@@ -20,8 +20,11 @@
 {% block htmx_table %}
   {{ block.super }}
 
-  <small class="text-muted">Auctions you've joined will always show up here.  Other auctions will only be listed here if they:
-    <ul>
+  {% comment %}A <ul> is not allowed inside <small>, which is what this used to be.  It is a help note rather than a muted paragraph because it is the standing answer to "why isn't my auction on this list" -- a funnel rather than a lightbulb so it doesn't read as a second copy of the note at the top of the page.{% endcomment %}
+  <div class="help-note mt-3">
+    <i class="bi bi-funnel"></i>
+    <div>Auctions you've joined will always show up here.  Other auctions will only be listed here if they:
+    <ul class="mb-0 ps-3">
       <li>have "promote this auction" checked</li>
       <li>are starting less than 90 days from today</li>
       <li>were created less than 2 years ago</li>
@@ -33,7 +36,8 @@
         {% endif %}
       {% endif %}
     </ul>
-  </small>
+    </div>
+  </div>
 {% endblock %}
 
 {% block extra_js %}

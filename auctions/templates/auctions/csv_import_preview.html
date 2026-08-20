@@ -32,6 +32,7 @@ each possible-duplicate row gets a merge/create choice. Lot/award imports omit t
         Possible duplicates &mdash; choose what to do with each
       </div>
       <div class="card-body p-0">
+        <div class="table-responsive">
         <table class="table table-sm mb-0 align-middle">
           <thead>
             <tr>
@@ -63,6 +64,7 @@ each possible-duplicate row gets a merge/create choice. Lot/award imports omit t
             {% endfor %}
           </tbody>
         </table>
+        </div>
       </div>
     </div>
     {% endif %}
@@ -71,6 +73,7 @@ each possible-duplicate row gets a merge/create choice. Lot/award imports omit t
     <div class="card mb-3">
       <div class="card-header">Rows to import</div>
       <div class="card-body p-0">
+        <div class="table-responsive">
         <table class="table table-sm table-striped mb-0">
           <thead>
             <tr>
@@ -90,6 +93,7 @@ each possible-duplicate row gets a merge/create choice. Lot/award imports omit t
             {% endfor %}
           </tbody>
         </table>
+        </div>
       </div>
     </div>
     {% endif %}
@@ -98,6 +102,7 @@ each possible-duplicate row gets a merge/create choice. Lot/award imports omit t
     <div class="card mb-3">
       <div class="card-header">Skipped rows ({{ skipped_rows|length }})</div>
       <div class="card-body p-0">
+        <div class="table-responsive">
         <table class="table table-sm mb-0">
           <thead>
             <tr><th>Reason</th><th>Row</th></tr>
@@ -111,6 +116,7 @@ each possible-duplicate row gets a merge/create choice. Lot/award imports omit t
             {% endfor %}
           </tbody>
         </table>
+        </div>
       </div>
     </div>
     {% endif %}
@@ -129,7 +135,7 @@ each possible-duplicate row gets a merge/create choice. Lot/award imports omit t
 
   <div class="d-flex gap-2 mt-3">
     <button type="submit" form="csv-import-confirm-form" class="btn btn-success">Confirm import</button>
-    <button type="submit" form="csv-import-cancel-form" class="btn btn-outline-secondary">Cancel</button>
+    <button type="submit" form="csv-import-cancel-form" class="btn btn-secondary">Cancel</button>
   </div>
 </div>
 {% endblock %}

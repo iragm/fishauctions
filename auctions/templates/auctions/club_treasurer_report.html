@@ -204,10 +204,10 @@ document.addEventListener("DOMContentLoaded", function() {
 
 <div class="d-flex flex-wrap gap-2 align-items-start mb-3">
   <a id="club-money-export-link" class="btn btn-primary" href="{{ treasurer_export_url }}">Export CSV</a>
-  <button class="btn btn-secondary" type="button" data-bs-toggle="collapse" data-bs-target="#club-money-add-record" aria-expanded="false" aria-controls="club-money-add-record">
+  <button class="btn btn-primary" type="button" data-bs-toggle="collapse" data-bs-target="#club-money-add-record" aria-expanded="false" aria-controls="club-money-add-record">
     Add record
   </button>
-  <button class="btn btn-outline-warning" type="button" data-bs-toggle="modal" data-bs-target="#balanceBooksModal">
+  <button class="btn btn-primary" type="button" data-bs-toggle="modal" data-bs-target="#balanceBooksModal">
     Balance books
   </button>
   <div class="ms-auto text-muted small pt-2">Current balance: <span id="club-money-current-balance">{{ currency_symbol }}{{ current_balance }}</span></div>
@@ -275,7 +275,7 @@ document.addEventListener("DOMContentLoaded", function() {
     <div class="modal-content">
       <div class="modal-header">
         <h5 class="modal-title" id="balanceBooksModalLabel">Balance books</h5>
-        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
       </div>
       <div class="modal-body">
         <div class="">
@@ -287,7 +287,7 @@ document.addEventListener("DOMContentLoaded", function() {
             <label class="form-label" for="{{ club_money_balance_form.account_balance.id_for_label }}">Account balance</label>
             {{ club_money_balance_form.account_balance }}
           </div>
-          <button type="submit" class="btn btn-warning">Save adjustment</button>
+          <button type="submit" class="btn btn-success text-dark">Save adjustment</button>
         </form>
       </div>
     </div>

@@ -144,6 +144,10 @@ class AuctionTOSHTMxTable(tables.Table):
             or self.is_club_auction_admin(record)
         ):
             result += '<span class="badge bg-danger ms-1 me-1" title="Can add users and lot">Admin</span>'
+        # The alternate-split badge stays bg-info and the Check in button below is btn-primary:
+        # they sat side by side in the same colour, and one is a fact about the person while the
+        # other is a thing to press.  This whole table is admin-only, which is what makes primary
+        # right for the button (style_reference.md: btn-info marks the admin half of a *shared* page).
         if record.is_club_member:
             label = record.auction.alternative_split_label.capitalize()
             result += (
@@ -157,7 +161,7 @@ class AuctionTOSHTMxTable(tables.Table):
             if self.can_manage_check_in:
                 check_in_url = reverse("auction_check_in", kwargs={"pk": record.pk})
                 result += (
-                    f'<button class="btn btn-sm btn-info ms-1" hx-get="{check_in_url}" '
+                    f'<button class="btn btn-sm btn-primary ms-1" hx-get="{check_in_url}" '
                     'hx-target="#modals-here" hx-swap="innerHTML" '
                     '_="on htmx:afterOnLoad wait 10ms then add .show to #modal then add .show to #modal-backdrop">'
                     "Check in</button>"
@@ -285,7 +289,7 @@ class LotHTMxTable(tables.Table):
     def render_lot_name(self, value, record):
         result = f"""
         <a href='' hx-noget hx-get='/api/lot/{record.pk}' hx-target='#modals-here' hx-trigger='click'><i class='bi bi-calendar-fill me-1'></i>{value}</a>
-        <button type="button" class="btn btn-sm bg-secondary dropdown-toggle dropdown-toggle-split" data-bs-toggle="dropdown" aria-haspopup="true" aria-expanded="false">
+        <button type="button" class="btn btn-sm btn-primary dropdown-toggle dropdown-toggle-split" data-bs-toggle="dropdown" aria-haspopup="true" aria-expanded="false">
 				</button>
 				<div class="dropdown-menu">
 					<div><a href='{record.lot_link}?src=admin'><i class="bi bi-calendar ms-1 me-1"></i>Lot page</a></div>
@@ -582,6 +586,7 @@ _PERMISSION_BADGES = [
     ("permission_manage_auctions", "Manage auctions"),
     ("permission_manage_bap", "Award points"),
     ("permission_manage_donations", "Manage donations"),
+    ("permission_send_announcements", "Send announcements"),
     ("permission_export", "Export data"),
     ("permission_add_edit", "Manage membership"),
     ("permission_view", "View members"),
@@ -889,7 +894,7 @@ class ClubMemberHTMxTable(tables.Table):
 
         return format_html(
             '<div class="dropdown">'
-            '<button type="button" class="btn btn-sm btn-secondary dropdown-toggle"'
+            '<button type="button" class="btn btn-sm btn-primary dropdown-toggle"'
             ' data-bs-toggle="dropdown" aria-label="Actions for {}">Actions</button>'
             "<ul class='dropdown-menu'>{}{}{}{}{}{}</ul>"
             "</div>",
@@ -942,15 +947,22 @@ class ClubHistoryHTMxTable(tables.Table):
     applies_to = tables.Column(accessor="applies_to", verbose_name="Modified")
     timestamp = tables.Column(accessor="timestamp", verbose_name="Time")
 
+    # One icon per ClubHistory.applies_to. Every choice is listed: three of them used to be missing
+    # here, so a membership renewal, a BAP award and an announcement all rendered as bare text next
+    # to rows that had an icon, which reads as "this one is different" rather than "nobody got to it".
+    APPLIES_TO_ICONS = {
+        "RULES": "bi-gear-fill",
+        "MEMBERS": "bi-people-fill",
+        "MEMBERSHIP": "bi-card-checklist",
+        "SETTINGS": "bi-sliders",
+        "BAP": "bi-award-fill",
+        "DONATIONS": "bi-gift-fill",
+        "ANNOUNCEMENTS": "bi-megaphone-fill",
+    }
+
     def render_applies_to(self, value, record):
-        if record.applies_to == "RULES":
-            result = "<i class='bi bi-gear-fill'></i>"
-        elif record.applies_to == "MEMBERS":
-            result = "<i class='bi bi-people-fill'></i>"
-        elif record.applies_to == "SETTINGS":
-            result = "<i class='bi bi-sliders'></i>"
-        else:
-            result = ""
+        icon = self.APPLIES_TO_ICONS.get(record.applies_to)
+        result = f"<i class='bi {icon}'></i>" if icon else ""
         result += f" {value}"
         return mark_safe(result)
 
@@ -1368,7 +1380,7 @@ class DonationVendorHTMxTable(tables.Table):
             # Stays clickable and explains itself in a toast; the handler is delegated from
             # club_donation_vendors.html so it survives htmx swaps of the table.
             return format_html(
-                "<button type='button' class='btn btn-sm btn-secondary donation-contact-blocked' "
+                "<button type='button' class='btn btn-sm btn-primary donation-contact-blocked' "
                 "data-reason='{}'><i class='bi bi-envelope-slash me-1'></i>Contact</button>",
                 reason,
             )

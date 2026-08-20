@@ -28,7 +28,7 @@ partial must stand alone — it's both part of the panel and the htmx response t
           <small class="text-muted">{{ group_name }}</small><br>
           {% for value, label in group_tags %}
           <button type="button"
-                  class="btn btn-sm mb-1 {% if value in my_tags %}btn-primary{% else %}btn-outline-secondary{% endif %}"
+                  class="btn btn-sm mb-1 {% if value in my_tags %}btn-primary active{% else %}btn-secondary{% endif %}"
                   hx-post="{% url 'speaker_tag' speaker.slug %}"
                   hx-vals='{"tag": "{{ value }}"}'
                   hx-target="#speaker-tags-block"

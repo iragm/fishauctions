@@ -1,0 +1,8 @@
+{% autoescape on %}{% if auction %}<div class="club-auction">
+  <a class="club-auction-title" href="{{ auction.url }}">{{ auction.title }}</a>
+  <span class="club-auction-when">{{ auction.when }}</span>{% if auction.location %}
+  <span class="club-auction-where">{{ auction.location }}</span>{% endif %}{% if auction.lots_open %}
+  <span class="club-auction-lots">{{ auction.lots_open }}</span>{% endif %}
+</div>
+{% else %}<div class="club-auction club-auction-empty">No auction running right now.</div>
+{% endif %}{% endautoescape %}

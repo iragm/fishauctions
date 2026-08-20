@@ -1,0 +1,26 @@
+{% comment %}The emailed version of a club announcement. Deliberately plain: this is the same
+sentence that went to Discord and to people's phones, and the moment it grows a layout it stops
+being the same message. A club that wants a designed newsletter already has a newsletter tool.
+
+`greeting` is the provider's own merge tag, marked safe in announcements.py because it is our
+constant and its syntax ({{ }}, *| |*) would otherwise be escaped into text.
+
+No unsubscribe link of our own: both providers append their own footer to a campaign, wired to
+the list this actually went out to. Ours would unsubscribe people from something else.
+
+No "read this on our website" link either. The announcement is short enough to be said in full in
+every place it goes, so a link would only lead somewhere that repeats it.
+{% endcomment %}
+<div style="font-family:Helvetica,Arial,sans-serif;font-size:16px;line-height:1.5;color:#222222;max-width:600px;margin:0 auto;padding:16px;">
+  {% if greeting %}<p style="margin:0 0 16px;">{{ greeting }}</p>{% endif %}
+  <div style="margin:0 0 32px;white-space:pre-wrap;">{{ announcement.text }}</div>
+  <hr style="border:none;border-top:1px solid #dddddd;margin:24px 0;">
+  <table role="presentation" cellpadding="0" cellspacing="0" border="0"><tr>
+    {% if club_icon_url %}
+    <td style="padding-right:8px;vertical-align:middle;">
+      <img src="{{ club_icon_url }}" alt="" width="32" height="32" style="display:block;width:32px;height:32px;object-fit:contain;border-radius:4px;">
+    </td>
+    {% endif %}
+    <td style="vertical-align:middle;font-size:14px;color:#555555;">{{ club.name }}</td>
+  </tr></table>
+</div>

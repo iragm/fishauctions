@@ -1,0 +1,7 @@
+{% autoescape off %}{% if greeting %}{{ greeting }}
+
+{% endif %}{{ announcement.text }}
+
+--
+{{ club.name }}
+{% endautoescape %}

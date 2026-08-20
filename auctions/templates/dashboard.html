@@ -3,6 +3,7 @@
 {% load static %}
 {% block content %}
 <h3>User stats</h3>
+<div class="table-responsive">
 <table class="table">
     <tr>
       <td>Active users 5m:</td>
@@ -35,7 +36,9 @@
       </td>
     </tr>
 </table>
+</div>
 <h3>Mobile app adoption</h3>
+<div class="table-responsive">
 <table class="table">
     <tr>
       <td>Users with the mobile app installed:</td>
@@ -63,8 +66,10 @@
       </td>
     </tr>
 </table>
+</div>
 <h3>Current auction usage</h3>
 <small class='text-muted'>Use this info along with the current users stat to see if it's safe to apply updates</small>
+<div class="table-responsive">
 <table class="table">
     <tr>
       <td>Lots from in person auctions ended in the last 30 minutes</td>
@@ -77,4 +82,5 @@
       </td>
     </tr>
 </table>
+</div>
 {% endblock %}

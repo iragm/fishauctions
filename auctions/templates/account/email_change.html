@@ -39,7 +39,7 @@
             <form method="post" action="{% url 'account_email' %}" id="pending-email" style="display: inline;">
                 {% csrf_token %}
                 <input type="hidden" name="email" value="{{ new_emailaddress.email }}">
-                <button type="submit" name="action_send" class="btn btn-sm btn-secondary">{% trans 'Re-send Verification' %}</button>
+                <button type="submit" name="action_send" class="btn btn-sm btn-primary">{% trans 'Re-send Verification' %}</button>
                 {% if current_emailaddress %}
                     <button type="submit" name="action_remove" class="btn btn-sm btn-danger">{% trans 'Cancel Change' %}</button>
                 {% endif %}

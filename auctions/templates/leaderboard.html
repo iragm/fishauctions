@@ -5,6 +5,7 @@
 {% block content %}
             <h3><s>Lead</s>Breederboard</h3><br>
             <h3>Most unique species bred and sold</h3><br>
+            <div class="table-responsive">
             <table class="table">
                 <thead>
                   <tr>
@@ -23,8 +24,10 @@
                   </tr>
                 {% endfor %}
               </tbody>
-            </table><br>
+            </table>
+            </div><br>
             <h3>Most lots sold</h3><br>
+            <div class="table-responsive">
             <table class="table">
                 <thead>
                   <tr>
@@ -43,9 +46,11 @@
                   </tr>
                 {% endfor %}
               </tbody>
-            </table><br>
+            </table>
+            </div><br>
             <h3>Most lots bid on</h3><br>
             <span class="text-muted">Here's a tip: only <em>successful</em> bids count towards this.  If you see the <span class="text-warning">You've been outbid</span> message, it means your bid didn't count.  You don't have to win the lot to get points here, just be the high bidder at least once.  Bid early and bid high to keep others from getting points in this category!</span><br>
+            <div class="table-responsive">
             <table class="table">
                 <thead>
                   <tr>
@@ -64,5 +69,6 @@
                   </tr>
                 {% endfor %}
               </tbody>
-            </table><br>
+            </table>
+            </div><br>
 {% endblock %}

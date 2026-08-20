@@ -594,3 +594,107 @@ body.speaker-panel-open {
     max-height: 60vh;
     overflow-y: auto;
 }
+
+/* Help notes -------------------------------------------------------------
+   The "what is this page for" sentence at the top of an admin page. It is
+   guidance, not a warning, so it reads as a tinted note rather than an alert:
+   a light-blue wash, a light-blue rule down the left, and no full border --
+   a boxed alert at the top of every admin page turns into wallpaper nobody
+   reads. Small text on purpose; it is read once and then skipped forever.
+   Markup pattern and rules are in style_reference.md. */
+.help-note {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.5rem;
+    /* The link accent (#2fa4e7) at low opacity: blue enough to read as
+       information against #222 without competing with the page content. */
+    background: rgba(47, 164, 231, 0.09);
+    border-left: 3px solid rgba(47, 164, 231, 0.55);
+    border-radius: 0.25rem;
+    padding: 0.5rem 0.75rem;
+    margin-bottom: 0.75rem;
+    font-size: 0.875rem;
+    color: #dee2e6;
+}
+
+.help-note > .bi {
+    color: #2fa4e7;
+    line-height: 1.5;
+}
+
+/* Paragraphs inside a note shouldn't add another gap under the note itself. */
+.help-note p:last-child {
+    margin-bottom: 0;
+}
+
+/* Cookie/terms bar ---------------------------------------------------------
+   Fixed over the bottom of every page for signed-out visitors. Two things it
+   has to do on a phone that the inline styles it used to carry did not: stay
+   short (a full-size alert wraps to three lines and eats a fifth of the
+   screen), and get out of the way of the end of the page -- fixed elements
+   are out of flow, so without the padding below it sat on top of whatever was
+   last on the page with no way to scroll further. */
+.tos-banner {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    width: 100%;
+    /* Under a modal (1055) and its backdrop (1050), over the page. At the 9999 it
+       used to carry, the cookie bar sat on top of every dialog on the site --
+       including, on a phone, the bottom of a confirm dialog's buttons. */
+    z-index: 1040;
+    padding: 0.5rem 0.75rem;
+    font-size: 0.875rem;
+}
+
+body:has(.tos-banner) {
+    padding-bottom: 5.5rem;
+}
+
+/* Toasts are fixed to the top right; on a narrow phone a 350px toast plus the
+   20px offset overflows the viewport and drags a horizontal scrollbar onto
+   every page that fires one. */
+@media (max-width: 420px) {
+    #toast-container {
+        left: 10px;
+        right: 10px;
+        top: 10px;
+    }
+
+    #toast-container .toast {
+        width: 100%;
+        max-width: 100%;
+    }
+}
+
+/* Close buttons ------------------------------------------------------------
+   This is why every X on the site was invisible. Bootswatch Darkly compiles
+   `.btn-close` with an already-white glyph (`fill='%23fff'`), and Bootstrap
+   5.3 then adds `[data-bs-theme=dark] .btn-close { filter: invert(1) ... }`
+   on top of it -- inverting the white X to black on a near-black panel. Worse,
+   that rule outranks `.btn-close-white` on specificity, so the documented fix
+   in the markup could not win either: offcanvas, modal, alert and toast
+   dismiss buttons were all black-on-black.
+
+   Turn the inversion off. The glyph is white to begin with, which is what a
+   dark surface wants, and `.btn-close-white` in the markup stays correct
+   (and would still be right if the vendor build were ever recompiled with a
+   dark default glyph). */
+[data-bs-theme="dark"] .btn-close,
+[data-bs-theme="dark"] .btn-close-white {
+    filter: none;
+}
+
+/* Darkly rests the glyph at 40% opacity, which on #303030 reads as a smudge
+   rather than a control. */
+.btn-close {
+    --bs-btn-close-opacity: 0.75;
+}
+
+/* The one place a dark glyph is right: the two toast headers that are a light
+   fill with dark text (success and warning -- see the toast helper in
+   base.html). */
+[data-bs-theme="dark"] .toast-header.bg-success .btn-close,
+[data-bs-theme="dark"] .toast-header.bg-warning .btn-close {
+    filter: invert(1);
+}

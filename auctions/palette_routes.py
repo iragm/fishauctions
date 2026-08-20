@@ -506,6 +506,20 @@ ROUTE_LIST: list[Route] = [
     _r("club_events_embed", "Embeddable club events", "Club", scope=SCOPE_CLUB, keywords=["embed", "widget"]),
     _r("bap_embed", "Embeddable Breeder Award list", "Club", scope=SCOPE_CLUB, keywords=["bap embed", "widget"]),
     _r(
+        "club_announcements_embed",
+        "Embeddable club announcements",
+        "Club",
+        scope=SCOPE_CLUB,
+        keywords=["announcement embed", "widget", "news"],
+    ),
+    _r(
+        "club_auction_embed",
+        "Embeddable current auction",
+        "Club",
+        scope=SCOPE_CLUB,
+        keywords=["auction embed", "widget"],
+    ),
+    _r(
         "club_admin",
         "Club member list",
         "Club admin",
@@ -520,6 +534,22 @@ ROUTE_LIST: list[Route] = [
         scope=SCOPE_CLUB,
         admin=ADMIN_CLUB,
         keywords=["setup", "getting started", "checklist"],
+    ),
+    _r(
+        "club_announcements",
+        "Send an announcement to a club",
+        "Club admin",
+        scope=SCOPE_CLUB,
+        admin=ADMIN_CLUB,
+        keywords=["announcement", "tell members", "news", "broadcast"],
+    ),
+    _r(
+        "club_website_integration",
+        "Put club information on the club's own website",
+        "Club admin",
+        scope=SCOPE_CLUB,
+        admin=ADMIN_CLUB,
+        keywords=["website", "embed", "widget", "wordpress", "snippet", "iframe"],
     ),
     _r(
         "club_edit",
@@ -988,6 +1018,7 @@ def _user_sees_nec_speakers(user):
         "permission_manage_auctions",
         "permission_manage_bap",
         "permission_manage_donations",
+        "permission_send_announcements",
     ]
     any_permission = Q()
     for field_name in permission_fields:
@@ -1136,6 +1167,10 @@ EXCLUDED: dict[str, str] = {
     "club_donation_contact": _API,
     "club_donation_email": _API,
     "club_donation_vendor_delete": _ACTION_ONLY,
+    "club_announcement_retract": (
+        "POST-only, from the Retract button beside a row on club_announcements. Keyed on the "
+        "announcement's uuid, and destructive in a way the palette should not offer blind."
+    ),
     # Webhooks and machine-to-machine
     "paypal-webhook": _WEBHOOK,
     "club_paypal_subscription_webhook": _WEBHOOK,

@@ -41,7 +41,7 @@
                     <span class="badge bg-success text-dark lot-number-badge">Lot #{{ lot.lot_number_display }}</span>
                     <!-- Actions dropdown menu -->
                     <div class="dropdown actions-menu">
-                      <button class="btn btn-sm btn-outline-secondary dropdown-toggle py-0 px-1" type="button" data-bs-toggle="dropdown" aria-expanded="false" style="font-size: 0.75rem;">
+                      <button class="btn btn-sm btn-primary dropdown-toggle py-0 px-1" type="button" data-bs-toggle="dropdown" aria-expanded="false" style="font-size: 0.75rem;">
                         <i class="bi bi-three-dots"></i>
                       </button>
                       <ul class="dropdown-menu dropdown-menu-end">
@@ -175,7 +175,7 @@
                     <span class="badge bg-secondary text-dark lot-number-badge">Not saved</span>
                     <!-- Actions dropdown menu (hidden until saved) -->
                     <div class="dropdown actions-menu" style="display: none;">
-                      <button class="btn btn-sm btn-outline-secondary dropdown-toggle py-0 px-1" type="button" data-bs-toggle="dropdown" aria-expanded="false" style="font-size: 0.75rem;">
+                      <button class="btn btn-sm btn-primary dropdown-toggle py-0 px-1" type="button" data-bs-toggle="dropdown" aria-expanded="false" style="font-size: 0.75rem;">
                         <i class="bi bi-three-dots"></i>
                       </button>
                       <ul class="dropdown-menu dropdown-menu-end">
@@ -286,7 +286,7 @@
         </div>
 
         <div class="mt-3 d-flex align-items-center gap-2">
-          <button class="btn btn-secondary btn-sm" id="add-row-btn">
+          <button class="btn btn-primary btn-sm" id="add-row-btn">
             <i class="bi bi-plus-circle"></i> Add another row
           </button>
           {% if is_admin and max_lots_per_user %}

@@ -8,6 +8,10 @@ site-wide (`<html data-bs-theme="dark">`).
 > **If templates or views are found that don't conform to this spec, either
 > change them to conform or document a reason why they cannot.**
 
+The button rules below were tightened after most of the site was written; the templates have now
+been brought into line with them. `docs/style_migration.md` records what each forbidden class
+became and carries the three greps that keep it that way — run them before you commit a template.
+
 ## Where things live
 
 - **Never edit the vendor CSS** (`auctions/static/css/vendor/bootstrap.min.css`).
@@ -39,7 +43,7 @@ Dark theme; the base surface is near-black (`#222`), panels around `#303030`.
 | **Danger (text)** | **`#e2756a`** | lighter tint used by `.text-danger` so red text stays legible on dark |
 | **Warning (fills)** | **`#b9770e`** | darkened from `#f39c12`, same hue; **dark text** (~5.7:1, vs 3.7:1 white) |
 | **Warning (text)** | **`#d99f3f`** | lighter tint used by `.text-warning` on dark |
-| Secondary / gray | `#444`, `#6c757d`, `#adb5bd`, `#dee2e6` | pagination + outline buttons |
+| Secondary / gray | `#444`, `#6c757d`, `#adb5bd`, `#dee2e6` | Cancel/Close buttons + pagination |
 
 Danger/warning were darkened so they "don't pop as much." Fills (`.bg-*`,
 `.btn-*`, `.text-bg-*`, badges) use the darker base; **text utilities**
@@ -76,21 +80,20 @@ How this is enforced:
 The global toast helper (`base.html`) uses these types: `info`/`danger` →
 white text, `success`/`warning` → dark text.
 
-## Outline buttons
+## Outline buttons are not used
 
-Darkly renders outline buttons with the *fill* color as their resting text
-color. On the dark background `btn-outline-secondary` (`#444`) and
-`btn-outline-dark` (`#303030`) are effectively invisible, and after darkening,
-`btn-outline-danger` is hard to read. `auction_site.css` gives each a light
-resting text color; hover/active still fill with the accent color:
+**Do not write `btn-outline-*`.** On the near-black body an outline button is a
+rectangle of thin border with low-contrast text in it, and next to a filled
+button it reads as disabled rather than as secondary. Every outline button is
+replaced by the filled button of the intent it was expressing — usually
+`btn-primary`, `btn-danger` for a delete.
 
-- `btn-outline-secondary`, `btn-outline-dark`: light-gray text, gray border.
-- `btn-outline-danger`: light-red text `#ec8b80`, fills `#a93226` on hover.
-- `btn-outline-warning`: light-amber text `#d9a441`, fills `#b9770e` on hover.
-
-Do **not** paper over this by adding `text-light` to individual templates — the
-CSS handles it once. Only touch a template if it has a conflicting explicit text
-class fighting the fix.
+There are none left in the templates or in the HTML emitted from Python. The
+`auction_site.css` block that gives `btn-outline-secondary`, `btn-outline-dark`,
+`btn-outline-danger` and `btn-outline-warning` a readable resting text color
+stays as a legibility floor in case one is pasted in from somewhere — it is
+**not** a licence to write new ones. Don't paper over the color in a template
+either; the CSS handles it once.
 
 ## Pagination
 
@@ -197,12 +200,12 @@ dead rather than merely unavailable. Judge it by the page:
   command palette's "Lot scanning" / "Tap to Pay" rows in `command_palette.py`).
 
 Reference implementation: the "Payment not available" button in
-`auctions/templates/invoice.html` — a plain `btn btn-secondary` (no `disabled`)
+`auctions/templates/invoice.html` — a plain `btn btn-primary` (no `disabled`)
 that fires an `info` toast with `invoice.reason_for_payment_not_available` on
 click.
 
 ```html
-<button type="button" class="btn btn-secondary" id="payment-not-available"
+<button type="button" class="btn btn-primary" id="payment-not-available"
         data-reason="{{ invoice.reason_for_payment_not_available }}">Pay now</button>
 <script>
   document.getElementById('payment-not-available').addEventListener('click', function () {
@@ -236,7 +239,7 @@ site-wide from `base.html`). No per-page JavaScript:
       data-confirm-ok="Disconnect"
       data-confirm-variant="danger">
   {% csrf_token %}
-  <button type="submit" class="btn btn-outline-danger btn-sm">Disconnect</button>
+  <button type="submit" class="btn btn-danger btn-sm">Disconnect</button>
 </form>
 ```
 
@@ -270,10 +273,16 @@ Use the right channel for the right kind of message, consistently.
 
 | Kind | Style | Icon |
 |---|---|---|
-| **Information** (neutral fact) | `alert-info` or `text-muted` | `bi-info-circle` |
+| **What this page is for** (standing explanation) | `help-note` — see below | `bi-lightbulb-fill` |
+| **Information** (neutral fact, one-off) | `alert-info` or `text-muted` | `bi-info-circle` |
 | **Error** (failed / blocking) | `alert-danger`, toast type `danger` | `bi-exclamation-triangle-fill` |
 | **Warning** (caution, non-blocking) | `alert-warning text-dark`, toast type `warning` | `bi-exclamation-triangle` |
 | **"Do this first" / setup guidance** | `bg-primary bg-gradient bg-opacity-50` banner | (heading + steps) |
+
+The first two rows are the pair most often confused. A **help note** is the
+sentence that is true every time the page loads ("this is a list of the people in
+your auction"); an **alert-info** is something that is true *right now* ("bidding
+is ending soon"). Standing text in an alert box trains people to skip alert boxes.
 
 The canonical **"do this first"** banner is the *Finish setting up* checklist in
 `auctions/templates/auction_ribbon.html`:
@@ -291,16 +300,193 @@ same `bg-primary` pattern (the Square-payments banner was migrated from
 
 ### Actions (buttons)
 
+Six classes, and nothing else. The point is that a colour means the same thing
+on every page: green is not "this button matters to me", it is "this is the one
+that completes the thing you came here to do".
+
 | Intent | Class |
 |---|---|
-| Primary action | `btn-primary` |
-| Secondary / neutral | `btn-secondary` |
-| Destructive (confirm before irreversible) | `btn-danger` |
-| Confirm / complete (save, sold, join) | `btn-success text-dark` |
+| Almost every button | `btn-primary` |
+| Auction-admin or club-admin only, invisible to ordinary users | `btn-info` |
+| Deleting or destroying something | `btn-danger` |
+| Saving a form, and a handful of pivotal actions | `btn-success text-dark` |
+| **Backing out — Cancel, Close** | **`btn-secondary`** |
+| A link that must not look like a button | `btn-link`, or plain text |
 
-Tooltips (`data-bs-toggle="tooltip"`, `title=`) are **supplementary only** —
-never the sole carrier of critical instructions. If a control's only explanation
-is a tooltip, surface it as visible text or an on-click message as well.
+Rules that follow from the table, all of them enforceable by grep:
+
+- **No `btn-outline-*`.** See "Outline buttons are not used" above.
+- **`btn-secondary` is for backing out, and only for that.** A **Cancel** or a
+  **Close** is `btn-secondary`, every time — it is `#444`, the one grey on the
+  page, and that is exactly right for the button somebody presses when they
+  decided *not* to do the thing. The dismissal must not compete with the action
+  it sits beside: a Cancel in `btn-primary` next to a Save is two buttons of
+  equal weight and a coin toss.
+  A **"Back to X"** link at the top or bottom of a sub-page is the same gesture
+  as Cancel — leaving without doing the thing — and is `btn-secondary` too.
+  It is **not** the old "a button I don't want to think about" default. If it
+  isn't leaving the dialog, abandoning the form or backing out of the page, it
+  isn't `btn-secondary` — whatever else it was saying, say it with `btn-primary`.
+- **"Cancel" the verb is not "Cancel" the exit.** A button that cancels a
+  *thing* — a volunteer job, a pending email change, an integration — is that
+  action and takes that action's colour (usually `btn-danger`), even though the
+  word on it is Cancel. The test is what happens if the user walks away instead:
+  if nothing happens, it's an exit; if the thing stays cancelled, it's a verb.
+- **No `btn-warning`.** Amber on a control means "careful" and almost nothing
+  ever used it that way; edit buttons wore it because they felt risky. Editing is
+  a primary action. Warnings belong in `alert-warning`, not on a button.
+- **`btn-success` is rationed.** Form-save buttons, and the handful of actions a
+  page exists for: *join this auction*, *place bid*, *buy now*, *pay / renew
+  membership*. Two green buttons on one screen means one of them is wrong. It
+  always carries `text-dark` (white on `#00bc8c` fails AA).
+- **`btn-danger` is for destruction, not for danger.** Delete, remove, refund,
+  ban, revoke. Not for "this is important".
+- **A selected/unselected pair is grey and blue.** In a `btn-group` that shows
+  which of several options is currently chosen — the feedback ratings, the
+  speaker List/Map switch, the invoice Open/Ready/Paid group, the speaker tags —
+  the unselected options are `btn-secondary` and the selected one is
+  `btn-primary active`. This is the one place grey does not mean "back out": an
+  option you have not picked is not something the page is asking you to do, and
+  the contrast between grey and blue is what makes the current state readable at
+  a glance. All-blue-with-`active` is not enough — the difference between
+  `btn-primary` and `btn-primary.active` is a few percent of lightness.
+  A group whose *current* value is hidden rather than marked (the club contact
+  preference page drops the option you are already on) is not a pair at all:
+  every button there is an action, so every button is `btn-primary`.
+- **`btn-info` marks the admin half of a page.** On a page members and admins
+  both see, it is what separates "the thing you came for" from "the thing you can
+  do because you run this". A page only admins can reach doesn't need it —
+  everything there is admin, so `btn-primary` is right.
+
+`btn-sm` is orthogonal to all of this: a row of controls above a table or beside
+a heading is `btn-sm`, a page's main action is not.
+
+### Close buttons
+
+Write **`btn-close btn-close-white`** on every modal, offcanvas, alert and toast
+on the site. Since the whole site is `data-bs-theme="dark"`, there is no case
+where the plain one is correct — and never the `btn-close text-reset bg-light`
+workaround, which is a light square with a dark X in it that reads as a
+rendering bug.
+
+**The class alone was not enough, and this is the part worth knowing.** Darkly
+compiles `.btn-close` with an already-*white* glyph (`fill='%23fff'`), and
+Bootstrap 5.3 then adds
+
+```css
+[data-bs-theme=dark] .btn-close { filter: invert(1) grayscale(100%) brightness(200%) }
+```
+
+on top of it — inverting that white X to **black on a near-black panel**. That
+rule also outranks `.btn-close-white` on specificity (`[attr] .class` beats
+`.class`), so writing the documented class could not win either: for a long time
+*every* dismiss control on the site was black-on-black, the club sidebar's
+offcanvas included. `auction_site.css` now turns the inversion back off
+(`filter: none`) and restores the resting opacity, which Darkly sets to 0.4.
+
+The lesson generalises: when a Bootswatch theme has already recolored a
+component for dark, Bootstrap's own `[data-bs-theme=dark]` rules recolor it a
+second time. Check for a double inversion before adding a utility class on top.
+
+If a dismiss control needs to be discoverable rather than merely present (an
+offcanvas somebody opened by accident, a panel with no obvious way out), don't
+use `btn-close` at all — use a real button that says `Close`, in
+`btn-secondary` like every other way out.
+
+### Hamburger menus
+
+**There is exactly one hamburger on the site: the main site menu, top right.**
+That icon means "the navigation for this whole site" and nothing else. A second
+bare `☰` on the same page is a mystery box — people don't open it, and the
+feature behind it may as well not exist.
+
+Every other collapsed menu gets **a name and an icon**: `Filter lots`,
+`{{ club.name }} menu`, `Admin actions`, `Export`. Judge it by whether a member
+who has never used the page can tell what is inside without clicking.
+
+```html
+<!-- no -->
+<button class="btn btn-primary" data-bs-toggle="offcanvas" data-bs-target="#x">
+  <i class="bi bi-list"></i>
+</button>
+
+<!-- yes -->
+<button class="btn btn-primary btn-sm" data-bs-toggle="offcanvas" data-bs-target="#x">
+  <i class="bi bi-list"></i> {{ club.name }} menu
+</button>
+```
+
+The name may be hidden below a breakpoint only when the icon is genuinely
+self-explanatory on its own (a funnel for filters); the site menu is the only
+control allowed to be an icon at every width.
+
+### Help notes
+
+Pages that explain themselves — "This is a list of items for sale in your
+auction. Click a lot name to edit it." — put that sentence in a **help note**:
+a light-blue tinted block with a lightbulb, small text, a rule down the left
+edge and **no full border**. It is guidance, not an alert; a boxed
+`alert-info` at the top of every admin page becomes wallpaper and stops being
+read at all.
+
+```html
+<div class="help-note">
+  <i class="bi bi-lightbulb-fill"></i>
+  <div>This is a list of people in your auction. Click on a name to edit that user.</div>
+</div>
+```
+
+`.help-note` lives in `auction_site.css`. It is a flex row, so the icon stays
+put while the text wraps; put the text in the `<div>`, not as a bare sibling of
+the icon.
+
+When to use which:
+
+| Kind | Use |
+|---|---|
+| What this page is for, how to use it | `help-note` |
+| Something is misconfigured and needs fixing | `alert-warning text-dark` |
+| Something failed | `alert-danger` |
+| A one-off neutral fact in the middle of a page | `text-muted` |
+| "Do this first" setup checklist | `bg-primary bg-gradient bg-opacity-50` banner |
+
+Keep it to a sentence or three. If a page needs more explanation than that, the
+explanation belongs in the FAQ or a blog post with a link from the note.
+
+**One help note per page.** Not one per section, and not one per control — a
+page with a note above the form, a note under the table and a paragraph beside
+each checkbox has said everything and communicated nothing, and the reader skips
+all of it. Ask what the reader would get wrong if the sentence were missing; if
+the answer is "nothing", cut it. A field's own `help_text` is the right place for
+a fact the reader needs *while filling that field in* ("12 of your 143 members
+have the app"), and the wrong place for how the feature works.
+
+### Page headings
+
+**A page whose name is already on screen does not repeat it in an `<h1>`–`<h3>`.**
+Club pages are the case that keeps drifting: the club sidebar names every page and
+marks the current one active, the ribbon carries the club name, and the browser tab
+carries the title, so an `<h3>Setup</h3>` under a highlighted "Setup" link is the
+word twice.
+
+Do add one when the page is *not* named elsewhere — a Setup sub-page, a form
+reached from a button, anything with no sidebar entry of its own — and when a long
+page needs its sections labelled.
+
+**The page's one action goes on the same row as its heading, on the right**, not on
+a line of its own underneath:
+
+```html
+<div class="d-flex flex-wrap gap-2 align-items-center justify-content-between mb-2">
+  <h3 class="mb-0">Speakers</h3>
+  <a class="btn btn-sm btn-info" href="…"><i class="bi bi-person-plus-fill"></i> Add a speaker</a>
+</div>
+```
+
+On a page with no heading, the left of that row is whatever the *reader* came for
+(subscribe links, filters) and the right is the admin action. Never the other way
+round: a member looking at a club's events should not find the subscribe buttons
+pushed to the right edge to balance an "Add event" button they cannot see.
 
 ## Contrast target
 

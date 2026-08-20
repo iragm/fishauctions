@@ -1,0 +1,8 @@
+{% autoescape on %}<ul class="club-announcements">
+{% for announcement in announcements %}  <li class="club-announcement">
+    <p class="club-announcement-text">{{ announcement.text }}</p>
+    <span class="club-announcement-when">{{ announcement.when }}</span>
+  </li>
+{% empty %}  <li class="club-announcements-empty">Nothing new right now.</li>
+{% endfor %}</ul>
+{% endautoescape %}

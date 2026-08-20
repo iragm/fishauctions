@@ -2614,7 +2614,7 @@ class LotPushTestNotificationViewTestCase(StandardTestCase):
         self.assertNotContains(response, 'id="test-notification"')
         self.assertNotContains(response, 'if (Notification.permission !== "granted")')
         self.assertContains(response, "$('#subscribe_success').addClass(\"d-none\")")
-        self.assertContains(response, "Enable push notifications on this device")
+        self.assertContains(response, "Get a notification on this device when bidding starts on this lot")
 
     def test_watch_notification_message_still_shows_without_push_info(self):
         watcher_userdata = UserData.objects.get(user=self.user_with_no_lots)
@@ -7190,7 +7190,7 @@ class InvoiceStatusButtonTests(StandardTestCase):
         assert self.invoice.status == "DRAFT"
         content = response.content.decode()
         assert f"id='invoice-buttons-{self.invoice.pk}'" in content
-        assert "btn-info" in content  # Open button should be info when active
+        assert "btn-primary active" in content  # the selected option is primary, the others secondary
 
     def test_invoice_status_button_anonymous_denied(self):
         """Anonymous users cannot change invoice status via the pk-based endpoint"""
@@ -18223,6 +18223,31 @@ class ClubViewTests(TestCase):
         self.assertNotContains(response, "View membership details")
         self.assertContains(response, "Club Auction 10")
         self.assertNotContains(response, "Club Auction 0")
+
+    def test_club_tabs_collapse_into_a_more_menu_when_there_are_too_many(self):
+        """Events/BAP/HAP/Culture/My Points runs off the side of a phone; three tabs don't."""
+        self.club.enable_club_page = True
+        self.club.enable_breeder_award_program = True
+        self.club.save()
+        self.client.login(username="club_owner2", password="testpass")
+        url = reverse("club_detail", kwargs={"slug": self.club.slug})
+
+        # Events, BAP, My Points: three fit, and a More menu holding one item is worse than a tab.
+        response = self.client.get(url)
+        self.assertFalse(response.context["club_tabs_overflow"])
+        self.assertRegex(response.content.decode(), r'class="nav-link[^"]*" id="my-points-tab-btn"')
+
+        # Turning on the other two award tracks makes five, so everything past BAP moves into More.
+        self.club.separate_hap = True
+        self.club.separate_cap = True
+        self.club.save()
+        response = self.client.get(url)
+        self.assertTrue(response.context["club_tabs_overflow"])
+        html = response.content.decode()
+        for tab in ("hap", "culture", "my-points"):
+            self.assertRegex(html, rf'class="dropdown-item[^"]*" id="{tab}-tab-btn"')
+        # Events and BAP stay where they were.
+        self.assertRegex(html, r'class="nav-link[^"]*" id="bap-tab-btn"')
 
     def test_club_detail_shows_join_button_for_non_member(self):
         self.club.enable_club_page = True
@@ -32181,6 +32206,32 @@ class MobileAppLabelPrintingVisibilityTests(StandardTestCase):
         self.assertEqual(
             offenders, [], "Label printing must not be gated on the mobile app UA:\n" + "\n".join(offenders)
         )
+
+
+class ClubBarcodeLabelsPDFTests(StandardTestCase):
+    """ "Download PDF" with nothing filled in used to 404, which reads as a broken feature."""
+
+    def setUp(self):
+        super().setUp()
+        self.club = Club.objects.create(name="Barcode Club")
+        ClubMember.objects.create(club=self.club, user=self.admin_user, permission_admin=True)
+        self.url = reverse("club_barcode_labels_pdf", kwargs={"slug": self.club.slug})
+        self.client.force_login(self.admin_user)
+
+    def test_an_empty_form_comes_back_to_the_page_with_a_reason(self):
+        response = self.client.get(self.url, {"label_type": ""}, follow=True)
+        self.assertEqual(response.status_code, 200)
+        self.assertRedirects(response, reverse("club_barcode_labels", kwargs={"slug": self.club.slug}))
+        self.assertIn("nothing to print", " ".join(str(m) for m in response.context["messages"]).lower())
+
+    def test_a_row_with_a_type_but_no_value_is_the_same_as_an_empty_one(self):
+        response = self.client.get(self.url, {"label_type": "bidder_paddle", "bidder_number": ""})
+        self.assertEqual(response.status_code, 302)
+
+    def test_a_complete_row_still_produces_a_pdf(self):
+        response = self.client.get(self.url, {"label_type": "bidder_paddle", "bidder_number": "12"})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response["Content-Type"], "application/pdf")
 
 
 class ClubMemberMembershipStatusFilterTests(TestCase):

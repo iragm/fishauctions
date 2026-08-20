@@ -14,7 +14,7 @@ and SpeakerCommentDeleteView, so it has to stand alone.
       </div>
       {% comment %}Mirrors SpeakerComment.can_be_deleted_by, which is what actually enforces this.{% endcomment %}
       {% if request.user == comment.user or request.user.is_superuser %}
-      <button type="button" class="btn btn-sm btn-outline-danger"
+      <button type="button" class="btn btn-sm btn-danger"
               hx-post="{% url 'speaker_comment_delete' speaker.slug comment.pk %}"
               hx-target="#speaker-comments-block"
               hx-swap="innerHTML"

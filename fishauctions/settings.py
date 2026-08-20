@@ -1080,15 +1080,23 @@ MAILCHIMP_CLIENT_SECRET = os.environ.get("MAILCHIMP_CLIENT_SECRET", "")
 # secondary calendar). Create an OAuth 2.0 "Web application" client in the Google Cloud console
 # and add https://<your-domain>/clubs/google-calendar/callback/ as an authorized redirect URI.
 #
-# The default scope is calendar.app.created, which only lets us touch calendars this app itself
-# created. That is all the integration needs, and it keeps the app out of Google's "sensitive
-# scope" verification track. Override GOOGLE_CALENDAR_SCOPE only if you know you need broader
-# access (e.g. ".../auth/calendar" to write into a club's pre-existing calendar).
+# The scope is calendar.app.created and nothing else. It only lets us touch calendars this app
+# itself created, which is all the integration needs, and it keeps the app out of Google's
+# "sensitive scope" verification track.
+#
+# It is also deliberately ALONE. Pairing a Sign-In scope (userinfo.email) with a non-Sign-In one
+# is exactly the combination that makes Google show its granular-consent *checkbox* screen instead
+# of a plain Allow button -- and those checkboxes arrive unticked. An admin who pressed Continue
+# without ticking the calendar box got a working refresh token carrying only their email address,
+# this site recorded a successful connection, and every subsequent Calendar call came back
+# "Request had insufficient authentication scopes". Asking for one scope removes the screen that
+# makes that possible. GOOGLE_CALENDAR_SCOPE overrides this only if you know you need broader
+# access (e.g. ".../auth/calendar" to write into a club's pre-existing calendar); adding a scope
+# back brings the checkbox screen back with it, which is what CALENDAR_SCOPE below guards.
 GOOGLE_CALENDAR_CLIENT_ID = os.environ.get("GOOGLE_CALENDAR_CLIENT_ID", "")
 GOOGLE_CALENDAR_CLIENT_SECRET = os.environ.get("GOOGLE_CALENDAR_CLIENT_SECRET", "")
 GOOGLE_CALENDAR_SCOPE = (
-    os.environ.get("GOOGLE_CALENDAR_SCOPE", "").strip()
-    or "https://www.googleapis.com/auth/calendar.app.created https://www.googleapis.com/auth/userinfo.email"
+    os.environ.get("GOOGLE_CALENDAR_SCOPE", "").strip() or "https://www.googleapis.com/auth/calendar.app.created"
 )
 
 # Discord bot integration settings

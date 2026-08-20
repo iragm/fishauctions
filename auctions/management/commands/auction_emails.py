@@ -1,7 +1,6 @@
 import logging
 from datetime import timedelta
 
-import requests
 from django.conf import settings
 from django.contrib.sites.models import Site
 from django.core.management.base import BaseCommand
@@ -18,16 +17,7 @@ logger = logging.getLogger(__name__)
 
 def _send_discord_channel_message(channel_id, content):
     """POST a plain-text message to a Discord channel. Returns True on success."""
-    bot_token = getattr(settings, "DISCORD_BOT_TOKEN", "")
-    if not bot_token or not channel_id:
-        return False
-    url = f"https://discord.com/api/v10/channels/{channel_id}/messages"
-    headers = {"Authorization": f"Bot {bot_token}", "Content-Type": "application/json"}
-    try:
-        resp = requests.post(url, headers=headers, json={"content": content}, timeout=10)
-        return resp.status_code in (200, 201)
-    except Exception:
-        return False
+    return bool(discord_events.send_channel_message(channel_id, content))
 
 
 def _create_discord_scheduled_event(guild_id, name, start_time, end_time, location_url):

@@ -62,7 +62,7 @@
 {% else %}
   {# Fully connected #}
   <div class="card mb-4">
-    <div class="card-header d-flex justify-content-between align-items-center">
+    <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
       <span>Mailchimp connection</span>
       <span class="badge bg-success"><i class="bi bi-check-circle-fill"></i> Connected</span>
     </div>
@@ -107,7 +107,7 @@
     <div class="card-footer">
       <form method="post" action="{% url 'mailchimp_sync_now' club.slug %}" class="d-inline">
         {% csrf_token %}
-        <button type="submit" class="btn btn-secondary btn-sm">
+        <button type="submit" class="btn btn-primary btn-sm">
           <i class="bi bi-arrow-clockwise"></i> Sync all now
         </button>
       </form>
@@ -117,7 +117,7 @@
             data-confirm-ok="Disconnect"
             data-confirm-variant="danger">
         {% csrf_token %}
-        <button type="submit" class="btn btn-outline-danger btn-sm">
+        <button type="submit" class="btn btn-danger btn-sm">
           <i class="bi bi-x-circle"></i> Disconnect
         </button>
       </form>
@@ -130,6 +130,7 @@
       <p class="text-muted small mb-2">
         Each member is tagged automatically based on their membership status, activity, and location.
       </p>
+      <div class="table-responsive">
       <table class="table table-sm mb-3">
         <tbody>
           <tr>
@@ -190,8 +191,10 @@
           </tr>
         </tbody>
       </table>
+      </div>
       <hr class="my-3">
       <p class="text-muted small mb-2">Merge fields available in campaigns:</p>
+      <div class="table-responsive">
       <table class="table table-sm mb-0">
         <tbody>
           <tr>
@@ -240,6 +243,7 @@
           </tr>
         </tbody>
       </table>
+      </div>
     </div>
   </div>
 {% endif %}

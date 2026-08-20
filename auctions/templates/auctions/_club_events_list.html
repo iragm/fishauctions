@@ -2,48 +2,56 @@
 The club page's event list: upcoming events, then a little recent history. Shared by both the
 tabbed (BAP enabled) and untabbed layouts of club_detail.html so the two can't drift apart.
 Expects: upcoming_events, past_events, has_any_events, can_manage_auctions, club,
-club_ical_subscribe_url, club_ical_google_url, club_events_embed_path.
+club_ical_subscribe_url, club_ical_google_url.
 
 Only ever use {% templatetag openblock %} comment {% templatetag closeblock %} blocks in here.
 Django's {% templatetag openbrace %}# … #{% templatetag closebrace %} form is single-line only;
 spread one over two lines and it renders straight onto the page for members to read.
 {% endcomment %}
 
-<div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
-  <div class="d-flex flex-wrap gap-2">
-    {% if can_manage_auctions %}
-    <a href="{% url 'club_event_add' club.slug %}" class="btn btn-sm btn-primary">
-      <i class="bi bi-calendar-plus"></i> Add event
-    </a>
-    <span class="align-self-center text-muted small" data-bs-toggle="tooltip"
-          title="Promoted auctions are added here on their own, along with a short event for the pickup times of an online auction that has a single pickup location. You only need this button for meetings, swaps, talks and the like.">
-      <i class="bi bi-info-circle"></i> Auctions are added automatically
-    </span>
-    {% endif %}
-  </div>
-  <div class="d-flex flex-wrap gap-2">
-    {% comment %}
-    Both buttons subscribe, so the club page keeps updating itself in the member's calendar. The
-    one-time .ics download used to sit alongside them and was never the right answer — nobody
-    wants a frozen snapshot of events that have already happened.
+{% comment %}
+The action on the right, the way the speaker directory does it, and the subscribe buttons on the
+left for everybody. They used to be the other way round, which meant a member -- the person the
+subscribe buttons are actually for -- found them shoved against the right edge of the page,
+balancing an admin-only button they could not see.
 
-    One Google button: the club's own calendar when it's shared, otherwise Google's add-by-URL
-    screen pointed at our feed. Two would be the same events twice.
-    {% endcomment %}
+No heading here: the tab above says "Events" in the tabbed layout and there is an <h4> above the
+include in the flat one, so a third would be the word three times on one screen.
+
+Both buttons subscribe, so the club page keeps updating itself in the member's calendar. The
+one-time .ics download used to sit alongside them and was never the right answer -- nobody wants a
+frozen snapshot of events that have already happened.
+
+One Google button: the club's own calendar when it's shared, otherwise Google's add-by-URL screen
+pointed at our feed. Two would be the same events twice.
+
+No "put these on your website" button either. The embed snippets moved to Website integration under
+Setup, with the auction, announcement and leaderboard ones beside them, and a signpost on the
+members' event list was an admin control on a page most of its readers can do nothing with.
+{% endcomment %}
+<div class="d-flex flex-wrap gap-2 align-items-center justify-content-between mb-2">
+  <div class="d-flex flex-wrap gap-2">
     {% if has_any_events %}
-    <a class="btn btn-sm btn-secondary" target="_blank" rel="noopener"
+    <a class="btn btn-sm btn-primary" target="_blank" rel="noopener"
        href="{% if club.google_calendar_public_url %}{{ club.google_calendar_public_url }}{% else %}{{ club_ical_google_url }}{% endif %}">
       <i class="bi bi-google"></i> Google Calendar
     </a>
-    <a class="btn btn-sm btn-secondary" href="{{ club_ical_subscribe_url }}">
+    <a class="btn btn-sm btn-primary" href="{{ club_ical_subscribe_url }}">
       <i class="bi bi-calendar-check"></i> Apple Calendar or Outlook
     </a>
     {% endif %}
   </div>
+  {% if can_manage_auctions %}
+  <a href="{% url 'club_event_add' club.slug %}" class="btn btn-sm btn-info">
+    <i class="bi bi-calendar-plus"></i> Add event
+  </a>
+  {% endif %}
 </div>
-
 {% if can_manage_auctions %}
-{% include "auctions/partials/club_events_embed_snippets.html" %}
+<p class="text-muted small">
+  <i class="bi bi-info-circle"></i> Promoted auctions add themselves here, along with the pickup
+  times of an online auction with one pickup location. That button is for meetings, swaps and talks.
+</p>
 {% endif %}
 
 {% if upcoming_events %}
@@ -76,14 +84,11 @@ spread one over two lines and it renders straight onto the page for members to r
           </span>
           {% endif %}
         </div>
+        {% comment %}One property rather than a date filter per part: an online auction runs for days, and
+        printing only the end time made a three-day auction read as one evening. See ClubEvent.when_display.{% endcomment %}
         <div class="text-muted small">
           <i class="bi bi-clock"></i>
-          {{ event.date_start|date:"D, N j, Y" }}
-          {% if event.all_day %}
-          &mdash; all day
-          {% else %}
-          at {{ event.date_start|date:"g:i A" }}{% if event.date_end %} &ndash; {{ event.date_end|date:"g:i A" }}{% endif %}
-          {% endif %}
+          {{ event.when_display }}
         </div>
         {% if event.location %}
         <div class="text-muted small">
@@ -97,14 +102,14 @@ spread one over two lines and it renders straight onto the page for members to r
       </div>
       <div class="d-flex align-items-center gap-2">
         <a href="{{ event.add_to_calendar_url }}" target="_blank" rel="noopener"
-           class="btn btn-sm btn-outline-secondary py-0" title="Save this event to your own calendar">
+           class="btn btn-sm btn-primary" title="Save this event to your own calendar">
           <i class="bi bi-calendar-plus"></i>
         </a>
         {% if can_manage_auctions and event.is_editable %}
-        <a href="{% url 'club_event_edit' club.slug event.pk %}" class="btn btn-sm btn-outline-secondary py-0">Edit</a>
+        <a href="{% url 'club_event_edit' club.slug event.pk %}" class="btn btn-sm btn-info">Edit</a>
         {% endif %}
         {% if can_manage_auctions and event.is_automatic %}
-        <a href="{{ event.related_auction.get_edit_url }}" class="btn btn-sm btn-outline-secondary py-0"
+        <a href="{{ event.related_auction.get_edit_url }}" class="btn btn-sm btn-info"
            title="These events are generated from the auction — edit it there">Edit auction</a>
         {% endif %}
         {% if can_manage_auctions and event.auction and event.auction.pk != current_auction_id and not event.is_over %}
@@ -112,7 +117,7 @@ spread one over two lines and it renders straight onto the page for members to r
           {% csrf_token %}
           <input type="hidden" name="action" value="make_current">
           <input type="hidden" name="auction" value="{{ event.auction.pk }}">
-          <button type="submit" class="btn btn-sm btn-outline-secondary py-0">Make current</button>
+          <button type="submit" class="btn btn-sm btn-info">Make current</button>
         </form>
         {% endif %}
       </div>
@@ -131,7 +136,7 @@ spread one over two lines and it renders straight onto the page for members to r
 <h6 class="text-muted mt-4">Recently</h6>
 <ul class="list-group">
   {% for event in past_events %}
-  <li class="list-group-item d-flex justify-content-between align-items-center">
+  <li class="list-group-item d-flex justify-content-between align-items-center flex-wrap gap-2">
     <span>
       {% if event.related_auction %}
       <a href="{{ event.related_auction.get_absolute_url }}">{{ event.title }}</a>
@@ -141,7 +146,7 @@ spread one over two lines and it renders straight onto the page for members to r
       <span class="text-muted ms-2">{{ event.date_start|date:"N j, Y" }}</span>
     </span>
     {% if can_manage_auctions and event.is_editable %}
-    <a href="{% url 'club_event_edit' club.slug event.pk %}" class="btn btn-sm btn-outline-secondary py-0">Edit</a>
+    <a href="{% url 'club_event_edit' club.slug event.pk %}" class="btn btn-sm btn-info">Edit</a>
     {% endif %}
   </li>
   {% endfor %}
@@ -152,7 +157,7 @@ spread one over two lines and it renders straight onto the page for members to r
 <h6 class="text-muted mt-4">Not promoted <span class="fw-normal">&mdash; only you can see these</span></h6>
 <ul class="list-group">
   {% for auction in unpromoted_auctions %}
-  <li class="list-group-item d-flex justify-content-between align-items-center">
+  <li class="list-group-item d-flex justify-content-between align-items-center flex-wrap gap-2">
     <span>
       <a href="{{ auction.get_absolute_url }}">{{ auction.title }}</a>
       <span class="text-muted ms-2">{{ auction.date_start|date:"N j, Y" }}</span>
@@ -166,7 +171,7 @@ spread one over two lines and it renders straight onto the page for members to r
         {% csrf_token %}
         <input type="hidden" name="action" value="make_current">
         <input type="hidden" name="auction" value="{{ auction.pk }}">
-        <button type="submit" class="btn btn-sm btn-outline-secondary py-0">Make current</button>
+        <button type="submit" class="btn btn-sm btn-info">Make current</button>
       </form>
       {% endif %}
     </span>

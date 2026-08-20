@@ -46,7 +46,7 @@ var form_id = '#printing-prefs';
             div.textContent = text;
             var btn = document.createElement('button');
             btn.type = 'button';
-            btn.className = 'btn-close';
+            btn.className = 'btn-close btn-close-white';
             btn.setAttribute('data-bs-dismiss', 'alert');
             btn.setAttribute('aria-label', 'Close');
             div.appendChild(btn);
@@ -98,7 +98,7 @@ var form_id = '#printing-prefs';
         // whose printer is misbehaving.
         var connect = document.createElement('button');
         connect.type = 'button';
-        connect.className = state.connected ? 'btn btn-sm btn-outline-primary' : 'btn btn-sm btn-primary';
+        connect.className = 'btn btn-sm btn-primary';
         connect.textContent = state.connected ? 'Printer settings' : 'Connect a printer';
         connect.addEventListener('click', function () {
             connect.disabled = true;
@@ -114,7 +114,7 @@ var form_id = '#printing-prefs';
             actionsEl.appendChild(connect);
             var unpair = document.createElement('button');
             unpair.type = 'button';
-            unpair.className = 'btn btn-sm btn-outline-danger ms-1';
+            unpair.className = 'btn btn-sm btn-danger ms-1';
             unpair.textContent = 'Unpair';
             unpair.addEventListener('click', function () {
                 stateEl.textContent = 'Disconnecting…';
@@ -145,7 +145,7 @@ var form_id = '#printing-prefs';
         label.textContent = 'Printer reports ' + labelSize.width_mm + ' × ' + labelSize.height_mm + ' mm labels —';
         var useBtn = document.createElement('button');
         useBtn.type = 'button';
-        useBtn.className = 'btn btn-sm btn-outline-primary';
+        useBtn.className = 'btn btn-sm btn-primary';
         useBtn.textContent = 'Use this size';
         useBtn.addEventListener('click', function () {
             presetEl.value = 'custom';

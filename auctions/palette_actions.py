@@ -5034,6 +5034,19 @@ NOT_A_SKILL: dict[str, str] = {
         "That is a decision made by reading the pair, with a confirmation dialog, not by saying a "
         "binomial into a microphone that has to get both halves of it right."
     ),
+    "ClubAnnouncementsView": (
+        "The text is the easy half; the channels are not. Which of Discord, push, Mailchimp, Brevo "
+        "and the website an announcement goes to is five deliberate decisions about who gets "
+        "interrupted, and the form shows how many members each one would actually reach before you "
+        "tick it. A dictated one-liner would have to guess all of them, and one of the guesses "
+        "sends an email campaign to the whole club."
+    ),
+    "ClubAnnouncementRetractView": (
+        "Acts on one announcement in the list you are already looking at, and what it can undo "
+        "depends on which one: the Discord post and the website copy come back, a delivered push "
+        "and a sent email never do. The page names the announcement and says which of those apply "
+        "before you confirm. The palette navigates there instead."
+    ),
     "ClubBapSettingsView": _FORM_PAGE,
     "ClubDetailView": _FORM_PAGE,
     "ClubEditView": _FORM_PAGE,

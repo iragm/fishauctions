@@ -43,6 +43,10 @@ def club_sidebar(context):
     # has its own permission rather than riding on member management. perm() grants everything to
     # permission_admin, which is why admin isn't named here.
     can_manage_donations = perm("permission_manage_donations")
+    # Announcements have their own permission: one goes straight to Discord, to members' phones and
+    # to the club's mailing list with nobody in between, which is a bigger blast radius than adding
+    # an event to the calendar and not something to hand out with auction management.
+    can_send_announcements = perm("permission_send_announcements")
 
     # In managed/check-in mode the auction's participant list is the member list,
     # so "Members" points at the enhanced auction users table (single entry).
@@ -61,6 +65,7 @@ def club_sidebar(context):
         "brevo",
         "api_keys",
         "donation_settings",
+        "website_integration",
     }
 
     bap_lots_base = reverse("club_bap_lots", kwargs={"slug": club.slug})
@@ -84,6 +89,7 @@ def club_sidebar(context):
         "setup_active": active_tab in setup_tabs,
         "bap_url": bap_url,
         "show_donation_tracking": club.enable_donation_tracking and can_manage_donations,
+        "show_announcements": can_send_announcements,
         # The speaker directory is only for NEC member clubs, so the link only exists for them.
         # Anyone in this sidebar already holds a club permission, which is the access bar.
         "show_speakers": club.is_nec_club,

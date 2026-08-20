@@ -3,6 +3,7 @@
 {% load static %}
 {% block content %}
 <h3>Referrers from the last {{ days }} days</h3>
+<div class="table-responsive">
 <table>
   <thead>
     <tr>
@@ -21,4 +22,5 @@
   {% endfor %}
   </tbody>
 </table>
+</div>
 {% endblock %}

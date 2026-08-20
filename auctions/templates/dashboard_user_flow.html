@@ -18,13 +18,13 @@
           <option value="{{ a.slug }}" {% if selected_auction.slug == a.slug %}selected{% endif %}>{{ a }}</option>
         {% endfor %}
       </select>
-      <button type="submit" class="btn btn-secondary">Load</button>
+      <button type="submit" class="btn btn-primary">Load</button>
     </div>
   </form>
 
   <form method="post" style="flex: 0 0 auto;">
     {% csrf_token %}
-    <button type="submit" class="btn btn-outline-primary" title="Processes every auction in the background (2 s sleep between each). Results are cached indefinitely in Redis.">
+    <button type="submit" class="btn btn-primary" title="Processes every auction in the background (2 s sleep between each). Results are cached indefinitely in Redis.">
       Compute all in background
     </button>
   </form>
@@ -34,7 +34,7 @@
   {% for message in messages %}
     <div class="alert alert-{{ message.tags|default:'info' }} alert-dismissible fade show" role="alert">
       {{ message }}
-      <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+      <button type="button" class="btn-close btn-close-white" data-bs-dismiss="alert" aria-label="Close"></button>
     </div>
   {% endfor %}
 {% endif %}
@@ -63,6 +63,7 @@
 <div class="row g-4 mb-5">
   <div class="col-lg-5">
     <h6>Page section frequency</h6>
+    <div class="table-responsive">
     <table class="table table-sm table-hover">
       <thead>
         <tr>
@@ -85,11 +86,13 @@
         {% endfor %}
       </tbody>
     </table>
+    </div>
   </div>
 
   <div class="col-lg-7">
     <h6>Typical next step (transition matrix)</h6>
     <p class="text-muted small">For each section, where do users go next in the same session?</p>
+    <div class="table-responsive">
     <table class="table table-sm">
       <thead>
         <tr>
@@ -112,6 +115,7 @@
         {% endfor %}
       </tbody>
     </table>
+    </div>
   </div>
 </div>
 {% endif %}

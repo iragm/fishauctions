@@ -24,9 +24,10 @@ from django.forms import (
     HiddenInput,
     modelform_factory,
 )
+from django.template.defaultfilters import pluralize
 from django.urls import reverse
 from django.utils import timezone
-from django.utils.html import escape
+from django.utils.html import escape, format_html
 from django.utils.safestring import mark_safe
 from django_recaptcha.fields import ReCaptchaField
 from django_recaptcha.widgets import ReCaptchaV2Invisible
@@ -44,6 +45,7 @@ from .models import (
     Category,
     ChatSubscription,
     Club,
+    ClubAnnouncement,
     ClubBapCategoryOverride,
     ClubBapGenusOverride,
     ClubEvent,
@@ -970,7 +972,7 @@ class WinnerLot(forms.Form):
             #     css_class='row',
             # ),
             Div(
-                HTML('<button type="submit" class="btn bg-success float-right ms-2">Save</button>'),
+                HTML('<button type="submit" class="btn btn-success text-dark ms-2">Save</button>'),
                 css_class="row",
             ),
         )
@@ -1148,7 +1150,7 @@ class DeleteAuctionTOS(forms.Form):
             ),
             Div(
                 HTML('<a class="btn btn-secondary" href="javascript:window.history.back();">Keep this user</a>'),
-                HTML('<button type="submit" class="text-dark btn btn-warning float-right">Delete</button>'),
+                HTML('<button type="submit" class="btn btn-danger">Delete</button>'),
                 css_class="modal-footer",
             ),
         )
@@ -1413,11 +1415,11 @@ class EditLot(forms.ModelForm):
         # mistake this pair of buttons exists to head off.
         lot_list = reverse("auction_lot_list", kwargs={"slug": self.auction.slug})
         buttons = HTML(
-            f'<a class="btn btn-sm btn-outline-secondary mb-2" target="_blank" rel="noopener" '
+            f'<a class="btn btn-sm btn-primary mb-2" target="_blank" rel="noopener" '
             f'href="{reverse("species_name_create")}?lot_name={quote(self.lot.lot_name or "")}'
             f'&next={quote(lot_list)}">'
             '<i class="bi bi-tag"></i> Name an existing species</a> '
-            f'<a class="btn btn-sm btn-outline-secondary mb-2" target="_blank" rel="noopener" '
+            f'<a class="btn btn-sm btn-primary mb-2" target="_blank" rel="noopener" '
             f'href="{reverse("species_create")}?lot_name={quote(self.lot.lot_name or "")}'
             f'&next={quote(lot_list)}">'
             '<i class="bi bi-plus-lg"></i> New species</a>'
@@ -1438,7 +1440,7 @@ class EditLot(forms.ModelForm):
             HTML(
                 '<div class="d-flex flex-wrap align-items-center gap-3 mb-3">'
                 f'<span class="text-muted">{" &middot; ".join(summary)}</span>'
-                '<button class="btn btn-sm btn-outline-secondary" type="button" '
+                '<button class="btn btn-sm btn-primary" type="button" '
                 'data-bs-toggle="collapse" data-bs-target="#lot-species-fields" '
                 'aria-expanded="false" aria-controls="lot-species-fields">Change</button>'
                 "</div>"
@@ -1479,10 +1481,10 @@ class EditLot(forms.ModelForm):
                     f'<a class="btn btn-primary me-2" href="{reverse("single_lot_label", kwargs={"pk": self.lot.pk})}"><i class="bi bi-tag"></i> {"Reprint label" if self.lot.label_printed else "Print label"}</a>'
                 ),
                 HTML(
-                    '<button type="button" class="btn btn-secondary float-left" onmousedown="event.preventDefault()" onclick="closeModal()">Cancel</button>'
+                    '<button type="button" class="btn btn-secondary me-auto" onmousedown="event.preventDefault()" onclick="closeModal()">Cancel</button>'
                 ),
                 HTML(
-                    f'<button hx-post="{post_url}" hx-target="#modals-here" type="submit" class="btn bg-success float-right ms-2">Save</button>'
+                    f'<button hx-post="{post_url}" hx-target="#modals-here" type="submit" class="btn btn-success text-dark ms-2">Save</button>'
                 ),
                 css_class="modal-footer",
             ),
@@ -1569,7 +1571,7 @@ class CreateEditAuctionTOS(forms.ModelForm):
             problem_button_html = f"<a href={problems_url} class='btn text-dark bg-warning d-none d-md-inline'><i class='bi bi-exclamation-circle'></i> Problems</a>"
             post_url = f"/api/auctiontos/{self.auctiontos.pk}/"
             delete_url = reverse("auctiontosdelete", kwargs={"pk": self.auctiontos.pk})
-            delete_button_html = f"<a href={delete_url} class='btn bg-danger d-none d-md-inline'><i class='bi bi-person-fill-x'></i> Delete</a>"
+            delete_button_html = f"<a href={delete_url} class='btn btn-danger d-none d-md-inline'><i class='bi bi-person-fill-x'></i> Delete</a>"
         else:
             post_url = f"/api/auctiontos/{self.auction.slug}/"
         self.helper = FormHelper()
@@ -1621,7 +1623,7 @@ class CreateEditAuctionTOS(forms.ModelForm):
                     f'{problem_button_html}{delete_button_html}<button type="button" class="btn btn-secondary" onmousedown="event.preventDefault()" onclick="closeModal()">Cancel</button>'
                 ),
                 HTML(
-                    f'<button hx-post="{post_url}" hx-target="#modals-here" type="submit" class="btn bg-success">Save</button>'
+                    f'<button hx-post="{post_url}" hx-target="#modals-here" type="submit" class="btn btn-success text-dark">Save</button>'
                 ),
                 css_class="modal-footer",
             ),
@@ -1823,7 +1825,7 @@ class AuctionNoShowForm(forms.Form):
     def __init__(self, auction, tos, *args, **kwargs):
         self.auction = auction
         self.tos = tos
-        submit_button_html = f'<button hx-post="{reverse("auction_no_show_dialog", kwargs={"slug": self.auction.slug, "tos": self.tos.bidder_number})}" hx-target="#modals-here" type="submit" class="btn btn-success float-right">Take actions</button>'
+        submit_button_html = f'<button hx-post="{reverse("auction_no_show_dialog", kwargs={"slug": self.auction.slug, "tos": self.tos.bidder_number})}" hx-target="#modals-here" type="submit" class="btn btn-success text-dark">Take actions</button>'
         super().__init__(*args, **kwargs)
         self.helper = FormHelper()
         self.helper.form_method = "post"
@@ -1852,7 +1854,7 @@ class AuctionNoShowForm(forms.Form):
             ),
             Div(
                 HTML(
-                    '<button type="button" class="btn btn-secondary float-left" onmousedown="event.preventDefault()" onclick="closeModal()">Cancel</button>'
+                    '<button type="button" class="btn btn-secondary me-auto" onmousedown="event.preventDefault()" onclick="closeModal()">Cancel</button>'
                 ),
                 HTML(submit_button_html),
                 css_class="modal-footer",
@@ -1889,8 +1891,8 @@ class BulkSellLotsToOnlineHighBidder(forms.Form):
     def __init__(self, auction, query, queryset, *args, **kwargs):
         self.auction = auction
         self.queryset = queryset
-        # submit_button_html = f'<button hx-vals="{query":"{query}"} hx-post="{reverse("bulk_set_lots_won", kwargs={"slug": self.auction.slug})}" hx-target="#modals-here" type="submit" class="btn btn-success float-right">Mark {self.queryset.count()} lots sold</button>'
-        submit_button_html = f'<button hx-vals=\'{{"query": "{query}"}}\' hx-post="{reverse("bulk_set_lots_won", kwargs={"slug": self.auction.slug})}" hx-target="#modals-here" type="submit" class="btn btn-success float-right">Mark {self.queryset.count()} lots sold</button>'
+        # submit_button_html = f'<button hx-vals="{query":"{query}"} hx-post="{reverse("bulk_set_lots_won", kwargs={"slug": self.auction.slug})}" hx-target="#modals-here" type="submit" class="btn btn-success text-dark">Mark {self.queryset.count()} lots sold</button>'
+        submit_button_html = f'<button hx-vals=\'{{"query": "{query}"}}\' hx-post="{reverse("bulk_set_lots_won", kwargs={"slug": self.auction.slug})}" hx-target="#modals-here" type="submit" class="btn btn-success text-dark">Mark {self.queryset.count()} lots sold</button>'
         super().__init__(*args, **kwargs)
         self.helper = FormHelper()
         self.helper.form_method = "post"
@@ -1907,7 +1909,7 @@ class BulkSellLotsToOnlineHighBidder(forms.Form):
             ),
             Div(
                 HTML(
-                    '<button type="button" class="btn btn-secondary float-left" onmousedown="event.preventDefault()" onclick="closeModal()">Cancel</button>'
+                    '<button type="button" class="btn btn-secondary me-auto" onmousedown="event.preventDefault()" onclick="closeModal()">Cancel</button>'
                 ),
                 HTML(submit_button_html),
                 css_class="modal-footer",
@@ -1931,7 +1933,7 @@ class ChangeInvoiceStatusForm(forms.Form):
         submit_button_html = ""
         self.show_checkbox = show_checkbox
         if self.invoice_count:
-            submit_button_html = f'<button hx-post="{reverse(post_target_url, kwargs={"slug": self.auction.slug})}" hx-target="#modals-here" type="submit" class="btn btn-success float-right">Change invoices</button>'
+            submit_button_html = f'<button hx-post="{reverse(post_target_url, kwargs={"slug": self.auction.slug})}" hx-target="#modals-here" type="submit" class="btn btn-success text-dark">Change invoices</button>'
         super().__init__(*args, **kwargs)
         self.helper = FormHelper()
         self.helper.form_method = "post"
@@ -1948,7 +1950,7 @@ class ChangeInvoiceStatusForm(forms.Form):
             ),
             Div(
                 HTML(
-                    '<button type="button" class="btn btn-secondary float-left" onmousedown="event.preventDefault()" onclick="closeModal()">Cancel</button>'
+                    '<button type="button" class="btn btn-secondary me-auto" onmousedown="event.preventDefault()" onclick="closeModal()">Cancel</button>'
                 ),
                 HTML(submit_button_html),
                 css_class="modal-footer",
@@ -1979,7 +1981,7 @@ class EnableBiddingForAllForm(forms.Form):
             post_url = reverse("auction_enable_bidding_for_all", kwargs={"slug": auction.slug})
             submit_button_html = (
                 f'<button hx-post="{post_url}" hx-target="#modals-here" type="submit" '
-                'class="btn btn-success float-right">Enable bidding</button>'
+                'class="btn btn-success text-dark">Enable bidding</button>'
             )
         self.helper = FormHelper()
         self.helper.form_method = "post"
@@ -1989,7 +1991,7 @@ class EnableBiddingForAllForm(forms.Form):
         self.helper.layout = Layout(
             Div(
                 HTML(
-                    '<button type="button" class="btn btn-secondary float-left" '
+                    '<button type="button" class="btn btn-secondary me-auto" '
                     'onmousedown="event.preventDefault()" onclick="closeModal()">Cancel</button>'
                 ),
                 HTML(submit_button_html),
@@ -2025,7 +2027,7 @@ class LotRefundForm(forms.ModelForm):
         if self.lot.square_refund_possible and not self.lot.no_more_refunds_possible:
             square_refund_msg = '<div class="alert alert-info mt-3"><i class="bi bi-square"></i> <strong>Square refund will be automatically issued</strong> when you save this form.</div>'
 
-        save_button_html = f'<button hx-post="{reverse("lot_refund", kwargs={"pk": self.lot.pk})}" hx-target="#modals-here" type="submit" class="btn bg-success float-right ms-2">Save</button>'
+        save_button_html = f'<button hx-post="{reverse("lot_refund", kwargs={"pk": self.lot.pk})}" hx-target="#modals-here" type="submit" class="btn btn-success text-dark ms-2">Save</button>'
         self.helper = FormHelper()
         self.helper.form_method = "post"
         self.helper.form_class = "form"
@@ -2050,7 +2052,7 @@ class LotRefundForm(forms.ModelForm):
             ),
             Div(
                 HTML(
-                    '<button type="button" class="btn btn-secondary float-left" onmousedown="event.preventDefault()" onclick="closeModal()">Cancel</button>'
+                    '<button type="button" class="btn btn-secondary me-auto" onmousedown="event.preventDefault()" onclick="closeModal()">Cancel</button>'
                 ),
                 HTML(save_button_html),
                 css_class="modal-footer",
@@ -2197,7 +2199,7 @@ class PickupLocationForm(forms.ModelForm):
         self.fields["contact_person"].label_from_instance = lambda obj: f"{obj.name}"
         delete_button_html = ""
         if self.is_edit_form:
-            delete_button_html = f"<a href='{reverse('delete_pickup', kwargs={'pk': self.pickup_location.pk})}' class='btn bg-danger ms-2 '>Delete this location</a>"
+            delete_button_html = f"<a href='{reverse('delete_pickup', kwargs={'pk': self.pickup_location.pk})}' class='btn btn-danger ms-2'>Delete this location</a>"
         self.helper = FormHelper()
         self.helper.form_method = "post"
         self.helper.form_id = "location-form"
@@ -2408,6 +2410,7 @@ class CreateAuctionForm(forms.ModelForm):
             last_auction = str(self.auction)
             last_auction_tooltip = "Same rules and locations, but with new dates and users."
             last_auction_state = ""
+            self._seed_picker_time_from(self.auction)
 
         if self.instance.pk:
             # editing existing auction
@@ -2454,6 +2457,27 @@ class CreateAuctionForm(forms.ModelForm):
             Div(
                 HTML("<span class='text-muted'><ul><li>" + last_auction_tooltip + "</li></ul></span>"),
             ),
+        )
+
+    def _seed_picker_time_from(self, auction):
+        """Open the date picker on today at *auction*'s start time, instead of at the time of day
+        the form happens to be open.
+
+        A club's auction is at the same hour every time it runs, so "7:00 PM" is nearly always the
+        right answer and "2:14 PM, because that is when I clicked" never is. Two picker options do
+        it: ``viewDate`` is the moment the calendar opens on, and ``selectDay`` keeps the viewDate's
+        *time* and only replaces its day — so whichever day is clicked comes back at the old
+        auction's time. ``useCurrent: false`` is what stops the picker stamping the current time
+        into the empty field the moment it opens, which is the behaviour being replaced; the field
+        stays blank until a day is actually picked, so nobody creates an auction dated today by
+        accident.
+        """
+        if not auction.date_start:
+            return
+        start = timezone.localtime(auction.date_start)
+        seed = timezone.localtime(timezone.now()).replace(hour=start.hour, minute=start.minute, second=0, microsecond=0)
+        self.fields["date_start"].widget = DateTimePickerInput(
+            options={"useCurrent": False, "viewDate": seed.strftime("%Y-%m-%dT%H:%M:%S")}
         )
 
 
@@ -4650,6 +4674,262 @@ class ClubEventForm(forms.ModelForm):
         return cleaned_data
 
 
+class ClubAnnouncementForm(forms.ModelForm):
+    """Say one thing to a club's members, in as many places at once as the club has set up.
+
+    The checkboxes are the whole design: an announcement isn't a channel, it's a message, and the
+    club decides per message whether it goes to the people in Discord, the people with the app, the
+    club's mailing list, or the club's own website. Each one is offered honestly — Discord is
+    switched off with a reason when there is no channel to post in, and the push box carries the
+    number of members it would actually reach, because "12 of 143" is the fact that stops a club
+    believing a push was the whole announcement.
+
+    Mailchimp and Brevo are the one pair that are mutually exclusive rather than merely independent
+    (see clean): they are two boxes because they are two accounts, not because a club has two
+    different sets of people.
+    """
+
+    class Meta:
+        model = ClubAnnouncement
+        fields = [
+            "text",
+            "send_to_discord",
+            "send_to_push",
+            "send_to_mailchimp",
+            "send_to_brevo",
+            "show_on_website",
+            "scheduled_for",
+        ]
+        widgets = {
+            "text": forms.Textarea(
+                attrs={"rows": 3, "placeholder": "Bring a plant to Saturday's meeting — we're doing a swap."}
+            ),
+            # A native datetime-local input rather than the site's DateTimePickerInput: that widget
+            # initializes on DOMContentLoaded, and the native one is the same control every phone
+            # already knows. See the datepicker note in CLAUDE.md.
+            "scheduled_for": forms.DateTimeInput(attrs={"type": "datetime-local"}, format="%Y-%m-%dT%H:%M"),
+        }
+
+    def __init__(self, *args, **kwargs):
+        self.club = kwargs.pop("club")
+        super().__init__(*args, **kwargs)
+        from auctions import announcements as announcements_module
+
+        self.fields["text"].label = "Announcement"
+        # The attribute is the browser's cap; clean_text below is the one that actually holds,
+        # because assigning max_length after the field is built never adds its validator.
+        self.fields["text"].widget.attrs["maxlength"] = announcements_module.MAX_LENGTH
+
+        self.discord_ready = announcements_module.discord_ready(self.club)
+        self.push_reachable, self.member_total = announcements_module.member_counts(self.club)
+
+        discord = self.fields["send_to_discord"]
+        discord.label = "Discord"
+        if self.discord_ready:
+            discord.help_text = "The channel you set with /announcements_here."
+        else:
+            # A checkbox that cannot do anything is disabled here rather than left clickable: this
+            # is a form field whose value would be silently dropped, not an action button, so the
+            # "unavailable actions stay clickable" rule in style_reference.md doesn't apply. The
+            # help text carries the fix, which is the part that matters.
+            discord.disabled = True
+            discord.initial = False
+            if not self.club.discord_server_id:
+                discord.help_text = format_html(
+                    "No Discord server is connected. <a href='{}'>Connect one</a> first.",
+                    reverse("club_discord_config", kwargs={"slug": self.club.slug}),
+                )
+            else:
+                discord.help_text = "No channel set. Run /announcements_here in the one you want."
+
+        push = self.fields["send_to_push"]
+        push.label = "Push notifications"
+        push.help_text = (
+            f"{self.push_reachable} of your {self.member_total} member{pluralize(self.member_total)} "
+            "have the app with notifications on."
+        )
+        if not self.push_reachable:
+            push.disabled = True
+            push.initial = False
+            push.help_text = "Nobody in your club has the app with notifications on yet."
+
+        website = self.fields["show_on_website"]
+        website.label = "Website"
+        # Nothing is ticked when the form opens, including this one -- the model default is True
+        # because a row created any other way should still reach the club's page, but on this form
+        # a pre-ticked box is a channel nobody chose. clean() already refuses a send with no
+        # channel at all, so the cost of forgetting is an error message, not a silent publish.
+        website.initial = False
+        website.help_text = format_html(
+            "Your club page, and the <a href='{}'>snippets</a> for your own site.",
+            reverse("club_website_integration", kwargs={"slug": self.club.slug}),
+        )
+
+        self.mailchimp_ready = announcements_module.mailchimp_ready(self.club)
+        self.brevo_ready = announcements_module.brevo_ready(self.club)
+        mailchimp_count, brevo_count = announcements_module.email_recipient_counts(self.club)
+        both_email_providers = self.mailchimp_ready and self.brevo_ready
+        # A club that has connected one provider is not shopping for the other, and a permanently
+        # disabled "Connect Brevo" box next to a working Mailchimp one is a box that can only ever
+        # be wrong. Offer both only while neither is connected, which is the case where the pair is
+        # a menu rather than a distraction.
+        mailchimp_connected = bool(self.club.mailchimp_access_token)
+        brevo_connected = bool(self.club.brevo_api_key)
+        if mailchimp_connected and not brevo_connected:
+            del self.fields["send_to_brevo"]
+        elif brevo_connected and not mailchimp_connected:
+            del self.fields["send_to_mailchimp"]
+        # Every member this site knows about is synced to *whichever* provider lists the club has
+        # connected, so a club with both has the same people on both. Ticking both would mail all
+        # of them twice, which is why clean() refuses it outright rather than warning about it.
+        overlap_note = " Your members are on both lists — pick one, not both." if both_email_providers else ""
+        self._configure_email_channel(
+            "send_to_mailchimp",
+            "Mailchimp",
+            ready=self.mailchimp_ready,
+            count=mailchimp_count,
+            connected=mailchimp_connected,
+            config_urlname="club_mailchimp_config",
+            list_word="audience",
+            overlap_note=overlap_note,
+        )
+        self._configure_email_channel(
+            "send_to_brevo",
+            "Brevo",
+            ready=self.brevo_ready,
+            count=brevo_count,
+            connected=brevo_connected,
+            config_urlname="club_brevo_config",
+            list_word="list",
+            overlap_note=overlap_note,
+        )
+
+        scheduled = self.fields["scheduled_for"]
+        scheduled.required = False
+        scheduled.help_text = (
+            f"Leave blank and it goes out in {announcements_module.GRACE_SECONDS} seconds, "
+            "so you can read it back and retract it."
+        )
+
+        # No subject box at all: the emailed version is always "<Club> announcement"
+        # (ClubAnnouncement.email_subject). A club given the box wrote its one-sentence
+        # announcement into it a second time, and the inbox showed the same words twice.
+        self.helper = FormHelper()
+        self.helper.form_method = "post"
+        layout_fields = ["text"]
+        layout_fields += [
+            name
+            for name in (
+                "send_to_discord",
+                "send_to_push",
+                "send_to_mailchimp",
+                "send_to_brevo",
+                "show_on_website",
+                "scheduled_for",
+            )
+            if name in self.fields
+        ]
+        self.helper.layout = Layout(*layout_fields)
+        self.helper.add_input(Submit("submit", "Send announcement", css_class="btn-success text-dark"))
+
+    def _configure_email_channel(
+        self, field_name, provider, *, ready, count, connected, config_urlname, list_word, overlap_note
+    ):
+        """Offer one email provider honestly: what it would reach, or why it can't.
+
+        Same shape as the Discord checkbox above — a box that cannot do anything is disabled with
+        the fix in its help text, because a form field whose value gets silently dropped is not the
+        "unavailable actions stay clickable" case.
+        """
+        field = self.fields.get(field_name)
+        if field is None:
+            # The club has the other provider connected, so this one was dropped above.
+            return
+        field.label = provider
+        if ready:
+            # "As a campaign" is the one detail worth the words: it is why the club's own
+            # unsubscribes apply, and the thing a club would otherwise ask about.
+            field.help_text = (
+                f"A campaign to the {count} contact{pluralize(count)} on your {provider} {list_word}, "
+                f"so {provider}'s unsubscribes apply." + overlap_note
+            )
+            return
+        field.disabled = True
+        field.initial = False
+        if connected:
+            field.help_text = format_html(
+                "{} is connected but no {} is chosen. <a href='{}'>Pick one</a> first.",
+                provider,
+                list_word,
+                reverse(config_urlname, kwargs={"slug": self.club.slug}),
+            )
+        else:
+            field.help_text = format_html(
+                "<a href='{}'>Connect {}</a> to email your members.",
+                reverse(config_urlname, kwargs={"slug": self.club.slug}),
+                provider,
+            )
+
+    def clean_text(self):
+        """Cap the length here rather than on the model.
+
+        Discord refuses a message over 2000 characters outright and a phone's lock screen shows
+        maybe two lines, so a long announcement is not a long announcement -- it is one that
+        arrives truncated in three different places, each cut somewhere different.
+        """
+        from auctions import announcements as announcements_module
+
+        text = (self.cleaned_data.get("text") or "").strip()
+        if len(text) > announcements_module.MAX_LENGTH:
+            msg = (
+                f"That's {len(text)} characters. Keep an announcement under "
+                f"{announcements_module.MAX_LENGTH} — Discord and a phone's lock screen will both "
+                "cut it off, in different places."
+            )
+            raise forms.ValidationError(msg)
+        return text
+
+    def clean_scheduled_for(self):
+        """A time in the past is somebody meaning "now", or getting the date wrong. Neither is safe.
+
+        Sending it immediately would surprise them; storing it would have the beat send it on its
+        next tick, which is the same surprise a few minutes later. A grace minute covers the clock
+        skew between the phone that filled the box in and this server.
+        """
+        when = self.cleaned_data.get("scheduled_for")
+        if when and when < timezone.now() - datetime.timedelta(minutes=1):
+            msg = "That time has already passed. Pick a time in the future, or leave it blank to send now."
+            raise forms.ValidationError(msg)
+        return when
+
+    def clean(self):
+        cleaned_data = super().clean()
+        if not any(
+            (
+                cleaned_data.get("send_to_discord"),
+                cleaned_data.get("send_to_push"),
+                cleaned_data.get("send_to_mailchimp"),
+                cleaned_data.get("send_to_brevo"),
+                cleaned_data.get("show_on_website"),
+            )
+        ):
+            # An announcement with no channel is a diary entry. Refuse it here rather than saving a
+            # row that reaches nobody and leaves the admin thinking they told their club something.
+            msg = "Pick at least one place to send this."
+            raise forms.ValidationError(msg)
+        if cleaned_data.get("send_to_mailchimp") and cleaned_data.get("send_to_brevo"):
+            # Members are synced to every connected provider, so both lists hold the same people
+            # and both campaigns would land in the same inboxes. A club keeps two providers
+            # connected while it moves between them; that is a reason to have both configured, not
+            # a reason to send to both at once.
+            msg = (
+                "Pick one email provider, not both — your members are on both lists, so sending "
+                "through both puts two copies of this in the same inbox."
+            )
+            raise forms.ValidationError(msg)
+        return cleaned_data
+
+
 class ClubEditForm(forms.ModelForm):
     """Form for club admins to edit their club settings."""
 
@@ -4790,7 +5070,7 @@ class ClubMembershipSettingsForm(forms.ModelForm):
             self.fields["paypal_webhook_id"].label = "PayPal webhook ID"
             self.fields["paypal_webhook_id"].required = False
             setup_toggle_html = (
-                '<button class="btn btn-outline-secondary btn-sm mb-2" type="button" '
+                '<button class="btn btn-primary btn-sm mb-2" type="button" '
                 'data-bs-toggle="collapse" data-bs-target="#paypalSubSetup" aria-expanded="false" '
                 'aria-controls="paypalSubSetup"><i class="bi bi-paypal"></i> '
                 "PayPal membership subscriptions &mdash; setup instructions</button>"
@@ -4817,7 +5097,7 @@ class ClubMembershipSettingsForm(forms.ModelForm):
                 '<div class="input-group input-group-sm mb-2">'
                 f'<input type="text" class="form-control" id="paypalWebhookUrl" readonly value="{webhook_url}" '
                 'onclick="this.select()">'
-                '<button class="btn btn-outline-secondary" type="button" '
+                '<button class="btn btn-primary" type="button" '
                 "onclick=\"var i=document.getElementById('paypalWebhookUrl');i.select();"
                 'navigator.clipboard&amp;&amp;navigator.clipboard.writeText(i.value);">Copy</button>'
                 "</div>"
@@ -5892,7 +6172,7 @@ class ClubMemberDiscordForm(MarksClubMemberAdminEditedMixin, forms.ModelForm):
                     '<div class="input-group">'
                     '<input type="text" name="discord_id" id="id_discord_id" maxlength="100"'
                     ' value="{}" readonly class="form-control" autocomplete="off">'
-                    '<button class="btn btn-outline-danger" type="button" id="clear-discord-id-btn">'
+                    '<button class="btn btn-danger" type="button" id="clear-discord-id-btn">'
                     "Clear</button>"
                     "</div></div>",
                     instance.discord_id,
@@ -5959,6 +6239,7 @@ class ClubMemberPermissionsForm(MarksClubMemberAdminEditedMixin, forms.ModelForm
             "permission_manage_auctions",
             "permission_manage_bap",
             "permission_manage_donations",
+            "permission_send_announcements",
             "permission_export",
             "permission_add_edit",
             "permission_view",
@@ -5973,6 +6254,7 @@ class ClubMemberPermissionsForm(MarksClubMemberAdminEditedMixin, forms.ModelForm
             "permission_manage_auctions": "Manage auctions",
             "permission_manage_bap": "Award points — can manually add breeder award points to members' accounts and edit BAP settings",
             "permission_manage_donations": "Manage donations",
+            "permission_send_announcements": "Send announcements — post to Discord, members' phones and the club's mailing list",
             "permission_export": "CSV import/export — can import and export member data as CSV",
             "permission_add_edit": "Manage membership — add, delete, and edit member records, renew memberships",
             "permission_view": "View members — can see the member list, but not edit",

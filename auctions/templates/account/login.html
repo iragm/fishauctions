@@ -16,6 +16,7 @@
       none of them just shows the password form below.
     {% endcomment %}
     {% if not request.is_mobile_app %}
+      <div class="d-flex flex-column flex-sm-row flex-wrap gap-2">
       {% if GOOGLE_LOGIN_ENABLED %}
       <a id='sign-in-google' class='btn btn-primary' href="/google/login/?process=login&next={{ redirect_field_value }}">Sign in with your Google account</a>
       {% endif %}
@@ -25,6 +26,7 @@
       {% if FACEBOOK_LOGIN_ENABLED %}
       <a id='sign-in-facebook' class='btn btn-primary' href="/facebook/login/?process=login&next={{ redirect_field_value }}">Sign in with Facebook</a>
       {% endif %}
+      </div>
     {% endif %}
 
     {% with social_shown=GOOGLE_LOGIN_ENABLED|default:APPLE_LOGIN_ENABLED|default:FACEBOOK_LOGIN_ENABLED %}
@@ -38,7 +40,12 @@
       <input type="hidden" name="{{ redirect_field_name }}" value="{{ redirect_field_value }}" />
       {% endif %}
 
-      <a class='btn btn-primary' href="{{ signup_url }}">Create a new account</a> <a class="btn btn-secondary" href="{% url 'account_reset_password' %}">{% trans "Forgot Password" %}</a> <button id='sign-in-local' class="btn btn-success" type="submit">{% trans "Sign In" %}</button>
+      {% comment %}Sign in first: on a phone these three wrap onto separate lines, and the button that finishes what the form above started should be the one directly under it. Forgot Password is a link, not a third button competing with the other two.{% endcomment %}
+      <div class="d-flex flex-wrap align-items-center gap-2">
+        <button id='sign-in-local' class="btn btn-success text-dark" type="submit">{% trans "Sign In" %}</button>
+        <a class='btn btn-primary' href="{{ signup_url }}">Create a new account</a>
+        <a class="btn btn-link" href="{% url 'account_reset_password' %}">{% trans "Forgot Password" %}</a>
+      </div>
     </form>
 
     {% endblock %}

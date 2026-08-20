@@ -51,6 +51,10 @@ below stretches past the sidebar instead of being clipped by text-truncate.{% en
   <a class="nav-link {% if active_tab == 'treasurer_report' %}active{% endif %}" href="{% url 'club_treasurer_report' club.slug %}"><i class="bi bi-cash-coin me-1"></i> Treasurer's Report</a>
   {% endif %}
 
+  {% if show_announcements %}
+  <a class="nav-link {% if active_tab == 'announcements' %}active{% endif %}" href="{% url 'club_announcements' club.slug %}"><i class="bi bi-megaphone-fill me-1"></i> Announcements</a>
+  {% endif %}
+
   <a class="nav-link {% if active_tab == 'map' %}active{% endif %}" href="{% url 'club_member_map' club.slug %}"><i class="bi bi-map me-1"></i> Map</a>
 
   {% if can_access_admin %}
@@ -61,7 +65,7 @@ below stretches past the sidebar instead of being clipped by text-truncate.{% en
   {% comment %}Find speakers, Setup and Club history are the tail of the nav on purpose: they're
   occasional errands rather than things you come here to do, so they sit below the day-to-day links.{% endcomment %}
   {% if show_speakers %}
-  <a class="nav-link {% if active_tab == 'speakers' %}active{% endif %}" href="{{ speakers_url }}"><i class="bi bi-megaphone me-1"></i> Find speakers</a>
+  <a class="nav-link {% if active_tab == 'speakers' %}active{% endif %}" href="{{ speakers_url }}"><i class="bi bi-person-fill me-1"></i> Find speakers</a>
   {% endif %}
 
   {% if show_donation_tracking %}

@@ -45,6 +45,10 @@ CATEGORY_LOT_SELLING = "lot_selling"
 # emailing its own text -- that would be a third message that is neither of the two required ones,
 # on top of the launch email the same command already sent.
 CATEGORY_TAP_TO_PAY_LAUNCH = "tap_to_pay_launch"
+# "Your club just said something." Push-only by nature: the club picks its channels one by one on
+# the announcement form, and a member who didn't get the push is reached by the Discord post or the
+# club's own website -- not by a surprise email nobody ticked a box for.
+CATEGORY_CLUB_ANNOUNCEMENT = "club_announcement"
 
 # Categories with no email equivalent -- either app-native, or so time-critical that a late email is
 # worse than nothing. A push that can't be delivered in these categories is simply dropped; every
@@ -56,6 +60,7 @@ PUSH_ONLY_CATEGORIES = frozenset(
         CATEGORY_VOLUNTEER,
         CATEGORY_LOT_SELLING,
         CATEGORY_TAP_TO_PAY_LAUNCH,
+        CATEGORY_CLUB_ANNOUNCEMENT,
     }
 )
 

@@ -25,7 +25,7 @@
       var notification = document.createElement('div');
       notification.className = 'alert alert-info alert-dismissible fade show position-fixed';
       notification.style = 'top: 20px; right: 20px; z-index: 9999; max-width: 400px;';
-      notification.innerHTML = '<a href="#" onclick="location.reload(); return false;"><strong>Updated stats ready!</strong> Click here to reload this page and see them.</a><button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>';
+      notification.innerHTML = '<a href="#" onclick="location.reload(); return false;"><strong>Updated stats ready!</strong> Click here to reload this page and see them.</a><button type="button" class="btn-close btn-close-white" data-bs-dismiss="alert" aria-label="Close"></button>';
       document.body.appendChild(notification);
     }
   };
@@ -505,6 +505,7 @@ function createScatterChart(canvasId, mainData, compareData, mainTitle, compareT
                 </script>
             </div>
             <h3>Users</h3>
+            <div class="table-responsive">
             <table class="table table-striped">
                 <thead>
                     <tr>
@@ -567,6 +568,7 @@ function createScatterChart(canvasId, mainData, compareData, mainTitle, compareT
                   </tr>
               </tbody>
             </table>
+            </div>
 <h4>Activity</h4>
 <p></p>
 <canvas id="activity" width="500" height="400"></canvas>
@@ -594,6 +596,7 @@ Promoted auctions are included in a weekly promotional email sent every Wednesda
 {% if auction.allow_mailing_lots and not auction.location_with_location_qs.count %}
 <br><br> Join reminder emails are not sent for auctions without an in-person pickup location.
 {% endif %}
+<div class="table-responsive">
 <table class="table table-striped">
     <thead>
         <tr>
@@ -656,8 +659,10 @@ Promoted auctions are included in a weekly promotional email sent every Wednesda
         </tr>
   </tbody>
 </table>
+</div>
 
 <br><h3>Lots</h3>
+<div class="table-responsive">
 <table class="table table-striped">
     <thead>
         <tr>
@@ -768,6 +773,7 @@ Promoted auctions are included in a weekly promotional email sent every Wednesda
 
   </tbody>
 </table>
+</div>
 
             <br><br>
             <h4>Lot sell prices</h4>

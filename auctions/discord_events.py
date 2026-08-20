@@ -63,6 +63,34 @@ def _send(method, path, payload=None):
         return (resp.status_code, {})
 
 
+def send_channel_message(channel_id, content):
+    """POST a plain-text message to a Discord channel. Returns its message id, or "" on failure.
+
+    Lives here rather than next to its first caller so that everything that talks to Discord goes
+    through one place with one timeout and one error path. ``auction_emails`` keeps its own thin
+    wrapper for the boolean it has always returned.
+    """
+    if not _bot_token() or not channel_id:
+        return ""
+    status, body = _send("POST", f"/channels/{channel_id}/messages", {"content": content[:2000]})
+    if status not in (200, 201):
+        return ""
+    return body.get("id") or ""
+
+
+def delete_channel_message(channel_id, message_id):
+    """DELETE one message the bot posted. True when it is gone (or was already).
+
+    Discord answers 404 for a message somebody deleted by hand, which is the same outcome the
+    caller wanted, so it counts as success -- retracting an announcement must not fail because
+    a moderator got there first.
+    """
+    if not _bot_token() or not channel_id or not message_id:
+        return False
+    status, _body = _send("DELETE", f"/channels/{channel_id}/messages/{message_id}")
+    return status in (200, 204, 404)
+
+
 def _event_payload(name, start_time, end_time, location, description="", *, creating=False):
     """The body Discord wants. Only a create may set the privacy level and entity type."""
     payload = {

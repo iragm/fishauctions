@@ -12,7 +12,7 @@
       <form method="post" class="mt-2">
         {% csrf_token %}
         <button type="submit" class="btn btn-primary">{{ confirm_label }}</button>
-        <a href="{% url 'club_detail' club.slug %}" class="btn btn-outline-secondary ms-2">Cancel</a>
+        <a href="{% url 'club_detail' club.slug %}" class="btn btn-secondary ms-2">Cancel</a>
       </form>
       {% else %}
       <h3 class="mb-3">{{ heading }}</h3>

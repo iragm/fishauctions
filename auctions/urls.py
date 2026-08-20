@@ -1048,6 +1048,31 @@ urlpatterns = [
         name="club_events_embed",
     ),
     path(
+        "clubs/<slug:slug>/announcements-embed/",
+        views.ClubAnnouncementsEmbedView.as_view(),
+        name="club_announcements_embed",
+    ),
+    path(
+        "clubs/<slug:slug>/auction-embed/",
+        views.ClubAuctionEmbedView.as_view(),
+        name="club_auction_embed",
+    ),
+    path(
+        "clubs/<slug:slug>/announcements/",
+        views.ClubAnnouncementsView.as_view(),
+        name="club_announcements",
+    ),
+    path(
+        "clubs/<slug:slug>/announcements/<uuid:uuid>/retract/",
+        views.ClubAnnouncementRetractView.as_view(),
+        name="club_announcement_retract",
+    ),
+    path(
+        "clubs/<slug:slug>/website/",
+        views.ClubWebsiteIntegrationView.as_view(),
+        name="club_website_integration",
+    ),
+    path(
         "clubs/<slug:slug>/print-barcodes/",
         views.ClubBarcodeLabelsView.as_view(),
         name="club_barcode_labels",

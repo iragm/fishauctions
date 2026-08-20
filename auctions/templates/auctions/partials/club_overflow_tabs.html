@@ -1,0 +1,20 @@
+{% comment %}The club tabs after BAP. Rendered flat when three tabs fit and inside the More
+dropdown when they don't -- see club_detail.html. The two callers differ only in the two classes
+below, so the markup lives here once instead of being written twice and drifting apart. Bootstrap's
+tab plugin handles a tab inside a dropdown natively: it excludes .dropdown-toggle from the tab list
+and marks the toggle active when a tab inside it is shown.{% endcomment %}
+{% if club.separate_hap %}
+<li class="{{ li_class }}" role="presentation">
+  <button class="{{ nav_class }} {% if active_club_tab == 'hap' %}active{% endif %}" id="hap-tab-btn" data-bs-toggle="tab" data-bs-target="#hap-tab" data-tab-url="{% url 'club_detail_tab' club.slug 'hap' %}" type="button" role="tab">HAP</button>
+</li>
+{% endif %}
+{% if club.separate_cap %}
+<li class="{{ li_class }}" role="presentation">
+  <button class="{{ nav_class }} {% if active_club_tab == 'culture' %}active{% endif %}" id="culture-tab-btn" data-bs-toggle="tab" data-bs-target="#culture-tab" data-tab-url="{% url 'club_detail_tab' club.slug 'culture' %}" type="button" role="tab">Culture</button>
+</li>
+{% endif %}
+{% if my_bap_awards is not None %}
+<li class="{{ li_class }}" role="presentation">
+  <button class="{{ nav_class }} {% if active_club_tab == 'my-points' %}active{% endif %}" id="my-points-tab-btn" data-bs-toggle="tab" data-bs-target="#my-points-tab" data-tab-url="{% url 'club_detail_tab' club.slug 'my-points' %}" type="button" role="tab">My Points</button>
+</li>
+{% endif %}

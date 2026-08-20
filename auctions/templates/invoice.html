@@ -113,12 +113,12 @@ document.addEventListener("DOMContentLoaded", function() {
 {% endif %}
 {% endif %}
 <br>
-<div class="row">
-  <div class="col-auto">
+<div class="row g-2">
+  <div class="col-12 col-md-auto d-flex flex-wrap gap-2">
     {% if show_links %}
       {% if is_admin %}
         {% if debug %}
-        <a href='{% url "invoice_no_login" uuid=invoice.no_login_link %}' class='btn btn-secondary ml-1 mr-1 '>View as bidder</a>
+        <a href='{% url "invoice_no_login" uuid=invoice.no_login_link %}' class='btn btn-primary'>View as bidder</a>
         {% endif %}
         <span id="invoice_control_buttons">{% include 'invoice_buttons.html' %}</span>
         <span style="display: none;" class='text-danger' id="form_dirty_warning">Save adjustments to mark ready or paid</span>
@@ -130,7 +130,7 @@ document.addEventListener("DOMContentLoaded", function() {
               {# Unavailable-action standard: keep the button clickable and explain why on click (see /style_reference.md). #}
               <button
                 type="button"
-                class="btn btn-secondary mr-1 mt-1"
+                class="btn btn-primary"
                 id="payment-not-available"
                 data-reason="{{ invoice.reason_for_payment_not_available }}"
               >
@@ -153,11 +153,11 @@ document.addEventListener("DOMContentLoaded", function() {
               collected via on-device Tap to Pay (see quick_checkout_htmx.html), so hide both here.
             {% endcomment %}
             {% if invoice.show_paypal_button and not request.is_mobile_app %}
-            <form action="{% url 'create_paypal_order' uuid=invoice.no_login_link %}" method="post" style="display: inline;">
+            <form action="{% url 'create_paypal_order' uuid=invoice.no_login_link %}" method="post" class="d-inline">
                 {% csrf_token %}
                 <button
                   type="submit"
-                  class="btn btn-success mr-1 mt-1"
+                  class="btn btn-success text-dark"
                   id="pay-with-paypal"
                   data-bs-toggle="popover"
                   data-bs-placement="bottom"
@@ -171,11 +171,11 @@ document.addEventListener("DOMContentLoaded", function() {
             </form>
             {% endif %}
             {% if invoice.show_square_button and not request.is_mobile_app %}
-            <form action="{% url 'create_square_payment_link' uuid=invoice.no_login_link %}" method="post" style="display: inline;">
+            <form action="{% url 'create_square_payment_link' uuid=invoice.no_login_link %}" method="post" class="d-inline">
                 {% csrf_token %}
                 <button
                   type="submit"
-                  class="btn btn-success mr-1 mt-1"
+                  class="btn btn-success text-dark"
                   id="pay-with-square"
                   data-bs-toggle="popover"
                   data-bs-placement="bottom"
@@ -196,20 +196,20 @@ document.addEventListener("DOMContentLoaded", function() {
         is handled natively over Bluetooth in the mobile app, so hide both print buttons on mobile.
       {% endcomment %}
       {% if not request.is_mobile_app %}
-      <a href="{{ request.path }}?print" class="btn btn-primary ml-1 mr-1 ">Print invoice</a>
+      <a href="{{ request.path }}?print" class="btn btn-primary">Print invoice</a>
       {% if show_links and print_label_link %}
-        <a href="{{ print_label_link }}" id="printomatic-9000" class="btn btn-primary ml-1 mr-1 ">Print labels for your lots</a>
+        <a href="{{ print_label_link }}" id="printomatic-9000" class="btn btn-primary">Print labels for your lots</a>
       {% endif %}
       {% endif %}
   </div>
-  <div class="col">
+  <div class="col-12 col-md d-flex flex-wrap gap-2 align-items-start">
     {% if not is_admin %}
-      <a href="{% url 'feedback' %}" class="btn btn-primary ml-1 mr-1 ">Leave feedback</a>
+      <a href="{% url 'feedback' %}" class="btn btn-primary">Leave feedback</a>
       {% if website_focus == "fish" %}
-        <a href="/blog/transporting-fish/" class="btn btn-primary ml-1 mr-1 ">Info on transporting fish</a>
+        <a href="/blog/transporting-fish/" class="btn btn-primary">Info on transporting fish</a>
       {% endif %}
       {% if location_map %}
-        <a href="{{location_map}}" class="btn btn-primary ml-1 mr-1 ">Get directions</a>
+        <a href="{{location_map}}" class="btn btn-primary">Get directions</a>
       {% endif %}
     {% else %}
       <input type="text" placeholder="Memo" value="{{invoice.auctiontos_user.memo}}" class="form-control " id="memo">
@@ -234,8 +234,8 @@ document.addEventListener("DOMContentLoaded", function() {
     {{ formset.management_form }}
     <form id="form-container" method="POST" action="{% url 'invoice_by_pk' pk=invoice.pk%}">
       {% crispy formset helper %}
-      <button class='btn bg-info' id="add-form" type="button">Add row</button>
-      <input type="submit" class='btn bg-success submit-button ms-2 ml-2' name='save' id='save' value="Save adjustments">
+      <button class='btn btn-info' id="add-form" type="button">Add row</button>
+      <input type="submit" class='btn btn-success text-dark submit-button ms-2' name='save' id='save' value="Save adjustments">
     </form>
     </span>
   {% endif %}
@@ -245,7 +245,7 @@ document.addEventListener("DOMContentLoaded", function() {
 {% if print_label_link %}
   <div>{% if show_links %}
     Either <a href="{{ print_label_link }}">print your labels</a> or
-    <span class='font-weight-bold'>write
+    <span class='fw-bold'>write
       {% else %}
     <span>Write
       {% endif %}
@@ -254,6 +254,7 @@ document.addEventListener("DOMContentLoaded", function() {
     {% endif %}
   </div>
 {% endif %}
+<div class="table-responsive">
 <table class="table">
   <tr>
     <td>Contact info:</td>
@@ -324,11 +325,13 @@ document.addEventListener("DOMContentLoaded", function() {
   {% endfor %}
   {% include "auctions/partials/invoice_final_total_row.html" %}
 </table>
+</div>
 {%if invoice.lots_sold %}
   <h3>Lots sold</h3>
   {% if invoice.auctiontos_user.is_club_member and invoice.auctiontos_user.auction.uses_alternate_split %}
     Note: {{ invoice.auctiontos_user.auction.alternative_split_label|capfirst }} fees have been applied<br>
   {% endif %}
+  <div class="table-responsive">
   <table class="table">
     <thead>
       <tr>
@@ -411,7 +414,8 @@ document.addEventListener("DOMContentLoaded", function() {
     {% endfor %}
   </tbody>
 </table>
-<small><div class="float-right">{% if invoice.pre_register_used %}*Pre-registeration discount applied{% endif %}</small><br></div>
+</div>
+<div class="text-end"><small>{% if invoice.pre_register_used %}*Pre-registeration discount applied{% endif %}</small></div>
 <b>Total donations:</b> {{ invoice.currency_symbol }}{{ invoice.total_donations|floatformat:2 }}<br>
 <b>Total payout:</b> {{ invoice.currency_symbol }}{{ invoice.total_sold|floatformat:2 }}<br>
 {% endif %}
@@ -420,6 +424,7 @@ document.addEventListener("DOMContentLoaded", function() {
 {% if invoice.lots_bought %}
   <br>
   <h3>Lots purchased</h3>
+  <div class="table-responsive">
   <table class="table">
     <thead>
       <tr>
@@ -481,11 +486,11 @@ document.addEventListener("DOMContentLoaded", function() {
       {% endfor %}
     </tbody>
   </table>
-  <b>Total bought:</b> {{ invoice.currency_symbol }}{{ invoice.total_bought|floatformat:2 }}     <br>
   </div>
+  <b>Total bought:</b> {{ invoice.currency_symbol }}{{ invoice.total_bought|floatformat:2 }}<br>
 {% endif %}
 {% if request.user.is_superuser and show_links %}
-  <a href="/admin/auctions/invoice/{{invoice.pk}}/change/" class="btn btn-danger active">Admin</a>
+  <a href="/admin/auctions/invoice/{{invoice.pk}}/change/" class="btn btn-info">Admin</a>
 {% endif %}
 <div id="modals-here"></div>
 {% endblock %}

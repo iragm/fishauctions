@@ -4,14 +4,14 @@
   {% include "auction_ribbon.html" %}
   <div class="container mt-3">
     <h4><i class="bi bi-people"></i> Recruit volunteers</h4>
-    <p class="text-muted mb-3">
+    <div class="help-note"><i class="bi bi-lightbulb-fill"></i><div>
       Use this page to get help from users in your auction. This will send a notification to people
       with the mobile app who can volunteer to help with the job you specify.
       <span tabindex="0" data-bs-toggle="tooltip"
             title="{{ helper_count }} {% if helper_count == 1 %}person has{% else %}people have{% endif %} the app with notifications turned on{% if auction.use_check_in_mode %} and {% if helper_count == 1 %}has{% else %}have{% endif %} checked in{% endif %}">
         <i class="bi bi-info-circle"></i> {{ helper_count }} reachable
       </span>
-    </p>
+    </div></div>
 
     {% if not auction.use_check_in_mode %}
       <div class="alert alert-warning text-dark">
@@ -78,7 +78,7 @@
                       {% csrf_token %}
                       <input type="hidden" name="action" value="cancel">
                       <input type="hidden" name="job_pk" value="{{ job.pk }}">
-                      <button type="submit" class="btn btn-sm btn-outline-danger">Cancel</button>
+                      <button type="submit" class="btn btn-sm btn-danger">Cancel</button>
                     </form>
                   {% endif %}
                 </td>

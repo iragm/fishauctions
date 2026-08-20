@@ -13,11 +13,14 @@
   "sponge filter" from "sponge" reliably, and a filter that hid rows would hide the ones worth
   finding. The columns are the evidence; the reader does the judging.
 {% endcomment %}
-<p class="text-muted small">
-  Grouped by lot name and sorted by how many sellers said they bred it &mdash; the strongest sign that a
-  name is a living thing rather than a box of hardware. Hardware and mixed bags belong here too and
-  should simply be left alone.
-</p>
+<div class="help-note">
+  <i class="bi bi-lightbulb-fill"></i>
+  <div>
+    Grouped by lot name and sorted by how many sellers said they bred it &mdash; the strongest sign that a
+    name is a living thing rather than a box of hardware. Hardware and mixed bags belong here too and
+    should simply be left alone.
+  </div>
+</div>
 
 <div class="table-responsive">
   <table class="table table-sm align-middle">
@@ -41,8 +44,8 @@
         </td>
         <td class="text-end text-nowrap">
           {% comment %}Naming first: most of these rows are a species the list already holds under a name nobody in the hobby types, and adding a second copy of it is what fills the duplicate table below.{% endcomment %}
-          <a class="btn btn-sm btn-outline-primary" href="{% url 'species_name_create' %}?lot_name={{ gap.lot_name|urlencode }}">Add a name</a>
-          <a class="btn btn-sm btn-outline-secondary" href="{% url 'species_create' %}?lot_name={{ gap.lot_name|urlencode }}">New species</a>
+          <a class="btn btn-sm btn-primary" href="{% url 'species_name_create' %}?lot_name={{ gap.lot_name|urlencode }}">Add a name</a>
+          <a class="btn btn-sm btn-primary" href="{% url 'species_create' %}?lot_name={{ gap.lot_name|urlencode }}">New species</a>
         </td>
       </tr>
       {% empty %}
@@ -73,7 +76,7 @@
         <td class="small text-muted">{{ species.club|default:"&mdash;" }}</td>
         <td class="text-end">{{ species.lots }}</td>
         <td class="text-end">
-          <a class="btn btn-sm btn-outline-secondary" href="/admin/auctions/species/{{ species.pk }}/change/">Check it</a>
+          <a class="btn btn-sm btn-primary" href="/admin/auctions/species/{{ species.pk }}/change/">Check it</a>
           <form method="post" action="{% url 'species_approve' species.pk %}" class="d-inline">
             {% csrf_token %}
             <button type="submit" class="btn btn-sm btn-success">Approve</button>
@@ -105,10 +108,10 @@
         <td class="text-end">{{ row.hits }}</td>
         <td class="small text-muted">{{ row.get_source_display }}</td>
         <td class="text-end">
-          <a class="btn btn-sm btn-outline-secondary" href="{% url 'species_create' %}?lot_name={{ row.search_text|urlencode }}">Add species</a>
+          <a class="btn btn-sm btn-primary" href="{% url 'species_create' %}?lot_name={{ row.search_text|urlencode }}">Add species</a>
           <form method="post" action="{% url 'species_cache_forget' row.pk %}" class="d-inline">
             {% csrf_token %}
-            <button type="submit" class="btn btn-sm btn-outline-secondary">Look it up again</button>
+            <button type="submit" class="btn btn-sm btn-primary">Look it up again</button>
           </form>
         </td>
       </tr>
@@ -146,7 +149,7 @@
         <td class="text-end">
           <form method="post" action="{% url 'species_cache_forget' row.pk %}" class="d-inline">
             {% csrf_token %}
-            <button type="submit" class="btn btn-sm btn-outline-secondary">Look it up again</button>
+            <button type="submit" class="btn btn-sm btn-primary">Look it up again</button>
           </form>
         </td>
       </tr>
@@ -162,13 +165,13 @@
   {% comment %}Flagged by Species.save(), the same way an AuctionTOS gets flagged: same scientific name at the same rank, or the same designated common name.  Merging is a superuser's call because it is not reversible and because it decides which name the whole site keeps.{% endcomment %}
   Two rows for one species happen when somebody adds a species the list already had under a name they
   didn&rsquo;t search for. Merging moves the lots, the strains, the hobby names and the remembered
-  lot names onto the row you keep, and deletes the other. Two species genuinely sharing a common
-  name is not a duplicate &mdash; say so and the pair stops being flagged.
+  lot names onto the row you merge into, and deletes the other one. Two species genuinely sharing a
+  common name is not a duplicate &mdash; keep both, and the pair stops being flagged.
 </p>
 <div class="table-responsive">
   <table class="table table-sm align-middle">
     <thead>
-      <tr><th>One row</th><th>The other</th><th>Why flagged</th><th></th></tr>
+      <tr><th>One row</th><th>The other</th><th>Why flagged</th><th>Neither</th></tr>
     </thead>
     <tbody>
       {% for pair in duplicates %}
@@ -183,12 +186,12 @@
           </div>
           <form method="post" action="{% url 'species_merge' pair.other.pk %}" class="d-inline"
                 data-confirm="Everything on {{ pair.other.full_scientific_name }} moves onto {{ pair.species.full_scientific_name }} and that row is deleted. This cannot be undone."
-                data-confirm-title="Keep {{ pair.species.full_scientific_name }}?"
-                data-confirm-ok="Merge and keep this one"
+                data-confirm-title="Merge into {{ pair.species.full_scientific_name }}?"
+                data-confirm-ok="Merge and delete the other"
                 data-confirm-variant="danger">
             {% csrf_token %}
             <input type="hidden" name="keep" value="{{ pair.species.pk }}">
-            <button type="submit" class="btn btn-sm btn-outline-danger mt-1">Keep this one</button>
+            <button type="submit" class="btn btn-sm btn-danger mt-1" title="Move everything off {{ pair.other.full_scientific_name }} onto this row, then delete that row">Merge into this one</button>
           </form>
         </td>
         <td>
@@ -200,19 +203,19 @@
           </div>
           <form method="post" action="{% url 'species_merge' pair.species.pk %}" class="d-inline"
                 data-confirm="Everything on {{ pair.species.full_scientific_name }} moves onto {{ pair.other.full_scientific_name }} and that row is deleted. This cannot be undone."
-                data-confirm-title="Keep {{ pair.other.full_scientific_name }}?"
-                data-confirm-ok="Merge and keep this one"
+                data-confirm-title="Merge into {{ pair.other.full_scientific_name }}?"
+                data-confirm-ok="Merge and delete the other"
                 data-confirm-variant="danger">
             {% csrf_token %}
             <input type="hidden" name="keep" value="{{ pair.other.pk }}">
-            <button type="submit" class="btn btn-sm btn-outline-danger mt-1">Keep this one</button>
+            <button type="submit" class="btn btn-sm btn-danger mt-1" title="Move everything off {{ pair.species.full_scientific_name }} onto this row, then delete that row">Merge into this one</button>
           </form>
         </td>
         <td class="small text-muted">{% if pair.same_scientific_name %}Same scientific name{% else %}Same common name{% endif %}</td>
         <td class="text-end">
           <form method="post" action="{% url 'species_duplicate_dismiss' pair.species.pk %}" class="d-inline">
             {% csrf_token %}
-            <button type="submit" class="btn btn-sm btn-outline-secondary">Not a duplicate</button>
+            <button type="submit" class="btn btn-sm btn-primary" title="These really are two different species. Both rows stay and the pair stops being flagged.">Keep both</button>
           </form>
         </td>
       </tr>
@@ -245,7 +248,7 @@
         <td class="text-end">
           <form method="post" action="{% url 'species_rejection_delete' row.pk %}" class="d-inline">
             {% csrf_token %}
-            <button type="submit" class="btn btn-sm btn-outline-secondary">Allow it again</button>
+            <button type="submit" class="btn btn-sm btn-primary">Allow it again</button>
           </form>
         </td>
       </tr>

@@ -4547,7 +4547,8 @@ class DuplicateSpeciesOnTheGapsPageTests(StandardTestCase):
         self.client.login(username="admin_user", password="testpassword")
         body = self.client.get(reverse("species_gaps")).content.decode()
         self.assertIn("Possible duplicate species", body)
-        self.assertEqual(body.count("Not a duplicate"), 1, "the pair is flagged on both rows, listed once")
+        self.assertEqual(body.count("Keep both"), 1, "the pair is flagged on both rows, listed once")
+        self.assertEqual(body.count("Merge into this one"), 2, "either row can be the one that survives")
 
     def test_a_superuser_can_merge_them(self):
         self.client.login(username="admin_user", password="testpassword")

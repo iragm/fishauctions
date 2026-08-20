@@ -910,6 +910,12 @@ class Club(CloudflareImageMixin, models.Model):
         null=True,
         help_text="Discord channel ID for auction announcements. Set via /auctions_here.",
     )
+    announcement_channel_id = models.CharField(
+        max_length=100,
+        blank=True,
+        null=True,
+        help_text="Discord channel ID for club announcements. Set via /announcements_here.",
+    )
     create_events_for_auctions = models.BooleanField(
         default=False,
         help_text="Automatically create a Discord scheduled event for each promoted auction.",
@@ -1084,6 +1090,14 @@ class Club(CloudflareImageMixin, models.Model):
         max_length=50,
         blank=True,
         help_text="Brevo folder that holds the club's list (Brevo requires lists to live in a folder).",
+    )
+    brevo_sender_id = models.CharField(
+        max_length=50,
+        blank=True,
+        help_text=(
+            "Which of the account's verified senders announcement emails go out as. Blank means "
+            "the first active one, which is the only one most accounts have."
+        ),
     )
     brevo_connected_on = models.DateTimeField(null=True, blank=True)
     brevo_connected_by = models.ForeignKey(
@@ -1705,6 +1719,13 @@ class ClubMember(ContactRecord):
         default=False,
         help_text="Add and email donation vendors.  Separate from member management: it sends mail in the club's name.",
     )
+    permission_send_announcements = models.BooleanField(
+        default=False,
+        help_text=(
+            "Write club announcements.  Its own permission because an announcement goes straight "
+            "to Discord, members' phones and the club's mailing list with nobody in between."
+        ),
+    )
     possible_duplicate = models.ForeignKey(
         "ClubMember",
         on_delete=models.SET_NULL,
@@ -1797,6 +1818,7 @@ class ClubMember(ContactRecord):
                 self.permission_manage_auctions,
                 self.permission_manage_bap,
                 self.permission_manage_donations,
+                self.permission_send_announcements,
             ]
         )
 
@@ -2489,6 +2511,7 @@ class ClubHistory(models.Model):
             ("SETTINGS", "Settings"),
             ("BAP", "BAP"),
             ("DONATIONS", "Donations"),
+            ("ANNOUNCEMENTS", "Announcements"),
         ),
         blank=True,
         null=True,
@@ -2900,6 +2923,35 @@ class ClubEvent(models.Model):
         return self.date_start + datetime.timedelta(hours=2)
 
     @property
+    def when_display(self):
+        """One line saying when this event is, in the viewer's timezone.
+
+        The end is only spelled out when it says something the start doesn't: an event that runs
+        past midnight repeats the date, one that finishes the same day shows just the end time, and
+        one with no end shows nothing extra. Online auctions are the case this exists for — they
+        run for days, and printing only the end *time* read as an auction that started and finished
+        in one evening.
+
+        ``all_day`` events store an exclusive end the way Google and iCal write it, so the last day
+        shown is the day before ``date_end``.
+        """
+        from django.template.defaultfilters import date as date_filter
+
+        start = timezone.localtime(self.date_start)
+        end = timezone.localtime(self.date_end) if self.date_end else None
+        if self.all_day:
+            last_day = (end - datetime.timedelta(days=1)) if end else None
+            if last_day and last_day.date() > start.date():
+                return f"{date_filter(start, 'D, N j')} – {date_filter(last_day, 'D, N j, Y')} — all day"
+            return f"{date_filter(start, 'D, N j, Y')} — all day"
+        when = f"{date_filter(start, 'D, N j, Y')} at {date_filter(start, 'g:i A')}"
+        if not end or end <= start:
+            return when
+        if end.date() == start.date():
+            return f"{when} – {date_filter(end, 'g:i A')}"
+        return f"{when} – {date_filter(end, 'D, N j, Y')} at {date_filter(end, 'g:i A')}"
+
+    @property
     def is_recurring(self):
         """True for a series. One row stands for all of it — see auctions/recurrence.py."""
         return bool(self.recurrence and self.recurrence_start)
@@ -2979,6 +3031,164 @@ class ClubEvent(models.Model):
         if self.location:
             params["location"] = self.location
         return "https://calendar.google.com/calendar/render?" + urlencode(params)
+
+
+class ClubAnnouncement(models.Model):
+    """One short message a club sent to its members, and where it went.
+
+    An announcement is deliberately not an event, a blog post, or an email campaign: it is a
+    sentence or two ("bring plants to Saturday's meeting") that a club wants in front of members
+    *now*, in whatever places its members actually look. The row records both the text and which
+    channels were picked, because "where did that go?" is the first question asked a week later
+    and the only place that can answer it is the announcement itself.
+
+    Channels are stored as they were chosen, not as they are configured now: a club that later
+    disconnects Discord must not have its history rewritten into "this never went to Discord".
+    """
+
+    club = models.ForeignKey(Club, on_delete=models.CASCADE, related_name="announcements")
+    text = models.TextField(
+        verbose_name="Announcement",
+        help_text="A sentence or two — this is read on a lock screen.",
+    )
+    created_by = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL, related_name="+")
+    created_at = models.DateTimeField(auto_now_add=True)
+    uuid = models.UUIDField(default=uuid_module.uuid4, unique=True, editable=False, db_index=True)
+    scheduled_for = models.DateTimeField(
+        null=True,
+        blank=True,
+        db_index=True,
+        verbose_name="Send later",
+        help_text="When it goes out. Blank on the form means a few seconds from now.",
+    )
+    sent_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        db_index=True,
+        help_text="When it actually went out. Null means scheduled and not sent yet -- nothing may show it.",
+    )
+
+    subject = models.CharField(
+        max_length=150,
+        blank=True,
+        default="",
+        verbose_name="Email subject",
+        help_text="Legacy. Subjects are now always '<Club> announcement' -- see email_subject.",
+    )
+
+    # --- what was asked for ---
+    send_to_discord = models.BooleanField(default=False)
+    send_to_push = models.BooleanField(default=False)
+    show_on_website = models.BooleanField(default=True)
+    # Two boolean columns rather than one "email" flag so the row records *which* provider carried
+    # it, which is the question asked a month later. Only one may be set: this site syncs every
+    # member to whichever lists a club has connected, so a club with both has the same people on
+    # both and ticking both would mail all of them twice. ClubAnnouncementForm.clean refuses it.
+    send_to_mailchimp = models.BooleanField(default=False)
+    send_to_brevo = models.BooleanField(default=False)
+
+    # --- what actually happened ---
+    discord_sent = models.BooleanField(
+        default=False,
+        help_text="Discord accepted the message. False with send_to_discord set means it failed.",
+    )
+    discord_message_id = models.CharField(max_length=100, blank=True, default="")
+    push_recipients = models.PositiveIntegerField(
+        default=0,
+        help_text="How many members the push was handed to. Delivery, not readership — see the view table.",
+    )
+    mailchimp_campaign_id = models.CharField(max_length=100, blank=True, default="")
+    brevo_campaign_id = models.CharField(max_length=100, blank=True, default="")
+    email_opens = models.PositiveIntegerField(
+        default=0,
+        help_text="Unique opens reported by the email provider. The only real read receipt any channel has.",
+    )
+    email_error = models.CharField(
+        max_length=300,
+        blank=True,
+        default="",
+        help_text="Why the email didn't go out. Set means the campaign failed; the club needs to see it.",
+    )
+    website_views = models.PositiveIntegerField(
+        default=0,
+        help_text=(
+            "How many times this was rendered on a website -- the club's own page here, or one of "
+            "its embeds. An impression, not a read: it says the announcement was put in front of "
+            "somebody, which is a weaker claim than the email provider's open count."
+        ),
+    )
+    is_deleted = models.BooleanField(default=False, db_index=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["club", "is_deleted", "-created_at"]),
+            # The beat task's only query: due, not sent, not deleted.
+            models.Index(fields=["sent_at", "scheduled_for"]),
+        ]
+
+    def __str__(self):
+        return f"{self.club}: {self.short_text}"
+
+    @property
+    def short_text(self):
+        """The first line, for a table row or a push notification title."""
+        first = (self.text or "").strip().splitlines()
+        first = first[0] if first else ""
+        return first if len(first) <= 80 else first[:77] + "…"
+
+    @property
+    def email_subject(self):
+        """What the emailed version is titled, and it is not something anybody picks.
+
+        A club given a subject box types the announcement into it a second time, worse: the body is
+        one sentence and the box sits right above it, so the inbox ends up showing the same words
+        twice. "<Club> announcement" is the line that is actually useful in a list of unread mail --
+        it says who it is from and that it will be short. The ``subject`` column stays for the rows
+        written while it was editable; nothing reads it any more.
+        """
+        return f"{self.club.name} announcement"
+
+    def save(self, *args, **kwargs):
+        """An announcement with no schedule at all is sent the moment it is created.
+
+        sent_at is the column everything public filters on, so leaving it to the caller would mean
+        every code path that makes an announcement has to remember to stamp it or the club's own
+        website silently never shows it. The one case that legitimately has no sent_at is one with
+        a ``scheduled_for``, and that is exactly the case this skips -- which covers both a club
+        scheduling next Friday and the few seconds of retract window the form gives every
+        announcement (announcements.GRACE_SECONDS).
+        """
+        if self.sent_at is None and self.scheduled_for is None:
+            self.sent_at = timezone.now()
+            update_fields = kwargs.get("update_fields")
+            if update_fields is not None and "sent_at" not in update_fields:
+                kwargs["update_fields"] = [*update_fields, "sent_at"]
+        super().save(*args, **kwargs)
+
+    @property
+    def is_in_grace_period(self):
+        """Waiting out the retract window rather than waiting for a date the club picked.
+
+        Both are ``scheduled_for`` in the future, and they read completely differently to a person:
+        one is "going out in a moment, stop me if it's wrong" and the other is "Friday at 9". The
+        gap between when it was written and when it goes is what tells them apart.
+        """
+        if self.sent_at or not self.scheduled_for or not self.created_at:
+            return False
+        from auctions.announcements import GRACE_SECONDS
+
+        return (self.scheduled_for - self.created_at).total_seconds() <= GRACE_SECONDS * 4
+
+    @property
+    def is_scheduled(self):
+        """Waiting for its time. Nothing public may show one -- see latest_for_website."""
+        return self.sent_at is None and self.scheduled_for is not None
+
+    @property
+    def sent_by_email(self):
+        """Whether either email provider actually accepted a campaign for this announcement."""
+        return bool(self.mailchimp_campaign_id or self.brevo_campaign_id)
 
 
 class ClubAPIKey(models.Model):
@@ -6648,7 +6858,7 @@ class AuctionTOS(models.Model):
             result = self.print_labels_link_html
             if self.print_unprinted_labels_link_html:
                 result += f"""
-                <button type="button" class="btn btn-sm btn-secondary dropdown-toggle dropdown-toggle-split" data-bs-toggle="dropdown" aria-haspopup="true" aria-expanded="false">
+                <button type="button" class="btn btn-sm btn-primary dropdown-toggle dropdown-toggle-split" data-bs-toggle="dropdown" aria-haspopup="true" aria-expanded="false">
                 </button>
                 <div class="dropdown-menu">
                     <span class='dropdown-item'>{self.print_unprinted_labels_link_html}</span>
@@ -6659,7 +6869,7 @@ class AuctionTOS(models.Model):
     @property
     def actions_dropdown_html(self):
         show_on_mobile_string = "d-md-none"
-        result = f"""<button type='button' class='btn btn-sm btn-secondary dropdown-toggle dropdown-toggle-split' data-bs-toggle='dropdown'
+        result = f"""<button type='button' class='btn btn-sm btn-primary dropdown-toggle dropdown-toggle-split' data-bs-toggle='dropdown'
         aria-haspopup='true' aria-expanded='false'>Actions </button>
         <div class = "dropdown-menu" id='actions_dropdown'>
         <span class='dropdown-item {show_on_mobile_string}'>{self.bulk_add_link_html}</span>"""
@@ -11626,6 +11836,7 @@ class UserData(models.Model):
                     "permission_manage_auctions",
                     "permission_manage_bap",
                     "permission_manage_donations",
+                    "permission_send_announcements",
                 ]:
                     if getattr(source_member, field) and not getattr(target_member, field):
                         setattr(target_member, field, True)

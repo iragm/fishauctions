@@ -7,7 +7,7 @@
 <div class="mb-3 d-flex flex-wrap gap-2 align-items-center">
   <a href="{% url 'club_api_keys' club.slug %}" class="btn btn-sm btn-secondary"><i class="bi bi-arrow-left"></i> Back to API keys</a>
   {% if api_key.is_active %}
-  <a href="{% url 'club_api_key_revoke' club.slug api_key.pk %}" class="btn btn-sm btn-outline-danger"><i class="bi bi-slash-circle"></i> Revoke key</a>
+  <a href="{% url 'club_api_key_revoke' club.slug api_key.pk %}" class="btn btn-sm btn-danger"><i class="bi bi-slash-circle"></i> Revoke key</a>
   {% endif %}
 </div>
 
@@ -16,24 +16,27 @@
   <strong><i class="bi bi-exclamation-triangle-fill"></i> Save this key now — it will not be shown again.</strong>
   <div class="mt-2 d-flex align-items-center gap-2 flex-wrap">
     <code id="raw-key" class="fs-6 p-2 bg-light rounded border text-dark">{{ new_raw_key }}</code>
-    <button type="button" class="btn btn-sm btn-outline-dark" onclick="navigator.clipboard.writeText(document.getElementById('raw-key').textContent).then(()=>{this.textContent='Copied!';setTimeout(()=>{this.textContent='Copy'},1500)})">Copy</button>
+    <button type="button" class="btn btn-sm btn-primary" onclick="navigator.clipboard.writeText(document.getElementById('raw-key').textContent).then(()=>{this.textContent='Copied!';setTimeout(()=>{this.textContent='Copy'},1500)})">Copy</button>
   </div>
 </div>
 {% endif %}
 
 <div class="row mb-4">
   <div class="col-md-6">
+    <div class="table-responsive">
     <table class="table table-sm table-borderless">
       <tr><th class="text-muted" style="width:8rem">Prefix</th><td><code>{{ api_key.prefix }}…</code></td></tr>
       <tr><th class="text-muted">Status</th><td>{% if api_key.is_active %}<span class="badge bg-success">Active</span>{% else %}<span class="badge bg-secondary">Revoked</span>{% endif %}</td></tr>
       <tr><th class="text-muted">Created</th><td>{{ api_key.created_at|date:"N j, Y g:i a" }}</td></tr>
       <tr><th class="text-muted">Last used</th><td>{{ api_key.last_used_at|date:"N j, Y g:i a"|default:"Never" }}</td></tr>
     </table>
+    </div>
     <p class="small text-muted"><i class="bi bi-clock-history"></i> Track activity for this key in <a href="{% url 'club_history' club.slug %}?query={{ api_key.prefix }}">club history</a> — search for <code>{{ api_key.prefix }}</code>.</p>
   </div>
 </div>
 
 <h5>Permissions</h5>
+<div class="table-responsive">
 <table class="table table-sm mb-4" style="max-width:640px">
   <tbody>
     <tr><th style="width:18rem">Add club members</th><td>{% if api_key.can_add_club_members %}<span class="badge bg-success">Enabled</span>{% else %}<span class="badge bg-secondary">Disabled</span>{% endif %}</td></tr>
@@ -44,6 +47,7 @@
     <tr><th>Species<div class="fw-normal small text-muted">Match a typed name to a species, add new species, and name existing ones</div></th><td>{% if api_key.can_look_up_species %}<span class="badge bg-success">Enabled</span>{% else %}<span class="badge bg-secondary">Disabled</span>{% endif %}</td></tr>
   </tbody>
 </table>
+</div>
 
 <h5>Example endpoints</h5>
 <div class="mb-3 small text-muted">
@@ -267,6 +271,7 @@
 </p>
 
 {% if field_mappings %}
+<div class="table-responsive">
 <table class="table table-sm mb-3" style="max-width:480px">
   <thead><tr><th>External field (incoming)</th><th>Internal field</th><th></th></tr></thead>
   <tbody>
@@ -277,13 +282,14 @@
       <td class="text-end">
         <form method="post" action="{% url 'club_api_key_mapping_delete' club.slug api_key.pk mapping.pk %}" class="d-inline">
           {% csrf_token %}
-          <button type="submit" class="btn btn-sm btn-outline-danger py-0">Remove</button>
+          <button type="submit" class="btn btn-sm btn-danger py-0">Remove</button>
         </form>
       </td>
     </tr>
     {% endfor %}
   </tbody>
 </table>
+</div>
 {% else %}
 <p class="text-muted small">No mappings yet.</p>
 {% endif %}

@@ -11,6 +11,7 @@
 <p class="text-muted small">API keys allow external services (e.g. WordPress, Google Forms) to create club members without a user account. Each key is scoped to this club only.</p>
 
 {% if api_keys %}
+<div class="table-responsive">
 <table class="table table-sm">
   <thead>
     <tr>
@@ -39,13 +40,14 @@
       <td class="text-end">
         <a href="{% url 'club_api_key_detail' club.slug key.pk %}" class="btn btn-sm btn-primary">Manage</a>
         {% if key.is_active %}
-        <a href="{% url 'club_api_key_revoke' club.slug key.pk %}" class="btn btn-sm btn-outline-danger">Revoke</a>
+        <a href="{% url 'club_api_key_revoke' club.slug key.pk %}" class="btn btn-sm btn-danger">Revoke</a>
         {% endif %}
       </td>
     </tr>
     {% endfor %}
   </tbody>
 </table>
+</div>
 {% else %}
 <p class="text-muted">No API keys yet. <a href="{% url 'club_api_key_create' club.slug %}">Create one</a> to allow external integrations.</p>
 {% endif %}

@@ -21,7 +21,7 @@
           data-confirm-ok="Clear all locations"
           data-confirm-variant="danger">
       {% csrf_token %}
-      <button type="submit" class="btn btn-outline-danger btn-sm"><i class="bi bi-trash"></i> Clear all locations</button>
+      <button type="submit" class="btn btn-danger btn-sm"><i class="bi bi-trash"></i> Clear all locations</button>
     </form>
   </div>
 
@@ -138,8 +138,8 @@
     // actually wants — and hands off to the native scanning screen, which walks them to the lot.
     // "Locate" just re-centres/pulses the dot on this web map.
     const arButton = inApp
-      ? `<a class="btn btn-sm btn-outline-secondary" href="fishauctions://ar/${encodeURIComponent(auctionSlug)}?locate=${p.lot}"><i class="bi bi-geo-alt"></i> Find this lot</a>`
-      : `<button type="button" class="btn btn-sm btn-outline-secondary" id="ar-pop-ar"><i class="bi bi-geo-alt"></i> Find this lot</button>`;
+      ? `<a class="btn btn-sm btn-primary" href="fishauctions://ar/${encodeURIComponent(auctionSlug)}?locate=${p.lot}"><i class="bi bi-geo-alt"></i> Find this lot</a>`
+      : `<button type="button" class="btn btn-sm btn-primary" id="ar-pop-ar"><i class="bi bi-geo-alt"></i> Find this lot</button>`;
     popover.innerHTML =
       `<div class="card-body p-2">
          <div class="fw-semibold">Lot ${escapeHtml(p.lot_number)}</div>
@@ -149,7 +149,7 @@
          <div class="d-flex flex-wrap gap-1">
            <a class="btn btn-sm btn-primary" href="/lots/${p.lot}/"><i class="bi bi-box-arrow-up-right"></i> Open lot</a>
            ${arButton}
-           <button type="button" class="btn btn-sm btn-outline-primary" id="ar-pop-locate"><i class="bi bi-geo-alt-fill"></i> Locate</button>
+           <button type="button" class="btn btn-sm btn-primary" id="ar-pop-locate"><i class="bi bi-geo-alt-fill"></i> Locate</button>
          </div>
        </div>`;
     const wrap = svg.parentElement.getBoundingClientRect();

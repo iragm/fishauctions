@@ -12,18 +12,15 @@
   said, and who still needs chasing.
 </p>
 
-<div class="alert alert-info" role="alert">
-  <i class="bi bi-info-circle me-1"></i>
-  Donation emails sent from this site automatically carry the club's postal address and an
-  unsubscribe link, which US law requires on a bulk solicitation. The mailing address below is
-  what gets used, so a club sending from this site has to fill it in. If you copy/paste instead,
-  the message is yours to send and those lines are still added to what you copy &mdash; leave
-  them in.
-  <hr>
-  Some states require your club to be a registered non-profit before asking for donations. It's
-  your responsibility to comply with state and federal regulations, and to read the
-  <a href="#" data-bs-toggle="modal" data-bs-target="#donation-terms-modal">terms and conditions</a>
-  before you turn this on.
+{% comment %}The paragraph about the postal address and the unsubscribe line is gone from here: the mailing-address field says what it is for in its own help text, and the terms modal below covers CAN-SPAM.  What is left is the one thing somebody could get wrong by not knowing it, which is what a help note is for (style_reference.md).{% endcomment %}
+<div class="help-note">
+  <i class="bi bi-lightbulb-fill"></i>
+  <div>
+    Some states require your club to be a registered non-profit before asking for donations. It's
+    your responsibility to comply with state and federal regulations, and to read the
+    <a href="#" data-bs-toggle="modal" data-bs-target="#donation-terms-modal">terms and conditions</a>
+    before you turn this on.
+  </div>
 </div>
 
 {% if not assist_enabled %}
@@ -60,7 +57,7 @@
 
 {% if club.enable_donation_tracking %}
 <hr class="my-4">
-<a class="btn btn-secondary" href="{% url 'club_donation_vendors' club.slug %}">
+<a class="btn btn-primary" href="{% url 'club_donation_vendors' club.slug %}">
   <i class="bi bi-gift me-1"></i> Go to donation tracking
 </a>
 {% endif %}
@@ -71,7 +68,7 @@
     <div class="modal-content">
       <div class="modal-header">
         <h5 class="modal-title" id="donation-terms-title">Donation tracking terms and conditions</h5>
-        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
       </div>
       <div class="modal-body">
         <p class="text-muted">

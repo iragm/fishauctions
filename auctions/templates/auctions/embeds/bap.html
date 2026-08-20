@@ -1,0 +1,35 @@
+{% extends "auctions/embeds/base.html" %}
+{% comment %}Top-10 breeder award leaderboard. Names and points only -- never emails or member numbers.{% endcomment %}
+{% block embed_title %}{{ club_name }} {{ program_label }} leaderboard{% endblock %}
+{% block embed_heading %}{{ club_name }} &mdash; {{ program_label }} Top 10{% endblock %}
+{% block embed_extra_css %}
+    ol.ew-list li { display: flex; align-items: center; }
+    .lb-rank { min-width: 2em; color: var(--muted); }
+    .lb-name { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .lb-rank-1 .lb-name { font-weight: 600; }
+    .lb-points {
+      margin-left: 12px;
+      background: var(--badge-bg);
+      color: var(--badge-text);
+      border-radius: 999px;
+      padding: 2px 10px;
+      font-size: 0.85rem;
+      white-space: nowrap;
+    }
+    .lb-rank-1 .lb-points { background: var(--accent); color: #ffffff; }
+{% endblock %}
+{% block embed_body %}
+    {% if leaderboard %}
+    <ol class="ew-list">
+      {% for row in leaderboard %}
+      <li class="lb-rank-{{ row.rank }}">
+        <span class="lb-rank">{{ row.rank }}.</span>
+        <span class="lb-name">{{ row.name }}</span>
+        <span class="lb-points">{{ row.points }} pts</span>
+      </li>
+      {% endfor %}
+    </ol>
+    {% else %}
+    <p class="ew-empty">No points recorded yet.</p>
+    {% endif %}
+{% endblock %}

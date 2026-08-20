@@ -24,6 +24,7 @@ from .models import (
     BlogPost,
     Category,
     Club,
+    ClubAnnouncement,
     ClubAPIKey,
     ClubDiscordRole,
     ClubEvent,
@@ -1472,9 +1473,59 @@ class ClubEventAdmin(admin.ModelAdmin):
     ordering = ("-date_start",)
 
 
+class ClubAnnouncementAdmin(admin.ModelAdmin):
+    """Read-only-ish view of what clubs have announced.
+
+    The channel columns and the counters are not editable here on purpose: they record what
+    actually happened when the announcement was sent, and editing them would turn the club's own
+    history into something a site admin had rewritten. Delete or soft-delete an announcement that
+    shouldn't have gone out; don't retitle where it went.
+    """
+
+    model = ClubAnnouncement
+    list_display = (
+        "short_text",
+        "club",
+        "created_at",
+        "scheduled_for",
+        "sent_at",
+        "discord_sent",
+        "push_recipients",
+        "email_opens",
+        "is_deleted",
+    )
+    list_filter = (
+        "send_to_discord",
+        "send_to_push",
+        "send_to_mailchimp",
+        "send_to_brevo",
+        "show_on_website",
+        "is_deleted",
+        "created_at",
+    )
+    search_fields = ("text", "club__name")
+    raw_id_fields = ("club", "created_by")
+    # sent_at is editable: it is the column everything public filters on, so it is the one lever
+    # for un-sending or re-releasing a row that got into a strange state. The rest are the record
+    # of what the providers and Discord actually did.
+    readonly_fields = (
+        "created_at",
+        "uuid",
+        "discord_sent",
+        "discord_message_id",
+        "push_recipients",
+        "mailchimp_campaign_id",
+        "brevo_campaign_id",
+        "email_opens",
+        "email_error",
+    )
+    ordering = ("-created_at",)
+
+
 admin.site.register(ClubMember, ClubMemberAdmin)
 admin.site.register(ClubHistory, ClubHistoryAdmin)
 admin.site.register(ClubEvent, ClubEventAdmin)
+admin.site.register(ClubAnnouncement, ClubAnnouncementAdmin)
 
 
 class SpeakerTopicAdmin(admin.ModelAdmin):

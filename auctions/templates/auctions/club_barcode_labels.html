@@ -8,21 +8,24 @@
 
 {% block content %}
 {% include "club_ribbon.html" %}
+{% comment %}No page heading: the club sidebar already names this page and marks it active, and
+the browser tab carries the title. Most club pages have none for that reason -- see
+style_reference.md.{% endcomment %}
+{% comment %}One help note, not three stacked explanations: what the page is for goes in the note, and the one thing that can catch somebody out -- nothing here is saved -- is a warning, which is a different kind of message (style_reference.md).{% endcomment %}
+<div class="help-note mt-3">
+  <i class="bi bi-lightbulb-fill"></i>
+  <div>
+    You can scan user's membership barcodes to add them to club auctions, assign bidder numbers, or sell T-shirts and other swag (instantly added to that user's invoice).
+    Create barcodes here, print them out, then scan them using <strong>quick check in users</strong> in any of your club auctions. Scan the barcode first, then scan the user to assign it to.
+  </div>
+</div>
 
-<h4 class="mt-3">Print Barcodes</h4>
-<p class="text-muted small mb-2">
-  You can scan user's membership barcodes to add them to club auctions, assign bidder numbers, or sell T-shirts and other swag (instantly added to that user's invoice).
-</p>
-<p class="text-muted small mb-2">
-  Create barcodes here, print them out, then scan them using <strong>quick check in users</strong> in any of your club auctions. Scan the barcode first, then scan the user to assign it to.
-</p>
-
-<div class="alert alert-info py-2 small mb-3">
-  <i class="bi bi-info-circle"></i> Changes on this page will not be saved, so make sure the labels have all printed correctly before you leave.
+<div class="alert alert-warning text-dark py-2 small mb-3">
+  <i class="bi bi-exclamation-triangle"></i> Changes on this page will not be saved, so make sure the labels have all printed correctly before you leave.
 </div>
 
 <div class="mb-3">
-  <button type="button" id="scanner-test-toggle" class="btn btn-outline-secondary btn-sm">
+  <button type="button" id="scanner-test-toggle" class="btn btn-primary btn-sm">
     <i class="bi bi-upc-scan"></i> Test scanner
   </button>
 </div>
@@ -41,11 +44,12 @@
   <div id="scanner-test-status" class="alert alert-secondary mt-1 mb-0">Scan the test barcode above to begin&hellip;</div>
 </div>
 
-<form method="get" action="{% url 'club_barcode_labels_pdf' club.slug %}" id="barcode-form" target="_blank">
+{% comment %}No target="_blank": the response is an attachment, so the browser downloads it and leaves this page where it is -- and when there is nothing to print the view redirects back here with a message, which in a new tab would be a message on a page nobody is looking at.{% endcomment %}
+<form method="get" action="{% url 'club_barcode_labels_pdf' club.slug %}" id="barcode-form">
   <div id="rows-container"></div>
   <div class="d-flex gap-2 mt-2">
-    <button type="button" id="add-row" class="btn btn-info btn-sm">+ Add row</button>
-    <button type="submit" class="btn btn-success btn-sm">
+    <button type="button" id="add-row" class="btn btn-primary btn-sm"><i class="bi bi-plus-lg"></i> Add row</button>
+    <button type="submit" class="btn btn-success text-dark btn-sm">
       <i class="bi bi-file-pdf"></i> Download PDF
     </button>
   </div>
@@ -87,7 +91,7 @@
       </select>
     </div>
     <div class="align-self-end">
-      <button type="button" class="btn btn-outline-danger btn-sm remove-row">×</button>
+      <button type="button" class="btn btn-danger btn-sm remove-row">×</button>
     </div>
   </div>
 </template>
@@ -148,6 +152,36 @@ function addRow() {
 
 addRow();
 document.getElementById('add-row').addEventListener('click', addRow);
+
+// A row that is still on "- select -", or whose fields are blank, produces no label -- and a
+// submit with no labels in it used to come back as a 404. The button stays pressable and says why
+// nothing happened (style_reference.md: unavailable actions stay clickable); the view checks the
+// same thing again for anything that gets past this.
+function completeRowCount() {
+  let complete = 0;
+  document.querySelectorAll('.barcode-row').forEach(function (row) {
+    const type = row.querySelector('.label-type-select').value;
+    const value = function (name) {
+      const field = row.querySelector('[name="' + name + '"]');
+      return field ? field.value.trim() : '';
+    };
+    if (type === 'bidder_paddle' && value('bidder_number')) { complete++; }
+    else if ((type === 'charge' || type === 'discount') && parseFloat(value('amount')) > 0 && value('label_text')) { complete++; }
+    else if (type === 'member_card' && value('member_id')) { complete++; }
+  });
+  return complete;
+}
+
+document.getElementById('barcode-form').addEventListener('submit', function (event) {
+  if (completeRowCount()) { return; }
+  event.preventDefault();
+  $.toast({
+    title: 'Nothing to print',
+    content: 'Every row needs a label type and the fields that go with it: a bidder number, an amount and some label text, or a member.',
+    type: 'warning',
+    delay: 6000
+  });
+});
 
 const labelSettingsLink = document.getElementById('label-settings-link');
 document.getElementById('rows-container').addEventListener('change', function() {

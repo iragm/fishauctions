@@ -411,9 +411,64 @@ ruff.toml            # Linting/format config
   `auctions/test_template_hygiene.py`).
 
 - Read `style_reference.md` before making any frontend/template/CSS change. It
-  documents the palette, text-on-color rules, outline-button and pagination
-  fixes, the unavailable-action ("stay clickable") standard, and the message-type
+  documents the palette, text-on-color rules, the six permitted button classes (no
+  `btn-outline-*`, no `btn-warning`, and `btn-secondary` only on a Cancel or a Close), close
+  buttons, hamburger menus, help notes, pagination, the unavailable-action ("stay clickable") standard, and the message-type
   taxonomy. Never edit vendor CSS; site-wide overrides go in `auctions/static/css/auction_site.css`.
+  `docs/style_migration.md` is the worklist of files that don't conform to the button rules yet —
+  take a few off it when you're in a template anyway.
+
+## Club announcements and website integration
+
+A club says one thing to its members and picks where it lands: Discord, push notifications to
+phones with the app, an email campaign through its own Mailchimp or Brevo, its own website, or any
+combination. `auctions/announcements.py` does the delivering and `/clubs/<slug>/announcements/` is
+where an admin writes one, behind `permission_send_announcements` — its own permission because one
+press reaches every one of those places at once. The Discord channel is set in Discord with
+`/announcements_here`, the same shape as `/auctions_here` and deliberately a second channel.
+
+**Every channel carries the whole announcement and nothing else.** It has no page of its own and
+nothing links to one: it is a sentence or two by design, so a "read the rest on our website" link
+would only lead somewhere that repeats it. Discord is the club name in bold and the text, the push
+body is the entire announcement, and tapping the push opens the club's page. The consequence is
+that the **only** honest read receipt is the email provider's open count — Discord has none and a
+delivered push is not a read one — and no number is invented to stand in for the others. The
+website is the one channel that can count something of its own: `website_views` counts **renders**
+(the club page here, plus every format of the embed, admins excluded), which is an impression and
+is labelled as one — it answers "is the snippet on my site showing this at all", not "did anybody
+read it".
+
+Email always goes as a **campaign** addressed to the provider's list, never through this site's
+mail server, which is what makes the provider's unsubscribes apply — and it goes out from a Celery
+task, since it is four round trips per provider. Nobody types a from address: Mailchimp's audience
+`campaign_defaults` and Brevo's verified senders already hold one, and the same read fills in
+`Club.donation_mailing_address` when it is blank. **Nobody types a subject either** — it is always
+`"<Club> announcement"`, because the box clubs were given got the announcement typed into it a
+second time and the inbox showed the same sentence twice. Mailchimp and Brevo are two checkboxes so
+the row records which one carried it, but **only one may be ticked**: members are synced to every
+connected provider, so a club with both has the same people on both and sending to both would mail
+all of them twice. Only the provider a club has connected is offered at all; the other checkbox is
+dropped rather than shown disabled, unless neither is connected, where the pair is a menu. The form
+opens with **nothing ticked**, the website box included.
+
+**Nothing is delivered in the request.** One with no time on it is scheduled
+`announcements.GRACE_SECONDS` (30) out, which is the window in which Retract still means
+something — the mistake clubs make is the wrong date in the sentence, and they see it the moment
+the page reloads. An explicit schedule is the same path with a longer wait. `sent_at`, not
+`scheduled_for`, is the column everything public filters on: the row exists from the moment it is
+written, and the club page and the embed must stay blind to it until it has actually gone.
+Retracting stops one that hasn't gone, deletes the Discord post and takes it off the website, then
+says which channels it could not reach; the send and the retraction each write a `ClubHistory` row
+under `ANNOUNCEMENTS`, which for a retraction is the only surviving record.
+`docs/club_announcements.md` has the whole design.
+
+Everything a club can put on **its own website** is on one page, `/clubs/<slug>/website/`: the
+event calendar, the current auction, the latest announcement and the BAP leaderboard. Snippets are
+listed whether or not the feature behind them is switched on, with a note saying so — somebody
+choosing what to put on the club website is exactly who should find out that turning BAP on would
+give them a leaderboard. The four embeds share one shell (`auctions/templates/auctions/embeds/`)
+so their palette can't drift; each has a styled template and an `_unstyled` one, and
+`embed_mode_from_request` / `embed_response` in `views.py` are the one reader of `?format=`.
 
 ## Model Changes
 

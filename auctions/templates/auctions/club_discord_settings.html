@@ -42,7 +42,7 @@
     </p>
     <div class="input-group mb-2">
       <input type="text" class="form-control font-monospace" id="joinCommand" value="{{ club_uuid }}" readonly>
-      <button class="btn btn-outline-secondary" type="button"
+      <button class="btn btn-primary" type="button"
               onclick="navigator.clipboard.writeText(document.getElementById('joinCommand').value)">
         <i class="bi bi-clipboard"></i> Copy
       </button>
@@ -59,12 +59,13 @@
     </p>
     <form method="post" action="{% url 'club_discord_fetch_roles' club.slug %}" class="mb-3">
       {% csrf_token %}
-      <button type="submit" class="btn btn-secondary btn-sm">
+      <button type="submit" class="btn btn-primary btn-sm">
         <i class="bi bi-arrow-clockwise"></i> Fetch roles from Discord
       </button>
     </form>
 
     {% if roles %}
+      <div class="table-responsive">
       <table class="table table-sm align-middle">
         <thead>
           <tr>
@@ -95,6 +96,7 @@
           {% endfor %}
         </tbody>
       </table>
+      </div>
     {% else %}
       <p class="text-muted small">No roles fetched yet. Click <em>Fetch roles from Discord</em> above.</p>
     {% endif %}

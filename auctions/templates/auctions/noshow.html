@@ -10,16 +10,16 @@
 {% include 'auction_ribbon.html' %}
 
 <h3>Problems with {{ tos.name }}?</h3>
-<small>If this user won lots and didn't pay, broke rules, or caused issues for others in this auction, this page will allow you to take action against them.<br><br>
-  You can click Take Action to refund lots, leave negative feedback about this user, and/or ban them from future auctions.<br><br>
-When issuing a refund, if the invoice is open, no further action is needed.  If the invoice is paid, you should send money (the amount shown) back to the user who paid.</small>
-<br>
+<div class="help-note"><i class="bi bi-lightbulb-fill"></i><div>If this user won lots and didn't pay, broke rules, or caused issues for others in this auction, this page will allow you to take action against them.
+  You can click Take Action to refund lots, leave negative feedback about this user, and/or ban them from future auctions.
+When issuing a refund, if the invoice is open, no further action is needed.  If the invoice is paid, you should send money (the amount shown) back to the user who paid.</div></div>
 <a href="#" class='btn btn-danger mt-2 mb-2' hx-get="{% url 'auction_no_show_dialog' slug=auction.slug tos=tos.bidder_number %}"
                 hx-target="#modals-here"
                 hx-trigger="click">
                 Take Action
               </a>
 <h3>Lots Sold</h3>
+  <div class="table-responsive">
   <table class="table">
     <thead>
       <tr>
@@ -70,8 +70,10 @@ When issuing a refund, if the invoice is open, no further action is needed.  If 
     {% endfor %}
   </tbody>
 </table>
+  </div>
 <br>
   <h3>Lots purchased</h3>
+  <div class="table-responsive">
   <table class="table">
     <thead>
       <tr>
@@ -116,5 +118,6 @@ When issuing a refund, if the invoice is open, no further action is needed.  If 
       {% endfor %}
     </tbody>
   </table>
+  </div>
 <div id="modals-here"></div>
 {% endblock %}

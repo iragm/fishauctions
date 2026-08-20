@@ -1,13 +1,14 @@
 {% comment %}Responsive club nav: inline column on desktop (>=lg), offcanvas on mobile. Rendered by the club_sidebar tag (club_nav_tags).{% endcomment %}
 {% if can_view %}
-<button class="btn btn-outline-secondary btn-sm text-light d-lg-none mb-3" type="button"
+{% comment %}btn-info, not btn-primary: club_sidebar_can_view only returns True for someone holding a club or auction admin permission, so this button is invisible to ordinary members and sits on pages (the club home page above all) that members do see.{% endcomment %}
+<button class="btn btn-info btn-sm d-lg-none mb-3" type="button"
         data-bs-toggle="offcanvas" data-bs-target="#clubSidebar" aria-controls="clubSidebar">
   <i class="bi bi-list"></i> {{ club.name }} menu
 </button>
 <div class="offcanvas-lg offcanvas-start" tabindex="-1" id="clubSidebar" aria-labelledby="clubSidebarLabel">
   <div class="offcanvas-header">
     <h5 class="offcanvas-title" id="clubSidebarLabel">{{ club.name }}</h5>
-    <button type="button" class="btn-close" data-bs-dismiss="offcanvas" data-bs-target="#clubSidebar" aria-label="Close"></button>
+    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="offcanvas" data-bs-target="#clubSidebar" aria-label="Close"></button>
   </div>
   <div class="offcanvas-body d-block p-0">
     {% include "club_sidebar_nav.html" %}

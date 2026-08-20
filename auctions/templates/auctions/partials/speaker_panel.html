@@ -24,7 +24,7 @@ link. Nothing here assumes which — `standalone` only controls the close button
       </div>
     </div>
     {% if not standalone %}
-    <button type="button" class="btn-close" aria-label="Close" data-speaker-panel-close></button>
+    <button type="button" class="btn-close btn-close-white" aria-label="Close" data-speaker-panel-close></button>
     {% endif %}
   </div>
 
@@ -70,10 +70,10 @@ link. Nothing here assumes which — `standalone` only controls the close button
     <small class="text-muted">{{ speaker.attribution }}</small>
     <div class="d-flex gap-2">
       {% if not standalone %}
-      <a class="btn btn-sm btn-secondary" href="{% url 'speaker_detail' speaker.slug %}"><i class="bi bi-box-arrow-up-right"></i> Open page</a>
+      <a class="btn btn-sm btn-primary" href="{% url 'speaker_detail' speaker.slug %}"><i class="bi bi-box-arrow-up-right"></i> Open page</a>
       {% endif %}
       {% if can_edit %}
-      <a class="btn btn-sm btn-secondary" href="{% url 'speaker_edit' speaker.slug %}"><i class="bi bi-pencil"></i> Edit</a>
+      <a class="btn btn-sm btn-primary" href="{% url 'speaker_edit' speaker.slug %}"><i class="bi bi-pencil"></i> Edit</a>
       {% endif %}
       {% if can_delete %}
       <form method="post" action="{% url 'speaker_delete' speaker.slug %}" class="d-inline"
@@ -82,7 +82,7 @@ link. Nothing here assumes which — `standalone` only controls the close button
             data-confirm-ok="Remove speaker"
             data-confirm-variant="danger">
         {% csrf_token %}
-        <button type="submit" class="btn btn-sm btn-outline-danger"><i class="bi bi-trash"></i> Delete</button>
+        <button type="submit" class="btn btn-sm btn-danger"><i class="bi bi-trash"></i> Delete</button>
       </form>
       {% endif %}
     </div>

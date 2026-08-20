@@ -796,7 +796,7 @@
       wrap.className = "text-center pt-1 pb-2";
       var button = document.createElement("button");
       button.type = "button";
-      button.className = "btn btn-sm btn-outline-secondary";
+      button.className = "btn btn-sm btn-primary";
       button.innerHTML = '<i class="bi bi-megaphone me-1"></i>That didn\'t work — tell the site owner';
       button.addEventListener("click", function () {
         button.disabled = true;

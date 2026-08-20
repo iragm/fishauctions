@@ -70,7 +70,8 @@ from django.http import (
 )
 from django.middleware.csrf import get_token
 from django.shortcuts import get_object_or_404, redirect, render
-from django.template.defaultfilters import date as date_filter
+from django.template.defaultfilters import date as date_format
+from django.template.defaultfilters import pluralize
 from django.template.loader import render_to_string
 from django.templatetags.static import static
 from django.urls import reverse
@@ -112,7 +113,7 @@ from user_agents import parse
 from webpush import send_user_notification
 from webpush.models import PushInformation
 
-from . import club_events, discord_events, voice
+from . import announcements, club_events, discord_events, voice
 from .authentication import ApiKeyThrottle, OptionalAPIKeyAuthentication
 from .bidding import place_bid_and_broadcast
 from .filters import (
@@ -149,6 +150,7 @@ from .forms import (
     ChangeInvoiceStatusForm,
     ChangeUsernameForm,
     ChangeUserPreferencesForm,
+    ClubAnnouncementForm,
     ClubBapCategoryOverrideForm,
     ClubBapGenusOverrideForm,
     ClubBapSettingsForm,
@@ -215,6 +217,7 @@ from .models import (
     Category,
     ChatSubscription,
     Club,
+    ClubAnnouncement,
     ClubAPIKey,
     ClubAPIKeyFieldMap,
     ClubBapCategoryOverride,
@@ -487,6 +490,7 @@ CLUB_PERMISSION_FIELDS = (
     "permission_manage_auctions",
     "permission_manage_bap",
     "permission_manage_donations",
+    "permission_send_announcements",
 )
 
 
@@ -1231,6 +1235,18 @@ class ClubViewMixin:
         return self.user_has_club_permission("permission_admin") or self.user_has_club_permission("permission_view")
 
     @property
+    def can_manage_auctions(self):
+        """Runs the club's public-facing calendar: events and website snippets."""
+        return self.user_has_club_permission("permission_admin") or self.user_has_club_permission(
+            "permission_manage_auctions"
+        )
+
+    @property
+    def can_send_announcements(self):
+        """Writes announcements. Its own permission -- see ClubAnnouncementsView.dispatch."""
+        return self.user_has_club_permission("permission_send_announcements")
+
+    @property
     def can_add_edit(self):
         return self.user_has_club_permission("permission_add_edit")
 
@@ -1243,9 +1259,9 @@ class ClubViewMixin:
     def club_sidebar_can_view(self):
         """Whether the current user may see the club sidebar on a club page.
 
-        Mirrors the union of permissions that gated the old club_ribbon tabs, plus donations: the
-        sidebar is the only way to reach the donation pages, so leaving it out would make
-        permission_manage_donations a permission that grants access to a page nobody can find.
+        Mirrors the union of permissions that gated the old club_ribbon tabs, plus donations and
+        announcements: the sidebar is the only way to reach those pages, so leaving either out
+        would make its permission one that grants access to a page nobody can find.
         """
         if not self.club:
             return False
@@ -1255,6 +1271,8 @@ class ClubViewMixin:
             or self.can_manage_bap
             or self.can_manage_money
             or self.can_manage_donations
+            or self.can_manage_auctions
+            or self.can_send_announcements
         )
 
 
@@ -3556,9 +3574,9 @@ class AuctionChatDeleteUndelete(APIView, AuctionViewMixin):
         self.history.removed = not self.history.removed
         self.history.save()
         if not self.history.removed:
-            result = f'<span id="message_{self.history.pk}" class="badge bg-info">Delete</span>'
+            result = f'<span id="message_{self.history.pk}" class="btn btn-sm btn-danger">Delete</span>'
         else:
-            result = f'<span id="message_{self.history.pk}" class="badge bg-danger">Deleted</span>'
+            result = f'<span id="message_{self.history.pk}" class="btn btn-sm btn-secondary">Deleted</span>'
             self.auction.create_history(
                 applies_to="USERS",
                 action="Deleted chat message",
@@ -4312,7 +4330,7 @@ class AuctionCheckIn(LoginRequiredMixin, AuctionViewMixin, View):
     <div class="modal-content">
       <div class="modal-header">
         <h5 class="modal-title" id="checkInModalLabel">Check in {tos.name}</h5>
-        <button type="button" class="btn-close" data-modal-close-action="none" aria-label="Close"></button>
+        <button type="button" class="btn-close btn-close-white" data-modal-close-action="none" aria-label="Close"></button>
       </div>
       <form hx-post="{check_in_url}" hx-target="#modals-here" hx-swap="innerHTML">
         <input type="hidden" name="csrfmiddlewaretoken" value="{get_token(request)}">
@@ -9548,7 +9566,10 @@ class AuctionInfo(FormMixin, DetailView, AuctionViewMixin):
                             f"{creator.username} is now an admin of {creator_club.name}"
                             + (f" and {assigned_count} auction(s) assigned to club" if assigned_count else ""),
                         )
-            if self.auction.created_by.pk == request.user.pk:
+            # created_by is nullable (SET_NULL when an account is deleted, and blank on auctions
+            # made before it existed), so this cannot go straight through to .pk -- it 500s the
+            # auction page for everyone, not just the creator.
+            if self.auction.created_by_id == request.user.pk:
                 if str(request.GET.get("enable_online_payments", "")).lower() in ("1", "true"):
                     self.auction.enable_online_payments = True
                     self.auction.save()
@@ -9692,7 +9713,8 @@ class AuctionInfo(FormMixin, DetailView, AuctionViewMixin):
             )
         else:
             context["user_has_lots"] = False
-        if self.request.user.is_authenticated and self.request.user.pk == self.auction.created_by.pk:
+        # created_by is nullable; see the note on the same comparison in dispatch().
+        if self.request.user.is_authenticated and self.request.user.pk == self.auction.created_by_id:
             invalidPickups = self.auction.pickup_locations_before_end
             if invalidPickups:
                 messages.info(
@@ -12692,6 +12714,32 @@ class MailchimpCallbackView(LoginRequiredMixin, View):
         return redirect(config_url)
 
 
+def _prefill_donation_address(club, address, provider):
+    """Fill in the club's donation mailing address from a marketing provider, if it is still blank.
+
+    Both providers make a club type a real postal address when it signs up, because US bulk
+    commercial email has to carry one -- and that is the same address the donation letters need
+    (Club.donation_mailing_address, printed under the sign-off of every request a club sends a
+    vendor). A club that has already told Mailchimp where it is should not be asked again here.
+
+    Only ever fills a blank. An address the club typed itself is the club's, and a later reconnect
+    must never quietly rewrite the return address on its mail. Returns True if it filled one in.
+    """
+    from auctions.models import Club
+
+    address = (address or "").strip()
+    if not address or club.donation_mailing_address.strip():
+        return False
+    club.donation_mailing_address = address
+    Club.objects.filter(pk=club.pk).update(donation_mailing_address=address)
+    ClubHistory.objects.create(
+        club=club,
+        action=f"Donation mailing address filled in from {provider}",
+        applies_to="SETTINGS",
+    )
+    return True
+
+
 class MailchimpAudienceSelectView(LoginRequiredMixin, ClubViewMixin, View):
     """Pick an existing audience or create '{club} Members', then provision + backfill."""
 
@@ -12714,19 +12762,15 @@ class MailchimpAudienceSelectView(LoginRequiredMixin, ClubViewMixin, View):
         choice = request.POST.get("audience_id", "")
         try:
             if choice == "__new__":
-                from_email = club.contact_email or settings.DEFAULT_FROM_EMAIL
-                contact = {
-                    "company": club.name,
-                    "address1": club.location or "",
-                    "city": "",
-                    "state": "",
-                    "zip": "",
-                    "country": "US",
-                }
-                audience_id, audience_name = mc.create_audience(client, club, from_email, contact)
+                # Sender and mailing address come from the club's own Mailchimp account, never
+                # from here -- see mailchimp.account_defaults.
+                audience_id, audience_name = mc.create_audience(client, club)
             else:
                 audience_id = choice
                 audience_name = next((a["name"] for a in mc.list_audiences(client) if a["id"] == choice), "")
+        except mc.MailchimpError as e:
+            messages.error(request, str(e))
+            return redirect(config_url)
         except Exception:
             logger.exception("Mailchimp audience selection failed for club %s", club.pk)
             messages.error(
@@ -12756,6 +12800,13 @@ class MailchimpAudienceSelectView(LoginRequiredMixin, ClubViewMixin, View):
             applies_to="SETTINGS",
         )
         messages.success(request, f"Syncing {count} member(s) into the '{audience_name}' Mailchimp audience.")
+        defaults = mc.account_defaults(client) or {}
+        if _prefill_donation_address(club, mc.format_mailing_address(defaults.get("contact")), "Mailchimp"):
+            messages.info(
+                request,
+                "We also filled in your donation mailing address from Mailchimp — check it on the "
+                "donation settings page.",
+            )
         return redirect(config_url)
 
 
@@ -13029,12 +13080,12 @@ class GoogleCalendarCallbackView(LoginRequiredMixin, View):
             gcal.ensure_calendar(club)
         except gcal.GoogleCalendarError as exc:
             logger.exception("Could not set up the Google calendar for club %s", club.pk)
-            # The calendar id is saved before anything else can fail, so say which half worked
-            # rather than claiming nothing was created.
-            if club.google_calendar_id:
-                messages.warning(request, f"Connected and the calendar exists, but setup didn't finish: {exc}")
-            else:
-                messages.error(request, f"Connected, but we couldn't create the calendar: {exc}")
+            # Deliberately one message. ensure_calendar only stores a calendar id once the calendar
+            # exists, so an id still on the club here is the *old* one from a previous connection --
+            # reading it as "the calendar exists" told admins the half that failed had worked.
+            club.google_calendar_last_error = str(exc)[:500]
+            club.save(update_fields=["google_calendar_last_error"])
+            messages.error(request, f"Connected to Google, but we couldn't set up the calendar: {exc}")
             return redirect(config_url)
 
         # Mirror the club's auctions and push everything, so the calendar isn't empty on arrival.
@@ -13597,6 +13648,12 @@ class BrevoListSelectView(LoginRequiredMixin, ClubViewMixin, View):
             applies_to="SETTINGS",
         )
         messages.success(request, f"Syncing {count} member(s) into the '{list_name}' Brevo list.")
+        info = brevo.account_info(brevo.get_client(club))
+        if _prefill_donation_address(club, brevo.format_mailing_address(info.get("address")), "Brevo"):
+            messages.info(
+                request,
+                "We also filled in your donation mailing address from Brevo — check it on the donation settings page.",
+            )
         return redirect(config_url)
 
 
@@ -18859,6 +18916,7 @@ class ClubDetailView(ClubViewMixin, TemplateView):
                     | Q(permission_export=True)
                     | Q(permission_manage_bap=True)
                     | Q(permission_manage_donations=True)
+                    | Q(permission_send_announcements=True)
                 )
                 .exists()
             )
@@ -18953,6 +19011,10 @@ class ClubDetailView(ClubViewMixin, TemplateView):
                     club=club, is_deleted=False, hap_points__gt=0
                 ).order_by("-hap_points")[:10]
         context["active_club_tab"] = requested_tab if requested_tab in available_tabs else "auctions"
+        # Four or more tabs ("Events BAP HAP Culture My Points") run off the side of a phone, so
+        # everything past BAP moves into a More menu -- the same shape the auction ribbon uses.
+        # Three still fit, and a More menu holding one item is worse than the tab it replaced.
+        context["club_tabs_overflow"] = len(available_tabs) > 3
         context["can_access_admin"] = self.user_has_club_permission(
             "permission_admin"
         ) or self.user_has_club_permission("permission_view")
@@ -18999,6 +19061,15 @@ class ClubDetailView(ClubViewMixin, TemplateView):
         )
         context["upcoming_events"] = upcoming
         context["past_events"] = past
+        # The one announcement worth putting at the top of the page. Only the "show on website"
+        # ones are eligible; see announcements.latest_for_website.
+        latest = announcements.latest_for_website(self.club, 1)
+        context["latest_announcement"] = latest[0] if latest else None
+        # The club's own page here counts as "on your website" -- it is what the globe icon on the
+        # announcements page has always meant. Admins are not counted: somebody reloading the page
+        # they just posted from would otherwise be most of the number.
+        if latest and not self.club_sidebar_can_view:
+            announcements.record_website_views(latest)
         context["has_any_events"] = bool(upcoming or past)
         # Both of these *subscribe*, so the calendar keeps updating: webcal:// hands the feed to
         # the desktop or phone calendar app, and Google takes the https URL through its
@@ -19014,12 +19085,6 @@ class ClubDetailView(ClubViewMixin, TemplateView):
             context["unpromoted_auctions"] = Auction.objects.filter(
                 club=self.club, is_deleted=False, promote_this_auction=False
             ).order_by("-date_start")[:CLUB_DETAIL_EVENT_LIMIT]
-            # Snippets for putting the calendar on the club's own website — admins only, though
-            # the embed itself is public (it shows what this page already does). Which is also
-            # why it's offered only when the club page is on: with it off the embed 404s, and
-            # handing out a snippet that renders nothing is worse than not offering one.
-            if self.club.enable_club_page:
-                context["club_events_embed_path"] = reverse("club_events_embed", kwargs={"slug": self.club.slug})
         # Email button: visible to authenticated users when someone can be reached at this club.
         from .email_routing import email_routing_enabled
 
@@ -20373,6 +20438,43 @@ BAP_EMBED_PROGRAM_FIELDS = {"bap": "bap_points", "hap": "hap_points", "cap": "cu
 BAP_EMBED_PROGRAM_LABELS = {"bap": "BAP", "hap": "HAP", "cap": "CAP"}
 
 
+def embed_mode_from_request(request):
+    """Which representation a club asked for: "light", "dark", "unstyled", or None for JSON.
+
+    One reader for the ?format= every embed takes, so the four of them can't drift into
+    supporting slightly different spellings. Anything unrecognised falls through to JSON rather
+    than to a page -- a typo in a snippet must never hand a stranger's website an unexpected
+    document.
+    """
+    fmt = (request.GET.get("format") or "json").strip().lower()
+    if fmt in ("iframelight", "iframedark", "iframdark"):
+        return "dark" if fmt in ("iframedark", "iframdark") else "light"
+    if fmt == "unstyledhtml":
+        return "unstyled"
+    return None
+
+
+def embed_response(template_stem, embed_mode, context):
+    """Render one of auctions/embeds/*, with the framing headers a third-party site needs.
+
+    ``Access-Control-Allow-Origin`` is set on every embed response so a club's own JavaScript can
+    fetch one instead of iframing it; the views themselves are GET-only and public, so there is
+    nothing here CORS could leak that the page it mirrors doesn't already show.
+    """
+    suffix = "_unstyled" if embed_mode == "unstyled" else ""
+    html = render_to_string(f"auctions/embeds/{template_stem}{suffix}.html", context)
+    response = HttpResponse(html)
+    response["Access-Control-Allow-Origin"] = "*"
+    return response
+
+
+def embed_json(payload):
+    """JSON half of an embed endpoint, with the same cross-origin header."""
+    response = JsonResponse(payload)
+    response["Access-Control-Allow-Origin"] = "*"
+    return response
+
+
 def _bap_embed_leaderboard(club, program):
     """Top-10 leaderboard rows for a program: rank, display name, and points only.
 
@@ -20422,18 +20524,12 @@ class BapEmbedView(View):
 
         rows = _bap_embed_leaderboard(club, program)
         label = BAP_EMBED_PROGRAM_LABELS[program]
-        fmt = (request.GET.get("format") or "json").strip().lower()
-
-        if fmt in ("iframelight", "iframedark", "iframdark"):
-            embed_mode = "dark" if fmt in ("iframedark", "iframdark") else "light"
-        elif fmt == "unstyledhtml":
-            embed_mode = "unstyled"
-        else:
-            # json or anything unrecognized falls back to JSON — a typo never leaks an unexpected page.
+        embed_mode = embed_mode_from_request(request)
+        if embed_mode is None:
             return self._json_response(club, program, label, rows)
-
-        html = render_to_string(
-            "auctions/bap_embed.html",
+        return embed_response(
+            "bap",
+            embed_mode,
             {
                 "embed_mode": embed_mode,
                 "club_name": club.name,
@@ -20441,9 +20537,6 @@ class BapEmbedView(View):
                 "leaderboard": rows,
             },
         )
-        response = HttpResponse(html)
-        response["Access-Control-Allow-Origin"] = "*"
-        return response
 
 
 # How many events the embed will ever hand out. Clubs paste this into a sidebar; past ten it
@@ -20463,14 +20556,12 @@ def _club_events_embed_rows(request, club, count):
     rows = []
     for event in upcoming:
         start = timezone.localtime(event.date_start)
-        if event.all_day:
-            when = f"{date_filter(start, 'D, N j, Y')} — all day"
-        else:
-            when = f"{date_filter(start, 'D, N j, Y')} at {date_filter(start, 'g:i A')}"
         rows.append(
             {
                 "title": event.title,
-                "when": when,
+                # Same one-line "when" the club page shows, so a multi-day online auction reads as
+                # one on somebody's website too. See ClubEvent.when_display.
+                "when": event.when_display,
                 "starts": start.isoformat(),
                 "all_day": event.all_day,
                 "location": event.location,
@@ -20506,21 +20597,12 @@ class ClubEventsEmbedView(View):
         count = max(1, min(count, CLUB_EVENTS_EMBED_MAX))
 
         rows = _club_events_embed_rows(request, club, count)
-        fmt = (request.GET.get("format") or "json").strip().lower()
-
-        if fmt in ("iframelight", "iframedark"):
-            embed_mode = "dark" if fmt == "iframedark" else "light"
-        elif fmt == "unstyledhtml":
-            embed_mode = "unstyled"
-        else:
-            # json or anything unrecognized falls back to JSON — a typo never leaks an
-            # unexpected page.
-            response = JsonResponse({"club": club.name, "events": rows})
-            response["Access-Control-Allow-Origin"] = "*"
-            return response
-
-        html = render_to_string(
-            "auctions/club_events_embed.html",
+        embed_mode = embed_mode_from_request(request)
+        if embed_mode is None:
+            return embed_json({"club": club.name, "events": rows})
+        return embed_response(
+            "events",
+            embed_mode,
             {
                 "embed_mode": embed_mode,
                 "club_name": club.name,
@@ -20531,9 +20613,408 @@ class ClubEventsEmbedView(View):
                 "events": rows,
             },
         )
-        response = HttpResponse(html)
-        response["Access-Control-Allow-Origin"] = "*"
-        return response
+
+
+# A club pasting this into a sidebar wants "what's new", not an archive. Past three it stops being
+# an announcement and starts being a blog nobody asked us to build.
+CLUB_ANNOUNCEMENTS_EMBED_MAX = 3
+
+
+def _club_announcements_embed_rows(club, count):
+    """The club's most recent published announcements, flattened for the embed.
+
+    Only announcements the club ticked "show on website" for ever reach this — the other channels
+    are opt-in one at a time on the same form, and a club that chose Discord only must not find
+    its message on its own home page.
+    """
+    rows = []
+    shown = announcements.latest_for_website(club, count)
+    for announcement in shown:
+        created = timezone.localtime(announcement.created_at)
+        rows.append(
+            {
+                "text": announcement.text.strip(),
+                "when": date_format(created, "N j, Y"),
+                "posted": created.isoformat(),
+            }
+        )
+    # Every format counts, JSON included: a club whose site fetches the JSON and renders it itself
+    # has put the announcement on a page exactly as much as one using the styled iframe.
+    announcements.record_website_views(shown)
+    return rows
+
+
+@method_decorator(xframe_options_exempt, name="dispatch")
+class ClubAnnouncementsEmbedView(View):
+    """Public, embeddable list of a club's latest announcements.
+
+    Same shape as the events and BAP embeds: ?format= picks the representation and ?count= how
+    many, defaulting to **one** — the common use is a single line at the top of a club's home
+    page saying what is going on this month. Nothing here is member data; it is the same text the
+    club page shows to the public.
+    """
+
+    def get(self, request, slug):
+        club = Club.objects.filter(Q(slug=slug) | Q(abbreviation=slug)).order_by("pk").first()
+        if not club or not club.enable_club_page:
+            raise Http404
+        try:
+            count = int(request.GET.get("count") or 1)
+        except (TypeError, ValueError):
+            count = 1
+        count = max(1, min(count, CLUB_ANNOUNCEMENTS_EMBED_MAX))
+
+        rows = _club_announcements_embed_rows(club, count)
+        embed_mode = embed_mode_from_request(request)
+        if embed_mode is None:
+            return embed_json({"club": club.name, "announcements": rows})
+        return embed_response(
+            "announcements",
+            embed_mode,
+            {
+                "embed_mode": embed_mode,
+                "club_name": club.name,
+                "heading": "Latest news" if count == 1 else "Announcements",
+                "club_url": request.build_absolute_uri(reverse("club_detail", kwargs={"slug": club.slug})),
+                "announcements": rows,
+            },
+        )
+
+
+def _club_current_auction(club):
+    """The auction a club would want advertised on its own website, or None.
+
+    The pinned ``current_auction`` first, because an admin picked it on purpose; otherwise the
+    soonest promoted auction that hasn't finished. Unpromoted auctions are never offered — that
+    flag is the club saying "this one isn't for the public yet", and an embed is as public as it
+    gets.
+    """
+    now = timezone.now()
+    pinned = club.current_auction
+    if pinned and not pinned.is_deleted and pinned.promote_this_auction and not pinned.pretty_much_over:
+        return pinned
+    return (
+        Auction.objects.filter(club=club, is_deleted=False, promote_this_auction=True, date_start__isnull=False)
+        .filter(Q(date_end__gte=now) | Q(date_end__isnull=True, date_start__gte=now))
+        .order_by("date_start")
+        .first()
+    )
+
+
+def _club_auction_embed_row(request, auction):
+    """The handful of facts about an auction worth putting on somebody else's website."""
+    if not auction:
+        return None
+    start = timezone.localtime(auction.date_start)
+    when = f"{date_format(start, 'D, N j, Y')} at {date_format(start, 'g:i A')}"
+    if auction.is_online and auction.date_end and auction.date_end > auction.date_start:
+        end = timezone.localtime(auction.date_end)
+        when += f" – {date_format(end, 'D, N j, Y')} at {date_format(end, 'g:i A')}"
+    lots_open = ""
+    if auction.lot_submission_end_date and auction.lot_submission_end_date > timezone.now():
+        deadline = timezone.localtime(auction.lot_submission_end_date)
+        lots_open = f"Lots can be entered until {date_format(deadline, 'N j, Y')}"
+    return {
+        "title": auction.title,
+        "when": when,
+        "starts": timezone.localtime(auction.date_start).isoformat(),
+        "is_online": auction.is_online,
+        "location": club_events.auction_display_location(auction),
+        "lots_open": lots_open,
+        "url": request.build_absolute_uri(auction.get_absolute_url()),
+    }
+
+
+@method_decorator(xframe_options_exempt, name="dispatch")
+class ClubAuctionEmbedView(View):
+    """Public, embeddable "our auction is on" strip for a club's own website.
+
+    Overlaps the events embed on purpose. A club that runs one auction a year wants to advertise
+    *the auction* on its front page all year, where the events embed would show whatever meeting
+    happens to be next.
+    """
+
+    def get(self, request, slug):
+        club = Club.objects.filter(Q(slug=slug) | Q(abbreviation=slug)).order_by("pk").first()
+        if not club or not club.enable_club_page:
+            raise Http404
+        row = _club_auction_embed_row(request, _club_current_auction(club))
+        embed_mode = embed_mode_from_request(request)
+        if embed_mode is None:
+            return embed_json({"club": club.name, "auction": row})
+        return embed_response(
+            "auction",
+            embed_mode,
+            {
+                "embed_mode": embed_mode,
+                "club_name": club.name,
+                "heading": "Current auction",
+                "club_url": request.build_absolute_uri(reverse("club_detail", kwargs={"slug": club.slug})),
+                "auction": row,
+            },
+        )
+
+
+class ClubAnnouncementsView(LoginRequiredMixin, ClubViewMixin, TemplateView):
+    """Write an announcement, and see where the last ones went.
+
+    One page rather than a list plus a form, because posting is the reason anybody comes here and
+    the history is what tells them whether last month's went anywhere. Each past row carries an
+    icon per channel with the only number that channel can honestly report, which for Discord is
+    none at all.
+    """
+
+    template_name = "auctions/club_announcements.html"
+    active_tab = "announcements"
+
+    def dispatch(self, request, *args, **kwargs):
+        self.get_club(kwargs.get("slug", ""))
+        # Its own permission rather than "manages auctions": posting here reaches Discord, every
+        # member's phone and the club's mailing list in one press, with nobody between the person
+        # writing and the people reading. That is not the same trust as adding a lot to an auction.
+        if not self.user_has_club_permission("permission_send_announcements"):
+            raise PermissionDenied()
+        return super().dispatch(request, *args, **kwargs)
+
+    def get_form(self, data=None):
+        return ClubAnnouncementForm(data, club=self.club)
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["club"] = self.club
+        context.setdefault("form", self.get_form())
+        # Retracted ones are listed too, struck through. is_deleted is what hides an announcement
+        # from the public; hiding it from the club as well would make Retract look like Delete and
+        # leave the admin who pressed it with nothing on screen saying it worked.
+        rows = list(ClubAnnouncement.objects.filter(club=self.club)[:50])
+        context["announcements"] = rows
+        # A row inside its retract window says "Sending — retract it now", which stops being true
+        # a few seconds later. Reload once when it does, so the page ends up showing what actually
+        # happened rather than a promise the reader has to refresh to check.
+        pending = [r.scheduled_for for r in rows if r.is_in_grace_period]
+        if pending:
+            seconds = (min(pending) - timezone.now()).total_seconds() + 3
+            context["reload_in_seconds"] = max(2, int(seconds))
+        self._queue_open_refresh(rows)
+        return context
+
+    def _queue_open_refresh(self, rows):
+        """Ask the email providers for open counts in the background, never during the page load.
+
+        Opens arrive hours after a send, so the number on screen is always the stored one and this
+        only updates it for next time. Bounded to the few recent rows that could still change: an
+        admin opening this page must never pay for 50 rows' worth of somebody else's API.
+        """
+        from auctions.tasks import refresh_announcement_opens
+
+        cutoff = timezone.now() - timedelta(days=30)
+        recent = [r for r in rows if r.sent_by_email and not r.is_deleted and r.created_at >= cutoff][:5]
+        for announcement in recent:
+            try:
+                refresh_announcement_opens.delay(announcement.pk)
+            except Exception:
+                logger.warning("Could not queue an open-count refresh for announcement %s", announcement.pk)
+                break
+
+    def post(self, request, *args, **kwargs):
+        form = self.get_form(request.POST)
+        if not form.is_valid():
+            return self.render_to_response(self.get_context_data(form=form))
+        announcement = form.save(commit=False)
+        announcement.club = self.club
+        announcement.created_by = request.user
+        chose_a_time = bool(announcement.scheduled_for)
+        if not chose_a_time:
+            # Nothing sends in the request any more. Half a minute is the whole point: the wrong
+            # date in the sentence is obvious the instant the page reloads and shows it back, and
+            # this is the window in which Retract still means something. It goes down the same path
+            # a real schedule does, so there is one way an announcement is sent rather than two.
+            announcement.scheduled_for = timezone.now() + timedelta(seconds=announcements.GRACE_SECONDS)
+        announcement.save()
+        # The beat is the backstop; this is what makes 30 seconds mean 30 seconds. A lost task
+        # costs a delay, never the announcement.
+        try:
+            from auctions.tasks import send_scheduled_announcements
+
+            send_scheduled_announcements.apply_async(
+                countdown=max(1, int((announcement.scheduled_for - timezone.now()).total_seconds()) + 2)
+            )
+        except Exception:
+            logger.warning("Could not queue the send for announcement %s; the beat will get it", announcement.pk)
+        going_to = []
+        if announcement.send_to_discord:
+            going_to.append("Discord")
+        if announcement.send_to_push:
+            reachable, _total = announcements.member_counts(self.club)
+            going_to.append(f"{reachable} phone{pluralize(reachable)}")
+        for name, ticked in (("Mailchimp", announcement.send_to_mailchimp), ("Brevo", announcement.send_to_brevo)):
+            if ticked:
+                going_to.append(name)
+        if announcement.show_on_website:
+            going_to.append("your website")
+        where = " and ".join(", ".join(going_to).rsplit(", ", 1)) if going_to else "nowhere"
+        if chose_a_time:
+            ClubHistory.objects.create(
+                club=self.club,
+                user=request.user,
+                action=f"Announcement scheduled: {announcement.short_text}",
+                applies_to="ANNOUNCEMENTS",
+            )
+            when = timezone.localtime(announcement.scheduled_for)
+            messages.success(
+                request,
+                f"Going to {where} on {when.strftime('%A, %B %-d at %-I:%M %p')}. "
+                "Retract it before then and it never goes out.",
+            )
+        else:
+            messages.success(
+                request,
+                f"Going to {where} in {announcements.GRACE_SECONDS} seconds. Read it back — "
+                "Retract now and nobody sees it.",
+            )
+        return redirect(reverse("club_announcements", kwargs={"slug": self.club.slug}))
+
+
+class ClubAnnouncementRetractView(LoginRequiredMixin, ClubViewMixin, View):
+    """Take an announcement back, and say honestly how much of it could be taken back.
+
+    Clubs send the wrong date, and the first thing they ask for is a way to unsend it. What that
+    can mean is different per channel -- the Discord post goes, the page goes, the website listing
+    goes with it; the push notification is already on a lock screen and the email is already in an
+    inbox -- so the message afterwards names what is still out there instead of saying "retracted"
+    and letting the admin believe it was all undone.
+    """
+
+    def dispatch(self, request, *args, **kwargs):
+        self.get_club(kwargs.get("slug", ""))
+        if not self.user_has_club_permission("permission_send_announcements"):
+            raise PermissionDenied()
+        return super().dispatch(request, *args, **kwargs)
+
+    def post(self, request, slug, uuid):
+        announcement = get_object_or_404(ClubAnnouncement, uuid=uuid, club=self.club, is_deleted=False)
+        result = announcements.retract(announcement)
+        ClubHistory.objects.create(
+            club=self.club,
+            user=request.user,
+            action=f"Announcement retracted: {announcement.short_text}",
+            applies_to="ANNOUNCEMENTS",
+        )
+        if result["never_sent"]:
+            messages.success(request, "Announcement cancelled. It was never sent.")
+            return redirect(reverse("club_announcements", kwargs={"slug": self.club.slug}))
+        still_out_there = []
+        if result["discord_left_behind"]:
+            still_out_there.append("the Discord post couldn't be deleted — remove it by hand")
+        if result["push_delivered"]:
+            still_out_there.append(
+                f"{result['push_delivered']} phone{pluralize(result['push_delivered'])} already got the notification"
+            )
+        if result["emailed"]:
+            still_out_there.append("the email has already been sent and can't be recalled")
+        if still_out_there:
+            messages.warning(
+                request,
+                "Announcement retracted, but " + "; ".join(still_out_there) + ".",
+            )
+        else:
+            messages.success(request, "Announcement retracted.")
+        return redirect(reverse("club_announcements", kwargs={"slug": self.club.slug}))
+
+
+class ClubWebsiteIntegrationView(LoginRequiredMixin, ClubViewMixin, TemplateView):
+    """Every "put this on your own website" snippet the site offers, in one place.
+
+    They used to be a collapsed panel on whichever page happened to own the data — the calendar
+    for events, the BAP page for the leaderboard — which meant a club had to already know a
+    feature existed to find the snippet for it, and a club with the Breeder Award Program turned
+    off could never see that one at all. They are all listed here whether or not the feature is
+    switched on, with the ones that would currently render nothing labelled as such: a club
+    deciding what to put on its website is exactly the person who should find out that turning
+    BAP on would give them a leaderboard.
+    """
+
+    template_name = "auctions/club_website_integration.html"
+    active_tab = "website_integration"
+
+    def dispatch(self, request, *args, **kwargs):
+        self.get_club(kwargs.get("slug", ""))
+        if not (self.can_manage_auctions or self.can_edit_settings):
+            raise PermissionDenied()
+        return super().dispatch(request, *args, **kwargs)
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        club = self.club
+        context["club"] = club
+        base = f"{self.request.scheme}://{self.request.get_host()}"
+        context["snippets"] = [
+            {
+                "key": "events",
+                "title": "Upcoming events",
+                "icon": "bi-calendar-event",
+                "blurb": (
+                    "Your club calendar, live. Auctions, meetings, swaps and anything pulled in from "
+                    "your Google Calendar. Only the name, date and place — never anything about your members."
+                ),
+                "url": base + reverse("club_events_embed", kwargs={"slug": club.slug}),
+                "counts": True,
+                "max_count": CLUB_EVENTS_EMBED_MAX,
+                "default_count": 1,
+                "heights": {1: 200, 10: 880},
+                "available": club.enable_club_page,
+                "unavailable_reason": "Your public club page is turned off, so this would show nothing.",
+                "settings_url": reverse("club_edit", kwargs={"slug": club.slug}),
+            },
+            {
+                "key": "auction",
+                "title": "Current auction",
+                "icon": "bi-hammer",
+                "blurb": (
+                    "The auction you have pinned as current, or the next promoted one. Use this when "
+                    "your club runs one big auction a year and wants it on the front page all year."
+                ),
+                "url": base + reverse("club_auction_embed", kwargs={"slug": club.slug}),
+                "counts": False,
+                "heights": {1: 200},
+                "available": club.enable_club_page,
+                "unavailable_reason": "Your public club page is turned off, so this would show nothing.",
+                "settings_url": reverse("club_edit", kwargs={"slug": club.slug}),
+            },
+            {
+                "key": "announcements",
+                "title": "Latest announcement",
+                "icon": "bi-megaphone",
+                "blurb": (
+                    "Whatever you last announced with the Website box ticked. Defaults to one — the "
+                    "usual use is a single line at the top of a home page."
+                ),
+                "url": base + reverse("club_announcements_embed", kwargs={"slug": club.slug}),
+                "counts": True,
+                "max_count": CLUB_ANNOUNCEMENTS_EMBED_MAX,
+                "default_count": 1,
+                "heights": {1: 160, 3: 340},
+                "available": club.enable_club_page,
+                "unavailable_reason": "Your public club page is turned off, so this would show nothing.",
+                "settings_url": reverse("club_edit", kwargs={"slug": club.slug}),
+            },
+            {
+                "key": "bap",
+                "title": "Breeder Award leaderboard",
+                "icon": "bi-award",
+                "blurb": (
+                    "Your current top ten. Names and points only — never emails or member numbers. "
+                    "Add &program=hap or &program=cap to the URL for a separate program."
+                ),
+                "url": base + reverse("bap_embed", kwargs={"slug": club.slug}),
+                "counts": False,
+                "heights": {1: 420},
+                "available": club.enable_breeder_award_program,
+                "unavailable_reason": "The Breeder Award Program is turned off for this club.",
+                "settings_url": reverse("club_bap_settings", kwargs={"slug": club.slug}),
+            },
+        ]
+        return context
 
 
 class ClubBarcodeLabelsView(LoginRequiredMixin, ClubViewMixin, TemplateView):
@@ -20720,6 +21201,23 @@ class ClubBarcodeLabelsViewPDF(LoginRequiredMixin, ClubViewMixin, TemplateView, 
     def get_pdf_filename(self):
         return f"{self.club.slug}-barcodes.pdf"
 
+    def get(self, request, *args, **kwargs):
+        """A form with nothing complete in it used to 404, which is what "Download PDF" did on a
+        row where the label type was still on "- select -" or the amount was blank. A 404 reads as
+        "this feature is broken"; the truth is that there is nothing to print yet, so say that on
+        the page the person is already looking at. The form guards this in the browser too -- this
+        is the backstop for a submit that gets past it."""
+        members = ClubMember.objects.filter(club=self.club, is_deleted=False, membership_number__isnull=False)
+        self.labels = ClubBarcodeLabelsView._build_labels(self, request.GET, members)
+        if not self.labels:
+            messages.error(
+                request,
+                "There was nothing to print. Every row needs a label type and the fields that go "
+                "with it: a bidder number, an amount and some label text, or a member.",
+            )
+            return redirect("club_barcode_labels", slug=self.club.slug)
+        return super().get(request, *args, **kwargs)
+
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         prefs, _ = UserLabelPrefs.objects.get_or_create(user=self.request.user)
@@ -20727,11 +21225,7 @@ class ClubBarcodeLabelsViewPDF(LoginRequiredMixin, ClubViewMixin, TemplateView, 
         context.update(dims)
         context["print_border"] = prefs.print_border
 
-        members = ClubMember.objects.filter(club=self.club, is_deleted=False, membership_number__isnull=False)
-        labels = ClubBarcodeLabelsView._build_labels(self, self.request.GET, members)
-        if not labels:
-            raise Http404
-        context["labels"] = labels
+        context["labels"] = self.labels
 
         available_width = dims["page_width"] - dims["page_margin_left"] - dims["page_margin_right"]
         available_height = dims["page_height"] - dims["page_margin_top"] - dims["page_margin_bottom"]
@@ -21121,6 +21615,7 @@ class ClubMemberMergeView(LoginRequiredMixin, ClubViewMixin, View):
                         "permission_manage_auctions",
                         "permission_manage_bap",
                         "permission_manage_donations",
+                        "permission_send_announcements",
                     ]:
                         if getattr(source, perm_field, False) and not getattr(target, perm_field, False):
                             setattr(target, perm_field, True)
@@ -21749,7 +22244,6 @@ class ClubBapLotsView(LoginRequiredMixin, ClubViewMixin, HTMxTableView):
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         context["club"] = self.club
-        context["bap_embed_path"] = reverse("bap_embed", kwargs={"slug": self.club.slug})
         return context
 
     def get_table_kwargs(self, **kwargs):
@@ -24263,6 +24757,8 @@ class DiscordInteractionsView(View):
                 return self._handle_connect_command(data)
             if command_name == "auctions_here":
                 return self._handle_auctions_here_command(data)
+            if command_name == "announcements_here":
+                return self._handle_announcements_here_command(data)
             if command_name == "membership":
                 return self._handle_membership_command(data)
             if command_name == "bap":
@@ -24510,6 +25006,42 @@ class DiscordInteractionsView(View):
             applies_to="SETTINGS",
         )
         return _discord_ephemeral("✅ Auction announcements will be posted in this channel.")
+
+    def _handle_announcements_here_command(self, data):
+        """/announcements_here — point this club's announcements at the channel it was run in.
+
+        Deliberately a second channel rather than reusing ``auction_channel_id``: an auction
+        announcement is news for everybody, and a club announcement is often for members only, so
+        the two land in different rooms on most servers. Same shape and same permission bar as
+        /auctions_here, and it writes to ClubHistory for the same reason — a channel that stops
+        working six months later needs a record of who set it.
+        """
+        guild_id = data.get("guild_id", "")
+        channel_id = data.get("channel_id", "")
+        member_data = data.get("member") or {}
+        user_data = member_data.get("user") or data.get("user") or {}
+        caller_discord_id = user_data.get("id", "")
+
+        if not _has_discord_manage_guild(data):
+            return _discord_ephemeral("❌ You need the Manage Server permission to run this command.")
+
+        if not guild_id or not channel_id:
+            return _discord_ephemeral("❌ Missing guild or channel ID.")
+
+        club = Club.objects.filter(discord_server_id=guild_id).first()
+        if not club:
+            return _discord_ephemeral("❌ This server is not connected to a club. Run /connect first.")
+
+        club.announcement_channel_id = channel_id
+        club.save(update_fields=["announcement_channel_id"])
+        caller_username = user_data.get("username") or caller_discord_id
+        ClubHistory.objects.create(
+            club=club,
+            user=None,
+            action=f"Club announcement channel set by @{caller_username} (Discord ID {caller_discord_id})",
+            applies_to="SETTINGS",
+        )
+        return _discord_ephemeral("✅ Club announcements will be posted in this channel.")
 
     def _handle_membership_command(self, data):
         guild_id = data.get("guild_id", "")

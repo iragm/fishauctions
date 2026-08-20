@@ -311,7 +311,7 @@
     (candidates || []).forEach(function (candidate) {
       const text = String(candidate);
       if (text === String(value)) { return; }
-      const pick = $('<button type="button" class="btn btn-sm btn-outline-secondary me-1"></button>');
+      const pick = $('<button type="button" class="btn btn-sm btn-primary me-1"></button>');
       pick.text(text);
       pick.on('click', function () { voiceApplyCorrection(field, text); });
       box.append(pick);
@@ -686,8 +686,8 @@ $(document).ready(function() {
 <span class="hide-fullscreen">
 {% include 'auction_ribbon.html' %}
 
-<small>Use this page to mark lots as sold.  Press tab to move the to next field.  <a href='https://github.com/iragm/fishauctions/issues/223'>Leave feedback about this page here.</a></small><br>
-<button id="fullscreen-btn" class="btn btn-sm bg-primary d-none d-sm-inline-block"><i class="bi bi-fullscreen"></i> Go fullscreen</button>
+<div class="help-note"><i class="bi bi-lightbulb-fill"></i><div>Use this page to mark lots as sold.  Press tab to move the to next field.  <a href='https://github.com/iragm/fishauctions/issues/223'>Leave feedback about this page here.</a></div></div>
+<button id="fullscreen-btn" class="btn btn-sm btn-primary d-none d-sm-inline-block"><i class="bi bi-fullscreen"></i> Go fullscreen</button>
 {% if request.is_mobile_app %}
 {% comment %}
   Voice input. Rendered hidden and revealed only once the app answers voiceGetState() with
@@ -701,7 +701,7 @@ $(document).ready(function() {
   this button permanently on every phone that hadn't already granted the microphone.)
 {% endcomment %}
 <button type="button" id="voice-btn" class="btn btn-sm btn-primary ms-2 d-none"><i class="bi bi-mic"></i> Listen</button>
-<button type="button" id="voice-settings-btn" class="btn btn-sm btn-outline-secondary ms-1 d-none" aria-expanded="false" aria-controls="voice-settings" aria-label="Voice settings"><i class="bi bi-sliders"></i></button>
+<button type="button" id="voice-settings-btn" class="btn btn-sm btn-primary ms-1 d-none" aria-expanded="false" aria-controls="voice-settings" aria-label="Voice settings"><i class="bi bi-sliders"></i></button>
 <span id="voice-level" class="voice-level d-none" aria-hidden="true"><span id="voice-level-bar"></span></span>
 <small id="voice-status" class="ms-2 text-muted"></small>
 <div id="voice-first-run" class="alert alert-info mt-2 d-none" role="alert">
@@ -791,9 +791,9 @@ $(document).ready(function() {
     </div>
     <div class="col-12 mb-3">
       <div class="btn-group" role="group" aria-label="Save">
-        <button type="submit" class="btn bg-success text-dark">Save</button>
+        <button type="submit" class="btn btn-success text-dark">Save</button>
         <div class="btn-group" role="group">
-          <button id="more_save_options" type="button" class="btn btn-success dropdown-toggle text-dark" data-bs-toggle="dropdown" aria-haspopup="true" aria-expanded="false"></button><span id="more_save_options_tooltip"></span>
+          <button id="more_save_options" type="button" class="btn btn-success dropdown-toggle dropdown-toggle-split text-dark" data-bs-toggle="dropdown" aria-haspopup="true" aria-expanded="false"><span class="visually-hidden">More save options</span></button><span id="more_save_options_tooltip"></span>
           <div class="dropdown-menu" aria-labelledby="more_save_options">
             <a class="dropdown-item" href='javascript:void(0)' onclick="sendFormData('force_save')">Ignore errors and save</a>
             <a id='sell_to_online_high_bidder' class="d-none dropdown-item" onclick="sendFormData('to_online_high_bidder')" href='javascript:void(0)'></a>

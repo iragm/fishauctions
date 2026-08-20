@@ -32,6 +32,11 @@ TOKEN_URL = "https://oauth2.googleapis.com/token"  # noqa: S105 - a URL, not a s
 CALENDAR_API_BASE = "https://www.googleapis.com/calendar/v3"
 USERINFO_URL = "https://www.googleapis.com/oauth2/v3/userinfo"
 
+# The one scope every Calendar call here needs. Checked against what Google says it actually
+# granted (see exchange_code): asking for a scope and being handed a token without it is a real
+# state, and the only place it can be caught before it turns into a 403 hours later.
+CALENDAR_SCOPE = "https://www.googleapis.com/auth/calendar.app.created"
+
 # Google rejects a syncToken once it's too old (or after we change what we ask for). When that
 # happens the only fix is to forget the token and do a fresh full pull.
 SYNC_TOKEN_GONE = 410
@@ -105,13 +110,31 @@ def exchange_code(code, redirect_uri):
             "https://myaccount.google.com/permissions and try connecting again."
         )
         raise GoogleCalendarError(msg)
+    # What Google *granted*, which is not the same as what we asked for. A partial grant still
+    # returns a code and a refresh token, so without this check the connection is recorded as a
+    # success and the first Calendar call comes back "insufficient authentication scopes" -- an
+    # error about the token, surfacing on a page that has nothing to do with consent.
+    granted = set((payload.get("scope") or "").split())
+    if granted and CALENDAR_SCOPE not in granted:
+        msg = (
+            "Google didn't grant access to your calendars. On the Google permission screen, tick "
+            "the box about making and managing calendars, then press Continue."
+        )
+        raise GoogleCalendarError(msg)
     access_token = payload.get("access_token", "")
-    return refresh_token, access_token, payload.get("expires_in", 3600), _account_email(access_token)
+    return refresh_token, access_token, payload.get("expires_in", 3600), _account_email(access_token, granted)
 
 
-def _account_email(access_token):
-    """Best-effort lookup of which Google account authorized us, for display only."""
+def _account_email(access_token, granted_scopes=()):
+    """Best-effort lookup of which Google account authorized us, for display only.
+
+    Skipped entirely unless userinfo.email was granted, which by default it isn't -- see the
+    GOOGLE_CALENDAR_SCOPE comment in settings.py for why the calendar scope now travels alone.
+    Kept working for a site that deliberately widens the scope, and a doomed request otherwise.
+    """
     if not access_token:
+        return ""
+    if granted_scopes and not any(scope.endswith("userinfo.email") for scope in granted_scopes):
         return ""
     try:
         resp = requests.get(USERINFO_URL, headers={"Authorization": f"Bearer {access_token}"}, timeout=TIMEOUT)
@@ -213,15 +236,14 @@ def ensure_calendar(club):
     Google Calendar, in a few clicks; ``Club.google_calendar_is_public`` records that they have.
     """
     if club.google_calendar_id:
-        existing = _request(club, "GET", f"/calendars/{_quote(club.google_calendar_id)}", allow_status=(404, 403))
-        if existing not in (404, 403):
+        # 404 only. A 403 is "you may not touch this" -- a missing scope, a rate limit, a calendar
+        # that now belongs to a different Google account -- and none of those mean the admin
+        # deleted it. Treating them the same used to throw away every event link on this club for
+        # a temporary error, and re-push each event as a duplicate afterwards.
+        existing = _request(club, "GET", f"/calendars/{_quote(club.google_calendar_id)}", allow_status=(404,))
+        if existing != 404:
             return club.google_calendar_id
-        # The calendar is gone on Google's side. Drop the stale id (and sync token) and make a
-        # new one, then let the events re-push.
         logger.info("Google calendar %s for club %s no longer exists; recreating.", club.google_calendar_id, club.pk)
-        club.google_calendar_id = ""
-        club.google_calendar_sync_token = ""
-        club.events.filter(is_deleted=False).update(google_event_id="", needs_google_sync=True)
 
     created = _request(
         club,
@@ -233,8 +255,14 @@ def ensure_calendar(club):
             "timeZone": settings.TIME_ZONE,
         },
     )
+    # Nothing is thrown away until the replacement exists. The old id and the events' google_event_ids
+    # are the only record of what is already in somebody's calendar, and a POST that fails after they
+    # were cleared leaves the club pointing at a calendar whose events it can no longer recognize --
+    # which is how a later reconnect ends up duplicating every event members subscribed to.
     club.google_calendar_id = created.get("id", "")
+    club.google_calendar_sync_token = ""
     club.save(update_fields=["google_calendar_id", "google_calendar_sync_token"])
+    club.events.filter(is_deleted=False).update(google_event_id="", needs_google_sync=True)
     return club.google_calendar_id
 
 

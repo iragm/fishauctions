@@ -107,13 +107,13 @@ function paymentCompleted(pk) {
   // Update invoice status buttons to show "Paid" state
   const invoiceButtons = document.getElementById(`invoice-buttons-${pk}`);
   if (invoiceButtons) {
-    // Update all buttons: set non-paid buttons to secondary, paid button to success
+    // Update all buttons: unselected go grey, the selected "Paid" one goes green
     invoiceButtons.querySelectorAll('button').forEach(btn => {
       if (btn.id === `${pk}_PAID`) {
         btn.classList.remove('btn-secondary');
-        btn.classList.add('btn-success');
+        btn.classList.add('btn-success', 'text-dark', 'active');
       } else {
-        btn.classList.remove('btn-info');
+        btn.classList.remove('btn-primary', 'active');
         btn.classList.add('btn-secondary');
       }
     });
@@ -266,7 +266,7 @@ $(document).ready(function() {
 {% endblock %}
 {% block content %}
 {% include 'auction_ribbon.html' %}
-<small>Use this page quickly mark invoices paid at the end of your auction.  <a href='https://github.com/iragm/fishauctions/issues/292'>Leave feedback about this page here.</a></small><br>
+<div class="help-note"><i class="bi bi-lightbulb-fill"></i><div>Use this page quickly mark invoices paid at the end of your auction.  <a href='https://github.com/iragm/fishauctions/issues/292'>Leave feedback about this page here.</a></div></div>
 <div class="container">
   <input type="text" class="form-control" id="tos" placeholder="Bidder number or name" autocomplete="off">
 </div>

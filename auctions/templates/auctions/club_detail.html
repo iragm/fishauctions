@@ -36,6 +36,23 @@
 </div>
 {% endif %}
 
+{% comment %}The club's latest announcement, at the top where an announcement belongs. Only ones sent
+with the Website box ticked ever appear -- that checkbox is what separates "tell the Discord
+regulars" from "put this on the front page". See auctions/announcements.py.{% endcomment %}
+{% if latest_announcement %}
+<div class="card mb-3 border-primary">
+  <div class="card-body py-3">
+    <div class="d-flex align-items-start gap-2">
+      <i class="bi bi-megaphone-fill text-primary"></i>
+      <div class="flex-grow-1">
+        <div>{{ latest_announcement.text|linebreaksbr }}</div>
+        <div class="text-muted small mt-1">{{ latest_announcement.sent_at|default:latest_announcement.created_at|date:"N j, Y" }}</div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endif %}
+
 {% if not club.enable_club_page and can_access_admin %}
 <p class="text-muted small"><i class="bi bi-eye-slash"></i> This page is only visible to admins. <a href="{% url 'club_edit' club.slug %}">Enable it in settings</a> to make it public.</p>
 {% endif %}
@@ -64,20 +81,15 @@
   <li class="nav-item" role="presentation">
     <button class="nav-link {% if active_club_tab == 'bap' %}active{% endif %}" id="bap-tab-btn" data-bs-toggle="tab" data-bs-target="#bap-tab" data-tab-url="{% url 'club_detail_tab' club.slug 'bap' %}" type="button" role="tab">BAP</button>
   </li>
-  {% if club.separate_hap %}
-  <li class="nav-item" role="presentation">
-    <button class="nav-link {% if active_club_tab == 'hap' %}active{% endif %}" id="hap-tab-btn" data-bs-toggle="tab" data-bs-target="#hap-tab" data-tab-url="{% url 'club_detail_tab' club.slug 'hap' %}" type="button" role="tab">HAP</button>
+  {% if club_tabs_overflow %}
+  <li class="nav-item dropdown" role="presentation">
+    <a class="nav-link dropdown-toggle {% if active_club_tab != 'auctions' and active_club_tab != 'bap' %}active{% endif %}" href="#" role="button" data-bs-toggle="dropdown" aria-expanded="false">More</a>
+    <ul class="dropdown-menu">
+      {% include "auctions/partials/club_overflow_tabs.html" with li_class="" nav_class="dropdown-item" %}
+    </ul>
   </li>
-  {% endif %}
-  {% if club.separate_cap %}
-  <li class="nav-item" role="presentation">
-    <button class="nav-link {% if active_club_tab == 'culture' %}active{% endif %}" id="culture-tab-btn" data-bs-toggle="tab" data-bs-target="#culture-tab" data-tab-url="{% url 'club_detail_tab' club.slug 'culture' %}" type="button" role="tab">Culture</button>
-  </li>
-  {% endif %}
-  {% if my_bap_awards is not None %}
-  <li class="nav-item" role="presentation">
-    <button class="nav-link {% if active_club_tab == 'my-points' %}active{% endif %}" id="my-points-tab-btn" data-bs-toggle="tab" data-bs-target="#my-points-tab" data-tab-url="{% url 'club_detail_tab' club.slug 'my-points' %}" type="button" role="tab">My Points</button>
-  </li>
+  {% else %}
+  {% include "auctions/partials/club_overflow_tabs.html" with li_class="nav-item" nav_class="nav-link" %}
   {% endif %}
 </ul>
 

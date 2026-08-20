@@ -4,7 +4,9 @@
 
 {% block htmx_table_ribbon %}
 {% include "club_ribbon.html" %}
-<h3 class="mb-3">Donation Tracking</h3>
+{% comment %}No page heading: the club sidebar already names this page and marks it active, and
+the browser tab carries the title. Most club pages have none for that reason -- see
+style_reference.md.{% endcomment %}
 
 {% if followup_due_count %}
 <div class="alert alert-warning text-dark py-2" role="alert">
@@ -66,7 +68,7 @@
 
 {% comment %}Collapsed, not hidden: three things about this feature that surprise people, worth reading once and never again.{% endcomment %}
 <p class="mb-2">
-  <button class="btn btn-sm btn-outline-secondary" type="button" data-bs-toggle="collapse"
+  <button class="btn btn-sm btn-primary" type="button" data-bs-toggle="collapse"
           data-bs-target="#donation-tracking-help" aria-expanded="false" aria-controls="donation-tracking-help">
     <i class="bi bi-info-circle me-1"></i> How donation tracking works
   </button>

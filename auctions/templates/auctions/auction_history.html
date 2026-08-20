@@ -4,12 +4,12 @@
 
 {% block htmx_table_ribbon %}
   {% include 'auction_ribbon.html' %}
-  <small>A list of changes made to your auction.  Most of these changes will be made by your or other admins, but you can also see users making changes for themselves like joining or adding lots.  Some stuff that's not currently tracked:<ul>
+  <div class="help-note"><i class="bi bi-lightbulb-fill"></i><div>A list of changes made to your auction.  Most of these changes will be made by your or other admins, but you can also see users making changes for themselves like joining or adding lots.  Some stuff that's not currently tracked:<ul class="mb-1">
     <li>Printing labels</li>
     <li>Users placing bids</li>
     <li>Users editing or deleting their own lots</li>
     <li>System set lot winners at the end of online auctions</li>
   </ul>
-  <br>Feel like some of these (or other stuff) should be tracked here? Is there a filter missing that you want to see? <a href="https://github.com/iragm/fishauctions/issues/392">Leave comments and feedback here</a>
-  </small>
+  Feel like some of these (or other stuff) should be tracked here? Is there a filter missing that you want to see? <a href="https://github.com/iragm/fishauctions/issues/392">Leave comments and feedback here</a>
+  </div></div>
 {% endblock %}

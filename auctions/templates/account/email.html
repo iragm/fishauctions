@@ -33,10 +33,14 @@
   </div>
     {% endfor %}
 
-  <div class="buttonHolder">
+  <div class="buttonHolder d-flex flex-wrap gap-2 mt-2">
         <button class="btn btn-sm btn-primary secondaryAction" type="submit" name="action_primary" >{% trans 'Make Primary' %}</button>
         <button class="btn btn-sm btn-primary secondaryAction" type="submit" name="action_send" >{% trans 'Re-send Verification' %}</button>
-        <button class="btn btn-sm text-dark btn-danger primaryAction" type="submit" name="action_remove" >{% trans 'Remove' %}</button>
+        <button class="btn btn-sm btn-danger primaryAction" type="submit" name="action_remove"
+                data-confirm="{% trans 'Do you really want to remove the selected e-mail address?' %}"
+                data-confirm-title="{% trans 'Remove this address?' %}"
+                data-confirm-ok="{% trans 'Remove' %}"
+                data-confirm-variant="danger">{% trans 'Remove' %}</button>
   </div>
 
   </fieldset>
@@ -58,18 +62,5 @@
 {% endblock %}
 
 
-{% block extra_js %}
-<script type="text/javascript">
-(function() {
-  var message = "{% trans 'Do you really want to remove the selected e-mail address?' %}";
-  var actions = document.getElementsByName('action_remove');
-  if (actions.length) {
-    actions[0].addEventListener("click", function(e) {
-      if (! confirm(message)) {
-        e.preventDefault();
-      }
-    });
-  }
-})();
-</script>
-{% endblock %}
+{# Removing an address confirms through data-confirm (confirm_modal.js), not the browser's confirm(). #}
+

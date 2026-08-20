@@ -23,7 +23,7 @@ Context: auction, entries (ordered LotQueueEntry list), error (optional string).
       <strong>Lot {{ entry.lot.lot_number_display }}</strong>
       <span class="d-none d-sm-inline">&mdash; {{ entry.lot.lot_name }}</span>
     </span>
-    <button type="button" class="btn btn-sm btn-outline-danger"
+    <button type="button" class="btn btn-sm btn-danger"
             hx-post="{% url 'auction_lot_queue' slug=auction.slug %}"
             hx-vals='{"action": "remove", "entry_id": "{{ entry.pk }}"}'
             hx-target="#queue-list" hx-swap="innerHTML"
