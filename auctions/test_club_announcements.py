@@ -12,7 +12,7 @@ import uuid
 from unittest.mock import patch
 
 from django.contrib.auth.models import User
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from django.test.client import Client
 from django.urls import reverse
 from django.utils import timezone
@@ -280,7 +280,12 @@ class AnnouncementDeliveryTests(TestCase):
         push.assert_called_once()
         self.assertEqual(push.call_args[0][0], member.user_id)
 
+    @override_settings(FIREBASE_CREDENTIALS_JSON="test-firebase-key")
     def test_a_failed_discord_post_is_recorded_and_never_costs_the_push(self):
+        # Push has to be *configured* for the form to accept the ticked box at all: with no FCM
+        # credentials member_counts() reports nobody reachable, ClubAnnouncementForm disables
+        # send_to_push, and a disabled field drops the submitted value -- so without this the test
+        # measures the dev machine's .env rather than what a Discord failure costs.
         self._reachable_member()
         self.client.force_login(self.admin)
         with (
