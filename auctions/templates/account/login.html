@@ -7,7 +7,7 @@
 {% block title %}{% trans "Sign In" %}{% endblock %}
 
 {% block content %}
-    <h1>{% trans "Sign In" %}</h1>
+    <h3>{% trans "Sign In" %}</h3>
 
     {% comment %}
       The native app has its own sign-in path for all three providers (MobileSocialAuthView); the
@@ -30,7 +30,7 @@
     {% endif %}
 
     {% with social_shown=GOOGLE_LOGIN_ENABLED|default:APPLE_LOGIN_ENABLED|default:FACEBOOK_LOGIN_ENABLED %}
-      <br><br><h5>{% if social_shown and not request.is_mobile_app %}Rather not use those?  {% endif %}Sign in with your account on this site:</h5>
+      <h5 class="mt-3">{% if social_shown and not request.is_mobile_app %}Rather not use those?  {% endif %}Sign in with your account on this site:</h5>
     {% endwith %}
 
     <form class="login" method="POST" action="{% url 'account_login' %}">

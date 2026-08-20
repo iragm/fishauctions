@@ -4153,7 +4153,7 @@ class UserLabelPrefsForm(forms.ModelForm):
             ),
             Div(
                 HTML(
-                    """<span class='text-warning'>You most likely do not need to change these settings!</span><br><br>Some combinations may not work, so if you have a problem, just leave a comment <a href="https://github.com/iragm/fishauctions/issues/122">here</a> and I'll fix it.</p>"""
+                    """<div class="alert alert-warning text-dark" role="alert"><i class="bi bi-exclamation-triangle me-1"></i>You most likely do not need to change these settings!  Some combinations may not work, so if you have a problem, just leave a comment <a href="https://github.com/iragm/fishauctions/issues/122" class="alert-link">here</a> and I'll fix it.</div>"""
                 ),
                 Div(
                     Div(
@@ -4378,7 +4378,7 @@ class ChangeUserPreferencesForm(forms.ModelForm):
                 ),
                 css_class="row",
             ),
-            HTML("<h4>Notifications</h4><br>"),
+            HTML('<h4 class="mt-4">Notifications</h4>'),
             Div(
                 Div(
                     "push_notifications_instead_of_email",
@@ -4402,7 +4402,8 @@ class ChangeUserPreferencesForm(forms.ModelForm):
                 css_class="row",
             ),
             HTML(
-                "You'll get one email per week that contains an update on everything you've checked below<span class='text-muted'><small><br>And you'll only get that if you haven't visited the site in the last 6 days.</small></span><br><br>"
+                "<p class=\"text-muted small\">You'll get one email per week that contains an update on everything you've"
+                " checked below, and only if you haven't visited the site in the last 6 days.</p>"
             ),
             Div(
                 Div(

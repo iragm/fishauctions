@@ -80,6 +80,40 @@ How this is enforced:
 The global toast helper (`base.html`) uses these types: `info`/`danger` →
 white text, `success`/`warning` → dark text.
 
+### Alerts are solid fills, and a variable override does not reach them
+
+An alert on this site is a **solid brand-coloured block**, not Bootstrap 5.3's
+subtle tinted one. Darkly writes `.alert{color:#fff;border:none}` and one
+`.alert-warning{background-color:#f39c12}` per variant — plain declarations, far
+below the rule that reads `--bs-alert-bg`. So overriding `--bs-alert-bg` /
+`--bs-alert-color` in `auction_site.css`, which is what it used to do, changed
+nothing at all: every alert stayed Darkly's bright fill under white text, at
+2.2:1 for warning and 2.5:1 for success. **Set `background-color` and `color`
+outright on `.alert-*`.**
+
+| Variant | Fill | Text |
+|---|---|---|
+| `alert-primary` | `#375a7f` | white (7.2:1) |
+| `alert-secondary` | `#444` | white (9.7:1) |
+| `alert-danger` | `#a93226` (the darkened fill) | white (6.6:1) |
+| `alert-warning` | `#b9770e` (the darkened fill) | **black** (5.7:1) |
+| `alert-success` | `#00bc8c` | **black** (8.6:1) |
+| `alert-info` | `#3498db` | white (3.1:1 — passes for large/bold only) |
+
+Two consequences, both handled in `auction_site.css`:
+
+- Darkly also makes every link inside an alert white
+  (`.alert .alert-link,.alert a`), which is the same problem one level down and
+  usually lands on the sentence that says what to do about the alert. The
+  dark-text variants get dark links.
+- `.text-dark` is `#303030`, not black, and on the darkened warning fill that is
+  3.6:1 where black is 5.7:1 — so writing the documented `alert-warning
+  text-dark` would come out *worse* than the alert's own colour. Inside an alert
+  the utility is resolved to black (`.alert.text-dark`), so the markup the
+  message-type standard asks for is the markup that is right.
+- A dismiss button on a light fill needs the dark glyph, the same exception the
+  success/warning toast headers take. See "Close buttons".
+
 ## Outline buttons are not used
 
 **Do not write `btn-outline-*`.** On the near-black body an outline button is a
@@ -173,6 +207,14 @@ it. Two things to know before touching one:
   (`select2-bootstrap.min.css`) sizes to a 5.3 theme, and any per-page stylesheet
   loads after `auction_site.css`. The site rules are prefixed with `body` so they
   still win, but the page ends up fighting itself for no gain.
+- **The default theme sets no text colour on a multi-select**, and that is the
+  one thing dropping the skin cost. select2 paints the box white and the picked
+  chips `#e4e4e4` but colours neither, so both inherited Darkly's `#dee2e6` —
+  1.1:1, and the categories on `/ignore/` were invisible rather than missing.
+  The same is true of both boxes you can type into (`--inline` inside a
+  multi-select and `--dropdown` at the top of an open picker). Those colours are
+  in the same `auction_site.css` block as the sizing now; don't put them back in
+  a page.
 
 ## Unavailable actions stay clickable
 

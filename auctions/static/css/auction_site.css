@@ -146,6 +146,54 @@ body .select2-container--default .select2-selection--multiple {
     padding-left: 0.375rem;
 }
 
+/* --- and the text inside a multi-select is dark, like every other input -----
+   select2's default theme paints the box white and the chips #e4e4e4 but sets a colour on
+   *neither*, so both inherit whatever the page's text colour is -- which on this site is Darkly's
+   #dee2e6.  Light grey on white and light grey on #e4e4e4 is 1.1:1: the picked categories, and
+   everything typed into the box, were there the whole time and unreadable.  The Bootstrap 3 skin
+   this page used to load happened to set those colours, which is why dropping the skin is what
+   exposed it; the colours belong here now, with the rest of the sizing, so a page that starts
+   select2 itself cannot lose them again.
+
+   Values are the ones Bootstrap 5 uses inside a .form-control on this theme: #303030 for text,
+   #6c757d for the placeholder and the little x. */
+body .select2-container--default .select2-selection--multiple .select2-selection__rendered {
+    color: #303030;
+}
+
+body .select2-container--default .select2-selection--multiple .select2-selection__choice {
+    background-color: #e9ecef;
+    border-color: #adb5bd;
+    color: #303030;
+}
+
+body .select2-container--default .select2-selection--multiple .select2-selection__choice__remove {
+    color: #6c757d;
+}
+
+body .select2-container--default .select2-selection--multiple .select2-selection__choice__remove:hover {
+    color: #303030;
+}
+
+body .select2-container--default .select2-selection--multiple .select2-selection__clear {
+    color: #6c757d;
+}
+
+/* Two different boxes you can type into: the one inside a multi-select (`--inline`, transparent
+   over the white selection box) and the search field at the top of an open dropdown.  Neither sets
+   a colour of its own either, so both were light-on-white as well -- on every picker on the site,
+   not just this page. */
+body .select2-container--default .select2-search--inline .select2-search__field,
+body .select2-container--default .select2-search--dropdown .select2-search__field {
+    color: #303030;
+}
+
+body .select2-container--default .select2-search--inline .select2-search__field::placeholder,
+body .select2-container--default .select2-search--dropdown .select2-search__field::placeholder {
+    color: #6c757d;
+    opacity: 1;
+}
+
 /* The same focus ring .form-control:focus draws, so tabbing across a form doesn't change shape. */
 body .select2-container--default.select2-container--focus .select2-selection--single,
 body .select2-container--default.select2-container--open .select2-selection--single,
@@ -295,19 +343,50 @@ body .select2-container {
     color: #000;
 }
 
-/* Subtle dark alerts, retuned to the darker palette. */
+/* Alerts, retuned to the darker palette ------------------------------------
+   These used to set `--bs-alert-bg` and `--bs-alert-color` only, which did
+   nothing: Bootstrap's `.alert` reads those variables, but Darkly then writes a
+   *direct* `.alert-warning{background-color:#f39c12}` (and one per variant) far
+   later in its stylesheet, and a plain declaration on an equally specific
+   selector beats a variable the earlier rule read.  So every alert on the site
+   was still Darkly's bright fill with `.alert{color:#fff}` on top of it --
+   white on #f39c12 is 2.2:1 and white on #00bc8c is 2.5:1, the two worst
+   pairings on the site.
+
+   Set the background and the text colour outright, in the pairings the palette
+   documents: the darkened danger fill with white on it, and dark text on the
+   fills that are too light for white. */
 .alert-danger {
-    --bs-alert-color: #f1a49b;
-    --bs-alert-bg: #2b100c;
-    --bs-alert-border-color: #7f261d;
-    --bs-alert-link-color: #f5b8b1;
+    background-color: #a93226;
+    color: #fff;
 }
 
 .alert-warning {
-    --bs-alert-color: #f3c58a;
-    --bs-alert-bg: #2e1f06;
-    --bs-alert-border-color: #8b590b;
-    --bs-alert-link-color: #f7d3a3;
+    background-color: #b9770e;
+    color: #000;
+}
+
+.alert-success {
+    color: #000;
+}
+
+/* Darkly makes every link inside an alert white (`.alert .alert-link,.alert a`),
+   which is the same 2.2:1 problem one level down -- and it is usually the link
+   that says what to do about the alert.  Dark text alerts get dark links. */
+.alert-warning a,
+.alert-warning .alert-link,
+.alert-success a,
+.alert-success .alert-link {
+    color: #000;
+}
+
+/* `.text-dark` is #303030, not black, and style_reference.md's numbers for a
+   warning fill are black's (5.7:1, against 3.6:1 for #303030).  The markup that
+   pairs an alert with `text-dark` is following the message-type standard, so it
+   should not come out darker-on-dark than the alert's own colour: inside an
+   alert, resolve the utility to the black the palette meant. */
+.alert.text-dark {
+    color: #000 !important;
 }
 
 /* --- Outline buttons legible on the dark background ----------------------- */
@@ -691,10 +770,13 @@ body:has(.tos-banner) {
     --bs-btn-close-opacity: 0.75;
 }
 
-/* The one place a dark glyph is right: the two toast headers that are a light
-   fill with dark text (success and warning -- see the toast helper in
-   base.html). */
+/* The one place a dark glyph is right: a light fill carrying dark text -- the
+   two toast headers the toast helper in base.html paints (success and warning),
+   and the alerts of those two colours, which the block above gives dark text
+   for the same reason.  A white x on #b9770e is 3.7:1 and on #00bc8c 2.5:1. */
 [data-bs-theme="dark"] .toast-header.bg-success .btn-close,
-[data-bs-theme="dark"] .toast-header.bg-warning .btn-close {
+[data-bs-theme="dark"] .toast-header.bg-warning .btn-close,
+[data-bs-theme="dark"] .alert-success .btn-close,
+[data-bs-theme="dark"] .alert-warning .btn-close {
     filter: invert(1);
 }

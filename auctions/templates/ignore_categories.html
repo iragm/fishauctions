@@ -13,7 +13,7 @@ the site renders, so this one is left on it too. {% endcomment %}
 $(document).ready(function() {
     $("#category-selection").select2({
         width: '100%',
-        placeholder: "Select categories to hide when viewing lots",
+        placeholder: "Pick a category",
     });
     $('#category-selection').on('select2:unselect', function (e) {
         // delete
@@ -49,10 +49,13 @@ $(document).ready(function() {
 {% endblock %}
 {% block content %}
 {% include "preferences_ribbon.html" %}
-            <br>You can hide categories that you're not interested in.  Lots in these categories will not be shown unless you specifically filter by that category.<br><br>
-            For example, if you don't have a saltwater tank, you might want to hide corals.  Or, if you can't read, you might hide books/magazines.
-            <br><br><br>
-            Everything listed here is hidden from most views:
-            <select id='category-selection' class="category-selection" name="categories" multiple="multiple"></select>
-            <br><span class='text-muted'>Note that if you filter lots by a category, you'll still be able to see lots in that category.</span>
+<div class="mt-3">
+  <div class="help-note">
+    <i class="bi bi-lightbulb-fill"></i>
+    <div>Hide the categories you're not interested in and their lots stop showing up in most views &mdash; if you don't have a saltwater tank, hide corals.  Changes save as you make them.</div>
+  </div>
+  <label class="form-label" for="category-selection">Categories to hide</label>
+  <select id="category-selection" class="category-selection" name="categories" multiple="multiple"></select>
+  <div class="form-text">Filtering lots by a category still shows that category's lots, even when it's hidden here.</div>
+</div>
 {% endblock %}

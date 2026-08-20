@@ -10,6 +10,11 @@
 {% endblock %}
 {% block content %}
 {% include "preferences_ribbon.html" %}
-<br>
-{% crispy form form.helper %}
+<div class="mt-3">
+  <div class="help-note">
+    <i class="bi bi-lightbulb-fill"></i>
+    <div>Your username is the name shown on your lots, your bids and your chat messages.  You can sign in with either it or your email address, so remember the new one.</div>
+  </div>
+  {% crispy form form.helper %}
+</div>
 {% endblock %}

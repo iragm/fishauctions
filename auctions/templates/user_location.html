@@ -2,7 +2,7 @@
 {% load crispy_forms_tags %}
 {% load i18n %}
 
-{% block title %}Location{% endblock %}
+{% block title %}Contact info{% endblock %}
 
 {% block extra_css %}
 <link rel="stylesheet" href="//code.jquery.com/ui/1.12.1/themes/base/jquery-ui.css">
@@ -58,16 +58,21 @@
 {% endblock %}
 {% block content %}
 {% include "preferences_ribbon.html" %}
-        <br><a href='/blog/privacy/' target='_blank'>Who can see this information</a><br><br>
-            {% if auctiontos_update_message %}
-            <div class="alert alert-info" role="alert">
-                <i class="bi bi-info-circle me-1"></i>{{ auctiontos_update_message }}
-            </div>
-            {% endif %}
-            {% if club_membership_message %}
-            <div class="alert alert-info" role="alert">
-                <i class="bi bi-people-fill me-1"></i>{{ club_membership_message }}
-            </div>
-            {% endif %}
-            {% crispy form form.helper %}
+<div class="mt-3">
+  <div class="help-note">
+    <i class="bi bi-lightbulb-fill"></i>
+    <div>Auctions you join get your name, phone number and address so they can reach you and put them on your invoice, and the site measures the distances in your <a href="{% url 'preferences' %}">preferences</a> from this address.  <a href="/blog/privacy/" target="_blank">Who can see this information</a>.</div>
+  </div>
+  {% if auctiontos_update_message %}
+  <div class="alert alert-info" role="alert">
+    <i class="bi bi-info-circle me-1"></i>{{ auctiontos_update_message }}
+  </div>
+  {% endif %}
+  {% if club_membership_message %}
+  <div class="alert alert-info" role="alert">
+    <i class="bi bi-people-fill me-1"></i>{{ club_membership_message }}
+  </div>
+  {% endif %}
+  {% crispy form form.helper %}
+</div>
 {% endblock %}

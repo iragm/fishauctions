@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {% load crispy_forms_tags %}
-{% block title %}Preferences{% endblock %}
+{% block title %}Label printing{% endblock %}
 {% load static %}
 
 {% block extra_js %}
@@ -174,22 +174,24 @@ var form_id = '#printing-prefs';
 {% endblock %}
 {% block content %}
 {% include "preferences_ribbon.html" %}
-<br>{% if last_auction_used %}<a href="{% url 'print_my_labels' slug=last_auction_used.slug %}" class="btn-sm btn btn-primary">Print labels for {{last_auction_used}}</a>{% endif %}
-    <ol>
-        <li>Print your labels on regular paper</li>
-        <li>Cut them out with scissors</li>
-        <li>Use packing tape to attach them to your lots (make sure your bags are dry!)</li>
-    </ol>
-    <p>If you want to print on self-adhesive labels, search for <a href="https://www.google.com/search?q=Avery 5160 labels">small labels</a> or <a href="https://www.google.com/search?q=Avery 18262 labels">large labels</a>, and make sure to print using a laser printer (inkjet runs when it's wet).</p>
-    <small class='text-muted'>Keep in mind that most peel and stick (Avery) labels don't have the same margin at the top and the bottom, so if the text isn't printing on the labels, there's a good chance you've got the paper turned around.
-
-        <p><br>If you're printing lots of labels, or running club auctions, it likely makes sense to purchase a thermal printer.</p>
-    </small>
-
-        {% comment %}The auction named here is last_admin_auction, which is also what the block is gated on.  It used to link last_auction_used, an unrelated (and often blank) variable -- an admin who had never opened an auction reversed auction_printing with an empty slug and got a 500 on their own preferences page.{% endcomment %}
-        {% if last_admin_auction %}
-        <span class="text-warning"><b>Note:</b></span> These are your personal label printing settings, they don't change anything for other users.  Because you're an admin in {{ last_admin_auction }}, you can <a href='{% url "auction_printing" slug=last_admin_auction.slug %}'>print labels for other users</a>, or <a href="{% url 'auction_label_config' slug=last_admin_auction.slug %}">change what gets printed on labels.</a><br>
-        {% endif %}
-
-    {% crispy form form.helper %}
+{% comment %}Nothing here is a heading: the ribbon above already says which page this is.  The reader's action goes on the left of this row and the admin's on the right, per style_reference.md.{% endcomment %}
+<div class="d-flex flex-wrap gap-2 align-items-center justify-content-between mt-3 mb-2">
+  <div class="d-flex flex-wrap gap-2">
+    {% if last_auction_used %}<a href="{% url 'print_my_labels' slug=last_auction_used.slug %}" class="btn btn-sm btn-primary"><i class="bi bi-tag"></i> Print labels for {{ last_auction_used }}</a>{% endif %}
+  </div>
+  {% comment %}The auction named here is last_admin_auction, which is also what the block is gated on.  It used to link last_auction_used, an unrelated (and often blank) variable -- an admin who had never opened an auction reversed auction_printing with an empty slug and got a 500 on their own preferences page.{% endcomment %}
+  {% if last_admin_auction %}
+  <div class="d-flex flex-wrap gap-2">
+    <a class="btn btn-sm btn-info" href="{% url 'auction_printing' slug=last_admin_auction.slug %}"><i class="bi bi-printer"></i> Print labels for other users</a>
+    <a class="btn btn-sm btn-info" href="{% url 'auction_label_config' slug=last_admin_auction.slug %}"><i class="bi bi-sliders"></i> What gets printed on labels</a>
+  </div>
+  {% endif %}
+</div>
+<div class="help-note">
+  <i class="bi bi-lightbulb-fill"></i>
+  <div>These are your own label settings &mdash; they don't change anything for anyone else{% if last_admin_auction %}, including the auctions you run{% endif %}.  Print on regular paper, cut the labels out and tape them to your lots (make sure your bags are dry!), or set the size below to match self-adhesive
+    <a href="https://www.google.com/search?q=Avery 5160 labels">small</a> or <a href="https://www.google.com/search?q=Avery 18262 labels">large</a> labels and print those on a laser printer &mdash; inkjet runs when it's wet.</div>
+</div>
+<p class="text-muted small">Most peel and stick (Avery) labels don't have the same margin at the top and the bottom, so if the text isn't printing on the labels, there's a good chance you've got the paper turned around.  If you're printing lots of labels, or running club auctions, it likely makes sense to purchase a thermal printer.</p>
+{% crispy form form.helper %}
 {% endblock %}
