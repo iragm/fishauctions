@@ -294,6 +294,11 @@ INSTALLED_APPS = [
     "rest_framework",
     "rest_framework.authtoken",
     "rest_framework_simplejwt.token_blacklist",
+    # OAuth 2.1 authorization server for the MCP endpoint at /mcp/. Everything that reads it is
+    # guarded by ``auctions.mcp.auth.oauth_enabled()`` (which asks whether this app is installed),
+    # so a deployment that does not want to be an authorization server can drop this line and the
+    # site — including /mcp/ with an API key — keeps working.
+    "oauth2_provider",
 ]
 ASGI_APPLICATION = "fishauctions.asgi.application"
 MIDDLEWARE = [
@@ -1192,4 +1197,105 @@ SIMPLE_JWT = {
     "USER_ID_FIELD": "id",
     "USER_ID_CLAIM": "user_id",
     "TOKEN_OBTAIN_SERIALIZER": "rest_framework_simplejwt.serializers.TokenObtainPairSerializer",
+}
+
+
+# --- OAuth 2.1 for the MCP endpoint ------------------------------------------
+#
+# What Claude.ai, Claude Desktop, Claude mobile and Claude Code use to get permission to act as a
+# person through /mcp/. They run a real authorization-code flow and have nowhere to paste an API
+# key, so without this the endpoint is reachable only by things that can set a header. See
+# auctions/mcp/auth.py for the other half.
+#
+# django-oauth-toolkit 3.4 carries the whole stack the MCP authorization spec asks for: RFC 8414
+# authorization-server metadata, RFC 9728 protected-resource metadata, dynamic client registration
+# (RFC 7591/7592), Client ID Metadata Documents, and RFC 8707 resource indicators.
+OAUTH2_PROVIDER = {
+    # Two scopes, and they mean the same thing as ``UserAPIKey.allow_writes``: a ceiling on what
+    # the credential may do, never a grant. Every tool still asks the database what *this user* is
+    # allowed to do. ``offline_access`` is what gets Claude a refresh token — it appends the scope
+    # only when the metadata advertises it.
+    "SCOPES": {
+        "read": "Look things up: auctions, lots, people, invoices, club members",
+        "write": "Add and change things you could change yourself on the website",
+        "offline_access": "Stay connected without signing in again",
+    },
+    "DEFAULT_SCOPES": ["read"],
+    # OAuth 2.1, and the MCP spec, require PKCE. Claude always sends S256.
+    "PKCE_REQUIRED": True,
+    # DCR and CIMD are the two ways a client Anthropic runs can register itself without anybody
+    # creating an Application by hand. CIMD is preferred for anything with traffic — DCR registers
+    # a brand new client on every fresh connection — but Claude only *chooses* CIMD when the
+    # metadata advertises both ``client_id_metadata_document_supported`` and "none" in
+    # ``token_endpoint_auth_methods_supported``, so both are on and the second is asserted below.
+    "DCR_ENABLED": True,
+    "CIMD_ENABLED": True,
+    # Claude Code is a native client: it listens on a loopback redirect whose port is picked per
+    # session, and declares the portless ``http://localhost/callback`` in its metadata document.
+    # RFC 8252 §7.3 exempts the 127.0.0.1 literal from port matching out of the box; this setting
+    # is what extends the same exemption to the "localhost" spelling, which is the one Claude Code
+    # actually uses.
+    "ALLOW_LOCALHOST_LOOPBACK": True,
+    # DCR and CIMD both register Claude as a *public* client, and OAuth 2.1 requires a public
+    # client's refresh token to be rotated rather than reused.
+    "ROTATE_REFRESH_TOKEN": True,
+    # Rotation without replay detection is half the mechanism: it is the *detection* that turns a
+    # stolen refresh token into a revoked session instead of a second live one. Replaying a
+    # rotated token revokes the whole family.
+    "REFRESH_TOKEN_REUSE_PROTECTION": True,
+    # ...and the grace period is what stops that firing on an honest client. Claude refreshes
+    # reactively on a 401 and proactively before expiry, so two refreshes can be in flight at once
+    # over a slow link; with a grace period of zero the second one looks exactly like a replay and
+    # the person is told to reconnect. Ten seconds covers a retry and is far short of any window an
+    # attacker could use.
+    "REFRESH_TOKEN_GRACE_PERIOD_SECONDS": 10,
+    # An access token is a bearer credential that can act as somebody on this site; a short life
+    # is the main thing limiting the damage a leaked one can do. Claude refreshes on a 401 (and
+    # proactively up to five minutes before expiry), so a short life costs a round trip, not a
+    # re-consent.
+    "ACCESS_TOKEN_EXPIRE_SECONDS": 60 * 60,
+    "REFRESH_TOKEN_EXPIRE_SECONDS": 60 * 60 * 24 * 30,
+    "OAUTH2_PROTECTED_RESOURCE_NAME": "Auction site MCP endpoint",
+    # Dynamic client registration has to be reachable *before* anybody has signed in — it is the
+    # first call a client makes, with no user in the loop — so the toolkit's default
+    # "must be authenticated" permission would refuse every real DCR attempt. Open registration is
+    # what the MCP authorization spec expects; the cost is a row per registering client, which is
+    # exactly why CIMD is advertised above and preferred by anything that supports it.
+    "DCR_REGISTRATION_PERMISSION_CLASSES": ("oauth2_provider.dcr.AllowAllDCRPermission",),
+    # What the discovery document advertises. Narrowed from the toolkit's defaults to the two
+    # grants this authorization server exists to serve: an MCP client gets an authorization code
+    # and then refreshes it. Advertising `implicit`, `password`, `client_credentials` and the
+    # device grant would be describing an attack surface we do not want anyone to go looking for.
+    "OAUTH2_RESPONSE_TYPES_SUPPORTED": ["code"],
+    "OAUTH2_GRANT_TYPES_SUPPORTED": ["authorization_code", "refresh_token"],
+    # "none" has to be first-class here, and it is the single easiest thing to get wrong: Claude
+    # picks CIMD only when the metadata advertises both `client_id_metadata_document_supported`
+    # *and* "none" among the token-endpoint auth methods, because its CIMD client authenticates as
+    # a public client. Leave it out and everything still works — by silently falling back to DCR,
+    # registering a fresh client on every connection.
+    "OAUTH2_TOKEN_ENDPOINT_AUTH_METHODS_SUPPORTED": ["none", "client_secret_post", "client_secret_basic"],
+    # RFC 9700 (OAuth 2.0 Security BCP). These default to False for backwards compatibility and
+    # are scheduled to become the default in the toolkit's 4.0; turned on now because this server
+    # was born as an OAuth 2.1 / MCP authorization server and has no legacy client to break.
+    # Each one refuses the insecure behaviour rather than merely warning about it.
+    "COMPLIANT_BCP_RFC9700_IMPLICIT_GRANT": True,
+    "COMPLIANT_BCP_RFC9700_PASSWORD_GRANT": True,
+    # Drops "plain" PKCE, so the metadata advertises S256 only — which is what the MCP
+    # authorization spec asks a client to be able to verify before it starts the flow.
+    "COMPLIANT_BCP_RFC9700_PKCE_METHOD": True,
+    # Refuses an access token presented in the query string. The MCP spec forbids that outright,
+    # and a credential in a URL ends up in logs, proxies and history.
+    "COMPLIANT_BCP_RFC9700_ACCESS_TOKEN_TRANSPORT": True,
+    # RFC 9207: return `iss` on the authorization response, so a client can tell which server
+    # answered it (mix-up defence).
+    "COMPLIANT_BCP_RFC9700_AUTHZ_RESPONSE_ISS": True,
+    # ``manage.py check --deploy`` warns (oauth2_provider.W008) that plaintext http redirect URIs
+    # are allowed. That is deliberate and the toolkit's own hint says so: RFC 8252 native-app
+    # loopback callbacks are http, and Claude Code's is one. Removing "http" from
+    # ALLOWED_REDIRECT_URI_SCHEMES would lock Claude Code out.
+    #
+    # Deliberately left at the default: COMPLIANT_BCP_RFC9700_TOKEN_STORAGE hashes tokens at rest,
+    # which is a real improvement, but it is incompatible with a refresh-token grace period — and
+    # Claude refreshes reactively on a 401, where two in-flight refreshes with no grace period
+    # means one of them fails and the user is asked to reconnect. Worth revisiting with numbers.
 }

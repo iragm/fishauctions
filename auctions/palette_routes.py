@@ -175,6 +175,12 @@ ROUTE_LIST: list[Route] = [
     _r("change_username", "Change my username", "Account", keywords=["username", "rename"]),
     _r("ignore_categories", "Categories to hide", "Account", keywords=["ignore", "hide categories", "mute"]),
     _r("printing", "Label printing preferences", "Account", keywords=["printer", "label size", "thermal"]),
+    _r(
+        "user_api_keys",
+        "API keys for AI assistants and scripts",
+        "Account",
+        keywords=["api key", "mcp", "claude", "connect an assistant", "token"],
+    ),
     _r("account_delete", "Delete my account", "Account", keywords=["close account", "delete me", "gdpr"]),
     _r("paypal_seller", "My PayPal payout settings", "Account", keywords=["paypal", "get paid", "payout"]),
     _r("paypal_connect", "Connect PayPal", "Account", keywords=["link paypal", "set up paypal"]),
@@ -1037,6 +1043,17 @@ _DUPLICATE = "Same page as another entry in the catalog."
 _ACTION_ONLY = "POST-only action; the palette has a real skill for this instead of navigating."
 
 EXCLUDED: dict[str, str] = {
+    # The MCP endpoint and its authorization server
+    "mcp": (
+        "The Model Context Protocol endpoint. Another program's way in, authenticated by a bearer "
+        "token rather than a person's session; there is nothing on it to look at."
+    ),
+    # django-oauth-toolkit's authorization server (/o/, plus the discovery documents at the domain
+    # root) is how Claude and other agents get permission to use the MCP endpoint as somebody. It
+    # needs no entry here: its URLs are namespaced, and ``is_third_party`` excuses every namespaced
+    # name for the same reason it excuses allauth's. An entry would in fact *break* the audit --
+    # ``audit()`` drops ``namespace:*`` from the live set, so a reason written for one is a reason
+    # for a URL that is never seen, which is exactly what ``stale`` reports.
     # Speaker directory
     "speaker_panel": _API,
     "speaker_tag": _API,
@@ -1368,9 +1385,68 @@ _WORD = re.compile(r"[a-z0-9]+")
 
 #: Words that carry no signal when matching a query against a destination label.
 _STOPWORDS = frozenset(
-    """a an and are as at be by can could do does for from get go going have how i in into is it its
-    me my need of on or our page please put show take that the their them then there these this to
-    up us want was what when where which who will with would you your""".split()
+    [
+        "a",
+        "an",
+        "and",
+        "are",
+        "as",
+        "at",
+        "be",
+        "by",
+        "can",
+        "could",
+        "do",
+        "does",
+        "for",
+        "from",
+        "get",
+        "go",
+        "going",
+        "have",
+        "how",
+        "i",
+        "in",
+        "into",
+        "is",
+        "it",
+        "its",
+        "me",
+        "my",
+        "need",
+        "of",
+        "on",
+        "or",
+        "our",
+        "page",
+        "please",
+        "put",
+        "show",
+        "take",
+        "that",
+        "the",
+        "their",
+        "them",
+        "then",
+        "there",
+        "these",
+        "this",
+        "to",
+        "up",
+        "us",
+        "want",
+        "was",
+        "what",
+        "when",
+        "where",
+        "which",
+        "who",
+        "will",
+        "with",
+        "would",
+        "you",
+        "your",
+    ]
 )
 
 

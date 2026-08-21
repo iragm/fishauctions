@@ -250,6 +250,7 @@ from .models import (
     SpeciesNameRejection,
     SpeciesSearchCache,
     SquareSeller,
+    UserAPIKey,
     UserBan,
     UserData,
     UserIgnoreCategory,
@@ -1323,13 +1324,11 @@ class AuctionStatsPermissionsMixin:
         if not result:
             if not self.auction.make_stats_public:
                 logger.debug("non-admins allowed")
-                pass
 
             else:
                 raise PermissionDenied()
         else:
             logger.debug("allowing user %s to view %s", self.request.user, self.auction)
-            pass
         return result
 
 
@@ -1430,7 +1429,6 @@ class RenderAd(DetailView):
             if campaign.bid > uniform(0, total - 1):
                 if campaign.number_of_clicks > campaign.max_clicks or campaign.number_of_impressions > campaign.max_ads:
                     logger.debug("not selected -- limit exceeded")
-                    pass
                 else:
                     return AdCampaignResponse.objects.create(
                         user=user, campaign=campaign
@@ -5956,7 +5954,7 @@ class CSVContactImportMixin:
 
     def import_target_id(self):
         """A stable id binding a preview token to one auction/club so it cannot be replayed elsewhere."""
-        return None
+        return
 
     def _preview_cache_key(self, token):
         return f"{self.PREVIEW_CACHE_PREFIX}:{token}"
@@ -6780,8 +6778,7 @@ class BulkAddLots(LoginRequiredMixin, AuctionViewMixin, TemplateView):
             else:
                 extra = self.auction.max_lots_per_user - self.queryset.count()
             # but of course sometimes admisn will break the rules for their users:
-            if extra < 0:
-                extra = 0
+            extra = max(extra, 0)
         else:
             extra = 5  # default rows to show if max_lots_per_user is not set for this auction
         self.LotFormSet = modelformset_factory(
@@ -9279,7 +9276,6 @@ class AuctionCreateView(CreateView, LoginRequiredMixin):
                         clone_from_auction = original_auction
             except Exception as e:
                 logger.exception(e)
-                pass
         elif "online" in str(self.request.GET):
             is_online = True
         else:
@@ -9831,8 +9827,9 @@ class AuctionInfo(FormMixin, DetailView, AuctionViewMixin):
                         "You have to set your address before you can choose pickup by mail",
                     )
                     return redirect(f"{reverse('contact_info')}?next={auction.get_absolute_url()}")
-            if form.cleaned_data["time_spent_reading_rules"] > obj.time_spent_reading_rules:
-                obj.time_spent_reading_rules = form.cleaned_data["time_spent_reading_rules"]
+            obj.time_spent_reading_rules = max(
+                obj.time_spent_reading_rules, form.cleaned_data["time_spent_reading_rules"]
+            )
             # even if an auctiontos was originally manually added, if the user clicked join, mark them as not manually added
             obj.manually_added = False
             if obj.email_address_status == "UNKNOWN":
@@ -10404,11 +10401,13 @@ class InvoiceView(DetailView, FormMixin, AuctionViewMixin):
         if self.auction and self.auction.invoice_payment_instructions and invoice.status == "UNPAID":
             messages.info(request, self.auction.invoice_payment_instructions)
         if request.user.is_authenticated:
-            if invoice.club and invoice.buyer == request.user:
-                mark_invoice_viewed_by_user = True
-                auth = True
-            elif invoice.auctiontos_user and (
-                invoice.auctiontos_user.email == request.user.email or invoice.auctiontos_user.user == request.user
+            if (
+                invoice.club
+                and invoice.buyer == request.user
+                or invoice.auctiontos_user
+                and (
+                    invoice.auctiontos_user.email == request.user.email or invoice.auctiontos_user.user == request.user
+                )
             ):
                 mark_invoice_viewed_by_user = True
                 auth = True
@@ -12925,7 +12924,7 @@ class ClubMailchimpConfigView(LoginRequiredMixin, ClubViewMixin, View):
 
 
 GOOGLE_CALENDAR_OAUTH_CLUB_SESSION_KEY = "google_calendar_oauth_club_slug"
-GOOGLE_CALENDAR_OAUTH_STATE_SESSION_KEY = "google_calendar_oauth_state"  # noqa: S105 - a session key name
+GOOGLE_CALENDAR_OAUTH_STATE_SESSION_KEY = "google_calendar_oauth_state"
 
 
 class ClubGoogleCalendarConfigView(LoginRequiredMixin, ClubViewMixin, View):
@@ -25075,7 +25074,7 @@ class DiscordInteractionsView(View):
 
         return _discord_ephemeral("\n".join(lines))
 
-    def _handle_bap_command(self, data):  # noqa: C901 (kept intentional)
+    def _handle_bap_command(self, data):
         guild_id = data.get("guild_id", "")
         member_data = data.get("member") or {}
         user_data = member_data.get("user") or data.get("user") or {}
@@ -25454,6 +25453,56 @@ class ClubDiscordSendJoinMessageView(LoginRequiredMixin, ClubViewMixin, View):
         else:
             messages.error(request, f"Discord API error {resp.status_code}: could not send message.")
         return redirect(reverse("club_discord_config", kwargs={"slug": self.club.slug}))
+
+
+class UserAPIKeyView(LoginRequiredMixin, TemplateView):
+    """Issue, list and revoke this user's own MCP keys.
+
+    A key here is what lets a program act as this person through ``/mcp/`` — Claude Code with a
+    header, a script, anything that cannot run an OAuth flow. It can never do more than its owner
+    can: the tools re-check the owner's real permissions on every call, and ``allow_writes`` is a
+    ceiling on top of that rather than a grant.
+
+    The secret is shown **once**, on the redirect after creating it, and is never stored — only a
+    salted hash of it is. Same shape as the club API key pages
+    (:class:`ClubAPIKeyCreateView`), and for the same reason: a key you can go back and read is a
+    key that is written down somewhere it can be read from.
+    """
+
+    template_name = "user_api_keys.html"
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["active_tab"] = "api_keys"
+        context["keys"] = UserAPIKey.objects.filter(user=self.request.user).order_by("-created_at")
+        context["new_raw_key"] = self.request.session.pop("new_user_api_key", None)
+        context["mcp_url"] = self.request.build_absolute_uri(reverse("mcp"))
+        return context
+
+    def post(self, request, *args, **kwargs):
+        revoke = request.POST.get("revoke")
+        if revoke:
+            # Revoked rather than deleted: the row is what says a key existed and when it was last
+            # used, which is exactly what somebody wants to see after revoking one in a hurry.
+            UserAPIKey.objects.filter(pk=revoke, user=request.user).update(is_active=False)
+            messages.info(request, "That key has been revoked and will stop working immediately.")
+            return redirect(reverse("user_api_keys"))
+        name = request.POST.get("name", "").strip()
+        if not name:
+            messages.error(request, "Give the key a name so you can tell it apart later.")
+            return redirect(reverse("user_api_keys"))
+        raw_key, prefix, key_hash = UserAPIKey.generate()
+        UserAPIKey.objects.create(
+            user=request.user,
+            name=name[:100],
+            prefix=prefix,
+            key_hash=key_hash,
+            allow_writes=request.POST.get("allow_writes") == "on",
+        )
+        # Carried in the session rather than rendered straight away so a refresh of the page it
+        # lands on doesn't put the secret back on screen.
+        request.session["new_user_api_key"] = raw_key
+        return redirect(reverse("user_api_keys"))
 
 
 class CommandPaletteView(View):

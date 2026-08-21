@@ -1,0 +1,76 @@
+{% extends "base.html" %}
+{% block title %}API keys{% endblock %}
+{% block content %}
+{% include "preferences_ribbon.html" %}
+{% comment %}No heading: the ribbon above already says which page this is, per style_reference.md.{% endcomment %}
+<div class="help-note">
+  <i class="bi bi-lightbulb-fill"></i>
+  <div>A key lets an AI assistant or a script use this site as you, through the address below.  It can never do anything you couldn't do yourself &mdash; every auction and club still checks your own permissions &mdash; and a key that can only read is a much smaller thing to lose.  Anyone who has the key is you, so treat it like a password.</div>
+</div>
+
+{% if new_raw_key %}
+<div class="alert alert-success text-dark">
+  <h5><i class="bi bi-key-fill"></i> Here is your new key</h5>
+  <p class="mb-2">Copy it now &mdash; this is the only time it will ever be shown.  If you lose it, revoke it and make another.</p>
+  <pre class="bg-dark text-white p-2 rounded mb-2" style="overflow-x:auto"><code>{{ new_raw_key }}</code></pre>
+  <p class="mb-1">To use it in Claude Code:</p>
+  <pre class="bg-dark text-white p-2 rounded mb-0" style="overflow-x:auto"><code>claude mcp add --transport http auctions {{ mcp_url }} --header "Authorization: Bearer {{ new_raw_key }}"</code></pre>
+</div>
+{% endif %}
+
+<div class="card mt-3">
+  <div class="card-body">
+    <h5 class="card-title">Create a key</h5>
+    <form method="post">
+      {% csrf_token %}
+      <div class="mb-3">
+        <label class="form-label" for="key-name">What is this key for?</label>
+        <input class="form-control" type="text" name="name" id="key-name" maxlength="100" required placeholder="Claude on my laptop">
+        <div class="form-text">A name for you, so you can tell your keys apart later.</div>
+      </div>
+      <div class="form-check mb-3">
+        <input class="form-check-input" type="checkbox" name="allow_writes" id="allow-writes">
+        <label class="form-check-label" for="allow-writes">Let this key change things</label>
+        <div class="form-text">Off by default.  With it off the key can look things up but cannot add lots, check people in, or change an invoice.</div>
+      </div>
+      <button type="submit" class="btn btn-success text-dark"><i class="bi bi-plus-lg"></i> Create key</button>
+    </form>
+  </div>
+</div>
+
+<h5 class="mt-4">Your keys</h5>
+{% if keys %}
+<div class="table-responsive">
+  <table class="table align-middle">
+    <thead>
+      <tr><th>Name</th><th>Key</th><th>Can change things</th><th>Last used</th><th></th></tr>
+    </thead>
+    <tbody>
+      {% for key in keys %}
+      <tr{% if not key.is_active %} class="text-muted"{% endif %}>
+        <td>{{ key.name }}</td>
+        <td><code>{{ key.prefix }}&hellip;</code></td>
+        <td>{% if key.allow_writes %}Yes{% else %}No, read only{% endif %}</td>
+        <td>{% if key.last_used_at %}{{ key.last_used_at|timesince }} ago{% else %}Never{% endif %}</td>
+        <td class="text-end">
+          {% if key.is_active %}
+          <form method="post" data-confirm="Revoke this key?  Anything using it stops working straight away, and it cannot be turned back on." data-confirm-title="Revoke {{ key.name }}?" data-confirm-ok="Revoke key" data-confirm-variant="danger">
+            {% csrf_token %}
+            <input type="hidden" name="revoke" value="{{ key.pk }}">
+            <button type="submit" class="btn btn-sm btn-danger"><i class="bi bi-x-lg"></i> Revoke</button>
+          </form>
+          {% else %}
+          Revoked
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+<p class="text-muted">You haven't made any keys yet.</p>
+{% endif %}
+
+<p class="text-muted small mt-3">The address to connect to is <code>{{ mcp_url }}</code>.</p>
+{% endblock %}

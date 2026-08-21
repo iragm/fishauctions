@@ -470,6 +470,132 @@ give them a leaderboard. The four embeds share one shell (`auctions/templates/au
 so their palette can't drift; each has a styled template and an `_unstyled` one, and
 `embed_mode_from_request` / `embed_response` in `views.py` are the one reader of `?format=`.
 
+## MCP endpoint and the command palette's skills
+
+The site is a Model Context Protocol server at **`/mcp/`**, so Claude, Claude Code and any other
+agent can do the things the command palette can do. There is **one** catalogue behind both: every
+capability is an `Action` in `auctions/palette_actions.py`, `auctions/mcp/tools.py` turns the
+registry into MCP tool descriptors, and `palette_actions.run_action` is the single dispatcher. A
+skill cannot exist for one surface and not the other, and a permission cannot be checked
+differently depending on who asked — the resolvers call the same form, view or service the web page
+calls, so a lot added by an agent goes through the identical gauntlet as one added by clicking.
+
+**The schema is derived from the prose that was already there.** All 117 parameter descriptions in
+the registry open the same way — `"integer, optional, default 1."`, `"string, required. The lot
+number."` — because that is what the old system prompt needed in order to be readable. `param_schema`
+reads the type and the required flag off that prefix and keeps the whole sentence as the JSON Schema
+`description`. There is no second table of types to write, and
+`test_mcp.RegistryConformance.test_every_parameter_declares_its_type` fails the build the day
+somebody writes one that doesn't fit, because that parameter would silently lose its type.
+
+**Annotations come out of the danger tier**, which the registry has always carried: `safe` reads,
+`confirm` writes, `navigate` resolves a URL and never acts. So `readOnlyHint` is
+`danger != DANGER_CONFIRM`, and the read/write split a connector review demands is already enforced
+by a design that predates it. There is deliberately **no catch-all execute tool** — a single tool
+covering both reads and writes is the first thing a review rejects. `destructive=True` is set only
+where a write destroys a previous answer (`undo_sale`, `undo_last`), and `idempotent` is derived
+(reads are, writes aren't) unless an action that *sets* a value rather than appending one says
+otherwise.
+
+Four modules, and only the first knows anything about auctions:
+
+```
+auctions/mcp/tools.py      tool_descriptors(user, writes=) / call_tool(request, name, args)
+auctions/mcp/protocol.py   JSON-RPC 2.0 + the four MCP methods. Dicts in, dicts out.
+auctions/mcp/transport.py  the Django view: methods, headers, status codes, Origin check
+auctions/mcp/auth.py       who is calling
+```
+
+`tools.py` is the seam and it has two callers: the HTTP endpoint, and the command palette's own
+model, in-process with a live `request`. `protocol` and `transport` are hand-written because the
+stateless shape MCP allows is small and the auth path is worth owning outright; swapping them for
+FastMCP or the MCP Python SDK later is those two files and nothing else, which is why
+`auctions/test_mcp.py` is written against the URL rather than against internals.
+
+**The palette is a client of that catalogue, not a second copy of it.** `palette_assist.tools_for`
+is `mcp.tools.tool_descriptors(user)` plus exactly two tools of its own — `ask_the_user` and
+`cannot_do_this`, which have no MCP equivalent because a host does its own asking and a failing
+tool says so through `isError`. `llm.complete(system, messages, tools)` sends them as OpenAI
+function definitions (`llm.as_openai_tool` is the one place that translation lives) and the
+provider enforces them.
+
+That is what deleted ~200 lines from `palette_assist`. Under JSON mode the model could reply in any
+shape, so `parse_reply` had to *repair* the near-misses: a page key in the `action` slot, an auction
+title where a lookup name goes, a call written as `{"go_to_page": {…}}`, a lookup named in the
+action slot — plus a correction round for everything else. None of those can happen when the name
+has to be one of the tools we sent, so `read_reply` is now a short mapping from "which tool" to
+"lookup / action / question / refusal", and the correction round is gone: a reply that still gets
+here is one the endpoint didn't validate, and asking again does not fix that. `complete_json` stays
+for the four callers that want data rather than a call (species matching, donations, the two
+speaker commands).
+
+What is *kept* is deliberately palette-only and has no business in the MCP layer: the
+`obvious_match` / `shortcut_match` short-circuit that answers "invoice" with no model call at all,
+the confirm countdown and its trust window, `humanize`, the `_give_up` fallback ladder,
+`sanitize_context` / `_carry_over` conversation memory, the throttles, and the cancel/report
+analytics. The countdown is the browser's answer to the same question `destructiveHint` answers for
+an MCP host — one danger tier, two audiences.
+
+**Stateless streamable HTTP.** A POSTed request is answered with one `application/json` body (the
+spec allows this instead of an SSE stream); a notification gets `202`; `GET` and `DELETE` get `405`,
+because no server-initiated stream and no session are offered. A foreign `Origin` is `403`
+(DNS-rebinding), an unknown `MCP-Protocol-Version` header is `400`, and a missing one means
+`2025-03-26`.
+
+**A session cookie is never a credential, and that is the load-bearing line.** `/mcp/` is a
+CSRF-exempt POST that performs writes; if it honoured cookies, any page on the internet could drive
+it as whoever was signed in. Two credentials are accepted, both as `Authorization: Bearer`:
+
+* a **`UserAPIKey`** (prefix `ak_`), issued at `/account/api-keys/` and shown once. This is what
+  `claude mcp add --transport http … --header "Authorization: Bearer ak_…"` uses, and what the
+  `static_headers` beta on claude.ai uses. It shares `HashedAPIKey.generate` / `.verify` with
+  `ClubAPIKey`: prefix in the clear, secret as a salted hash, never stored.
+* an **OAuth 2.1 access token** from `django-oauth-toolkit`, which is the only thing claude.ai,
+  Desktop and mobile can do — they run a real authorization-code flow with PKCE and have nowhere to
+  paste a key. Gated on `oauth2_provider` being in `INSTALLED_APPS`, so a deployment that doesn't
+  want to be an authorization server simply isn't one and the key path still works.
+
+The authorization server is mounted twice in `fishauctions/urls.py`: its own URLs under `/o/`, and
+the discovery documents **again at the domain root**, because RFC 8414 and RFC 9728 put them at the
+origin and that is the first place Claude looks. Three settings in `OAUTH2_PROVIDER` are the ones
+worth knowing, because each fails silently:
+
+* `"none"` must be in `OAUTH2_TOKEN_ENDPOINT_AUTH_METHODS_SUPPORTED`. Claude selects CIMD only when
+  the metadata advertises *both* `client_id_metadata_document_supported` **and** `none` — its CIMD
+  client authenticates as a public client. Leave it out and everything still works, by falling back
+  to DCR and registering a fresh client on every connection.
+* `DCR_REGISTRATION_PERMISSION_CLASSES` must allow anonymous registration. DCR is the first call a
+  client makes, before any user is signed in; the toolkit's default refuses it.
+* `ALLOW_LOCALHOST_LOOPBACK`, because Claude Code declares a portless `http://localhost/callback`
+  and listens on an ephemeral port. RFC 8252 exempts the `127.0.0.1` literal out of the box; this
+  extends it to the `localhost` spelling, which is the one Claude Code actually sends.
+
+`/mcp` is matched with **and without** the trailing slash (`re_path(r"^mcp/?$")`), because
+`APPEND_SLASH` cannot rescue a POST — the 301 drops the body — and the RFC 9728 document names the
+resource without one. The `WWW-Authenticate` header points at the path-component form
+(`/.well-known/oauth-protected-resource/mcp`), not the bare origin: Claude requires the document's
+`resource` to match the URL the user typed, and the origin's document describes the whole site.
+
+`allow_writes` (a key) and the `write` scope (a token) are a **ceiling, not a grant**: they can only
+ever narrow what their owner may do. Read-only credentials are not offered write tools in
+`tools/list` at all, because an agent that spends its turn picking a tool it is about to be refused
+has been told the wrong thing.
+
+`ClubAPIKey` is the wrong shape for this and was not reused: it identifies a *club*, and every tool
+asks "may **this user** do this to this auction". It also carries one boolean per integration
+feature, which is a list that would have to grow with every new tool.
+
+**Adding a URL still costs you two entries.** `/mcp/` and `oauth2_provider:*` are in
+`palette_routes.EXCLUDED`; `UserAPIKeyView` is in `palette_actions.NOT_A_SKILL`; `user_api_keys` is a
+real `Route` because it is a page a person asks to be taken to.
+
+```bash
+docker exec -it django python3 manage.py test auctions.test_mcp
+curl -s -X POST http://127.0.0.1/mcp/ -H 'Content-Type: application/json' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25"}}'
+# expect 401 + WWW-Authenticate: Bearer resource_metadata="…/.well-known/oauth-protected-resource"
+```
+
 ## Model Changes
 
 - Always create migrations after model changes (`makemigrations` then `migrate`).

@@ -104,10 +104,11 @@ DANGER_SAFE = "safe"
 DANGER_CONFIRM = "confirm"
 DANGER_NAVIGATE = "navigate"
 
-# Who a skill is worth describing to. A pre-filter for the prompt, *not* the security boundary --
-# every resolver re-checks permissions, and ``parse_reply`` will happily accept an action that
-# wasn't advertised. Its job is to keep an ordinary bidder's prompt from being three quarters club
-# administration, which costs tokens on every call and gives the model wrong answers to choose from.
+# Who a skill is worth describing to. A pre-filter for the tool list, *not* the security boundary --
+# every resolver re-checks permissions, and both ``run_action`` and ``mcp.tools.call_tool`` will
+# happily accept an action that was never advertised. Its job is to keep an ordinary bidder's tool
+# list from being three quarters club administration, which costs tokens on every call and gives
+# the model wrong answers to choose from.
 NEEDS_ANYONE = ""
 NEEDS_AUCTION_ADMIN = "auction_admin"
 NEEDS_CLUB_ADMIN = "club_admin"
@@ -146,21 +147,19 @@ class Action:
     aliases: set[str] = field(default_factory=set)
     #: Who this is worth describing to. See :func:`actions_for`.
     needs: str = NEEDS_ANYONE
+    #: Overwrites or removes something that was there. Only ever true on a ``confirm``-tier
+    #: action, and only where the write destroys a previous answer rather than adding a new one --
+    #: undoing a sale clears a winner and a price. An MCP host reads this as
+    #: ``destructiveHint`` and always asks before running one; the palette already always asks.
+    destructive: bool = False
+    #: Whether running this twice with the same parameters is the same as running it once.
+    #: ``None`` means "derive it": reads are, writes aren't. Set it to ``True`` on a write that
+    #: sets a value rather than appending one, so a host may safely retry it on a dropped
+    #: connection. See :func:`auctions.mcp.tools.idempotent`.
+    idempotent: bool | None = None
 
     def accepts(self, key: str) -> bool:
         return key in self.params or key in self.aliases
-
-    def schema(self) -> dict[str, Any]:
-        """The JSON blob describing this action in the system prompt."""
-        data: dict[str, Any] = {
-            "skill": self.name,
-            "description": self.description,
-            "params": self.params,
-            "danger": self.danger,
-        }
-        if self.examples:
-            data["examples"] = self.examples
-        return data
 
 
 ACTIONS: dict[str, Action] = {}
@@ -2092,6 +2091,13 @@ def describe_auction(request, params: dict[str, Any]) -> dict[str, Any]:
         "lot_submission_open_now": bool(auction.can_submit_lots),
         "over": bool(auction.pretty_much_over),
         "uses_check_in": bool(auction.use_check_in_mode),
+        # Also in the palette's context block, but only for the auction whose page the user is
+        # standing on (see ``_auction_facts``). A caller with no page -- an agent over MCP, or
+        # anybody asking about an auction they aren't looking at -- has no other way to learn
+        # that this club calls custom_field_1 "CARES species", and add_lot's own parameter
+        # documentation points here for it. Placed ahead of ``rules`` for the reason the fees
+        # are: the tail is what truncation takes.
+        "lot_fields_this_auction_uses": lot_fields_in_use(auction),
         "you_have_joined": bool(tos),
         "your_bidder_number": tos.bidder_number if tos else None,
         "you_are_an_admin": is_admin,
@@ -3877,11 +3883,11 @@ register(
             ),
             "custom_field_1": (
                 "string, optional. Only for auctions that use a custom text field; its label is in "
-                "'lot_fields_this_auction_uses' in the context below."
+                "'lot_fields_this_auction_uses', which describe_auction returns."
             ),
             "custom_dropdown": (
                 "string, optional. Only for auctions that use a custom dropdown; its label and "
-                "allowed values are in 'lot_fields_this_auction_uses' in the context below."
+                "allowed values are in 'lot_fields_this_auction_uses', which describe_auction returns."
             ),
         },
         danger=DANGER_CONFIRM,
@@ -3904,7 +3910,7 @@ register(
         ),
         params={
             "lots": (
-                "array, required. The things to add, e.g. ['java fern', 'heater'] or "
+                "array of string or object, required. The things to add, e.g. ['java fern', 'heater'] or "
                 "[{'name': 'guppies', 'quantity': 3}]."
             ),
             "auction": "string, optional. Auction slug or title; omit for the user's last auction.",
@@ -3934,6 +3940,7 @@ register(
             "auction": "string, optional. Defaults to the user's last auction.",
         },
         danger=DANGER_CONFIRM,
+        idempotent=True,
         resolver=no_sale,
         confirm_template="Mark a lot as not sold",
         examples=["lot 14 didn't sell", "pass on lot 22", "no sale"],
@@ -3977,6 +3984,7 @@ register(
             ),
         },
         danger=DANGER_CONFIRM,
+        idempotent=True,
         resolver=update_preferences,
         aliases={"preference", "name"},
         confirm_template="Change a preference",
@@ -4031,6 +4039,7 @@ register(
             "auction": "string, optional. Defaults to the user's last auction.",
         },
         danger=DANGER_CONFIRM,
+        idempotent=True,
         resolver=set_lot_winner,
         confirm_template="Record a sale",
         examples=["lot 101 sold to bidder 14 for 25"],
@@ -4050,6 +4059,7 @@ register(
             "bidder_number": "string, optional. Assign this bidder number while checking in.",
         },
         danger=DANGER_CONFIRM,
+        idempotent=True,
         resolver=check_in,
         aliases={"bidder"},
         confirm_template="Check someone in",
@@ -4107,6 +4117,7 @@ register(
             "auction": "string, optional. Defaults to the user's last auction.",
         },
         danger=DANGER_CONFIRM,
+        idempotent=True,
         resolver=update_person,
         aliases={"name", "phone"},
         confirm_template="Update someone's details",
@@ -4132,10 +4143,17 @@ register(
             "buy_now_price": "number, optional.",
             "donation": "boolean, optional.",
             "i_bred_this_fish": "boolean, optional. Whether the seller bred this themselves (breeder award points).",
-            "custom_field_1": "string, optional. Only for auctions using a custom text field — see the context below.",
-            "custom_dropdown": "string, optional. Only for auctions using a custom dropdown — see the context below.",
+            "custom_field_1": (
+                "string, optional. Only for auctions using a custom text field; its label is in "
+                "'lot_fields_this_auction_uses', which describe_auction returns."
+            ),
+            "custom_dropdown": (
+                "string, optional. Only for auctions using a custom dropdown; its label and allowed "
+                "values are in 'lot_fields_this_auction_uses', which describe_auction returns."
+            ),
         },
         danger=DANGER_CONFIRM,
+        idempotent=True,
         resolver=edit_lot,
         aliases={"name", "query", "lot_id", "price"},
         confirm_template="Change a lot",
@@ -4159,6 +4177,7 @@ register(
             ),
         },
         danger=DANGER_CONFIRM,
+        idempotent=True,
         resolver=watch_lot,
         aliases={"name", "query", "lot_id", "unwatch", "action"},
         confirm_template="Update your watch list",
@@ -4180,6 +4199,7 @@ register(
             "auction": "string, optional. Defaults to the user's last auction.",
         },
         danger=DANGER_CONFIRM,
+        idempotent=True,
         resolver=set_invoice_status,
         aliases={"bidder", "name"},
         confirm_template="Change an invoice",
@@ -4230,6 +4250,7 @@ register(
             "memo": "string, optional. An admin-only note about them.",
         },
         danger=DANGER_CONFIRM,
+        idempotent=True,
         resolver=update_club_member,
         aliases={"name", "phone", "bidder_number"},
         confirm_template="Update a club member",
@@ -4449,14 +4470,15 @@ register(
     Action(
         name="go_to_page",
         description=(
-            "Open any page on the site. 'page' must be one of the destination keys listed under "
-            "'Pages you can open' below — that list is every page this site has. Use 'target' when "
-            "the page is about a particular thing: an auction name, a bidder, a lot, a club. This "
-            "is the right answer for anything phrased as 'take me to', 'open', 'show me' or 'where "
-            "is', and it is also the correct last resort when no other action fits."
+            "Open any page on the site, and return its URL. 'page' is a destination key, or the "
+            "page named in plain words — find_page searches the keys and returns ones that can be "
+            "passed straight back here. Between them they reach every page this site has. Use "
+            "'target' when the page is about a particular thing: an auction name, a bidder, a lot, "
+            "a club. This is the right answer for anything phrased as 'take me to', 'open', 'show "
+            "me' or 'where is', and it is also the correct last resort when no other action fits."
         ),
         params={
-            "page": "string, required. A destination key from the list below.",
+            "page": "string, required. A destination key from find_page, or the page named in plain words.",
             "target": (
                 "string, optional. Which auction / club / lot / person the page is about. "
                 "Omit to use whatever the user is currently looking at."
@@ -4515,6 +4537,7 @@ register(
         ),
         params={},
         danger=DANGER_CONFIRM,
+        destructive=True,
         resolver=undo_last,
         confirm_template="Undo the last thing",
         examples=["undo that", "no wait, that was wrong", "never mind"],
@@ -4729,6 +4752,8 @@ register(
             "auction": "string, optional. Defaults to the user's last auction.",
         },
         danger=DANGER_CONFIRM,
+        destructive=True,
+        idempotent=True,
         resolver=undo_sale,
         confirm_template="Undo a sale",
         examples=["undo lot 14", "that last one was wrong, unsell it"],
@@ -4877,15 +4902,6 @@ def actions_for(user=None) -> list[Action]:
     return allowed
 
 
-def registry_for_prompt(user=None) -> list[dict[str, Any]]:
-    """The action list as handed to the model, generated from the registry itself.
-
-    Generated rather than hand-written so a new action is described to the model the moment it
-    is registered, and can never drift from what the server will actually accept.
-    """
-    return [action.schema() for action in actions_for(user)]
-
-
 # --- the skill audit ---------------------------------------------------------
 #
 # ``palette_routes`` guarantees the assistant can *reach* every page. This table is the other half
@@ -4984,6 +5000,11 @@ NOT_A_SKILL: dict[str, str] = {
     "RemotePrintJobCancelView": _NEEDS_THE_ROW,
     # Pages with forms on them
     "AccountDeleteView": _DESTRUCTIVE,
+    "UserAPIKeyView": (
+        "Issuing a key for another program to act as you is a decision to make while looking at "
+        "the page that explains what the key can do, and the secret is shown once and never again. "
+        "go_to_page opens it."
+    ),
     "AdminUserFlow": _FORM_PAGE,
     "AuctionCreateView": (
         "Creating an auction is twenty decisions about dates, fees and rules. The create page walks "

@@ -2383,13 +2383,11 @@ class ClubMember(ContactRecord):
             new_reminder_30_days = self.calculate_membership_expiration_reminder_due(days_before=30)
             min_reminder = timezone.now() + datetime.timedelta(days=30)
             if new_reminder is not None and (previous_reminder_due is None or new_reminder < previous_reminder_due):
-                if new_reminder < min_reminder:
-                    new_reminder = min_reminder
+                new_reminder = max(new_reminder, min_reminder)
             if new_reminder_30_days is not None and (
                 previous_reminder_30_days_due is None or new_reminder_30_days < previous_reminder_30_days_due
             ):
-                if new_reminder_30_days < min_reminder:
-                    new_reminder_30_days = min_reminder
+                new_reminder_30_days = max(new_reminder_30_days, min_reminder)
             self.membership_expiration_reminder_due = new_reminder
             self.membership_expiration_reminder_30_days_due = new_reminder_30_days
         # Inherit email_address_status from another known record, same as AuctionTOS pattern
@@ -3191,8 +3189,65 @@ class ClubAnnouncement(models.Model):
         return bool(self.mailchimp_campaign_id or self.brevo_campaign_id)
 
 
-class ClubAPIKey(models.Model):
+class HashedAPIKey(models.Model):
+    """A key shown once and stored as a salted hash, with a lookup prefix in front of it.
+
+    Shared by :class:`ClubAPIKey` (a club's own website or software) and :class:`UserAPIKey` (an
+    agent acting as one person over MCP), because a second implementation of "issue a token and
+    check it later" is a second chance to get the storage wrong. The raw key is
+    ``<prefix>.<secret>``: the prefix is indexed and identifies the row, the secret is verified
+    against ``key_hash`` with Django's password hasher and is never written down anywhere.
+
+    A subclass sets :attr:`key_prefix` so the two kinds of key can be told apart on sight, and may
+    narrow :attr:`is_usable`.
+    """
+
+    #: What the prefix of a key from this model starts with. Distinct per subclass so a key pasted
+    #: into the wrong box is recognisable, and so a log line says which kind it was.
+    key_prefix = "k_"
+    #: Passed to ``select_related`` when verifying, since the caller always wants the owner.
+    verify_select_related: tuple[str, ...] = ()
+
+    class Meta:
+        abstract = True
+
+    @property
+    def is_usable(self):
+        """Whether this key may be used right now. Subclasses may add reasons it may not."""
+        return self.is_active
+
+    @classmethod
+    def generate(cls):
+        """Return ``(raw_key, prefix, key_hash)``. Store the last two; show the first once."""
+        import secrets
+
+        prefix = cls.key_prefix + secrets.token_hex(4)
+        secret = secrets.token_hex(16)
+        raw_key = f"{prefix}.{secret}"
+        key_hash = make_password(secret)
+        return raw_key, prefix, key_hash
+
+    @classmethod
+    def verify(cls, raw_key):
+        """Return the key matching ``raw_key``, or ``None``. Never raises on rubbish input."""
+        try:
+            prefix, secret = raw_key.split(".", 1)
+        except (AttributeError, ValueError):
+            return None
+        candidates = cls.objects.filter(prefix=prefix, is_active=True)
+        if cls.verify_select_related:
+            candidates = candidates.select_related(*cls.verify_select_related)
+        for candidate in candidates:
+            if check_password(secret, candidate.key_hash) and candidate.is_usable:
+                return candidate
+        return None
+
+
+class ClubAPIKey(HashedAPIKey):
     """API key scoped to a single Club, used by external services to ingest ClubMember records."""
+
+    key_prefix = "ck_"
+    verify_select_related = ("club",)
 
     club = models.ForeignKey(Club, on_delete=models.CASCADE, related_name="api_keys")
     name = models.CharField(max_length=100, help_text="Label for this integration, e.g. 'WordPress'")
@@ -3220,30 +3275,6 @@ class ClubAPIKey(models.Model):
     last_used_at = models.DateTimeField(null=True, blank=True)
     rate_limit = models.IntegerField(null=True, blank=True, help_text="Max requests per hour. Blank = site default.")
 
-    @staticmethod
-    def generate():
-        """Return (raw_key, prefix, key_hash). Store prefix + key_hash; display raw_key once."""
-        import secrets
-
-        prefix = "ck_" + secrets.token_hex(4)
-        secret = secrets.token_hex(16)
-        raw_key = f"{prefix}.{secret}"
-        key_hash = make_password(secret)
-        return raw_key, prefix, key_hash
-
-    @staticmethod
-    def verify(raw_key):
-        """Return active ClubAPIKey matching raw_key, or None."""
-        try:
-            prefix, secret = raw_key.split(".", 1)
-        except ValueError:
-            return None
-        candidates = ClubAPIKey.objects.filter(prefix=prefix, is_active=True).select_related("club")
-        for candidate in candidates:
-            if check_password(secret, candidate.key_hash):
-                return candidate
-        return None
-
     def __str__(self):
         return f"{self.name} ({self.prefix}…)"
 
@@ -3260,6 +3291,57 @@ class ClubAPIKeyFieldMap(models.Model):
 
     def __str__(self):
         return f"{self.external_field} → {self.internal_field}"
+
+
+class UserAPIKey(HashedAPIKey):
+    """A key that lets an agent act as one person over the MCP endpoint at ``/mcp/``.
+
+    A :class:`ClubAPIKey` is the wrong shape for this. It identifies a *club*, and every tool the
+    MCP endpoint offers is a resolver that asks "may **this user** do this to this auction", so an
+    agent needs a person to be. It also carries a permission per integration feature, which is a
+    list that would have to grow every time a tool is added.
+
+    So this key carries exactly one permission, :attr:`allow_writes`, and it is off by default.
+    That is not the security boundary -- the resolvers are, and they check the user's real
+    permissions on every call. It is a ceiling: a key can only ever do *less* than its owner can,
+    which is what makes handing one to a program a smaller decision than handing over a password.
+
+    OAuth is the other way in (see :mod:`auctions.mcp.auth`) and it is the one Claude's own hosted
+    surfaces use. This exists for everything that cannot do an OAuth dance: Claude Code with a
+    header, a script, a club's own tooling.
+    """
+
+    key_prefix = "ak_"
+    verify_select_related = ("user",)
+
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="api_keys")
+    name = models.CharField(max_length=100, help_text="What this key is for, e.g. 'Claude on my laptop'")
+    prefix = models.CharField(max_length=12, unique=True, db_index=True)
+    key_hash = models.CharField(max_length=255, db_index=True)  # salted password hash of secret
+    is_active = models.BooleanField(default=True)
+    allow_writes = models.BooleanField(
+        default=False,
+        help_text=(
+            "Let this key add and change things — lots, check-ins, invoices, members. Off by "
+            "default: a key that can only read is a much smaller thing to lose. Either way it can "
+            "never do anything you couldn't do yourself."
+        ),
+    )
+    expires_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="Stop accepting this key after this date. Blank means it never expires on its own.",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    last_used_at = models.DateTimeField(null=True, blank=True)
+    rate_limit = models.IntegerField(null=True, blank=True, help_text="Max requests per hour. Blank = site default.")
+
+    @property
+    def is_usable(self):
+        return self.is_active and not (self.expires_at and self.expires_at <= timezone.now())
+
+    def __str__(self):
+        return f"{self.name} ({self.prefix}…)"
 
 
 class Category(models.Model):
@@ -11325,11 +11407,9 @@ class PageView(models.Model):
         """
         if self.duplicate_count:
             dup = self.duplicates.first()
-            if self.date_start > dup.date_start:
-                self.date_start = dup.date_start
+            self.date_start = min(self.date_start, dup.date_start)
             if self.date_end and dup.date_end:
-                if self.date_end < dup.date_end:
-                    self.date_end = dup.date_end
+                self.date_end = max(self.date_end, dup.date_end)
             self.total_time = self.total_time + dup.total_time
             if not self.source:
                 self.source = dup.source
@@ -12908,8 +12988,7 @@ class UserInterestCategory(models.Model):
         try:
             maxInterest = UserInterestCategory.objects.filter(user=self.user).order_by("-interest")[0].interest
             self.as_percent = int(((self.interest + 1) / maxInterest) * 100)  # + 1 for the times maxInterest is 0
-            if self.as_percent > 100:
-                self.as_percent = 100
+            self.as_percent = min(self.as_percent, 100)
         except Exception:
             self.as_percent = 100
         super().save(*args, **kwargs)
