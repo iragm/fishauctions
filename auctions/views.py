@@ -12956,42 +12956,20 @@ class ClubGoogleCalendarConfigView(LoginRequiredMixin, ClubViewMixin, View):
     def post(self, request, slug):
         """Save the checkboxes on the settings page.
 
-        google_calendar_is_public is the admin telling us they've shared the calendar in Google.
-        We still can't *set* that — it needs a scope over all their calendars — but we can check
-        it, by asking for the calendar the way a member would.
+        There is deliberately no "this calendar is public" box among them any more. Sharing is a
+        fact about the calendar rather than a preference about this site, and we can read it — see
+        google_calendar.refresh_public_flag, which every sync runs.
         """
-        from auctions import google_calendar as gcal
-
         club = self.club
         club.add_auctions_to_calendar = "add_auctions_to_calendar" in request.POST
         club.create_discord_events_for_club_events = "create_discord_events_for_club_events" in request.POST
-        wants_public = "google_calendar_is_public" in request.POST
-        club.google_calendar_is_public = wants_public
-        # Their word, checked: a shared calendar has a public iCal feed, so fetching it without
-        # credentials tells us whether members can actually subscribe. Advertising links that
-        # 404 for everyone is worse than not advertising them.
-        warning = ""
-        if wants_public and club.google_calendar_connected:
-            try:
-                if not gcal.is_calendar_public(club):
-                    club.google_calendar_is_public = False
-                    warning = (
-                        "That calendar isn't shared publicly yet, so the Google subscribe links stay "
-                        "hidden. Follow the steps below, then tick the box again."
-                    )
-            except gcal.GoogleCalendarError as exc:
-                logger.warning("Could not check calendar sharing for club %s: %s", club.pk, exc)
-                warning = f"We couldn't check the calendar's sharing just now, so we've taken your word for it ({exc})."
         club.save(
             update_fields=[
                 "add_auctions_to_calendar",
                 "create_discord_events_for_club_events",
-                "google_calendar_is_public",
             ]
         )
         messages.success(request, "Calendar settings saved.")
-        if warning:
-            messages.warning(request, warning)
         return redirect(reverse("club_google_calendar_config", kwargs={"slug": club.slug}))
 
 
@@ -13110,6 +13088,8 @@ class GoogleCalendarSyncNowView(LoginRequiredMixin, ClubViewMixin, View):
         return super().dispatch(request, *args, **kwargs)
 
     def post(self, request, slug):
+        from auctions import google_calendar as gcal
+
         club = self.club
         config_url = reverse("club_google_calendar_config", kwargs={"slug": club.slug})
         if not club.google_calendar_connected:
@@ -13119,8 +13099,12 @@ class GoogleCalendarSyncNowView(LoginRequiredMixin, ClubViewMixin, View):
         club.refresh_from_db()
         if club.google_calendar_last_error:
             messages.error(request, f"Sync failed: {club.google_calendar_last_error}")
-        else:
-            messages.success(request, "Calendar synced.")
+            return redirect(config_url)
+        # An admin pressing this has usually just changed something in Google Calendar, and one of
+        # the things they change is sharing. Skipping the hourly rate limit here is what makes
+        # "I ticked the box in Google, why does this still say Private" answerable in one click.
+        gcal.refresh_public_flag(club, force=True)
+        messages.success(request, "Calendar synced.")
         return redirect(config_url)
 
 
@@ -13203,7 +13187,10 @@ class ClubEventUpdateView(LoginRequiredMixin, ClubViewMixin, View):
         if request.user.is_authenticated and not self._can_manage():
             raise PermissionDenied()
         self.event = get_object_or_404(ClubEvent, club=self.club, pk=kwargs.get("pk"), is_deleted=False)
-        if not self.event.is_editable:
+        # A generated event reaches this form too, and the form narrows itself to the two fields
+        # a club owns there. It used to 404, which left "our meeting is at the auction" with
+        # nowhere to be typed except Google Calendar, where the next push overwrote it.
+        if not self.event.details_are_editable:
             raise Http404
         return super().dispatch(request, *args, **kwargs)
 
@@ -13221,6 +13208,10 @@ class ClubEventUpdateView(LoginRequiredMixin, ClubViewMixin, View):
     def post(self, request, slug, pk):
         club_url = reverse("club_detail", kwargs={"slug": self.club.slug})
         if request.POST.get("action") == "delete":
+            # Never for a generated event: the auction is what put it here, and deleting the row
+            # only means the next sync builds it again. Unpromote the auction instead.
+            if not self.event.is_editable:
+                raise Http404
             title = self.event.title
             club_events.retire_event(self.event)
             messages.success(request, f"Deleted {title}.")
@@ -21006,6 +20997,39 @@ class ClubWebsiteIntegrationView(LoginRequiredMixin, ClubViewMixin, TemplateView
                 "available": club.enable_breeder_award_program,
                 "unavailable_reason": "The Breeder Award Program is turned off for this club.",
                 "settings_url": reverse("club_bap_settings", kwargs={"slug": club.slug}),
+            },
+            {
+                "key": "calendar",
+                "title": "Calendar links",
+                "icon": "bi-calendar-check",
+                "blurb": (
+                    "Not an embed — just the two addresses behind your events, to put on whatever "
+                    "your site already has: a button, a menu item, a line of text. The first one "
+                    "adds your calendar to somebody's own; the second is the raw feed, for "
+                    "anything that reads one."
+                ),
+                # Google's when the club has shared its calendar, ours when it hasn't. Same rule
+                # as the buttons on the club page: the shared Google calendar is the copy the club
+                # itself keeps, so it has whatever an admin typed straight into it, pull or no pull.
+                "links": [
+                    {
+                        "label": "Add to calendar",
+                        "url": club.calendar_subscribe_url(self.request.get_host()),
+                        "note": (
+                            "Opens Google Calendar."
+                            if club.google_calendar_public_url
+                            else "Opens whatever calendar app the visitor uses."
+                        ),
+                    },
+                    {
+                        "label": "Calendar feed (.ics)",
+                        "url": club.calendar_feed_url(self.request.get_host()),
+                        "note": "For a website plugin or anything else that reads a calendar feed.",
+                    },
+                ],
+                "available": club.enable_club_page,
+                "unavailable_reason": "Your public club page is turned off, so this feed is not being served.",
+                "settings_url": reverse("club_edit", kwargs={"slug": club.slug}),
             },
         ]
         return context

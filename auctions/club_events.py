@@ -78,11 +78,18 @@ def sync_one_auction_event(auction):
         )
         return event
 
+    # A title or description a club admin typed is theirs and stays: the meeting details that
+    # belong on the calendar entry change every month, and the auction's own title and "In-person
+    # auction." don't. Everything else here is still owned by the auction, so an auction that
+    # moves still moves its event. Clearing the flag on the form brings the generated value back
+    # on the next save.
+    keep_title = event.title_is_custom
+    keep_description = event.description_is_custom
     changed = (
-        event.title != auction.title
+        (not keep_title and event.title != auction.title)
         or event.date_start != start
         or event.date_end != end
-        or event.description != description
+        or (not keep_description and event.description != description)
         or event.location != location
         or event.is_deleted
         or event.club_id != club.pk
@@ -90,8 +97,10 @@ def sync_one_auction_event(auction):
     if changed:
         event.club = club
         event.source = ClubEvent.SOURCE_AUCTION
-        event.title = auction.title
-        event.description = description
+        if not keep_title:
+            event.title = auction.title
+        if not keep_description:
+            event.description = description
         event.location = location
         event.date_start = start
         event.date_end = end
@@ -305,9 +314,13 @@ def sync_pickup_events(auction):
             )
             touched += 1
             continue
+        # Same rule as the auction event above: hand-typed wording survives, everything else
+        # tracks the pickup time. "Pickup — swap table open too" is a real thing a club says.
+        keep_title = event.title_is_custom
+        keep_description = event.description_is_custom
         changed = (
-            event.title != title
-            or event.description != description
+            (not keep_title and event.title != title)
+            or (not keep_description and event.description != description)
             or event.location != address
             or event.date_start != start
             or event.date_end != start + PICKUP_LENGTH
@@ -316,8 +329,10 @@ def sync_pickup_events(auction):
         )
         if changed:
             event.club = club
-            event.title = title
-            event.description = description
+            if not keep_title:
+                event.title = title
+            if not keep_description:
+                event.description = description
             event.location = address
             event.date_start = start
             event.date_end = start + PICKUP_LENGTH
@@ -349,6 +364,27 @@ def _pickup_description(auction, location):
     if location.users_must_coordinate_pickup:
         parts.append("Coordinate the exact time with the seller.")
     return " ".join(parts)
+
+
+def generated_wording(event):
+    """(title, description) as this site would write them for a generated event, or ("", "").
+
+    The counterpart to ``title_is_custom`` / ``description_is_custom``: those columns say "don't
+    overwrite this", and this says what the overwrite *would* have been. The edit form needs it
+    twice — to show an admin what they are replacing, and to put it back when they press reset.
+
+    Recomputed rather than stored. It is two attribute reads and a string join, and a stored copy
+    would be one more thing that can fall out of step with the auction it came from.
+    """
+    from auctions.models import ClubEvent
+
+    if event.source == ClubEvent.SOURCE_AUCTION and event.auction:
+        return event.auction.title, _auction_description(event.auction)
+    if event.source == ClubEvent.SOURCE_PICKUP and event.pickup_location:
+        auction = event.pickup_location.auction
+        if auction:
+            return _pickup_title(auction, event.pickup_location), _pickup_description(auction, event.pickup_location)
+    return "", ""
 
 
 def refresh_recurring_events(club):

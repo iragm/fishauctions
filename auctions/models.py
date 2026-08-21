@@ -6,7 +6,7 @@ import uuid as uuid_module
 from datetime import time
 from decimal import ROUND_HALF_UP, Decimal
 from random import randint
-from urllib.parse import quote_plus, urlencode
+from urllib.parse import quote_plus
 
 import channels.layers
 import pytz
@@ -1159,11 +1159,16 @@ class Club(CloudflareImageMixin, models.Model):
         default=False,
         verbose_name="This calendar is shared publicly",
         help_text=(
-            "Whether the admin has made the calendar public in Google Calendar. We can't change "
-            "sharing ourselves — that needs a scope granting access to all of their calendars — "
-            "but ticking this box is checked against the calendar's public feed before it sticks. "
-            "It only controls whether the club page advertises the Google subscribe links."
+            "Whether the calendar is shared publicly in Google Calendar. Derived, not typed: we "
+            "can't change sharing ourselves — that needs a scope granting access to all of their "
+            "calendars — but a shared calendar has a public iCal feed, so every sync asks for it "
+            "the way a member would. It only controls whether we advertise the Google links."
         ),
+    )
+    google_calendar_public_checked = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="When we last asked Google whether this calendar is shared. See google_calendar.refresh_public_flag.",
     )
     google_calendar_last_sync = models.DateTimeField(null=True, blank=True)
     google_calendar_last_error = models.TextField(blank=True)
@@ -1311,6 +1316,29 @@ class Club(CloudflareImageMixin, models.Model):
         if not self.google_calendar_is_public:
             return ""
         return self.google_calendar_ical_url_candidate
+
+    def _own_ical_url(self, domain):
+        """This site's own iCal feed for the club. Every club has one, connected or not."""
+        return f"https://{domain}{reverse('club_events_ical', kwargs={'slug': self.slug})}"
+
+    def calendar_subscribe_url(self, domain):
+        """The one link to hand a member who wants these events in their own calendar.
+
+        Google's own calendar when the club has shared it, because that is the copy the club
+        actually keeps — anything an admin types straight into Google Calendar is on it, whether
+        or not the pull has run yet. Otherwise our feed, which needs no Google connection at all.
+
+        ``webcal://`` rather than ``https://`` for the fallback, deliberately: an https .ics is a
+        *download*, which most calendar apps import as a frozen snapshot, and a frozen snapshot of
+        a club calendar is the thing we keep telling people not to hand out.
+        """
+        if self.google_calendar_public_url:
+            return self.google_calendar_public_url
+        return re.sub(r"^https?://", "webcal://", self._own_ical_url(domain))
+
+    def calendar_feed_url(self, domain):
+        """The raw iCal feed behind :meth:`calendar_subscribe_url`, for anything that reads one."""
+        return self.google_calendar_ical_url or self._own_ical_url(domain)
 
     @property
     def icon_display_url(self):
@@ -2854,6 +2882,17 @@ class ClubEvent(models.Model):
         blank=True,
         help_text="Where the series is anchored — the first occurrence. Only set for repeating events.",
     )
+    title_is_custom = models.BooleanField(
+        default=False,
+        help_text=(
+            "Set when a club admin typed this event's title by hand. Only means anything on a "
+            "generated event, where it stops sync_one_auction_event overwriting it again."
+        ),
+    )
+    description_is_custom = models.BooleanField(
+        default=False,
+        help_text="The same, for the description. Cleared, the auction's own blurb comes back.",
+    )
     cancelled = models.BooleanField(
         default=False,
         verbose_name="This event is cancelled",
@@ -2905,8 +2944,23 @@ class ClubEvent(models.Model):
 
     @property
     def is_editable(self):
-        """Generated events are owned by the auction — edit the auction instead."""
+        """Everything about this event is the club's to change.
+
+        False for a generated event: its dates, its location and its very existence belong to the
+        auction. Its *wording* doesn't — see ``details_are_editable``.
+        """
         return self.source not in self.AUTOMATIC_SOURCES
+
+    @property
+    def details_are_editable(self):
+        """The title and description can always be typed by hand, generated event or not.
+
+        A club's monthly meeting often *is* the auction, and "In-person auction." is not what the
+        club wants members to read on their phone. Everything else about a generated event stays
+        owned by the auction, so this is deliberately narrower than ``is_editable`` rather than a
+        replacement for it.
+        """
+        return True
 
     @property
     def is_automatic(self):
@@ -3011,24 +3065,6 @@ class ClubEvent(models.Model):
         if not self.location:
             return ""
         return "https://www.google.com/maps/search/?api=1&query=" + quote_plus(self.location)
-
-    @property
-    def add_to_calendar_url(self):
-        """A 'save this to my calendar' link that works for anyone, with or without the club
-        having connected Google Calendar."""
-        params = {
-            "action": "TEMPLATE",
-            "text": self.title,
-            "dates": (
-                f"{self.date_start.astimezone(datetime.timezone.utc):%Y%m%dT%H%M%SZ}/"
-                f"{self.effective_end.astimezone(datetime.timezone.utc):%Y%m%dT%H%M%SZ}"
-            ),
-        }
-        if self.description:
-            params["details"] = self.description
-        if self.location:
-            params["location"] = self.location
-        return "https://calendar.google.com/calendar/render?" + urlencode(params)
 
 
 class ClubAnnouncement(models.Model):

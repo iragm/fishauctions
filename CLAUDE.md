@@ -470,6 +470,50 @@ give them a leaderboard. The four embeds share one shell (`auctions/templates/au
 so their palette can't drift; each has a styled template and an `_unstyled` one, and
 `embed_mode_from_request` / `embed_response` in `views.py` are the one reader of `?format=`.
 
+A fifth card on that page is **not** an embed: **Calendar links** hands over two plain addresses —
+a subscribe link and the raw `.ics` feed — because a club's own site already has somewhere to put
+a link and an iframe is the wrong shape for "subscribe to our calendar". Both follow one rule,
+`Club.calendar_subscribe_url` / `.calendar_feed_url`: **the club's Google calendar when it is
+shared, ours when it isn't**. The same rule picks the Google button on the club page and the "Add
+our calendar" link in the membership emails, and it is a rule rather than a preference because a
+shared Google calendar holds whatever an admin typed straight into it, pull or no pull. The
+subscribe link is `webcal://` when it falls back to us: an `https` `.ics` is a *download*, which
+most calendar apps import as a frozen snapshot.
+
+**Whether that calendar is shared is read, never asked.** `Club.google_calendar_is_public` was a
+checkbox an admin ticked after following the instructions, checked once at that moment, and it got
+both halves wrong — a club that shared the calendar and never came back never got its links, and a
+club that later un-shared it went on advertising links that 404 for every member.
+`google_calendar.refresh_public_flag` now fetches the calendar's public `.ics` anonymously (200 =
+really shared) at the end of every `sync_club`, at most hourly
+(`PUBLIC_CHECK_INTERVAL`, stamped in `google_calendar_public_checked`); **Sync now** forces it, and
+`disconnect()` forgets it so a reconnected *different* account can't inherit a stale "public".
+Failing to reach Google leaves the flag alone — a timeout is not evidence, and treating it as one
+would take the links off a working club page. We still cannot *set* sharing: that needs
+`calendar.acls`, which is sensitive and covers every calendar the admin owns.
+
+A generated event's **wording is the club's, everything else is the auction's**. A club's monthly
+meeting often *is* the auction, and "Spring Auction / In-person auction." is not what they want
+members reading on their phone — but the only place left to type it was Google Calendar, where the
+next push wiped it (`_apply_event_item` refuses Google-side edits to automatic events, and still
+does). `ClubEvent.title_is_custom` / `description_is_custom` are what stop
+`sync_one_auction_event` and `sync_pickup_events` overwriting a hand-typed field; `title` and
+`description` still hold the value **everything displays**, which is the point of the design — the
+alternative, override columns behind a `display_title` property, would have moved eight readers
+(club page, embed, `.ics`, `_event_body` twice, Discord, the membership email, the palette,
+`__str__`) and any one missed shows a different name in the feed members actually subscribed to.
+`club_events.generated_wording` recomputes what the site *would* have written, for the help text
+and the reset. `ClubEventForm` narrows itself to those two fields when `instance.is_automatic`, so
+dates, location, cancellation and delete stay with the auction (`is_editable` still gates delete;
+`details_are_editable` is the new, always-true guard on the form). `docs/club_event_details.md`
+has the whole design.
+
+There is deliberately **no per-event "add this to my calendar" link** on the club page's event
+list. It wrote Google's `TEMPLATE` screen — a dead copy of one event that never hears about a
+change of date — and competed for the click that should put a member on the whole calendar. The
+pickup-time buttons on the *auction* page are a different thing and stay: that is logistics for
+one Saturday, for people who already won lots.
+
 ## MCP endpoint and the command palette's skills
 
 The site is a Model Context Protocol server at **`/mcp/`**, so Claude, Claude Code and any other

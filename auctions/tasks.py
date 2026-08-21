@@ -103,6 +103,12 @@ def next_event_fragment(club, current_site, *, include_event=True, as_links=True
     Covers auctions and anything else on the club's calendar — meetings, swaps, talks. Shared by
     the real emails and the settings-page preview so the two can't drift; the preview passes
     ``as_links=False`` because a preview shouldn't contain working links.
+
+    It ends with a subscribe link, because one event in an email is a club's whole calendar in
+    miniature and the member is never going to be sent this email again — a welcome goes out once.
+    It rides on this fragment rather than sitting on its own so that a club which turned the next
+    event off (``welcome_include_auction`` and friends) gets no calendar pitch either: that switch
+    means "don't advertise what we're doing next", and a subscribe link is exactly that.
     """
     from auctions import club_events
 
@@ -147,6 +153,17 @@ def next_event_fragment(club, current_site, *, include_event=True, as_links=True
         f" <a href='{escape(details_url)}'>{escape(details_label)}</a>."
         if as_links
         else f" <span class='text-info'>{escape(details_label)}</span>."
+    )
+
+    # The club's Google calendar when they've shared it, our own feed when they haven't — the same
+    # choice the club page's buttons make, for the same reason: a club that keeps its calendar in
+    # Google keeps things there we only see after the next pull.
+    subscribe_url = club.calendar_subscribe_url(current_site.domain)
+    text += f" Add our calendar: {subscribe_url}"
+    html += (
+        f" <a href='{escape(subscribe_url)}'>Add our calendar</a>."
+        if as_links
+        else " <span class='text-info'>Add our calendar</span>."
     )
     return text, html
 
