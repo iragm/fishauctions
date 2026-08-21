@@ -1833,7 +1833,7 @@ class AddPersonTests(PaletteAssistTestCase):
         self.assertFalse(AuctionTOS.objects.filter(name="Jane Doe").exists())
 
     def test_add_lot_warns_the_model_off_making_a_person_into_a_lot(self):
-        """"add mike smith" is a person, not a lot called Mike Smith. Said where the model reads it."""
+        """ "add mike smith" is a person, not a lot called Mike Smith. Said where the model reads it."""
         description = self._tool("add_lot")["description"]
         self.assertIn("add_person", description)
         self.assertIn("PERSON", description)
