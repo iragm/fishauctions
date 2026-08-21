@@ -48,6 +48,21 @@ SCOPE_READ = "read"
 SCOPE_WRITE = "write"
 
 
+def opted_in(user) -> bool:
+    """Whether this person has the feature turned on at all.
+
+    ``UserData.use_llm_search`` is the same per-user flag that opens the natural-language command
+    palette, and it gates this endpoint for the same reason: it is one beta, reached two ways, and
+    a rollout control that only covers half of it is decorative. Without this a person could skip
+    the page that explains any of this, run the OAuth flow a client offers them, and be connected.
+
+    Deliberately *not* also gated on a language model being configured site-wide: an agent
+    connecting here brings its own, so this works on an install that has no API key of its own.
+    """
+    userdata = getattr(user, "userdata", None)
+    return bool(userdata and userdata.use_llm_search)
+
+
 @dataclass
 class Credential:
     """An authenticated caller: who they are, what they may do, and what proved it."""
@@ -118,11 +133,13 @@ def _from_oauth(request) -> Credential | None:
         return None
     from oauth2_provider.models import get_access_token_model
 
-    token = get_access_token_model().objects.filter(token=raw).select_related("user").first()
+    token = get_access_token_model().objects.filter(token=raw).select_related("user__userdata").first()
     # ``is_valid(scopes)`` is expiry *and* scope in one call. Reading is the floor: a token that
     # was granted neither scope has nothing here it is allowed to do, and saying so at the door
     # beats handing it a tool list it will be refused on every entry of.
     if token is None or not token.is_valid([SCOPE_READ]):
+        return None
+    if not opted_in(token.user):
         return None
     if token.user is None:
         # A client-credentials token has no user behind it. Every tool here acts as a person and
@@ -145,7 +162,7 @@ def _from_api_key(request) -> Credential | None:
     if not raw.startswith(UserAPIKey.key_prefix):
         return None
     key = UserAPIKey.verify(raw)
-    if key is None:
+    if key is None or not opted_in(key.user):
         return None
     _touch(key)
     return Credential(user=key.user, writes=key.allow_writes, kind="key", token=key)

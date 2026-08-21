@@ -3312,7 +3312,9 @@ class UserAPIKey(HashedAPIKey):
     """
 
     key_prefix = "ak_"
-    verify_select_related = ("user",)
+    # ``user__userdata`` rather than ``user``: every request checks the owner's ``use_llm_search``
+    # flag (see auctions.mcp.auth.opted_in), so fetching it here saves a query per call.
+    verify_select_related = ("user__userdata",)
 
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="api_keys")
     name = models.CharField(max_length=100, help_text="What this key is for, e.g. 'Claude on my laptop'")

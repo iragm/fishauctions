@@ -546,10 +546,10 @@ because no server-initiated stream and no session are offered. A foreign `Origin
 CSRF-exempt POST that performs writes; if it honoured cookies, any page on the internet could drive
 it as whoever was signed in. Two credentials are accepted, both as `Authorization: Bearer`:
 
-* a **`UserAPIKey`** (prefix `ak_`), issued at `/account/api-keys/` and shown once. This is what
-  `claude mcp add --transport http … --header "Authorization: Bearer ak_…"` uses, and what the
-  `static_headers` beta on claude.ai uses. It shares `HashedAPIKey.generate` / `.verify` with
-  `ClubAPIKey`: prefix in the clear, secret as a salted hash, never stored.
+* a **`UserAPIKey`** (prefix `ak_`), issued at `/account/api-keys/` and shown once. This is for
+  what *cannot* sign in — a script, a cron job, the `static_headers` beta where an org admin enters
+  one credential for everybody. It shares `HashedAPIKey.generate` / `.verify` with `ClubAPIKey`:
+  prefix in the clear, secret as a salted hash, never stored.
 * an **OAuth 2.1 access token** from `django-oauth-toolkit`, which is the only thing claude.ai,
   Desktop and mobile can do — they run a real authorization-code flow with PKCE and have nowhere to
   paste a key. Gated on `oauth2_provider` being in `INSTALLED_APPS`, so a deployment that doesn't
@@ -575,6 +575,19 @@ worth knowing, because each fails silently:
 resource without one. The `WWW-Authenticate` header points at the path-component form
 (`/.well-known/oauth-protected-resource/mcp`), not the bare origin: Claude requires the document's
 `resource` to match the URL the user typed, and the origin's document describes the whole site.
+
+**The whole feature is gated on `UserData.use_llm_search`** — the same per-user beta flag that
+opens the natural-language palette, checked by `mcp.auth.opted_in` on every request and by
+`UserAPIKeyView.dispatch` on the page. Gating only the page would be decorative: a person could
+skip it, run whatever OAuth flow their client offers, and be connected. It is deliberately *not*
+also gated on a language model being configured site-wide — an agent brings its own model, so this
+works on an install with no `OPENAI_API_KEY` at all. Turning the flag back off disconnects them.
+
+`/account/api-keys/` is the page that explains all of this, written for a person rather than for a
+developer: the address, the two ways to connect (custom connector, `claude mcp add`), what it can
+do, and the key form underneath for the cases that need one. It leads with signing in because
+that is what almost everyone wants — Claude Code runs its own OAuth flow too, so a key is the
+exception, not the default.
 
 `allow_writes` (a key) and the `write` scope (a token) are a **ceiling, not a grant**: they can only
 ever narrow what their owner may do. Read-only credentials are not offered write tools in

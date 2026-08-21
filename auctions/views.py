@@ -12062,7 +12062,7 @@ class PayPalAPIMixin:
         payload = {"amount": {"value": str(amount), "currency_code": str(payment.currency)}}
         result = self.post_to_paypal(f"v2/payments/captures/{payment.external_id}/refund", payload)
         if result.get("status") != "COMPLETED":
-            logger.exception("PayPal refund failed: %s, debug_id: %s", result, self.paypal_debug)
+            logger.error("PayPal refund failed: %s, debug_id: %s", result, self.paypal_debug)
             return "PayPal refund failed"
         # no database recording happens here, that goes through the webhook, see handle_refund()
         return None
@@ -12185,7 +12185,7 @@ class PayPalConnectView(LoginRequiredMixin, PayPalAPIMixin, View):
         # Extract the action_url from the links list
         action_url = next((link["href"] for link in data.get("links", []) if link.get("rel") == "action_url"), None)
         if not action_url:
-            logger.exception("PayPal onboarding failed %s, debug_id %s", data, self.paypal_debug)
+            logger.error("PayPal onboarding failed %s, debug_id %s", data, self.paypal_debug)
             messages.error(request, "Unable to start PayPal onboarding process, please try again later.")
             return redirect(reverse("home"))
         # Redirect seller to PayPal to complete onboarding
@@ -25456,20 +25456,36 @@ class ClubDiscordSendJoinMessageView(LoginRequiredMixin, ClubViewMixin, View):
 
 
 class UserAPIKeyView(LoginRequiredMixin, TemplateView):
-    """Issue, list and revoke this user's own MCP keys.
+    """How to connect Claude (or anything else) to this site, and the keys for doing it.
 
-    A key here is what lets a program act as this person through ``/mcp/`` — Claude Code with a
-    header, a script, anything that cannot run an OAuth flow. It can never do more than its owner
-    can: the tools re-check the owner's real permissions on every call, and ``allow_writes`` is a
+    Two ways in, and the page leads with the one most people want. **Signing in** is the whole
+    story for Claude, Claude Desktop, Claude mobile and Claude Code: they run a real OAuth flow
+    against this site and there is no key to copy anywhere. A **key** is for the things that
+    can't do that — a script, a cron job, a connector an administrator adds for a whole
+    organisation with a fixed header.
+
+    Either way the credential can never do more than its owner can: the tools re-check the owner's
+    real permissions on every call, and ``allow_writes`` (and the OAuth ``write`` scope) is a
     ceiling on top of that rather than a grant.
 
-    The secret is shown **once**, on the redirect after creating it, and is never stored — only a
-    salted hash of it is. Same shape as the club API key pages
+    A key's secret is shown **once**, on the redirect after creating it, and is never stored — only
+    a salted hash of it is. Same shape as the club API key pages
     (:class:`ClubAPIKeyCreateView`), and for the same reason: a key you can go back and read is a
     key that is written down somewhere it can be read from.
+
+    Gated on ``UserData.use_llm_search``, the same per-user flag that opens the natural-language
+    command palette — this is the same beta, reached a different way, and it is rolled out the same
+    way. Deliberately *not* also gated on a language model being configured site-wide
+    (``llm.assist_enabled``): an agent connecting over MCP brings its own model, so this feature
+    works perfectly well on an install that has no API key of its own.
     """
 
     template_name = "user_api_keys.html"
+
+    def dispatch(self, request, *args, **kwargs):
+        if request.user.is_authenticated and not getattr(request.user.userdata, "use_llm_search", False):
+            raise PermissionDenied
+        return super().dispatch(request, *args, **kwargs)
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
@@ -25477,9 +25493,18 @@ class UserAPIKeyView(LoginRequiredMixin, TemplateView):
         context["keys"] = UserAPIKey.objects.filter(user=self.request.user).order_by("-created_at")
         context["new_raw_key"] = self.request.session.pop("new_user_api_key", None)
         context["mcp_url"] = self.request.build_absolute_uri(reverse("mcp"))
+        # Every tool this user would actually be offered, so the page can say what connecting gets
+        # them rather than describing the feature in the abstract.
+        from auctions.mcp import tools as mcp_tools
+
+        descriptors = mcp_tools.tool_descriptors(self.request.user)
+        context["tool_count"] = len(descriptors)
+        context["read_tool_count"] = sum(1 for tool in descriptors if tool["annotations"]["readOnlyHint"])
         return context
 
     def post(self, request, *args, **kwargs):
+        # No gate of its own: dispatch() above refuses this view outright for anyone without the
+        # flag, GET and POST alike.
         revoke = request.POST.get("revoke")
         if revoke:
             # Revoked rather than deleted: the row is what says a key existed and when it was last

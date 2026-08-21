@@ -22,7 +22,7 @@ from django.utils import timezone
 
 from auctions import palette_actions
 from auctions.mcp import protocol, tools
-from auctions.models import UserAPIKey
+from auctions.models import UserAPIKey, UserData
 from auctions.test_support import isolated_cache
 from auctions.tests import StandardTestCase
 
@@ -221,6 +221,10 @@ class RegistryConformance(SimpleTestCase):
 class CallToolTests(StandardTestCase):
     """The dispatcher: the three shapes a resolver can return, as MCP results."""
 
+    def setUp(self):
+        super().setUp()
+        UserData.objects.update(use_llm_search=True)
+
     def _request_for(self, user):
         request = RequestFactory().post("/mcp/")
         request.user = user
@@ -291,6 +295,10 @@ class EndpointTests(StandardTestCase):
 
     def setUp(self):
         super().setUp()
+        # The feature is per-user opt-in (UserData.use_llm_search, off by default while it is in
+        # beta) and the endpoint enforces that, so the fixture has to opt in. OptInTests below is
+        # where the flag itself is tested.
+        UserData.objects.update(use_llm_search=True)
         raw, prefix, key_hash = UserAPIKey.generate()
         self.raw_key = raw
         self.key = UserAPIKey.objects.create(
@@ -519,6 +527,7 @@ class OAuthTests(StandardTestCase):
 
     def setUp(self):
         super().setUp()
+        UserData.objects.update(use_llm_search=True)
         from oauth2_provider.models import get_access_token_model, get_application_model
 
         self.application = get_application_model().objects.create(
@@ -684,3 +693,113 @@ class DiscoveryDocumentTests(StandardTestCase):
         )
         self.assertEqual(response.status_code, 201, response.content)
         self.assertTrue(json.loads(response.content)["client_id"])
+
+
+@isolated_cache("mcp-opt-in")
+class OptInTests(StandardTestCase):
+    """``UserData.use_llm_search`` gates the whole feature, not just the page that explains it.
+
+    The flag is off by default and flipped per user while this is in beta. A rollout control that
+    covered only the instructions page would be decorative: a person could skip it, run whatever
+    OAuth flow their client offers, and be connected.
+    """
+
+    url = "/mcp/"
+
+    def setUp(self):
+        super().setUp()
+        raw, prefix, key_hash = UserAPIKey.generate()
+        self.raw_key = raw
+        UserAPIKey.objects.create(user=self.user, name="k", prefix=prefix, key_hash=key_hash, allow_writes=True)
+
+    def _opt_in(self, user, enabled=True):
+        user.userdata.use_llm_search = enabled
+        user.userdata.save()
+
+    def rpc(self):
+        return self.client.post(
+            self.url,
+            data=json.dumps({"jsonrpc": "2.0", "id": 1, "method": "ping"}),
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Bearer {self.raw_key}",
+            HTTP_MCP_PROTOCOL_VERSION=protocol.LATEST_PROTOCOL_VERSION,
+        )
+
+    def test_a_key_belonging_to_somebody_not_opted_in_does_not_work(self):
+        self._opt_in(self.user, False)
+        self.assertEqual(self.rpc().status_code, 401)
+
+    def test_the_same_key_works_once_they_are_opted_in(self):
+        self._opt_in(self.user, True)
+        self.assertEqual(self.rpc().status_code, 200)
+
+    def test_turning_the_flag_back_off_disconnects_them(self):
+        self._opt_in(self.user, True)
+        self.assertEqual(self.rpc().status_code, 200)
+        self._opt_in(self.user, False)
+        self.assertEqual(self.rpc().status_code, 401)
+
+
+class ConnectPageTests(StandardTestCase):
+    """The page that explains how to connect, and the same gate on it."""
+
+    url = "/account/api-keys/"
+
+    def test_it_is_refused_to_somebody_not_opted_in(self):
+        self.user.userdata.use_llm_search = False
+        self.user.userdata.save()
+        self.client.force_login(self.user)
+        self.assertEqual(self.client.get(self.url).status_code, 403)
+
+    def test_creating_a_key_is_refused_too(self):
+        """The gate is on dispatch, so it covers the POST and not just the page."""
+        self.user.userdata.use_llm_search = False
+        self.user.userdata.save()
+        self.client.force_login(self.user)
+        self.assertEqual(self.client.post(self.url, {"name": "sneaky"}).status_code, 403)
+        self.assertFalse(UserAPIKey.objects.filter(name="sneaky").exists())
+
+    def test_it_renders_for_somebody_opted_in(self):
+        self.user.userdata.use_llm_search = True
+        self.user.userdata.save()
+        self.client.force_login(self.user)
+        response = self.client.get(self.url)
+        self.assertEqual(response.status_code, 200)
+        body = response.content.decode()
+        # The address, and both ways of connecting with it.
+        self.assertIn("/mcp", body)
+        self.assertIn("Add custom connector", body)
+        self.assertIn("claude mcp add --transport http", body)
+
+    def test_creating_a_key_shows_it_exactly_once(self):
+        self.user.userdata.use_llm_search = True
+        self.user.userdata.save()
+        self.client.force_login(self.user)
+        self.client.post(self.url, {"name": "My script"})
+        key = UserAPIKey.objects.get(name="My script")
+        self.assertFalse(key.allow_writes, "a new key is read-only unless asked otherwise")
+        first = self.client.get(self.url).content.decode()
+        self.assertIn(key.prefix, first)
+        self.assertIn("only time it will ever be shown", first)
+        # Reloading must not put the secret back on screen.
+        self.assertNotIn("only time it will ever be shown", self.client.get(self.url).content.decode())
+
+    def test_revoking_a_key(self):
+        self.user.userdata.use_llm_search = True
+        self.user.userdata.save()
+        self.client.force_login(self.user)
+        self.client.post(self.url, {"name": "Doomed"})
+        key = UserAPIKey.objects.get(name="Doomed")
+        self.client.post(self.url, {"revoke": key.pk})
+        key.refresh_from_db()
+        self.assertFalse(key.is_active)
+
+    def test_somebody_elses_key_cannot_be_revoked(self):
+        self.user.userdata.use_llm_search = True
+        self.user.userdata.save()
+        raw, prefix, key_hash = UserAPIKey.generate()
+        theirs = UserAPIKey.objects.create(user=self.admin_user, name="Theirs", prefix=prefix, key_hash=key_hash)
+        self.client.force_login(self.user)
+        self.client.post(self.url, {"revoke": theirs.pk})
+        theirs.refresh_from_db()
+        self.assertTrue(theirs.is_active)

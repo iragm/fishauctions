@@ -177,9 +177,9 @@ ROUTE_LIST: list[Route] = [
     _r("printing", "Label printing preferences", "Account", keywords=["printer", "label size", "thermal"]),
     _r(
         "user_api_keys",
-        "API keys for AI assistants and scripts",
+        "Connect Claude or another AI assistant",
         "Account",
-        keywords=["api key", "mcp", "claude", "connect an assistant", "token"],
+        keywords=["api key", "mcp", "claude", "connect an assistant", "token", "ai"],
     ),
     _r("account_delete", "Delete my account", "Account", keywords=["close account", "delete me", "gdpr"]),
     _r("paypal_seller", "My PayPal payout settings", "Account", keywords=["paypal", "get paid", "payout"]),

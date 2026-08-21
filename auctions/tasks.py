@@ -782,6 +782,39 @@ def _cleanup_invoice_notification_task(invoice_pk):
 
 
 @shared_task(bind=True, ignore_result=True)
+def cleanup_oauth_tokens(self):
+    """Delete expired OAuth tokens and stale registered clients. Daily.
+
+    Two things grow on their own here, and one of them grows because of a deliberate decision:
+
+    * **Expired access and refresh tokens.** Ordinary accumulation — an access token lives an hour
+      and Claude refreshes on a 401, so an active connection leaves a row behind several times a
+      day. ``cleartokens`` removes the ones past their expiry, which are already useless.
+    * **Registered clients.** Dynamic client registration is deliberately open (it has to be: DCR
+      is the first call a client makes, before anyone has signed in — see the OAUTH2_PROVIDER block
+      in settings.py), so anybody can POST to /o/register/ and create an Application row. CIMD is
+      advertised precisely so Claude does not need to, but the fallback is reachable.
+      ``clearcimdapplications`` removes CIMD entries whose cached metadata has expired and that
+      nothing holds a token for.
+
+    A no-op on an install that isn't an authorization server: without ``oauth2_provider`` in
+    INSTALLED_APPS the commands don't exist, and this returns rather than raising every night.
+    """
+    from django.apps import apps
+    from django.core.management import call_command
+
+    if not apps.is_installed("oauth2_provider"):
+        return
+    for command in ("cleartokens", "clearcimdapplications"):
+        try:
+            call_command(command)
+        except Exception:
+            # One of the two failing must not stop the other, and neither is worth waking anyone
+            # for: the next run is in 24 hours and nothing is broken in the meantime.
+            logger.exception("OAuth cleanup command %s failed", command)
+
+
+@shared_task(bind=True, ignore_result=True)
 def cleanup_old_invoice_notification_tasks(self):
     """
     Clean up old invoice notification PeriodicTask entries from the database.
