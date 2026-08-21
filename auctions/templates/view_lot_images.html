@@ -540,7 +540,7 @@ Nothing has been dropped -- see the git history of this file if a fact looks mis
                             {% endif %}
                         {% endif %}
                         </div>
-                        <div class="text-muted small mt-1"><i class="bi bi-clock"></i> Ends <span id="end_date" data-end-iso="{% if not lot.is_part_of_in_person_auction or lot.winner_as_str and lot.date_end %}{{ lot.calculated_end|date:'c' }}{% endif %}">{{ lot.calculated_end_for_templates }}</span>{% if lot.ended %} <span class='badge rounded-pill bg-danger'>Ended</span>{% endif %}</div>
+                        <div class="text-muted small mt-1"><i class="bi bi-clock"></i> {% if not lot.ends_when_sold %}<span id="end_label">Ends </span>{% endif %}<span id="end_date" data-end-iso="{% if not lot.ends_when_sold %}{{ lot.calculated_end|date:'c' }}{% endif %}">{{ lot.calculated_end_for_templates }}</span>{% if lot.ended %} <span class='badge rounded-pill bg-danger'>Ended</span>{% endif %}</div>
 
                         <span id="bid_area" class="{% if force_buy_now and not lot.bidding_error %}d-none{%endif%}">
                         {% comment %}These two used to be bg-dark: a #303030 box on a #222 page, which is the one place on the lot page where the reader most needs to be told something.  Same words in the tinted note the rest of the site explains itself with -- see refreshBidArea() in the script below, which rebuilds this same markup when a lot ends while you are looking at it.{% endcomment %}
@@ -841,11 +841,7 @@ Nothing has been dropped -- see the git history of this file if a fact looks mis
                                 request.setRequestHeader("X-CSRFTOKEN", "{{ csrf_token }}");
                             },
                             success: function() {
-                                {% if watched %}
                                 $('#app_push_opt_in').html("You'll get a notification in the app on your phone when bidding starts on this lot");
-                                {% else %}
-                                $('#app_push_opt_in').html("Notifications enabled.  Make sure to watch this lot to get a notification");
-                                {% endif %}
                             },
                             error: function() {
                                 $('#enable-app-notifications').prop("disabled", false);
@@ -869,7 +865,6 @@ Nothing has been dropped -- see the git history of this file if a fact looks mis
                                     } else {
                                         $('#subscribe_message_area').addClass("d-none");
                                         $('#subscribe_success').removeClass("d-none");
-                                        {% if not watched %}$('#subscribe_success').html('Notifications enabled.  Make sure to watch this lot to get a notification');{% endif %}
                                         $.post({url: "{% url 'enable_notifications' %}",
                                             beforeSend: function (request) {
                                                 request.setRequestHeader("X-CSRFTOKEN", "{{ csrf_token }}");
@@ -1037,6 +1032,7 @@ grey box with a drop shadow. It is a card now, like every other panel on the pag
                 }
                 if (data.info == "LOT_END_WINNER") {
                     $('#price_label').html("Winner:");
+                    $('#end_label').remove();
                     $('#end_date').html("Ended");
                     $('#bid_area').html('<div class="help-note mt-2"><i class="bi bi-clock-history"></i><div>Bidding has ended on this lot</div></div>');
                 }

@@ -129,6 +129,22 @@ stays as a legibility floor in case one is pasted in from somewhere — it is
 **not** a licence to write new ones. Don't paper over the color in a template
 either; the CSS handles it once.
 
+## Tables carry the page background with them
+
+Darkly compiles `.table{--bs-table-bg:var(--bs-body-bg)}`, and Bootstrap 5.3 paints every cell
+with that variable. A plain `<table class="table">` therefore takes the page's `#222` with it
+wherever it is put — inside a card it draws a near-black rectangle on the `#303030` panel, which
+reads as a hole in the card rather than as a table.
+
+`auction_site.css` sets `.table{--bs-table-bg:transparent}` site-wide. On a page-level table the
+result is identical (transparent over `#222` is `#222`); everywhere else the table now shows the
+surface it was put on. Don't re-add a background in the markup, and don't reach for `table-dark` —
+that is a *darker* variant, not "the normal one".
+
+This is the same trap as the close-button one below: a Bootswatch theme bakes a literal into a
+component variable, and the component then looks wrong the moment it is moved onto a surface the
+theme didn't anticipate.
+
 ## Pagination
 
 Darkly hardcodes success-green into `.pagination` vars, which leaks into the

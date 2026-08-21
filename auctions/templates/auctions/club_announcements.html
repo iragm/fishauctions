@@ -3,13 +3,8 @@
 {% block title %}Announcements - {{ club.name }}{% endblock %}
 {% block content %}
 {% include "club_ribbon.html" %}
-{% comment %}One help note on the page, and it earns its place by pointing somewhere else: an
-event posted as an announcement is the mistake that costs a club the most, because the calendar
-would have put it in members' own calendars. Everything else about how this works is said by the
-checkboxes themselves.{% endcomment %}
 <div class="help-note"><i class="bi bi-lightbulb-fill"></i><div>
-  Short news only &mdash; anything with a date belongs on the
-  <a href="{% url 'club_detail' club.slug %}">calendar</a> instead.
+  Contact your members
 </div></div>
 
 <div class="card mb-4">
@@ -37,7 +32,6 @@ retract window or waiting for a date.{% endcomment %}
           {% comment %}Going out in seconds, not on a date the club picked -- reading it back as
           "scheduled for 3:59 PM" would be true and useless.{% endcomment %}
           <span class="badge bg-info text-dark"><i class="bi bi-hourglass-split"></i> Sending</span>
-          &mdash; retract it now and nobody sees it
           {% elif announcement.is_scheduled %}
           <span class="badge bg-info text-dark"><i class="bi bi-clock"></i> Scheduled</span>
           for {{ announcement.scheduled_for|date:"D, N j, Y" }} at {{ announcement.scheduled_for|date:"g:i A" }}
@@ -107,7 +101,7 @@ retract window or waiting for a date.{% endcomment %}
 A tooltip must never be the only explanation (style_reference.md), and "12" beside a bell means
 nothing on its own -- phones reached and emails opened are different measurements.{% endcomment %}
 <p class="text-muted small">
-  <i class="bi bi-discord"></i> Discord (no read count exists) &middot;
+  <i class="bi bi-discord"></i> Discord &middot;
   <i class="bi bi-bell-fill"></i> phones reached &middot;
   <i class="bi bi-envelope-fill"></i> emails opened &middot;
   <i class="bi bi-globe"></i> times shown on your website

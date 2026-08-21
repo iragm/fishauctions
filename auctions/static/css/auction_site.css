@@ -667,8 +667,13 @@ body.speaker-panel-open {
     }
 }
 
-/* The speaker directory's topic menu is the whole vocabulary; without a cap it
-   runs off the bottom of a phone. */
+/* A cap for *filter* menus, where the rows are a vocabulary that can be any
+   length (the speaker directory's topics, the htmx table filters) and running
+   off the bottom of a phone is the likely case.
+
+   Not for a menu of links. The auction ribbon's More menu wore this for a
+   while, and a navigation menu that scrolls inside itself puts half its own
+   destinations behind a scrollbar that nobody expects a menu to have. */
 .dropdown-menu-scroll {
     max-height: 60vh;
     overflow-y: auto;
@@ -779,4 +784,19 @@ body:has(.tos-banner) {
 [data-bs-theme="dark"] .alert-success .btn-close,
 [data-bs-theme="dark"] .alert-warning .btn-close {
     filter: invert(1);
+}
+
+/* Tables inside a card -----------------------------------------------------
+   Darkly compiles `.table{--bs-table-bg:var(--bs-body-bg)}` and Bootstrap 5.3
+   paints every cell with it, so a plain table carries the page's #222 with it
+   wherever it goes. Inside a card that is a near-black rectangle sitting on the
+   #303030 panel -- the lot page's details and bidding-history tables both read
+   as a hole in the card they are in.
+
+   Transparent instead, everywhere: on a #222 page the result is identical, and
+   any other surface (card, modal, list group) is what the table should have
+   been showing all along. The `.table-*` variants set their own
+   `--bs-table-bg` and are untouched by this. */
+.table {
+    --bs-table-bg: transparent;
 }

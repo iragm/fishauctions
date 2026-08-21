@@ -98,11 +98,10 @@ def brevo_ready(club):
 def email_recipient_counts(club):
     """(mailchimp contacts, brevo contacts) the club's lists would reach, as this site last saw them.
 
-    Counted from ClubMember rather than asked of the provider: the number is for the checkbox on
-    the form, where two API calls per page load would be paid by every admin who never emails.
-    It is the count of members *we* have synced and not marked unsubscribed, so it is an estimate
-    of the provider's list, not the provider's own answer — someone who signed up through the
-    club's own website is on the list and not on this one.
+    Counted from ClubMember rather than asked of the provider, which is what makes it free to
+    ask for. It is the count of members *we* have synced and not marked unsubscribed, so it is
+    an estimate of the provider's list, not the provider's own answer — someone who signed up
+    through the club's own website is on the list and not on this one.
     """
     from auctions.models import ClubMember
 

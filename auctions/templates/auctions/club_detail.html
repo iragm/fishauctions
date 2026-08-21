@@ -46,7 +46,6 @@ regulars" from "put this on the front page". See auctions/announcements.py.{% en
       <i class="bi bi-megaphone-fill text-primary"></i>
       <div class="flex-grow-1">
         <div>{{ latest_announcement.text|linebreaksbr }}</div>
-        <div class="text-muted small mt-1">{{ latest_announcement.sent_at|default:latest_announcement.created_at|date:"N j, Y" }}</div>
       </div>
     </div>
   </div>

@@ -1,7 +1,6 @@
 {% extends "auctions/embeds/base.html" %}
 {% comment %}Top-10 breeder award leaderboard. Names and points only -- never emails or member numbers.{% endcomment %}
 {% block embed_title %}{{ club_name }} {{ program_label }} leaderboard{% endblock %}
-{% block embed_heading %}{{ club_name }} &mdash; {{ program_label }} Top 10{% endblock %}
 {% block embed_extra_css %}
     ol.ew-list li { display: flex; align-items: center; }
     .lb-rank { min-width: 2em; color: var(--muted); }

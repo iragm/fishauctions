@@ -638,11 +638,6 @@ class ClubEventsEmbedTests(TestCase):
                 self.assertIn(f'data-theme="{theme}"', body)
                 self.assertIn("Meeting 0", body)
 
-    def test_one_event_and_many_events_are_labelled_differently(self):
-        self._events(3)
-        self.assertContains(self.client.get(self.url, {"format": "iframelight", "count": 1}), "Next event")
-        self.assertContains(self.client.get(self.url, {"format": "iframelight"}), "Upcoming events")
-
     def test_the_unstyled_format_is_a_bare_list(self):
         self._events(1)
         body = self.client.get(self.url, {"format": "unstyledhtml"}).content.decode()

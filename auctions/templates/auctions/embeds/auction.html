@@ -4,7 +4,6 @@ own site. Almost the same information as the events embed's next row, and delibe
 a club that runs one auction a year wants to advertise that auction, not "the next thing on the
 calendar", which for most of the year is a meeting.{% endcomment %}
 {% block embed_title %}{{ club_name }} current auction{% endblock %}
-{% block embed_heading %}{{ club_name }} &mdash; {{ heading }}{% endblock %}
 {% block embed_body %}
     {% if auction %}
     <ul class="ew-list">
@@ -20,4 +19,3 @@ calendar", which for most of the year is a meeting.{% endcomment %}
     <p class="ew-empty">No auction running right now.</p>
     {% endif %}
 {% endblock %}
-{% block embed_more_label %}More from {{ club_name }}{% endblock %}

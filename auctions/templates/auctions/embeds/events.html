@@ -1,7 +1,6 @@
 {% extends "auctions/embeds/base.html" %}
 {% comment %}A club's next few events. Rows come from _club_events_embed_rows().{% endcomment %}
-{% block embed_title %}{{ club_name }} {{ heading|lower }}{% endblock %}
-{% block embed_heading %}{{ club_name }} &mdash; {{ heading }}{% endblock %}
+{% block embed_title %}{{ club_name }} events{% endblock %}
 {% block embed_body %}
     {% if events %}
     <ul class="ew-list">
@@ -19,4 +18,3 @@
     <p class="ew-empty">Nothing coming up right now.</p>
     {% endif %}
 {% endblock %}
-{% block embed_more_label %}See the full calendar{% endblock %}

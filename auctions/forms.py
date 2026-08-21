@@ -4768,8 +4768,6 @@ class ClubAnnouncementForm(forms.ModelForm):
 
         self.mailchimp_ready = announcements_module.mailchimp_ready(self.club)
         self.brevo_ready = announcements_module.brevo_ready(self.club)
-        mailchimp_count, brevo_count = announcements_module.email_recipient_counts(self.club)
-        both_email_providers = self.mailchimp_ready and self.brevo_ready
         # A club that has connected one provider is not shopping for the other, and a permanently
         # disabled "Connect Brevo" box next to a working Mailchimp one is a box that can only ever
         # be wrong. Offer both only while neither is connected, which is the case where the pair is
@@ -4780,37 +4778,26 @@ class ClubAnnouncementForm(forms.ModelForm):
             del self.fields["send_to_brevo"]
         elif brevo_connected and not mailchimp_connected:
             del self.fields["send_to_mailchimp"]
-        # Every member this site knows about is synced to *whichever* provider lists the club has
-        # connected, so a club with both has the same people on both. Ticking both would mail all
-        # of them twice, which is why clean() refuses it outright rather than warning about it.
-        overlap_note = " Your members are on both lists — pick one, not both." if both_email_providers else ""
         self._configure_email_channel(
             "send_to_mailchimp",
             "Mailchimp",
             ready=self.mailchimp_ready,
-            count=mailchimp_count,
             connected=mailchimp_connected,
             config_urlname="club_mailchimp_config",
             list_word="audience",
-            overlap_note=overlap_note,
         )
         self._configure_email_channel(
             "send_to_brevo",
             "Brevo",
             ready=self.brevo_ready,
-            count=brevo_count,
             connected=brevo_connected,
             config_urlname="club_brevo_config",
             list_word="list",
-            overlap_note=overlap_note,
         )
 
         scheduled = self.fields["scheduled_for"]
         scheduled.required = False
-        scheduled.help_text = (
-            f"Leave blank and it goes out in {announcements_module.GRACE_SECONDS} seconds, "
-            "so you can read it back and retract it."
-        )
+        scheduled.help_text = ""
 
         # No subject box at all: the emailed version is always "<Club> announcement"
         # (ClubAnnouncement.email_subject). A club given the box wrote its one-sentence
@@ -4833,9 +4820,7 @@ class ClubAnnouncementForm(forms.ModelForm):
         self.helper.layout = Layout(*layout_fields)
         self.helper.add_input(Submit("submit", "Send announcement", css_class="btn-success text-dark"))
 
-    def _configure_email_channel(
-        self, field_name, provider, *, ready, count, connected, config_urlname, list_word, overlap_note
-    ):
+    def _configure_email_channel(self, field_name, provider, *, ready, connected, config_urlname, list_word):
         """Offer one email provider honestly: what it would reach, or why it can't.
 
         Same shape as the Discord checkbox above — a box that cannot do anything is disabled with
@@ -4848,12 +4833,7 @@ class ClubAnnouncementForm(forms.ModelForm):
             return
         field.label = provider
         if ready:
-            # "As a campaign" is the one detail worth the words: it is why the club's own
-            # unsubscribes apply, and the thing a club would otherwise ask about.
-            field.help_text = (
-                f"A campaign to the {count} contact{pluralize(count)} on your {provider} {list_word}, "
-                f"so {provider}'s unsubscribes apply." + overlap_note
-            )
+            field.help_text = ""
             return
         field.disabled = True
         field.initial = False

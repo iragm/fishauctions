@@ -20606,10 +20606,6 @@ class ClubEventsEmbedView(View):
             {
                 "embed_mode": embed_mode,
                 "club_name": club.name,
-                # One event reads as "here's what's next", ten as a calendar. The heading has to
-                # say which, because the embed is dropped onto a page with no other context.
-                "heading": "Next event" if count == 1 else "Upcoming events",
-                "club_url": request.build_absolute_uri(reverse("club_detail", kwargs={"slug": club.slug})),
                 "events": rows,
             },
         )
@@ -20674,8 +20670,6 @@ class ClubAnnouncementsEmbedView(View):
             {
                 "embed_mode": embed_mode,
                 "club_name": club.name,
-                "heading": "Latest news" if count == 1 else "Announcements",
-                "club_url": request.build_absolute_uri(reverse("club_detail", kwargs={"slug": club.slug})),
                 "announcements": rows,
             },
         )
@@ -20729,9 +20723,11 @@ def _club_auction_embed_row(request, auction):
 class ClubAuctionEmbedView(View):
     """Public, embeddable "our auction is on" strip for a club's own website.
 
-    Overlaps the events embed on purpose. A club that runs one auction a year wants to advertise
-    *the auction* on its front page all year, where the events embed would show whatever meeting
-    happens to be next.
+    Overlaps the events embed on purpose: this one names *the auction*, where the events embed
+    shows whatever happens to be next, which for most of the year is a meeting. It is only ever
+    the auction that is still ahead or still running -- see _club_current_auction, which drops a
+    pinned auction once it is pretty_much_over -- so a club's front page goes quiet between
+    auctions rather than advertising last spring's.
     """
 
     def get(self, request, slug):
@@ -20748,8 +20744,6 @@ class ClubAuctionEmbedView(View):
             {
                 "embed_mode": embed_mode,
                 "club_name": club.name,
-                "heading": "Current auction",
-                "club_url": request.build_absolute_uri(reverse("club_detail", kwargs={"slug": club.slug})),
                 "auction": row,
             },
         )
@@ -20971,8 +20965,9 @@ class ClubWebsiteIntegrationView(LoginRequiredMixin, ClubViewMixin, TemplateView
                 "title": "Current auction",
                 "icon": "bi-hammer",
                 "blurb": (
-                    "The auction you have pinned as current, or the next promoted one. Use this when "
-                    "your club runs one big auction a year and wants it on the front page all year."
+                    "The auction you have pinned as current, or the soonest promoted one if you "
+                    "haven't pinned any. It clears itself a day after that auction is over — until "
+                    "the next one is promoted, the snippet says there's nothing on."
                 ),
                 "url": base + reverse("club_auction_embed", kwargs={"slug": club.slug}),
                 "counts": False,

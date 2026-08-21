@@ -212,7 +212,17 @@ class AnnouncementReachTests(TestCase):
             self.assertEqual(announcements.member_counts(self.club), (0, 1))
 
 
+@override_settings(FIREBASE_CREDENTIALS_JSON="test-firebase-key")
 class AnnouncementDeliveryTests(TestCase):
+    """Push has to be *configured* for the form to accept the ticked box at all.
+
+    With no FCM credentials ``member_counts()`` reports nobody reachable, ``ClubAnnouncementForm``
+    disables ``send_to_push``, and a disabled field drops the submitted value -- so an undecorated
+    test here measures whatever ``FIREBASE_CREDENTIALS_JSON`` happens to be in the environment, or
+    whatever the last ``override_settings`` in the run left behind. It belongs on the class rather
+    than on the two methods that happened to have it: every test in here posts the form.
+    """
+
     def setUp(self):
         self.club = Club.objects.create(
             name="Delivery Club",
@@ -257,7 +267,10 @@ class AnnouncementDeliveryTests(TestCase):
         # ...and nothing public can see it yet either.
         self.assertEqual(announcements.latest_for_website(self.club), [])
 
+    @override_settings(FIREBASE_CREDENTIALS_JSON="test-firebase-key")
     def test_posting_sends_to_every_ticked_channel_and_records_what_happened(self):
+        # Without FCM credentials the form disables send_to_push and drops the ticked box, so this
+        # would measure the machine's .env rather than the delivery. See the failed-Discord test.
         member = self._reachable_member()
         self.client.force_login(self.admin)
         with (
@@ -280,12 +293,7 @@ class AnnouncementDeliveryTests(TestCase):
         push.assert_called_once()
         self.assertEqual(push.call_args[0][0], member.user_id)
 
-    @override_settings(FIREBASE_CREDENTIALS_JSON="test-firebase-key")
     def test_a_failed_discord_post_is_recorded_and_never_costs_the_push(self):
-        # Push has to be *configured* for the form to accept the ticked box at all: with no FCM
-        # credentials member_counts() reports nobody reachable, ClubAnnouncementForm disables
-        # send_to_push, and a disabled field drops the submitted value -- so without this the test
-        # measures the dev machine's .env rather than what a Discord failure costs.
         self._reachable_member()
         self.client.force_login(self.admin)
         with (
@@ -486,24 +494,6 @@ class CurrentAuctionEmbedTests(TestCase):
         self.club.save()
         self.assertEqual(self.client.get(self.url).status_code, 404)
 
-    def test_every_render_is_counted_whatever_the_format(self):
-        """A render count, not a read count -- it answers "is my snippet showing this at all".
-        JSON counts too: a club rendering the JSON itself has put it on a page just the same."""
-        announcement = self._announce("Counted")
-        for fmt in ("json", "iframelight", "unstyledhtml"):
-            self.client.get(self.url, {"format": fmt})
-        announcement.refresh_from_db()
-        self.assertEqual(announcement.website_views, 3)
-
-    def test_an_announcement_that_is_not_on_the_website_is_never_counted(self):
-        hidden = self._announce("Discord only", show_on_website=False, send_to_discord=True)
-        shown = self._announce("Public")
-        self.client.get(self.url, {"count": 3})
-        hidden.refresh_from_db()
-        shown.refresh_from_db()
-        self.assertEqual(hidden.website_views, 0)
-        self.assertEqual(shown.website_views, 1)
-
 
 class WebsiteIntegrationPageTests(TestCase):
     def setUp(self):
@@ -671,19 +661,13 @@ class AnnouncementEmailChannelTests(TestCase):
         self.assertTrue(form.fields["send_to_brevo"].disabled)
         self.assertIn("no list is chosen", str(form.fields["send_to_brevo"].help_text))
 
-    def test_both_connected_offers_both_and_says_to_pick_one(self):
+    def test_both_connected_offers_both(self):
+        """Both boxes are live; clean() is what refuses ticking the pair -- see below."""
         self._connect_mailchimp()
         self._connect_brevo()
         form = ClubAnnouncementForm(None, club=self.club)
         self.assertFalse(form.fields["send_to_mailchimp"].disabled)
         self.assertFalse(form.fields["send_to_brevo"].disabled)
-        for field_name in ("send_to_mailchimp", "send_to_brevo"):
-            self.assertIn("not both", str(form.fields[field_name].help_text))
-
-    def test_one_provider_alone_carries_no_pick_one_note(self):
-        self._connect_mailchimp()
-        form = ClubAnnouncementForm(None, club=self.club)
-        self.assertNotIn("not both", str(form.fields["send_to_mailchimp"].help_text))
 
     def test_an_email_provider_alone_is_enough_to_send(self):
         """Email is a channel like the others: it satisfies "pick at least one place"."""

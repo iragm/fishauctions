@@ -8949,6 +8949,16 @@ class Lot(models.Model):
         return timezone.now()
 
     @property
+    def ends_when_sold(self):
+        """True when this lot has no end time to show, only "when the auctioneer gets to it".
+
+        An in-person lot ends when the room ends it, so until it has a winner there is no date to
+        print -- which is what calculated_end_for_templates says in words. Templates that put a
+        label in front of it ("Ends ...") need to know which of the two they are about to render.
+        """
+        return self.is_part_of_in_person_auction and not (self.winner_as_str and self.date_end)
+
+    @property
     def calculated_end_for_templates(self):
         """For models, use self.calculated_end which always returns a date
         But for places where a user can see this, we need a friendly reminder that the auction admin needs to manually end lots"""

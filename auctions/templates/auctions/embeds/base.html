@@ -4,7 +4,11 @@ Wix or Squarespace and it has to look like it belongs there without knowing anyt
 page it lands on. So the CSS lives here once, in four blocks — a light palette, a dark palette, a
 card, and a list — and each embed only supplies its rows.
 
-Two rules this file exists to enforce:
+Three rules this file exists to enforce:
+
+  * **Nothing but the rows.** No heading, no "More from" link, no club name. This is pasted into
+    a page that already has its own heading and its own navigation, and a club that wanted a link
+    back here would have written one; ours reads as somebody else's furniture in their room.
 
   * **One palette.** Four embeds that each carried their own copy of these variables drifted
     apart the first time one of them was touched, and a club that used two of them got two
@@ -65,11 +69,6 @@ spread one over two lines and it renders onto the page.
       padding: 16px;
       background: var(--card-bg);
     }
-    .ew h2 {
-      margin: 0 0 12px;
-      font-size: 1.05rem;
-      font-weight: 600;
-    }
     .ew-list {
       list-style: none;
       margin: 0;
@@ -106,21 +105,13 @@ spread one over two lines and it renders onto the page.
     .ew-badge-alert { background: var(--cancelled); color: #ffffff; }
     .ew-badge-accent { background: var(--accent); color: #ffffff; }
     .ew-empty { color: var(--muted); margin: 0; }
-    .ew-more {
-      display: inline-block;
-      margin-top: 12px;
-      color: var(--link);
-      font-size: 0.9rem;
-    }
     .ew-body { margin: 0 0 4px; white-space: pre-wrap; }
     {% block embed_extra_css %}{% endblock %}
   </style>
 </head>
 <body>
   <div class="ew">
-    <h2>{% block embed_heading %}{{ club_name }}{% endblock %}</h2>
     {% block embed_body %}{% endblock %}
-    {% block embed_footer %}{% if club_url %}<a class="ew-more" href="{{ club_url }}" target="_blank" rel="noopener">{% block embed_more_label %}More from {{ club_name }}{% endblock %}</a>{% endif %}{% endblock %}
   </div>
 </body>
 </html>
