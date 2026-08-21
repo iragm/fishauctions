@@ -499,6 +499,48 @@ def cleanup_mail(self):
     call_command("cleanup_mail", days=settings.MAIL_RETENTION_DAYS, delete_attachments=True)
 
 
+@shared_task(bind=True, ignore_result=True)
+def send_announcement_emails(self, announcement_pk):
+    """Mail one club announcement through whichever of Mailchimp/Brevo the club ticked.
+
+    Out of the request because it is four round trips to somebody else's API per provider. No
+    retry: a campaign that half-created and then failed would be sent twice by a retry, and the
+    failure is written onto the announcement where the admin can see it and press send again.
+    """
+    from auctions import announcements
+    from auctions.models import ClubAnnouncement
+
+    announcement = ClubAnnouncement.objects.filter(pk=announcement_pk, is_deleted=False).select_related("club").first()
+    if not announcement:
+        return
+    announcements.send_emails(announcement)
+
+
+@shared_task(bind=True, ignore_result=True)
+def send_scheduled_announcements(self):
+    """Deliver club announcements whose send time has arrived.
+
+    Queued twice over: once by the view with a ``countdown`` for the exact moment (which is what
+    makes a 30-second retract window 30 seconds), and once a minute by the beat as a backstop. It
+    is safe to run either way round or twice at once -- ``send_due`` claims each row with the same
+    UPDATE that marks it sent.
+    """
+    from auctions import announcements
+
+    announcements.send_due()
+
+
+@shared_task(bind=True, ignore_result=True)
+def refresh_announcement_opens(self, announcement_pk):
+    """Pull the email open count for one announcement from whichever provider sent it."""
+    from auctions import announcements
+    from auctions.models import ClubAnnouncement
+
+    announcement = ClubAnnouncement.objects.filter(pk=announcement_pk).select_related("club").first()
+    if announcement:
+        announcements.refresh_email_opens(announcement)
+
+
 @shared_task
 def send_push_to_user(user_pk, *, title, body, url, category, collapse_key=None, auction_pk=None, invoice_pk=None):
     """Send a push notification to every push-enabled device of a user; prune dead tokens.

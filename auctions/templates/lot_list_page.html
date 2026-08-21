@@ -15,6 +15,7 @@
   {% endif %}
 {% else %}
 
+<div class="table-responsive">
 <table class="table">
   <thead>
     <tr>
@@ -65,7 +66,7 @@
         {% comment %} App-only: walk the user to this lot with lot scanning. The annotation (LotFilter.qs) is only
         present in the app, for a located lot in an in-person auction that's happening now. {% endcomment %}
         {% if lot.ar_locate_available %}
-        <a href="fishauctions://ar/{{ lot.auction.slug }}?locate={{ lot.pk }}" class="btn btn-sm btn-outline-secondary ms-1">
+        <a href="fishauctions://ar/{{ lot.auction.slug }}?locate={{ lot.pk }}" class="btn btn-sm btn-primary ms-1">
           <i class="bi bi-geo-alt"></i> Find this lot
         </a>
         {% endif %}
@@ -74,13 +75,14 @@
       <td>{{ lot.high_bidder_display }}</td>
       <td>{% if lot.user == request.user %}{% if lot.owner_chats %}<span class='text-warning'>{{ lot.owner_chats }}</span>{% else %}Views: {{ lot.page_views }}{% endif %}
         {% else %}
-        {% if lot.all_chats %}<span class='text-muted>'>{{lot.all_chats}}</span>{% endif %}
+        {% if lot.all_chats %}<span class='text-muted'>{{lot.all_chats}}</span>{% endif %}
         {% endif %}</td>
-      <td ><span class="">{{ lot.calculated_end_for_templates }}</span>{% if lot.ended %}<span class='badge-pill badge bg-danger'>Ended</span>{% endif %}</td>
+      <td ><span class="">{{ lot.calculated_end_for_templates }}</span>{% if lot.ended %}<span class='badge rounded-pill bg-danger'>Ended</span>{% endif %}</td>
     </tr>
     {% endfor %}
   </tbody>
 </table>
+</div>
 {% include "ad.html" %}
 
 {% endif %}

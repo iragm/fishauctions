@@ -52,6 +52,7 @@
   });
 </script>
 <h3>Popular pages from the last {{ days }} days</h3>
+<div class="table-responsive">
 <table>
   <thead>
     <tr>
@@ -68,8 +69,10 @@
   {% endfor %}
   </tbody>
 </table>
+</div>
 <h3>Top user agents from the last 24 hours</h3>
 <p class="text-muted">Useful for spotting and filtering out bots.</p>
+<div class="table-responsive">
 <table>
   <thead>
     <tr>
@@ -90,6 +93,7 @@
   {% endfor %}
   </tbody>
 </table>
+</div>
 <h3>Heat map of traffic over the last {{ days }} days</h3>
 <div id="map_wrapper" style='height: 600px;'>
 <div id="map_visualization" class="mapping mt-2" style='width: 100%; height: 100%;'></div>

@@ -108,13 +108,13 @@ Most-of-the-page on desktop; fullscreen on mobile.
                  aria-label="Search" aria-controls="command-palette-results">
           {% comment %} Hidden by default; the script removes d-none only when the browser supports speech recognition. {% endcomment %}
           {% if palette_assist_enabled %}
-          <button type="button" class="btn btn-outline-secondary cp-mic d-none" id="command-palette-mic"
+          <button type="button" class="btn btn-primary cp-mic d-none" id="command-palette-mic"
                   aria-pressed="false" aria-label="Speak a command" title="Speak a command">
             <i class="bi bi-mic-fill"></i>
           </button>
           {% endif %}
         </div>
-        <button type="button" class="btn-close ms-2" data-bs-dismiss="modal" aria-label="Close"></button>
+        <button type="button" class="btn-close btn-close-white ms-2" data-bs-dismiss="modal" aria-label="Close"></button>
         {% comment %} Shown by the script only on the first couple of auto-started listens. {% endcomment %}
         {% if palette_assist_enabled %}
         <div id="command-palette-mic-hint" class="d-none text-muted" role="status">

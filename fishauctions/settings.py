@@ -488,6 +488,17 @@ FIREBASE_ANDROID_CONFIG_FILE = os.environ.get("FIREBASE_ANDROID_CONFIG_FILE", ""
 FIREBASE_IOS_CONFIG_FILE = os.environ.get("FIREBASE_IOS_CONFIG_FILE", "").strip()
 FIREBASE_CLIENT_CONFIG = load_firebase_client_config(FIREBASE_ANDROID_CONFIG_FILE, FIREBASE_IOS_CONFIG_FILE)
 INBOUND_ROUTING_SECRET = os.environ.get("INBOUND_ROUTING_SECRET", "").strip()
+# App-association files, served from /.well-known/ by auctions.app_links so that a link to this site
+# — including the ones the site itself emails — opens in the mobile app on a phone that has it.
+# Both are per-deployment: production claims the release package, staging claims its own flavors, and
+# a local checkout claims nothing (blank ⇒ the file 404s rather than claiming no apps, which would
+# verify successfully and look identical to a working setup).
+#
+# ANDROID_APP_LINKS: comma-separated "package=SHA256_FINGERPRINT". Repeat a package to give it more
+# than one signing certificate. The fingerprint is the one Play *re-signs* with, not the upload key.
+# IOS_APP_LINKS: comma-separated "TEAMID.bundle.id".
+ANDROID_APP_LINKS = [entry for entry in os.environ.get("ANDROID_APP_LINKS", "").split(",") if entry.strip()]
+IOS_APP_LINKS = [entry for entry in os.environ.get("IOS_APP_LINKS", "").split(",") if entry.strip()]
 DEFAULT_FROM_EMAIL = (
     f"info@{EMAIL_ROUTING_DOMAIN}"
     if SES_ROUTE_EMAILS_ENABLED
@@ -1069,15 +1080,23 @@ MAILCHIMP_CLIENT_SECRET = os.environ.get("MAILCHIMP_CLIENT_SECRET", "")
 # secondary calendar). Create an OAuth 2.0 "Web application" client in the Google Cloud console
 # and add https://<your-domain>/clubs/google-calendar/callback/ as an authorized redirect URI.
 #
-# The default scope is calendar.app.created, which only lets us touch calendars this app itself
-# created. That is all the integration needs, and it keeps the app out of Google's "sensitive
-# scope" verification track. Override GOOGLE_CALENDAR_SCOPE only if you know you need broader
-# access (e.g. ".../auth/calendar" to write into a club's pre-existing calendar).
+# The scope is calendar.app.created and nothing else. It only lets us touch calendars this app
+# itself created, which is all the integration needs, and it keeps the app out of Google's
+# "sensitive scope" verification track.
+#
+# It is also deliberately ALONE. Pairing a Sign-In scope (userinfo.email) with a non-Sign-In one
+# is exactly the combination that makes Google show its granular-consent *checkbox* screen instead
+# of a plain Allow button -- and those checkboxes arrive unticked. An admin who pressed Continue
+# without ticking the calendar box got a working refresh token carrying only their email address,
+# this site recorded a successful connection, and every subsequent Calendar call came back
+# "Request had insufficient authentication scopes". Asking for one scope removes the screen that
+# makes that possible. GOOGLE_CALENDAR_SCOPE overrides this only if you know you need broader
+# access (e.g. ".../auth/calendar" to write into a club's pre-existing calendar); adding a scope
+# back brings the checkbox screen back with it, which is what CALENDAR_SCOPE below guards.
 GOOGLE_CALENDAR_CLIENT_ID = os.environ.get("GOOGLE_CALENDAR_CLIENT_ID", "")
 GOOGLE_CALENDAR_CLIENT_SECRET = os.environ.get("GOOGLE_CALENDAR_CLIENT_SECRET", "")
 GOOGLE_CALENDAR_SCOPE = (
-    os.environ.get("GOOGLE_CALENDAR_SCOPE", "").strip()
-    or "https://www.googleapis.com/auth/calendar.app.created https://www.googleapis.com/auth/userinfo.email"
+    os.environ.get("GOOGLE_CALENDAR_SCOPE", "").strip() or "https://www.googleapis.com/auth/calendar.app.created"
 )
 
 # Discord bot integration settings
@@ -1149,7 +1168,20 @@ REST_FRAMEWORK = {
         # per 10 min plus resumes → 30/hour is comfortable while capping abuse.
         "mobile_checkin": "30/hour",
     },
+    # JSON only. DRF's default set also carries the browsable API, which renders any endpoint a
+    # browser asks for as an HTML page built out of the view's own docstring — so opening an API
+    # URL in a tab published our internal notes, class and function names, and a form for every
+    # writable field. None of it is a page anybody here needs: this site's own UI is Django
+    # templates, and an API client sends Accept: application/json. Turned back on below in DEBUG,
+    # where poking at an endpoint in a browser is how you develop one.
+    "DEFAULT_RENDERER_CLASSES": ["rest_framework.renderers.JSONRenderer"],
 }
+
+if DEBUG:
+    REST_FRAMEWORK["DEFAULT_RENDERER_CLASSES"] = [
+        "rest_framework.renderers.JSONRenderer",
+        "rest_framework.renderers.BrowsableAPIRenderer",
+    ]
 
 SIMPLE_JWT = {
     "ACCESS_TOKEN_LIFETIME": datetime.timedelta(minutes=60),

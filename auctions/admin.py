@@ -4,9 +4,10 @@ import datetime
 from django.contrib import admin, messages
 from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
 from django.contrib.auth.models import User
+from django.db.models import Count
 from django.http import HttpResponse
 from django.urls import reverse
-from django.utils.html import format_html
+from django.utils.html import format_html, format_html_join
 
 from .models import (
     FAQ,
@@ -23,6 +24,7 @@ from .models import (
     BlogPost,
     Category,
     Club,
+    ClubAnnouncement,
     ClubAPIKey,
     ClubDiscordRole,
     ClubEvent,
@@ -42,13 +44,17 @@ from .models import (
     ObservedPrinter,
     PageView,
     PickupLocation,
-    Product,
     PushNotificationSent,
+    RemotePrintJob,
     SearchHistory,
     Speaker,
     SpeakerComment,
     SpeakerTag,
     SpeakerTopic,
+    Species,
+    SpeciesCommonName,
+    SpeciesNameRejection,
+    SpeciesSearchCache,
     ThermalPrinterProfile,
     UserBan,
     UserData,
@@ -381,8 +387,19 @@ class UserAdmin(BaseUserAdmin):
 
 @admin.register(MobileDevice)
 class MobileDeviceAdmin(admin.ModelAdmin):
-    list_display = ("user", "platform", "app_version", "device_name", "push_enabled", "has_token", "last_seen")
-    list_filter = ("platform", "app_version", "push_enabled")
+    list_display = (
+        "user",
+        "platform",
+        "app_version",
+        "device_name",
+        "push_enabled",
+        "has_token",
+        "print_ready",
+        "printer_name",
+        "last_heartbeat",
+        "last_seen",
+    )
+    list_filter = ("platform", "app_version", "push_enabled", "print_ready", "ever_print_ready")
     search_fields = (
         "user__username",
         "user__email",
@@ -391,13 +408,41 @@ class MobileDeviceAdmin(admin.ModelAdmin):
         "device_uuid",
         "device_name",
     )
-    readonly_fields = ("created_at", "last_seen", "fcm_token_updated_at")
+    readonly_fields = ("created_at", "last_seen", "fcm_token_updated_at", "last_heartbeat")
     raw_id_fields = ("user",)
     date_hierarchy = "last_seen"
 
     @admin.display(boolean=True, description="Has push token")
     def has_token(self, obj):
         return bool(obj.fcm_token)
+
+
+@admin.register(RemotePrintJob)
+class RemotePrintJobAdmin(admin.ModelAdmin):
+    """Labels sent from a computer to a phone's Bluetooth printer. Read-only — the website creates
+    these and the app reports on them, so the only reason to open one is to find out why somebody's
+    labels didn't come out. ``message`` is the app's own words, unedited."""
+
+    list_display = ("uuid", "user", "device", "status", "printed_count", "total_count", "created_at")
+    list_filter = ("status",)
+    search_fields = ("uuid", "user__username", "user__email", "message")
+    readonly_fields = (
+        "uuid",
+        "user",
+        "device",
+        "lots",
+        "status",
+        "printed_count",
+        "total_count",
+        "message",
+        "created_at",
+        "updated_at",
+    )
+    raw_id_fields = ("user", "device")
+    date_hierarchy = "created_at"
+
+    def has_add_permission(self, request, obj=None):
+        return False
 
 
 @admin.register(MobileOfflineOp)
@@ -658,17 +703,68 @@ class VoiceGrammarAdmin(admin.ModelAdmin):
         return not VoiceGrammar.objects.exists()
 
 
+class VoiceOutcomeFilter(admin.SimpleListFilter):
+    """Split the log by what actually happened, which the ``slot`` filter can't do.
+
+    "Nothing matched" is a blank slot, and blank isn't one of the field's choices, so it would
+    otherwise be unreachable — despite being the pile worth reading first.
+    """
+
+    title = "outcome"
+    parameter_name = "outcome"
+
+    def lookups(self, request, model_admin):
+        return [
+            ("unmatched", "Nothing matched"),
+            ("corrected", "Filled in, then corrected"),
+            ("stood", "Filled in, and it stood"),
+        ]
+
+    def queryset(self, request, queryset):
+        if self.value() == "unmatched":
+            return queryset.filter(slot="")
+        if self.value() == "corrected":
+            return queryset.exclude(corrected_to="")
+        if self.value() == "stood":
+            return queryset.exclude(slot="").filter(corrected_to="")
+        return queryset
+
+
+@admin.action(description="Count what was heard")
+def count_what_was_heard(modeladmin, request, queryset):
+    """Group the selected rows by ``heard`` and show the commonest first.
+
+    This is the query the log exists to answer: select the "Nothing matched" rows and the phrases at
+    the top of this list are the words the auctioneer keeps saying that the grammar has never heard
+    of. Each one is an ``anchors`` entry in Voice grammar, and ships without an app release.
+    """
+    counts = queryset.values("heard").annotate(times=Count("id")).order_by("-times", "heard")[:25]
+    if not counts:
+        messages.warning(request, "Nothing selected to count.")
+        return
+    messages.info(
+        request,
+        format_html(
+            "Commonest of the {} selected: {}",
+            queryset.count(),
+            format_html_join(", ", "{} × “{}”", ((row["times"], row["heard"] or "(silence)") for row in counts)),
+        ),
+    )
+
+
 @admin.register(VoiceCommandLog)
 class VoiceCommandLogAdmin(admin.ModelAdmin):
     """What voice heard, what it filled in, and what the operator changed it to.
 
-    The tuning queue: filter to rows with a correction (search a value in ``corrected_to``, or sort
-    by it) and each one names a word the grammar gets wrong. Fix it in Voice grammar above.
-    Read-only — these are observations, and editing them would only corrupt the sample.
+    The tuning queue, in two piles. Filter to rows with a correction (or search a value in
+    ``corrected_to``) and each one names a word the grammar gets *wrong*. Filter to "Nothing
+    matched" and each one names a word the grammar has never heard of at all — select them and run
+    "Count what was heard" to see which phrases keep coming back. Both are fixed in Voice grammar
+    above. Read-only — these are observations, and editing them would only corrupt the sample.
     """
 
     list_display = ("createdon", "auction", "user", "slot", "heard", "chosen", "confidence", "corrected_to")
-    list_filter = ("slot", "auction")
+    list_filter = (VoiceOutcomeFilter, "slot", "auction")
     search_fields = ("heard", "chosen", "corrected_to", "user__username", "auction__title")
     raw_id_fields = ("auction", "user")
     readonly_fields = (
@@ -683,7 +779,7 @@ class VoiceCommandLogAdmin(admin.ModelAdmin):
         "updatedon",
     )
     date_hierarchy = "createdon"
-    actions = [export_to_csv]
+    actions = [count_what_was_heard, export_to_csv]
 
     def has_add_permission(self, request):
         return False
@@ -1101,17 +1197,134 @@ class CategoryAdmin(admin.ModelAdmin):
     search_fields = ("name",)
 
 
-class ProductAdmin(admin.ModelAdmin):
-    model = Product
-    menu_label = "Products"
+class SpeciesCommonNameInline(admin.TabularInline):
+    model = SpeciesCommonName
+    extra = 0
+    # Rebuilt from `name` on every save, so editing it does nothing but confuse.
+    exclude = ("name_normalized",)
+    # `source` is deliberately editable and defaults to "manual", which is what makes a name added
+    # here outlive the next import: import_fishbase only ever deletes rows it wrote itself.
+
+
+class SpeciesCommonNameAdmin(admin.ModelAdmin):
+    """The queue for names a club added to a species everybody already has.
+
+    Approving a *species* brings its own names with it (see ``SpeciesAdmin.approve_species``), but
+    a name attached to a shared species -- "yellow lab" on FishBase's *Labidochromis caeruleus* --
+    has no species approval to ride along on, and this page is where that decision is made.
+    """
+
+    model = SpeciesCommonName
+    menu_label = "Species common names"
+    list_display = ("name", "species", "source", "approved", "is_preferred", "added_by", "club")
+    # "approved" first: an unapproved name is offered to one club and nobody else, so the queue of
+    # them is the one thing here anybody has to act on.
+    list_filter = ("approved", "source", "club", "is_preferred")
+    search_fields = ("name", "species__scientific_name", "species__common_name")
+    autocomplete_fields = ("species",)
+    exclude = ("name_normalized",)
+    actions = ["approve_names"]
+
+    @admin.action(description="Approve for every club")
+    def approve_names(self, request, queryset):
+        changed = queryset.filter(approved=False).update(approved=True)
+        self.message_user(request, f"Approved {changed} names.")
+
+
+class SpeciesAdmin(admin.ModelAdmin):
+    model = Species
+    menu_label = "Species"
     list_display = (
-        "category",
-        "common_name",
         "scientific_name",
+        "variety",
+        "common_name",
+        "genus",
+        "family",
+        "category",
+        "source",
+        "approved",
+        "added_by",
+        "club",
         "breeder_points",
+        "possible_duplicate",
     )
-    list_filter = ("category",)
-    search_fields = ("common_name", "scientific_name", "category__name")
+    # Not family: there are 664 of them and the sidebar would list every one.  Search instead.
+    # "approved" first: an unapproved species is suggested to one person and nobody else, so the
+    # queue of them is the one thing on this page anybody has to act on.  possible_duplicate is an
+    # emptiness filter rather than a plain one for the same reason: it is a self-FK, so listing its
+    # values would list 36,000 species in the sidebar.  Merging a pair is deliberately *not* an
+    # action here -- which of the two rows the whole site keeps is a decision that needs the lot
+    # counts and the sources side by side, which is what the species gaps page shows.
+    list_filter = (
+        "approved",
+        ("possible_duplicate", admin.EmptyFieldListFilter),
+        "source",
+        # A cross has no scientific name to search for and no genus to sort by, so a filter is the
+        # only way to see the ones the site holds.  There are a handful; there are 36,000 of
+        # everything else.  See Species.is_hybrid.
+        "is_hybrid",
+        "club",
+        "category",
+        "freshwater",
+        "brackish",
+        "saltwater",
+    )
+    actions = ["approve_species"]
+
+    @admin.action(description="Approve for every auction")
+    def approve_species(self, request, queryset):
+        """Promote species from "only the person who added them" to the shared list.
+
+        The other half of ``SpeciesApproveView``, which is the same decision one row at a time
+        from the species gaps page.  Bulk here because the queue after a busy weekend is a dozen
+        rows from one check-in table, and they are approved or not as a batch.
+        """
+        changed = queryset.filter(approved=False).update(approved=True)
+        # The names came in with the species and are scoped the same way; approving one without
+        # the other leaves a shared species nobody can find by the word they type for it.
+        SpeciesCommonName.objects.filter(species__in=queryset, approved=False).update(approved=True)
+        for genus in set(queryset.values_list("genus", flat=True)):
+            if genus:
+                Species.recompute_trade_ranks(genus=genus)
+        self.message_user(request, f"Approved {changed} species.")
+
+    search_fields = ("common_name", "scientific_name", "genus", "variety", "family", "category__name")
+    inlines = [SpeciesCommonNameInline]
+    # scientific_name is rebuilt from genus + species on every save, so editing it does nothing.
+    readonly_fields = ("scientific_name",)
+    # Tens of thousands of rows: a plain select for the parent of a cultivar would render every
+    # one of them into the page.
+    autocomplete_fields = ("parent",)
+
+
+class SpeciesSearchCacheAdmin(admin.ModelAdmin):
+    model = SpeciesSearchCache
+    menu_label = "Species name cache"
+    # accepts and rejects are the whole story of whether a remembered answer is any good: a lot
+    # saved with it left alone counts once, a lot it was cleared from counts against it, and one
+    # rejection in ten retires the row -- see species_matching.record_choice.
+    list_display = ("search_text", "species", "source", "created_by", "hits", "accepts", "rejects", "createdon")
+    list_filter = ("source",)
+    search_fields = ("search_text", "species__scientific_name")
+    # Deleting a row here is how you make the site look a name up again -- handy when a bad
+    # answer got cached.
+    autocomplete_fields = ("species",)
+
+
+class SpeciesNameRejectionAdmin(admin.ModelAdmin):
+    """The pairings the site has retired.  Deleting a row lets the matcher offer it again.
+
+    The counterpart of the name cache: that table says what a lot name *is*, this one says what
+    enough people have decided it is not.  Both are read before the language model, and this one
+    survives the cache row it came from -- otherwise the model would answer the same question the
+    same way and the wrong answer would be written straight back.
+    """
+
+    model = SpeciesNameRejection
+    menu_label = "Retired species names"
+    list_display = ("search_text", "species", "createdon")
+    search_fields = ("search_text", "species__scientific_name")
+    autocomplete_fields = ("species",)
 
 
 class BanAdmin(admin.ModelAdmin):
@@ -1201,7 +1414,10 @@ admin.site.unregister(User)
 admin.site.register(User, UserAdmin)
 admin.site.register(UserBan, BanAdmin)
 admin.site.register(Category, CategoryAdmin)
-admin.site.register(Product, ProductAdmin)
+admin.site.register(Species, SpeciesAdmin)
+admin.site.register(SpeciesCommonName, SpeciesCommonNameAdmin)
+admin.site.register(SpeciesSearchCache, SpeciesSearchCacheAdmin)
+admin.site.register(SpeciesNameRejection, SpeciesNameRejectionAdmin)
 admin.site.register(Auction, AuctionAdmin)
 admin.site.register(Invoice, InvoiceAdmin)
 admin.site.register(LotHistory, ChatAdmin)
@@ -1257,9 +1473,59 @@ class ClubEventAdmin(admin.ModelAdmin):
     ordering = ("-date_start",)
 
 
+class ClubAnnouncementAdmin(admin.ModelAdmin):
+    """Read-only-ish view of what clubs have announced.
+
+    The channel columns and the counters are not editable here on purpose: they record what
+    actually happened when the announcement was sent, and editing them would turn the club's own
+    history into something a site admin had rewritten. Delete or soft-delete an announcement that
+    shouldn't have gone out; don't retitle where it went.
+    """
+
+    model = ClubAnnouncement
+    list_display = (
+        "short_text",
+        "club",
+        "created_at",
+        "scheduled_for",
+        "sent_at",
+        "discord_sent",
+        "push_recipients",
+        "email_opens",
+        "is_deleted",
+    )
+    list_filter = (
+        "send_to_discord",
+        "send_to_push",
+        "send_to_mailchimp",
+        "send_to_brevo",
+        "show_on_website",
+        "is_deleted",
+        "created_at",
+    )
+    search_fields = ("text", "club__name")
+    raw_id_fields = ("club", "created_by")
+    # sent_at is editable: it is the column everything public filters on, so it is the one lever
+    # for un-sending or re-releasing a row that got into a strange state. The rest are the record
+    # of what the providers and Discord actually did.
+    readonly_fields = (
+        "created_at",
+        "uuid",
+        "discord_sent",
+        "discord_message_id",
+        "push_recipients",
+        "mailchimp_campaign_id",
+        "brevo_campaign_id",
+        "email_opens",
+        "email_error",
+    )
+    ordering = ("-created_at",)
+
+
 admin.site.register(ClubMember, ClubMemberAdmin)
 admin.site.register(ClubHistory, ClubHistoryAdmin)
 admin.site.register(ClubEvent, ClubEventAdmin)
+admin.site.register(ClubAnnouncement, ClubAnnouncementAdmin)
 
 
 class SpeakerTopicAdmin(admin.ModelAdmin):

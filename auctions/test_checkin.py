@@ -33,6 +33,10 @@ class CheckinBase(TestCase):
             is_online=False,
             date_start=now,
             date_end=now + datetime.timedelta(hours=6),
+            # Every auction the site creates starts unpromoted, and evaluate_ping deliberately says
+            # nothing about those (see PingIgnoresUnpromotedAuctionTests). The fixture is the
+            # promoted case because that is the one the rest of these tests are about.
+            promote_this_auction=True,
         )
         # In-person auctions get one auto-created default pickup location (signals.py); a real
         # single-location auction is exactly that one row. Re-save to materialise it, then pin coords.
@@ -546,3 +550,104 @@ class CheckinCloneTests(TestCase):
     def test_clone_copies_allow_self_checkin(self):
         # An auction that assigns bidder numbers at the door will run the same way next year.
         self.assertFalse(self._clone(allow_self_checkin=False).allow_self_checkin)
+
+
+class ClubManagedAdminBadgeTests(CheckinBase):
+    """The users list has to say who runs the auction in club-managed auctions too.
+
+    There, AuctionTOS.is_admin is hidden and disabled on the user form (AuctionTOSAdminForm) and
+    who may run the auction is decided by the club's permissions, exactly as Auction.permission_check
+    reads them -- so a badge keyed on is_admin alone never appeared and the list gave no way to tell
+    an admin from an attendee.
+    """
+
+    BADGE = '<span class="badge bg-danger ms-1 me-1" title="Can add users and lot">Admin</span>'
+
+    def setUp(self):
+        super().setUp()
+        self.club = Club.objects.create(name="Fish Club")
+        self.venue.club = self.club
+        self.venue.manage_users_through_club = "all"
+        self.venue.save()
+        # In a club-managed auction each new member gets a shadow AuctionTOS automatically (signals).
+        self.creator_member = ClubMember.objects.create(
+            club=self.club, user=self.creator, name="Venue Admin", email="admin@example.com", permission_admin=True
+        )
+        self.helper = ClubMember.objects.create(
+            club=self.club, name="Ann Helper", email="ann@example.com", permission_manage_auctions=True
+        )
+        self.attendee = ClubMember.objects.create(club=self.club, name="Bob Attendee", email="bob@example.com")
+        self.client.force_login(self.creator)
+
+    def _users_list(self):
+        response = self.client.get(reverse("auction_tos_list", kwargs={"slug": self.venue.slug}))
+        self.assertEqual(response.status_code, 200)
+        return response.content.decode()
+
+    def _name_cell(self, html, name):
+        """Just this person's name cell, so one row's badge can't be read off another's."""
+        marker = f">{name}</a>"
+        self.assertIn(marker, html)
+        start = html.index(marker)
+        return html[start : html.index("</td>", start)]
+
+    def test_club_admin_gets_the_badge(self):
+        self.assertIn(self.BADGE, self._name_cell(self._users_list(), "Venue Admin"))
+
+    def test_manage_auctions_permission_gets_the_badge(self):
+        # The other half of Auction.permission_check: managing auctions is running this one.
+        self.assertIn(self.BADGE, self._name_cell(self._users_list(), "Ann Helper"))
+
+    def test_plain_member_does_not(self):
+        self.assertNotIn(self.BADGE, self._name_cell(self._users_list(), "Bob Attendee"))
+
+    def test_badge_goes_away_with_the_permission(self):
+        ClubMember.objects.filter(pk=self.helper.pk).update(permission_manage_auctions=False)
+        self.assertNotIn(self.BADGE, self._name_cell(self._users_list(), "Ann Helper"))
+
+    def test_deactivated_member_does_not_count(self):
+        # is_deleted members are skipped by permission_check, so they must not look like admins.
+        ClubMember.objects.filter(pk=self.helper.pk).update(is_deleted=True)
+        self.assertNotIn(self.BADGE, self._name_cell(self._users_list(), "Ann Helper"))
+
+    def test_club_permissions_do_not_leak_into_an_unmanaged_auction(self):
+        # With the club attached but not managing participants, only AuctionTOS.is_admin counts --
+        # again matching permission_check, which only consults the club when is_club_managed.
+        self.venue.manage_users_through_club = ""
+        self.venue.save()
+        self.assertNotIn(self.BADGE, self._name_cell(self._users_list(), "Ann Helper"))
+
+    def test_auction_tos_admin_still_gets_it(self):
+        tos = AuctionTOS.objects.get(auction=self.venue, clubmember=self.attendee)
+        AuctionTOS.objects.filter(pk=tos.pk).update(is_admin=True)
+        self.assertIn(self.BADGE, self._name_cell(self._users_list(), "Bob Attendee"))
+
+
+class PingIgnoresUnpromotedAuctionTests(CheckinBase):
+    """An auction nobody asked to publicise must not be announced by the welcome ping.
+
+    ``promote_this_auction`` starts False on every auction (AuctionCreateView), so before the filter
+    landed a phone standing at the venue during the window got the auction's full title and a working
+    Join button for an auction its creator had never agreed to show anyone. The failure is silent and
+    only visible from a phone in the right place at the right time, which is why it is tested here.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.venue.promote_this_auction = False
+        self.venue.save()
+
+    def test_no_join_offer_for_unpromoted_auction(self):
+        self.assertEqual(self._ping(self.arrival, *AT).json()["actions"], [])
+
+    def test_no_admin_nudge_for_unpromoted_auction(self):
+        # Not even the admin's own set_location_offer: it names an auction the app should not be
+        # mentioning at all, and the admin has the website for that.
+        self.venue.exact_location_set = False
+        self.venue.save()
+        self.assertEqual(self._ping(self.creator, *NEAR).json()["actions"], [])
+
+    def test_promoting_it_brings_the_offer_back(self):
+        self.venue.promote_this_auction = True
+        self.venue.save()
+        self.assertIn("join_offer", self._types(self._ping(self.arrival, *AT)))

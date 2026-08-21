@@ -7,6 +7,6 @@
                 <p>Are you sure you want to delete {{ object }}?</p>
                 <span class="text-warning">This cannot be undone!</span><br>
                 <a href="{% url 'auction_main' slug=object.slug %}" class='btn btn-secondary ms-2'>Cancel</a>
-                <input type="submit" class='text-dark btn btn-warning' value="Delete">
+                <input type="submit" class='btn btn-danger' value="Delete">
             </form>
 {% endblock %}

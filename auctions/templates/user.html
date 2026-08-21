@@ -7,6 +7,7 @@
             {% endif %}
             <h4>{{ user.username }}</h4>
             <h6>Account information</h6>
+            <div class="table-responsive">
             <table class="table">
                 {% if request.user.is_authenticated %}
                 <tr>
@@ -29,7 +30,8 @@
                     </td>
                   </tr>
                   {% else %}
-                  <a href="{% url 'account_login' %}?next={% firstof request.path '/' %}">Sign in to see this user's info</a>
+                  {% comment %}In a cell, not loose between rows: the HTML parser hoists a bare <a> out of a <table> and drew it above the heading.{% endcomment %}
+                  <tr><td colspan="2"><a href="{% url 'account_login' %}?next={% firstof request.path '/' %}">Sign in to see this user's info</a></td></tr>
                   {% endif %}
                   <tr>
                     <td>Lots sold:<br>Feedback:</td>
@@ -44,8 +46,10 @@
                     </td>
                   </tr>
             </table>
+            </div>
             {% if user.pk == request.user.id or request.user.is_superuser %}
             <h6>Only visible to you:</h6>
+            <div class="table-responsive">
             <table class="table">
                 <tr>
                     <td>Location:</td>
@@ -68,10 +72,11 @@
                     </td>
                 </tr>{%endif%}
             </table>
+            </div>
 
             <br>
             {% endif %}
-            <a href='/lots/user/?user={{user.username}}' class="btn btn-primary mr-1 mt-1">View all lots from this user</a>
+            <a href='/lots/user/?user={{user.username}}' class="btn btn-primary mt-1">View all lots from this user</a>
             <br><br><h4>Feedback</h4>
             {% if seller_feedback or winner_feedback %}
                 {% if seller_feedback %}
@@ -99,7 +104,11 @@
                 {% else %}
                 <form method="post" action="/api/users/ban/{{user.pk}}/">
                     {% csrf_token %}
-                    <button class="btn btn-danger"  name="action_ban" type="submit">Ban</button>
+                    <button class="btn btn-danger" name="action_ban" type="submit"
+                            data-confirm="Ban this user from bidding on your lots and in auctions you administer?"
+                            data-confirm-title="Ban this user?"
+                            data-confirm-ok="Ban"
+                            data-confirm-variant="danger">Ban</button>
                 </form>
                 {% endif %}
             {% endif %}
@@ -149,18 +158,8 @@
 
 
 {% block extra_js %}
+{# The Ban button confirms through data-confirm (confirm_modal.js); never the browser's confirm(). #}
 <script type="text/javascript">
-(function() {
-  var message = "Ban this user from bidding on your lots and in auctions you administer?";
-  var actions = document.getElementsByName('action_ban');
-  if (actions.length) {
-    actions[0].addEventListener("click", function(e) {
-      if (! confirm(message)) {
-        e.preventDefault();
-      }
-    });
-  }
-})();
 pageView();
 </script>
 {% endblock %}

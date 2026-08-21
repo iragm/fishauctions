@@ -1,0 +1,20 @@
+{% extends "auctions/embeds/base.html" %}
+{% comment %}A club's next few events. Rows come from _club_events_embed_rows().{% endcomment %}
+{% block embed_title %}{{ club_name }} events{% endblock %}
+{% block embed_body %}
+    {% if events %}
+    <ul class="ew-list">
+      {% for event in events %}
+      <li{% if event.cancelled %} class="ew-struck"{% endif %}>
+        <a class="ew-title" href="{{ event.url }}" target="_blank" rel="noopener">{{ event.title }}</a>
+        {% if event.cancelled %}<span class="ew-badge ew-badge-alert">Cancelled</span>{% endif %}
+        {% if event.repeats %}<span class="ew-badge">{{ event.repeats }}</span>{% endif %}
+        <span class="ew-line">{{ event.when }}</span>
+        {% if event.location %}<span class="ew-line">{{ event.location }}</span>{% endif %}
+      </li>
+      {% endfor %}
+    </ul>
+    {% else %}
+    <p class="ew-empty">Nothing coming up right now.</p>
+    {% endif %}
+{% endblock %}

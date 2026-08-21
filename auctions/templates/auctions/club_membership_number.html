@@ -11,7 +11,7 @@
         <div class="input-group">
           <input type="text" id="membership-number-value" class="form-control font-monospace"
             value="{{ member.membership_number }}" readonly>
-          <button type="button" class="btn btn-outline-secondary" id="copy-membership-number"
+          <button type="button" class="btn btn-primary" id="copy-membership-number"
             title="Copy to clipboard">
             <i class="bi bi-clipboard" id="copy-icon"></i>
           </button>
@@ -19,7 +19,7 @@
       </div>
       <div class="modal-footer">
         <button type="button" class="btn btn-secondary" data-modal-close-action="none">Close</button>
-        <button type="button" class="btn btn-warning"
+        <button type="button" class="btn btn-danger"
           hx-post="{% url 'club_member_membership_number' pk=member.pk %}"
           hx-target="#modals-here"
           hx-swap="innerHTML">

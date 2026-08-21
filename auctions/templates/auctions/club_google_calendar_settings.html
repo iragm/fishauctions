@@ -26,6 +26,14 @@
       <a href="{% url 'google_calendar_connect' club.slug %}" class="btn btn-primary">
         <i class="bi bi-google"></i> Connect Google Calendar
       </a>
+      {% comment %}The error from a connect attempt that failed has to show in this branch too.
+      It only appeared under "Connected" before, so an admin whose very first attempt failed saw
+      the same Connect button they had just pressed and no reason why.{% endcomment %}
+      {% if club.google_calendar_last_error %}
+      <div class="alert alert-danger mt-3 mb-0 small">
+        <i class="bi bi-exclamation-triangle-fill"></i> Last attempt: {{ club.google_calendar_last_error }}
+      </div>
+      {% endif %}
     </div>
   </div>
 
@@ -50,14 +58,23 @@
   </div>
   {% endif %}
   <div class="card mb-4">
-    <div class="card-header d-flex justify-content-between align-items-center">
+    <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
       <span>Google Calendar connection</span>
       <span class="badge bg-success text-dark"><i class="bi bi-check-circle-fill"></i> Connected</span>
     </div>
     <div class="card-body">
       <dl class="row mb-0">
+        {% comment %}Only shown when we have it. The site no longer asks Google for the account's
+        email address: pairing that Sign-In scope with the calendar one is what made Google show a
+        checkbox consent screen whose calendar box arrives unticked, which is how clubs ended up
+        "connected" with a token that couldn't touch a calendar. Connections made before that
+        change still have the email, so the row stays for them.{% endcomment %}
+        {% if club.google_calendar_account_email %}
         <dt class="col-sm-4">Google account</dt>
-        <dd class="col-sm-8">{{ club.google_calendar_account_email|default:"—" }}</dd>
+        <dd class="col-sm-8">{{ club.google_calendar_account_email }}</dd>
+        {% endif %}
+        <dt class="col-sm-4">Connected by</dt>
+        <dd class="col-sm-8">{{ club.google_calendar_connected_by|default:"—" }}</dd>
         <dt class="col-sm-4">Calendar</dt>
         <dd class="col-sm-8">
           {{ club.name }} events
@@ -83,7 +100,7 @@
     <div class="card-footer">
       <form method="post" action="{% url 'google_calendar_sync_now' club.slug %}" class="d-inline">
         {% csrf_token %}
-        <button type="submit" class="btn btn-secondary btn-sm">
+        <button type="submit" class="btn btn-primary btn-sm">
           <i class="bi bi-arrow-clockwise"></i> Sync now
         </button>
       </form>
@@ -93,7 +110,7 @@
             data-confirm-ok="Disconnect"
             data-confirm-variant="danger">
         {% csrf_token %}
-        <button type="submit" class="btn btn-outline-danger btn-sm">
+        <button type="submit" class="btn btn-danger btn-sm">
           <i class="bi bi-x-circle"></i> Disconnect
         </button>
       </form>
@@ -128,10 +145,10 @@
       </ol>
       {% if club.google_calendar_is_public %}
       <div class="d-flex flex-wrap gap-2">
-        <a href="{{ club.google_calendar_public_url }}" target="_blank" rel="noopener" class="btn btn-sm btn-secondary">
+        <a href="{{ club.google_calendar_public_url }}" target="_blank" rel="noopener" class="btn btn-sm btn-primary">
           <i class="bi bi-google"></i> Google Calendar link
         </a>
-        <a href="{{ club.google_calendar_ical_url }}" target="_blank" rel="noopener" class="btn btn-sm btn-secondary">
+        <a href="{{ club.google_calendar_ical_url }}" target="_blank" rel="noopener" class="btn btn-sm btn-primary">
           <i class="bi bi-calendar-week"></i> Google iCal feed
         </a>
       </div>

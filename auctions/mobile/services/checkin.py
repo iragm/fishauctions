@@ -169,10 +169,19 @@ def evaluate_ping(user, latitude, longitude, now=None):
     now = now or timezone.now()
     # Candidate physical pickup locations within the (larger) admin radius; the auction is filtered
     # down to in-person, single-location, in-window below.
+    #
+    # ``promote_this_auction`` is the disclosure gate and belongs here rather than in the app: an
+    # unpromoted auction is one whose creator has not agreed to it being shown to strangers, and
+    # every auction starts that way (AuctionCreateView sets it False). Without this filter, standing
+    # within two miles of the venue during the window pushed the full title and a working Join button
+    # to any signed-in app user who happened to be nearby. It gates the admin nudges too, not just the
+    # join offer -- a reminder to set the location is still a mention of an auction we should not be
+    # mentioning.
     locations = (
         PickupLocation.objects.filter(
             auction__is_online=False,
             auction__is_deleted=False,
+            auction__promote_this_auction=True,
             pickup_by_mail=False,
         )
         .annotate(distance=distance_to(latitude, longitude, approximate_distance_to=DISTANCE_RESOLUTION_MI))

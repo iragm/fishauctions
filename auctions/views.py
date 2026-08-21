@@ -54,6 +54,7 @@ from django.db.models import (
     Sum,
     Value,
     When,
+    prefetch_related_objects,
 )
 from django.db.models.base import Model as Model
 from django.db.models.functions import ExtractHour, ExtractIsoWeekDay, TruncDay, TruncMonth
@@ -69,7 +70,8 @@ from django.http import (
 )
 from django.middleware.csrf import get_token
 from django.shortcuts import get_object_or_404, redirect, render
-from django.template.defaultfilters import date as date_filter
+from django.template.defaultfilters import date as date_format
+from django.template.defaultfilters import pluralize
 from django.template.loader import render_to_string
 from django.templatetags.static import static
 from django.urls import reverse
@@ -111,7 +113,7 @@ from user_agents import parse
 from webpush import send_user_notification
 from webpush.models import PushInformation
 
-from . import club_events, discord_events, voice
+from . import announcements, club_events, discord_events, voice
 from .authentication import ApiKeyThrottle, OptionalAPIKeyAuthentication
 from .bidding import place_bid_and_broadcast
 from .filters import (
@@ -122,6 +124,7 @@ from .filters import (
     ClubBapLotFilter,
     ClubHistoryFilter,
     ClubMemberFilter,
+    InvoiceFilter,
     LotAdminFilter,
     LotFilter,
     SpeakerFilter,
@@ -147,7 +150,9 @@ from .forms import (
     ChangeInvoiceStatusForm,
     ChangeUsernameForm,
     ChangeUserPreferencesForm,
+    ClubAnnouncementForm,
     ClubBapCategoryOverrideForm,
+    ClubBapGenusOverrideForm,
     ClubBapSettingsForm,
     ClubEditForm,
     ClubEmailSettingsForm,
@@ -182,6 +187,8 @@ from .forms import (
     QuickAddTOS,
     SpeakerCommentForm,
     SpeakerForm,
+    SpeciesAdminForm,
+    SpeciesCommonNameForm,
     TOSFormSetHelper,
     UserLabelPrefsForm,
     UserLocation,
@@ -189,6 +196,7 @@ from .forms import (
     validate_image_url,
 )
 from .helper_functions import bin_data, get_currency_symbol
+from .llm import assist_enabled
 from .mobile.services.web_session import mark_session_opened_by_app, session_opened_by_app
 from .models import (
     CUSTOM_DROPDOWN_MAX_LENGTH,
@@ -209,9 +217,11 @@ from .models import (
     Category,
     ChatSubscription,
     Club,
+    ClubAnnouncement,
     ClubAPIKey,
     ClubAPIKeyFieldMap,
     ClubBapCategoryOverride,
+    ClubBapGenusOverride,
     ClubDiscordRole,
     ClubEvent,
     ClubHistory,
@@ -230,10 +240,15 @@ from .models import (
     PageView,
     PayPalSeller,
     PickupLocation,
+    RemotePrintJob,
     SearchHistory,
     Speaker,
     SpeakerComment,
     SpeakerTag,
+    Species,
+    SpeciesCommonName,
+    SpeciesNameRejection,
+    SpeciesSearchCache,
     SquareSeller,
     UserBan,
     UserData,
@@ -251,14 +266,18 @@ from .models import (
     median_value,
     nearby_auctions,
     normalize_email,
+    normalize_species_name,
 )
-from .notifications import CATEGORY_LOT_SELLING, user_has_app_push
+from .notifications import CATEGORY_LOT_SELLING, push_configured, user_has_app_push
 from .serializers import (
     CLUB_MEMBER_API_KEY_MAPPING_FIELDS,
     BapAwardAPIKeyCreateSerializer,
     ClubBapLotSerializer,
     ClubMemberAPIKeySerializer,
     ClubMemberSerializer,
+    SpeciesCommonNameCreateSerializer,
+    SpeciesCreateSerializer,
+    SpeciesMatchSerializer,
 )
 from .services import (
     LOT_ADD_BLOCK_BULK_DISABLED,
@@ -276,6 +295,17 @@ from .services import (
     user_can_clone_lot,
 )
 from .site_setup import get_server_public_ip
+from .species_matching import (
+    MAX_SUGGESTIONS,
+    LLMBudget,
+    species_already_named,
+    species_carrying_common_name,
+    suggest_species,
+    visible_common_names,
+    visible_species,
+)
+from .species_matching import record_choice as record_species_choice
+from .species_matching import remember as remember_species
 from .tables import (
     AuctionHistoryHTMxTable,
     AuctionHTMxTable,
@@ -284,6 +314,7 @@ from .tables import (
     ClubBapLotHTMxTable,
     ClubHistoryHTMxTable,
     ClubMemberHTMxTable,
+    InvoiceHTMxTable,
     LotHTMxTable,
     LotHTMxTableForUsers,
     SpeakerHTMxTable,
@@ -458,6 +489,8 @@ CLUB_PERMISSION_FIELDS = (
     "permission_money",
     "permission_manage_auctions",
     "permission_manage_bap",
+    "permission_manage_donations",
+    "permission_send_announcements",
 )
 
 
@@ -1188,6 +1221,10 @@ class ClubViewMixin:
         return self.user_has_club_permission("permission_manage_bap")
 
     @property
+    def can_manage_donations(self):
+        return self.user_has_club_permission("permission_manage_donations")
+
+    @property
     def can_manage_money(self):
         return self.user_has_club_permission("permission_money") or self.user_has_club_permission(
             "permission_edit_club"
@@ -1196,6 +1233,18 @@ class ClubViewMixin:
     @property
     def can_access_admin(self):
         return self.user_has_club_permission("permission_admin") or self.user_has_club_permission("permission_view")
+
+    @property
+    def can_manage_auctions(self):
+        """Runs the club's public-facing calendar: events and website snippets."""
+        return self.user_has_club_permission("permission_admin") or self.user_has_club_permission(
+            "permission_manage_auctions"
+        )
+
+    @property
+    def can_send_announcements(self):
+        """Writes announcements. Its own permission -- see ClubAnnouncementsView.dispatch."""
+        return self.user_has_club_permission("permission_send_announcements")
 
     @property
     def can_add_edit(self):
@@ -1209,10 +1258,22 @@ class ClubViewMixin:
     @property
     def club_sidebar_can_view(self):
         """Whether the current user may see the club sidebar on a club page.
-        Mirrors the union of permissions that gated the old club_ribbon tabs."""
+
+        Mirrors the union of permissions that gated the old club_ribbon tabs, plus donations and
+        announcements: the sidebar is the only way to reach those pages, so leaving either out
+        would make its permission one that grants access to a page nobody can find.
+        """
         if not self.club:
             return False
-        return bool(self.can_access_admin or self.can_edit_settings or self.can_manage_bap or self.can_manage_money)
+        return bool(
+            self.can_access_admin
+            or self.can_edit_settings
+            or self.can_manage_bap
+            or self.can_manage_money
+            or self.can_manage_donations
+            or self.can_manage_auctions
+            or self.can_send_announcements
+        )
 
 
 class AdminOnlyViewMixin:
@@ -1224,6 +1285,25 @@ class AdminOnlyViewMixin:
 
     def dispatch(self, request, *args, **kwargs):
         if not (request.user.is_superuser):
+            messages.error(request, self.permission_denied_message)
+            return redirect(self.redirect_url)
+        return super().dispatch(request, *args, **kwargs)
+
+
+class AuctionAdminAnywhereViewMixin:
+    """Include to let anyone who runs an auction see this page, plus superusers.
+
+    A deliberately weaker gate than :class:`AdminOnlyViewMixin`, for the one thing that has to be
+    doable while somebody is standing at a check-in table: adding a species the list is missing.
+    The standing comes from :attr:`UserData.runs_an_auction`; what it buys is a species only its
+    author can see until it is approved, not a write to everybody's picker.
+    """
+
+    permission_denied_message = "Only auction admins can view this page"
+    redirect_url = "/"
+
+    def dispatch(self, request, *args, **kwargs):
+        if not (request.user.is_authenticated and request.user.userdata.runs_an_auction):
             messages.error(request, self.permission_denied_message)
             return redirect(self.redirect_url)
         return super().dispatch(request, *args, **kwargs)
@@ -2711,9 +2791,11 @@ class MyWonLotCSV(LoginRequiredMixin, View):
 
     def get(self, request):
         lots = add_price_info(
-            Lot.objects.filter(Q(winner=request.user) | Q(auctiontos_winner__email=request.user.email)).exclude(
-                is_deleted=True
-            )
+            Lot.objects.filter(Q(winner=request.user) | Q(auctiontos_winner__email=request.user.email))
+            .exclude(is_deleted=True)
+            # auction as well as species: lot.scientific_name reads the auction's setting, and a
+            # query per row is not worth paying for a column.
+            .select_related("species", "auction")
         )
         current_site = Site.objects.get_current()
         response = HttpResponse(content_type="text/csv")
@@ -2721,12 +2803,13 @@ class MyWonLotCSV(LoginRequiredMixin, View):
             f'attachment; filename="my_won_lots_from_{current_site.domain.replace(".", "_")}.csv"'
         )
         writer = csv.writer(response)
-        writer.writerow(["Lot number", "Name", "Auction", "Winning price", "Link"])
+        writer.writerow(["Lot number", "Name", "Scientific name", "Auction", "Winning price", "Link"])
         for lot in lots:
             writer.writerow(
                 [
                     lot.lot_number_display,
                     lot.lot_name,
+                    lot.scientific_name,
                     lot.auction,
                     f"{lot.currency_symbol}{lot.winning_price}",
                     "https://" + lot.full_lot_link,
@@ -2742,7 +2825,8 @@ class MyLotReportView(LoginRequiredMixin, View):
         lots = add_price_info(
             Lot.objects.filter(Q(user=request.user) | Q(auctiontos_seller__email=request.user.email))
             .exclude(is_deleted=True)
-            .select_related("bap_award__club_member__club")
+            # auction too: lot.scientific_name reads the auction's setting (see the property).
+            .select_related("bap_award__club_member__club", "species", "auction")
         )
         current_site = Site.objects.get_current()
         response = HttpResponse(content_type="text/csv")
@@ -2754,6 +2838,7 @@ class MyLotReportView(LoginRequiredMixin, View):
             [
                 "Lot number",
                 "Name",
+                "Scientific name",
                 "Auction",
                 "Status",
                 "Winning price",
@@ -2788,6 +2873,7 @@ class MyLotReportView(LoginRequiredMixin, View):
                 [
                     lot.lot_number_display,
                     lot.lot_name,
+                    lot.scientific_name,
                     lot.auction,
                     status,
                     lot.winning_price,
@@ -3290,6 +3376,10 @@ class AuctionLotsCSV(LoginRequiredMixin, AuctionViewMixin, View):
             "Club Cut",
             "Seller cut",
         ]
+        # Only when the auction actually collected one, so a club that turned the field off
+        # doesn't get an empty column in every report.
+        if self.auction.use_scientific_name:
+            first_row_fields.insert(2, "Scientific name")
         if self.auction.use_custom_checkbox_field and self.auction.custom_checkbox_name:
             first_row_fields.append(self.auction.custom_checkbox_name)
         if self.auction.custom_field_1 != "disable" and self.auction.custom_field_1_name:
@@ -3297,7 +3387,7 @@ class AuctionLotsCSV(LoginRequiredMixin, AuctionViewMixin, View):
         if custom_dropdown_enabled:
             first_row_fields.append(self.auction.custom_dropdown_name)
         writer.writerow(first_row_fields)
-        lots = self.auction.lots_qs
+        lots = self.auction.lots_qs.select_related("species", "auction")
         lots = add_price_info(lots)
         if query:
             lots = LotAdminFilter.generic(None, lots, query)
@@ -3319,6 +3409,8 @@ class AuctionLotsCSV(LoginRequiredMixin, AuctionViewMixin, View):
                 f"{lot.club_cut:.2f}" if lot.winning_price else "",
                 f"{lot.your_cut:.2f}" if lot.winning_price else "",
             ]
+            if self.auction.use_scientific_name:
+                row.insert(2, lot.scientific_name)
             if self.auction.use_custom_checkbox_field and self.auction.custom_checkbox_name:
                 row.append(lot.custom_checkbox_label)
             if self.auction.custom_field_1 != "disable" and self.auction.custom_field_1_name:
@@ -3382,6 +3474,54 @@ class FindImageIcon(APIView):
         return HttpResponse("")
 
 
+class SpeciesSuggestions(APIView):
+    """Given a lot name, return the handful of species it might be.
+
+    Backs the scientific-name picker on every lot form.  The list is always short and always
+    comes out of the Species table, so the client can render it as a ``<select>`` and the server
+    can reject anything that isn't in it -- see ``configure_species_field`` and
+    ``clean_species_for_auction`` in forms.py.
+    """
+
+    authentication_classes = [SessionAuthentication, TokenAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, *args, **kwargs):
+        name = (request.POST.get("name") or "").strip()
+        # The last-typed name wins: on the bulk-add page several rows can be in flight at once and
+        # the client matches responses back up by this.
+        if not name:
+            return JsonResponse({"name": name, "choices": [], "source": "none"})
+        # Optional, and only ever a tie-break inside suggest_species.  Not validated beyond "is it
+        # a number" on purpose: a category that doesn't exist simply matches nothing.
+        category = request.POST.get("category") or None
+        matches, source = suggest_species(
+            name,
+            user=request.user,
+            category=int(category) if category and category.isdigit() else None,
+        )
+        return JsonResponse(
+            {
+                "name": name,
+                "source": source,
+                "choices": [
+                    {
+                        "id": species.pk,
+                        "scientific_name": species.full_scientific_name,
+                        "common_name": species.common_name,
+                        # The category the lot will get if this species is picked -- by name for
+                        # the line of text the forms show, and by pk so the category picker can be
+                        # set to it rather than left showing whatever the name guesser said.
+                        "category": str(species.category) if species.category else "",
+                        "category_id": species.category_id or "",
+                        "label": species.label,
+                    }
+                    for species in matches
+                ],
+            }
+        )
+
+
 class AuctionChats(AuctionViewMixin, LoginRequiredMixin, ListView):
     """Auction admins view to show and delete all chats for an auction"""
 
@@ -3434,9 +3574,9 @@ class AuctionChatDeleteUndelete(APIView, AuctionViewMixin):
         self.history.removed = not self.history.removed
         self.history.save()
         if not self.history.removed:
-            result = f'<span id="message_{self.history.pk}" class="badge bg-info">Delete</span>'
+            result = f'<span id="message_{self.history.pk}" class="btn btn-sm btn-danger">Delete</span>'
         else:
-            result = f'<span id="message_{self.history.pk}" class="badge bg-danger">Deleted</span>'
+            result = f'<span id="message_{self.history.pk}" class="btn btn-sm btn-secondary">Deleted</span>'
             self.auction.create_history(
                 applies_to="USERS",
                 action="Deleted chat message",
@@ -3986,7 +4126,14 @@ class AuctionUsers(LoginRequiredMixin, AuctionViewMixin, HTMxTableView):
 
     def get_queryset(self):
         _ = self.can_add_edit_people  # raises PermissionDenied if not allowed
-        return AuctionTOS.objects.filter(auction=self.auction).order_by("name")
+        # Every row renders the Admin badge, which reads the auction's creator and (in a
+        # club-managed auction) the member row behind it, so without this each of the 100-odd
+        # rows on a page costs its own handful of queries.
+        return (
+            AuctionTOS.objects.filter(auction=self.auction)
+            .select_related("auction__created_by", "clubmember__club", "user")
+            .order_by("name")
+        )
 
     def get_table_kwargs(self):
         kwargs = super().get_table_kwargs()
@@ -4183,7 +4330,7 @@ class AuctionCheckIn(LoginRequiredMixin, AuctionViewMixin, View):
     <div class="modal-content">
       <div class="modal-header">
         <h5 class="modal-title" id="checkInModalLabel">Check in {tos.name}</h5>
-        <button type="button" class="btn-close" data-modal-close-action="none" aria-label="Close"></button>
+        <button type="button" class="btn-close btn-close-white" data-modal-close-action="none" aria-label="Close"></button>
       </div>
       <form hx-post="{check_in_url}" hx-target="#modals-here" hx-swap="innerHTML">
         <input type="hidden" name="csrfmiddlewaretoken" value="{get_token(request)}">
@@ -5020,12 +5167,29 @@ class VoiceCommandLogView(LoginRequiredMixin, AuctionViewMixin, View):
     speech engine — it was having no record of *what* it misheard, which left grammar changes as
     guesswork. Every row with a ``corrected_to`` names a word to fix in the Voice grammar admin.
 
+    A post with no ``slot`` is the utterance that matched nothing, which is the row we most needed
+    and never had: a log of accepted commands can only return words that already work. Those are
+    rate-limited per session in :func:`auctions.voice.log_unmatched`, because a continuous
+    recognizer hears the room and would otherwise file a transcript of the whole auction.
+
     Admin-only via ``AuctionViewMixin`` (which raises PermissionDenied for non-admins), and
-    fire-and-forget from the page: form-encoded in, ``{"id": <pk>}`` out, and never an error that
-    could interrupt a sale.
+    fire-and-forget from the page: form-encoded in, ``{"id": <pk>}`` out (``null`` when the row was
+    dropped), and never an error that could interrupt a sale.
     """
 
     def post(self, request, *args, **kwargs):
+        if not request.POST.get("slot", ""):
+            return JsonResponse(
+                {
+                    "id": voice.log_unmatched(
+                        request.user,
+                        self.auction,
+                        heard=request.POST.get("heard", ""),
+                        confidence=request.POST.get("confidence"),
+                        session_key=request.session.session_key or "",
+                    )
+                }
+            )
         log_id = request.POST.get("id")
         try:
             log_id = int(log_id) if log_id else None
@@ -6517,8 +6681,13 @@ class BulkAddLots(LoginRequiredMixin, AuctionViewMixin, TemplateView):
         if lot_formset.is_valid():
             lots = lot_formset.save(commit=False)
             new_lot_count = 0
+            # Which of these rows the seller actually moved the species on.  A rejection is
+            # evidence about a lot, not about a save, so re-posting a row whose species was
+            # cleared last week must not count a second time -- see record_choice.
+            species_moved = {id(form.instance) for form in lot_formset.forms if "species" in form.changed_data}
             for lot in lots:
-                if not lot.pk:
+                lot_is_new = not lot.pk
+                if lot_is_new:
                     new_lot_count += 1
                     # save_new_lot is shared with the command palette's add_lot action so a lot
                     # added by voice lands exactly the same way as one added on this page.
@@ -6530,6 +6699,13 @@ class BulkAddLots(LoginRequiredMixin, AuctionViewMixin, TemplateView):
                     if owner:
                         lot.user = owner
                     lot.save()
+                # What the seller did with the species this lot name was remembered as.  The same
+                # report the ajax bulk page makes -- this is the other bulk page, and a remembered
+                # answer cleared here is exactly the same evidence.  See record_choice.
+                if self.auction.use_scientific_name and lot.lot_name:
+                    record_species_choice(
+                        lot.lot_name, lot.species, first_save=lot_is_new, changed=id(lot) in species_moved
+                    )
             if lots:
                 updated_lot_count = len(lots) - new_lot_count
                 self.auction.create_history(
@@ -6663,6 +6839,7 @@ class BulkAddLotsAuto(LoginRequiredMixin, AuctionViewMixin, TemplateView):
         context["minimum_bid"] = self.auction.minimum_bid
 
         context["auto_add_images"] = self.auction.auto_add_images
+        context["use_scientific_name"] = self.auction.use_scientific_name
 
         # Lot limit settings
         context["max_lots_per_user"] = self.auction.max_lots_per_user
@@ -6782,6 +6959,10 @@ class SaveLotAjax(APIView, AuctionViewMixin):
                     added_by=request.user,
                 )
                 is_new = True
+            # What the species was before this save touched it, so record_choice can tell a seller
+            # taking the answer off a lot from a seller editing the price of a lot they already
+            # took it off.  Only the first of those is evidence about the name.
+            species_before = lot.species_id
 
             admin_bypassed_lot_limit = False  # Track if admin bypassed lot limit
             admin_bypassed_selling_allowed = False  # Track if admin bypassed selling_allowed
@@ -6827,6 +7008,28 @@ class SaveLotAjax(APIView, AuctionViewMixin):
             # Species category (auto-set to Uncategorized)
             if not lot.species_category_id:
                 lot.species_category = Category.objects.filter(name="Uncategorized").first()
+
+            # Scientific name.  Only ever a pk from the suggestions endpoint; anything else is
+            # rejected rather than coerced, so the column can't fill up with free text.
+            if self.auction.use_scientific_name:
+                species_id = data.get("species")
+                if species_id in (None, "", "0"):
+                    lot.species = None
+                else:
+                    species = visible_species(request.user, self.auction.club).filter(pk=species_id).first()
+                    # Whatever is already on the lot stays allowed even when it isn't this
+                    # person's to pick: an unapproved species another admin added is still the
+                    # right answer for that lot, and every save posts the field back, so
+                    # rejecting it here would make the row unsaveable rather than just unpickable.
+                    if not species and str(lot.species_id) == str(species_id):
+                        species = lot.species
+                    if not species:
+                        errors["species"] = "Pick a scientific name from the list"
+                    else:
+                        lot.species = species
+            # No else: with the field switched off there is nothing on the page to post, so an
+            # ajax save of any other field would otherwise wipe a species that is already stored.
+            # Turning the setting off hides the field; it does not throw the column away.
 
             # Custom checkbox
             if self.auction.use_custom_checkbox_field and self.auction.custom_checkbox_name:
@@ -6940,6 +7143,26 @@ class SaveLotAjax(APIView, AuctionViewMixin):
 
             # Save the lot - locking is handled in Lot.save() for both standard and seller_dash modes
             lot.save()
+
+            # The species half of the save, and only once the row has really been saved: a row that
+            # bounced on its price is not somebody's answer about what the fish is.
+            if self.auction.use_scientific_name and lot.lot_name:
+                # What the seller did with the answer this name was remembered as: left it alone,
+                # cleared it with the X, or picked something else.  This is the half that was
+                # missing -- the page wrote to a site-wide cache on a first save and never reported
+                # back, so one misclick was the site's answer for good.  Before remember() below,
+                # deliberately: the person teaching the site a pairing must not also be counted as a
+                # second person agreeing with it.  See species_matching.record_choice.
+                record_species_choice(
+                    lot.lot_name, lot.species, first_save=is_new, changed=lot.species_id != species_before
+                )
+                # Remember it only on the row's first save, where the name and the species were
+                # entered together and the pairing is really what the person meant.  On a later edit
+                # they may well have rewritten the lot name and left the old species sitting there,
+                # and the cache is global -- one stale row would teach every club that "sponge
+                # filter" is a guppy.
+                if is_new and lot.species:
+                    remember_species(lot.lot_name, lot.species, source="user", user=request.user)
 
             # Create auction history entry
             if is_new:
@@ -7595,16 +7818,7 @@ class ViewLot(DetailView):
             if viewer_has_bap and lot.sold:
                 club = lot.auction.club
                 context["bap_club"] = club
-                _bap_override = (
-                    ClubBapCategoryOverride.objects.filter(club=club, category=lot.species_category).first()
-                    if lot.species_category
-                    else None
-                )
-                context["bap_default_points"] = (
-                    _bap_override.points
-                    if _bap_override is not None
-                    else (club.points_per_lot or (lot.species_category.bap_points if lot.species_category else 5))
-                )
+                context["bap_default_points"] = lot.bap_points_for_club(club)
         is_lot_creator = lot.is_owned_by(self.request.user)
         # The template gates the edit/delete/deactivate buttons and the seller-only notes on this,
         # rather than on lot.user, because lot.user is null on lots added through an unlinked TOS.
@@ -7901,6 +8115,7 @@ class LotValidation(LoginRequiredMixin):
             lot.donation = False
         # someday we may change this to be a field on the form, but for now we need to collect data
         lot.promotion_weight = randint(0, 20)
+        lot_is_new = not lot.pk
         if lot.pk:
             # this is an existing lot
             lot.save()
@@ -7944,6 +8159,14 @@ class LotValidation(LoginRequiredMixin):
                 messages.error(self.request, "The image URL provided was not valid and will not be used.")
             lot.image_url = None
             lot.save(update_fields=["image_url"])
+        # What the seller did with the species the matcher offered for this lot name.  This form
+        # never *writes* to the shared name cache -- only the admin's lot editor and the bulk-add
+        # page do -- but it is one of the places a wrong remembered answer is visibly taken off a
+        # lot, and that is evidence worth keeping.  See species_matching.record_choice.
+        if lot.auction and lot.auction.use_scientific_name and lot.lot_name:
+            record_species_choice(
+                lot.lot_name, lot.species, first_save=lot_is_new, changed="species" in form.changed_data
+            )
         return super().form_valid(form)
 
     def get_form_kwargs(self, *args, **kwargs):
@@ -8363,6 +8586,21 @@ class LotAdmin(LoginRequiredMixin, TemplateView, FormMixin, AuctionViewMixin):
             obj.custom_checkbox = form.cleaned_data["custom_checkbox"]
             obj.custom_field_1 = form.cleaned_data["custom_field_1"]
             obj.custom_dropdown = form.cleaned_data["custom_dropdown"]
+            # This view assigns field by field rather than calling form.save(), and the scientific
+            # name was simply not on the list -- so the picker rendered, validated, and had its
+            # answer thrown away on every save since it was added.  It is the *admin's* lot form:
+            # the one place a wrong species is meant to get fixed.
+            #
+            # Guarded on the auction's own setting rather than trusting cleaned_data, because
+            # EditLot is built without an ``instance``: clean_species_for_auction falls back to
+            # "whatever is stored on the lot" when the field is switched off, and what it actually
+            # reads is a blank Lot() -- so assigning that would wipe the column on every auction
+            # that has scientific names turned off.  Turning the setting off hides the field; it
+            # does not throw the data away.
+            species = form.cleaned_data.get("species") if self.auction.use_scientific_name else None
+            species_changed = bool(self.auction.use_scientific_name) and obj.species_id != getattr(species, "pk", None)
+            if self.auction.use_scientific_name:
+                obj.species = species
             # need to make sure the winner matches the auctiontos_winner
             if obj.pk and obj.winner:
                 if not obj.auctiontos_winner:
@@ -8371,6 +8609,21 @@ class LotAdmin(LoginRequiredMixin, TemplateView, FormMixin, AuctionViewMixin):
                     obj.winner = obj.auctiontos_winner.user
                 # winner not set if auctiontos_winner is set for the first time...don't see a real downside here, winner is generally not set as part of an auction anyway
             obj.save()
+            # Teach the site the pairing -- but only from here, and only on a real change.  This
+            # form has the "search every species" box on it, so the choice is not bounded by the
+            # five suggestions the matcher produced; it can be any of 36,000 rows, and the cache
+            # is read by every club ahead of the token search.  What makes it safe to write anyway
+            # is who is doing it: this view is auction admins only, they are correcting a lot on
+            # purpose, and the answer is listed and revertible on the species gaps page.  The
+            # seller-facing forms deliberately do not do this.
+            if self.auction.use_scientific_name and species_changed and obj.lot_name:
+                # An admin moving a lot off the species it was given is the clearest rejection
+                # there is of whatever the matcher remembered for this name.  Never an *accept*:
+                # this form is only ever a later edit, and re-saving a lot to set its winner is
+                # not somebody confirming the species.  See species_matching.record_choice.
+                record_species_choice(obj.lot_name, species, first_save=False, changed=True)
+            if species_changed and species and obj.lot_name:
+                remember_species(obj.lot_name, species, source="user", user=self.request.user)
             # add message if the winner changed
             if obj.auctiontos_winner:
                 if self.lot_initial_winner != obj.auctiontos_winner:
@@ -9076,6 +9329,7 @@ class AuctionCreateView(CreateView, LoginRequiredMixin):
                 "auto_add_images",
                 "message_users_when_lots_sell",
                 "label_print_fields",
+                "use_scientific_name",
                 "force_donation_threshold",
                 "use_quantity_field",
                 "custom_checkbox_name",
@@ -9312,7 +9566,10 @@ class AuctionInfo(FormMixin, DetailView, AuctionViewMixin):
                             f"{creator.username} is now an admin of {creator_club.name}"
                             + (f" and {assigned_count} auction(s) assigned to club" if assigned_count else ""),
                         )
-            if self.auction.created_by.pk == request.user.pk:
+            # created_by is nullable (SET_NULL when an account is deleted, and blank on auctions
+            # made before it existed), so this cannot go straight through to .pk -- it 500s the
+            # auction page for everyone, not just the creator.
+            if self.auction.created_by_id == request.user.pk:
                 if str(request.GET.get("enable_online_payments", "")).lower() in ("1", "true"):
                     self.auction.enable_online_payments = True
                     self.auction.save()
@@ -9456,7 +9713,8 @@ class AuctionInfo(FormMixin, DetailView, AuctionViewMixin):
             )
         else:
             context["user_has_lots"] = False
-        if self.request.user.is_authenticated and self.request.user.pk == self.auction.created_by.pk:
+        # created_by is nullable; see the note on the same comparison in dispatch().
+        if self.request.user.is_authenticated and self.request.user.pk == self.auction.created_by_id:
             invalidPickups = self.auction.pickup_locations_before_end
             if invalidPickups:
                 messages.info(
@@ -9986,22 +10244,51 @@ class AllLots(LotListView, AuctionViewMixin):
         return context
 
 
-class Invoices(ListView, LoginRequiredMixin):
+class Invoices(LoginRequiredMixin, HTMxTableView):
     """Get all invoices for the current user"""
 
     model = Invoice
+    table_class = InvoiceHTMxTable
+    filterset_class = InvoiceFilter
     template_name = "all_invoices.html"
-    ordering = ["-date"]
+    filter_placeholder_text = "Search your invoices"
 
     def get_queryset(self):
-        qs = Invoice.objects.filter(
-            Q(auctiontos_user__user=self.request.user) | Q(auctiontos_user__email=self.request.user.email)
-        ).order_by("-date")
-        return qs
+        """Newest first.
 
-    # def get_context_data(self, **kwargs):
-    #     context = super().get_context_data(**kwargs)
-    #     return context
+        The table's own default sort (`InvoiceHTMxTable.Meta.order_by`) is the one that
+        actually decides what the page opens on; this order_by keeps the queryset itself
+        sensible for anything reading it without the table.
+        """
+        return (
+            Invoice.objects.filter(
+                Q(auctiontos_user__user=self.request.user) | Q(auctiontos_user__email=self.request.user.email)
+            )
+            .select_related("auction", "auction__club", "auctiontos_user")
+            .order_by("-date")
+        )
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        filterset = context.get("filter")
+        if filterset is not None and not filterset.qs.exists():
+            context["no_results"] = self._build_no_results_html()
+        return context
+
+    def _build_no_results_html(self):
+        """Empty state: nothing matched a search, or there is nothing here at all yet."""
+        query = (self.request.GET.get("query") or "").strip()
+        if query:
+            return format_html(
+                "<div class='text-center text-muted p-4'>No invoices match <strong>{}</strong>.</div>", query
+            )
+        return (
+            "<div class='text-center text-muted p-4'>"
+            "<i class='bi bi-bag fs-1 d-block mb-2'></i>"
+            "<p class='mb-0'>You don't have any invoices yet. An invoice is created automatically "
+            "once you buy or sell a lot in an auction.</p>"
+            "</div>"
+        )
 
 
 class InvoiceCreateView(LoginRequiredMixin, View, AuctionViewMixin):
@@ -10173,7 +10460,9 @@ class InvoiceView(DetailView, FormMixin, AuctionViewMixin):
             self.request.user, club, "permission_manage_bap"
         )
         if context["viewer_has_bap"] and club:
-            context["bap_default_points"] = club.points_per_lot
+            # Blank rather than None when the club has no flat rate: the value goes straight into a
+            # text box, and the per-lot category rate isn't worth a query per row on an invoice.
+            context["bap_default_points"] = "" if club.points_per_lot is None else club.points_per_lot
         return context
 
     def get_success_url(self):
@@ -10393,23 +10682,73 @@ class LotLabelView(TemplateView, WeasyTemplateResponseMixin, AuctionViewMixin):
         return f"{label_name}.pdf"
 
     def get(self, request, *args, **kwargs):
-        """Hand a Bluetooth-printing app user the lot set instead of a PDF sheet.
+        """Three ways to print, in the order they get asked.
 
         Gated here rather than in the templates that build bulk label links, because every bulk
         entry point funnels through this view -- the users-table anchors, ``?printredirect=``, the
         command palette, print-after-bulk-add, a bookmarked URL -- and gating them one at a time
         leaves entry points behind (it also keeps label printing out of the mobile-app UA
         conditionals the templates are deliberately free of; see
-        MobileAppLabelPrintingVisibilityTests). Everyone else gets the PDF, unchanged.
+        MobileAppLabelPrintingVisibilityTests).
 
-        Deliberately before ``get_context_data``, which marks labels printed as a side effect of
-        rendering: nothing has printed yet, and the app posts labels/printed/ for the ones that
-        actually come out.
+        1. ``?pdf=1`` -- the escape hatch, and it is checked first so it can never loop back into a
+           branch. It is what the remote-print waiting page's "Print a PDF here" button links to,
+           and the app arm has to respect it too or that button would bounce a phone straight back
+           to the deep link it was trying to get out of.
+        2. The app printing over Bluetooth: a deep link to its own printer. First of the two real
+           arms, so somebody printing *from the phone* prints directly instead of routing a job
+           through FCM back to the phone they are holding.
+        3. A computer, with ``print_from_computer`` on and a phone that is actually reachable: a job
+           pushed to that phone plus a page that waits on it.
+
+        Everyone else gets the PDF, unchanged.
+
+        All of it deliberately before ``get_context_data``, which marks labels printed as a side
+        effect of rendering: in arms 2 and 3 nothing has printed yet, and what actually came out is
+        reported afterwards (``labels/printed/`` for the deep link, the job's result post for a job).
         """
+        if request.GET.get("pdf"):
+            return super().get(request, *args, **kwargs)
         deep_link_response = self.bluetooth_deep_link_response()
         if deep_link_response is not None:
             return deep_link_response
+        remote_print_response = self.remote_print_response()
+        if remote_print_response is not None:
+            return remote_print_response
         return super().get(request, *args, **kwargs)
+
+    def remote_print_response(self):
+        """The waiting page for a job pushed to the user's phone, or None to render the PDF.
+
+        Only from a *computer*: in the app, arm 2 above has already had its say, and a phone that
+        prints its own labels needs no job. ``can_print_from_computer`` is both halves of the
+        question -- the preference is on, and a phone is heartbeating with a printer paired -- because
+        a page that promises a print the phone cannot deliver is exactly what this feature is built to
+        avoid.
+        """
+        from auctions.mobile.services import remote_print
+
+        request = self.request
+        if getattr(request, "is_mobile_app", False) or not request.user.is_authenticated:
+            return None
+        if not remote_print.can_print_from_computer(request.user):
+            return None
+        # Same queryset and order as the PDF, which is the order they come out of the printer.
+        pks = list(self.get_queryset().values_list("pk", flat=True))
+        if not pks:
+            return None
+        job = remote_print.start(request.user, pks)
+        context = {
+            "job": job,
+            "label_count": job.total_count,
+            # A batch bigger than one push can carry; the rest is a second run, the same way the
+            # deep-link path splits one.
+            "truncated_count": len(pks) if len(pks) > job.total_count else 0,
+            "printer_name": job.device.printer_name if job.device else "",
+            "pdf_url": self.request.get_full_path() + ("&" if self.request.GET else "?") + "pdf=1",
+            "back_url": self.auction.get_absolute_url() if self.auction else reverse("selling"),
+        }
+        return render(self.request, "label_remote_print.html", context)
 
     def bluetooth_deep_link_response(self):
         """The ``fishauctions://print/?lots=…`` handoff page, or None to render the PDF."""
@@ -10589,6 +10928,10 @@ class LotLabelView(TemplateView, WeasyTemplateResponseMixin, AuctionViewMixin):
             "auctiontos_winner",
             "auctiontos_winner__pickup_location",
             "species_category",
+            "species",
+            # A strain with no common name of its own falls back to its parent's, which the label
+            # prints -- see Lot.common_name_line.  One join rather than a query per label.
+            "species__parent",
             "user",
         )
 
@@ -10742,6 +11085,65 @@ class SingleLotLabelView(LotLabelView):
             return HttpResponse(content, content_type=content_type)
         # super() would try to find an auction
         return View.dispatch(self, request, *args, **kwargs)
+
+
+class RemotePrintJobMixin(LoginRequiredMixin):
+    """The job, scoped to the signed-in user.
+
+    Session auth, not the mobile JWT: this half of the conversation is the *computer*, watching a job
+    it started. 404 for somebody else's job -- the uuid is unguessable, and a 403 would only confirm
+    that one exists.
+    """
+
+    def get_job(self, request, job_uuid):
+        return get_object_or_404(RemotePrintJob, uuid=job_uuid, user=request.user)
+
+
+class RemotePrintJobStatusView(RemotePrintJobMixin, View):
+    """GET /printing/job/<uuid>/ — what the waiting page polls, once a second.
+
+    Deliberately a plain JSON web view rather than a DRF endpoint: it is read by a page in the
+    browser that started the job, on the session it already has.
+    """
+
+    def get(self, request, job_uuid):
+        from auctions.mobile.services.remote_print import job_state
+
+        return JsonResponse(job_state(self.get_job(request, job_uuid)))
+
+
+class RemotePrintJobRetryView(RemotePrintJobMixin, View):
+    """POST /printing/job/<uuid>/retry/ — "Try again": the same labels, a fresh job.
+
+    A new row rather than a reset of the old one, because the old one is a record of something that
+    really happened (and its phone may yet report on it). The lot list is copied from the job instead
+    of re-derived from the queryset: a lot sold or deleted in between would silently shorten the
+    batch, and the person is standing at the printer expecting the labels they asked for.
+    """
+
+    def post(self, request, job_uuid):
+        from auctions.mobile.services import remote_print
+
+        old_job = self.get_job(request, job_uuid)
+        job = remote_print.create_job(request.user, old_job.lots)
+        remote_print.dispatch(job)
+        return JsonResponse({"job": str(job.uuid), **remote_print.job_state(job)})
+
+
+class RemotePrintJobCancelView(RemotePrintJobMixin, View):
+    """POST /printing/job/<uuid>/cancel/ — the user gave up on this one.
+
+    Only the record is cancelled; a phone already feeding labels is not interrupted, because there is
+    no channel to interrupt it with and it has its own Stop button next to the printer. What this
+    does buy is that a late result post can no longer overwrite the answer the person chose.
+    """
+
+    def post(self, request, job_uuid):
+        job = self.get_job(request, job_uuid)
+        if not job.is_terminal:
+            job.status = RemotePrintJob.STATUS_CANCELLED
+            job.save(update_fields=["status", "updated_at"])
+        return JsonResponse({"status": job.status})
 
 
 class GetClubs(APIView):
@@ -12312,6 +12714,32 @@ class MailchimpCallbackView(LoginRequiredMixin, View):
         return redirect(config_url)
 
 
+def _prefill_donation_address(club, address, provider):
+    """Fill in the club's donation mailing address from a marketing provider, if it is still blank.
+
+    Both providers make a club type a real postal address when it signs up, because US bulk
+    commercial email has to carry one -- and that is the same address the donation letters need
+    (Club.donation_mailing_address, printed under the sign-off of every request a club sends a
+    vendor). A club that has already told Mailchimp where it is should not be asked again here.
+
+    Only ever fills a blank. An address the club typed itself is the club's, and a later reconnect
+    must never quietly rewrite the return address on its mail. Returns True if it filled one in.
+    """
+    from auctions.models import Club
+
+    address = (address or "").strip()
+    if not address or club.donation_mailing_address.strip():
+        return False
+    club.donation_mailing_address = address
+    Club.objects.filter(pk=club.pk).update(donation_mailing_address=address)
+    ClubHistory.objects.create(
+        club=club,
+        action=f"Donation mailing address filled in from {provider}",
+        applies_to="SETTINGS",
+    )
+    return True
+
+
 class MailchimpAudienceSelectView(LoginRequiredMixin, ClubViewMixin, View):
     """Pick an existing audience or create '{club} Members', then provision + backfill."""
 
@@ -12334,19 +12762,15 @@ class MailchimpAudienceSelectView(LoginRequiredMixin, ClubViewMixin, View):
         choice = request.POST.get("audience_id", "")
         try:
             if choice == "__new__":
-                from_email = club.contact_email or settings.DEFAULT_FROM_EMAIL
-                contact = {
-                    "company": club.name,
-                    "address1": club.location or "",
-                    "city": "",
-                    "state": "",
-                    "zip": "",
-                    "country": "US",
-                }
-                audience_id, audience_name = mc.create_audience(client, club, from_email, contact)
+                # Sender and mailing address come from the club's own Mailchimp account, never
+                # from here -- see mailchimp.account_defaults.
+                audience_id, audience_name = mc.create_audience(client, club)
             else:
                 audience_id = choice
                 audience_name = next((a["name"] for a in mc.list_audiences(client) if a["id"] == choice), "")
+        except mc.MailchimpError as e:
+            messages.error(request, str(e))
+            return redirect(config_url)
         except Exception:
             logger.exception("Mailchimp audience selection failed for club %s", club.pk)
             messages.error(
@@ -12376,6 +12800,13 @@ class MailchimpAudienceSelectView(LoginRequiredMixin, ClubViewMixin, View):
             applies_to="SETTINGS",
         )
         messages.success(request, f"Syncing {count} member(s) into the '{audience_name}' Mailchimp audience.")
+        defaults = mc.account_defaults(client) or {}
+        if _prefill_donation_address(club, mc.format_mailing_address(defaults.get("contact")), "Mailchimp"):
+            messages.info(
+                request,
+                "We also filled in your donation mailing address from Mailchimp — check it on the "
+                "donation settings page.",
+            )
         return redirect(config_url)
 
 
@@ -12649,12 +13080,12 @@ class GoogleCalendarCallbackView(LoginRequiredMixin, View):
             gcal.ensure_calendar(club)
         except gcal.GoogleCalendarError as exc:
             logger.exception("Could not set up the Google calendar for club %s", club.pk)
-            # The calendar id is saved before anything else can fail, so say which half worked
-            # rather than claiming nothing was created.
-            if club.google_calendar_id:
-                messages.warning(request, f"Connected and the calendar exists, but setup didn't finish: {exc}")
-            else:
-                messages.error(request, f"Connected, but we couldn't create the calendar: {exc}")
+            # Deliberately one message. ensure_calendar only stores a calendar id once the calendar
+            # exists, so an id still on the club here is the *old* one from a previous connection --
+            # reading it as "the calendar exists" told admins the half that failed had worked.
+            club.google_calendar_last_error = str(exc)[:500]
+            club.save(update_fields=["google_calendar_last_error"])
+            messages.error(request, f"Connected to Google, but we couldn't set up the calendar: {exc}")
             return redirect(config_url)
 
         # Mirror the club's auctions and push everything, so the calendar isn't empty on arrival.
@@ -13217,6 +13648,12 @@ class BrevoListSelectView(LoginRequiredMixin, ClubViewMixin, View):
             applies_to="SETTINGS",
         )
         messages.success(request, f"Syncing {count} member(s) into the '{list_name}' Brevo list.")
+        info = brevo.account_info(brevo.get_client(club))
+        if _prefill_donation_address(club, brevo.format_mailing_address(info.get("address")), "Brevo"):
+            messages.info(
+                request,
+                "We also filled in your donation mailing address from Brevo — check it on the donation settings page.",
+            )
         return redirect(config_url)
 
 
@@ -13563,10 +14000,27 @@ class UserLabelPrefsView(UpdateView, SuccessMessageMixin):
         it in the app, or on web if the user has ever registered a device (so they can pre-configure)."""
         return bool(self.request.is_mobile_app) or MobileDevice.objects.filter(user=self.request.user).exists()
 
+    def _show_print_from_computer(self):
+        """Offer computer-to-phone printing only to an account with a phone that could do it.
+
+        ``ever_print_ready``, not ``print_ready``: the current flag goes False the moment the printer
+        is switched off, and "does this account have a phone with a label printer" is not a question
+        whose answer changes over breakfast. Whether it will work *right now* is the separate, honest
+        question, and the last-seen line beside the checkbox is where that gets answered.
+
+        ``push_configured`` because the job reaches the phone as an FCM data message and nothing else:
+        on a deployment with no Firebase credentials every job would go straight to "couldn't reach
+        your phone", which is true but blames the user's phone for the server's missing config.
+        """
+        if not push_configured():
+            return False
+        return MobileDevice.objects.filter(user=self.request.user, ever_print_ready=True).exists()
+
     def get_form_kwargs(self):
         kwargs = super().get_form_kwargs()
         kwargs["show_print_method"] = self._show_print_method()
         kwargs["is_mobile_app"] = bool(self.request.is_mobile_app)
+        kwargs["show_print_from_computer"] = self._show_print_from_computer()
         return kwargs
 
     def get_context_data(self, **kwargs):
@@ -13577,6 +14031,14 @@ class UserLabelPrefsView(UpdateView, SuccessMessageMixin):
         prefs = self.object
         context["label_prefs"] = prefs
         context["show_print_method"] = self._show_print_method()
+        context["show_print_from_computer"] = self._show_print_from_computer()
+        # The single fact that decides whether printing to the phone will work, and the only one the
+        # user can do anything about. Rendered next to the checkbox rather than left for them to
+        # discover by pressing print and waiting.
+        device, last_seen = MobileDevice.print_presence_for(self.request.user)
+        context["print_phone_device"] = device
+        context["print_phone_last_seen"] = last_seen
+        context["print_phone_reachable"] = bool(device and device.is_reachable_for_printing)
         # Print-method mismatch warnings talk about switching to Bluetooth / thermal printers, which
         # only work in the app. On the web only PDF is available, so the warnings aren't actionable —
         # suppress them there and keep them in the app.
@@ -17292,6 +17754,7 @@ class AuctionFinder(APIView):
                 ),
                 "use_reference_link": self.auction.use_reference_link,
                 "use_description": self.auction.use_description,
+                "use_scientific_name": self.auction.use_scientific_name,
             }
         return JsonResponse(result)
 
@@ -18452,6 +18915,8 @@ class ClubDetailView(ClubViewMixin, TemplateView):
                     | Q(permission_manage_auctions=True)
                     | Q(permission_export=True)
                     | Q(permission_manage_bap=True)
+                    | Q(permission_manage_donations=True)
+                    | Q(permission_send_announcements=True)
                 )
                 .exists()
             )
@@ -18546,6 +19011,10 @@ class ClubDetailView(ClubViewMixin, TemplateView):
                     club=club, is_deleted=False, hap_points__gt=0
                 ).order_by("-hap_points")[:10]
         context["active_club_tab"] = requested_tab if requested_tab in available_tabs else "auctions"
+        # Four or more tabs ("Events BAP HAP Culture My Points") run off the side of a phone, so
+        # everything past BAP moves into a More menu -- the same shape the auction ribbon uses.
+        # Three still fit, and a More menu holding one item is worse than the tab it replaced.
+        context["club_tabs_overflow"] = len(available_tabs) > 3
         context["can_access_admin"] = self.user_has_club_permission(
             "permission_admin"
         ) or self.user_has_club_permission("permission_view")
@@ -18592,6 +19061,15 @@ class ClubDetailView(ClubViewMixin, TemplateView):
         )
         context["upcoming_events"] = upcoming
         context["past_events"] = past
+        # The one announcement worth putting at the top of the page. Only the "show on website"
+        # ones are eligible; see announcements.latest_for_website.
+        latest = announcements.latest_for_website(self.club, 1)
+        context["latest_announcement"] = latest[0] if latest else None
+        # The club's own page here counts as "on your website" -- it is what the globe icon on the
+        # announcements page has always meant. Admins are not counted: somebody reloading the page
+        # they just posted from would otherwise be most of the number.
+        if latest and not self.club_sidebar_can_view:
+            announcements.record_website_views(latest)
         context["has_any_events"] = bool(upcoming or past)
         # Both of these *subscribe*, so the calendar keeps updating: webcal:// hands the feed to
         # the desktop or phone calendar app, and Google takes the https URL through its
@@ -18607,12 +19085,6 @@ class ClubDetailView(ClubViewMixin, TemplateView):
             context["unpromoted_auctions"] = Auction.objects.filter(
                 club=self.club, is_deleted=False, promote_this_auction=False
             ).order_by("-date_start")[:CLUB_DETAIL_EVENT_LIMIT]
-            # Snippets for putting the calendar on the club's own website — admins only, though
-            # the embed itself is public (it shows what this page already does). Which is also
-            # why it's offered only when the club page is on: with it off the embed 404s, and
-            # handing out a snippet that renders nothing is worse than not offering one.
-            if self.club.enable_club_page:
-                context["club_events_embed_path"] = reverse("club_events_embed", kwargs={"slug": self.club.slug})
         # Email button: visible to authenticated users when someone can be reached at this club.
         from .email_routing import email_routing_enabled
 
@@ -19966,6 +20438,43 @@ BAP_EMBED_PROGRAM_FIELDS = {"bap": "bap_points", "hap": "hap_points", "cap": "cu
 BAP_EMBED_PROGRAM_LABELS = {"bap": "BAP", "hap": "HAP", "cap": "CAP"}
 
 
+def embed_mode_from_request(request):
+    """Which representation a club asked for: "light", "dark", "unstyled", or None for JSON.
+
+    One reader for the ?format= every embed takes, so the four of them can't drift into
+    supporting slightly different spellings. Anything unrecognised falls through to JSON rather
+    than to a page -- a typo in a snippet must never hand a stranger's website an unexpected
+    document.
+    """
+    fmt = (request.GET.get("format") or "json").strip().lower()
+    if fmt in ("iframelight", "iframedark", "iframdark"):
+        return "dark" if fmt in ("iframedark", "iframdark") else "light"
+    if fmt == "unstyledhtml":
+        return "unstyled"
+    return None
+
+
+def embed_response(template_stem, embed_mode, context):
+    """Render one of auctions/embeds/*, with the framing headers a third-party site needs.
+
+    ``Access-Control-Allow-Origin`` is set on every embed response so a club's own JavaScript can
+    fetch one instead of iframing it; the views themselves are GET-only and public, so there is
+    nothing here CORS could leak that the page it mirrors doesn't already show.
+    """
+    suffix = "_unstyled" if embed_mode == "unstyled" else ""
+    html = render_to_string(f"auctions/embeds/{template_stem}{suffix}.html", context)
+    response = HttpResponse(html)
+    response["Access-Control-Allow-Origin"] = "*"
+    return response
+
+
+def embed_json(payload):
+    """JSON half of an embed endpoint, with the same cross-origin header."""
+    response = JsonResponse(payload)
+    response["Access-Control-Allow-Origin"] = "*"
+    return response
+
+
 def _bap_embed_leaderboard(club, program):
     """Top-10 leaderboard rows for a program: rank, display name, and points only.
 
@@ -20015,18 +20524,12 @@ class BapEmbedView(View):
 
         rows = _bap_embed_leaderboard(club, program)
         label = BAP_EMBED_PROGRAM_LABELS[program]
-        fmt = (request.GET.get("format") or "json").strip().lower()
-
-        if fmt in ("iframelight", "iframedark", "iframdark"):
-            embed_mode = "dark" if fmt in ("iframedark", "iframdark") else "light"
-        elif fmt == "unstyledhtml":
-            embed_mode = "unstyled"
-        else:
-            # json or anything unrecognized falls back to JSON — a typo never leaks an unexpected page.
+        embed_mode = embed_mode_from_request(request)
+        if embed_mode is None:
             return self._json_response(club, program, label, rows)
-
-        html = render_to_string(
-            "auctions/bap_embed.html",
+        return embed_response(
+            "bap",
+            embed_mode,
             {
                 "embed_mode": embed_mode,
                 "club_name": club.name,
@@ -20034,9 +20537,6 @@ class BapEmbedView(View):
                 "leaderboard": rows,
             },
         )
-        response = HttpResponse(html)
-        response["Access-Control-Allow-Origin"] = "*"
-        return response
 
 
 # How many events the embed will ever hand out. Clubs paste this into a sidebar; past ten it
@@ -20056,14 +20556,12 @@ def _club_events_embed_rows(request, club, count):
     rows = []
     for event in upcoming:
         start = timezone.localtime(event.date_start)
-        if event.all_day:
-            when = f"{date_filter(start, 'D, N j, Y')} — all day"
-        else:
-            when = f"{date_filter(start, 'D, N j, Y')} at {date_filter(start, 'g:i A')}"
         rows.append(
             {
                 "title": event.title,
-                "when": when,
+                # Same one-line "when" the club page shows, so a multi-day online auction reads as
+                # one on somebody's website too. See ClubEvent.when_display.
+                "when": event.when_display,
                 "starts": start.isoformat(),
                 "all_day": event.all_day,
                 "location": event.location,
@@ -20099,34 +20597,419 @@ class ClubEventsEmbedView(View):
         count = max(1, min(count, CLUB_EVENTS_EMBED_MAX))
 
         rows = _club_events_embed_rows(request, club, count)
-        fmt = (request.GET.get("format") or "json").strip().lower()
-
-        if fmt in ("iframelight", "iframedark"):
-            embed_mode = "dark" if fmt == "iframedark" else "light"
-        elif fmt == "unstyledhtml":
-            embed_mode = "unstyled"
-        else:
-            # json or anything unrecognized falls back to JSON — a typo never leaks an
-            # unexpected page.
-            response = JsonResponse({"club": club.name, "events": rows})
-            response["Access-Control-Allow-Origin"] = "*"
-            return response
-
-        html = render_to_string(
-            "auctions/club_events_embed.html",
+        embed_mode = embed_mode_from_request(request)
+        if embed_mode is None:
+            return embed_json({"club": club.name, "events": rows})
+        return embed_response(
+            "events",
+            embed_mode,
             {
                 "embed_mode": embed_mode,
                 "club_name": club.name,
-                # One event reads as "here's what's next", ten as a calendar. The heading has to
-                # say which, because the embed is dropped onto a page with no other context.
-                "heading": "Next event" if count == 1 else "Upcoming events",
-                "club_url": request.build_absolute_uri(reverse("club_detail", kwargs={"slug": club.slug})),
                 "events": rows,
             },
         )
-        response = HttpResponse(html)
-        response["Access-Control-Allow-Origin"] = "*"
-        return response
+
+
+# A club pasting this into a sidebar wants "what's new", not an archive. Past three it stops being
+# an announcement and starts being a blog nobody asked us to build.
+CLUB_ANNOUNCEMENTS_EMBED_MAX = 3
+
+
+def _club_announcements_embed_rows(club, count):
+    """The club's most recent published announcements, flattened for the embed.
+
+    Only announcements the club ticked "show on website" for ever reach this — the other channels
+    are opt-in one at a time on the same form, and a club that chose Discord only must not find
+    its message on its own home page.
+    """
+    rows = []
+    shown = announcements.latest_for_website(club, count)
+    for announcement in shown:
+        created = timezone.localtime(announcement.created_at)
+        rows.append(
+            {
+                "text": announcement.text.strip(),
+                "when": date_format(created, "N j, Y"),
+                "posted": created.isoformat(),
+            }
+        )
+    # Every format counts, JSON included: a club whose site fetches the JSON and renders it itself
+    # has put the announcement on a page exactly as much as one using the styled iframe.
+    announcements.record_website_views(shown)
+    return rows
+
+
+@method_decorator(xframe_options_exempt, name="dispatch")
+class ClubAnnouncementsEmbedView(View):
+    """Public, embeddable list of a club's latest announcements.
+
+    Same shape as the events and BAP embeds: ?format= picks the representation and ?count= how
+    many, defaulting to **one** — the common use is a single line at the top of a club's home
+    page saying what is going on this month. Nothing here is member data; it is the same text the
+    club page shows to the public.
+    """
+
+    def get(self, request, slug):
+        club = Club.objects.filter(Q(slug=slug) | Q(abbreviation=slug)).order_by("pk").first()
+        if not club or not club.enable_club_page:
+            raise Http404
+        try:
+            count = int(request.GET.get("count") or 1)
+        except (TypeError, ValueError):
+            count = 1
+        count = max(1, min(count, CLUB_ANNOUNCEMENTS_EMBED_MAX))
+
+        rows = _club_announcements_embed_rows(club, count)
+        embed_mode = embed_mode_from_request(request)
+        if embed_mode is None:
+            return embed_json({"club": club.name, "announcements": rows})
+        return embed_response(
+            "announcements",
+            embed_mode,
+            {
+                "embed_mode": embed_mode,
+                "club_name": club.name,
+                "announcements": rows,
+            },
+        )
+
+
+def _club_current_auction(club):
+    """The auction a club would want advertised on its own website, or None.
+
+    The pinned ``current_auction`` first, because an admin picked it on purpose; otherwise the
+    soonest promoted auction that hasn't finished. Unpromoted auctions are never offered — that
+    flag is the club saying "this one isn't for the public yet", and an embed is as public as it
+    gets.
+    """
+    now = timezone.now()
+    pinned = club.current_auction
+    if pinned and not pinned.is_deleted and pinned.promote_this_auction and not pinned.pretty_much_over:
+        return pinned
+    return (
+        Auction.objects.filter(club=club, is_deleted=False, promote_this_auction=True, date_start__isnull=False)
+        .filter(Q(date_end__gte=now) | Q(date_end__isnull=True, date_start__gte=now))
+        .order_by("date_start")
+        .first()
+    )
+
+
+def _club_auction_embed_row(request, auction):
+    """The handful of facts about an auction worth putting on somebody else's website."""
+    if not auction:
+        return None
+    start = timezone.localtime(auction.date_start)
+    when = f"{date_format(start, 'D, N j, Y')} at {date_format(start, 'g:i A')}"
+    if auction.is_online and auction.date_end and auction.date_end > auction.date_start:
+        end = timezone.localtime(auction.date_end)
+        when += f" – {date_format(end, 'D, N j, Y')} at {date_format(end, 'g:i A')}"
+    lots_open = ""
+    if auction.lot_submission_end_date and auction.lot_submission_end_date > timezone.now():
+        deadline = timezone.localtime(auction.lot_submission_end_date)
+        lots_open = f"Lots can be entered until {date_format(deadline, 'N j, Y')}"
+    return {
+        "title": auction.title,
+        "when": when,
+        "starts": timezone.localtime(auction.date_start).isoformat(),
+        "is_online": auction.is_online,
+        "location": club_events.auction_display_location(auction),
+        "lots_open": lots_open,
+        "url": request.build_absolute_uri(auction.get_absolute_url()),
+    }
+
+
+@method_decorator(xframe_options_exempt, name="dispatch")
+class ClubAuctionEmbedView(View):
+    """Public, embeddable "our auction is on" strip for a club's own website.
+
+    Overlaps the events embed on purpose: this one names *the auction*, where the events embed
+    shows whatever happens to be next, which for most of the year is a meeting. It is only ever
+    the auction that is still ahead or still running -- see _club_current_auction, which drops a
+    pinned auction once it is pretty_much_over -- so a club's front page goes quiet between
+    auctions rather than advertising last spring's.
+    """
+
+    def get(self, request, slug):
+        club = Club.objects.filter(Q(slug=slug) | Q(abbreviation=slug)).order_by("pk").first()
+        if not club or not club.enable_club_page:
+            raise Http404
+        row = _club_auction_embed_row(request, _club_current_auction(club))
+        embed_mode = embed_mode_from_request(request)
+        if embed_mode is None:
+            return embed_json({"club": club.name, "auction": row})
+        return embed_response(
+            "auction",
+            embed_mode,
+            {
+                "embed_mode": embed_mode,
+                "club_name": club.name,
+                "auction": row,
+            },
+        )
+
+
+class ClubAnnouncementsView(LoginRequiredMixin, ClubViewMixin, TemplateView):
+    """Write an announcement, and see where the last ones went.
+
+    One page rather than a list plus a form, because posting is the reason anybody comes here and
+    the history is what tells them whether last month's went anywhere. Each past row carries an
+    icon per channel with the only number that channel can honestly report, which for Discord is
+    none at all.
+    """
+
+    template_name = "auctions/club_announcements.html"
+    active_tab = "announcements"
+
+    def dispatch(self, request, *args, **kwargs):
+        self.get_club(kwargs.get("slug", ""))
+        # Its own permission rather than "manages auctions": posting here reaches Discord, every
+        # member's phone and the club's mailing list in one press, with nobody between the person
+        # writing and the people reading. That is not the same trust as adding a lot to an auction.
+        if not self.user_has_club_permission("permission_send_announcements"):
+            raise PermissionDenied()
+        return super().dispatch(request, *args, **kwargs)
+
+    def get_form(self, data=None):
+        return ClubAnnouncementForm(data, club=self.club)
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["club"] = self.club
+        context.setdefault("form", self.get_form())
+        # Retracted ones are listed too, struck through. is_deleted is what hides an announcement
+        # from the public; hiding it from the club as well would make Retract look like Delete and
+        # leave the admin who pressed it with nothing on screen saying it worked.
+        rows = list(ClubAnnouncement.objects.filter(club=self.club)[:50])
+        context["announcements"] = rows
+        # A row inside its retract window says "Sending — retract it now", which stops being true
+        # a few seconds later. Reload once when it does, so the page ends up showing what actually
+        # happened rather than a promise the reader has to refresh to check.
+        pending = [r.scheduled_for for r in rows if r.is_in_grace_period]
+        if pending:
+            seconds = (min(pending) - timezone.now()).total_seconds() + 3
+            context["reload_in_seconds"] = max(2, int(seconds))
+        self._queue_open_refresh(rows)
+        return context
+
+    def _queue_open_refresh(self, rows):
+        """Ask the email providers for open counts in the background, never during the page load.
+
+        Opens arrive hours after a send, so the number on screen is always the stored one and this
+        only updates it for next time. Bounded to the few recent rows that could still change: an
+        admin opening this page must never pay for 50 rows' worth of somebody else's API.
+        """
+        from auctions.tasks import refresh_announcement_opens
+
+        cutoff = timezone.now() - timedelta(days=30)
+        recent = [r for r in rows if r.sent_by_email and not r.is_deleted and r.created_at >= cutoff][:5]
+        for announcement in recent:
+            try:
+                refresh_announcement_opens.delay(announcement.pk)
+            except Exception:
+                logger.warning("Could not queue an open-count refresh for announcement %s", announcement.pk)
+                break
+
+    def post(self, request, *args, **kwargs):
+        form = self.get_form(request.POST)
+        if not form.is_valid():
+            return self.render_to_response(self.get_context_data(form=form))
+        announcement = form.save(commit=False)
+        announcement.club = self.club
+        announcement.created_by = request.user
+        chose_a_time = bool(announcement.scheduled_for)
+        if not chose_a_time:
+            # Nothing sends in the request any more. Half a minute is the whole point: the wrong
+            # date in the sentence is obvious the instant the page reloads and shows it back, and
+            # this is the window in which Retract still means something. It goes down the same path
+            # a real schedule does, so there is one way an announcement is sent rather than two.
+            announcement.scheduled_for = timezone.now() + timedelta(seconds=announcements.GRACE_SECONDS)
+        announcement.save()
+        # The beat is the backstop; this is what makes 30 seconds mean 30 seconds. A lost task
+        # costs a delay, never the announcement.
+        try:
+            from auctions.tasks import send_scheduled_announcements
+
+            send_scheduled_announcements.apply_async(
+                countdown=max(1, int((announcement.scheduled_for - timezone.now()).total_seconds()) + 2)
+            )
+        except Exception:
+            logger.warning("Could not queue the send for announcement %s; the beat will get it", announcement.pk)
+        going_to = []
+        if announcement.send_to_discord:
+            going_to.append("Discord")
+        if announcement.send_to_push:
+            reachable, _total = announcements.member_counts(self.club)
+            going_to.append(f"{reachable} phone{pluralize(reachable)}")
+        for name, ticked in (("Mailchimp", announcement.send_to_mailchimp), ("Brevo", announcement.send_to_brevo)):
+            if ticked:
+                going_to.append(name)
+        if announcement.show_on_website:
+            going_to.append("your website")
+        where = " and ".join(", ".join(going_to).rsplit(", ", 1)) if going_to else "nowhere"
+        if chose_a_time:
+            ClubHistory.objects.create(
+                club=self.club,
+                user=request.user,
+                action=f"Announcement scheduled: {announcement.short_text}",
+                applies_to="ANNOUNCEMENTS",
+            )
+            when = timezone.localtime(announcement.scheduled_for)
+            messages.success(
+                request,
+                f"Going to {where} on {when.strftime('%A, %B %-d at %-I:%M %p')}. "
+                "Retract it before then and it never goes out.",
+            )
+        else:
+            messages.success(
+                request,
+                f"Going to {where} in {announcements.GRACE_SECONDS} seconds. Read it back — "
+                "Retract now and nobody sees it.",
+            )
+        return redirect(reverse("club_announcements", kwargs={"slug": self.club.slug}))
+
+
+class ClubAnnouncementRetractView(LoginRequiredMixin, ClubViewMixin, View):
+    """Take an announcement back, and say honestly how much of it could be taken back.
+
+    Clubs send the wrong date, and the first thing they ask for is a way to unsend it. What that
+    can mean is different per channel -- the Discord post goes, the page goes, the website listing
+    goes with it; the push notification is already on a lock screen and the email is already in an
+    inbox -- so the message afterwards names what is still out there instead of saying "retracted"
+    and letting the admin believe it was all undone.
+    """
+
+    def dispatch(self, request, *args, **kwargs):
+        self.get_club(kwargs.get("slug", ""))
+        if not self.user_has_club_permission("permission_send_announcements"):
+            raise PermissionDenied()
+        return super().dispatch(request, *args, **kwargs)
+
+    def post(self, request, slug, uuid):
+        announcement = get_object_or_404(ClubAnnouncement, uuid=uuid, club=self.club, is_deleted=False)
+        result = announcements.retract(announcement)
+        ClubHistory.objects.create(
+            club=self.club,
+            user=request.user,
+            action=f"Announcement retracted: {announcement.short_text}",
+            applies_to="ANNOUNCEMENTS",
+        )
+        if result["never_sent"]:
+            messages.success(request, "Announcement cancelled. It was never sent.")
+            return redirect(reverse("club_announcements", kwargs={"slug": self.club.slug}))
+        still_out_there = []
+        if result["discord_left_behind"]:
+            still_out_there.append("the Discord post couldn't be deleted — remove it by hand")
+        if result["push_delivered"]:
+            still_out_there.append(
+                f"{result['push_delivered']} phone{pluralize(result['push_delivered'])} already got the notification"
+            )
+        if result["emailed"]:
+            still_out_there.append("the email has already been sent and can't be recalled")
+        if still_out_there:
+            messages.warning(
+                request,
+                "Announcement retracted, but " + "; ".join(still_out_there) + ".",
+            )
+        else:
+            messages.success(request, "Announcement retracted.")
+        return redirect(reverse("club_announcements", kwargs={"slug": self.club.slug}))
+
+
+class ClubWebsiteIntegrationView(LoginRequiredMixin, ClubViewMixin, TemplateView):
+    """Every "put this on your own website" snippet the site offers, in one place.
+
+    They used to be a collapsed panel on whichever page happened to own the data — the calendar
+    for events, the BAP page for the leaderboard — which meant a club had to already know a
+    feature existed to find the snippet for it, and a club with the Breeder Award Program turned
+    off could never see that one at all. They are all listed here whether or not the feature is
+    switched on, with the ones that would currently render nothing labelled as such: a club
+    deciding what to put on its website is exactly the person who should find out that turning
+    BAP on would give them a leaderboard.
+    """
+
+    template_name = "auctions/club_website_integration.html"
+    active_tab = "website_integration"
+
+    def dispatch(self, request, *args, **kwargs):
+        self.get_club(kwargs.get("slug", ""))
+        if not (self.can_manage_auctions or self.can_edit_settings):
+            raise PermissionDenied()
+        return super().dispatch(request, *args, **kwargs)
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        club = self.club
+        context["club"] = club
+        base = f"{self.request.scheme}://{self.request.get_host()}"
+        context["snippets"] = [
+            {
+                "key": "events",
+                "title": "Upcoming events",
+                "icon": "bi-calendar-event",
+                "blurb": (
+                    "Your club calendar, live. Auctions, meetings, swaps and anything pulled in from "
+                    "your Google Calendar. Only the name, date and place — never anything about your members."
+                ),
+                "url": base + reverse("club_events_embed", kwargs={"slug": club.slug}),
+                "counts": True,
+                "max_count": CLUB_EVENTS_EMBED_MAX,
+                "default_count": 1,
+                "heights": {1: 200, 10: 880},
+                "available": club.enable_club_page,
+                "unavailable_reason": "Your public club page is turned off, so this would show nothing.",
+                "settings_url": reverse("club_edit", kwargs={"slug": club.slug}),
+            },
+            {
+                "key": "auction",
+                "title": "Current auction",
+                "icon": "bi-hammer",
+                "blurb": (
+                    "The auction you have pinned as current, or the soonest promoted one if you "
+                    "haven't pinned any. It clears itself a day after that auction is over — until "
+                    "the next one is promoted, the snippet says there's nothing on."
+                ),
+                "url": base + reverse("club_auction_embed", kwargs={"slug": club.slug}),
+                "counts": False,
+                "heights": {1: 200},
+                "available": club.enable_club_page,
+                "unavailable_reason": "Your public club page is turned off, so this would show nothing.",
+                "settings_url": reverse("club_edit", kwargs={"slug": club.slug}),
+            },
+            {
+                "key": "announcements",
+                "title": "Latest announcement",
+                "icon": "bi-megaphone",
+                "blurb": (
+                    "Whatever you last announced with the Website box ticked. Defaults to one — the "
+                    "usual use is a single line at the top of a home page."
+                ),
+                "url": base + reverse("club_announcements_embed", kwargs={"slug": club.slug}),
+                "counts": True,
+                "max_count": CLUB_ANNOUNCEMENTS_EMBED_MAX,
+                "default_count": 1,
+                "heights": {1: 160, 3: 340},
+                "available": club.enable_club_page,
+                "unavailable_reason": "Your public club page is turned off, so this would show nothing.",
+                "settings_url": reverse("club_edit", kwargs={"slug": club.slug}),
+            },
+            {
+                "key": "bap",
+                "title": "Breeder Award leaderboard",
+                "icon": "bi-award",
+                "blurb": (
+                    "Your current top ten. Names and points only — never emails or member numbers. "
+                    "Add &program=hap or &program=cap to the URL for a separate program."
+                ),
+                "url": base + reverse("bap_embed", kwargs={"slug": club.slug}),
+                "counts": False,
+                "heights": {1: 420},
+                "available": club.enable_breeder_award_program,
+                "unavailable_reason": "The Breeder Award Program is turned off for this club.",
+                "settings_url": reverse("club_bap_settings", kwargs={"slug": club.slug}),
+            },
+        ]
+        return context
 
 
 class ClubBarcodeLabelsView(LoginRequiredMixin, ClubViewMixin, TemplateView):
@@ -20313,6 +21196,23 @@ class ClubBarcodeLabelsViewPDF(LoginRequiredMixin, ClubViewMixin, TemplateView, 
     def get_pdf_filename(self):
         return f"{self.club.slug}-barcodes.pdf"
 
+    def get(self, request, *args, **kwargs):
+        """A form with nothing complete in it used to 404, which is what "Download PDF" did on a
+        row where the label type was still on "- select -" or the amount was blank. A 404 reads as
+        "this feature is broken"; the truth is that there is nothing to print yet, so say that on
+        the page the person is already looking at. The form guards this in the browser too -- this
+        is the backstop for a submit that gets past it."""
+        members = ClubMember.objects.filter(club=self.club, is_deleted=False, membership_number__isnull=False)
+        self.labels = ClubBarcodeLabelsView._build_labels(self, request.GET, members)
+        if not self.labels:
+            messages.error(
+                request,
+                "There was nothing to print. Every row needs a label type and the fields that go "
+                "with it: a bidder number, an amount and some label text, or a member.",
+            )
+            return redirect("club_barcode_labels", slug=self.club.slug)
+        return super().get(request, *args, **kwargs)
+
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         prefs, _ = UserLabelPrefs.objects.get_or_create(user=self.request.user)
@@ -20320,11 +21220,7 @@ class ClubBarcodeLabelsViewPDF(LoginRequiredMixin, ClubViewMixin, TemplateView, 
         context.update(dims)
         context["print_border"] = prefs.print_border
 
-        members = ClubMember.objects.filter(club=self.club, is_deleted=False, membership_number__isnull=False)
-        labels = ClubBarcodeLabelsView._build_labels(self, self.request.GET, members)
-        if not labels:
-            raise Http404
-        context["labels"] = labels
+        context["labels"] = self.labels
 
         available_width = dims["page_width"] - dims["page_margin_left"] - dims["page_margin_right"]
         available_height = dims["page_height"] - dims["page_margin_top"] - dims["page_margin_bottom"]
@@ -20713,6 +21609,8 @@ class ClubMemberMergeView(LoginRequiredMixin, ClubViewMixin, View):
                         "permission_edit_club",
                         "permission_manage_auctions",
                         "permission_manage_bap",
+                        "permission_manage_donations",
+                        "permission_send_announcements",
                     ]:
                         if getattr(source, perm_field, False) and not getattr(target, perm_field, False):
                             setattr(target, perm_field, True)
@@ -21134,6 +22032,18 @@ class ClubBapSettingsView(LoginRequiredMixin, ClubViewMixin, UpdateView):
             "category"
         )
         context["override_form"] = ClubBapCategoryOverrideForm()
+        context["bap_genus_overrides"] = ClubBapGenusOverride.objects.filter(club=self.club)
+        context["genus_override_form"] = ClubBapGenusOverrideForm()
+        # What the free-text genus box offers as suggestions.  Deliberately the genera this club's
+        # own lots use rather than all 4,000 in the database: a rule is only worth writing for a
+        # genus the club actually sells, and clean_genus still accepts anything real that is typed.
+        context["bap_genus_choices"] = list(
+            Lot.objects.filter(auction__club=self.club, species__isnull=False, is_deleted=False)
+            .exclude(species__genus="")
+            .order_by("species__genus")
+            .values_list("species__genus", flat=True)
+            .distinct()
+        )
         return context
 
     def form_valid(self, form):
@@ -21189,6 +22099,59 @@ class ClubBapCategoryOverrideDeleteView(LoginRequiredMixin, ClubViewMixin, View)
                 club=self.club,
                 user=request.user,
                 action=f"Removed BAP point override for {override.category.name}",
+                applies_to="BAP",
+            )
+            override.delete()
+        return redirect(reverse("club_bap_settings", kwargs={"slug": self.club.slug}))
+
+
+class ClubBapGenusOverrideSaveView(LoginRequiredMixin, ClubViewMixin, View):
+    """Create or update a per-genus BAP point override for a club.
+
+    The genus twin of :class:`ClubBapCategoryOverrideSaveView`; a genus rule outranks a category
+    rule when a lot's species falls under both (see ``Lot.bap_points_for_club``).
+    """
+
+    def dispatch(self, request, *args, **kwargs):
+        self.get_club(kwargs.get("slug", ""))
+        if request.user.is_authenticated and not self.user_has_club_permission("permission_manage_bap"):
+            raise PermissionDenied()
+        return super().dispatch(request, *args, **kwargs)
+
+    def post(self, request, slug):
+        form = ClubBapGenusOverrideForm(request.POST)
+        if form.is_valid():
+            genus = form.cleaned_data["genus"]
+            points = form.cleaned_data["points"]
+            ClubBapGenusOverride.objects.update_or_create(club=self.club, genus=genus, defaults={"points": points})
+            ClubHistory.objects.create(
+                club=self.club,
+                user=request.user,
+                action=f"Set BAP point override for the genus {genus}: {points} pts",
+                applies_to="BAP",
+            )
+        else:
+            for error in form.errors.get("genus", []):
+                messages.error(request, error)
+        return redirect(reverse("club_bap_settings", kwargs={"slug": self.club.slug}))
+
+
+class ClubBapGenusOverrideDeleteView(LoginRequiredMixin, ClubViewMixin, View):
+    """Delete a per-genus BAP point override."""
+
+    def dispatch(self, request, *args, **kwargs):
+        self.get_club(kwargs.get("slug", ""))
+        if request.user.is_authenticated and not self.user_has_club_permission("permission_manage_bap"):
+            raise PermissionDenied()
+        return super().dispatch(request, *args, **kwargs)
+
+    def post(self, request, slug, pk):
+        override = ClubBapGenusOverride.objects.filter(pk=pk, club=self.club).first()
+        if override:
+            ClubHistory.objects.create(
+                club=self.club,
+                user=request.user,
+                action=f"Removed BAP point override for the genus {override.genus}",
                 applies_to="BAP",
             )
             override.delete()
@@ -21268,7 +22231,7 @@ class ClubBapLotsView(LoginRequiredMixin, ClubViewMixin, HTMxTableView):
             qs = qs.filter(auctiontos_winner__isnull=False, winning_price__isnull=False)
         return (
             qs.filter(Exists(matching_member))
-            .select_related("auctiontos_seller__user", "auction__club", "species_category")
+            .select_related("auctiontos_seller__user", "auction__club", "species_category", "species")
             .prefetch_related("bap_award")
             .order_by("-date_end")
         )
@@ -21276,7 +22239,6 @@ class ClubBapLotsView(LoginRequiredMixin, ClubViewMixin, HTMxTableView):
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         context["club"] = self.club
-        context["bap_embed_path"] = reverse("bap_embed", kwargs={"slug": self.club.slug})
         return context
 
     def get_table_kwargs(self, **kwargs):
@@ -21312,7 +22274,9 @@ class ClubBapLotCategoryView(APIView):
         )
         if form.is_valid():
             updated_lot = form.save(commit=False)
-            update_fields = ["species_category"]
+            # category_automatically_added comes along because the form clears it: it is what stops
+            # Lot._do_save from re-deriving the category from the species and undoing this edit.
+            update_fields = ["species_category", "category_automatically_added"]
             if not BapAward.objects.filter(lot=updated_lot).exists() and not updated_lot.manually_approved:
                 updated_lot.bap_points_awarded = 0
                 updated_lot.bap_auto_reason = updated_lot.sold_lot_no_bap_reason or ""
@@ -21363,16 +22327,7 @@ class BapAwardAdminView(APIView):
             initial["club_member"] = member
         if lot.date_end:
             initial["date"] = lot.date_end.date()
-        override = (
-            ClubBapCategoryOverride.objects.filter(club=club, category=lot.species_category).first()
-            if lot.species_category
-            else None
-        )
-        points = (
-            override.points
-            if override is not None
-            else (club.points_per_lot or (lot.species_category.bap_points if lot.species_category else 5))
-        )
+        points = lot.bap_points_for_club(club)
         placeholder = lot.bap_placeholder
         if placeholder == "HAP":
             initial["hap_points"] = points
@@ -21700,6 +22655,7 @@ class ClubAPIKeyCreateView(LoginRequiredMixin, ClubViewMixin, View):
                     "can_update_club_members": False,
                     "can_add_bap_points": False,
                     "can_renew_memberships": False,
+                    "can_look_up_species": False,
                 },
             },
         )
@@ -21718,6 +22674,7 @@ class ClubAPIKeyCreateView(LoginRequiredMixin, ClubViewMixin, View):
             "can_update_club_members": checkbox_value("can_update_club_members"),
             "can_add_bap_points": checkbox_value("can_add_bap_points"),
             "can_renew_memberships": checkbox_value("can_renew_memberships"),
+            "can_look_up_species": checkbox_value("can_look_up_species"),
         }
         if not name:
             return render(
@@ -21737,6 +22694,7 @@ class ClubAPIKeyCreateView(LoginRequiredMixin, ClubViewMixin, View):
             can_update_club_members=form_values["can_update_club_members"],
             can_add_bap_points=form_values["can_add_bap_points"],
             can_renew_memberships=form_values["can_renew_memberships"],
+            can_look_up_species=form_values["can_look_up_species"],
         )
         ClubHistory.objects.create(
             club=self.club,
@@ -21791,6 +22749,28 @@ class ClubAPIKeyDetailView(LoginRequiredMixin, ClubViewMixin, TemplateView):
         ctx["example_bap_range_start"] = _as_api_timestamp(now - timedelta(days=BAP_LOT_DEFAULT_DAYS))
         ctx["example_bap_lot_timestamp"] = _as_api_timestamp(now - timedelta(days=2))
         ctx["example_bap_award_date"] = (now - timedelta(days=2)).date()
+        # Species lookup: the documented numbers come from the matcher itself, so the page can't
+        # drift away from what the endpoint actually does.
+        # Field mappings rename incoming *club member* fields, so they mean nothing to a key that
+        # only reads lots or looks up species -- and a settings box that does nothing is worse
+        # than no box.
+        ctx["key_writes_club_members"] = any(
+            (
+                api_key.can_add_club_members,
+                api_key.can_read_club_member_list,
+                api_key.can_update_club_members,
+                api_key.can_renew_memberships,
+            )
+        )
+        ctx["species_lookup_max_results"] = MAX_SUGGESTIONS
+        ctx["species_lookup_llm_calls_per_day"] = SPECIES_LOOKUP_LLM_CALLS_PER_CLUB_PER_DAY
+        ctx["species_lookup_llm_available"] = assist_enabled()
+        # What is left of it right now, so the page a club admin reads and the header their
+        # software reads are the same number.
+        ctx["species_lookup_llm_remaining"] = LLMBudget.for_club(
+            self.club, SPECIES_LOOKUP_LLM_CALLS_PER_CLUB_PER_DAY
+        ).remaining
+        ctx["example_category"] = Category.objects.order_by("name").first()
         return ctx
 
 
@@ -23123,6 +24103,362 @@ class ClubBapLotListAPIView(ClubAPIViewMixin, APIView):
         )
 
 
+#: Daily ceiling on species lookups from one club that are allowed to reach the language model.
+#:
+#: A club rather than a key: a club that issues three keys still gets one bill, and one busy
+#: integration must not be able to switch the model off for the club's other software.
+#:
+#: Large on purpose, because almost nothing spends it.  A lookup only reaches the model after the
+#: exact, cache and search steps have all failed, and every model answer -- including "this is not
+#: a species" -- is written to a cache every club reads, so a name costs one call ever, site-wide.
+#: A thousand a day is therefore a thousand *names nobody on this site has ever looked up*, which
+#: is not a number a club reaches twice.
+SPECIES_LOOKUP_LLM_CALLS_PER_CLUB_PER_DAY = 1000
+
+
+def _species_llm_budget_headers(budget):
+    """What is left of this club's daily model allowance, for a species-lookup response.
+
+    Headers rather than a field in the body, so a caller can back off without parsing the answer,
+    and on every response rather than only the ones that spent something: an integration that
+    first reads the number when it is already being refused has read it too late.
+    """
+    return {
+        "X-Species-LLM-Limit": str(budget.limit),
+        "X-Species-LLM-Remaining": str(budget.remaining),
+        "X-Species-LLM-Reset": budget.resets_at.isoformat(),
+    }
+
+
+def _resolve_category(name, raw_id):
+    """``category=cichlids`` (by name, any case) or ``category_id=10``.  Returns ``(category, error)``.
+
+    Both may be None, which is what "the caller didn't mention a category" looks like.
+
+    Two parameters rather than one that works out which was meant: "2024" is a perfectly good name
+    for a category, and anything deciding by looking at the characters will one day decide wrong.
+    A category we cannot find is an error rather than a shrug -- it only ever re-orders candidates,
+    so ignoring a typo in it would go unnoticed for months.
+    """
+    # Both are str()ed rather than trusted: a query parameter is always a string, but a JSON body
+    # can perfectly well send {"category": 12}, and that must be a 400 about a category rather
+    # than a 500 about .strip().
+    name = str(name if name is not None else "").strip()
+    raw_id = str(raw_id if raw_id is not None else "").strip()
+    if name and raw_id:
+        return None, "Pass category or category_id, not both."
+    if raw_id:
+        if not raw_id.isdigit():
+            return None, "category_id must be a whole number: the id of a category on this site."
+        category = Category.objects.filter(pk=int(raw_id)).first()
+        return (category, None) if category else (None, f"No category with id {raw_id} on this site.")
+    if name:
+        category = Category.objects.filter(name__iexact=name).first()
+        return (category, None) if category else (None, f"No category called '{name}' on this site.")
+    return None, None
+
+
+class ClubSpeciesLookupAPIView(ClubAPIViewMixin, APIView):
+    """Turn free text into a species from this site's list, and add the ones it is missing.
+
+    ``GET  /api/v1/clubs/<slug>/species-lookup/?q=yellow%20lab``
+    ``POST /api/v1/clubs/<slug>/species-lookup/`` -- add a species
+
+    One permission, ``can_look_up_species``, covers both, and the write is safe to hand out with
+    the read because of what it cannot do: it only ever creates, and what it creates is this
+    club's until a site admin approves it.
+
+    The same matcher the add-lot form runs -- :func:`auctions.species_matching.suggest_species`,
+    called exactly as ``SpeciesSuggestions`` calls it -- so a club's own website, membership system
+    or breeder-award program files a name the way this site would file it, and the two agree about
+    what a lot is.  Nothing the matcher returns is invented: every answer is a row in the species
+    table, and the way to add a row is the POST rather than a cleverer matcher.
+
+    Be as conservative reading the answer as the matcher is producing it.  ``results`` is a
+    shortlist, not a decision.  ``unambiguous`` is true only when the matcher came back with
+    exactly one species, which is the same signal the site itself trusts: the lot form fills the
+    field in for the user only on one answer, and ``backfill_lot_species`` writes to old lots only
+    on one answer.  ``source`` says how it was found, most trustworthy first -- ``exact`` (the text
+    *is* a scientific or common name), ``cache`` (a remembered answer), ``search`` (token/phrase
+    matching), ``llm`` (a language model picked from a shortlist we built), ``none``.
+
+    **What this club can see** is everything on the shared list plus its own unapproved rows --
+    the ones its admins added at a check-in table and the ones its keys POSTed here, which stay
+    the club's until a site admin approves them for everybody.  That is
+    :func:`~auctions.species_matching.visible_species` with this club passed in, and ``approved``
+    on each result says which kind a row is.  A *signed-in* admin browsing the same URL is also a
+    person, so they additionally see anything they added themselves or that belongs to another
+    club of theirs -- the site-wide rule, and the one thing that can make a browser's answer
+    slightly wider than the key's.
+
+    **No match is a normal answer**, not an error: 200 with an empty ``results``.  Most lots are
+    not a species -- "sponge filter", "assorted plants", "10 gallon tank" -- and a matcher that
+    always finds something would be putting wrong species on labels and wrong points in a breeder
+    award program.
+
+    Params:
+        ``q``            the text to match.  Required; blank is the one 400.
+        ``category``     a category *name*, matched case-insensitively.
+        ``category_id``  a category id, as the lot form has one to hand.  Either form only breaks
+                         a tie between candidates that already matched -- neither can filter --
+                         and a name or id this site doesn't have is a 400 rather than a shrug.
+
+    At most :data:`~auctions.species_matching.MAX_SUGGESTIONS` candidates come back; a bare genus
+    can match more than that and ``total_matches`` says so, which is the number to look at before
+    trusting a picklist.
+
+    The language model runs on every lookup the database could not answer, which is the whole
+    point of asking a matcher rather than querying the species table yourself.  It is bounded by
+    what it costs rather than by asking permission per request: the request has to get past the
+    exact, cache and search steps to reach it, and the club spends one of
+    :data:`SPECIES_LOOKUP_LLM_CALLS_PER_CLUB_PER_DAY` when it does.  Every answer, "this is not a
+    species" included, goes to ``SpeciesSearchCache``, so a name costs one call ever for the whole
+    site.  ``X-Species-LLM-Remaining`` on every response is the number to back off on; a lookup
+    that needed the model with nothing left is the one 429, because answering it "no species"
+    would be a lie that then gets cached.
+    """
+
+    serializer_class = SpeciesMatchSerializer
+
+    def get(self, request, slug):
+        club = self.require_club_permission(
+            "permission_view",
+            "can_look_up_species",
+            "You do not have permission to look up species for this club.",
+        )
+        # Built before anything can fail, so the allowance is on the 400s too: a caller reading
+        # the header on every response should not have to make a *valid* request to see it.
+        budget = LLMBudget.for_club(club, SPECIES_LOOKUP_LLM_CALLS_PER_CLUB_PER_DAY)
+        headers = _species_llm_budget_headers(budget)
+        query = (request.query_params.get("q") or "").strip()
+        if not query:
+            return Response(
+                {"error": "q is required: the text to match, e.g. ?q=yellow lab."}, status=400, headers=headers
+            )
+        category, error = _resolve_category(
+            request.query_params.get("category"), request.query_params.get("category_id")
+        )
+        if error:
+            return Response({"error": error}, status=400, headers=headers)
+        matches, source = suggest_species(
+            query,
+            # An API key authenticates a script, not a person: request.user is anonymous, and
+            # LLMUsage rows and the matcher's own per-user budget both want a real user or none.
+            user=None if self.is_api_key_request() else request.user,
+            # The club whose key or admin is asking, so a species one of its admins added but
+            # nobody has approved is visible to its own software.
+            club=club,
+            use_llm=True,
+            category=category,
+            budget=budget,
+        )
+        # Rebuilt: the lookup may just have spent one of these.
+        headers = _species_llm_budget_headers(budget)
+        if not matches and budget.blocked:
+            # Out of budget *and* nothing to show.  Not 200-with-no-results: this lookup was never
+            # actually answered, and a caller that wrote down "no species" would be writing down
+            # something the site never said.  Lookups the database can answer keep working.
+            retry_after = max(1, int((budget.resets_at - timezone.now()).total_seconds()))
+            return Response(
+                {
+                    "error": (
+                        f"This club has used its {budget.limit} language-model species lookups for today, "
+                        "and the database could not answer this one.  Lookups the database can answer are "
+                        "unaffected; this one is worth retrying after the allowance resets."
+                    ),
+                    "query": query,
+                },
+                status=429,
+                headers={**headers, "Retry-After": str(retry_after)},
+            )
+        shown = matches[:MAX_SUGGESTIONS]
+        # One query for every result's common names instead of one each.
+        prefetch_related_objects(shown, "common_names")
+        serializer = self.serializer_class(shown, many=True)
+        return Response(
+            {
+                "query": query,
+                "source": source,
+                # Exactly one answer is the only case the site itself acts on unprompted.
+                "unambiguous": len(matches) == 1,
+                "total_matches": len(matches),
+                "count": len(serializer.data),
+                # Whether this request cost a model call, not whether the model found something:
+                # "not a species" is an answer the model was paid for too.
+                "llm": bool(budget.spent),
+                "results": serializer.data,
+            },
+            headers=headers,
+        )
+
+    def post(self, request, slug):
+        """Add a species that isn't on the list yet.  Create only -- see :class:`SpeciesCreateSerializer`.
+
+        The club API's half of ``/species/new/``, which is the same job for a person: somebody is
+        selling a fish this site has never heard of, and "email the site owner" ends in a lot with
+        no scientific name on its label.  What a key adds is ``approved=False`` and stamped with
+        this club, so it is offered to this club and to nobody else until a site admin approves it.
+
+        A name that is already on the list is a 409 carrying the row that already has it, because
+        the answer to "add *Poecilia reticulata*" is always "use the one that exists", never a
+        second copy of it -- two rows for one fish is how breeder points end up split in half.
+        """
+        club = self.require_club_permission(
+            "permission_add_edit",
+            "can_look_up_species",
+            "You do not have permission to add species for this club.",
+        )
+        # A body that isn't an object at all -- a bare list, a string -- has no fields to read, so
+        # it goes to the serializer as nothing and comes back as "scientific_name is required"
+        # rather than as a 500 about .get().
+        data = request.data if hasattr(request.data, "get") else {}
+        category, error = _resolve_category(data.get("category"), data.get("category_id"))
+        if error:
+            return Response({"error": error}, status=400)
+        serializer = SpeciesCreateSerializer(data=data, club=club)
+        serializer.is_valid(raise_exception=True)
+        cleaned = serializer.validated_data
+        existing = species_already_named(
+            cleaned["genus"],
+            cleaned["epithet"],
+            cleaned["variety"],
+            club=club,
+            is_hybrid=cleaned.get("is_hybrid", False),
+        )
+        if existing:
+            return Response(
+                {
+                    "error": f"{existing.label} is already on this site's list.  Use it instead of adding it again.",
+                    "species": self.serializer_class(existing).data,
+                },
+                status=409,
+            )
+        species = serializer.save(
+            club=club,
+            # A key is a script; there is no person to credit.  The club is what the row is stamped
+            # with, and what a superuser sees when approving it.
+            added_by=None if self.is_api_key_request() else request.user,
+            category=category,
+        )
+        return Response(self.serializer_class(species).data, status=201)
+
+
+class ClubSpeciesCommonNameAPIView(ClubAPIViewMixin, APIView):
+    """Add a common name to a species that is already on the list.
+
+    ``POST /api/v1/clubs/<slug>/species-lookup/<id or scientific name>/common-names/``
+
+    This is the table the hobby's own vocabulary lives in.  FishBase is an ichthyology database:
+    it is authoritative about which species exist and has no reason to know that *Labidochromis
+    caeruleus* is a "yellow lab", so that name has to be ours.  It is stamped ``source="admin"``,
+    which is what makes it survive the next FishBase re-import -- every importer deletes only the
+    names it wrote itself -- and scoped to this club until a site admin approves it, exactly like
+    a species.
+
+    Named by **id or by scientific name**, because a caller matching free text has a name and not
+    an id, and making them look the id up first would be two calls to do one thing.  A strain
+    needs its full name ("Neocaridina davidi 'Blue Dream'") or its id: the plain species and all
+    thirteen of its colour strains carry the same ``scientific_name``.
+
+    Create only.  It never edits or removes a name that is already there, never touches
+    ``Species.common_name``, and never claims another source's ``is_preferred``.  Sending a name
+    the species already has is not an error -- 200 with the row that exists, so a club can re-run
+    its import without thinking about it.  A name that already names a *different* species is a
+    409: one name on two species turns an unambiguous lookup into a picklist, so it is the loss of
+    a name rather than the gain of one.
+    """
+
+    serializer_class = SpeciesMatchSerializer
+
+    #: "Neocaridina davidi 'Blue Dream'" -- a strain as ``full_scientific_name`` writes it, which
+    #: is the string every response shows and therefore the one a caller has to hand.
+    _STRAIN_NAME = re.compile(r"""^(?P<species>.*?)\s*['"\u2018\u2019](?P<variety>.+?)['"\u2018\u2019]$""")
+
+    def _find_species(self, identifier, club):
+        """The species this URL names, or None.  Scoped exactly like the lookup."""
+        visible = visible_species(None, club)
+        identifier = (identifier or "").strip()
+        if identifier.isdigit():
+            return visible.filter(pk=int(identifier)).first()
+        strain = self._STRAIN_NAME.match(identifier)
+        if strain:
+            # "Hybrid 'Tibee'" is what full_scientific_name prints for a cross, so it is what a
+            # caller has to hand -- but "Hybrid" is not a genus and there is no such scientific
+            # name to match on.  See Species.is_hybrid.
+            if strain.group("species").strip().lower() == "hybrid":
+                return visible.filter(is_hybrid=True, variety__iexact=strain.group("variety")).first()
+            return visible.filter(
+                scientific_name__iexact=strain.group("species").strip(), variety__iexact=strain.group("variety")
+            ).first()
+        matches = list(visible.filter(scientific_name__iexact=identifier)[:25])
+        if len(matches) > 1:
+            # A strain carries its parent's name, so a bare "Neocaridina davidi" is the plain
+            # species and its strains all at once.  The plain species is what was meant.
+            matches = [species for species in matches if not species.variety]
+        return matches[0] if len(matches) == 1 else None
+
+    def post(self, request, slug, identifier):
+        club = self.require_club_permission(
+            "permission_add_edit",
+            "can_look_up_species",
+            "You do not have permission to add species for this club.",
+        )
+        species = self._find_species(identifier, club)
+        if not species:
+            msg = (
+                "No species here with that id or scientific name.  A strain needs its full name, "
+                "e.g. Neocaridina davidi 'Blue Dream'."
+            )
+            raise Http404(msg)
+        serializer = SpeciesCommonNameCreateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        name = serializer.validated_data["name"]
+        taken = species_carrying_common_name(name, club=club, exclude=species)
+        if taken:
+            return Response(
+                {
+                    "error": f"\u201c{name}\u201d is already the name for {taken.label}.",
+                    "species": self.serializer_class(taken).data,
+                },
+                status=409,
+            )
+        # Matched on the normalised column, because that is what every lookup matches on:
+        # "Adolf's catfish" and "adolfs catfish" are the same name here.  Scoped to the names this
+        # club can see, so another club's private name for the same fish is not mistaken for ours.
+        existing = (
+            visible_common_names(None, club)
+            .filter(species=species, name_normalized=normalize_species_name(name))
+            .first()
+        )
+        created = existing is None
+        if created:
+            user = None if self.is_api_key_request() else request.user
+            existing = SpeciesCommonName.objects.create(
+                species=species,
+                name=name[:255],
+                language="English",
+                # Never preferred: that would demote the name the source designates, which is an
+                # edit to somebody else's row rather than a name of our own.
+                is_preferred=False,
+                source="admin",
+                # A superuser is adding to everybody's vocabulary and knows it.  Anyone else --
+                # and every key -- is adding this club's word for it.  Same rule as a species.
+                approved=bool(user and user.is_superuser),
+                added_by=user,
+                club=club,
+            )
+        return Response(
+            {
+                "created": created,
+                "id": existing.pk,
+                "name": existing.name,
+                "approved": existing.approved,
+                "species": self.serializer_class(species).data,
+            },
+            status=201 if created else 200,
+        )
+
+
 # ---------------------------------------------------------------------------
 # Inbound email routing API
 # ---------------------------------------------------------------------------
@@ -23167,7 +24503,17 @@ class InboundEmailRoutingView(APIView):
         info = resolve_routing_info(local_part)
         if info is None:
             return Response({"error": "no recipient found for this address"}, status=404)
-        return Response({"recipient": info["recipient"], "display_name": info["display_name"]})
+        payload = {"recipient": info["recipient"], "display_name": info["display_name"]}
+        # A donation alias has to say so.  The Lambda reads "kind" for two decisions -- post the
+        # body back to /api/v1/email-routing/donation/ so it lands on the vendor's row, and treat
+        # an empty recipient as "forward to nobody" rather than as a missing answer.  Whitelisting
+        # only the two keys above silently turned both off: no vendor reply was ever recorded, and
+        # a club with no donation contact had its vendors' replies forwarded to the site fallback
+        # inbox, which is the one outcome SES.md says must not happen.
+        for key in ("kind", "vendor_key"):
+            if info.get(key):
+                payload[key] = info[key]
+        return Response(payload)
 
 
 # ---------------------------------------------------------------------------
@@ -23406,6 +24752,8 @@ class DiscordInteractionsView(View):
                 return self._handle_connect_command(data)
             if command_name == "auctions_here":
                 return self._handle_auctions_here_command(data)
+            if command_name == "announcements_here":
+                return self._handle_announcements_here_command(data)
             if command_name == "membership":
                 return self._handle_membership_command(data)
             if command_name == "bap":
@@ -23654,6 +25002,42 @@ class DiscordInteractionsView(View):
         )
         return _discord_ephemeral("✅ Auction announcements will be posted in this channel.")
 
+    def _handle_announcements_here_command(self, data):
+        """/announcements_here — point this club's announcements at the channel it was run in.
+
+        Deliberately a second channel rather than reusing ``auction_channel_id``: an auction
+        announcement is news for everybody, and a club announcement is often for members only, so
+        the two land in different rooms on most servers. Same shape and same permission bar as
+        /auctions_here, and it writes to ClubHistory for the same reason — a channel that stops
+        working six months later needs a record of who set it.
+        """
+        guild_id = data.get("guild_id", "")
+        channel_id = data.get("channel_id", "")
+        member_data = data.get("member") or {}
+        user_data = member_data.get("user") or data.get("user") or {}
+        caller_discord_id = user_data.get("id", "")
+
+        if not _has_discord_manage_guild(data):
+            return _discord_ephemeral("❌ You need the Manage Server permission to run this command.")
+
+        if not guild_id or not channel_id:
+            return _discord_ephemeral("❌ Missing guild or channel ID.")
+
+        club = Club.objects.filter(discord_server_id=guild_id).first()
+        if not club:
+            return _discord_ephemeral("❌ This server is not connected to a club. Run /connect first.")
+
+        club.announcement_channel_id = channel_id
+        club.save(update_fields=["announcement_channel_id"])
+        caller_username = user_data.get("username") or caller_discord_id
+        ClubHistory.objects.create(
+            club=club,
+            user=None,
+            action=f"Club announcement channel set by @{caller_username} (Discord ID {caller_discord_id})",
+            applies_to="SETTINGS",
+        )
+        return _discord_ephemeral("✅ Club announcements will be posted in this channel.")
+
     def _handle_membership_command(self, data):
         guild_id = data.get("guild_id", "")
         member_data = data.get("member") or {}
@@ -23772,11 +25156,13 @@ class LotBapPointsView(LoginRequiredMixin, View):
             if lot.species_category
             else None
         )
-        default_points = (
-            override.points
-            if override is not None
-            else (club.points_per_lot or (lot.species_category.bap_points if lot.species_category else 5))
-        )
+        if override is not None:
+            default_points = override.points
+        elif club.points_per_lot is not None:
+            # See Lot.bap_points_for_club: a club that sets 0 means 0, not "use the category".
+            default_points = club.points_per_lot
+        else:
+            default_points = lot.species_category.bap_points if lot.species_category else 5
         if club.points_for_custom_checkbox > 0 and lot.custom_checkbox:
             default_points += club.points_for_custom_checkbox
         return render(
@@ -24280,6 +25666,575 @@ class CommandPaletteReportView(View):
             data = {}
         recorded = palette_assist.mark_reported(request.user, (data or {}).get("usage_id"))
         return JsonResponse({"recorded": recorded})
+
+
+class SpeciesAutocomplete(LoginRequiredMixin, autocomplete.Select2QuerySetView):
+    """Search the whole species list by hand.
+
+    Two callers, and the difference between them is ``?varieties=1``:
+
+    * the "strain of" field on the add-species form, which wants **nominal species only** -- a
+      strain of a strain is not a thing, and offering one would build a chain nothing else in the
+      codebase knows how to walk.
+    * the "search all species" box on the lot forms, which wants the strains too: "Blue Dream" is
+      exactly the kind of thing somebody falls back to searching for.
+
+    That second caller is why this exists on a lot form at all.  The picker there is filled in
+    only by :class:`SpeciesSuggestions`, from the lot name -- so when the matcher came back with
+    nothing (FishBase files *Labidochromis caeruleus* under "Blue streak hap", so "Yellow lab"
+    finds nothing without the model) or came back with the wrong five, there was no way to reach
+    the right species at all, for the seller or for the auction admin editing the lot afterwards.
+    """
+
+    def get_queryset(self):
+        # Same visibility rule the suggestions follow: an unapproved species is offered to the
+        # person who added it and to nobody else.  Searching by hand must not be the way round it.
+        queryset = visible_species(self.request.user)
+        if self.request.GET.get("varieties") != "1":
+            # Nominal species only.  ``is_hybrid`` as well as ``parent``: a cross is not a strain of
+            # anything, so it passes ``parent__isnull=True`` while being exactly the sort of row a
+            # "strain of" box must never offer -- a strain of it would inherit a genus it hasn't got.
+            queryset = queryset.filter(parent__isnull=True, is_hybrid=False)
+        if self.q:
+            queryset = queryset.filter(
+                Q(scientific_name__icontains=self.q)
+                | Q(common_name__icontains=self.q)
+                | Q(variety__icontains=self.q)
+                # The names people actually type; the same column every other lookup matches on.
+                | Q(common_names__name_normalized__icontains=normalize_species_name(self.q))
+            ).distinct()
+        # Same ordering as the suggestions: the fish somebody actually keeps, first, and a
+        # freshwater one ahead of the reef fish that shares its name.  See species_matching._rank.
+        return queryset.order_by("-freshwater", "trade_rank", "scientific_name")
+
+    def get_result_label(self, result):
+        return format_html("{}", result.label)
+
+
+class SpeciesGapsView(AdminOnlyViewMixin, TemplateView):
+    """The lots that should have a scientific name and don't, as a work queue.
+
+    The sibling of the command palette's bounce list, and it exists for the same reason: the
+    interesting thing about a lookup is not the ones that worked, it is the repeated ones that
+    didn't.  A lot name showing up here forty times is either a species missing from the list or a
+    name the matcher can't connect to one, and both are fixed by the same button.
+
+    Grouped by lot name rather than listed per lot, because forty lots called "blue dream shrimp"
+    are one problem and one decision, not forty.
+
+    What it deliberately does **not** do is guess which of these are hardware.  There is no signal
+    that separates "sponge filter" from "sponge" reliably, and a filter that hid things would hide
+    the ones worth finding.  Instead every column is a piece of evidence -- how many sellers said
+    they bred it, what categories the lots landed in, what the matcher decided last time -- and
+    the reader does the judging.  The one exception is names made entirely of stopwords and
+    numbers, which cannot name anything.
+    """
+
+    template_name = "species_gaps.html"
+
+    #: Enough to work through in a sitting.  The tail is a long list of one-off lot names, and
+    #: anything appearing once is not yet a pattern worth adding a species for.
+    LIMIT = 100
+
+    def get_context_data(self, **kwargs):
+        from .species_matching import base_words, normalize
+
+        context = super().get_context_data(**kwargs)
+        # Only auctions that asked: a lot in an auction with the field switched off has no species
+        # because nobody was ever offered the choice, which is not a gap.
+        missing = Lot.objects.filter(
+            species__isnull=True, is_deleted=False, banned=False, auction__use_scientific_name=True
+        )
+        rows = (
+            missing.exclude(lot_name="")
+            .values("lot_name")
+            .annotate(
+                # Lot's primary key is lot_number, not id.
+                lots=Count("pk"),
+                bred=Count("pk", filter=Q(i_bred_this_fish=True)),
+                newest=Max("date_posted"),
+            )
+            .order_by("-lots", "-newest")[: self.LIMIT * 3]
+        )
+        # Two lot names that normalise the same are the same problem.  Merged here rather than in
+        # SQL because the normalisation is Python (see species_matching.normalize).
+        merged = {}
+        for row in rows:
+            if not base_words(row["lot_name"]):
+                continue
+            key = normalize(row["lot_name"])
+            if not key:
+                continue
+            entry = merged.setdefault(
+                key, {"lot_name": row["lot_name"], "lots": 0, "bred": 0, "newest": row["newest"], "key": key}
+            )
+            entry["lots"] += row["lots"]
+            entry["bred"] += row["bred"]
+            entry["newest"] = max(entry["newest"], row["newest"]) if row["newest"] else entry["newest"]
+
+        verdicts = {
+            cache_row.search_text: cache_row
+            for cache_row in SpeciesSearchCache.objects.filter(search_text__in=list(merged)).select_related("species")
+        }
+        for key, entry in merged.items():
+            verdict = verdicts.get(key)
+            if verdict is None:
+                entry["verdict"] = "never looked up"
+                entry["verdict_detail"] = ""
+            elif verdict.species_id:
+                # The name resolves fine; these lots predate the answer, or the seller said no.
+                entry["verdict"] = "matches a species"
+                entry["verdict_detail"] = verdict.species.label
+            elif verdict.source == "llm":
+                entry["verdict"] = "not a species"
+                entry["verdict_detail"] = "decided by the language model"
+            else:
+                entry["verdict"] = "not a species"
+                entry["verdict_detail"] = "chosen by a person"
+
+        context["gaps"] = sorted(merged.values(), key=lambda entry: (-entry["bred"], -entry["lots"]))[: self.LIMIT]
+        context["total_missing"] = missing.count()
+        context["total_with_species"] = Lot.objects.filter(
+            species__isnull=False, is_deleted=False, auction__use_scientific_name=True
+        ).count()
+        context["rejected"] = list(
+            SpeciesSearchCache.objects.filter(species__isnull=True).order_by("-hits", "-createdon")[:25]
+        )
+        # The other half of the same table, and the half that was invisible.  A remembered *wrong*
+        # species is strictly worse than a remembered "no": it outranks search_matches, it is
+        # shared by every club, and it ends up on a printed label and in a breeder award.  There
+        # was nowhere on the site it could be seen, let alone undone.
+        context["mappings"] = list(
+            SpeciesSearchCache.objects.filter(species__isnull=False)
+            .select_related("species", "created_by")
+            .order_by("-hits", "-createdon")[:50]
+        )
+        # Species an auction admin added to solve a problem in front of them.  Each one is
+        # currently offered to that person and to nobody else, and approving it is the whole of
+        # the admin's job here -- see Species.approved and species_matching.visible_species.
+        context["pending"] = list(
+            Species.objects.filter(approved=False)
+            .select_related("added_by", "category", "parent", "club")
+            .annotate(lots=Count("lot"))
+            .order_by("-id")[:50]
+        )
+        # Pairings the site has retired, and the only place they can be undone.  Kept next to the
+        # cache tables because they are the same subject read the other way round: what the matcher
+        # has been told *not* to answer.  See species_matching.record_choice.
+        context["rejections"] = list(SpeciesNameRejection.objects.select_related("species").order_by("-createdon")[:50])
+        # Rows that look like another row.  Both halves of a pair carry the flag, so the listing is
+        # de-duplicated here and the reader sees one line per decision rather than two.  Ordered by
+        # pk so that line is stable from one page load to the next.
+        flagged = list(
+            Species.objects.filter(possible_duplicate__isnull=False)
+            .select_related("possible_duplicate", "category", "added_by", "club")
+            .annotate(lots=Count("lot"))
+            .order_by("pk")[:100]
+        )
+        # One query for the lot counts of the other halves rather than one per row: both sides of
+        # a pair carry the flag, but only the side that came back from the query above is annotated.
+        other_lots = dict(
+            Lot.objects.filter(species__in=[species.possible_duplicate_id for species in flagged])
+            .values_list("species")
+            .annotate(count=Count("pk"))
+        )
+        duplicates = []
+        seen_pairs = set()
+        for species in flagged:
+            other = species.possible_duplicate
+            pair = tuple(sorted((species.pk, other.pk)))
+            if pair in seen_pairs:
+                continue
+            seen_pairs.add(pair)
+            duplicates.append(
+                {
+                    "species": species,
+                    "other": other,
+                    "other_lots": other_lots.get(other.pk, 0),
+                    "same_scientific_name": bool(
+                        species.scientific_name
+                        and species.scientific_name.lower() == other.scientific_name.lower()
+                        and species.variety.lower() == other.variety.lower()
+                    ),
+                }
+            )
+        context["duplicates"] = duplicates
+        context["species_total"] = Species.objects.count()
+        context["species_added_here"] = Species.objects.filter(source="admin").count()
+        return context
+
+
+class SpeciesSearchCacheForgetView(AdminOnlyViewMixin, View):
+    """Delete one remembered answer, so the next lookup works the name out again.
+
+    The undo for :func:`auctions.species_matching.remember`.  That cache is written by the lot
+    forms on a seller's first save as well as by the language model, it is shared by every club,
+    and it is consulted *before* the token search -- so one wrong row quietly outranks the species
+    list itself for everybody, forever.  Until this existed the only way to remove one was the
+    Django admin, and the gaps page didn't list the wrong ones at all, so nobody knew to look.
+
+    Deleting is the whole fix: the name simply falls through to the matcher again next time.
+    """
+
+    def post(self, request, pk):
+        row = get_object_or_404(SpeciesSearchCache, pk=pk)
+        name = row.search_text
+        row.delete()
+        messages.success(request, f"Forgot the remembered answer for “{name}”.  It will be looked up again.")
+        return redirect("species_gaps")
+
+
+class SpeciesNameRejectionDeleteView(AdminOnlyViewMixin, View):
+    """Let a name be matched to a species again after the site retired the pairing.
+
+    The escape hatch for :func:`auctions.species_matching.record_choice`.  Enough sellers taking a
+    species off the lots called something retires that pairing for good -- deliberately, because
+    otherwise the language model answers the same question the same way and the answer is written
+    straight back.  "For good" needs a way out, and this is it: usually because the rejections were
+    really about the *lot names* ("blue dream shrimp" cleared by people selling something else) and
+    the pairing was right all along.
+    """
+
+    def post(self, request, pk):
+        row = get_object_or_404(SpeciesNameRejection, pk=pk)
+        name, species = row.search_text, row.species
+        row.delete()
+        messages.success(request, f"“{name}” may be matched to {species.label} again.")
+        return redirect("species_gaps")
+
+
+class SpeciesDuplicateDismissView(AdminOnlyViewMixin, View):
+    """ "These two are not the same species."  Clears the flag on both sides.
+
+    Two species really can share a designated common name -- FishBase gives "Peppered cory" to two
+    different *Corydoras* -- so a flag that could only be resolved by merging would force a wrong
+    answer.  Cleared on both rows, so the pair does not come back on the next save of either.
+    """
+
+    def post(self, request, pk):
+        species = get_object_or_404(Species, pk=pk)
+        other = species.possible_duplicate
+        Species.objects.filter(pk=species.pk).update(possible_duplicate=None)
+        if other:
+            Species.objects.filter(pk=other.pk).update(possible_duplicate=None)
+        messages.success(request, f"{species.label} is not a duplicate.")
+        return redirect("species_gaps")
+
+
+class SpeciesMergeView(AdminOnlyViewMixin, View):
+    """Fold one species row into another.  Superusers only, on purpose.
+
+    A duplicate is almost always a club's hand-added row sitting next to one of FishBase's 36,000,
+    and merging is not reversible: the lots, the strains and the hobby names move, and one of the
+    two rows stops existing.  Which name the whole site keeps is a decision for whoever maintains
+    the list, not for whichever admin happened to add the second row -- which is also why the
+    button lives on the gaps page and not on the lot form.
+
+    ``keep`` is the row that survives; the pk in the URL is the one being folded in.
+    """
+
+    def post(self, request, pk):
+        duplicate = get_object_or_404(Species, pk=pk)
+        keep = get_object_or_404(Species, pk=request.POST.get("keep") or 0)
+        if keep.pk == duplicate.pk:
+            messages.error(request, "A species cannot be merged into itself.")
+            return redirect("species_gaps")
+        # A variety and its own parent are not two copies of one species; merging them would move
+        # the strain's lots onto the nominal species and lose the strain.
+        if keep.parent_id == duplicate.pk or duplicate.parent_id == keep.pk:
+            messages.error(request, "That is a strain and its parent species, not a duplicate.  Nothing was merged.")
+            return redirect("species_gaps")
+        losing_label = duplicate.label
+        moved = keep.merge_duplicate(duplicate)
+        messages.success(
+            request,
+            f"Merged {losing_label} into {keep.label}: "
+            f"{moved.get('lots', 0)} lot(s), {moved.get('common_names', 0)} common name(s), "
+            f"{moved.get('varieties', 0)} strain(s) and {moved.get('remembered_names', 0)} "
+            "remembered name(s) moved.",
+        )
+        return redirect("species_gaps")
+
+
+class SpeciesApproveView(AdminOnlyViewMixin, View):
+    """Promote one species from "the person who added it" to "everybody".
+
+    The entire approval workflow.  An auction admin adding a species at a check-in table gets a
+    row only they can see (:attr:`Species.approved`); this is the button that makes it part of the
+    shared list, and it is a superuser's call because that list is a shared asset.
+
+    Approving is also what lets the name be *remembered*: :func:`species_matching.remember`
+    refuses to write an unapproved species into a cache every club reads, so the mapping from the
+    lot name is written here instead, at the moment the species becomes everyone's.
+    """
+
+    def post(self, request, pk):
+        species = get_object_or_404(Species, pk=pk)
+        if not species.approved:
+            species.approved = True
+            species.save()
+            # The names arrived with it and are scoped the same way, so they become everybody's at
+            # the same moment.  Without this the species would be on the shared list while the
+            # words people actually type for it stayed private to one club.
+            species.common_names.filter(approved=False).update(approved=True)
+            # The genus tier is a statement about siblings, and this row was invisible to the last
+            # pass that worked one out.
+            Species.recompute_trade_ranks(genus=species.genus)
+            for lot_name in (
+                Lot.objects.filter(species=species)
+                .exclude(lot_name="")
+                .order_by()
+                .values_list("lot_name", flat=True)
+                .distinct()
+            )[:20]:
+                remember_species(lot_name, species, source="user", user=species.added_by)
+        messages.success(request, f"{species.label} is now suggested for everyone.")
+        return redirect("species_gaps")
+
+
+def species_page_success_url(request):
+    """Where to go after adding a species or naming one.  ``?next=`` wins, for everybody.
+
+    It used to be "the gaps page if you are a superuser, ``?next=`` otherwise", and the superuser
+    half was wrong in exactly the case these pages are opened from: the button is on the auction
+    admin's *lot editor*, it opens in a new tab, and it carries a ``next=`` back to the lot list.
+    A superuser clicking it was thrown onto the admin work queue with the lot they were fixing
+    left behind in the other tab.  Whoever wrote the link knows where the person came from; the
+    permissions they happen to hold do not.
+
+    Checked against the host, because it arrives as a query parameter and a redirect is the whole
+    payload.
+    """
+    following = request.GET.get("next") or request.POST.get("next") or ""
+    if following and url_has_allowed_host_and_scheme(
+        following, allowed_hosts={request.get_host()}, require_https=request.is_secure()
+    ):
+        return following
+    if request.user.is_superuser:
+        return reverse("species_gaps")
+    return reverse("selling")
+
+
+class LotNameSpeciesMixin:
+    """The lots a ``?lot_name=`` in the URL is talking about.
+
+    Shared by the two pages that fix a gap on the species list -- adding the species
+    (:class:`SpeciesCreateView`) and naming one that is already there
+    (:class:`SpeciesCommonNameCreateView`).  Both arrive from the same links carrying the same
+    lot name, and both end by putting the species on every lot called that, so the awkward part
+    -- finding those lots when the name has an apostrophe in it -- is written once.
+    """
+
+    def _lot_name(self):
+        return (self.request.GET.get("lot_name") or self.request.POST.get("lot_name") or "").strip()[:200]
+
+    def _matching_lots(self):
+        """The lots this name would be attached to.  Never touches a lot that already has one.
+
+        Matched on the *normalised* name as well as literally, because half the links into this
+        page carry a normalised name in the first place: the gaps page groups by it, and the "not a
+        species" table has nothing else to link with -- the search cache only ever stored the
+        normalised form.  On ``iexact`` alone every name whose original had an apostrophe or a
+        capital came through here as "0 lots" and the button quietly did nothing.
+
+        The ``icontains`` is only there to keep this off a full scan; the decision is the
+        normalised comparison in Python, which is the same function the cache key and the matcher
+        use.  It casts a deliberately wide net -- the longest few words *and* their singulars --
+        because the narrowing runs on a name that has already lost its apostrophes: looking for
+        "agassizs" would miss the very lot called "Agassiz's corydoras" this is here to find.
+        """
+        from .species_matching import base_words, normalize, singularize
+
+        name = self._lot_name()
+        if not name:
+            return Lot.objects.none()
+        base = Lot.objects.filter(species__isnull=True, is_deleted=False, auction__use_scientific_name=True)
+        # Only lots this person is actually responsible for.  This page used to be superusers
+        # only, where "every lot on the site called this" was the right answer; it is open to
+        # auction admins now, and the button would otherwise reach into other clubs' auctions.
+        if not self.request.user.is_superuser:
+            base = base.filter(auction__in=self.request.user.userdata.auctions_i_admin)
+        normalized = normalize(name)
+        words = sorted(base_words(name), key=len, reverse=True)[:3]
+        if not normalized or not words:
+            return base.filter(lot_name__iexact=name)
+        narrowing = Q()
+        for word in words:
+            for form in {word, singularize(word)}:
+                narrowing |= Q(lot_name__icontains=form)
+        also = [
+            pk
+            for pk, lot_name in base.filter(narrowing).values_list("pk", "lot_name")
+            if normalize(lot_name) == normalized
+        ]
+        return base.filter(Q(lot_name__iexact=name) | Q(pk__in=also))
+
+
+class SpeciesCreateView(AuctionAdminAnywhereViewMixin, LotNameSpeciesMixin, CreateView):
+    """Add a species, or a strain of one, from the site.
+
+    Reached from :class:`SpeciesGapsView` with ``?lot_name=`` prefilled, which is the whole
+    workflow: see a name that keeps coming up with no species, click it, fill in two boxes, and
+    every lot with that name gets the species and the matcher learns the name for next time.
+
+    Open to anyone who runs an auction, not just site superusers.  The reason is the check-in
+    table: somebody is standing there with a bag of fish the picker has never heard of, and a
+    workflow that ends in "email the site owner" ends in the lot going out with no scientific
+    name.  What an auction admin adds is not everybody's, though -- it is ``approved=False``, so
+    :func:`~auctions.species_matching.visible_species` offers it to them and to nobody else until
+    a superuser ticks the box.  The imported list is a shared asset and one club's guess at a name
+    has no business in another club's picker.
+    """
+
+    model = Species
+    form_class = SpeciesAdminForm
+    template_name = "species_form.html"
+
+    def get_form_kwargs(self):
+        kwargs = super().get_form_kwargs()
+        kwargs["lot_name"] = self._lot_name()
+        kwargs["lot_count"] = self._matching_lots().count()
+        # The form stamps added_by and decides approved from this.
+        kwargs["added_by"] = self.request.user
+        return kwargs
+
+    def get_initial(self):
+        initial = super().get_initial()
+        name = self._lot_name()
+        if name:
+            # The lot name is the best guess at the common name -- it is what people call it.
+            initial["common_name"] = name[:255]
+        return initial
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        name = self._lot_name()
+        context["lot_name"] = name
+        context["title"] = f"Add a species for “{name}”" if name else "Add a species"
+        # Named in the page's first sentence, because "who will see this" is the question
+        # somebody adding a species at a check-in table is really asking.  Often None -- see
+        # UserData.only_club.
+        context["club"] = self.request.user.userdata.only_club
+        return context
+
+    def form_valid(self, form):
+        response = super().form_valid(form)
+        species = self.object
+        name = self._lot_name()
+        attached = 0
+        if name and form.cleaned_data.get("attach_to_lots"):
+            from .species_matching import remember as remember_species
+
+            # save() rather than update(): it is what derives the lot's category from the species,
+            # and these are tens of rows, not thousands.
+            for lot in self._matching_lots()[:500]:
+                lot.species = species
+                lot.save()
+                attached += 1
+            # Teach the matcher, so the next person typing this name is offered it straight away.
+            # A no-op while the species is unapproved -- remember() refuses to put one in a table
+            # every club reads -- so the name is learned when the species is.
+            remember_species(name, species, source="user", user=self.request.user)
+        messages.success(
+            self.request,
+            f"Added {species.label}."
+            + (f"  Set it on {attached} lot{'' if attached == 1 else 's'} called “{name}”." if attached else ""),
+        )
+        if not species.approved:
+            messages.info(
+                self.request,
+                f"{species.label} is yours for now: it will be suggested on your lots and nobody "
+                "else's until a site admin approves it for everyone.",
+            )
+        return response
+
+    def get_success_url(self):
+        return species_page_success_url(self.request)
+
+
+class SpeciesCommonNameCreateView(AuctionAdminAnywhereViewMixin, LotNameSpeciesMixin, FormView):
+    """Name a species that is **already** on the list, without opening the Django admin.
+
+    The sibling of :class:`SpeciesCreateView`, and the one that should be reached more often.
+    Most lot names with no scientific name are not a missing species: they are one of FishBase's
+    36,000 filed under a name nobody in the hobby says.  *Labidochromis caeruleus* is "Blue streak
+    hap" there and "yellow lab" everywhere else, and until this page existed an auction admin who
+    hit that had exactly two options -- give up, or add a second *Labidochromis caeruleus*.  The
+    duplicate table on the gaps page is made of people taking the second one.
+
+    Open to anyone who runs an auction, on the same terms as adding a species: what a
+    non-superuser writes is ``approved=False``, so it answers their own club's lookups and nobody
+    else's until somebody approves it.  See
+    :func:`~auctions.species_matching.visible_common_names`.
+
+    Deliberately does **not** write to :class:`SpeciesSearchCache`.  The name itself is the
+    teaching -- :func:`~auctions.species_matching.exact_matches` reads the name table before
+    anything else runs -- and a cache row is global, so remembering the pairing here would push an
+    unapproved club-scoped name into a table every club is served from.
+    """
+
+    form_class = SpeciesCommonNameForm
+    template_name = "species_name_form.html"
+
+    def get_form_kwargs(self):
+        kwargs = super().get_form_kwargs()
+        kwargs["lot_name"] = self._lot_name()
+        kwargs["lot_count"] = self._matching_lots().count()
+        kwargs["added_by"] = self.request.user
+        return kwargs
+
+    def get_initial(self):
+        initial = super().get_initial()
+        # ?species= so the gaps page and the lot editor can open this with the answer already
+        # picked; scoped, so a guessed id cannot be used to find out what another club added.
+        wanted = self.request.GET.get("species") or ""
+        if wanted.isdigit():
+            initial["species"] = visible_species(self.request.user).filter(pk=int(wanted)).first()
+        return initial
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        name = self._lot_name()
+        context["lot_name"] = name
+        context["title"] = f"Name a species for \u201c{name}\u201d" if name else "Add a name to a species"
+        # Who this name will answer for, so the page can say so.  Same rule as SpeciesCreateView:
+        # a name is scoped by added_by and club exactly the way a species is, and often there is
+        # no obvious club at all -- see UserData.only_club.
+        context["club"] = self.request.user.userdata.only_club
+        return context
+
+    def form_valid(self, form):
+        created = form.save()
+        species = form.cleaned_data["species"]
+        name = self._lot_name()
+        attached = 0
+        if name and form.cleaned_data.get("attach_to_lots"):
+            # save() rather than update(): it is what derives the lot's category from the species,
+            # and these are tens of rows, not thousands.
+            for lot in self._matching_lots()[:500]:
+                lot.species = species
+                lot.save()
+                attached += 1
+        if created:
+            written = ", ".join(f"\u201c{row.name}\u201d" for row in created)
+            messages.success(
+                self.request,
+                f"{species.label} now answers to {written}."
+                + (f"  Set it on {attached} lot{'' if attached == 1 else 's'}." if attached else ""),
+            )
+        else:
+            messages.info(
+                self.request,
+                f"{species.label} already answered to {'that name' if len(form.cleaned_data['names']) == 1 else 'those names'}."
+                + (f"  Set it on {attached} lot{'' if attached == 1 else 's'}." if attached else ""),
+            )
+        if any(not row.approved for row in created):
+            messages.info(
+                self.request,
+                "That name is yours for now: it will be matched on your own lots and nobody "
+                "else's until a site admin approves it for everyone.",
+            )
+        return redirect(species_page_success_url(self.request))
 
 
 class CommandPaletteAnalyticsView(AdminOnlyViewMixin, TemplateView):

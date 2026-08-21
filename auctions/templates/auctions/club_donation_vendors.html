@@ -1,0 +1,125 @@
+{% extends "auctions/htmx_table_view.html" %}
+
+{% block title %}Donation Tracking &mdash; {{ club.name }}{% endblock %}
+
+{% block htmx_table_ribbon %}
+{% include "club_ribbon.html" %}
+{% comment %}No page heading: the club sidebar already names this page and marks it active, and
+the browser tab carries the title. Most club pages have none for that reason -- see
+style_reference.md.{% endcomment %}
+
+{% if followup_due_count %}
+<div class="alert alert-warning text-dark py-2" role="alert">
+  <i class="bi bi-exclamation-triangle me-1"></i>
+  {{ followup_due_count }} vendor{{ followup_due_count|pluralize }} due for a follow-up.
+</div>
+{% endif %}
+
+{% if needs_mailing_address %}
+<div class="alert alert-warning text-dark py-2" role="alert">
+  <i class="bi bi-exclamation-triangle me-1"></i>
+  <strong>Add a donation mailing address before sending.</strong>
+  Donation emails sent from this site have to carry a postal address for the club.
+  <a href="{% url 'club_donation_settings' club.slug %}">Add one in donation settings</a>.
+</div>
+{% endif %}
+
+{% if not can_send %}
+<div class="alert alert-info py-2" role="alert">
+  <i class="bi bi-info-circle me-1"></i>
+  Donation emails are copied into your own email program, so replies won't be tracked here.
+  <a href="{% url 'club_donation_settings' club.slug %}">Change this in donation settings</a>.
+</div>
+{% endif %}
+
+{% if not assist_enabled %}
+<div class="alert alert-info py-2" role="alert">
+  <i class="bi bi-info-circle me-1"></i>
+  Automatic email writing isn't set up on this site, so you'll be writing donation emails yourself.
+</div>
+{% endif %}
+
+{% comment %}The daily allowance, spent and remaining. A bar rather than a number because the thing worth knowing at a glance is how close to the end of it you are.{% endcomment %}
+<div class="mb-3">
+  <div class="d-flex justify-content-between align-items-center small">
+    <span>Donation emails today</span>
+    <span class="{% if quota.exhausted %}text-warning{% else %}text-muted{% endif %}">
+      {{ quota.used }} of {{ quota.limit }}
+    </span>
+  </div>
+  <div class="progress" style="height: 8px;" role="progressbar"
+       aria-label="Donation emails sent today" aria-valuenow="{{ quota.used }}"
+       aria-valuemin="0" aria-valuemax="{{ quota.limit }}">
+    <div class="progress-bar {% if quota.exhausted %}bg-warning{% endif %}" style="width: {{ quota.percent_used }}%;"></div>
+  </div>
+  {% if quota.exhausted %}
+  <div class="alert alert-warning text-dark py-2 mt-2 mb-0" role="alert">
+    <i class="bi bi-exclamation-triangle me-1"></i>
+    That's all {{ quota.limit }} donation emails for today &mdash; you can start again {{ quota.resets_in_words }}.
+    Replies still arrive and are recorded in the meantime.
+  </div>
+  {% else %}
+  <div class="form-text">
+    {{ quota.remaining }} left before the daily limit; it resets {{ quota.resets_in_words }}.
+    {% if assist_enabled %}Asking for an email to be written counts, even if you don't send it.{% endif %}
+  </div>
+  {% endif %}
+</div>
+
+{% comment %}Collapsed, not hidden: three things about this feature that surprise people, worth reading once and never again.{% endcomment %}
+<p class="mb-2">
+  <button class="btn btn-sm btn-primary" type="button" data-bs-toggle="collapse"
+          data-bs-target="#donation-tracking-help" aria-expanded="false" aria-controls="donation-tracking-help">
+    <i class="bi bi-info-circle me-1"></i> How donation tracking works
+  </button>
+</p>
+<div class="collapse mb-3" id="donation-tracking-help">
+  <div class="card card-body py-2">
+    <ul class="mb-0 ps-3">
+      <li>
+        There's no way to import a list of vendors, and you're capped at {{ quota.limit }} emails a
+        day. This isn't a spam system, it's donation tracking.
+      </li>
+      {% if can_send %}
+      <li>
+        Replies are routed back to this page, and nothing tells you when one arrives. That's
+        deliberate &mdash; a reply landing in your own inbox is one you'd answer from there, and
+        this site would never see it. Get in the habit of checking this page.
+      </li>
+      <li>
+        When a vendor replies, their follow-up date is set to today, so they show up in the list
+        of vendors waiting on you.
+      </li>
+      {% else %}
+      <li>
+        You're copying emails into your own email program, so replies arrive in your inbox and
+        this site never sees them. Open the vendor and set their status by hand when one comes in.
+      </li>
+      {% endif %}
+    </ul>
+  </div>
+</div>
+{% endblock %}
+
+{% comment %}The header partial renders the search box and status menu, so the default crispy filter form would only duplicate them.{% endcomment %}
+{% block htmx_table_filter_form %}{% endblock %}
+
+{% block extra_js %}
+{{ block.super }}
+<script>
+  // Vendors we may not write to keep a clickable button that says why, rather than a disabled one
+  // (see "Unavailable actions stay clickable" in style_reference.md). Delegated from the document
+  // so it survives every htmx swap of the table body.
+  document.addEventListener('click', function (event) {
+    var button = event.target.closest('.donation-contact-blocked');
+    if (!button) { return; }
+    event.preventDefault();
+    window.jQuery.toast({
+      title: 'Not right now',
+      content: button.getAttribute('data-reason') || '',
+      type: 'info',
+      delay: 8000
+    });
+  });
+</script>
+{% endblock %}

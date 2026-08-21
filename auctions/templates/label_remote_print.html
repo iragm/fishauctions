@@ -1,0 +1,172 @@
+{% extends "base.html" %}
+{% comment %}
+The waiting page for labels printed from a computer on the phone's Bluetooth printer, rendered by
+LotLabelView instead of the PDF.
+
+It exists because the phone cannot be summoned: the app has to already be open, and when it isn't,
+the honest thing is for the *computer* to say so and offer a way out rather than spin forever. Hence
+the three buttons on any failure — try again, print a PDF here, cancel — and hence the failure text
+being the app's own words, shown verbatim: the app already distinguishes no-printer-paired from
+couldn't-connect from lost-the-link-mid-print, and a second copy of that vocabulary here would drift.
+
+The 20-second silence rule lives on the server (remote_print.job_state), not in this JS, so two tabs
+watching one job agree.
+{% endcomment %}
+{% block title %}Printing labels{% endblock %}
+{% block content %}
+<div class="container mt-4" style="max-width: 34rem;">
+  <h4><i class="bi bi-printer me-1"></i><span id="remote-print-heading">Sending {{ label_count }} label{{ label_count|pluralize }} to your phone…</span></h4>
+  {% if printer_name %}<p class="text-muted mb-1"><i class="bi bi-bluetooth me-1"></i>{{ printer_name }}</p>{% endif %}
+  {% if truncated_count %}
+  <div class="alert alert-warning text-dark mt-3" role="alert">
+    <i class="bi bi-exclamation-triangle me-1"></i>
+    Sending the first {{ label_count }} of {{ truncated_count }} labels. Once these have printed, use
+    <b>Print only unprinted labels</b> to send the rest.
+  </div>
+  {% endif %}
+
+  <div id="remote-print-progress" class="progress mt-3" role="progressbar" aria-label="Printing progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+    <div class="progress-bar progress-bar-striped progress-bar-animated" style="width: 0%"></div>
+  </div>
+
+  {% comment %}Error channel per style_reference.md: alert-danger + bi-exclamation-triangle-fill.  The text goes in its own span because it is set with textContent (it is the app's words, and must never be able to inject markup), which would otherwise wipe the icon out.{% endcomment %}
+  <div id="remote-print-message" class="alert alert-danger mt-3" role="alert" style="display:none;">
+    <i class="bi bi-exclamation-triangle-fill me-1"></i><span id="remote-print-message-text"></span>
+  </div>
+
+  <div id="remote-print-buttons" class="mt-3" style="display:none;">
+    <button type="button" class="btn btn-primary" id="remote-print-retry"><i class="bi bi-arrow-clockwise me-1"></i>Try again</button>
+    <a class="btn btn-primary ms-1" href="{{ pdf_url }}"><i class="bi bi-file-earmark-pdf me-1"></i>Print a PDF here</a>
+    <button type="button" class="btn btn-secondary ms-1" id="remote-print-cancel">Cancel</button>
+  </div>
+
+  <div id="remote-print-done" class="mt-3" style="display:none;">
+    <a class="btn btn-primary" href="{{ back_url }}">Done</a>
+  </div>
+
+  <p class="text-muted mt-4 small">
+    <i class="bi bi-info-circle me-1"></i>
+    Labels print on the phone paired with your label printer, so the app has to be open on it. To go
+    back to PDFs, turn this off on <a href="{% url 'printing' %}">your printing preferences</a>.
+  </p>
+</div>
+
+{{ job.uuid|json_script:"remote-print-job-id" }}
+<script>
+(function () {
+  var jobId = JSON.parse(document.getElementById('remote-print-job-id').textContent);
+  var statusUrl = "{% url 'remote_print_job' job_uuid=job.uuid %}";
+  var retryUrl = "{% url 'remote_print_job_retry' job_uuid=job.uuid %}";
+  var cancelUrl = "{% url 'remote_print_job_cancel' job_uuid=job.uuid %}";
+  var backUrl = "{{ back_url|escapejs }}";
+  var total = {{ label_count }};
+
+  var heading = document.getElementById('remote-print-heading');
+  var progress = document.getElementById('remote-print-progress');
+  var bar = progress.querySelector('.progress-bar');
+  var messageBox = document.getElementById('remote-print-message');
+  var messageText = document.getElementById('remote-print-message-text');
+  var buttons = document.getElementById('remote-print-buttons');
+  var done = document.getElementById('remote-print-done');
+  var timer = null;
+
+  // Django's CSRF cookie, for the two POST buttons. Same one every form on the site uses.
+  function csrfToken() {
+    var match = document.cookie.match(/(^|;)\s*csrftoken=([^;]+)/);
+    return match ? match[2] : '';
+  }
+
+  function stopPolling() {
+    if (timer) { window.clearInterval(timer); timer = null; }
+  }
+
+  function showFailure(text) {
+    stopPolling();
+    progress.style.display = 'none';
+    messageText.textContent = text;
+    messageBox.style.display = '';
+    buttons.style.display = '';
+  }
+
+  function render(state) {
+    var printed = state.printed || 0;
+    total = state.total || total;
+    if (state.status === 'queued' || state.status === 'sent') {
+      heading.textContent = 'Sending ' + total + ' label' + (total === 1 ? '' : 's') + ' to your phone…';
+    } else if (state.status === 'printing') {
+      heading.textContent = 'Printing ' + printed + ' of ' + total + '…';
+      bar.classList.remove('progress-bar-animated');
+      bar.style.width = (total ? Math.round((printed / total) * 100) : 0) + '%';
+      progress.setAttribute('aria-valuenow', total ? Math.round((printed / total) * 100) : 0);
+    } else if (state.status === 'printed') {
+      stopPolling();
+      heading.textContent = 'Printed ' + printed + ' label' + (printed === 1 ? '' : 's') + '.';
+      bar.classList.remove('progress-bar-animated');
+      bar.style.width = '100%';
+      progress.setAttribute('aria-valuenow', 100);
+      done.style.display = '';
+    } else if (state.status === 'failed') {
+      // The app's own words, unedited — see the comment at the top of this file.
+      showFailure(state.message || 'Printing failed on your phone.');
+    } else if (state.status === 'unreachable') {
+      showFailure("Couldn't reach your phone. Make sure the app is open.");
+    } else if (state.status === 'cancelled') {
+      stopPolling();
+      window.location.href = backUrl;
+    }
+  }
+
+  function poll() {
+    fetch(statusUrl, {credentials: 'same-origin'})
+      .then(function (r) { return r.json(); })
+      .then(render)
+      // A dropped poll is not a failed print: the phone is talking to the server, not to this page.
+      // Keep polling and let the server's own silence rule decide.
+      .catch(function () {});
+  }
+
+  document.getElementById('remote-print-retry').addEventListener('click', function (event) {
+    var button = event.currentTarget;
+    button.disabled = true;
+    fetch(retryUrl, {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: {'X-CSRFToken': csrfToken()}
+    }).then(function (r) { return r.json(); }).then(function (state) {
+      // Retrying makes a *new* job with its own uuid, so this page moves onto its URLs in place.
+      // Reloading the label URL instead would work, but it would create a second job on top of the
+      // one this POST just created.
+      var newId = state.job;
+      statusUrl = statusUrl.replace(jobId, newId);
+      retryUrl = retryUrl.replace(jobId, newId);
+      cancelUrl = cancelUrl.replace(jobId, newId);
+      jobId = newId;
+      messageBox.style.display = 'none';
+      buttons.style.display = 'none';
+      progress.style.display = '';
+      bar.classList.add('progress-bar-animated');
+      bar.style.width = '0%';
+      button.disabled = false;
+      render(state);
+      stopPolling();
+      timer = window.setInterval(poll, 1000);
+    }).catch(function () {
+      button.disabled = false;
+    });
+  });
+
+  document.getElementById('remote-print-cancel').addEventListener('click', function () {
+    stopPolling();
+    fetch(cancelUrl, {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: {'X-CSRFToken': csrfToken()}
+    }).then(function () { window.location.href = backUrl; })
+      .catch(function () { window.location.href = backUrl; });
+  });
+
+  timer = window.setInterval(poll, 1000);
+  poll();
+})();
+</script>
+{% endblock %}

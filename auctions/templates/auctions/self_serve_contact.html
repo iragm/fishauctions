@@ -24,13 +24,13 @@
           To change your preference again, use one of the links below.</p>
         <div class="d-flex gap-2 justify-content-center flex-wrap">
           {% if level != "all" %}
-          <a href="{% url 'club_member_contact_pref' slug=club.slug uuid=member.uuid level='all' %}" class="btn btn-outline-success btn-sm">All emails</a>
+          <a href="{% url 'club_member_contact_pref' slug=club.slug uuid=member.uuid level='all' %}" class="btn btn-primary btn-sm">All emails</a>
           {% endif %}
           {% if level != "essential" %}
-          <a href="{% url 'club_member_contact_pref' slug=club.slug uuid=member.uuid level='essential' %}" class="btn btn-outline-primary btn-sm">Essential only</a>
+          <a href="{% url 'club_member_contact_pref' slug=club.slug uuid=member.uuid level='essential' %}" class="btn btn-primary btn-sm">Essential only</a>
           {% endif %}
           {% if level != "none" %}
-          <a href="{% url 'club_member_contact_pref' slug=club.slug uuid=member.uuid level='none' %}" class="btn btn-outline-secondary btn-sm">No emails</a>
+          <a href="{% url 'club_member_contact_pref' slug=club.slug uuid=member.uuid level='none' %}" class="btn btn-primary btn-sm">No emails</a>
           {% endif %}
         </div>
       </div>

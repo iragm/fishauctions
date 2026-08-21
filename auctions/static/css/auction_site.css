@@ -68,8 +68,173 @@ a.ad:hover {
     z-index: 1060;
   }
 
+/* --- select2 pickers are the same box as every other input ---------------
+   Two things are wrong with a django-autocomplete-light picker as it ships, and they compound
+   into "the text in this box is offset".
+
+   dal starts select2 with `containerCssClass: ':all:'`, which copies every class off the
+   original <select> onto the box select2 draws -- and crispy's bootstrap5 field template, like
+   add_bootstrap_classes(), puts `form-select` on any Select widget.  Despite the option's name
+   the classes land on `.select2-selection`, the visible box, and not on the container: so that
+   box is a Bootstrap dropdown *and* a select2 selection at once, wearing both sets of padding
+   (Bootstrap's 0.75rem on the box, select2's 0.75rem on the text span inside it -- 25px of inset
+   where every other field on the form has 13) and both carets, drawn two pixels apart.  That is
+   the offset, and it is why deleting the select2 classes in devtools looks like the fix: what is
+   left is the Bootstrap box on its own.  The clear x jumps to the left of the text at the same
+   time, because select2 prepends it into the text span and only select2's stylesheet floats it
+   back to the right.
+
+   The second thing is the size: select2's *default* theme, which is the one dal renders, is a
+   28px box with 8px of text padding, where Bootstrap's .form-control beside it is 38px with 12px.
+
+   So Bootstrap's padding and caret come off wherever those copied classes land, and select2's own
+   box is dressed to match .form-control instead -- one definition, which the pickers that dal did
+   not build (three pages start select2 themselves) get as well.
+
+   Nothing here changes the colours: Darkly's inputs really are white with dark text.
+
+   Prefixed with `body` on purpose.  Those three pages load their own copy of select2's stylesheet
+   in the extra_js block, and {{ form.media }} loads dal's and the admin's after this file as
+   well, so a rule of equal specificity would lose on exactly the pages this is for.  One element
+   selector is enough to win everywhere without !important. */
+body .select2-selection.form-select,
+body .select2-selection.form-select-sm,
+body .select2-selection.form-select-lg,
+body .select2-selection.form-control,
+body .select2-selection.form-control-sm,
+body .select2-selection.form-control-lg {
+    /* The text span inside carries the padding.  Bootstrap's would be a second helping of it. */
+    padding: 0;
+    /* Bootstrap's caret; select2 draws its own in an element of its own, on top of it. */
+    background-image: none;
+}
+
+body .select2-container--default .select2-selection--single {
+    height: calc(1.5em + 0.75rem + calc(var(--bs-border-width) * 2));
+    border: var(--bs-border-width) solid #222;
+    border-radius: var(--bs-border-radius);
+}
+
+body .select2-container--default .select2-selection--single .select2-selection__rendered {
+    color: #303030;
+    /* The box less its two borders, so one line of text sits in the middle of it. */
+    line-height: calc(1.5em + 0.75rem);
+    padding-left: 0.75rem;
+    /* Room for the caret, the same gap .form-select leaves for its own. */
+    padding-right: 2.25rem;
+}
+
+/* 0.625rem puts the middle of select2's 8px triangle where the middle of Bootstrap's 16px chevron
+   is, 20px in from the right edge, so a picker and a plain <select> line up down the form. */
+body .select2-container--default .select2-selection--single .select2-selection__arrow {
+    height: calc(1.5em + 0.75rem);
+    right: 0.625rem;
+}
+
+/* Floated right inside the text span, so the padding above is what keeps it clear of the caret;
+   it needs no margin of its own. */
+body .select2-container--default .select2-selection--single .select2-selection__clear {
+    line-height: calc(1.5em + 0.75rem);
+    margin-right: 0;
+    color: #6c757d;
+}
+
+body .select2-container--default .select2-selection--multiple {
+    min-height: calc(1.5em + 0.75rem + calc(var(--bs-border-width) * 2));
+    border: var(--bs-border-width) solid #222;
+    border-radius: var(--bs-border-radius);
+    padding-left: 0.375rem;
+}
+
+/* --- and the text inside a multi-select is dark, like every other input -----
+   select2's default theme paints the box white and the chips #e4e4e4 but sets a colour on
+   *neither*, so both inherit whatever the page's text colour is -- which on this site is Darkly's
+   #dee2e6.  Light grey on white and light grey on #e4e4e4 is 1.1:1: the picked categories, and
+   everything typed into the box, were there the whole time and unreadable.  The Bootstrap 3 skin
+   this page used to load happened to set those colours, which is why dropping the skin is what
+   exposed it; the colours belong here now, with the rest of the sizing, so a page that starts
+   select2 itself cannot lose them again.
+
+   Values are the ones Bootstrap 5 uses inside a .form-control on this theme: #303030 for text,
+   #6c757d for the placeholder and the little x. */
+body .select2-container--default .select2-selection--multiple .select2-selection__rendered {
+    color: #303030;
+}
+
+body .select2-container--default .select2-selection--multiple .select2-selection__choice {
+    background-color: #e9ecef;
+    border-color: #adb5bd;
+    color: #303030;
+}
+
+body .select2-container--default .select2-selection--multiple .select2-selection__choice__remove {
+    color: #6c757d;
+}
+
+body .select2-container--default .select2-selection--multiple .select2-selection__choice__remove:hover {
+    color: #303030;
+}
+
+body .select2-container--default .select2-selection--multiple .select2-selection__clear {
+    color: #6c757d;
+}
+
+/* Two different boxes you can type into: the one inside a multi-select (`--inline`, transparent
+   over the white selection box) and the search field at the top of an open dropdown.  Neither sets
+   a colour of its own either, so both were light-on-white as well -- on every picker on the site,
+   not just this page. */
+body .select2-container--default .select2-search--inline .select2-search__field,
+body .select2-container--default .select2-search--dropdown .select2-search__field {
+    color: #303030;
+}
+
+body .select2-container--default .select2-search--inline .select2-search__field::placeholder,
+body .select2-container--default .select2-search--dropdown .select2-search__field::placeholder {
+    color: #6c757d;
+    opacity: 1;
+}
+
+/* The same focus ring .form-control:focus draws, so tabbing across a form doesn't change shape. */
+body .select2-container--default.select2-container--focus .select2-selection--single,
+body .select2-container--default.select2-container--open .select2-selection--single,
+body .select2-container--default.select2-container--focus .select2-selection--multiple {
+    border-color: #9badbf;
+    box-shadow: 0 0 0 0.25rem rgba(55, 90, 127, 0.25);
+}
+
+/* crispy marks a field that failed validation by adding .is-invalid, which rides along on the copy
+   above -- but the border it paints is the one the rules here have just overwritten, so the red
+   has to be put back after them. */
+body .select2-selection.is-invalid {
+    border-color: var(--bs-form-invalid-border-color, #e74c3c);
+}
+
+/* dal ships `min-width: 20em`, which is wider than a narrow column on a phone: the box then
+   overflowed its container to the right, which is the other half of "the text looks offset".
+   Every picker on the site sets its own width, so capping this at the container costs nothing. */
+body .select2-container {
+    min-width: min(20em, 100%);
+    max-width: 100%;
+}
+
 .modal-backdrop {
     z-index: 1040 !important;
+}
+
+/* A <form> wrapping the body and footer of a scrollable modal hides the footer.
+   Bootstrap makes .modal-content a flex column with `max-height:100%; overflow:hidden` and lets
+   .modal-body scroll inside it. That only works while the body and footer are flex children of
+   .modal-content: a <form> between them is one flex item whose automatic minimum size is its full
+   content height, so a long body pushes it past the content box and .modal-content's overflow
+   clips whatever is at the bottom -- the footer, buttons and all. Nothing looks broken; the Send
+   and Copy buttons simply are not on the screen, and only on the dialogs with enough text to
+   overflow. Making the form the flex column .modal-content expected puts the scrolling back on
+   .modal-body and pins the footer where it belongs. */
+.modal-dialog-scrollable .modal-content > form {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    overflow: hidden;
 }
 
 .magic {
@@ -178,19 +343,50 @@ a.ad:hover {
     color: #000;
 }
 
-/* Subtle dark alerts, retuned to the darker palette. */
+/* Alerts, retuned to the darker palette ------------------------------------
+   These used to set `--bs-alert-bg` and `--bs-alert-color` only, which did
+   nothing: Bootstrap's `.alert` reads those variables, but Darkly then writes a
+   *direct* `.alert-warning{background-color:#f39c12}` (and one per variant) far
+   later in its stylesheet, and a plain declaration on an equally specific
+   selector beats a variable the earlier rule read.  So every alert on the site
+   was still Darkly's bright fill with `.alert{color:#fff}` on top of it --
+   white on #f39c12 is 2.2:1 and white on #00bc8c is 2.5:1, the two worst
+   pairings on the site.
+
+   Set the background and the text colour outright, in the pairings the palette
+   documents: the darkened danger fill with white on it, and dark text on the
+   fills that are too light for white. */
 .alert-danger {
-    --bs-alert-color: #f1a49b;
-    --bs-alert-bg: #2b100c;
-    --bs-alert-border-color: #7f261d;
-    --bs-alert-link-color: #f5b8b1;
+    background-color: #a93226;
+    color: #fff;
 }
 
 .alert-warning {
-    --bs-alert-color: #f3c58a;
-    --bs-alert-bg: #2e1f06;
-    --bs-alert-border-color: #8b590b;
-    --bs-alert-link-color: #f7d3a3;
+    background-color: #b9770e;
+    color: #000;
+}
+
+.alert-success {
+    color: #000;
+}
+
+/* Darkly makes every link inside an alert white (`.alert .alert-link,.alert a`),
+   which is the same 2.2:1 problem one level down -- and it is usually the link
+   that says what to do about the alert.  Dark text alerts get dark links. */
+.alert-warning a,
+.alert-warning .alert-link,
+.alert-success a,
+.alert-success .alert-link {
+    color: #000;
+}
+
+/* `.text-dark` is #303030, not black, and style_reference.md's numbers for a
+   warning fill are black's (5.7:1, against 3.6:1 for #303030).  The markup that
+   pairs an alert with `text-dark` is following the message-type standard, so it
+   should not come out darker-on-dark than the alert's own colour: inside an
+   alert, resolve the utility to the black the palette meant. */
+.alert.text-dark {
+    color: #000 !important;
 }
 
 /* --- Outline buttons legible on the dark background ----------------------- */
@@ -300,6 +496,19 @@ a.ad:hover {
     height: 100%;
     background: #00bc8c;
     transition: width 0.1s linear;
+}
+
+/* Voice settings panel. Capped rather than full-bleed: it is read on a phone held in one hand
+   while an auction runs, and a slider stretched across a tablet in landscape makes a 0.01 step
+   into a pixel of travel. */
+.voice-settings {
+    max-width: 28rem;
+}
+
+/* The end labels are the slider's only reading -- it shows no number on purpose -- so keep them
+   tight under the track rather than floating between it and the help text. */
+.voice-settings .form-range {
+    margin-bottom: 0.25rem;
 }
 
 /* --- Command palette: voice + assist -------------------------------------- */
@@ -458,9 +667,136 @@ body.speaker-panel-open {
     }
 }
 
-/* The speaker directory's topic menu is the whole vocabulary; without a cap it
-   runs off the bottom of a phone. */
+/* A cap for *filter* menus, where the rows are a vocabulary that can be any
+   length (the speaker directory's topics, the htmx table filters) and running
+   off the bottom of a phone is the likely case.
+
+   Not for a menu of links. The auction ribbon's More menu wore this for a
+   while, and a navigation menu that scrolls inside itself puts half its own
+   destinations behind a scrollbar that nobody expects a menu to have. */
 .dropdown-menu-scroll {
     max-height: 60vh;
     overflow-y: auto;
+}
+
+/* Help notes -------------------------------------------------------------
+   The "what is this page for" sentence at the top of an admin page. It is
+   guidance, not a warning, so it reads as a tinted note rather than an alert:
+   a light-blue wash, a light-blue rule down the left, and no full border --
+   a boxed alert at the top of every admin page turns into wallpaper nobody
+   reads. Small text on purpose; it is read once and then skipped forever.
+   Markup pattern and rules are in style_reference.md. */
+.help-note {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.5rem;
+    /* The link accent (#2fa4e7) at low opacity: blue enough to read as
+       information against #222 without competing with the page content. */
+    background: rgba(47, 164, 231, 0.09);
+    border-left: 3px solid rgba(47, 164, 231, 0.55);
+    border-radius: 0.25rem;
+    padding: 0.5rem 0.75rem;
+    margin-bottom: 0.75rem;
+    font-size: 0.875rem;
+    color: #dee2e6;
+}
+
+.help-note > .bi {
+    color: #2fa4e7;
+    line-height: 1.5;
+}
+
+/* Paragraphs inside a note shouldn't add another gap under the note itself. */
+.help-note p:last-child {
+    margin-bottom: 0;
+}
+
+/* Cookie/terms bar ---------------------------------------------------------
+   Fixed over the bottom of every page for signed-out visitors. Two things it
+   has to do on a phone that the inline styles it used to carry did not: stay
+   short (a full-size alert wraps to three lines and eats a fifth of the
+   screen), and get out of the way of the end of the page -- fixed elements
+   are out of flow, so without the padding below it sat on top of whatever was
+   last on the page with no way to scroll further. */
+.tos-banner {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    width: 100%;
+    /* Under a modal (1055) and its backdrop (1050), over the page. At the 9999 it
+       used to carry, the cookie bar sat on top of every dialog on the site --
+       including, on a phone, the bottom of a confirm dialog's buttons. */
+    z-index: 1040;
+    padding: 0.5rem 0.75rem;
+    font-size: 0.875rem;
+}
+
+body:has(.tos-banner) {
+    padding-bottom: 5.5rem;
+}
+
+/* Toasts are fixed to the top right; on a narrow phone a 350px toast plus the
+   20px offset overflows the viewport and drags a horizontal scrollbar onto
+   every page that fires one. */
+@media (max-width: 420px) {
+    #toast-container {
+        left: 10px;
+        right: 10px;
+        top: 10px;
+    }
+
+    #toast-container .toast {
+        width: 100%;
+        max-width: 100%;
+    }
+}
+
+/* Close buttons ------------------------------------------------------------
+   This is why every X on the site was invisible. Bootswatch Darkly compiles
+   `.btn-close` with an already-white glyph (`fill='%23fff'`), and Bootstrap
+   5.3 then adds `[data-bs-theme=dark] .btn-close { filter: invert(1) ... }`
+   on top of it -- inverting the white X to black on a near-black panel. Worse,
+   that rule outranks `.btn-close-white` on specificity, so the documented fix
+   in the markup could not win either: offcanvas, modal, alert and toast
+   dismiss buttons were all black-on-black.
+
+   Turn the inversion off. The glyph is white to begin with, which is what a
+   dark surface wants, and `.btn-close-white` in the markup stays correct
+   (and would still be right if the vendor build were ever recompiled with a
+   dark default glyph). */
+[data-bs-theme="dark"] .btn-close,
+[data-bs-theme="dark"] .btn-close-white {
+    filter: none;
+}
+
+/* Darkly rests the glyph at 40% opacity, which on #303030 reads as a smudge
+   rather than a control. */
+.btn-close {
+    --bs-btn-close-opacity: 0.75;
+}
+
+/* The one place a dark glyph is right: a light fill carrying dark text -- the
+   two toast headers the toast helper in base.html paints (success and warning),
+   and the alerts of those two colours, which the block above gives dark text
+   for the same reason.  A white x on #b9770e is 3.7:1 and on #00bc8c 2.5:1. */
+[data-bs-theme="dark"] .toast-header.bg-success .btn-close,
+[data-bs-theme="dark"] .toast-header.bg-warning .btn-close,
+[data-bs-theme="dark"] .alert-success .btn-close,
+[data-bs-theme="dark"] .alert-warning .btn-close {
+    filter: invert(1);
+}
+
+/* Tables inside a card -----------------------------------------------------
+   Darkly compiles `.table{--bs-table-bg:var(--bs-body-bg)}` and Bootstrap 5.3
+   paints every cell with it, so a plain table carries the page's #222 with it
+   wherever it goes. Inside a card that is a near-black rectangle sitting on the
+   #303030 panel -- the lot page's details and bidding-history tables both read
+   as a hole in the card they are in.
+
+   Transparent instead, everywhere: on a #222 page the result is identical, and
+   any other surface (card, modal, list group) is what the table should have
+   been showing all along. The `.table-*` variants set their own
+   `--bs-table-bg` and are untouched by this. */
+.table {
+    --bs-table-bg: transparent;
 }

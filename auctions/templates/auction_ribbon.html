@@ -8,10 +8,10 @@
 <small><span class='text-muted'>{% if auction.club %}An official {{ auction.club }} auction{% else %}An {{auction.auction_type_as_str}}, created by {{ auction.created_by }}{% if request.user.is_authenticated and auction.created_by.userdata.email_visible %}: {{ auction.created_by.email|urlize }}{% endif %}{% endif %}</span></small>
 {% if view.is_auction_admin or is_auction_admin %}
 {% if request.user.is_superuser and not auction.created_by.userdata.is_trusted %}
-      <br><a href='{% url "auction_main" slug=auction.slug %}?trust_user=true' class="btn btn-warning btn-sm mt-2">Trust this user</a>
+      <br><a href='{% url "auction_main" slug=auction.slug %}?trust_user=true' class="btn btn-info btn-sm mt-2">Trust this user</a>
 {% endif %}
 {% if can_make_club_admin %}
-      <br><a href='{% url "auction_main" slug=auction.slug %}?make_club_admin=true' class="btn btn-warning btn-sm mt-2 text-dark">Make {{ auction.created_by.username }} admin of {{ creator_club }}</a>
+      <br><a href='{% url "auction_main" slug=auction.slug %}?make_club_admin=true' class="btn btn-info btn-sm mt-2">Make {{ auction.created_by.username }} admin of {{ creator_club }}</a>
 {% endif %}
 {% if not auction.admin_checklist_completed and not auction.admin_checklist_mostly_completed or not auction.admin_checklist_completed and not request.user.userdata.is_experienced %}
 <div class='mt-4 mb-4 p-2 bg-primary text-white rounded bg-gradient bg-opacity-50'><h5>Finish setting up</h5>
@@ -47,7 +47,7 @@
           Contact us and request access
         </a>
       {% endif %}
-      <a href='{% url "auction_main" slug=auction.slug %}?dismissed_promo_banner=true' class="btn btn-outline-light btn-sm mt-2">Don't show again for this auction</a>
+      <a href='{% url "auction_main" slug=auction.slug %}?dismissed_promo_banner=true' class="btn btn-secondary btn-sm mt-2">Don't show again for this auction</a>
     </div>
   </div>
   {% endif %}
@@ -63,8 +63,8 @@
     </small>
     <div>
       <a href="{% url 'paypal_connect' %}" class="btn btn-info btn-sm mt-2">Connect PayPal account and enable payments</a>
-      <a href='{% url "auction_main" slug=auction.slug %}?dismissed_paypal_banner=true' class="btn btn-outline-light btn-sm mt-2">Not this auction</a>
-      <a href='{% url "auction_main" slug=auction.slug %}?never_show_paypal_connect=true' class="btn btn-outline-light btn-sm mt-2">Never show this again</a>
+      <a href='{% url "auction_main" slug=auction.slug %}?dismissed_paypal_banner=true' class="btn btn-secondary btn-sm mt-2">Not this auction</a>
+      <a href='{% url "auction_main" slug=auction.slug %}?never_show_paypal_connect=true' class="btn btn-secondary btn-sm mt-2">Never show this again</a>
     </div>
   </div>
   {% endif %}
@@ -80,12 +80,25 @@
     </small>
     <div>
       <a href="{% url 'square_connect' %}" class="btn btn-info btn-sm mt-2">Connect Square account and enable payments</a>
-      <a href='{% url "auction_main" slug=auction.slug %}?dismissed_square_banner=true' class="btn btn-outline-light btn-sm mt-2">Not this auction</a>
-      <a href='{% url "auction_main" slug=auction.slug %}?never_show_square_connect=true' class="btn btn-outline-light btn-sm mt-2">Never show this again</a>
+      <a href='{% url "auction_main" slug=auction.slug %}?dismissed_square_banner=true' class="btn btn-secondary btn-sm mt-2">Not this auction</a>
+      <a href='{% url "auction_main" slug=auction.slug %}?never_show_square_connect=true' class="btn btn-secondary btn-sm mt-2">Never show this again</a>
     </div>
   </div>
   {% endif %}
 {% endif %}
+{% comment %}The opposite state to the "connect your Square account" banner above: Square *is* connected here and can take a card in the room, so this is a page where the website is about to show this admin its own Square card.  That is the only moment Apple's Tap to Pay awareness modal belongs, and it is a question only the server can answer -- the app used to guess it from a URL prefix plus a live credential, which put the modal in front of organizers on unrelated pages.  Called unconditionally: the handler resolves {offered: false} on Android, on a phone that can't do Tap to Pay, when the modal has already been shown on this device, and when Tap to Pay is already set up, so the page needs no capability checks of its own.{% endcomment %}
+{% if request.is_mobile_app and auction.offers_tap_to_pay %}
+<script>
+  (function () {
+    try {
+      if (window.flutter_inappwebview && window.flutter_inappwebview.callHandler) {
+        window.flutter_inappwebview.callHandler('tapToPayOffer');
+      }
+    } catch (e) { /* older app build with no handler: nothing to offer */ }
+  })();
+</script>
+{% endif %}
+{% comment %}Icon-only on a phone on purpose: four labelled tabs wrap to two rows, and a wrapped tab strip reads as two separate things.  The icons carry the meaning at that width, which is why More has one at all -- it used to be an empty tab on mobile.{% endcomment %}
 <ul class="nav nav-tabs">
     <li class="nav-item">
       <a class="nav-link {% if active_tab == 'main'%}active{% endif %}" href='{% url "auction_main" slug=auction.slug %}'><i class="bi bi-house-fill"></i><span class='d-none d-md-inline'> Main</span></a>
@@ -97,8 +110,8 @@
       <a class="nav-link {% if active_tab == 'lots'%}active{% endif %}" href="{% url 'auction_lot_list' slug=auction.slug %}"><i class="bi bi-calendar"></i><span class='d-none d-md-inline'> Lots</span></a>
     </li>
     <li class="nav-item dropdown">
-        <a class="nav-link dropdown-toggle" href="#" role="button" data-bs-toggle="dropdown" aria-expanded="false"><span class='d-none d-md-inline'>More</span></span></a>
-        <ul class="dropdown-menu">
+        <a class="nav-link dropdown-toggle" href="#" role="button" data-bs-toggle="dropdown" aria-expanded="false"><i class="bi bi-three-dots"></i><span class='d-none d-md-inline'> More</span></a>
+        <ul class="dropdown-menu dropdown-menu-end">
           <a class="dropdown-item" href="{% url 'edit_auction' slug=auction.slug %}"><i class="bi bi-gear-fill"></i> Rules</a>
           <a class="dropdown-item" href="{% url 'edit_auction_custom_fields' slug=auction.slug %}"><i class="bi bi-ui-checks-grid"></i> Custom fields</a>
           <a class="dropdown-item" href="{{ auction.location_link }}"><i class="bi bi-geo-alt-fill"></i> Location{% if auction.location_qs|length > 1 %}s{% endif %}</a>

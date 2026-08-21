@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block title %}Unsubscribe from donation requests{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+  <div class="col-md-8">
+    <h3 class="mb-3">Donation requests</h3>
+
+    {% if just_unsubscribed %}
+    <div class="alert alert-success text-dark" role="alert">
+      <i class="bi bi-check-circle-fill me-1"></i>
+      <strong>You've been unsubscribed.</strong>
+      {{ vendor.email }} won't receive donation requests from {{ club.name }} or from any other
+      club on this site.
+    </div>
+    <p class="text-muted">You can close this page. Nothing else is needed.</p>
+
+    {% elif already_unsubscribed %}
+    <div class="alert alert-info" role="alert">
+      <i class="bi bi-info-circle me-1"></i>
+      {{ vendor.email }} is already unsubscribed from donation requests.
+    </div>
+
+    {% else %}
+    <p>
+      {{ club.name }} has been sending donation requests to <strong>{{ vendor.email }}</strong>.
+    </p>
+    <p>
+      Unsubscribing stops donation requests to this address from <strong>every club</strong> on
+      this site, not just {{ club.name }}. This can't be undone from your side or theirs &mdash;
+      if you change your mind later you'll need to contact the club directly.
+    </p>
+    <form method="post">
+      {% csrf_token %}
+      <button type="submit" class="btn btn-danger">
+        <i class="bi bi-slash-circle me-1"></i> Unsubscribe {{ vendor.email }}
+      </button>
+    </form>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

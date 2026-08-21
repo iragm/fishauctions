@@ -1,0 +1,20 @@
+{% comment %}
+  Attribution for the species list.  FishBase asks to be cited as Froese & Pauly; the snapshot we
+  actually load comes from rfishbase's mirror, whose authors ask for the Boettiger et al. citation
+  the package itself ships.
+
+  It is *not* on the forms.  A citation under every lot form is a paragraph of small print in front
+  of somebody adding forty lots, and the forms no longer even show a scientific name most of the
+  time -- the picker is hidden until it is needed.  It lives behind the "?" next to the name on the
+  lot page instead, which is the page where a reader is actually reading the data.
+{% endcomment %}
+<div class="text-muted small mt-2 border-top pt-2">
+  Scientific names from
+  <a href="https://fishbase.org" target="_blank" rel="noopener">FishBase</a>
+  ({{ fishbase_version }}): Froese, R. and D. Pauly, Editors. World Wide Web electronic publication.
+  Snapshot via
+  <a href="https://github.com/ropensci/rfishbase" target="_blank" rel="noopener">rfishbase</a>:
+  Boettiger, C., Temple Lang, D. and Wainwright, P. (2012)
+  <i>Journal of Fish Biology</i> 81(6), 2030&ndash;2039.
+  Plants, invertebrates, live foods and named strains come from this site's own reviewed list.
+</div>

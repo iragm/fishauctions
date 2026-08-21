@@ -3,7 +3,7 @@
     <button class="btn btn-sm {{ filter_button_class|default:'btn-primary' }} dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false">
       <i class="bi bi-filter"></i> Filters
     </button>
-    <div class="dropdown-menu">
+    <div class="dropdown-menu dropdown-menu-scroll">
       {% for filter_label, filter_key in possible_filters %}
         {% if filter_key %}
           <label class="dropdown-item">

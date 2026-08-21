@@ -4,9 +4,19 @@ from django.urls import include, path, re_path
 from django.views.generic.base import TemplateView
 from django_ses.views import SESEventWebhookView
 
-from . import apple_notifications, passkit_views, views
+from . import app_links, apple_notifications, donation_views, passkit_views, views
 
 urlpatterns = [
+    # App-association files. The paths and filenames are fixed by Google and Apple (Apple's really
+    # does have no .json extension), and neither platform follows a redirect to reach them, so they
+    # are matched exactly here rather than anywhere APPEND_SLASH could get involved. Public: the
+    # fetch comes from Google's and Apple's infrastructure, not from a signed-in user.
+    path(".well-known/assetlinks.json", app_links.assetlinks, name="android_assetlinks"),
+    path(
+        ".well-known/apple-app-site-association",
+        app_links.apple_app_site_association,
+        name="apple_app_site_association",
+    ),
     # allauth mounts these under /3rdparty/, but the app's WebView allowlist is built around
     # /social/... (AllauthWebScreen), so the mobile social-login continuation is sent here instead.
     # Same views, second path — the /3rdparty/ URLs keep working for the web, and the names stay
@@ -71,6 +81,11 @@ urlpatterns = [
         "api/category-autocomplete/",
         views.CategoryAutocomplete.as_view(),
         name="category-autocomplete",
+    ),
+    path(
+        "api/species-autocomplete/",
+        views.SpeciesAutocomplete.as_view(),
+        name="species-autocomplete",
     ),
     path("ads/fetch/", views.RenderAd.as_view(), name="get_ad"),
     path("ads/<str:uuid>/", views.ClickAd.as_view(), name="click_ad"),
@@ -163,6 +178,38 @@ urlpatterns = [
         "admin-dashboard/command-palette/",
         views.CommandPaletteAnalyticsView.as_view(),
         name="command_palette_analytics",
+    ),
+    path(
+        "admin-dashboard/species-gaps/",
+        views.SpeciesGapsView.as_view(),
+        name="species_gaps",
+    ),
+    path("species/new/", views.SpeciesCreateView.as_view(), name="species_create"),
+    path("species/name/", views.SpeciesCommonNameCreateView.as_view(), name="species_name_create"),
+    path(
+        "admin-dashboard/species-gaps/forget/<int:pk>/",
+        views.SpeciesSearchCacheForgetView.as_view(),
+        name="species_cache_forget",
+    ),
+    path(
+        "admin-dashboard/species-gaps/approve/<int:pk>/",
+        views.SpeciesApproveView.as_view(),
+        name="species_approve",
+    ),
+    path(
+        "admin-dashboard/species-gaps/allow-again/<int:pk>/",
+        views.SpeciesNameRejectionDeleteView.as_view(),
+        name="species_rejection_delete",
+    ),
+    path(
+        "admin-dashboard/species-gaps/not-a-duplicate/<int:pk>/",
+        views.SpeciesDuplicateDismissView.as_view(),
+        name="species_duplicate_dismiss",
+    ),
+    path(
+        "admin-dashboard/species-gaps/merge/<int:pk>/",
+        views.SpeciesMergeView.as_view(),
+        name="species_merge",
     ),
     path("admin-traffic/", views.AdminTraffic.as_view(), name="admin_traffic"),
     path("admin-traffic-data/", views.AdminTrafficJSON.as_view(), name="admin_traffic_json"),
@@ -567,6 +614,24 @@ urlpatterns = [
     path("account/deleted/", views.AccountDeletedView.as_view(), name="account_deleted"),
     path("messages/", login_required(views.ChatSubscriptions.as_view()), name="messages"),
     path("printing/", login_required(views.UserLabelPrefsView.as_view()), name="printing"),
+    # Printing from a computer to the phone's Bluetooth printer: the waiting page polls the first of
+    # these once a second, and the three buttons on a failure use the other two. Session auth -- this
+    # is the computer's half of the conversation; the phone's half is under /api/mobile/printjobs/.
+    path(
+        "printing/job/<uuid:job_uuid>/",
+        views.RemotePrintJobStatusView.as_view(),
+        name="remote_print_job",
+    ),
+    path(
+        "printing/job/<uuid:job_uuid>/retry/",
+        views.RemotePrintJobRetryView.as_view(),
+        name="remote_print_job_retry",
+    ),
+    path(
+        "printing/job/<uuid:job_uuid>/cancel/",
+        views.RemotePrintJobCancelView.as_view(),
+        name="remote_print_job_cancel",
+    ),
     path("faq/", views.FAQ.as_view(), name="faq"),
     path(
         "auctions/<slug:slug>/locations/",
@@ -725,6 +790,11 @@ urlpatterns = [
         views.FindImageIcon.as_view(),
         name="auto_image_available",
     ),
+    path(
+        "api/species/suggest/",
+        views.SpeciesSuggestions.as_view(),
+        name="species_suggestions",
+    ),
     # path('api/auctionstats/distance-traveled', views.AdminStatsDistanceTraveled.as_view(), name='distance_traveled'),
     # path('api/auctionstats/prices-with-images', views.AdminStatsImages.as_view(), name='prices_with_images'),
     path(
@@ -874,6 +944,16 @@ urlpatterns = [
         views.ClubBapCategoryOverrideDeleteView.as_view(),
         name="club_bap_category_override_delete",
     ),
+    path(
+        "clubs/<slug:slug>/bap-settings/genus-overrides/save/",
+        views.ClubBapGenusOverrideSaveView.as_view(),
+        name="club_bap_genus_override_save",
+    ),
+    path(
+        "clubs/<slug:slug>/bap-settings/genus-overrides/<int:pk>/delete/",
+        views.ClubBapGenusOverrideDeleteView.as_view(),
+        name="club_bap_genus_override_delete",
+    ),
     path("clubs/<slug:slug>/bap-admin/", views.ClubBapView.as_view(), name="club_bap"),
     path("clubs/<slug:slug>/bap-admin/lots/", views.ClubBapLotsView.as_view(), name="club_bap_lots"),
     path(
@@ -968,6 +1048,31 @@ urlpatterns = [
         name="club_events_embed",
     ),
     path(
+        "clubs/<slug:slug>/announcements-embed/",
+        views.ClubAnnouncementsEmbedView.as_view(),
+        name="club_announcements_embed",
+    ),
+    path(
+        "clubs/<slug:slug>/auction-embed/",
+        views.ClubAuctionEmbedView.as_view(),
+        name="club_auction_embed",
+    ),
+    path(
+        "clubs/<slug:slug>/announcements/",
+        views.ClubAnnouncementsView.as_view(),
+        name="club_announcements",
+    ),
+    path(
+        "clubs/<slug:slug>/announcements/<uuid:uuid>/retract/",
+        views.ClubAnnouncementRetractView.as_view(),
+        name="club_announcement_retract",
+    ),
+    path(
+        "clubs/<slug:slug>/website/",
+        views.ClubWebsiteIntegrationView.as_view(),
+        name="club_website_integration",
+    ),
+    path(
         "clubs/<slug:slug>/print-barcodes/",
         views.ClubBarcodeLabelsView.as_view(),
         name="club_barcode_labels",
@@ -1035,7 +1140,66 @@ urlpatterns = [
         views.ClubBapLotListAPIView.as_view(),
         name="api_club_bap_lots",
     ),
+    path(
+        "api/v1/clubs/<slug:slug>/species-lookup/",
+        views.ClubSpeciesLookupAPIView.as_view(),
+        name="api_club_species_lookup",
+    ),
+    # <identifier> is a species id *or* a scientific name -- a caller that just matched free text
+    # has the name and not the id, and looking it up first would be two calls to do one thing.
+    path(
+        "api/v1/clubs/<slug:slug>/species-lookup/<str:identifier>/common-names/",
+        views.ClubSpeciesCommonNameAPIView.as_view(),
+        name="api_club_species_common_names",
+    ),
     path("api/v1/email-routing/resolve/", views.InboundEmailRoutingView.as_view(), name="inbound_email_routing"),
+    path(
+        "api/v1/email-routing/donation/",
+        donation_views.InboundDonationEmailView.as_view(),
+        name="inbound_donation_email",
+    ),
+    # Donation tracking. The unsubscribe link goes out in email to people with no account here,
+    # so it sits outside the clubs/<slug>/ admin block and is keyed on an unguessable uuid.
+    path(
+        "donations/unsubscribe/<uuid:uuid>/",
+        donation_views.DonationUnsubscribeView.as_view(),
+        name="donation_unsubscribe",
+    ),
+    path(
+        "clubs/<slug:slug>/donations/",
+        donation_views.ClubDonationVendorsView.as_view(),
+        name="club_donation_vendors",
+    ),
+    path(
+        "clubs/<slug:slug>/donations/settings/",
+        donation_views.ClubDonationSettingsView.as_view(),
+        name="club_donation_settings",
+    ),
+    path(
+        "clubs/<slug:slug>/donations/add/",
+        donation_views.DonationVendorPanelView.as_view(),
+        name="club_donation_vendor_create",
+    ),
+    path(
+        "donations/vendor/<int:pk>/",
+        donation_views.DonationVendorPanelView.as_view(),
+        name="club_donation_vendor",
+    ),
+    path(
+        "donations/vendor/<int:pk>/delete/",
+        donation_views.DonationVendorDeleteView.as_view(),
+        name="club_donation_vendor_delete",
+    ),
+    path(
+        "donations/vendor/<int:pk>/contact/",
+        donation_views.DonationContactView.as_view(),
+        name="club_donation_contact",
+    ),
+    path(
+        "donations/email/<int:pk>/",
+        donation_views.DonationEmailPreviewView.as_view(),
+        name="club_donation_email",
+    ),
     # Discord integration
     path("discord/interactions/", views.DiscordInteractionsView.as_view(), name="discord_interactions"),
     path("clubs/<slug:slug>/discord/", views.ClubDiscordConfigView.as_view(), name="club_discord_config"),

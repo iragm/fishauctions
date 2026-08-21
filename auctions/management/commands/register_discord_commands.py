@@ -50,6 +50,17 @@ class Command(BaseCommand):
         else:
             self.stderr.write(f"Failed to register /auctions_here: {resp2.status_code} {resp2.text}")
 
+        announcements_here_payload = {
+            "name": "announcements_here",
+            "description": "Set this channel to receive club announcements",
+            "default_member_permissions": "32",
+        }
+        resp2b = requests.post(url, headers=headers, json=announcements_here_payload, timeout=10)
+        if resp2b.status_code in (200, 201):
+            self.stdout.write(self.style.SUCCESS("Successfully registered /announcements_here command."))
+        else:
+            self.stderr.write(f"Failed to register /announcements_here: {resp2b.status_code} {resp2b.text}")
+
         membership_payload = {
             "name": "membership",
             "description": "Check your membership status and expiration date",

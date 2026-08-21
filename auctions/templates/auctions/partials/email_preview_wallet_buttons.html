@@ -1,15 +1,17 @@
 {% comment %}
-Non-clickable stand-ins for the "Add to ... Wallet" buttons that the real membership emails
-put under the barcode (see tasks._wallet_buttons_html).  Like the rest of this preview they
-carry no working links.  Each only appears when that wallet is configured for the site.
+Stand-ins for the "Add to ... Wallet" buttons that the real membership emails put under the
+barcode (tasks._wallet_buttons_html).  They are pictures of a button, not buttons: the inline
+style is a copy of _WALLET_BUTTON_STYLE so the preview looks like the mail, and like the rest of
+this preview they carry no working links.  The real email only ever writes a button it has a URL
+for, so a wallet that isn't set up produces nothing there and nothing here.
 {% endcomment %}
 {% if google_wallet_enabled or apple_wallet_enabled %}
-<div class="mb-3 d-flex flex-wrap gap-2">
+<div class="mb-3">
   {% if google_wallet_enabled %}
-  <span class="btn btn-sm btn-dark disabled" aria-disabled="true"><i class="bi bi-google"></i> Add to Google Wallet</span>
+  <span style="display:inline-block;padding:10px 16px;margin:0 8px 8px 0;background:#303030;color:#ffffff;border-radius:6px;font-size:14px;"><i class="bi bi-google"></i> Add to Google Wallet</span>
   {% endif %}
   {% if apple_wallet_enabled %}
-  <span class="btn btn-sm btn-dark disabled" aria-disabled="true"><i class="bi bi-apple"></i> Add to Apple Wallet</span>
+  <span style="display:inline-block;padding:10px 16px;margin:0 8px 8px 0;background:#303030;color:#ffffff;border-radius:6px;font-size:14px;"><i class="bi bi-apple"></i> Add to Apple Wallet</span>
   {% endif %}
 </div>
 {% endif %}

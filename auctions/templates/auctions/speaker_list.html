@@ -41,8 +41,8 @@ of it on the page.{% endcomment %}
 {% block htmx_table %}
 {% comment %}Directly above the results, not tucked up beside the heading: switching to the map is the second thing people want from this page and it was easy to miss up there.{% endcomment %}
 <div class="btn-group mb-2" role="group" aria-label="List or map">
-  <button type="button" class="btn btn-outline-secondary" id="speaker-view-list"><i class="bi bi-list-ul"></i> List</button>
-  <button type="button" class="btn btn-outline-secondary" id="speaker-view-map"><i class="bi bi-map"></i> Map</button>
+  <button type="button" class="btn btn-secondary" id="speaker-view-list"><i class="bi bi-list-ul"></i> List</button>
+  <button type="button" class="btn btn-secondary" id="speaker-view-map"><i class="bi bi-map"></i> Map</button>
 </div>
 
 <div id="speaker-map-wrapper" class="card mb-3 d-none">
@@ -167,19 +167,25 @@ the htmx table response ships the same wrapper so filtering redraws the map mark
 
   let mapInitialized = false;
 
+  /* Selected is primary, unselected is secondary -- see style_reference.md. */
+  function setViewButtons(selected, unselected) {
+    selected.classList.remove('btn-secondary');
+    selected.classList.add('btn-primary', 'active');
+    unselected.classList.remove('btn-primary', 'active');
+    unselected.classList.add('btn-secondary');
+  }
+
   function showList() {
     mapWrapper.classList.add('d-none');
     listWrapper.classList.remove('d-none');
-    listButton.classList.add('active');
-    mapButton.classList.remove('active');
+    setViewButtons(listButton, mapButton);
     setViewParam('list');
   }
 
   function showMap() {
     listWrapper.classList.add('d-none');
     mapWrapper.classList.remove('d-none');
-    mapButton.classList.add('active');
-    listButton.classList.remove('active');
+    setViewButtons(mapButton, listButton);
     setViewParam('map');
     initSpeakerMap();
     if (speakerMap) {

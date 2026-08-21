@@ -77,6 +77,12 @@
                 {% if 'lot_name' in label.auction.label_print_fields %}
                     {{ label.lot_name }}<br>
                 {% endif %}
+                {% comment %}The name the seller did *not* type: a label reading "Chindongo saulosi" twice wastes the one line of space that could have said "Saulosi cichlid" instead.  See Lot.scientific_name_line.{% endcomment %}
+                {% if 'scientific_name' in label.auction.label_print_fields and label.scientific_name_line %}
+                    <span style="font-size: {{ description_font_size }}pt;"><i>{{ label.scientific_name_line }}</i></span><br>
+                {% elif 'scientific_name' in label.auction.label_print_fields and label.common_name_line %}
+                    <span style="font-size: {{ description_font_size }}pt;">{{ label.common_name_line }}</span><br>
+                {% endif %}
                 {% if 'custom_field_1' in label.auction.label_print_fields and label.custom_field_1 %}
                     <span style="font-size: {{ description_font_size }}pt;">
                         {{ label.custom_field_1 }}<br>

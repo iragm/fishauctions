@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% load crispy_forms_tags %}
+{% block title %}{{ title }}{% endblock %}
+{% block content %}
+<h2 class="mb-1">{{ title }}</h2>
+{% comment %}
+  The other half of species_form.html, and the one that should be used more often: most lot names
+  with no scientific name are a species the list has had all along under a name nobody says out
+  loud.  Adding a name is the fix; adding a second copy of the species is what fills the duplicate
+  table.
+{% endcomment %}
+<p class="text-muted">
+  {% if request.user.is_superuser %}You are naming a species everyone can already see. A name added here is matched on every club's lots straight away.{% elif club %}You are naming a species everyone can already see. The name will only be matched for you and the rest of {{ club }} until a site admin approves it.{% else %}You are naming a species everyone can already see. The name will only be matched for you until a site admin approves it.{% endif %}
+</p>
+{% if lot_name %}
+<div class="alert alert-info py-2">
+  Naming a species for lots called &ldquo;<strong>{{ lot_name }}</strong>&rdquo;.
+</div>
+{% endif %}
+{% crispy form form.helper %}
+<p class="text-muted small mt-3">
+  Nothing on the list matches? <a href="{% url 'species_create' %}?lot_name={{ lot_name|urlencode }}{% if request.GET.next %}&next={{ request.GET.next|urlencode }}{% endif %}">Add the species itself</a> instead.
+</p>
+{% endblock %}

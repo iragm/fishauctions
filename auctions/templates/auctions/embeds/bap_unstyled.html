@@ -1,0 +1,13 @@
+{% autoescape on %}<table class="bap-leaderboard">
+  <thead>
+    <tr><th scope="col">Rank</th><th scope="col">Name</th><th scope="col">{{ program_label }} points</th></tr>
+  </thead>
+  <tbody>
+  {% for row in leaderboard %}
+    <tr><td>{{ row.rank }}</td><td>{{ row.name }}</td><td>{{ row.points }}</td></tr>
+  {% empty %}
+    <tr><td colspan="3">No points recorded yet.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endautoescape %}

@@ -41,7 +41,7 @@
                     <span class="badge bg-success text-dark lot-number-badge">Lot #{{ lot.lot_number_display }}</span>
                     <!-- Actions dropdown menu -->
                     <div class="dropdown actions-menu">
-                      <button class="btn btn-sm btn-outline-secondary dropdown-toggle py-0 px-1" type="button" data-bs-toggle="dropdown" aria-expanded="false" style="font-size: 0.75rem;">
+                      <button class="btn btn-sm btn-primary dropdown-toggle py-0 px-1" type="button" data-bs-toggle="dropdown" aria-expanded="false" style="font-size: 0.75rem;">
                         <i class="bi bi-three-dots"></i>
                       </button>
                       <ul class="dropdown-menu dropdown-menu-end">
@@ -61,6 +61,11 @@
                                value="{{ lot.lot_name }}" maxlength="40" data-field="lot_name"
                                {% if not lot.can_be_edited %}disabled{% endif %}>
                       </div>
+                      {% comment %}The scientific name is worked out from the lot name and shown here as text: no dropdown to read on every one of forty rows.  Wrong, or not a species at all?  Clear it.  Changing it is a job for the full editor, on a lot that has already been saved.{% endcomment %}
+                      {% if use_scientific_name %}
+                      <input type="hidden" class="lot-input species-input" name="species" data-field="species" value="{{ lot.species_id|default_if_none:'' }}">
+                      <div class="form-text small species-hint">{% if lot.species %}<i>{{ lot.species.full_scientific_name }}</i>{% if lot.can_be_edited %}<button type="button" class="btn btn-link btn-sm p-0 ms-1 align-baseline species-clear text-muted" title="Not this species" aria-label="Remove this scientific name"><i class="bi bi-x-lg"></i></button>{% endif %}{% endif %}</div>
+                      {% endif %}
                       <div class="invalid-feedback"></div>
                     </div>
 
@@ -170,7 +175,7 @@
                     <span class="badge bg-secondary text-dark lot-number-badge">Not saved</span>
                     <!-- Actions dropdown menu (hidden until saved) -->
                     <div class="dropdown actions-menu" style="display: none;">
-                      <button class="btn btn-sm btn-outline-secondary dropdown-toggle py-0 px-1" type="button" data-bs-toggle="dropdown" aria-expanded="false" style="font-size: 0.75rem;">
+                      <button class="btn btn-sm btn-primary dropdown-toggle py-0 px-1" type="button" data-bs-toggle="dropdown" aria-expanded="false" style="font-size: 0.75rem;">
                         <i class="bi bi-three-dots"></i>
                       </button>
                       <ul class="dropdown-menu dropdown-menu-end">
@@ -189,6 +194,10 @@
                         <input type="text" class="form-control form-control-sm lot-input auto-image-check" name="lot_name"
                                placeholder="Enter lot name" maxlength="40" data-field="lot_name">
                       </div>
+                      {% if use_scientific_name %}
+                      <input type="hidden" class="lot-input species-input" name="species" data-field="species" value="">
+                      <div class="form-text small species-hint"></div>
+                      {% endif %}
                       <div class="invalid-feedback"></div>
                     </div>
 
@@ -277,7 +286,7 @@
         </div>
 
         <div class="mt-3 d-flex align-items-center gap-2">
-          <button class="btn btn-secondary btn-sm" id="add-row-btn">
+          <button class="btn btn-primary btn-sm" id="add-row-btn">
             <i class="bi bi-plus-circle"></i> Add another row
           </button>
           {% if is_admin and max_lots_per_user %}
@@ -706,6 +715,15 @@ document.getElementById('add-row-btn').addEventListener('click', () => {
     // Clear validation errors
     newRow.querySelectorAll('.invalid-feedback').forEach(fb => fb.textContent = '');
 
+    // A cloned row carries the previous row's species, which was worked out from a different lot
+    // name.  Both halves have to go: the value that would be saved, and the line of text saying
+    // what it is.
+    newRow.querySelectorAll('.species-input').forEach(input => {
+        input.value = '';
+        delete input.dataset.lastQuery;
+    });
+    newRow.querySelectorAll('.species-hint').forEach(hint => hint.innerHTML = '');
+
     // Remove image icons
     newRow.querySelectorAll('.input-group-text').forEach(el => el.remove());
     newRow.querySelectorAll('.input-wrapper input').forEach(input => {
@@ -724,6 +742,95 @@ document.getElementById('add-row-btn').addEventListener('click', () => {
     // Scroll to the new row
     newRow.scrollIntoView({ behavior: 'smooth', block: 'center' });
 });
+
+{% if use_scientific_name %}
+// The scientific name, worked out from the lot name.  There is no picker on this page: somebody
+// adding forty lots is not reading a dropdown forty times, so a name the matcher is *sure* about
+// is filled into a hidden input and shown as a line of text, and anything less certain is left
+// blank rather than put in front of them.  The value only ever comes from the server, so nothing
+// here can invent a species; correcting one is a job for the full editor, from the lot page.
+const SPECIES_URL = "{% url 'species_suggestions' %}";
+
+function showSpecies(row, label, note) {
+    const hint = row.querySelector('.species-hint');
+    if (!hint) return;
+    hint.innerHTML = '';
+    if (!label) {
+        if (note) { hint.textContent = note; }
+        return;
+    }
+    const name = document.createElement('i');
+    name.textContent = label;
+    hint.appendChild(name);
+    if (note) {
+        hint.appendChild(document.createTextNode(' ' + note));
+    }
+    const clear = document.createElement('button');
+    clear.type = 'button';
+    clear.className = 'btn btn-link btn-sm p-0 ms-1 align-baseline species-clear text-muted';
+    clear.title = 'Not this species';
+    clear.setAttribute('aria-label', 'Remove this scientific name');
+    clear.innerHTML = '<i class="bi bi-x-lg"></i>';
+    hint.appendChild(clear);
+}
+
+// The only control on this page: "that is not what I am selling".  Clearing sticks, because the
+// lookup below only runs when the lot name actually changes.
+$(document).on('click', '.species-clear', function() {
+    const row = this.closest('.lot-row');
+    const input = row.querySelector('.species-input');
+    if (!input) return;
+    input.value = '';
+    showSpecies(row, '', '');
+    saveLot(row);
+});
+
+function applySpecies(row, choices, source) {
+    const input = row.querySelector('.species-input');
+    if (!input) return;
+    // Exactly one, or nothing.  A shortlist is the matcher saying it cannot tell two species
+    // apart, and the honest answer to that on a page with no picker is no species at all.
+    if (choices.length === 1) {
+        input.value = choices[0].id;
+        // A match the species list made itself is exact and needs no comment; one the language
+        // model worked out from the lot name is a good guess, and says so, because it ends up on
+        // a printed label and in breeder points.
+        showSpecies(row, choices[0].scientific_name || choices[0].label, source === 'llm' ? '(best guess)' : '');
+        return;
+    }
+    input.value = '';
+    showSpecies(row, '', '');
+}
+
+$(document).on('blur', '[data-field="lot_name"]', function() {
+    const row = this.closest('.lot-row');
+    if (!row) return;
+    const input = row.querySelector('.species-input');
+    if (!input || row.dataset.locked === 'true') return;
+    const name = this.value.trim();
+    if (!name) {
+        applySpecies(row, [], 'none');
+        return;
+    }
+    if (input.dataset.lastQuery === name) return;
+    input.dataset.lastQuery = name;
+    $.ajax({
+        url: SPECIES_URL,
+        type: 'POST',
+        data: {'name': name, 'csrfmiddlewaretoken': '{{ csrf_token }}'},
+        success: function(response) {
+            // A slow reply for an old lot name must not stomp on what is in the box now.
+            if (input.dataset.lastQuery !== response.name) return;
+            applySpecies(row, response.choices || [], response.source);
+            // Saving here rather than waiting for a change event: a hidden input set by script
+            // fires nothing, so a species filled in by the page that nobody touches would never
+            // reach the database.  Unconditional, because this is also what saves a brand new row
+            // whose lot name matched no species at all.
+            saveLot(row);
+        }
+    });
+});
+{% endif %}
 
 {% if auto_add_images %}
 // Image checking system

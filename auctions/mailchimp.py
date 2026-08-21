@@ -137,16 +137,102 @@ def list_audiences(client):
     return out
 
 
-def create_audience(client, club, from_email, contact):
-    """Create a '{club name} Members' audience and return its id."""
+def account_defaults(client):
+    """Return {'from_name', 'from_email', 'contact'} as Mailchimp already has them, or None.
+
+    A campaign is sent by the club's own Mailchimp account, from a domain verified inside that
+    account, against that account's suppression list -- so the sender cannot come from this site.
+    Our address is not verified there (the send is refused), and the club's site contact email
+    usually isn't either. Both are also the wrong answer even when they work: mail from this club
+    should arrive looking like the mail this club already sends.
+
+    Mailchimp holds the answer in two places, in this order of trust:
+
+    1. An audience the account already has. Its `campaign_defaults` are what Mailchimp itself
+       prefills on every campaign the club sends by hand, so they are a sender that demonstrably
+       works, and its `contact` block is the physical address that audience passes CAN-SPAM with.
+    2. The account root, for an account with no audience yet -- the login email and the mailing
+       address the club typed when it signed up.
+
+    Returns None when neither has an email, which is a real state (a brand-new account) and the
+    one case worth stopping on: creating the audience anyway would bake an unsendable default
+    into it, and the club would only find out at the first send.
+    """
+    try:
+        lists = client.lists.get_all_lists(count=200).get("lists", [])
+    except Exception:
+        logger.exception("Mailchimp: couldn't read existing audiences for account defaults")
+        lists = []
+    for lst in lists:
+        defaults = lst.get("campaign_defaults") or {}
+        if defaults.get("from_email"):
+            return {
+                "from_name": defaults.get("from_name") or "",
+                "from_email": defaults["from_email"],
+                "contact": lst.get("contact") or {},
+            }
+    try:
+        root = client.root.get_root(fields=["account_name", "email", "contact"])
+    except Exception:
+        logger.exception("Mailchimp: couldn't read the account root for account defaults")
+        return None
+    if not root.get("email"):
+        return None
+    return {
+        "from_name": root.get("account_name") or "",
+        "from_email": root["email"],
+        "contact": root.get("contact") or {},
+    }
+
+
+def format_mailing_address(contact):
+    """Turn a Mailchimp `contact` block into the multi-line address a letter is signed with.
+
+    Mailchimp requires a real postal address on every audience because US bulk commercial email
+    has to carry one, which makes it the same address a club's donation letters need -- see
+    Club.donation_mailing_address. The company line is dropped: the letter already says who is
+    writing, and every club that types its own name into that box ends up saying it twice.
+    """
+    if not contact:
+        return ""
+    lines = [contact.get("addr1"), contact.get("addr2")]
+    city_line = " ".join(x for x in (contact.get("city"), contact.get("state")) if x)
+    if contact.get("zip"):
+        city_line = f"{city_line} {contact['zip']}".strip()
+    lines.append(city_line)
+    country = contact.get("country") or ""
+    # Two-letter country codes read as noise on a domestic letter; only non-US is worth printing.
+    if country and country.upper() not in {"US", "USA"}:
+        lines.append(country)
+    return "\n".join(x.strip() for x in lines if x and x.strip())
+
+
+def create_audience(client, club):
+    """Create a '{club name} Members' audience and return (id, name).
+
+    The sender and the mailing address are the account's own (see account_defaults); nothing
+    about the new audience is taken from this site except its name and permission reminder,
+    which are about the club rather than about who the mail is from.
+    """
+    defaults = account_defaults(client)
+    if not defaults:
+        msg = (
+            "Mailchimp hasn't got a sender address for this account yet. Send one campaign from "
+            "Mailchimp (or create an audience there), then come back and pick it from the list."
+        )
+        raise MailchimpError(msg)
+    contact = dict(defaults["contact"])
+    contact["company"] = contact.get("company") or club.name
     body = {
         "name": f"{club.name} Members",
         "contact": contact,
         "permission_reminder": f"You are receiving this because you are a member of {club.name}.",
         "email_type_option": True,
         "campaign_defaults": {
-            "from_name": club.name,
-            "from_email": from_email,
+            # from_name is a display name Mailchimp doesn't validate, so the club's own name is a
+            # fine fallback; from_email is validated at send time and has no fallback at all.
+            "from_name": defaults["from_name"] or club.name,
+            "from_email": defaults["from_email"],
             "subject": "",
             "language": "en",
         },
@@ -549,3 +635,101 @@ def member_in_mailchimp_url(member):
     if not member.mailchimp_web_id or not club.mailchimp_server_prefix:
         return ""
     return f"https://{club.mailchimp_server_prefix}.admin.mailchimp.com/lists/members/view?id={member.mailchimp_web_id}"
+
+
+# --- announcement campaigns -------------------------------------------------------------------
+#
+# A club announcement mailed through the club's own Mailchimp, as a *campaign* rather than a
+# transactional send. That distinction is the whole point: a campaign goes to the audience, which
+# means Mailchimp applies the audience's unsubscribes, cleaned addresses and compliance footer for
+# us. Sending the same text through this site's own mail server would reach the people who
+# unsubscribed from the club, which is the one thing these integrations exist to prevent.
+
+
+def verified_sender(client, club):
+    """Return (from_name, from_email) for a campaign, or raise MailchimpError saying why not.
+
+    The sender is the audience's own campaign defaults -- what Mailchimp prefills when the club
+    writes a campaign by hand -- because a from address this site invented is one Mailchimp will
+    refuse at send time. See account_defaults for where it comes from.
+    """
+    try:
+        settings_ = client.lists.get_list(club.mailchimp_audience_id).get("campaign_defaults") or {}
+    except Exception as e:
+        msg = f"Couldn't read your Mailchimp audience: {_readable_api_error(e)}"
+        raise MailchimpError(msg) from e
+    from_email = settings_.get("from_email") or ""
+    if not from_email:
+        msg = (
+            "Your Mailchimp audience has no default from address. Open the audience in Mailchimp, "
+            "set its default from name and email, then try again."
+        )
+        raise MailchimpError(msg)
+    return (settings_.get("from_name") or club.name, from_email)
+
+
+def send_announcement_campaign(club, *, subject, html, plain_text):
+    """Create and send one campaign to the club's audience. Returns the campaign id.
+
+    Four calls, which is why this runs in a Celery task rather than in a form POST. Raises
+    MailchimpError with something an admin can act on; the caller records it on the announcement.
+    """
+    client = get_client(club)
+    if not client or not club.mailchimp_audience_id:
+        msg = "Mailchimp is not connected to an audience."
+        raise MailchimpError(msg)
+    from_name, from_email = verified_sender(client, club)
+    try:
+        campaign = client.campaigns.create(
+            {
+                "type": "regular",
+                "recipients": {"list_id": club.mailchimp_audience_id},
+                "settings": {
+                    # title is Mailchimp's internal name for the campaign; the club sees it in its
+                    # own campaign list, so it says where the thing came from.
+                    "title": f"{club.name} announcement — {subject}"[:100],
+                    "subject_line": subject[:150],
+                    "from_name": from_name[:100],
+                    "reply_to": from_email,
+                    # Mailchimp's own footer, which carries the unsubscribe link and the audience's
+                    # physical address. Not optional in either direction: with it off, Mailchimp
+                    # refuses any content that has no *|UNSUB|* tag of its own, and writing our own
+                    # unsubscribe link would point at something other than the list this went to.
+                    "auto_footer": True,
+                },
+            }
+        )
+    except MailchimpError:
+        raise
+    except Exception as e:
+        msg = f"Mailchimp refused to create the campaign: {_readable_api_error(e)}"
+        raise MailchimpError(msg) from e
+    campaign_id = campaign.get("id") or ""
+    if not campaign_id:
+        msg = "Mailchimp created the campaign but returned no id."
+        raise MailchimpError(msg)
+    try:
+        client.campaigns.set_content(campaign_id, {"html": html, "plain_text": plain_text})
+        client.campaigns.send(campaign_id)
+    except Exception as e:
+        msg = f"Mailchimp refused to send the campaign: {_readable_api_error(e)}"
+        raise MailchimpError(msg) from e
+    return campaign_id
+
+
+def campaign_opens(club, campaign_id):
+    """Unique opens on a sent campaign, or None when Mailchimp can't tell us yet.
+
+    None and 0 are different answers -- a report that isn't ready yet is not a campaign nobody
+    opened -- so the caller can leave the number off the row rather than printing a wrong one.
+    """
+    client = get_client(club)
+    if not client or not campaign_id:
+        return None
+    try:
+        report = client.reports.get_campaign_report(campaign_id)
+    except Exception:
+        logger.warning("Mailchimp: couldn't read the report for campaign %s", campaign_id)
+        return None
+    opens = (report.get("opens") or {}).get("unique_opens")
+    return opens if isinstance(opens, int) else None

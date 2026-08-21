@@ -11,6 +11,7 @@ from .views import (
     MobileCommandPaletteLogView,
     MobileCommandPaletteView,
     MobileConfigView,
+    MobileDeviceHeartbeatView,
     MobileDeviceRegisterView,
     MobileDeviceUnregisterView,
     MobileGoogleAuthView,
@@ -29,6 +30,8 @@ from .views import (
     MobilePaymentCreateView,
     MobilePrinterObservedView,
     MobilePrinterProfilesView,
+    MobileRemotePrintProgressView,
+    MobileRemotePrintResultView,
     MobileSocialAuthView,
     MobileSocialCompleteView,
     MobileSocialContinueView,
@@ -78,6 +81,8 @@ urlpatterns = [
     # Devices
     path("devices/register/", MobileDeviceRegisterView.as_view(), name="mobile-device-register"),
     path("devices/unregister/", MobileDeviceUnregisterView.as_view(), name="mobile-device-unregister"),
+    # Presence, so the website knows whether a print job sent to this phone can possibly arrive.
+    path("devices/heartbeat/", MobileDeviceHeartbeatView.as_view(), name="mobile-device-heartbeat"),
     # Printers
     path("printers/profiles/", MobilePrinterProfilesView.as_view(), name="mobile-printer-profiles"),
     path("printers/observed/", MobilePrinterObservedView.as_view(), name="mobile-printer-observed"),
@@ -85,6 +90,17 @@ urlpatterns = [
     path("labels/prefs/", MobileLabelPrefsView.as_view(), name="mobile-label-prefs"),
     path("labels/printed/", MobileLabelsPrintedView.as_view(), name="mobile-labels-printed"),
     path("labels/<int:pk>/", MobileLotLabelView.as_view(), name="mobile-label-lot"),
+    # Remote print jobs: labels started on a computer, printed on this phone's Bluetooth printer.
+    path(
+        "printjobs/<uuid:job_uuid>/progress/",
+        MobileRemotePrintProgressView.as_view(),
+        name="mobile-printjob-progress",
+    ),
+    path(
+        "printjobs/<uuid:job_uuid>/result/",
+        MobileRemotePrintResultView.as_view(),
+        name="mobile-printjob-result",
+    ),
     # Notifications
     path("notifications/prefs/", MobileNotificationPrefsView.as_view(), name="mobile-notification-prefs"),
     # Lots

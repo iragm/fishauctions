@@ -70,6 +70,7 @@ from .models import (
     PayPalSeller,
     PickupLocation,
     SearchHistory,
+    Species,
     SquareSeller,
     UserBan,
     UserData,
@@ -2613,7 +2614,7 @@ class LotPushTestNotificationViewTestCase(StandardTestCase):
         self.assertNotContains(response, 'id="test-notification"')
         self.assertNotContains(response, 'if (Notification.permission !== "granted")')
         self.assertContains(response, "$('#subscribe_success').addClass(\"d-none\")")
-        self.assertContains(response, "Enable push notifications on this device")
+        self.assertContains(response, "Get a notification on this device when bidding starts on this lot")
 
     def test_watch_notification_message_still_shows_without_push_info(self):
         watcher_userdata = UserData.objects.get(user=self.user_with_no_lots)
@@ -7085,6 +7086,74 @@ class InvoiceViewTests(StandardTestCase):
         assert amount_value in ["", None]
 
 
+class MyInvoicesListTests(StandardTestCase):
+    """/invoices/ -- the user's own invoice list, an htmx table sorted newest first"""
+
+    def setUp(self):
+        super().setUp()
+        # A second invoice for the same user, deliberately created out of date order so that
+        # "newest first" can't pass by accident on insertion order.
+        self.older_invoice = self.invoice
+        self.newer_invoice, _ = Invoice.objects.get_or_create(auctiontos_user=self.in_person_tos)
+        Invoice.objects.filter(pk=self.older_invoice.pk).update(
+            date=timezone.now() - datetime.timedelta(days=10),
+        )
+        Invoice.objects.filter(pk=self.newer_invoice.pk).update(date=timezone.now())
+
+    def invoice_pks(self, response):
+        return [row.record.pk for row in response.context["table"].rows]
+
+    def test_anonymous_user_is_sent_to_login(self):
+        response = self.client.get(reverse("my_invoices"))
+        assert response.status_code in [301, 302, 403]
+
+    def test_default_sort_is_newest_first(self):
+        self.client.login(username=self.user.username, password="testpassword")
+        response = self.client.get(reverse("my_invoices"))
+        assert response.status_code == 200
+        self.assertEqual(response.context["table"].order_by, ("-date",))
+        self.assertEqual(self.invoice_pks(response), [self.newer_invoice.pk, self.older_invoice.pk])
+
+    def test_date_column_can_be_sorted_oldest_first(self):
+        self.client.login(username=self.user.username, password="testpassword")
+        response = self.client.get(reverse("my_invoices"), {"sort": "date"})
+        self.assertEqual(self.invoice_pks(response), [self.older_invoice.pk, self.newer_invoice.pk])
+
+    def test_other_users_invoices_are_not_listed(self):
+        self.client.login(username=self.user.username, password="testpassword")
+        response = self.client.get(reverse("my_invoices"))
+        assert self.invoiceB.pk not in self.invoice_pks(response)
+
+    def test_query_filters_by_auction_name(self):
+        self.client.login(username=self.user.username, password="testpassword")
+        response = self.client.get(reverse("my_invoices"), {"query": "in-person"})
+        self.assertEqual(self.invoice_pks(response), [self.newer_invoice.pk])
+
+    def test_query_filters_by_status_word(self):
+        Invoice.objects.filter(pk=self.newer_invoice.pk).update(status="PAID")
+        self.client.login(username=self.user.username, password="testpassword")
+        response = self.client.get(reverse("my_invoices"), {"query": "paid"})
+        self.assertEqual(self.invoice_pks(response), [self.newer_invoice.pk])
+
+    def test_htmx_request_returns_only_the_table(self):
+        self.client.login(username=self.user.username, password="testpassword")
+        response = self.client.get(reverse("my_invoices"), HTTP_HX_REQUEST="true")
+        assert response.status_code == 200
+        self.assertNotContains(response, "<html")
+        self.assertContains(response, f"/invoices/{self.newer_invoice.pk}/")
+
+    def test_user_with_no_invoices_sees_the_empty_state(self):
+        self.client.login(username=self.user_who_does_not_join.username, password="testpassword")
+        response = self.client.get(reverse("my_invoices"))
+        assert response.status_code == 200
+        self.assertContains(response, "any invoices yet")
+
+    def test_no_search_results_says_so(self):
+        self.client.login(username=self.user.username, password="testpassword")
+        response = self.client.get(reverse("my_invoices"), {"query": "nothing matches this"})
+        self.assertContains(response, "No invoices match")
+
+
 class InvoiceStatusButtonTests(StandardTestCase):
     """Test invoice status buttons can be clicked and update correctly"""
 
@@ -7121,7 +7190,7 @@ class InvoiceStatusButtonTests(StandardTestCase):
         assert self.invoice.status == "DRAFT"
         content = response.content.decode()
         assert f"id='invoice-buttons-{self.invoice.pk}'" in content
-        assert "btn-info" in content  # Open button should be info when active
+        assert "btn-primary active" in content  # the selected option is primary, the others secondary
 
     def test_invoice_status_button_anonymous_denied(self):
         """Anonymous users cannot change invoice status via the pk-based endpoint"""
@@ -9767,6 +9836,42 @@ class LotEndauctionsMethodsTests(StandardTestCase):
         # ACTUAL should change to REPRESENTATIVE on relist
         self.assertEqual(new_image.image_source, "REPRESENTATIVE")
         self.assertTrue(new_image.is_primary)
+
+
+class WebsocketClientDisconnectTests(TestCase):
+    """A user closing the tab (or losing signal) mid-handshake makes uvicorn raise
+    ClientDisconnected out of accept().  That's routine, so it must not be logged at ERROR:
+    auctions.consumers is wired to mail_admins in settings.LOGGING, and it would email admins."""
+
+    def test_client_disconnected_during_connect_is_not_logged_as_an_error(self):
+        import logging as logging_module
+
+        from auctions.consumers import ClientDisconnected, LotConsumer
+
+        user = User.objects.create_user(username="ws_gone", password="testpassword", email="gone@example.com")
+        lot = Lot.objects.create(
+            lot_name="A test lot",
+            date_end=timezone.now() + datetime.timedelta(days=3),
+            reserve_price=5,
+            user=user,
+            quantity=1,
+        )
+
+        class FakeChannelLayer:
+            async def group_add(self, group, channel):
+                return None
+
+        consumer = LotConsumer()
+        consumer.scope = {"url_route": {"kwargs": {"lot_number": lot.pk}}, "user": user}
+        consumer.channel_name = "test.channel"
+        consumer.channel_layer = FakeChannelLayer()
+
+        with (
+            patch.object(LotConsumer, "accept", side_effect=ClientDisconnected),
+            self.assertLogs("auctions.consumers", level="INFO") as captured,
+        ):
+            consumer.connect()
+        self.assertFalse([record for record in captured.records if record.levelno >= logging_module.ERROR])
 
 
 @unittest.skipUnless(CHANNELS_TESTING_AVAILABLE, "channels.testing requires daphne (test-only dependency)")
@@ -16057,6 +16162,25 @@ class MergeAuctionTOSTests(StandardTestCase):
         self.online_tos.merge_duplicate(self.duplicate_tos)
         self.assertFalse(AuctionTOS.objects.filter(pk=duplicate_pk).exists())
 
+    def test_merge_duplicate_clears_possible_duplicate_link(self):
+        """The kept record must not be left pointing at the deleted duplicate, in the database or in memory.
+
+        possible_duplicate is a self-FK, so a stale value here becomes a dangling id: the database
+        gets it right via SET_NULL, but this instance keeps the old id and the caller's next save()
+        writes it back, which MariaDB rejects with a foreign key error.
+        """
+        duplicate_pk = self.duplicate_tos.pk
+        AuctionTOS.objects.filter(pk=self.online_tos.pk).update(possible_duplicate=duplicate_pk)
+        AuctionTOS.objects.filter(pk=duplicate_pk).update(possible_duplicate=self.online_tos.pk)
+        self.online_tos.refresh_from_db()
+        self.online_tos.merge_duplicate(self.duplicate_tos)
+        self.assertIsNone(self.online_tos.possible_duplicate_id)
+        self.online_tos.save()  # raises IntegrityError if the deleted id gets written back
+        self.online_tos.refresh_from_db()
+        # save() may re-flag this record against some other live record; it must never point at the
+        # row the merge just deleted.
+        self.assertNotEqual(self.online_tos.possible_duplicate_id, duplicate_pk)
+
     def test_merge_duplicate_creates_auction_history(self):
         """Merging should create an AuctionHistory entry attributed to system"""
         initial_count = AuctionHistory.objects.filter(auction=self.online_auction, applies_to="USERS").count()
@@ -16277,6 +16401,36 @@ class AuctionTOSMergeViewTests(StandardTestCase):
         # The source's won lot moved to the kept target (not lost to a backwards auto-merge).
         won_lot.refresh_from_db()
         self.assertEqual(won_lot.auctiontos_winner, self.online_tos)
+
+    def test_merge_review_when_the_two_records_are_flagged_as_duplicates(self):
+        """Merging two records that point at each other via possible_duplicate must not 500.
+
+        Regression: this is the normal path in from the duplicate review list, so both rows have
+        possible_duplicate set to the other. Deleting the source SET_NULLs the kept row in the
+        database but not the in-memory instance the review form saves, so saving the reviewed
+        fields wrote the deleted id back and raised IntegrityError (1452).
+        """
+        AuctionTOS.objects.filter(pk=self.online_tos.pk).update(possible_duplicate=self.source_tos.pk)
+        AuctionTOS.objects.filter(pk=self.source_tos.pk).update(possible_duplicate=self.online_tos.pk)
+        url = reverse("auctiontosdelete", kwargs={"pk": self.source_tos.pk}) + "?action=merge"
+        response = self.client.post(
+            url,
+            {
+                "action": "merge",
+                "step": "review",
+                "target": str(self.online_tos.pk),
+                "name": "Merged Winner",
+                "email": "updated@example.com",
+                "phone_number": "5553334444",
+                "address": "222 Updated Ave",
+                "pickup_location": self.location.pk,
+            },
+        )
+        self.assertRedirects(response, reverse("auction_tos_list", kwargs={"slug": self.online_auction.slug}))
+        self.online_tos.refresh_from_db()
+        self.assertEqual(self.online_tos.name, "Merged Winner")
+        self.assertIsNone(self.online_tos.possible_duplicate_id)
+        self.assertFalse(AuctionTOS.objects.filter(pk=self.source_tos.pk).exists())
 
 
 class LotImageManagementTests(StandardTestCase):
@@ -18069,6 +18223,31 @@ class ClubViewTests(TestCase):
         self.assertNotContains(response, "View membership details")
         self.assertContains(response, "Club Auction 10")
         self.assertNotContains(response, "Club Auction 0")
+
+    def test_club_tabs_collapse_into_a_more_menu_when_there_are_too_many(self):
+        """Events/BAP/HAP/Culture/My Points runs off the side of a phone; three tabs don't."""
+        self.club.enable_club_page = True
+        self.club.enable_breeder_award_program = True
+        self.club.save()
+        self.client.login(username="club_owner2", password="testpass")
+        url = reverse("club_detail", kwargs={"slug": self.club.slug})
+
+        # Events, BAP, My Points: three fit, and a More menu holding one item is worse than a tab.
+        response = self.client.get(url)
+        self.assertFalse(response.context["club_tabs_overflow"])
+        self.assertRegex(response.content.decode(), r'class="nav-link[^"]*" id="my-points-tab-btn"')
+
+        # Turning on the other two award tracks makes five, so everything past BAP moves into More.
+        self.club.separate_hap = True
+        self.club.separate_cap = True
+        self.club.save()
+        response = self.client.get(url)
+        self.assertTrue(response.context["club_tabs_overflow"])
+        html = response.content.decode()
+        for tab in ("hap", "culture", "my-points"):
+            self.assertRegex(html, rf'class="dropdown-item[^"]*" id="{tab}-tab-btn"')
+        # Events and BAP stay where they were.
+        self.assertRegex(html, r'class="nav-link[^"]*" id="bap-tab-btn"')
 
     def test_club_detail_shows_join_button_for_non_member(self):
         self.club.enable_club_page = True
@@ -20056,6 +20235,7 @@ class ClubBapSettingsViewTests(TestCase):
                 "points_for_custom_checkbox": 0,
                 "min_quantity": 3,
                 "days_between_same_name_lots": 0,
+                "days_between_same_species_lots": 0,
                 "only_active_members_can_participate": False,
                 "only_donation_lots": False,
                 "separate_hap": False,
@@ -20076,6 +20256,7 @@ class ClubBapSettingsViewTests(TestCase):
                 "points_for_custom_checkbox": 0,
                 "min_quantity": 5,
                 "days_between_same_name_lots": 0,
+                "days_between_same_species_lots": 0,
                 "only_active_members_can_participate": False,
                 "only_donation_lots": False,
                 "separate_hap": False,
@@ -20333,6 +20514,40 @@ class ClubSettingsViewTests(TestCase):
         self.assertEqual(self.club.expiring_soon_opening, "Your membership expires soon.")
         self.assertEqual(self.club.expiring_soon_closing, "Renew today to stay connected.")
         self.assertTrue(ClubHistory.objects.filter(club=self.club, action="Updated email settings").exists())
+
+    def test_email_text_still_rejects_html_and_links(self):
+        from auctions.forms import ClubEmailSettingsForm
+
+        for value, message in (
+            ("<b>Welcome</b>", "HTML tags are not allowed in email text."),
+            ("Read https://example.com", "Links (URLs) are not allowed in email text."),
+        ):
+            form = ClubEmailSettingsForm(
+                {"welcome_opening": value},
+                instance=self.club,
+                show_email_routing=False,
+            )
+            form.is_valid()
+            self.assertIn(message, form.errors.get("welcome_opening", []), value)
+
+    def test_a_value_built_to_be_slow_is_validated_quickly(self):
+        """The tag check runs on submitted text, so it has to stay linear in its length.
+
+        The old ``<[^>]+>`` scanned to the end of the value from every "<" in it, and took ~15
+        seconds on this input; it now takes milliseconds.
+        """
+        import time
+
+        from auctions.forms import ClubEmailSettingsForm
+
+        form = ClubEmailSettingsForm(
+            {"welcome_opening": "<" * 200000},
+            instance=self.club,
+            show_email_routing=False,
+        )
+        started = time.monotonic()
+        form.is_valid()
+        self.assertLess(time.monotonic() - started, 2.0)
 
 
 class ClubEmailRoutingTests(TestCase):
@@ -20666,6 +20881,121 @@ class LotBapEligibilityTests(TestCase):
             date_end=timezone.now(),
         )
         self.assertEqual(lot.unsold_lot_no_bap_reason, "not_long_enough")
+
+    def test_same_species_rule_blocks_the_same_fish_under_a_different_name(self):
+        """The point of the rule: the name rule cannot see that these are one fish bred twice."""
+        self.club.days_between_same_species_lots = 30
+        self.club.save(update_fields=["days_between_same_species_lots"])
+        yellow_lab = Species.objects.create(genus="Labidochromis", species="caeruleus", common_name="Yellow lab")
+        self._make_lot(
+            lot_name="Yellow labs",
+            species=yellow_lab,
+            user=self.user,
+            date_end=timezone.now() - datetime.timedelta(days=1),
+            bap_points_awarded=5,
+        )
+        lot = self._make_lot(
+            lot_name="Labidochromis caeruleus", species=yellow_lab, user=self.user, date_end=timezone.now()
+        )
+        self.assertEqual(lot.unsold_lot_no_bap_reason, "not_long_enough")
+
+    def test_a_different_strain_of_the_same_species_still_earns_points(self):
+        """Blue and red cherry shrimp are two things to breed, and the strains are separate rows."""
+        self.club.days_between_same_species_lots = 30
+        self.club.save(update_fields=["days_between_same_species_lots"])
+        neocaridina = Species.objects.create(genus="Neocaridina", species="davidi", common_name="Cherry shrimp")
+        blue = Species.objects.create(
+            genus="Neocaridina", species="davidi", variety="Blue Dream", parent=neocaridina, source="aquarium"
+        )
+        red = Species.objects.create(
+            genus="Neocaridina", species="davidi", variety="Fire Red", parent=neocaridina, source="aquarium"
+        )
+        self._make_lot(
+            lot_name="Blue dream shrimp",
+            species=blue,
+            user=self.user,
+            date_end=timezone.now() - datetime.timedelta(days=1),
+            bap_points_awarded=5,
+        )
+        lot = self._make_lot(lot_name="Fire red shrimp", species=red, user=self.user, date_end=timezone.now())
+        self.assertIsNone(lot.unsold_lot_no_bap_reason)
+
+    def test_the_same_strain_twice_is_still_blocked(self):
+        self.club.days_between_same_species_lots = 30
+        self.club.save(update_fields=["days_between_same_species_lots"])
+        neocaridina = Species.objects.create(genus="Neocaridina", species="davidi", common_name="Cherry shrimp")
+        blue = Species.objects.create(
+            genus="Neocaridina", species="davidi", variety="Blue Dream", parent=neocaridina, source="aquarium"
+        )
+        self._make_lot(
+            lot_name="Blue dream shrimp",
+            species=blue,
+            user=self.user,
+            date_end=timezone.now() - datetime.timedelta(days=1),
+            bap_points_awarded=5,
+        )
+        lot = self._make_lot(lot_name="Blue dreams", species=blue, user=self.user, date_end=timezone.now())
+        self.assertEqual(lot.unsold_lot_no_bap_reason, "not_long_enough")
+
+    def test_the_same_species_outside_the_window_is_fine(self):
+        self.club.days_between_same_species_lots = 30
+        self.club.save(update_fields=["days_between_same_species_lots"])
+        species = Species.objects.create(genus="Poecilia", species="reticulata", common_name="Guppy")
+        prior = self._make_lot(lot_name="Guppies", species=species, user=self.user, bap_points_awarded=5)
+        # update(), not save(): Lot._do_save pulls date_end back to the auction's, which would put
+        # this lot inside the window again and quietly test nothing.
+        Lot.objects.filter(pk=prior.pk).update(date_end=timezone.now() - datetime.timedelta(days=45))
+        lot = self._make_lot(lot_name="Guppies", species=species, user=self.user, date_end=timezone.now())
+        self.assertIsNone(lot.unsold_lot_no_bap_reason)
+
+    def test_zero_means_the_species_rule_is_off(self):
+        species = Species.objects.create(genus="Poecilia", species="reticulata", common_name="Guppy")
+        self._make_lot(
+            lot_name="Guppies",
+            species=species,
+            user=self.user,
+            date_end=timezone.now() - datetime.timedelta(days=1),
+            bap_points_awarded=5,
+        )
+        lot = self._make_lot(lot_name="Different name", species=species, user=self.user, date_end=timezone.now())
+        self.assertIsNone(lot.unsold_lot_no_bap_reason)
+
+    def test_a_lot_with_no_species_is_untouched_by_the_species_rule(self):
+        self.club.days_between_same_species_lots = 30
+        self.club.save(update_fields=["days_between_same_species_lots"])
+        species = Species.objects.create(genus="Poecilia", species="reticulata", common_name="Guppy")
+        self._make_lot(
+            lot_name="Guppies",
+            species=species,
+            user=self.user,
+            date_end=timezone.now() - datetime.timedelta(days=1),
+            bap_points_awarded=5,
+        )
+        lot = self._make_lot(lot_name="Mixed bag", species=None, user=self.user, date_end=timezone.now())
+        self.assertIsNone(lot.unsold_lot_no_bap_reason)
+
+    def test_two_lots_with_no_species_are_both_judged_on_their_names(self):
+        """No species means no *opinion*, not a match against every other unnamed lot.
+
+        The rule is guarded on ``self.species_id``, so a lot with nothing picked falls straight
+        through to the next check rather than colliding with every other one.  That is why there is
+        no separate setting for it: the club already has ``days_between_same_name_lots`` for the
+        case it actually cares about, and it is the rule that can see these two are different.
+        """
+        self.club.days_between_same_species_lots = 30
+        self.club.days_between_same_name_lots = 30
+        self.club.save(update_fields=["days_between_same_species_lots", "days_between_same_name_lots"])
+        self._make_lot(
+            lot_name="Sponge filter",
+            species=None,
+            user=self.user,
+            date_end=timezone.now() - datetime.timedelta(days=1),
+            bap_points_awarded=5,
+        )
+        lot = self._make_lot(lot_name="Bag of gravel", species=None, user=self.user, date_end=timezone.now())
+        self.assertIsNone(lot.unsold_lot_no_bap_reason)
+        same = self._make_lot(lot_name="Sponge filter", species=None, user=self.user, date_end=timezone.now())
+        self.assertEqual(same.unsold_lot_no_bap_reason, "not_long_enough", "the name rule is what catches these")
 
     def test_sold_lot_no_bap_reason_not_sold(self):
         self.club.only_sold_lots = True
@@ -31876,6 +32206,32 @@ class MobileAppLabelPrintingVisibilityTests(StandardTestCase):
         self.assertEqual(
             offenders, [], "Label printing must not be gated on the mobile app UA:\n" + "\n".join(offenders)
         )
+
+
+class ClubBarcodeLabelsPDFTests(StandardTestCase):
+    """ "Download PDF" with nothing filled in used to 404, which reads as a broken feature."""
+
+    def setUp(self):
+        super().setUp()
+        self.club = Club.objects.create(name="Barcode Club")
+        ClubMember.objects.create(club=self.club, user=self.admin_user, permission_admin=True)
+        self.url = reverse("club_barcode_labels_pdf", kwargs={"slug": self.club.slug})
+        self.client.force_login(self.admin_user)
+
+    def test_an_empty_form_comes_back_to_the_page_with_a_reason(self):
+        response = self.client.get(self.url, {"label_type": ""}, follow=True)
+        self.assertEqual(response.status_code, 200)
+        self.assertRedirects(response, reverse("club_barcode_labels", kwargs={"slug": self.club.slug}))
+        self.assertIn("nothing to print", " ".join(str(m) for m in response.context["messages"]).lower())
+
+    def test_a_row_with_a_type_but_no_value_is_the_same_as_an_empty_one(self):
+        response = self.client.get(self.url, {"label_type": "bidder_paddle", "bidder_number": ""})
+        self.assertEqual(response.status_code, 302)
+
+    def test_a_complete_row_still_produces_a_pdf(self):
+        response = self.client.get(self.url, {"label_type": "bidder_paddle", "bidder_number": "12"})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response["Content-Type"], "application/pdf")
 
 
 class ClubMemberMembershipStatusFilterTests(TestCase):

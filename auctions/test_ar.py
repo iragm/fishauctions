@@ -824,6 +824,22 @@ class LotPageBackToArBannerTests(ArApiBaseTestCase):
         html = self.client.get(self._url(self.lot_a), HTTP_USER_AGENT=self.APP_UA).content.decode()
         self.assertNotIn("Back to scanning", html)
 
+    def test_bar_is_drawn_before_the_page_content(self):
+        """AR-1 — it has to be first in the body, or `position: sticky` has nothing to stick over.
+
+        It used to live in ``undiv_content``, which base.html renders *after* ``content``, near the
+        end of the document: sticky only works over the scroll range left after an element's own
+        place in flow, so at the bottom of the page it drew once with all of the lot page's
+        background above it. That is the "bunch of empty black space over the Back to scanning
+        button" reported from the app.
+        """
+        self.client.force_login(self.user)
+        html = self.client.get(f"{self._url(self.lot_a)}?src=ar", HTTP_USER_AGENT=self.APP_UA).content.decode()
+        body = html.split("<body", 1)[1]
+        # "mt-5 mb-5" is base.html's wrapper around {% block content %}; undiv_content is emitted
+        # after it closes, which is exactly where the bar used to land.
+        self.assertLess(body.index("Back to scanning"), body.index("mt-5 mb-5"))
+
 
 class ArObservationsEndpointTests(ArApiBaseTestCase):
     def _post(self, user, payload):
@@ -1658,6 +1674,87 @@ class ArLocateOnLotListTests(ArApiBaseTestCase):
         with patch.object(ar_service, "locatable_auction_pks") as mocked:
             self._lot_list(self.in_person_auction, "Mozilla/5.0")
         mocked.assert_not_called()
+
+
+class ArLocateOnLotPageTests(StandardTestCase):
+    """The lot page's "Find this lot" button is app-only *and* in-person only.
+
+    It used to render for any lot with an auction, so every online lot in the app offered to walk
+    the user to a fish that is in somebody else's fish room -- the deep link opens lot scanning on
+    an auction that has no room, no labels and no positions.  Same rule the lot lists use
+    (``locatable_auction_pks``) and the command palette's "Lot scanning" row uses
+    (``_app_ar_auction``): there is nothing to walk to at an online auction.
+    """
+
+    APP_UA = "FishAuctionsApp/1.0 (Flutter; iOS)"
+    WEB_UA = "Mozilla/5.0"
+
+    def setUp(self):
+        super().setUp()
+        self.client.login(username=self.user_with_no_lots.username, password="testpassword")
+
+    def _page(self, lot, user_agent):
+        response = self.client.get(reverse("lot_by_pk", kwargs={"pk": lot.pk}), HTTP_USER_AGENT=user_agent)
+        self.assertEqual(response.status_code, 200)
+        return response.content.decode()
+
+    def _deep_link(self, lot):
+        return f"fishauctions://ar/{lot.auction.slug}?locate={lot.pk}"
+
+    def test_shown_in_the_app_for_an_in_person_lot(self):
+        html = self._page(self.in_person_lot, self.APP_UA)
+        self.assertIn("Find this lot", html)
+        self.assertIn(self._deep_link(self.in_person_lot), html)
+
+    def test_hidden_for_an_online_lot(self):
+        html = self._page(self.lot, self.APP_UA)
+        self.assertIn(self.lot.lot_name, html)  # the page is there...
+        self.assertNotIn(self._deep_link(self.lot), html)  # ...just without the lot-scanning handoff
+        self.assertNotIn("Find this lot", html)
+
+    def test_hidden_on_the_web(self):
+        html = self._page(self.in_person_lot, self.WEB_UA)
+        self.assertNotIn(self._deep_link(self.in_person_lot), html)
+
+    def test_the_back_to_scanning_bar_is_deliberately_not_gated_the_same_way(self):
+        """The rule is on the *entry points* into lot scanning, not on the way back out of one.
+
+        The sticky bar only renders with ``?src=ar``, which is a URL you can only arrive at from
+        the scanner -- so an online lot cannot reach it in the first place, and gating it as well
+        buys nothing while giving somebody who did reach it no way back.  See
+        :class:`LotPageBackToArBannerTests`, which is what that bar is really specified by.
+        """
+        url = reverse("lot_by_pk", kwargs={"pk": self.in_person_lot.pk})
+        html = self.client.get(f"{url}?src=ar", HTTP_USER_AGENT=self.APP_UA).content.decode()
+        self.assertIn("Back to scanning", html)
+
+
+class ArScanLotsButtonOnAuctionPageTests(StandardTestCase):
+    """The auction page's "Scan lots" button is the other app entry point into lot scanning, and
+    carries the same in-person rule -- it was offering the camera on online auctions too."""
+
+    APP_UA = "FishAuctionsApp/1.0 (Flutter; iOS)"
+
+    def _page(self, auction, user_agent=APP_UA):
+        self.client.login(username=self.user.username, password="testpassword")
+        response = self.client.get(reverse("auction_main", kwargs={"slug": auction.slug}), HTTP_USER_AGENT=user_agent)
+        self.assertEqual(response.status_code, 200)
+        return response.content.decode()
+
+    def test_shown_for_an_in_person_auction(self):
+        html = self._page(self.in_person_auction)
+        self.assertIn("Scan lots", html)
+        self.assertIn(f"fishauctions://ar/{self.in_person_auction.slug}", html)
+
+    def test_hidden_for_an_online_auction(self):
+        html = self._page(self.online_auction)
+        self.assertNotIn(f"fishauctions://ar/{self.online_auction.slug}", html)
+        self.assertNotIn("Scan lots", html)
+
+    def test_hidden_on_the_web(self):
+        html = self._page(self.in_person_auction, user_agent="Mozilla/5.0")
+        self.assertNotIn("Scan lots", html)
+        self.assertNotIn(f"fishauctions://ar/{self.in_person_auction.slug}", html)
 
 
 class FollowUpFixTests(StandardTestCase):

@@ -6,7 +6,7 @@
 {% block content %}
   {% include 'auction_ribbon.html' %}
   <br>
-  <p>{% if is_admin %}You are adding/editing lots for <b><span class="text-warning">{{ tos.name }}</b></span>, bidder number <b>{{ tos.bidder_number}}</b>
+  <p>{% if is_admin %}You are adding/editing lots for <b><span class="text-warning">{{ tos.name }}</span></b>, bidder number <b>{{ tos.bidder_number}}</b>
   {% else %}
     Use this page to quickly add lots to {{ auction }}.  Enter one lot per row.  You can edit these lots, add images, or add lots one at a time from your <a href="/selling">selling dashboard</a>.
   {% endif %}
@@ -15,10 +15,12 @@
   {{ formset.management_form }}
   <form id="form-container" method="POST" action="{% url 'bulk_add_lots' slug=auction.slug bidder_number=tos.bidder_number%}">
     {% crispy formset helper %}
-    <button class='btn btn-info' id="add-form" type="button">Add row</button>
-
-    <input type="submit" class='btn bg-info float-right submit-button ms-2 ml-2 d-none d-md-inline' name='save_print' id='save_print' value="Save and print labels">
-    <input type="submit" class='btn bg-success float-right submit-button' name='save_submit' id='save_submit' value="Save lots for {% if is_admin%}{{ tos.name }}{% else %}{{ auction }}{% endif %}">
+    {% comment %}One wrapping row: float-* is Bootstrap 4 and did nothing here, so on a phone these three ran together with no gap.{% endcomment %}
+    <div class="d-flex flex-wrap gap-2 mt-2">
+      <button class='btn btn-info' id="add-form" type="button">Add row</button>
+      <input type="submit" class='btn btn-info submit-button d-none d-md-inline' name='save_print' id='save_print' value="Save and print labels">
+      <input type="submit" class='btn btn-success text-dark submit-button ms-auto' name='save_submit' id='save_submit' value="Save lots for {% if is_admin%}{{ tos.name }}{% else %}{{ auction }}{% endif %}">
+    </div>
   </form>
 {% endblock %}
 
@@ -49,6 +51,12 @@ function cloneMore(selector, type) {
         var newFor = $(this).attr('for').replace('-' + (total-1) + '-','-' + total + '-');
         $(this).attr('for', newFor);
     });
+    {% comment %}A new row keeps the last row's values on purpose, but not its species: that was worked out from a different lot name.{% endcomment %}
+    newElement.find('input[name$="-species"]').each(function() {
+        this.value = '';
+        delete this.dataset.lastQuery;
+    });
+    newElement.find('.species-hint').html('');
     total++;
     $('#id_' + type + '-TOTAL_FORMS').val(total);
     $(selector).after(newElement);
@@ -64,6 +72,71 @@ $(".submit-button").click(function(event){
         return true
     }
 });
+{% if auction.use_scientific_name %}
+{% comment %}
+  Same rule as the auto-saving bulk page: no picker on a bulk row, just a hidden input filled in
+  when the matcher gives exactly one answer, the name shown as text under the lot name, and a
+  button to clear it.  The value only ever comes from the server.
+{% endcomment %}
+function speciesHint(row) {
+    var hint = row.querySelector('.species-hint');
+    if (!hint) {
+        hint = document.createElement('div');
+        hint.className = 'form-text small species-hint';
+        var lotName = row.querySelector('input[name$="-lot_name"]');
+        (lotName ? lotName.parentNode : row).appendChild(hint);
+    }
+    return hint;
+}
+function showSpecies(row, label) {
+    var hint = speciesHint(row);
+    hint.innerHTML = '';
+    if (!label) return;
+    var name = document.createElement('i');
+    name.textContent = label;
+    hint.appendChild(name);
+    var clear = document.createElement('button');
+    clear.type = 'button';
+    clear.className = 'btn btn-link btn-sm p-0 ms-1 align-baseline species-clear text-muted';
+    clear.title = 'Not this species';
+    clear.setAttribute('aria-label', 'Remove this scientific name');
+    clear.innerHTML = '<i class="bi bi-x-lg"></i>';
+    hint.appendChild(clear);
+}
+$(document).on('click', '.species-clear', function() {
+    var row = this.closest('.lot-form');
+    var input = row.querySelector('input[name$="-species"]');
+    if (input) { input.value = ''; }
+    showSpecies(row, '');
+});
+$(document).on('blur', 'input[name$="-lot_name"]', function() {
+    var row = this.closest('.lot-form');
+    if (!row) return;
+    var input = row.querySelector('input[name$="-species"]');
+    if (!input) return;
+    var name = this.value.trim();
+    if (!name || input.dataset.lastQuery === name) return;
+    input.dataset.lastQuery = name;
+    $.ajax({
+        url: "{% url 'species_suggestions' %}",
+        type: 'POST',
+        data: {'name': name, 'csrfmiddlewaretoken': '{{ csrf_token }}'},
+        success: function(response) {
+            if (input.dataset.lastQuery !== response.name) return;
+            var choices = response.choices || [];
+            // Exactly one, or nothing: a shortlist means the matcher cannot tell two species
+            // apart, and there is nobody being asked to choose on this page.
+            if (choices.length === 1) {
+                input.value = choices[0].id;
+                showSpecies(row, choices[0].scientific_name || choices[0].label);
+            } else {
+                input.value = '';
+                showSpecies(row, '');
+            }
+        }
+    });
+});
+{% endif %}
 {% if auction.auto_add_images %}
 $(document).ready(function() {
     $('.auto-image-check').on('blur', function() {

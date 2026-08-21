@@ -2311,6 +2311,40 @@ class SignupLegalLinksTests(TestCase):
         self.assertContains(response, reverse("privacy_policy"))
 
 
+class CookieBannerInTheAppTests(StandardTestCase):
+    """The "By using this site..." bar is web chrome and must not render inside the app.
+
+    It is fixed to the bottom of every page, so in the app it sits on top of the native controls
+    for a decision the user already made in the app's own sign-up (and again at review time).
+    Dropped on the app's User-Agent, the same way the navbar and the install prompts are; the web
+    banner and its "Don't show again" cookie are untouched.
+    """
+
+    APP_UA = "FishAuctionsApp/1.0 (Flutter; iOS)"
+    BANNER = "By using this site"
+
+    def _home(self, user_agent="", login=True):
+        if login:
+            self.client.force_login(self.user)
+        return self.client.get(reverse("home"), follow=True, HTTP_USER_AGENT=user_agent)
+
+    def test_shown_on_the_web(self):
+        self.assertContains(self._home(), self.BANNER)
+
+    def test_hidden_in_the_app(self):
+        response = self._home(self.APP_UA)
+        self.assertNotContains(response, self.BANNER)
+        self.assertNotContains(response, "agreeTos")  # and the dismiss button's script with it
+
+    def test_hidden_in_the_app_for_a_signed_out_visitor(self):
+        # The app's login screen is a WebView too, and that is where the bar was most in the way.
+        self.assertNotContains(self._home(self.APP_UA, login=False), self.BANNER)
+
+    def test_the_web_dismiss_cookie_still_works(self):
+        self.client.cookies["hide_tos_banner"] = "true"
+        self.assertNotContains(self._home(), self.BANNER)
+
+
 # ---------------------------------------------------------------------------
 # Part A — wallet buttons, one per platform
 # ---------------------------------------------------------------------------

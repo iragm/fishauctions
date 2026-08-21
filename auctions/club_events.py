@@ -192,15 +192,24 @@ def purge_retired(club):
 
 
 def _auction_description(auction):
-    """A short plain-text blurb for the calendar entry."""
-    parts = []
+    """A short plain-text blurb for the calendar entry.
+
+    Deliberately just what kind of auction it is. The lot submission deadline used to be here and
+    was removed: it is a seller's deadline, not the event, and it landed in every member's Google
+    Calendar and Discord next to a date that had nothing to do with when to turn up.
+    """
     if auction.is_online:
-        parts.append("Online auction with in-person pickup.")
-    else:
-        parts.append("In-person auction.")
-    if auction.lot_submission_end_date:
-        parts.append(f"Lot submission closes {auction.lot_submission_end_date:%b %-d, %Y at %-I:%M %p}.")
-    return " ".join(parts)
+        return "Online auction with in-person pickup."
+    return "In-person auction."
+
+
+def auction_display_location(auction):
+    """The one address worth advertising for an auction, or "" when there isn't one.
+
+    Public wrapper over the rule the calendar entry already uses, so the website embeds show the
+    same place the club's Google Calendar does instead of inventing a second answer.
+    """
+    return _auction_location(auction)
 
 
 def _auction_location(auction):

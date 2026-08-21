@@ -1,43 +1,18 @@
-{% extends "base.html" %}
-{% load currency_filters %}
+{% extends "auctions/htmx_table_view.html" %}
 
 {% block title %}Invoices{% endblock %}
-{% load static %}
-{% block content %}
-<h5>Invoices</h5>
-<small>This is a list of invoices for auctions you've participated in.  If you didn't buy or sell any lots in an auction, you won't get an invoice.</small>
-<br>
-<br>
-        <table class="table">
-          <thead>
-            <tr>
-              <th scope="col">Invoice</th>
-              <th scope="col">Total</th>
-              <th scope="col">Status</th>
-              <th scope="col">Date</th>
-            </tr>
-          </thead>
-          <tbody>
-            {% for invoice in object_list %}
-            <tr>
-              <td><a href="/invoices/{{invoice.pk}}/">{{ invoice.label }}</a></td>
-              <td>{% if invoice.user_should_be_paid or invoice.net == 0 %}
-                  {{ invoice.currency_symbol }}{{ invoice.calculated_total|floatformat:2 }}
-                {% else %}
-                  <span class='text-danger'>({{ invoice.currency_symbol }}{{ invoice.absolute_amount|floatformat:2 }})</span>
-                {% endif %}
-                </td>
-              <td>{{ invoice.get_status_display }}</td>
-              <td>{{ invoice.date }}</td>
-            </tr>
-            {% empty %}
-            <tr>
-              <td colspan="4" class="text-center text-muted p-3">
-                You don't have any invoices yet. An invoice is created automatically once you buy or sell a lot in an auction.
-              </td>
-            </tr>
-            {% endfor %}
-        </tbody>
-      </table>
+
+{% block htmx_table_ribbon %}
+  <h5>Invoices</h5>
+  <small class="text-muted">This is a list of invoices for auctions you've participated in.  If you didn't buy or sell any lots in an auction, you won't get an invoice.</small>
 {% endblock %}
-{% block extra_js %}<script type='text/javascript'>pageView();</script>{% endblock %}
+
+{% block htmx_table_filter_form %}
+  {{ block.super }}
+  <div class="progress d-none"> <div class="indeterminate"></div> </div>
+{% endblock %}
+
+{% block extra_js %}
+  {{ block.super }}
+  <script type='text/javascript'>pageView();</script>
+{% endblock %}

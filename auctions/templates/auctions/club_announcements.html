@@ -1,0 +1,121 @@
+{% extends "base.html" %}
+{% load crispy_forms_tags %}
+{% block title %}Announcements - {{ club.name }}{% endblock %}
+{% block content %}
+{% include "club_ribbon.html" %}
+<div class="help-note"><i class="bi bi-lightbulb-fill"></i><div>
+  Contact your members
+</div></div>
+
+<div class="card mb-4">
+  <div class="card-body">
+    {% crispy form form.helper %}
+  </div>
+</div>
+
+{% if announcements %}
+{% comment %}"Recent", not "Sent so far": the top of this list is usually something still inside its
+retract window or waiting for a date.{% endcomment %}
+<h5 class="mb-2">Recent</h5>
+<ul class="list-group mb-3">
+  {% for announcement in announcements %}
+  <li class="list-group-item{% if announcement.is_deleted %} opacity-50{% endif %}">
+    <div class="d-flex justify-content-between align-items-start gap-3 flex-wrap">
+      <div class="flex-grow-1">
+        {% comment %}Not a link: an announcement has no page of its own. What was sent is the whole
+        of it, and it is right here.{% endcomment %}
+        <div{% if announcement.is_deleted %} class="text-decoration-line-through"{% endif %}>{{ announcement.text|linebreaksbr }}</div>
+        <div class="text-muted small">
+          {% if announcement.is_deleted %}
+          <span class="badge bg-danger"><i class="bi bi-x-circle"></i> Retracted</span>
+          {% elif announcement.is_in_grace_period %}
+          {% comment %}Going out in seconds, not on a date the club picked -- reading it back as
+          "scheduled for 3:59 PM" would be true and useless.{% endcomment %}
+          <span class="badge bg-info text-dark"><i class="bi bi-hourglass-split"></i> Sending</span>
+          {% elif announcement.is_scheduled %}
+          <span class="badge bg-info text-dark"><i class="bi bi-clock"></i> Scheduled</span>
+          for {{ announcement.scheduled_for|date:"D, N j, Y" }} at {{ announcement.scheduled_for|date:"g:i A" }}
+          {% else %}
+          {{ announcement.sent_at|default:announcement.created_at|date:"D, N j, Y" }} at {{ announcement.sent_at|default:announcement.created_at|date:"g:i A" }}
+          {% endif %}
+          {% if announcement.created_by %}&middot; {{ announcement.created_by }}{% endif %}
+        </div>
+      </div>
+      {% comment %}Plain title attributes, not data-bs-toggle="tooltip": base.html only starts the
+      Bootstrap 4 selector, so a bs tooltip here would never render at all. The legend under the
+      list is what actually carries the meaning -- a tooltip must never be the only explanation
+      (style_reference.md).{% endcomment %}
+      <div class="d-flex align-items-center gap-3 text-nowrap">
+        {% if not announcement.is_scheduled and not announcement.is_deleted %}
+        {% if announcement.send_to_discord %}
+        <span class="{% if announcement.discord_sent %}text-muted{% else %}text-danger{% endif %}"
+              title="{% if announcement.discord_sent %}Posted to your Discord channel.{% else %}Discord did not accept this one.{% endif %}">
+          <i class="bi bi-discord"></i>{% if not announcement.discord_sent %} <i class="bi bi-exclamation-triangle"></i>{% endif %}
+        </span>
+        {% endif %}
+        {% if announcement.send_to_push %}
+        <span class="text-muted" title="Delivered to {{ announcement.push_recipients }} phone{{ announcement.push_recipients|pluralize }}.">
+          <i class="bi bi-bell-fill"></i> {{ announcement.push_recipients }}
+        </span>
+        {% endif %}
+        {% if announcement.send_to_mailchimp or announcement.send_to_brevo %}
+        {% comment %}One envelope for both providers: the club picked which one sent it and the
+        number that matters is how many people opened the email, not which API carried it. The
+        title says which, for the club that has both connected.{% endcomment %}
+        <span class="{% if announcement.email_error %}text-danger{% else %}text-muted{% endif %}"
+              title="{% if announcement.email_error %}{{ announcement.email_error }}{% else %}Emailed through {% if announcement.send_to_mailchimp %}Mailchimp{% endif %}{% if announcement.send_to_mailchimp and announcement.send_to_brevo %} and {% endif %}{% if announcement.send_to_brevo %}Brevo{% endif %}. {{ announcement.email_opens }} opened it so far.{% endif %}">
+          <i class="bi bi-envelope-fill"></i>{% if announcement.email_error %} <i class="bi bi-exclamation-triangle"></i>{% else %} {{ announcement.email_opens }}{% endif %}
+        </span>
+        {% endif %}
+        {% if announcement.show_on_website %}
+        {% comment %}A render count, not a read count -- see announcements.record_website_views. It
+        is the only number the website channel can honestly produce, and it answers the question a
+        club actually has about it, which is whether the snippet on their own site is showing
+        anything at all.{% endcomment %}
+        <span class="text-muted" title="Shown {{ announcement.website_views }} time{{ announcement.website_views|pluralize }} on your club page and in your website snippets.">
+          <i class="bi bi-globe"></i> {{ announcement.website_views }}
+        </span>
+        {% endif %}
+        {% endif %}
+      </div>
+    </div>
+    {% comment %}Retract says what it can actually do in the confirmation, because what it can do
+    differs per announcement: one still inside its retract window never goes at all, where a sent
+    one loses its Discord post and its place on the website and nothing else. The button is small
+    and last, since the common case on this list is reading it.{% endcomment %}
+    {% if not announcement.is_deleted %}
+    <form method="post" action="{% url 'club_announcement_retract' club.slug announcement.uuid %}"
+          class="mt-2"
+          data-confirm="{% if announcement.is_scheduled %}This hasn't been sent yet, so cancelling it means nobody ever sees it.{% else %}The Discord post will be deleted and it will come off your website. Anything already delivered — a notification on someone's phone, an email in their inbox — stays where it is.{% endif %}"
+          data-confirm-title="{% if announcement.is_scheduled %}Cancel this announcement?{% else %}Retract this announcement?{% endif %}"
+          data-confirm-ok="{% if announcement.is_scheduled %}Cancel it{% else %}Retract{% endif %}"
+          data-confirm-variant="danger">
+      {% csrf_token %}
+      <button type="submit" class="btn btn-sm btn-danger"><i class="bi bi-x-circle"></i> {% if announcement.is_scheduled %}Cancel{% else %}Retract{% endif %}</button>
+    </form>
+    {% endif %}
+  </li>
+  {% endfor %}
+</ul>
+{% comment %}The legend stays, cut to the shortest thing that still says what each number counts.
+A tooltip must never be the only explanation (style_reference.md), and "12" beside a bell means
+nothing on its own -- phones reached and emails opened are different measurements.{% endcomment %}
+<p class="text-muted small">
+  <i class="bi bi-discord"></i> Discord &middot;
+  <i class="bi bi-bell-fill"></i> phones reached &middot;
+  <i class="bi bi-envelope-fill"></i> emails opened &middot;
+  <i class="bi bi-globe"></i> times shown on your website
+</p>
+{% else %}
+<p class="text-muted">You haven't sent any announcements yet.</p>
+{% endif %}
+{% endblock %}
+
+{% block extra_js %}
+{{ block.super }}
+{% comment %}Something on this page is inside its retract window, so reload once when it is over --
+otherwise "Sending — retract it now" sits there being wrong until somebody refreshes.{% endcomment %}
+{% if reload_in_seconds %}
+<script>setTimeout(function () { window.location.reload(); }, {{ reload_in_seconds }} * 1000);</script>
+{% endif %}
+{% endblock %}

@@ -1,19 +1,24 @@
 from urllib.parse import urlencode
 
 import django_tables2 as tables
+from django.contrib.humanize.templatetags.humanize import naturalday
 from django.db.models import F
 from django.urls import reverse
 from django.utils.html import format_html, format_html_join
 from django.utils.safestring import mark_safe
 
+from . import donations
 from .models import (
     Auction,
     AuctionHistory,
     AuctionTOS,
     BapAward,
     ClubBapCategoryOverride,
+    ClubBapGenusOverride,
     ClubHistory,
     ClubMember,
+    DonationVendor,
+    Invoice,
     Lot,
     Speaker,
 )
@@ -103,6 +108,22 @@ class AuctionTOSHTMxTable(tables.Table):
             )
         return value
 
+    def is_club_auction_admin(self, record):
+        """Whether this row runs the auction by way of the club rather than AuctionTOS.is_admin.
+
+        In a club-managed auction the is_admin checkbox is hidden and disabled (AuctionTOSAdminForm):
+        who may run the auction is decided by the club permissions, exactly as Auction.permission_check
+        reads them. Without this the Admin badge is never shown in those auctions.
+
+        The clubmember is already loaded by the membership column, which is only present in this mode.
+        """
+        if not self.is_managed:
+            return False
+        club_member = record.clubmember
+        if not club_member or club_member.is_deleted:
+            return False
+        return bool(club_member.permission_admin or club_member.permission_manage_auctions)
+
     def render_name(self, value, record):
         # as a button, looks awful
         # result = f"<span class='btn btn-secondary btn-sm' style='cursor:pointer;' hx-get='/api/auctiontos/{record.pk}' hx-target='#modals-here' hx-trigger='click'>{value}</span>"
@@ -115,8 +136,18 @@ class AuctionTOSHTMxTable(tables.Table):
         else:
             result += "<i class='bi bi-person-fill-gear me-1'></i>"
         result += f"{value}</a>"
-        if record.is_admin or (record.user and record.auction.created_by.pk == record.user.pk):
+        # created_by is nullable (the account that made the auction can be deleted), and comparing
+        # ids rather than objects keeps this from fetching a user and a creator for every row.
+        if (
+            record.is_admin
+            or (record.user_id and record.auction.created_by_id == record.user_id)
+            or self.is_club_auction_admin(record)
+        ):
             result += '<span class="badge bg-danger ms-1 me-1" title="Can add users and lot">Admin</span>'
+        # The alternate-split badge stays bg-info and the Check in button below is btn-primary:
+        # they sat side by side in the same colour, and one is a fact about the person while the
+        # other is a thing to press.  This whole table is admin-only, which is what makes primary
+        # right for the button (style_reference.md: btn-info marks the admin half of a *shared* page).
         if record.is_club_member:
             label = record.auction.alternative_split_label.capitalize()
             result += (
@@ -130,7 +161,7 @@ class AuctionTOSHTMxTable(tables.Table):
             if self.can_manage_check_in:
                 check_in_url = reverse("auction_check_in", kwargs={"pk": record.pk})
                 result += (
-                    f'<button class="btn btn-sm btn-info ms-1" hx-get="{check_in_url}" '
+                    f'<button class="btn btn-sm btn-primary ms-1" hx-get="{check_in_url}" '
                     'hx-target="#modals-here" hx-swap="innerHTML" '
                     '_="on htmx:afterOnLoad wait 10ms then add .show to #modal then add .show to #modal-backdrop">'
                     "Check in</button>"
@@ -177,7 +208,7 @@ class AuctionTOSHTMxTable(tables.Table):
     def __init__(self, *args, **kwargs):
         self.request = kwargs.pop("request", None)
         self.can_manage_check_in = kwargs.pop("can_manage_check_in", False)
-        is_managed = kwargs.pop("is_managed", False)
+        self.is_managed = is_managed = kwargs.pop("is_managed", False)
         exclude = list(kwargs.pop("exclude", None) or [])
         # The membership column is only meaningful for club-managed/check-in auctions.
         if not is_managed:
@@ -258,7 +289,7 @@ class LotHTMxTable(tables.Table):
     def render_lot_name(self, value, record):
         result = f"""
         <a href='' hx-noget hx-get='/api/lot/{record.pk}' hx-target='#modals-here' hx-trigger='click'><i class='bi bi-calendar-fill me-1'></i>{value}</a>
-        <button type="button" class="btn btn-sm bg-secondary dropdown-toggle dropdown-toggle-split" data-bs-toggle="dropdown" aria-haspopup="true" aria-expanded="false">
+        <button type="button" class="btn btn-sm btn-primary dropdown-toggle dropdown-toggle-split" data-bs-toggle="dropdown" aria-haspopup="true" aria-expanded="false">
 				</button>
 				<div class="dropdown-menu">
 					<div><a href='{record.lot_link}?src=admin'><i class="bi bi-calendar ms-1 me-1"></i>Lot page</a></div>
@@ -381,6 +412,68 @@ class AuctionHTMxTable(tables.Table):
         }
 
 
+class InvoiceHTMxTable(tables.Table):
+    """The current user's own invoices -- /invoices/
+
+    Sorted newest first by default (Meta.order_by); every column here is backed by a real
+    database field so each header is a working sort, not just a label.
+    """
+
+    #: status code -> badge class.  Success fills need dark text, see style_reference.md.
+    STATUS_BADGES = {
+        "DRAFT": "bg-secondary",
+        "UNPAID": "bg-info",
+        "PAID": "bg-success text-dark",
+    }
+
+    # These two accessors are `pk` rather than the field they display: django-tables2 skips
+    # render_*() entirely when the accessed value is empty, and both an auction-less invoice
+    # and an unstamped calculated_total are empty.  pk is never empty, so render always runs
+    # and order_by carries the real sort.
+    invoice = tables.Column(accessor="pk", verbose_name="Invoice", order_by=("auction__title",))
+    total = tables.Column(accessor="pk", verbose_name="Total", order_by=("calculated_total",))
+    status = tables.Column(accessor="status", verbose_name="Status")
+    date = tables.Column(accessor="date", verbose_name="Date")
+
+    def render_invoice(self, value, record):
+        return format_html("<a href='{}'>{}</a>", record.get_absolute_url(), record.label or str(record))
+
+    def render_total(self, value, record):
+        """Money the user owes the club shows red and parenthesized, a payout owed to them plain.
+
+        `calculated_total` is the stamped copy of `rounded_net`, so reading it here keeps the
+        displayed number and the column's sort in agreement -- and spares this page the handful
+        of queries per row that recomputing `net` costs.  It is only ever NULL on a draft that
+        was never recalculated, which is the one case that falls back.
+        """
+        amount = record.calculated_total
+        if amount is None:
+            amount = record.rounded_net
+        # format_html() escapes its arguments into SafeString first, which has no numeric
+        # format codes, so the rounding has to happen before it gets there.
+        if amount < 0:
+            return format_html("<span class='text-danger'>({}{})</span>", record.currency_symbol, f"{abs(amount):.2f}")
+        return format_html("{}{}", record.currency_symbol, f"{amount:.2f}")
+
+    def render_status(self, value, record):
+        return format_html(
+            "<span class='badge {}'>{}</span>",
+            self.STATUS_BADGES.get(value, "bg-secondary"),
+            record.get_status_display(),
+        )
+
+    class Meta:
+        model = Invoice
+        template_name = "tables/bootstrap_htmx.html"
+        fields = (
+            "invoice",
+            "total",
+            "status",
+            "date",
+        )
+        order_by = "-date"
+
+
 class LotHTMxTableForUsers(tables.Table):
     hide_string = "d-md-table-cell d-none"
     # seller = tables.Column(accessor='auctiontos_seller', verbose_name="Seller")
@@ -492,6 +585,8 @@ _PERMISSION_BADGES = [
     ("permission_money", "Manage membership and payments"),
     ("permission_manage_auctions", "Manage auctions"),
     ("permission_manage_bap", "Award points"),
+    ("permission_manage_donations", "Manage donations"),
+    ("permission_send_announcements", "Send announcements"),
     ("permission_export", "Export data"),
     ("permission_add_edit", "Manage membership"),
     ("permission_view", "View members"),
@@ -799,7 +894,7 @@ class ClubMemberHTMxTable(tables.Table):
 
         return format_html(
             '<div class="dropdown">'
-            '<button type="button" class="btn btn-sm btn-secondary dropdown-toggle"'
+            '<button type="button" class="btn btn-sm btn-primary dropdown-toggle"'
             ' data-bs-toggle="dropdown" aria-label="Actions for {}">Actions</button>'
             "<ul class='dropdown-menu'>{}{}{}{}{}{}</ul>"
             "</div>",
@@ -852,15 +947,22 @@ class ClubHistoryHTMxTable(tables.Table):
     applies_to = tables.Column(accessor="applies_to", verbose_name="Modified")
     timestamp = tables.Column(accessor="timestamp", verbose_name="Time")
 
+    # One icon per ClubHistory.applies_to. Every choice is listed: three of them used to be missing
+    # here, so a membership renewal, a BAP award and an announcement all rendered as bare text next
+    # to rows that had an icon, which reads as "this one is different" rather than "nobody got to it".
+    APPLIES_TO_ICONS = {
+        "RULES": "bi-gear-fill",
+        "MEMBERS": "bi-people-fill",
+        "MEMBERSHIP": "bi-card-checklist",
+        "SETTINGS": "bi-sliders",
+        "BAP": "bi-award-fill",
+        "DONATIONS": "bi-gift-fill",
+        "ANNOUNCEMENTS": "bi-megaphone-fill",
+    }
+
     def render_applies_to(self, value, record):
-        if record.applies_to == "RULES":
-            result = "<i class='bi bi-gear-fill'></i>"
-        elif record.applies_to == "MEMBERS":
-            result = "<i class='bi bi-people-fill'></i>"
-        elif record.applies_to == "SETTINGS":
-            result = "<i class='bi bi-sliders'></i>"
-        else:
-            result = ""
+        icon = self.APPLIES_TO_ICONS.get(record.applies_to)
+        result = f"<i class='bi {icon}'></i>" if icon else ""
         result += f" {value}"
         return mark_safe(result)
 
@@ -1008,12 +1110,21 @@ class ClubBapLotHTMxTable(tables.Table):
         except Exception:
             award = None
         record.bap_award_cached = award
-        override = self._override_cache.get(record.species_category_id) if record.species_category_id else None
-        default_points = (
-            override.points
-            if override is not None
-            else ((self.club.points_per_lot or record.species_category.bap_points) if self.club else 0)
-        )
+        # Same precedence as Lot.bap_points_for_club, but off prefetched dicts: this runs once per
+        # row and the pending-BAP page shows hundreds.
+        genus = record.species.genus if record.species_id else ""
+        override = self._genus_override_cache.get(genus) if genus else None
+        if override is None and record.species_category_id:
+            override = self._override_cache.get(record.species_category_id)
+        if override is not None:
+            default_points = override.points
+        elif not self.club:
+            default_points = 0
+        elif self.club.points_per_lot is not None:
+            # See Lot.bap_points_for_club: a club that sets 0 means 0, not "use the category".
+            default_points = self.club.points_per_lot
+        else:
+            default_points = record.species_category.bap_points if record.species_category_id else 5
         if self.club and self.club.points_for_custom_checkbox > 0 and record.custom_checkbox:
             default_points += self.club.points_for_custom_checkbox
         return mark_safe(
@@ -1033,8 +1144,10 @@ class ClubBapLotHTMxTable(tables.Table):
         super().__init__(*args, **kwargs)
         if self.club:
             self._override_cache = {o.category_id: o for o in ClubBapCategoryOverride.objects.filter(club=self.club)}
+            self._genus_override_cache = {o.genus: o for o in ClubBapGenusOverride.objects.filter(club=self.club)}
         else:
             self._override_cache = {}
+            self._genus_override_cache = {}
 
 
 class SpeakerHTMxTable(tables.Table):
@@ -1154,4 +1267,126 @@ class SpeakerHTMxTable(tables.Table):
             " ",
             "<span class='badge bg-primary'>{} {}</span>",
             ((label, count) for _value, label, _group, count in counts),
+        )
+
+
+class DonationVendorHTMxTable(tables.Table):
+    """Vendors a club is asking for donations, with where each conversation stands."""
+
+    hide_string = "d-md-table-cell d-none"
+
+    name = tables.Column(accessor="name", verbose_name="Vendor")
+    contact_name = tables.Column(
+        accessor="contact_name",
+        verbose_name="Contact",
+        default="—",
+        attrs={"th": {"class": hide_string}, "cell": {"class": hide_string}},
+    )
+    email = tables.Column(
+        accessor="email",
+        verbose_name="Email",
+        default="—",
+        attrs={"th": {"class": hide_string}, "cell": {"class": hide_string}},
+    )
+    status = tables.Column(accessor="status", verbose_name="Status")
+    last_contact = tables.Column(accessor="last_contact", verbose_name="Last contact", default="—")
+    followup_due = tables.Column(accessor="followup_due", verbose_name="Follow-up", default="—")
+    contact = tables.Column(accessor="pk", verbose_name="Contact", orderable=False)
+
+    #: Bootstrap background for each status, so the pipeline reads at a glance. Kept here rather
+    #: than in the template because the status column is rendered as HTML either way.
+    STATUS_BADGES = {
+        "new": "bg-secondary",
+        "sent": "bg-info",
+        "interested": "bg-primary",
+        # success and warning fills need dark text on this theme -- see style_reference.md.
+        "promised": "bg-warning text-dark",
+        "received": "bg-success text-dark",
+        "not_interested": "bg-dark",
+        "do_not_contact": "bg-danger",
+    }
+
+    class Meta:
+        model = DonationVendor
+        template_name = "tables/bootstrap_htmx.html"
+        fields = ()
+
+    def __init__(self, *args, **kwargs):
+        # Counted once by the view and handed down, so rendering a page of vendors doesn't ask the
+        # same question of the database for every row.
+        self.quota = kwargs.pop("quota", None)
+        super().__init__(*args, **kwargs)
+
+    def render_name(self, value, record):
+        """The vendor name opens the side panel with their email history and edit form."""
+        return format_html(
+            "<a href='' hx-noget hx-get='{}' hx-target='#modals-here' hx-trigger='click'>"
+            "<i class='bi bi-shop me-1'></i>{}</a>",
+            reverse("club_donation_vendor", kwargs={"pk": record.pk}),
+            value,
+        )
+
+    def render_status(self, value, record):
+        badge = self.STATUS_BADGES.get(record.status, "bg-secondary")
+        label = record.get_status_display()
+        if record.unsubscribed:
+            return format_html(
+                "<span class='badge {}' title='This vendor unsubscribed'>"
+                "<i class='bi bi-slash-circle me-1'></i>{}</span>",
+                badge,
+                label,
+            )
+        return format_html("<span class='badge {}'>{}</span>", badge, label)
+
+    def render_last_contact(self, value, record):
+        if not record.last_contact:
+            return "—"
+        return format_html("<span title='{}'>{}</span>", record.last_contact, naturalday(record.last_contact))
+
+    def order_followup_due(self, queryset, is_descending):
+        """Sort by follow-up date, keeping the vendors that have none at the bottom either way.
+
+        Without this the database decides where nulls go, which puts every vendor who unsubscribed
+        or had their date cleared at the top of the ascending sort -- a screenful of rows there is
+        nothing to do about, above the overdue ones the page is meant to surface.
+        """
+        field = F("followup_due")
+        return (
+            queryset.order_by(field.desc(nulls_last=True) if is_descending else field.asc(nulls_last=True), "name"),
+            True,
+        )
+
+    def render_followup_due(self, value, record):
+        if not record.followup_due:
+            return "—"
+        formatted = naturalday(record.followup_due)
+        if record.is_followup_due:
+            return format_html(
+                "<span class='text-warning' title='{}'><i class='bi bi-exclamation-circle me-1'></i>{}</span>",
+                record.followup_due,
+                formatted,
+            )
+        return format_html("<span title='{}'>{}</span>", record.followup_due, formatted)
+
+    def render_contact(self, value, record):
+        """A button that opens the write-an-email dialog.
+
+        A vendor we may not write to keeps a clickable button that explains why rather than a
+        disabled one -- see the unavailable-action standard in style_reference.md. Running out of
+        the club's daily allowance blocks the button the same way, and says when it comes back.
+        """
+        reason = donations.contact_blocked_reason(record, self.quota)
+        if reason:
+            # Stays clickable and explains itself in a toast; the handler is delegated from
+            # club_donation_vendors.html so it survives htmx swaps of the table.
+            return format_html(
+                "<button type='button' class='btn btn-sm btn-primary donation-contact-blocked' "
+                "data-reason='{}'><i class='bi bi-envelope-slash me-1'></i>Contact</button>",
+                reason,
+            )
+        return format_html(
+            "<button type='button' class='btn btn-sm btn-primary' hx-get='{}' "
+            "hx-target='#modals-here' hx-trigger='click'>"
+            "<i class='bi bi-envelope me-1'></i>Contact</button>",
+            reverse("club_donation_contact", kwargs={"pk": record.pk}),
         )

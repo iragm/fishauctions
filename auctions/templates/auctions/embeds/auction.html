@@ -1,0 +1,21 @@
+{% extends "auctions/embeds/base.html" %}
+{% comment %}The club's current auction, for a "we have an auction on" strip at the top of a club's
+own site. Almost the same information as the events embed's next row, and deliberately separate:
+a club that runs one auction a year wants to advertise that auction, not "the next thing on the
+calendar", which for most of the year is a meeting.{% endcomment %}
+{% block embed_title %}{{ club_name }} current auction{% endblock %}
+{% block embed_body %}
+    {% if auction %}
+    <ul class="ew-list">
+      <li>
+        <a class="ew-title" href="{{ auction.url }}" target="_blank" rel="noopener">{{ auction.title }}</a>
+        {% if auction.is_online %}<span class="ew-badge">Online</span>{% endif %}
+        <span class="ew-line">{{ auction.when }}</span>
+        {% if auction.location %}<span class="ew-line">{{ auction.location }}</span>{% endif %}
+        {% if auction.lots_open %}<span class="ew-line">{{ auction.lots_open }}</span>{% endif %}
+      </li>
+    </ul>
+    {% else %}
+    <p class="ew-empty">No auction running right now.</p>
+    {% endif %}
+{% endblock %}

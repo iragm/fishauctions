@@ -1,17 +1,18 @@
-<small>This is a list of items for sale in your auction.  Click a lot name to edit it.  {% if auction.is_online %}You probably don't need to use this page; users will add their own lots to this auction{% else %}To add new lots, go to the <a href="{% url 'auction_tos_list' slug=auction.slug %}">users page</a> and click add lots under the appropriate user.{% endif %}<br>
-{% if auction.use_seller_dash_lot_numbering and not auction.admin_checklist_lots_added %}<br><div class=""><b class="text-warning">Change your lot numbering:</b> This auction uses seller-dash-lot numbering.  Go to the <a href="{% url 'edit_auction' slug=auction.slug %}">rules</a> and uncheck <b>Use seller dash lot numbering</b> to switch to a simpler lot numbering system that users find less confusing.  <a href='https://github.com/iragm/fishauctions/issues/269'>Read more and leave feedback here.</a><br></div>{% endif %}
-</small>
+<div class="help-note"><i class="bi bi-lightbulb-fill"></i><div>This is a list of items for sale in your auction.  Click a lot name to edit it.  {% if auction.is_online %}You probably don't need to use this page; users will add their own lots to this auction{% else %}To add new lots, go to the <a href="{% url 'auction_tos_list' slug=auction.slug %}">users page</a> and click add lots under the appropriate user.{% endif %}</div></div>
+{% if auction.use_seller_dash_lot_numbering and not auction.admin_checklist_lots_added %}<div class="alert alert-warning text-dark py-2"><b>Change your lot numbering:</b> This auction uses seller-dash-lot numbering.  Go to the <a href="{% url 'edit_auction' slug=auction.slug %}">rules</a> and uncheck <b>Use seller dash lot numbering</b> to switch to a simpler lot numbering system that users find less confusing.  <a href='https://github.com/iragm/fishauctions/issues/269'>Read more and leave feedback here.</a></div>{% endif %}
+{% comment %}One wrapping row rather than five loose buttons with their own margins: on a phone they used to wrap into an uneven staircase.{% endcomment %}
+<div class="d-flex flex-wrap gap-2 mt-2 mb-2">
 {% if not auction.is_online %}<a class='btn btn-sm btn-primary' href="{{ auction.set_lot_winners_link }}"><i class="bi bi-calendar-check"></i> Set winners</a>{% endif %}
 <a id='all_lot_list'
    href="{% url 'lot_list' slug=auction.slug %}{% if request.GET.query %}?query={{ request.GET.query|urlencode }}{% endif %}"
    data-query-sync-url="{% url 'lot_list' slug=auction.slug %}"
-   class="btn btn-sm mt-2 mb-2 btn-primary"><i class="bi bi-download"></i> Export lot CSV</a>
-<button class="btn btn-sm btn-primary mt-2 mb-2" type="button" data-bs-toggle="collapse" data-bs-target="#csvImportLots" aria-expanded="false" aria-controls="csvImportLots">
+   class="btn btn-sm btn-primary"><i class="bi bi-download"></i> Export lot CSV</a>
+<button class="btn btn-sm btn-primary" type="button" data-bs-toggle="collapse" data-bs-target="#csvImportLots" aria-expanded="false" aria-controls="csvImportLots">
   <i class="bi bi-file-earmark-spreadsheet"></i> Import lots from CSV
 </button>
 <a href="{{auction.view_lot_link}}" class="btn btn-sm btn-primary"><i class="bi bi-calendar"></i> See user view</a>
 {% if auction.online_bidding != "disable" and not auction.is_online %}
-<a id='bulk_set_lots_won' href="#" class="btn btn-sm mt-2  mb-2 btn-primary"
+<a id='bulk_set_lots_won' href="#" class="btn btn-sm btn-primary"
     hx-get="{% url 'bulk_set_lots_won' auction.slug %}"
     hx-vals='{"query": "{% if request.GET.query %}{{ request.GET.query|escapejs }}{% endif %}"}'
     data-query-sync-hx-vals="query"
@@ -19,6 +20,7 @@
     hx-trigger="click"
     _="on htmx:afterOnLoad wait 10ms then add .show to #modal then add .show to #modal-backdrop"><i class="bi bi-calendar-check-fill"></i> Sell lots to online high bidder</a>
 {% endif %}
+</div>
 
 <div class="collapse mt-3" id="csvImportLots">
   <div class="card card-body">

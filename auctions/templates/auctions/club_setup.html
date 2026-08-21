@@ -3,8 +3,10 @@
 
 {% block content %}
 {% include "club_ribbon.html" %}
-<h3 class="mb-3">Setup</h3>
-<div class="list-group">
+{% comment %}No page heading: the club sidebar already names this page and marks it active, and
+the browser tab carries the title. Most club pages have none for that reason -- see
+style_reference.md.{% endcomment %}
+<div class="list-group mt-3">
   <a class="list-group-item list-group-item-action d-flex align-items-center gap-2" href="{% url 'club_edit' club.slug %}">
     <i class="bi bi-gear fs-5"></i>
     <span><strong>General</strong><br><small class="text-muted">Club name, logo, location, and public page</small></span>
@@ -33,6 +35,10 @@
     <i class="bi bi-send fs-5"></i>
     <span><strong>Brevo</strong><br><small class="text-muted">Sync members to a Brevo list</small></span>
   </a>
+  <a class="list-group-item list-group-item-action d-flex align-items-center gap-2" href="{% url 'club_website_integration' club.slug %}">
+    <i class="bi bi-code-slash fs-5"></i>
+    <span><strong>Website integration</strong><br><small class="text-muted">Put your events, auction, announcements and leaderboard on your own site</small></span>
+  </a>
   <a class="list-group-item list-group-item-action d-flex align-items-center gap-2" href="{% url 'club_api_keys' club.slug %}">
     <i class="bi bi-key fs-5"></i>
     <span><strong>API keys</strong><br><small class="text-muted">Programmatic access to club data</small></span>
@@ -40,6 +46,10 @@
   <a class="list-group-item list-group-item-action d-flex align-items-center gap-2" href="{% url 'club_bap_settings' club.slug %}">
     <i class="bi bi-award fs-5"></i>
     <span><strong>BAP settings</strong><br><small class="text-muted">Breeder Award Program points and rules</small></span>
+  </a>
+  <a class="list-group-item list-group-item-action d-flex align-items-center gap-2" href="{% url 'club_donation_settings' club.slug %}">
+    <i class="bi bi-gift fs-5"></i>
+    <span><strong>Donation tracking</strong><br><small class="text-muted">Ask vendors to donate, and track who said yes</small></span>
   </a>
 </div>
 {% endblock %}

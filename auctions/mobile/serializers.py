@@ -11,7 +11,7 @@ from auctions.mobile.services.ar import (
 )
 from auctions.mobile.services.offline import MAX_OPS_PER_SYNC
 from auctions.mobile.services.social_auth import SUPPORTED_PROVIDERS
-from auctions.models import MobileDevice, ObservedPrinter, UserData, UserLabelPrefs
+from auctions.models import MobileDevice, ObservedPrinter, RemotePrintJob, UserData, UserLabelPrefs
 
 # ---------------------------------------------------------------------------
 # Auth
@@ -148,6 +148,27 @@ class MobileDeviceUnregisterSerializer(serializers.Serializer):
     device_uuid = serializers.UUIDField()
 
 
+class MobileDeviceHeartbeatSerializer(serializers.Serializer):
+    """Request body for POST /api/mobile/devices/heartbeat/ — "this phone is awake and can print".
+
+    Posted at shell mount, on resume, and every 5 minutes while foregrounded. It is the only thing
+    that makes printing from a computer to the phone possible at all: the phone cannot be woken on
+    demand, so the website has to know whether it is already awake before it offers.
+
+    ``print_ready`` is the app's own answer to "is a printer paired AND does its profile resolve",
+    not something derived from ``print_method``: a printer saved by an older build, or one whose
+    profile the site has since withdrawn, cannot print and must be reported not-ready rather than
+    advertised and then failed.
+    """
+
+    device_uuid = serializers.UUIDField()
+    print_ready = serializers.BooleanField(required=False, default=False)
+    printer_name = serializers.CharField(required=False, allow_blank=True, default="", max_length=100)
+    # Echoed by the app so the website can see the method the phone is actually set to; it is
+    # deliberately NOT what print_ready is computed from.
+    print_method = serializers.CharField(required=False, allow_blank=True, default="", max_length=20)
+
+
 # ---------------------------------------------------------------------------
 # Label printing
 # ---------------------------------------------------------------------------
@@ -192,6 +213,37 @@ class MobileLabelsPrintedSerializer(serializers.Serializer):
     """
 
     lots = serializers.ListField(child=serializers.IntegerField(min_value=1), allow_empty=True, max_length=1000)
+
+
+class MobileRemotePrintProgressSerializer(serializers.Serializer):
+    """Body for POST /api/mobile/printjobs/<uuid>/progress/ — one label went out.
+
+    Best-effort and throttled by the app (at most one per label, never two inside a second, dropped
+    silently on error). A phone that can print but has lost the network mid-batch must still finish
+    the batch; the waiting page's 20-second silence rule will then call the job unreachable, which is
+    a survivable wrong answer. The *result* post is the one that matters.
+    """
+
+    status = serializers.ChoiceField(
+        choices=[RemotePrintJob.STATUS_PRINTING], required=False, default=RemotePrintJob.STATUS_PRINTING
+    )
+    printed = serializers.IntegerField(min_value=0, required=False, default=0)
+    total = serializers.IntegerField(min_value=0, required=False, default=0)
+
+
+class MobileRemotePrintResultSerializer(serializers.Serializer):
+    """Body for POST /api/mobile/printjobs/<uuid>/result/ — the batch is over, one way or the other.
+
+    ``message`` is the app's own failure text and is shown to the person at the computer *verbatim*.
+    The app already distinguishes no-printer-paired from couldn't-connect from lost-the-link-mid-print
+    from label-wider-than-the-printhead; restating those here would be a second copy of the same
+    vocabulary, free to drift.
+    """
+
+    status = serializers.ChoiceField(choices=[RemotePrintJob.STATUS_PRINTED, RemotePrintJob.STATUS_FAILED])
+    printed = serializers.IntegerField(min_value=0, required=False, default=0)
+    total = serializers.IntegerField(min_value=0, required=False, default=0)
+    message = serializers.CharField(required=False, allow_blank=True, default="", max_length=1000)
 
 
 # ---------------------------------------------------------------------------

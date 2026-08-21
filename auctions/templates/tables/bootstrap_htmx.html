@@ -6,14 +6,14 @@
 {# Give the wrapper div a stable id so HTMx sends HX-Target: table-container #}
 {% block table-wrapper %}
 <div class="table-container" id="table-container">
-    {% block table %}{{ block.super }}{% endblock table %}
+    {% comment %}The scroller has to be *outside* the table: a <div> between <table> and <thead> is not allowed there, and the HTML parser hoists it out to sit above the table as an empty box -- which is why these tables used to scroll the whole page sideways on a phone instead of scrolling themselves. Dropdowns inside a cell escape the scroller via table_scroll.js.{% endcomment %}
+    {% block table %}<div class="table-responsive">{{ block.super }}</div>{% endblock table %}
     {% block pagination %}{{ block.super }}{% endblock pagination %}
 </div>
 {% endblock table-wrapper %}
 
 {% block table.thead %}
   {% if table.show_header %}
-  <div class="table-responsive">
     <thead {{ table.attrs.thead.as_html }}>
       <tr>
           {% for column in table.columns %}
@@ -29,7 +29,6 @@
           {% endfor %}
       </tr>
       </thead>
-  </div>
   {% endif %}
 {% endblock table.thead %}
 

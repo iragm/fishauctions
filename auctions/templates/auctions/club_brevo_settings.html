@@ -80,7 +80,7 @@
 {% else %}
   {# Fully connected #}
   <div class="card mb-4">
-    <div class="card-header d-flex justify-content-between align-items-center">
+    <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
       <span>Brevo connection</span>
       <span class="badge bg-success"><i class="bi bi-check-circle-fill"></i> Connected</span>
     </div>
@@ -126,7 +126,7 @@
     <div class="card-footer">
       <form method="post" action="{% url 'brevo_sync_now' club.slug %}" class="d-inline">
         {% csrf_token %}
-        <button type="submit" class="btn btn-secondary btn-sm">
+        <button type="submit" class="btn btn-primary btn-sm">
           <i class="bi bi-arrow-clockwise"></i> Sync all now
         </button>
       </form>
@@ -136,7 +136,7 @@
             data-confirm-ok="Disconnect"
             data-confirm-variant="danger">
         {% csrf_token %}
-        <button type="submit" class="btn btn-outline-danger btn-sm">
+        <button type="submit" class="btn btn-danger btn-sm">
           <i class="bi bi-x-circle"></i> Disconnect
         </button>
       </form>
@@ -152,6 +152,7 @@
         <span class="text-warning">MEMBER_TAGS</span> attribute &mdash; build a segment with
         &ldquo;MEMBER_TAGS contains <em>tag</em>&rdquo; to target each group.
       </p>
+      <div class="table-responsive">
       <table class="table table-sm mb-3">
         <tbody>
           <tr>
@@ -212,8 +213,10 @@
           </tr>
         </tbody>
       </table>
+      </div>
       <hr class="my-3">
       <p class="text-muted small mb-2">Attributes available for personalization in campaigns (e.g. <span class="text-warning">{% templatetag openvariable %} contact.FIRSTNAME {% templatetag closevariable %}</span>):</p>
+      <div class="table-responsive">
       <table class="table table-sm mb-0">
         <tbody>
           <tr>
@@ -270,6 +273,7 @@
           </tr>
         </tbody>
       </table>
+      </div>
     </div>
   </div>
 {% endif %}

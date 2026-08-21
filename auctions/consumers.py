@@ -17,6 +17,14 @@ from .models import (
     UserBan,
 )
 
+try:
+    from uvicorn.protocols.utils import ClientDisconnected
+except ImportError:  # pragma: no cover - only uvicorn raises this
+
+    class ClientDisconnected(Exception):
+        """Placeholder so the handlers below still work under other ASGI servers."""
+
+
 logger = logging.getLogger(__name__)
 
 
@@ -186,6 +194,11 @@ class LotConsumer(WebsocketConsumer):
                     existing_subscription.last_seen = timezone.now()
                     existing_subscription.last_notification_sent = timezone.now()
                     existing_subscription.save()
+        except ClientDisconnected:
+            # The user closed the tab or lost signal before the handshake finished. Routine, not a
+            # bug: log below ERROR so it doesn't reach mail_admins. ClientDisconnected subclasses
+            # OSError, so this must stay above the `except Exception` below.
+            logger.info("client went away before the lot websocket finished connecting")
         except Exception as e:
             logger.exception(e)
 
@@ -305,6 +318,9 @@ class UserConsumer(WebsocketConsumer):
                 #     self.user_notification_channel,
                 #     {"type": "toast", "message": 'Welcome!', 'bg': 'success'},
                 # )
+        except ClientDisconnected:
+            logger.info("client went away before the user websocket finished connecting")
+            return
         except Exception as e:
             logger.exception(e)
             self.close()
@@ -346,6 +362,9 @@ class AuctionConsumer(WebsocketConsumer):
             self.accept()
             async_to_sync(self.channel_layer.group_add)(f"auctions_{self.pk}", self.channel_name)
 
+        except ClientDisconnected:
+            logger.info("client went away before the auction websocket finished connecting")
+            return
         except Exception as e:
             logger.exception(e)
             self.close()

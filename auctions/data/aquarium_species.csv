@@ -1,0 +1,468 @@
+# The aquarium trade list.  See auctions/aquarium_species.py for the format and the rules.
+#
+# Everything here is something a club auction actually sells and that FishBase does not cover:
+# plants, freshwater invertebrates, live-food cultures, and the cultivars ("strains") of fish
+# FishBase does list.  A variety row names its parent in scientific_name and puts the strain in
+# variety; the loader links the two, and the parent has to already exist.
+#
+# A HYBRID row is the one row with no scientific name at all: leave the first column empty, put
+# the name the trade uses in variety, and the loader sets Species.is_hybrid.  It reads as
+# "Hybrid 'Tibee'" everywhere a name is shown, which is the point -- a BAP class that excludes
+# crosses can only do that if the label says which lots are crosses.  No parentage is recorded:
+# a cross has no binomial and filing it under one parent would put a wrong genus in a genus BAP
+# rule.  family and order may be filled in when both parents share one (every tibee is an atyid,
+# every flowerhorn a cichlid); that is what gives the row a category, and nothing else reads it.
+#
+# There is a third kind of row, at the bottom of the file: a NAMES-ONLY row, for a species
+# FishBase already has under a name nobody in the hobby uses.  FishBase files Labidochromis
+# caeruleus under "Blue streak hap", so "yellow lab" matched nothing at all.  Write the scientific
+# name and the common names, leave family/order/kind/habitat blank, and the loader attaches the
+# names to the existing species without creating a second copy of it or touching its taxonomy.
+#
+# Rules for adding a row:
+#   * scientific_name is the currently accepted binomial.  A genus on its own is allowed when the
+#     trade genuinely sells at that rank (Bucephalandra, Tylomelania) -- leave the epithet off.
+#   * common_names is what people type into a lot name, pipe-separated, lower case.  Include the
+#     abbreviations (rcs, mts, bbs): that is what actually gets typed.
+#   * Don't add a row to make a search work if the identification is contested.  A wrong species
+#     is printed on a label and counted for breeder points; no match is the better answer.
+#     "Bristlenose" is the example to keep in mind: everyone sells one, nobody agrees which
+#     Ancistrus it is, and so it is deliberately not in this file.
+#
+scientific_name,variety,common_names,family,order,kind,habitat
+#
+# ---------------------------------------------------------------- plants: rosettes and stems ---
+Anubias barteri,,anubias|anubias barteri|broad leaf anubias,Araceae,Alismatales,plant,fresh
+Anubias barteri,Nana,anubias nana|nana anubias|dwarf anubias,Araceae,Alismatales,plant,fresh
+Anubias barteri,Nana Petite,anubias nana petite|petite anubias,Araceae,Alismatales,plant,fresh
+Anubias barteri,Coffeefolia,anubias coffeefolia|coffeefolia,Araceae,Alismatales,plant,fresh
+Anubias gracilis,,anubias gracilis,Araceae,Alismatales,plant,fresh
+Anubias hastifolia,,anubias hastifolia|arrowhead anubias,Araceae,Alismatales,plant,fresh
+Anubias afzelii,,anubias afzelii,Araceae,Alismatales,plant,fresh
+Anubias heterophylla,,anubias congensis|congo anubias|anubias heterophylla,Araceae,Alismatales,plant,fresh
+Bucephalandra,,bucephalandra|buce|buces,Araceae,Alismatales,plant,fresh
+Cryptocoryne wendtii,,crypt wendtii|cryptocoryne wendtii|wendtii crypt|crypt,Araceae,Alismatales,plant,fresh
+Cryptocoryne wendtii,Green,green wendtii|crypt wendtii green,Araceae,Alismatales,plant,fresh
+Cryptocoryne wendtii,Bronze,bronze wendtii|crypt wendtii bronze,Araceae,Alismatales,plant,fresh
+Cryptocoryne wendtii,Red,red wendtii|crypt wendtii red,Araceae,Alismatales,plant,fresh
+Cryptocoryne wendtii,Tropica,crypt wendtii tropica|tropica crypt,Araceae,Alismatales,plant,fresh
+Cryptocoryne parva,,crypt parva|cryptocoryne parva|dwarf crypt,Araceae,Alismatales,plant,fresh
+Cryptocoryne lucens,,crypt lucens|cryptocoryne lucens,Araceae,Alismatales,plant,fresh
+Cryptocoryne crispatula,,crypt balansae|crypt crispatula|balansae|cryptocoryne crispatula,Araceae,Alismatales,plant,fresh
+Cryptocoryne spiralis,,crypt spiralis|cryptocoryne spiralis,Araceae,Alismatales,plant,fresh
+Cryptocoryne beckettii,,crypt beckettii|cryptocoryne beckettii,Araceae,Alismatales,plant,fresh
+Cryptocoryne undulata,,crypt undulata|cryptocoryne undulata,Araceae,Alismatales,plant,fresh
+Cryptocoryne usteriana,,crypt usteriana|cryptocoryne usteriana,Araceae,Alismatales,plant,fresh
+Cryptocoryne cordata,,crypt cordata|crypt blassii|cryptocoryne cordata,Araceae,Alismatales,plant,fresh
+Cryptocoryne affinis,,crypt affinis|cryptocoryne affinis,Araceae,Alismatales,plant,fresh
+Cryptocoryne albida,,crypt albida|crypt costata|cryptocoryne albida,Araceae,Alismatales,plant,fresh
+Cryptocoryne pontederiifolia,,crypt pontederiifolia|cryptocoryne pontederiifolia,Araceae,Alismatales,plant,fresh
+Cryptocoryne walkeri,,crypt walkeri|cryptocoryne walkeri|crypt lutea,Araceae,Alismatales,plant,fresh
+Echinodorus bleherae,,amazon sword|amazon swords|echinodorus bleherae|sword plant,Alismataceae,Alismatales,plant,fresh
+Echinodorus grisebachii,,echinodorus grisebachii|chain sword|narrow leaf amazon sword,Alismataceae,Alismatales,plant,fresh
+Echinodorus cordifolius,,radican sword|echinodorus cordifolius|marble queen sword,Alismataceae,Alismatales,plant,fresh
+Echinodorus uruguayensis,,uruguay sword|echinodorus uruguayensis,Alismataceae,Alismatales,plant,fresh
+Echinodorus parviflorus,,black amazon sword|echinodorus parviflorus|rosette sword,Alismataceae,Alismatales,plant,fresh
+Helanthium tenellum,,pygmy chain sword|dwarf chain sword|helanthium tenellum|echinodorus tenellus,Alismataceae,Alismatales,plant,fresh
+Helanthium bolivianum,,chain sword|helanthium bolivianum|quadricostatus,Alismataceae,Alismatales,plant,fresh
+Sagittaria subulata,,dwarf sagittaria|dwarf sag|sagittaria subulata|sag,Alismataceae,Alismatales,plant,fresh
+Vallisneria americana,,jungle val|vallisneria americana|val|vallisneria,Hydrocharitaceae,Alismatales,plant,fresh
+Vallisneria spiralis,,italian val|vallisneria spiralis|straight val,Hydrocharitaceae,Alismatales,plant,fresh
+Vallisneria nana,,dwarf val|vallisneria nana|narrow leaf val,Hydrocharitaceae,Alismatales,plant,fresh
+Blyxa japonica,,blyxa|blyxa japonica|dwarf rice plant,Hydrocharitaceae,Alismatales,plant,fresh
+Blyxa aubertii,,blyxa aubertii,Hydrocharitaceae,Alismatales,plant,fresh
+Egeria densa,,anacharis|elodea|egeria densa|brazilian waterweed,Hydrocharitaceae,Alismatales,plant,fresh
+Elodea canadensis,,canadian waterweed|elodea canadensis,Hydrocharitaceae,Alismatales,plant,fresh
+Najas guadalupensis,,guppy grass|najas|najas guadalupensis,Hydrocharitaceae,Alismatales,plant,fresh
+Limnobium laevigatum,,amazon frogbit|frogbit|limnobium laevigatum,Hydrocharitaceae,Alismatales,plant,fresh
+Hygrophila polysperma,,dwarf hygro|hygrophila polysperma|dwarf hygrophila,Acanthaceae,Lamiales,plant,fresh
+Hygrophila difformis,,water wisteria|hygrophila difformis|wisteria,Acanthaceae,Lamiales,plant,fresh
+Hygrophila corymbosa,,temple plant|hygrophila corymbosa|giant hygro,Acanthaceae,Lamiales,plant,fresh
+Hygrophila pinnatifida,,hygrophila pinnatifida|pinnatifida,Acanthaceae,Lamiales,plant,fresh
+Staurogyne repens,,staurogyne repens|staurogyne|s repens,Acanthaceae,Lamiales,plant,fresh
+Rotala rotundifolia,,rotala rotundifolia|rotala|rotala green,Lythraceae,Myrtales,plant,fresh
+Rotala indica,,rotala indica,Lythraceae,Myrtales,plant,fresh
+Rotala macrandra,,rotala macrandra|giant red rotala,Lythraceae,Myrtales,plant,fresh
+Rotala wallichii,,rotala wallichii,Lythraceae,Myrtales,plant,fresh
+Ammannia gracilis,,ammannia gracilis|red ammannia,Lythraceae,Myrtales,plant,fresh
+Ammannia senegalensis,,ammannia senegalensis,Lythraceae,Myrtales,plant,fresh
+Didiplis diandra,,water hedge|didiplis diandra,Lythraceae,Myrtales,plant,fresh
+Ludwigia repens,,ludwigia repens|ludwigia|red ludwigia,Onagraceae,Myrtales,plant,fresh
+Ludwigia palustris,,ludwigia palustris|water purslane,Onagraceae,Myrtales,plant,fresh
+Ludwigia arcuata,,ludwigia arcuata|needle leaf ludwigia,Onagraceae,Myrtales,plant,fresh
+Ludwigia glandulosa,,ludwigia glandulosa|peruensis,Onagraceae,Myrtales,plant,fresh
+Ludwigia inclinata,,ludwigia inclinata|cuba ludwigia,Onagraceae,Myrtales,plant,fresh
+Bacopa caroliniana,,bacopa|bacopa caroliniana|lemon bacopa,Plantaginaceae,Lamiales,plant,fresh
+Bacopa monnieri,,moneywort|bacopa monnieri|brahmi,Plantaginaceae,Lamiales,plant,fresh
+Limnophila sessiliflora,,ambulia|limnophila sessiliflora|dwarf ambulia,Plantaginaceae,Lamiales,plant,fresh
+Limnophila aromatica,,limnophila aromatica|rice paddy herb,Plantaginaceae,Lamiales,plant,fresh
+Micranthemum umbrosum,,pearl grass|micranthemum umbrosum|giant baby tears,Linderniaceae,Lamiales,plant,fresh
+Micranthemum tweediei,,monte carlo|micranthemum tweediei|mc,Linderniaceae,Lamiales,plant,fresh
+Micranthemum callitrichoides,,dwarf baby tears|hc cuba|hemianthus callitrichoides|hc,Linderniaceae,Lamiales,plant,fresh
+Micranthemum micranthemoides,,pearlweed|micranthemum micranthemoides,Linderniaceae,Lamiales,plant,fresh
+Pogostemon helferi,,downoi|pogostemon helferi,Lamiaceae,Lamiales,plant,fresh
+Pogostemon stellatus,,pogostemon stellatus|eusteralis stellata,Lamiaceae,Lamiales,plant,fresh
+Pogostemon erectus,,pogostemon erectus,Lamiaceae,Lamiales,plant,fresh
+Alternanthera reineckii,,alternanthera reineckii|ar|scarlet temple|alternanthera,Amaranthaceae,Caryophyllales,plant,fresh
+Alternanthera reineckii,Mini,ar mini|alternanthera reineckii mini,Amaranthaceae,Caryophyllales,plant,fresh
+Alternanthera reineckii,Rosanervig,ar rosanervig|pink rosanervig,Amaranthaceae,Caryophyllales,plant,fresh
+Myriophyllum aquaticum,,parrot feather|myriophyllum aquaticum,Haloragaceae,Saxifragales,plant,fresh
+Myriophyllum mattogrossense,,myriophyllum mattogrossense|red myrio|green myrio,Haloragaceae,Saxifragales,plant,fresh
+Cabomba caroliniana,,cabomba|green cabomba|cabomba caroliniana|fanwort,Cabombaceae,Nymphaeales,plant,fresh
+Cabomba furcata,,red cabomba|cabomba furcata|purple cabomba,Cabombaceae,Nymphaeales,plant,fresh
+Ceratophyllum demersum,,hornwort|ceratophyllum demersum|coontail,Ceratophyllaceae,Ceratophyllales,plant,fresh
+Nymphaea lotus,,tiger lotus|nymphaea lotus|red tiger lotus|dwarf lily,Nymphaeaceae,Nymphaeales,plant,fresh
+Barclaya longifolia,,barclaya longifolia|orchid lily,Nymphaeaceae,Nymphaeales,plant,fresh
+Nymphoides aquatica,,banana plant|nymphoides aquatica|banana lily,Menyanthaceae,Asterales,plant,fresh
+Nymphoides hydrophylla,,taiwan lily|nymphoides hydrophylla|nymphoides taiwan,Menyanthaceae,Asterales,plant,fresh
+Aponogeton crispus,,aponogeton crispus|crinkled aponogeton,Aponogetonaceae,Alismatales,plant,fresh
+Aponogeton madagascariensis,,madagascar lace|aponogeton madagascariensis|lace plant,Aponogetonaceae,Alismatales,plant,fresh
+Aponogeton ulvaceus,,aponogeton ulvaceus,Aponogetonaceae,Alismatales,plant,fresh
+Aponogeton boivinianus,,aponogeton boivinianus,Aponogetonaceae,Alismatales,plant,fresh
+Heteranthera zosterifolia,,stargrass|heteranthera zosterifolia|water stargrass,Pontederiaceae,Commelinales,plant,fresh
+Pontederia crassipes,,water hyacinth|eichhornia crassipes|pontederia crassipes,Pontederiaceae,Commelinales,plant,fresh
+Pistia stratiotes,,water lettuce|pistia stratiotes,Araceae,Alismatales,plant,fresh
+Lemna minor,,duckweed|duck weed|lemna minor|common duckweed,Araceae,Alismatales,plant,fresh
+Eleocharis parvula,,dwarf hairgrass|eleocharis parvula|hairgrass,Cyperaceae,Poales,plant,fresh
+Eleocharis acicularis,,hairgrass|eleocharis acicularis|needle spikerush,Cyperaceae,Poales,plant,fresh
+Cyperus helferi,,cyperus helferi,Cyperaceae,Poales,plant,fresh
+Hydrocotyle leucocephala,,brazilian pennywort|hydrocotyle leucocephala|pennywort,Araliaceae,Apiales,plant,fresh
+Hydrocotyle tripartita,,japan hydrocotyle|hydrocotyle tripartita|hydrocotyle japan,Araliaceae,Apiales,plant,fresh
+Lilaeopsis brasiliensis,,micro sword|lilaeopsis brasiliensis|brazilian micro sword,Apiaceae,Apiales,plant,fresh
+Cardamine lyrata,,japanese cress|cardamine lyrata,Brassicaceae,Brassicales,plant,fresh
+Utricularia graminifolia,,utricularia graminifolia|ug,Lentibulariaceae,Lamiales,plant,fresh
+Crinum calamistratum,,african onion plant|crinum calamistratum,Amaryllidaceae,Asparagales,plant,fresh
+Crinum natans,,crinum natans|onion plant,Amaryllidaceae,Asparagales,plant,fresh
+#
+# ------------------------------------------------------------------------ plants: ferns, moss ---
+Microsorum pteropus,,java fern|microsorum pteropus|leptochilus pteropus,Polypodiaceae,Polypodiales,plant,fresh
+Microsorum pteropus,Narrow Leaf,narrow leaf java fern|narrow java fern,Polypodiaceae,Polypodiales,plant,fresh
+Microsorum pteropus,Windelov,windelov java fern|windelov|lace java fern,Polypodiaceae,Polypodiales,plant,fresh
+Microsorum pteropus,Trident,trident java fern|trident fern,Polypodiaceae,Polypodiales,plant,fresh
+Microsorum pteropus,Needle Leaf,needle leaf java fern,Polypodiaceae,Polypodiales,plant,fresh
+Bolbitis heudelotii,,african water fern|bolbitis|bolbitis heudelotii,Dryopteridaceae,Polypodiales,plant,fresh
+Ceratopteris thalictroides,,water sprite|ceratopteris thalictroides|indian fern,Pteridaceae,Polypodiales,plant,fresh
+Ceratopteris cornuta,,floating water sprite|ceratopteris cornuta,Pteridaceae,Polypodiales,plant,fresh
+Marsilea hirsuta,,four leaf clover|marsilea hirsuta|dwarf four leaf clover,Marsileaceae,Salviniales,plant,fresh
+Marsilea crenata,,marsilea crenata|water clover,Marsileaceae,Salviniales,plant,fresh
+Salvinia natans,,floating fern|salvinia natans,Salviniaceae,Salviniales,plant,fresh
+Salvinia minima,,water spangles|salvinia minima|salvinia,Salviniaceae,Salviniales,plant,fresh
+Azolla filiculoides,,fairy moss|azolla|azolla filiculoides,Salviniaceae,Salviniales,plant,fresh
+Taxiphyllum barbieri,,java moss|taxiphyllum barbieri,Hypnaceae,Hypnales,plant,fresh
+# Flame moss is Taxiphyllum sp. 'Flame' -- an undescribed species, so the parent is the bare genus.
+Taxiphyllum,,taxiphyllum|taxiphyllum moss,Hypnaceae,Hypnales,plant,fresh
+Taxiphyllum,Flame,flame moss,Hypnaceae,Hypnales,plant,fresh
+Vesicularia dubyana,,singapore moss|vesicularia dubyana,Hypnaceae,Hypnales,plant,fresh
+Vesicularia montagnei,,christmas moss|xmas moss|vesicularia montagnei,Hypnaceae,Hypnales,plant,fresh
+Fissidens fontanus,,phoenix moss|fissidens|fissidens fontanus,Fissidentaceae,Fissidentales,plant,fresh
+Riccia fluitans,,riccia|crystalwort|riccia fluitans,Ricciaceae,Marchantiales,plant,fresh
+Monosolenium tenerum,,pellia|monosolenium tenerum|round pellia,Monosoleniaceae,Marchantiales,plant,fresh
+Aegagropila linnaei,,marimo moss ball|moss ball|marimo ball|marimo|cladophora,Pithophoraceae,Cladophorales,plant,fresh
+#
+# ------------------------------------------------------------------------- shrimp and crayfish ---
+Neocaridina davidi,,cherry shrimp|red cherry shrimp|neocaridina|rcs|cherry shrimps|neos|neo shrimp|neo shrimps|neocaridina shrimp|dwarf shrimp,Atyidae,Decapoda,invert,fresh
+Neocaridina davidi,Fire Red,fire red shrimp|fire red cherry shrimp|painted fire red,Atyidae,Decapoda,invert,fresh
+Neocaridina davidi,Bloody Mary,bloody mary shrimp|bloody mary,Atyidae,Decapoda,invert,fresh
+Neocaridina davidi,Blue Dream,blue dream shrimp|blue dream|blue dream neocaridina,Atyidae,Decapoda,invert,fresh
+Neocaridina davidi,Blue Velvet,blue velvet shrimp|blue velvet,Atyidae,Decapoda,invert,fresh
+Neocaridina davidi,Blue Jelly,blue jelly shrimp|blue jelly,Atyidae,Decapoda,invert,fresh
+Neocaridina davidi,Green Jade,green jade shrimp|green jade|jade shrimp,Atyidae,Decapoda,invert,fresh
+Neocaridina davidi,Chocolate,chocolate shrimp|chocolate neocaridina,Atyidae,Decapoda,invert,fresh
+Neocaridina davidi,Orange Sakura,orange sakura shrimp|orange shrimp|sunkist shrimp,Atyidae,Decapoda,invert,fresh
+Neocaridina davidi,Yellow Golden Back,yellow shrimp|golden back yellow shrimp|yellow neocaridina,Atyidae,Decapoda,invert,fresh
+Neocaridina davidi,Snowball,snowball shrimp|white pearl shrimp,Atyidae,Decapoda,invert,fresh
+Neocaridina davidi,Red Rili,red rili shrimp|red rili,Atyidae,Decapoda,invert,fresh
+Neocaridina davidi,Blue Rili,blue rili shrimp|blue rili,Atyidae,Decapoda,invert,fresh
+Neocaridina davidi,Carbon Rili,carbon rili shrimp|black rili shrimp,Atyidae,Decapoda,invert,fresh
+Caridina cantonensis,,bee shrimp|crystal shrimp|caridina|taiwan bee,Atyidae,Decapoda,invert,fresh
+Caridina cantonensis,Crystal Red,crystal red shrimp|crs|crystal reds,Atyidae,Decapoda,invert,fresh
+Caridina cantonensis,Crystal Black,crystal black shrimp|cbs|black crystal shrimp,Atyidae,Decapoda,invert,fresh
+Caridina cantonensis,Blue Bolt,blue bolt shrimp|blue bolt,Atyidae,Decapoda,invert,fresh
+Caridina cantonensis,King Kong Panda,king kong shrimp|panda shrimp|black king kong,Atyidae,Decapoda,invert,fresh
+Caridina cantonensis,Wine Red,wine red shrimp|wine red,Atyidae,Decapoda,invert,fresh
+Caridina multidentata,,amano shrimp|amano shrimps|yamato shrimp|caridina multidentata|caridina japonica,Atyidae,Decapoda,invert,fresh
+Caridina mariae,,tiger shrimp|tangerine tiger shrimp|caridina mariae,Atyidae,Decapoda,invert,fresh
+Caridina babaulti,,green shrimp|indian zebra shrimp|caridina babaulti,Atyidae,Decapoda,invert,fresh
+Caridina dennerli,,cardinal shrimp|sulawesi cardinal shrimp|caridina dennerli,Atyidae,Decapoda,invert,fresh
+Atyopsis moluccensis,,bamboo shrimp|wood shrimp|flower shrimp|singapore shrimp,Atyidae,Decapoda,invert,fresh
+Atya gabonensis,,vampire shrimp|african filter shrimp|atya gabonensis,Atyidae,Decapoda,invert,fresh
+Halocaridina rubra,,opae ula|hawaiian red shrimp|halocaridina rubra,Atyidae,Decapoda,invert,brackish
+Palaemonetes paludosus,,ghost shrimp|glass shrimp|feeder shrimp|palaemonetes paludosus,Palaemonidae,Decapoda,invert,fresh
+Cambarellus patzcuarensis,,dwarf orange crayfish|cpo|mexican dwarf crayfish|orange dwarf crayfish,Cambaridae,Decapoda,invert,fresh
+Cambarellus shufeldtii,,cajun dwarf crayfish|cambarellus shufeldtii,Cambaridae,Decapoda,invert,fresh
+Procambarus clarkii,,red swamp crayfish|procambarus clarkii|louisiana crawfish,Cambaridae,Decapoda,invert,fresh
+Procambarus alleni,,electric blue crayfish|florida crayfish|procambarus alleni|blue crayfish,Cambaridae,Decapoda,invert,fresh
+Cherax quadricarinatus,,australian redclaw|redclaw crayfish|cherax quadricarinatus,Parastacidae,Decapoda,invert,fresh
+Geosesarma dennerle,,vampire crab|geosesarma|geosesarma dennerle,Sesarmidae,Decapoda,invert,fresh
+#
+# ---------------------------------------------------------------------------------------- snails ---
+Neritina natalensis,,nerite snail|nerite snails|zebra nerite|neritina natalensis|nerites,Neritidae,Cycloneritida,invert,fresh
+Clithon corona,,horned nerite snail|horned nerite|clithon corona,Neritidae,Cycloneritida,invert,fresh
+Pomacea diffusa,,mystery snail|mystery snails|apple snail|pomacea diffusa|pomacea bridgesii,Ampullariidae,Architaenioglossa,invert,fresh
+Pomacea canaliculata,,channeled apple snail|pomacea canaliculata,Ampullariidae,Architaenioglossa,invert,fresh
+Marisa cornuarietis,,colombian ramshorn|giant ramshorn snail|marisa cornuarietis,Ampullariidae,Architaenioglossa,invert,fresh
+Planorbella duryi,,ramshorn snail|ramshorn snails|red ramshorn|planorbella duryi|ramshorns,Planorbidae,Hygrophila,invert,fresh
+Physella acuta,,bladder snail|pond snail|physella acuta|bladder snails,Physidae,Hygrophila,invert,fresh
+Melanoides tuberculata,,malaysian trumpet snail|mts|trumpet snail|melanoides tuberculata,Thiaridae,Caenogastropoda,invert,fresh
+Anentome helena,,assassin snail|assassin snails|anentome helena|clea helena,Nassariidae,Neogastropoda,invert,fresh
+Tylomelania,,rabbit snail|rabbit snails|sulawesi snail|tylomelania,Pachychilidae,Caenogastropoda,invert,fresh
+Lymnaea stagnalis,,great pond snail|lymnaea stagnalis,Lymnaeidae,Hygrophila,invert,fresh
+#
+# -------------------------------------------------------------------------- live food cultures ---
+Daphnia magna,,daphnia|daphnia magna|water flea|water fleas,Daphniidae,Cladocera,culture,fresh
+Daphnia pulex,,daphnia pulex|common water flea,Daphniidae,Cladocera,culture,fresh
+Moina macrocopa,,moina|moina macrocopa|japanese water flea,Moinidae,Cladocera,culture,fresh
+Artemia franciscana,,brine shrimp|baby brine shrimp|bbs|artemia|brine shrimp eggs,Artemiidae,Anostraca,culture,salt
+Artemia salina,,brine shrimp|artemia salina|sea monkeys,Artemiidae,Anostraca,culture,salt
+Lumbriculus variegatus,,blackworms|black worms|california blackworms|lumbriculus variegatus,Lumbriculidae,Lumbriculida,culture,fresh
+Tubifex tubifex,,tubifex|tubifex worms|sludge worm,Naididae,Tubificida,culture,fresh
+Enchytraeus buchholzi,,grindal worms|grindal|grindalworms,Enchytraeidae,Enchytraeida,culture,fresh
+Enchytraeus albidus,,white worms|whiteworms|enchytraeus albidus,Enchytraeidae,Enchytraeida,culture,fresh
+Panagrellus redivivus,,microworms|micro worms|panagrellus redivivus,Panagrolaimidae,Rhabditida,culture,fresh
+Turbatrix aceti,,vinegar eels|vinegar eel|turbatrix aceti,Panagrolaimidae,Rhabditida,culture,fresh
+Hyalella azteca,,scuds|scud|hyalella azteca|freshwater amphipod,Hyalellidae,Amphipoda,culture,fresh
+Gammarus pulex,,gammarus|freshwater shrimp scud|gammarus pulex,Gammaridae,Amphipoda,culture,fresh
+Paramecium caudatum,,paramecium|infusoria|paramecia,Parameciidae,Peniculida,culture,fresh
+Brachionus plicatilis,,rotifers|rotifer|brachionus,Brachionidae,Ploima,culture,salt
+Drosophila melanogaster,,fruit flies|wingless fruit flies|flightless fruit flies|drosophila,Drosophilidae,Diptera,culture,fresh
+Drosophila hydei,,hydei fruit flies|large fruit flies|drosophila hydei,Drosophilidae,Diptera,culture,fresh
+#
+# ------------------------------------------------------------------------------- fish cultivars ---
+# Parents come from FishBase; a row here is skipped with a warning if its parent isn't loaded.
+# Only strains the trade names consistently -- "fancy guppy" is not a strain, it is an adjective.
+Poecilia reticulata,Full Red,full red guppy|full red guppies|frt guppy,,,fish,fresh
+Poecilia reticulata,Albino Full Red,albino full red guppy|afr guppy,,,fish,fresh
+Poecilia reticulata,Blue Grass,blue grass guppy|blue grass guppies,,,fish,fresh
+Poecilia reticulata,Half Black,half black guppy|half black guppies|hb guppy,,,fish,fresh
+Poecilia reticulata,Cobra,cobra guppy|cobra guppies,,,fish,fresh
+Poecilia reticulata,Snakeskin,snakeskin guppy|snakeskin guppies,,,fish,fresh
+Poecilia reticulata,Moscow Blue,moscow blue guppy|moscow guppy,,,fish,fresh
+Poecilia reticulata,Koi,koi guppy|koi guppies,,,fish,fresh
+Poecilia reticulata,Dumbo Ear,dumbo ear guppy|dumbo guppy|big ear guppy,,,fish,fresh
+Poecilia reticulata,Tuxedo,tuxedo guppy|tuxedo guppies,,,fish,fresh
+Betta splendens,Halfmoon,halfmoon betta|half moon betta|hm betta,,,fish,fresh
+Betta splendens,Crowntail,crowntail betta|crown tail betta|ct betta,,,fish,fresh
+Betta splendens,Plakat,plakat betta|plakat|pk betta,,,fish,fresh
+Betta splendens,Veiltail,veiltail betta|veil tail betta|vt betta,,,fish,fresh
+Betta splendens,Double Tail,double tail betta|dt betta,,,fish,fresh
+Betta splendens,Dumbo Ear,dumbo ear betta|elephant ear betta,,,fish,fresh
+Betta splendens,Koi,koi betta|galaxy koi betta|nemo betta,,,fish,fresh
+Xiphophorus maculatus,Mickey Mouse,mickey mouse platy|mickey mouse platies,,,fish,fresh
+Xiphophorus maculatus,Wagtail,wagtail platy|wag platy|wagtail platies,,,fish,fresh
+Xiphophorus maculatus,Sunset,sunset platy|sunset platies,,,fish,fresh
+Xiphophorus hellerii,Red Velvet,red velvet swordtail|red swordtail,,,fish,fresh
+Xiphophorus hellerii,Pineapple,pineapple swordtail,,,fish,fresh
+Xiphophorus hellerii,Lyretail,lyretail swordtail,,,fish,fresh
+Poecilia sphenops,Black Molly,black molly|black mollies,,,fish,fresh
+Poecilia sphenops,Dalmatian,dalmatian molly|dalmatian mollies,,,fish,fresh
+Poecilia sphenops,Balloon,balloon molly|balloon mollies,,,fish,fresh
+Poecilia latipinna,Lyretail,lyretail molly|lyretail sailfin molly,,,fish,fresh
+Carassius auratus,Oranda,oranda|oranda goldfish|red cap oranda,,,fish,fresh
+Carassius auratus,Ryukin,ryukin|ryukin goldfish,,,fish,fresh
+Carassius auratus,Ranchu,ranchu|ranchu goldfish,,,fish,fresh
+Carassius auratus,Shubunkin,shubunkin|shubunkin goldfish,,,fish,fresh
+Carassius auratus,Comet,comet goldfish|comet,,,fish,fresh
+Carassius auratus,Black Moor,black moor|black moor goldfish|moor,,,fish,fresh
+Carassius auratus,Fantail,fantail goldfish|fantail,,,fish,fresh
+Pterophyllum scalare,Koi,koi angelfish|koi angel,,,fish,fresh
+Pterophyllum scalare,Marble,marble angelfish|marble angel,,,fish,fresh
+Pterophyllum scalare,Zebra,zebra angelfish|zebra angel,,,fish,fresh
+Pterophyllum scalare,Veil,veil angelfish|veiltail angelfish|veil angel,,,fish,fresh
+Pterophyllum scalare,Platinum,platinum angelfish|platinum angel,,,fish,fresh
+Pterophyllum scalare,Black Lace,black lace angelfish|black lace angel,,,fish,fresh
+Ancistrus cirrhosus,Albino,albino bristlenose|albino bn pleco|albino bristlenose pleco,,,fish,fresh
+Ancistrus cirrhosus,Longfin,longfin bristlenose|long fin bn pleco,,,fish,fresh
+Ancistrus cirrhosus,Super Red,super red bristlenose|super red bn pleco,,,fish,fresh
+Corydoras aeneus,Albino,albino cory|albino corydoras|albino cory catfish|albino cories,,,fish,fresh
+Corydoras aeneus,Bronze,bronze cory|bronze corydoras|bronze cory catfish,,,fish,fresh
+Danio rerio,Longfin,longfin zebra danio|long fin danio,,,fish,fresh
+Danio rerio,Leopard,leopard danio|leopard danios,,,fish,fresh
+Symphysodon aequifasciatus,Blue Diamond,blue diamond discus,,,fish,fresh
+Symphysodon aequifasciatus,Pigeon Blood,pigeon blood discus,,,fish,fresh
+Symphysodon aequifasciatus,Red Turquoise,red turquoise discus,,,fish,fresh
+#
+# --------------------------------------------- plants: cultivars the trade names (Tropica) ---
+# Tropica's catalogue is where a plant cultivar's name is settled -- "Rosanervig", "Monte Carlo",
+# "H'ra" are theirs -- and Florida Aquatic Nurseries is where the American common names are.  Both
+# lists were read for these rows; where the two disagreed about a species, neither was invented
+# past what they say.  A cultivar nobody outside one nursery's catalogue asks for is left out: the
+# test is whether somebody would write it on a bag.
+Alternanthera reineckii,Pink,ar pink|pink alternanthera|telanthera,Amaranthaceae,Caryophyllales,plant,fresh
+Anubias barteri,Caladiifolia,anubias caladiifolia|caladiifolia,Araceae,Alismatales,plant,fresh
+Anubias barteri,Glabra,anubias glabra,Araceae,Alismatales,plant,fresh
+Anubias barteri,Coin Leaf,anubias coin leaf|coin leaf anubias,Araceae,Alismatales,plant,fresh
+Anubias barteri,Nana Pinto,pinto anubias|anubias pinto|anubias nana pinto,Araceae,Alismatales,plant,fresh
+Anubias barteri,Nana Golden,golden anubias|anubias nana golden,Araceae,Alismatales,plant,fresh
+Anubias barteri,Angustifolia,anubias angustifolia|anubias lanceolata|narrow leaf anubias,Araceae,Alismatales,plant,fresh
+Anubias barteri,Frazeri,anubias frazeri|frazeri,Araceae,Alismatales,plant,fresh
+Anubias barteri,Nangi,anubias nangi|nangi,Araceae,Alismatales,plant,fresh
+Aponogeton longiplumulosus,,aponogeton longiplumulosus,Aponogetonaceae,Alismatales,plant,fresh
+Bacopa australis,,bacopa australis|dwarf bacopa,Plantaginaceae,Lamiales,plant,fresh
+Bacopa salzmannii,,bacopa salzmannii|purple bacopa,Plantaginaceae,Lamiales,plant,fresh
+Bucephalandra,Kedagang,kedagang|buce kedagang|bucephalandra kedagang,Araceae,Alismatales,plant,fresh
+Bucephalandra,Wavy Green,wavy green|green wavy|buce wavy green,Araceae,Alismatales,plant,fresh
+Bucephalandra,Brownie Blue,brownie blue|buce brownie blue,Araceae,Alismatales,plant,fresh
+Bucephalandra,Needle Leaf,needle leaf buce|bucephalandra needle leaf,Araceae,Alismatales,plant,fresh
+Cabomba aquatica,,cabomba aquatica|yellow cabomba,Cabombaceae,Nymphaeales,plant,fresh
+Crinum thaianum,,water onion|crinum thaianum,Amaryllidaceae,Asparagales,plant,fresh
+Cryptocoryne beckettii,Petchii,crypt petchii|cryptocoryne petchii|petchii,Araceae,Alismatales,plant,fresh
+Cryptocoryne wendtii,Mi Oya,mi oya|crypt mi oya|cryptocoryne mi oya,Araceae,Alismatales,plant,fresh
+Cryptocoryne spiralis,Red,red spiralis|crypt spiralis red,Araceae,Alismatales,plant,fresh
+Cryptocoryne undulata,Broad Leaf,broad leaf undulata|crypt undulata broad leaf,Araceae,Alismatales,plant,fresh
+Cryptocoryne willisii,,crypt willisii|cryptocoryne willisii|willisii,Araceae,Alismatales,plant,fresh
+Cryptocoryne nurii,,crypt nurii|cryptocoryne nurii,Araceae,Alismatales,plant,fresh
+Cryptocoryne retrospiralis,,crypt retrospiralis|cryptocoryne retrospiralis,Araceae,Alismatales,plant,fresh
+Cryptocoryne moehlmannii,,crypt moehlmannii|cryptocoryne moehlmannii,Araceae,Alismatales,plant,fresh
+Cryptocoryne ciliata,,crypt ciliata|cryptocoryne ciliata,Araceae,Alismatales,plant,fresh
+Echinodorus,,echinodorus,Alismataceae,Alismatales,plant,fresh
+Echinodorus,Ozelot,ozelot sword|ozelot|echinodorus ozelot,Alismataceae,Alismatales,plant,fresh
+Echinodorus,Ozelot Green,green ozelot sword|ozelot green,Alismataceae,Alismatales,plant,fresh
+Echinodorus,Red Diamond,red diamond sword|red diamond echinodorus,Alismataceae,Alismatales,plant,fresh
+Echinodorus,Rubin,rubin sword|echinodorus rubin,Alismataceae,Alismatales,plant,fresh
+Echinodorus,Red Flame,red flame sword|echinodorus red flame,Alismataceae,Alismatales,plant,fresh
+Echinodorus,Oriental,oriental sword|echinodorus oriental,Alismataceae,Alismatales,plant,fresh
+Echinodorus,Barthii,red melon sword|echinodorus barthii|barthii,Alismataceae,Alismatales,plant,fresh
+Echinodorus,Reni,reni sword|echinodorus reni,Alismataceae,Alismatales,plant,fresh
+Echinodorus,Rose,rose sword|echinodorus rose,Alismataceae,Alismatales,plant,fresh
+Echinodorus osiris,,melon sword|echinodorus osiris,Alismataceae,Alismatales,plant,fresh
+Echinodorus martii,,ruffled sword|echinodorus martii|echinodorus major,Alismataceae,Alismatales,plant,fresh
+Eleocharis montevidensis,,giant hairgrass|eleocharis montevidensis,Cyperaceae,Poales,plant,fresh
+Eleocharis pusilla,,eleocharis pusilla|mini hairgrass,Cyperaceae,Poales,plant,fresh
+Eriocaulon cinereum,,eriocaulon cinereum|eriocaulon,Eriocaulaceae,Poales,plant,fresh
+Glossostigma elatinoides,,glosso|glossostigma elatinoides|glossostigma,Phrymaceae,Lamiales,plant,fresh
+Gratiola viscidula,,gratiola viscidula|hedge hyssop,Plantaginaceae,Lamiales,plant,fresh
+Helanthium bolivianum,Vesuvius,vesuvius sword|helanthium vesuvius|echinodorus vesuvius,Alismataceae,Alismatales,plant,fresh
+Hottonia palustris,,water violet|hottonia palustris,Primulaceae,Ericales,plant,fresh
+Hydrocotyle verticillata,,whorled pennywort|hydrocotyle verticillata,Araliaceae,Apiales,plant,fresh
+Hygrophila corymbosa,Compact,hygrophila compact|compact hygro,Acanthaceae,Lamiales,plant,fresh
+Hygrophila corymbosa,Siamensis,narrow leaf temple plant|hygrophila siamensis|siamensis 53b,Acanthaceae,Lamiales,plant,fresh
+Hygrophila corymbosa,Stricta,hygrophila stricta|stricta,Acanthaceae,Lamiales,plant,fresh
+Hygrophila lancea,,hygrophila lancea,Acanthaceae,Lamiales,plant,fresh
+Hygrophila lancea,Araguaia,hygrophila araguaia|araguaia,Acanthaceae,Lamiales,plant,fresh
+Hygrophila polysperma,Rosanervig,sunset hygro|hygrophila rosanervig|rosanervig hygro,Acanthaceae,Lamiales,plant,fresh
+Hygrophila costata,,hygrophila costata|willow hygrophila,Acanthaceae,Lamiales,plant,fresh
+Juncus repens,,lesser creeping rush|juncus repens,Juncaceae,Poales,plant,fresh
+Lagenandra meeboldii,,lagenandra meeboldii|lagenandra,Araceae,Alismatales,plant,fresh
+Lagenandra meeboldii,Red,red lagenandra|lagenandra red,Araceae,Alismatales,plant,fresh
+Limnophila aquatica,,giant ambulia|limnophila aquatica,Plantaginaceae,Lamiales,plant,fresh
+Limnophila hippuridoides,,limnophila hippuridoides,Plantaginaceae,Lamiales,plant,fresh
+Lindernia rotundifolia,,lindernia rotundifolia|lindernia,Linderniaceae,Lamiales,plant,fresh
+Littorella uniflora,,littorella uniflora|shoreweed,Plantaginaceae,Lamiales,plant,fresh
+Lobelia cardinalis,,lobelia cardinalis|cardinal plant|dwarf lobelia,Campanulaceae,Asterales,plant,fresh
+Ludwigia palustris,Super Red,super red ludwigia|ludwigia super red,Onagraceae,Myrtales,plant,fresh
+Ludwigia repens,Rubin,ludwigia rubin|rubin ludwigia,Onagraceae,Myrtales,plant,fresh
+Lysimachia parvifolia,,lysimachia parvifolia|lysimachia,Primulaceae,Ericales,plant,fresh
+Marsilea minuta,,marsilea minuta|dwarf water clover,Marsileaceae,Salviniales,plant,fresh
+Mayaca fluviatilis,,mayaca fluviatilis|bog moss|stream bogmoss,Mayacaceae,Poales,plant,fresh
+Micranthemum glomeratum,,micranthemum glomeratum|manatee grass|babys tears,Linderniaceae,Lamiales,plant,fresh
+Murdannia keisak,,murdannia keisak|marsh dewflower,Commelinaceae,Commelinales,plant,fresh
+Phyllanthus fluitans,,red root floater|phyllanthus fluitans|rrf,Phyllanthaceae,Malpighiales,plant,fresh
+Pogostemon deccanensis,,pogostemon deccanensis|pogostemon deccan,Lamiaceae,Lamiales,plant,fresh
+Pogostemon quadrifolius,,pogostemon quadrifolius|pogostemon octopus,Lamiaceae,Lamiales,plant,fresh
+Proserpinaca palustris,,mermaid weed|proserpinaca palustris,Haloragaceae,Saxifragales,plant,fresh
+Ranunculus inundatus,,ranunculus inundatus|ranunculus,Ranunculaceae,Ranunculales,plant,fresh
+Rotala indica,Bonsai,rotala bonsai|bonsai rotala,Lythraceae,Myrtales,plant,fresh
+Rotala rotundifolia,Blood Red,blood red rotala|rotala blood red,Lythraceae,Myrtales,plant,fresh
+Rotala rotundifolia,H'ra,rotala hra|hra rotala|rotala h ra,Lythraceae,Myrtales,plant,fresh
+Sagittaria subulata,Needle Leaf,needle leaf sagittaria|sagittaria needle leaf,Alismataceae,Alismatales,plant,fresh
+Schismatoglottis prietoi,,schismatoglottis prietoi,Araceae,Alismatales,plant,fresh
+Shinnersia rivularis,,mexican oak leaf|shinnersia rivularis,Asteraceae,Asterales,plant,fresh
+Spirodela polyrrhiza,,giant duckweed|spirodela polyrrhiza,Araceae,Alismatales,plant,fresh
+Vallisneria americana,Natans,vallisneria natans|natans val,Hydrocharitaceae,Alismatales,plant,fresh
+Vallisneria spiralis,Tiger,tiger val|vallisneria tiger|tiger vallisneria,Hydrocharitaceae,Alismatales,plant,fresh
+Vallisneria americana,Gigantea,giant val|vallisneria gigantea|giant vallisneria,Hydrocharitaceae,Alismatales,plant,fresh
+#
+# ----------------------------------------------------------- plants: the rest of the mosses ---
+Leptodictyum riparium,,stringy moss|leptodictyum riparium,Amblystegiaceae,Hypnales,plant,fresh
+Echinodorus grandiflorus,,rangeri sword|echinodorus grandiflorus,Alismataceae,Alismatales,plant,fresh
+Echinodorus,Indian Red,indian red sword|echinodorus indian red,Alismataceae,Alismatales,plant,fresh
+Echinodorus,St Elmos Fire,st elmos fire sword|echinodorus st elmos fire,Alismataceae,Alismatales,plant,fresh
+Egeria najas,,narrow leaf anacharis|egeria najas,Hydrocharitaceae,Alismatales,plant,fresh
+Isoetes lacustris,,octopus plant|isoetes lacustris|isoetes,Isoetaceae,Isoetales,plant,fresh
+Lilaeopsis carolinensis,,giant micro sword|lilaeopsis carolinensis,Apiaceae,Apiales,plant,fresh
+Lysimachia nummularia,,creeping jenny|lysimachia nummularia|golden creeping jenny,Primulaceae,Ericales,plant,fresh
+Nymphaea lotus,Green,green tiger lotus|green lotus,Nymphaeaceae,Nymphaeales,plant,fresh
+Potamogeton crispus,,curly pondweed|potamogeton crispus,Potamogetonaceae,Alismatales,plant,fresh
+Sagittaria platyphylla,,broad leaf sag|sagittaria platyphylla|giant sagittaria,Alismataceae,Alismatales,plant,fresh
+Vallisneria asiatica,,corkscrew val|vallisneria asiatica|contortion val,Hydrocharitaceae,Alismatales,plant,fresh
+Riccardia chamedryfolia,,mini pellia|coral moss|riccardia chamedryfolia,Aneuraceae,Metzgeriales,plant,fresh
+Solenostoma tetragonum,,pearl moss|solenostoma tetragonum,Solenostomataceae,Jungermanniales,plant,fresh
+Taxiphyllum,Spiky,spiky moss,Hypnaceae,Hypnales,plant,fresh
+Taxiphyllum alternans,,taiwan moss|taxiphyllum alternans,Hypnaceae,Hypnales,plant,fresh
+Vesicularia ferriei,,weeping moss|vesicularia ferriei,Hypnaceae,Hypnales,plant,fresh
+#
+# ------------------------------------------------- shrimp: the strains a breeder sells them ---
+# From The Garden of Eder's list, which is a shrimp breeder's stock list rather than a taxonomy:
+# every row here is a Neocaridina davidi or a Caridina the trade agrees on.  The hybrid half of
+# that list -- tibee, tangtai, mischling, ghost bee, "steel", stardust, calceo -- is further down,
+# under hybrids: those are crosses *between* species (tiger x bee, and crosses of crosses), so
+# there is no binomial to file them under and they carry no genus at all.
+Neocaridina davidi,Blue Diamond,blue diamond shrimp|blue diamond neocaridina,Atyidae,Decapoda,invert,fresh
+Neocaridina davidi,Black Diamond,black diamond shrimp|black diamond neocaridina,Atyidae,Decapoda,invert,fresh
+Neocaridina davidi,Black Rose,black rose shrimp|black rose neocaridina,Atyidae,Decapoda,invert,fresh
+Neocaridina davidi,Green Emerald,green emerald shrimp|emerald green shrimp,Atyidae,Decapoda,invert,fresh
+Neocaridina davidi,Sakura Red,sakura shrimp|sakura red shrimp|red sakura shrimp,Atyidae,Decapoda,invert,fresh
+Caridina cantonensis,Yellow King Kong,yellow king kong|ykk shrimp|lemonhead shrimp,Atyidae,Decapoda,invert,fresh
+Caridina cantonensis,Pinto,pinto shrimp|red pinto shrimp|galaxy pinto,Atyidae,Decapoda,invert,fresh
+Caridina cantonensis,Snow White,snow white shrimp|golden bee shrimp,Atyidae,Decapoda,invert,fresh
+Caridina mariae,Orange Eye Blue Tiger,oebt|orange eye blue tiger|blue tiger shrimp,Atyidae,Decapoda,invert,fresh
+Caridina pareparensis,,malawa shrimp|malawa|sulawesi malawa,Atyidae,Decapoda,invert,fresh
+Asellus aquaticus,,freshwater isopod|asellus|asellus aquaticus|water louse,Asellidae,Isopoda,invert,fresh
+#
+# ------------------------------------------------- hybrids: the crosses the trade sells by name ---
+# No scientific name, on purpose: each of these is a cross between two species, and the whole
+# reason the hobby has a word for it is that no binomial covers it.  The test for adding one is
+# not "is the identification settled" -- there is nothing to identify -- but "does the hobby agree
+# this is a cross": a fish sold as a line-bred species belongs above with a parent, not here.
+# So the mbuna-blooded peacocks are here and "strawberry peacock" is not, dyed fish are nowhere,
+# and the balloon and long-fin body shapes are cultivars of one species rather than crosses.
+,Tibee,tibee|tibee shrimp|tibees,Atyidae,Decapoda,invert,fresh
+,Tangtai,tangtai|tangtai shrimp|tangtai bee,Atyidae,Decapoda,invert,fresh
+,Mischling,mischling|mischling shrimp|mischlings,Atyidae,Decapoda,invert,fresh
+,Ghost Bee,ghost bee|ghost bee shrimp,Atyidae,Decapoda,invert,fresh
+,Steel,steel shrimp|steel bee shrimp,Atyidae,Decapoda,invert,fresh
+,Stardust,stardust shrimp|stardust,Atyidae,Decapoda,invert,fresh
+,Calceo,calceo shrimp|calceo,Atyidae,Decapoda,invert,fresh
+,Flowerhorn,flowerhorn|flower horn|flowerhorn cichlid|luohan,Cichlidae,Cichliformes,fish,fresh
+,Blood Parrot,blood parrot|blood parrot cichlid|bloodparrot|blood red parrot,Cichlidae,Cichliformes,fish,fresh
+,Red Texas,red texas cichlid|red texas,Cichlidae,Cichliformes,fish,fresh
+,OB Peacock,ob peacock|ob peacocks|orange blotch peacock,Cichlidae,Cichliformes,fish,fresh
+,Dragon Blood Peacock,dragon blood peacock|dragonblood peacock|dragons blood peacock,Cichlidae,Cichliformes,fish,fresh
+#
+# ------------------------------------ names only: what the hobby calls fish FishBase already has ---
+# Rows below add common names to a species another list owns.  Leave family/order/kind/habitat
+# blank -- the owning list is the authority on those and the loader ignores them here.  This is
+# where the trade's own vocabulary lives: FishBase is an ichthyology database and has no reason to
+# know "yellow lab", and before this file could reach its rows there was no way to teach it one.
+Labidochromis caeruleus,,yellow lab|electric yellow|electric yellow lab|yellow labidochromis,,,,
+Carinotetraodon travancoricus,,pea puffer|dwarf puffer|indian dwarf puffer|pygmy puffer,,,,
+Poecilia wingei,,endler|endlers livebearer|endler livebearer,,,,
+Mikrogeophagus altispinosus,,bolivian ram|bolivian butterfly|bolivian butterfly ram,,,,
+Mikrogeophagus ramirezi,,german blue ram|gbr|blue ram|german ram,,,,
+Pterophyllum scalare,,angel|silver angel|silver angelfish|freshwater angel,,,,
+Betta splendens,,betta|betta fish|siamese fighter,,,,
+Corydoras panda,,panda cory|panda cory catfish,,,,
+Corydoras pygmaeus,,pygmy cory|pygmy cory catfish,,,,
+Corydoras habrosus,,salt and pepper cory|habrosus cory,,,,
+Pelvicachromis pulcher,,krib,,,,
+Chindongo saulosi,,saulosi|red top saulosi,,,,
+Chindongo demasoni,,demasoni|dems,,,,
+Maylandia estherae,,red zebra cichlid|esther grants zebra,,,,
+Tropheus duboisi,,duboisi|white spotted cichlid,,,,
+Trichogaster lalius,,flame gourami,,,,
+Danio margaritatus,,cpd|celestial pearl danio|galaxy danio,,,,
+Boraras brigittae,,chili rasbora|mosquito rasbora,,,,
+Paracheirodon innesi,,neon,,,,
+Melanotaenia boesemani,,boesemani|boesemani rainbow,,,,
+Tanichthys albonubes,,wcmm,,,,
+Sewellia lineolata,,reticulated hillstream loach|sewellia,,,,
+# Deliberately absent, same reason as bristlenose: "oto" is Otocinclus vittatus or O. macrospilus
+# depending on who imported the box, and nobody can tell them apart in a bag.
+#
+# L-numbers are an identification, not a nickname: the fish is undescribed and the code is what
+# the whole trade agrees to call it.  Only put one here when the species behind it is settled --
+# L046 and L134 are, L144 and L200 are two fish each and stay out.  The same goes for the CW
+# numbers on Corydoras: the mechanism works ("cw11" now survives the tokeniser), so add the row
+# when somebody who knows which Corydoras it is fills it in.
+Hypancistrus zebra,,l046|l46|imperial pleco,,,,
+Peckoltia compta,,l134|leopard frog pleco,,,,

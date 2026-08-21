@@ -24,12 +24,15 @@ document.querySelectorAll('.chat_subscribe_checkbox').forEach(function(element) 
 {% endblock %}
 {% block content %}
 <h4>Chat messages</h4>
-<small>Use this page to find new messages posted to your lots, as well as any lots on which you've posted messages.<br>
-  There are <a href="{% url 'preferences' %}">preferences</a> to send email notifications for <b>your lots</b> (currently turned {% if data.email_me_when_people_comment_on_my_lots %}on{% else %}off{% endif %} for your account), as well as for <b>lots you've commented on</b> (notifications are
-  {% if data.email_me_about_new_chat_replies %}on{% else %}off{% endif %}).  If these settings are off, you won't get email notifications even if a lot is checked on this page.
-</small>
-<br><br>
+<div class="help-note">
+  <i class="bi bi-lightbulb-fill"></i>
+  <div>Use this page to find new messages posted to your lots, as well as any lots on which you've posted messages.
+    There are <a href="{% url 'preferences' %}">preferences</a> to send email notifications for <b>your lots</b> (currently turned {% if data.email_me_when_people_comment_on_my_lots %}on{% else %}off{% endif %} for your account), as well as for <b>lots you've commented on</b> (notifications are
+    {% if data.email_me_about_new_chat_replies %}on{% else %}off{% endif %}).  If these settings are off, you won't get email notifications even if a lot is checked on this page.
+  </div>
+</div>
 <div>
+  <div class="table-responsive">
   <table class="table">
     <thead>
         <tr>
@@ -43,22 +46,23 @@ document.querySelectorAll('.chat_subscribe_checkbox').forEach(function(element) 
  {% for sub in subscriptions %}
             <tr>
                 <td>
-<div class="custom-control custom-checkbox">
-  <input type="checkbox" class="custom-control custom-control-input chat_subscribe_checkbox" id="chat_subscribe_checkbox__{{ sub.lot.pk }}" {% if not sub.unsubscribed %}checked=""{% endif %}>
-  <label class="custom-control-label" for="chat_subscribe_checkbox__{{ sub.lot.pk }}">Email notifications</label>
+<div class="form-check">
+  <input type="checkbox" class="form-check-input chat_subscribe_checkbox" id="chat_subscribe_checkbox__{{ sub.lot.pk }}" {% if not sub.unsubscribed %}checked=""{% endif %}>
+  <label class="form-check-label" for="chat_subscribe_checkbox__{{ sub.lot.pk }}">Email notifications</label>
                 </td>
                 <td>{{ sub.lot.lot_number_display }}
                 </td>
                 <td>
-                  <a href='{{ sub.lot.lot_link }}?src=chat'>{{sub.lot.lot_name}}</a> {% if sub.lot.user == request.user %}<span class="badge badge-pill text-dark bg-info">Your lot</span>{% endif %}
+                  <a href='{{ sub.lot.lot_link }}?src=chat'>{{sub.lot.lot_name}}</a> {% if sub.lot.user == request.user %}<span class="badge rounded-pill text-dark bg-info">Your lot</span>{% endif %}
                 </td>
                 <td>
-                  {% if sub.new_message_count %}<span class="badge badge-pill bg-warning text-dark">{{ sub.new_message_count }}</span>{% endif %}
+                  {% if sub.new_message_count %}<span class="badge rounded-pill bg-warning text-dark">{{ sub.new_message_count }}</span>{% endif %}
                 </td>
             </tr>
         {% endfor %}
     </tbody>
 </table>
+  </div>
 
   <br>
 </div>

@@ -3,6 +3,7 @@
   <p class="text-muted small">Override BAP points for specific categories. Points here will override the default points value above for the chosen category. You should probably add an override for Uncategorized at 0 points.</p>
 
   {% if bap_category_overrides %}
+  <div class="table-responsive">
   <table class="table table-sm table-bordered mb-3" style="max-width:500px">
     <thead>
       <tr>
@@ -19,7 +20,7 @@
         <td>
           <form method="post" action="{% url 'club_bap_category_override_delete' slug=club.slug pk=override.pk %}" style="display:inline">
             {% csrf_token %}
-            <button type="submit" class="btn btn-sm btn-outline-danger py-0 px-1">
+            <button type="submit" class="btn btn-sm btn-danger py-0 px-1">
               <i class="bi bi-x-lg"></i>
             </button>
           </form>
@@ -28,6 +29,7 @@
       {% endfor %}
     </tbody>
   </table>
+  </div>
   {% else %}
   <p class="text-muted small">No overrides set.</p>
   {% endif %}

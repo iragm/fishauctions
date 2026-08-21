@@ -21,7 +21,7 @@
           data-confirm-ok="Clear all locations"
           data-confirm-variant="danger">
       {% csrf_token %}
-      <button type="submit" class="btn btn-outline-danger btn-sm"><i class="bi bi-trash"></i> Clear all locations</button>
+      <button type="submit" class="btn btn-danger btn-sm"><i class="bi bi-trash"></i> Clear all locations</button>
     </form>
   </div>
 
@@ -47,7 +47,9 @@
 (function(){
   const dataUrl = "{% url 'auction_lot_map_data' slug=auction.slug %}";
   // "Find this lot" jumps the app straight into lot scanning beaconing this lot, via the same custom
-  // scheme as the lot page's "Back to scanning" bar. A desktop browser has no handler for the scheme, but
+  // scheme as the lot page's "Back to scanning" bar. If this page ever grows a bar of its own, it goes
+  // in base.html's `body_top` block, like that one -- `undiv_content` renders after the content block,
+  // where a sticky bar has no scroll range left to stick over. A desktop browser has no handler for the scheme, but
   // per style_reference.md an unavailable action stays clickable and says why: outside the app the
   // button toasts "open this in the app" instead of vanishing (this page is used on desktop, where a
   // missing button just looks like the feature doesn't exist).
@@ -136,16 +138,18 @@
     // actually wants — and hands off to the native scanning screen, which walks them to the lot.
     // "Locate" just re-centres/pulses the dot on this web map.
     const arButton = inApp
-      ? `<a class="btn btn-sm btn-outline-secondary" href="fishauctions://ar/${encodeURIComponent(auctionSlug)}?locate=${p.lot}"><i class="bi bi-geo-alt"></i> Find this lot</a>`
-      : `<button type="button" class="btn btn-sm btn-outline-secondary" id="ar-pop-ar"><i class="bi bi-geo-alt"></i> Find this lot</button>`;
+      ? `<a class="btn btn-sm btn-primary" href="fishauctions://ar/${encodeURIComponent(auctionSlug)}?locate=${p.lot}"><i class="bi bi-geo-alt"></i> Find this lot</a>`
+      : `<button type="button" class="btn btn-sm btn-primary" id="ar-pop-ar"><i class="bi bi-geo-alt"></i> Find this lot</button>`;
     popover.innerHTML =
       `<div class="card-body p-2">
          <div class="fw-semibold">Lot ${escapeHtml(p.lot_number)}</div>
-         <div class="small text-muted mb-2">${escapeHtml(p.name)}</div>
+         <div class="small text-muted">${escapeHtml(p.name)}</div>
+         ${p.scientific_name ? `<div class="small text-muted fst-italic mb-2">${escapeHtml(p.scientific_name)}</div>`
+            : p.common_name ? `<div class="small text-muted mb-2">${escapeHtml(p.common_name)}</div>` : '<div class="mb-2"></div>'}
          <div class="d-flex flex-wrap gap-1">
            <a class="btn btn-sm btn-primary" href="/lots/${p.lot}/"><i class="bi bi-box-arrow-up-right"></i> Open lot</a>
            ${arButton}
-           <button type="button" class="btn btn-sm btn-outline-primary" id="ar-pop-locate"><i class="bi bi-geo-alt-fill"></i> Locate</button>
+           <button type="button" class="btn btn-sm btn-primary" id="ar-pop-locate"><i class="bi bi-geo-alt-fill"></i> Locate</button>
          </div>
        </div>`;
     const wrap = svg.parentElement.getBoundingClientRect();

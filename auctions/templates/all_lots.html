@@ -29,11 +29,12 @@ Your lots{% else %}
 {% block content %}
 {% if routeByLastAuction and auction %}
 <div class="alert alert-secondary alert-dismissible fade show" role="alert">{{ auction }} is the last auction you joined.  <a href="{% url 'allLots' %}">View all lots instead</a>
-  <button type="button" class="btn-close bg-info" data-bs-dismiss="alert"></button>
+  <button type="button" class="btn-close btn-close-white" data-bs-dismiss="alert" aria-label="Close"></button>
   </div>
 {% endif %}
 <h3>
-        <button class="btn btn-info" type="button" data-bs-toggle="offcanvas" data-bs-target="#search-form" aria-controls="search-form">&#9776;</button>
+        {% comment %}A named menu, not a bare hamburger: the site menu is the only control allowed to be an icon on its own (style_reference.md).{% endcomment %}
+        <button class="btn btn-primary btn-sm" id="search-form-toggle" type="button" data-bs-toggle="offcanvas" data-bs-target="#search-form" aria-controls="search-form"><i class="bi bi-funnel"></i> Search and filter</button>
         {% if auction %}{% include 'auction_ribbon.html' %}{%endif%}
     {% if auction and lot_view_type == "user" %}
     <br>You are viewing only lots from {{ user }}
@@ -56,7 +57,7 @@ Your lots{% else %}
       {% endif %}
       {% if lot_view_type == "mywonlots" %}
       Lots you've won
-     <br><a href="{% url 'my_won_lot_csv' %}" class="btn btn-sm bg-primary"><i class="bi bi-download me-1"></i>Export my won lots CSV</a>
+     <br><a href="{% url 'my_won_lot_csv' %}" class="btn btn-sm btn-primary"><i class="bi bi-download me-1"></i>Export my won lots CSV</a>
      {% endif %}
       {% endif %}
       {% endif %}</h3>
@@ -64,7 +65,7 @@ Your lots{% else %}
     <div class="offcanvas offcanvas-start" tabindex="-1" id="search-form" aria-labelledby="search-form">
       <div class="offcanvas-header">
         <h5 class="offcanvas-title" id="offcanvasExampleLabel">Search and filter</h5>
-        <button type="button" class="btn-close text-reset bg-light" data-bs-dismiss="offcanvas" aria-label="Close"></button>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="offcanvas" aria-label="Close"></button>
       </div>
         <div class="offcanvas-body">
         <!-- <div class="bs-canvas-content px-3 py-5 bg-dark"> -->
@@ -74,11 +75,11 @@ Your lots{% else %}
           {% if lotsAreHidden >= 0 %}<span class="text-muted">{{lotsAreHidden}} categories are <a href="{% url 'ignore_categories' %}">ignored</a></span>{% endif %}
         <form method="GET" id='lot_filter_form' class=''>
             {{ filter.form | crispy }} {# alternative: {% crispy filter.form %} #}
-            <button type="submit" class="btn btn-primary mr-1 mt-1">Apply Filter</button> {% if lot_view_type == "mylots" or lot_view_type == "all" %}<br>
-            {% if auction %}<a href="{% url 'auction_main' slug=auction.slug %}" class="mr-1 mt-1">View {{ auction }} rules</a><br>
+            <button type="submit" class="btn btn-primary mt-1">Apply Filter</button> {% if lot_view_type == "mylots" or lot_view_type == "all" %}<br>
+            {% if auction %}<a href="{% url 'auction_main' slug=auction.slug %}" class="me-1 mt-1">View {{ auction }} rules</a><br>
               {% if auction.can_submit_lots %}
-                {% if auction_tos %}{% if auction.is_online or not auction.allow_bulk_adding_lots %}<a href='{{auction.add_lot_link}}' class="mr-1 mt-1">Add a lot</a>{% else %}
-                <a href='{% url "bulk_add_lots_auto_for_myself" slug=auction.slug %}' class="mr-1 mt-1">Add lots</a>{% endif %}
+                {% if auction_tos %}{% if auction.is_online or not auction.allow_bulk_adding_lots %}<a href='{{auction.add_lot_link}}' class="me-1 mt-1">Add a lot</a>{% else %}
+                <a href='{% url "bulk_add_lots_auto_for_myself" slug=auction.slug %}' class="me-1 mt-1">Add lots</a>{% endif %}
                   <small class="">You can add lots to this auction until {{ auction.lot_submission_end_date }}</small>
                 {% else %}
                   {% if not request.user.is_authenticated %}

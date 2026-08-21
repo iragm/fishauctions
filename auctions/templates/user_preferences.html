@@ -142,7 +142,7 @@
 {% endblock %}
 {% block content %}
 {% include "preferences_ribbon.html" %}
-<br>
+<div class="mt-3">
 {% comment %}
 Filled in by the app (see extra_js): a real notification control instead of a checkbox that's
 greyed out with no explanation. Stays empty and hidden in a browser, and in the app until the
@@ -150,4 +150,5 @@ bridge answers.
 {% endcomment %}
 {% if request.is_mobile_app %}<div id="app-push-controls" class="d-none mb-3"></div>{% endif %}
 {% crispy form form.helper %}
+</div>
 {% endblock %}

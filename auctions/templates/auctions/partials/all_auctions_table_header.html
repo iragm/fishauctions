@@ -1,5 +1,10 @@
-<h3>Auctions</h3>
-<div class='mb-3'>This is a list of club auctions which have been created on this site.</div>
-{% if show_new_auction_button %}
-<a href="{% url 'auction_confirm' %}" class='btn bg-info mb-3 text-white'><i class="bi bi-plus-circle"></i> Create a new auction</a><br>
-{% endif %}
+{% comment %}Title and the one action on the same row, the way the speaker directory does it: the
+button used to sit on its own line under a help note, which pushed the table down a screen on a
+phone and put the thing you came to do below the thing explaining the page.{% endcomment %}
+<div class="d-flex flex-wrap gap-2 align-items-center justify-content-between mb-2">
+  <h3 class="mb-0">Auctions</h3>
+  {% if show_new_auction_button %}
+  <a href="{% url 'auction_confirm' %}" class="btn btn-sm btn-info"><i class="bi bi-plus-circle"></i> Create a new auction</a>
+  {% endif %}
+</div>
+<div class="help-note"><i class="bi bi-lightbulb-fill"></i><div>This is a list of club auctions which have been created on this site.</div></div>

@@ -338,6 +338,7 @@ def recalculate_seller_invoice(auction, tos):
 CLONE_LOT_FIELDS = (
     "lot_name",
     "quantity",
+    "species",
     "species_category",
     "summernote_description",
     "i_bred_this_fish",
@@ -362,6 +363,15 @@ def user_can_clone_lot(user, lot) -> bool:
 
 def clone_lot_values(lot) -> dict:
     """The values from *lot* that a copy starts out with, keyed by field name.
+
+    Model *instances* come back for the two foreign keys, which is what a form's ``initial`` wants.
+    A caller building form *data* instead -- the command palette's relist does -- has to swap them
+    for their pks, the same way it already does for ``species_category``.
+
+    The scientific name is copied because relisting is the case it most obviously survives: it is
+    the same fish, from the same breeder, a season later.  Whether it is kept is still the target
+    auction's decision -- ``clean_species_for_auction`` drops it if that auction has the field
+    switched off.
 
     Permission is the caller's job -- call :func:`user_can_clone_lot` first.
     """

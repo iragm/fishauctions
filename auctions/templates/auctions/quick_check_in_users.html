@@ -15,6 +15,13 @@
       </div>
     </div>
     <div id="scan-status" class="alert alert-secondary mt-3 mb-2">Camera is off.</div>
+    {% comment %} Camera problems are usually device-specific and hard to reproduce on another phone. This gives whoever hits one something concrete to send us instead of "it doesn't work". {% endcomment %}
+    <details id="camera-help" class="small text-muted">
+      <summary class="text-info" style="cursor: pointer;">Camera not working?</summary>
+      <p class="mt-2 mb-1">On an iPhone, check that Safari is allowed to use the camera: tap <b>aA</b> at the left of the address bar, choose <b>Website Settings</b>, and set <b>Camera</b> to <b>Allow</b>. Camera scanning also doesn't work inside another app's built-in browser &mdash; open this page in Safari or Chrome.</p>
+      <p class="mb-1">If it still won't scan, send us this:</p>
+      <pre id="camera-diagnostics" class="small border rounded p-2 mb-0" style="white-space: pre-wrap; word-break: break-word;"></pre>
+    </details>
   </div>
 {% endblock %}
 {% block extra_js %}
@@ -27,11 +34,23 @@
     const wrapper = document.getElementById("scanner-wrapper");
     const video = document.getElementById("scanner-video");
     const statusBox = document.getElementById("scan-status");
+    const help = document.getElementById("camera-help");
 
     function setStatus(message, level = "secondary") {
       statusBox.className = `alert alert-${level} mt-3 mb-2`;
       statusBox.textContent = message;
+      // Open the troubleshooting panel by itself the moment the camera actually fails.
+      if (level === "danger") {
+        help.open = true;
+      }
     }
+
+    // Refreshed on open rather than at page load so it reports the state at the time of the failure.
+    help.addEventListener("toggle", () => {
+      if (help.open) {
+        document.getElementById("camera-diagnostics").textContent = window.cameraScannerDiagnostics();
+      }
+    });
 
     const scanner = window.createCameraScanner({
       video: video,

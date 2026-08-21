@@ -497,3 +497,145 @@ def member_in_brevo_url(member):
     if not member.brevo_contact_id:
         return ""
     return f"https://app.brevo.com/contact/index/{member.brevo_contact_id}"
+
+
+# --- account details and announcement campaigns ------------------------------------------------
+
+
+def account_info(client):
+    """Brevo's own record of who this account is: {'company', 'address'}.
+
+    Brevo asks for a company name and postal address when an account is created and prints them in
+    the footer of every campaign, which makes them the same details a club's letters need. Read
+    rather than asked for, on the same principle as the sender below: the club already told Brevo.
+    """
+    try:
+        data = client.request("GET", "/account").json()
+    except Exception:
+        logger.exception("Brevo: couldn't read the account")
+        return {"company": "", "address": {}}
+    return {"company": data.get("companyName") or "", "address": data.get("address") or {}}
+
+
+def format_mailing_address(address):
+    """Turn Brevo's account `address` block into the multi-line address a letter is signed with."""
+    if not address:
+        return ""
+    lines = [address.get("street")]
+    city_line = " ".join(x for x in (address.get("city"), address.get("zipCode")) if x)
+    lines.append(city_line)
+    country = address.get("country") or ""
+    if country and country.upper() not in {"US", "USA", "UNITED STATES"}:
+        lines.append(country)
+    return "\n".join(x.strip() for x in lines if x and x.strip())
+
+
+def senders(client):
+    """Every sender on the account, as [{'id', 'name', 'email', 'active'}]."""
+    try:
+        data = client.request("GET", "/senders").json()
+    except Exception:
+        logger.exception("Brevo: couldn't list senders")
+        return []
+    out = []
+    for sender in data.get("senders", []):
+        out.append(
+            {
+                "id": sender.get("id"),
+                "name": sender.get("name") or "",
+                "email": sender.get("email") or "",
+                # Brevo omits `active` on accounts with a single verified sender; absent means
+                # usable, so don't treat a missing key as "not verified".
+                "active": sender.get("active", True),
+            }
+        )
+    return out
+
+
+def default_sender(club):
+    """The sender a campaign goes out as: the club's stored choice, else the first active one.
+
+    Brevo has no campaign_defaults the way Mailchimp does, but it does have a list of verified
+    senders, and the overwhelmingly common case is exactly one. Asking a club to type an address
+    Brevo would then refuse is the worst of both, so the address is read and only the *choice*
+    between several is ever put to the admin (Club.brevo_sender_id).
+    """
+    client = get_client(club)
+    if not client:
+        return None
+    available = [s for s in senders(client) if s.get("email") and s.get("active")]
+    if not available:
+        return None
+    if club.brevo_sender_id:
+        for sender in available:
+            if str(sender["id"]) == str(club.brevo_sender_id):
+                return sender
+    return available[0]
+
+
+def send_announcement_campaign(club, *, subject, html, plain_text=None):
+    """Create and send one Brevo campaign to the club's list. Returns the campaign id.
+
+    ``plain_text`` is accepted and not sent: Brevo's campaign endpoint has no text field (that is
+    transactional email) and generates its own text part from the HTML. It stays in the signature
+    so the two providers are called the same way by announcements.send_emails.
+
+    Campaigns, never transactional send: a campaign is addressed to the list, so Brevo applies the
+    club's own blocklist and unsubscribes and appends its own unsubscribe footer. A transactional
+    send would go to whoever we named, blocklist and all, which is exactly the failure this
+    integration exists to prevent.
+    """
+    client = get_client(club)
+    if not client or not club.brevo_list_id:
+        msg = "Brevo is not connected to a list."
+        raise BrevoError(msg)
+    sender = default_sender(club)
+    if not sender:
+        msg = (
+            "Your Brevo account has no verified sender. In Brevo, go to Senders, domains & "
+            "dedicated IPs, add and verify a sender, then try again."
+        )
+        raise BrevoError(msg)
+    body = {
+        "name": f"{club.name} announcement — {subject}"[:255],
+        "subject": subject[:255],
+        "sender": {"name": sender["name"] or club.name, "email": sender["email"]},
+        "type": "classic",
+        "htmlContent": html,
+        "recipients": {"listIds": [int(club.brevo_list_id)]},
+    }
+    try:
+        campaign_id = str(client.request("POST", "/emailCampaigns", json_body=body).json().get("id") or "")
+    except BrevoApiError as e:
+        msg = f"Brevo refused to create the campaign: {e.detail}"
+        raise BrevoError(msg) from e
+    except Exception as e:
+        msg = "Couldn't reach Brevo to create the campaign."
+        raise BrevoError(msg) from e
+    if not campaign_id:
+        msg = "Brevo created the campaign but returned no id."
+        raise BrevoError(msg)
+    try:
+        client.request("POST", f"/emailCampaigns/{campaign_id}/sendNow")
+    except BrevoApiError as e:
+        msg = f"Brevo refused to send the campaign: {e.detail}"
+        raise BrevoError(msg) from e
+    except Exception as e:
+        msg = "Couldn't reach Brevo to send the campaign."
+        raise BrevoError(msg) from e
+    return campaign_id
+
+
+def campaign_opens(club, campaign_id):
+    """Unique opens on a sent campaign, or None when Brevo can't tell us yet."""
+    client = get_client(club)
+    if not client or not campaign_id:
+        return None
+    try:
+        stats = client.request("GET", f"/emailCampaigns/{campaign_id}").json().get("statistics") or {}
+    except Exception:
+        logger.warning("Brevo: couldn't read statistics for campaign %s", campaign_id)
+        return None
+    globals_ = stats.get("globalStats") or {}
+    opens = globals_.get("uniqueViews")
+    return opens if isinstance(opens, int) else None

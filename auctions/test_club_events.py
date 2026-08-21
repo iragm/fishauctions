@@ -638,11 +638,6 @@ class ClubEventsEmbedTests(TestCase):
                 self.assertIn(f'data-theme="{theme}"', body)
                 self.assertIn("Meeting 0", body)
 
-    def test_one_event_and_many_events_are_labelled_differently(self):
-        self._events(3)
-        self.assertContains(self.client.get(self.url, {"format": "iframelight", "count": 1}), "Next event")
-        self.assertContains(self.client.get(self.url, {"format": "iframelight"}), "Upcoming events")
-
     def test_the_unstyled_format_is_a_bare_list(self):
         self._events(1)
         body = self.client.get(self.url, {"format": "unstyledhtml"}).content.decode()
@@ -678,24 +673,34 @@ class ClubEventsEmbedTests(TestCase):
         for secret in ("em@example.com", "ea@example.com", "em_member", "em_admin"):
             self.assertNotIn(secret, body)
 
-    def test_only_admins_are_offered_the_snippets(self):
+    def test_the_snippets_live_on_the_website_integration_page_not_the_calendar(self):
+        """They used to be a collapsed panel on the club page; they are a page of their own now."""
         self._events(1)
-        page = reverse("club_detail", kwargs={"slug": self.club.slug})
+        club_page = reverse("club_detail", kwargs={"slug": self.club.slug})
+        integration = reverse("club_website_integration", kwargs={"slug": self.club.slug})
 
         self.client.force_login(self.admin)
-        self.assertContains(self.client.get(page), "Put these on your website")
-        self.assertContains(self.client.get(page), self.url)
+        self.assertNotContains(self.client.get(club_page), "iframelight")
+        self.assertContains(self.client.get(integration), self.url)
+
+    def test_only_admins_can_open_the_website_integration_page(self):
+        integration = reverse("club_website_integration", kwargs={"slug": self.club.slug})
+
+        self.client.force_login(self.admin)
+        self.assertEqual(self.client.get(integration).status_code, 200)
 
         self.client.force_login(self.member)
-        self.assertNotContains(self.client.get(page), "Put these on your website")
+        self.assertEqual(self.client.get(integration).status_code, 403)
 
+        # Anonymous gets the same 403 as a signed-in non-admin: the view's own permission check
+        # runs before LoginRequiredMixin, which is how every other club admin page behaves.
         self.client.logout()
-        self.assertNotContains(self.client.get(page), "Put these on your website")
+        self.assertEqual(self.client.get(integration).status_code, 403)
 
     def test_the_snippets_offer_the_next_event_and_the_next_ten(self):
         self._events(1)
         self.client.force_login(self.admin)
-        body = self.client.get(reverse("club_detail", kwargs={"slug": self.club.slug})).content.decode()
+        body = self.client.get(reverse("club_website_integration", kwargs={"slug": self.club.slug})).content.decode()
         self.assertIn("count=1", body)
         self.assertIn("count=10", body)
         self.assertIn("iframelight", body)

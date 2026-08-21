@@ -6,42 +6,51 @@ Pickup locations
 {% load static %}
 {% block content %}
 {% include 'auction_ribbon.html' %}
-  <div>
-  <small>This is a list of locations associated with your auction.  Typically, in-person auctions will have a single location.  Online auctions can have one or more locations; <a href='/blog/multiple-location-auctions/'>learn about having multiple pickup locations in your auction</a></small>
+  <div class="help-note">
+    <i class="bi bi-lightbulb-fill"></i>
+    <div>This is a list of locations associated with your auction.  Typically, in-person auctions will have a single location.  Online auctions can have one or more locations; <a href='/blog/multiple-location-auctions/'>learn about having multiple pickup locations in your auction</a></div>
   </div>
-      <a href="{% url 'create_auction_pickup_location' slug=auction.slug %}" class="btn btn-info btn-sm mt-2 mb-2" role="button">Add pickup location</a>
+      <a href="{% url 'create_auction_pickup_location' slug=auction.slug %}" class="btn btn-info btn-sm mt-2 mb-2" role="button"><i class="bi bi-geo-alt-fill"></i> Add pickup location</a>
+      <div class="table-responsive">
       <table class="table">
           <thead>
             <tr>
               <th scope="col">Location</th>
               <th scope="col">Number of users</th>
-              {% if auction.all_location_count > 1 %}
-              <th scope="col">Incoming lots</th>
-              <th scope="col">Outgoing lots</th>
-              {% endif %}
               <th scope="col">Get directions</th>
+              <th scope="col">Actions</th>
             </tr>
           </thead>
           <tbody>
+            {% comment %}Editing the location and the two lot lists are one menu, the same shape as the Actions menu on the club members list.  They used to be a link on the name plus two whole columns of their own, which on a phone is five columns of a table for what is usually a single row.  The counts have not gone anywhere -- they are the labels on the menu items.  Dropdowns escape the .table-responsive scroller via table_scroll.js.{% endcomment %}
             {% for location in object_list %}
             <tr>
-              <td><a href='/locations/edit/{{location.pk}}'>{{ location }}</a></td>
+              <td>{{ location }}</td>
               <td>{{ location.number_of_users }}</td>
-              {% if auction.all_location_count > 1 %}
-              <td><a href='{% url "location_incoming" pk=location.pk %}'>{{ location.number_of_incoming_lots }} incoming lots going to here</a></td>
-              <td><a href='{% url "location_outgoing" pk=location.pk %}'>{{ location.number_of_outgoing_lots }} outgoing lots coming from here</a></td>
-              {% endif %}
               <td>{% if location.pickup_by_mail %}N/A{% else %}{% if location.has_coordinates %}<a href={{ location.directions_link }}>Directions</a> {% else %} Location not set {% endif %}{% endif %}</td>
+              <td>
+                <div class="dropdown">
+                  <button type="button" class="btn btn-sm btn-primary dropdown-toggle" data-bs-toggle="dropdown" aria-expanded="false" aria-label="Actions for {{ location }}">Actions</button>
+                  <ul class="dropdown-menu">
+                    <li><a class="dropdown-item" href='/locations/edit/{{location.pk}}'><i class="bi bi-gear-fill me-1"></i>Edit this location</a></li>
+                    {% if auction.all_location_count > 1 %}
+                    <li><a class="dropdown-item" href='{% url "location_incoming" pk=location.pk %}'><i class="bi bi-box-arrow-in-down me-1"></i>{{ location.number_of_incoming_lots }} incoming lots going to here</a></li>
+                    <li><a class="dropdown-item" href='{% url "location_outgoing" pk=location.pk %}'><i class="bi bi-box-arrow-up me-1"></i>{{ location.number_of_outgoing_lots }} outgoing lots coming from here</a></li>
+                    {% endif %}
+                  </ul>
+                </div>
+              </td>
             </tr>
             {% empty %}
             <tr>
-              <td colspan="{% if auction.all_location_count > 1 %}5{% else %}3{% endif %}" class="text-center text-muted p-3">
+              <td colspan="4" class="text-center text-muted p-3">
                 No pickup locations yet. Add one with the <strong>Add pickup location</strong> button above &mdash; this is where users pick up the lots they win.
               </td>
             </tr>
             {% endfor %}
         </tbody>
       </table>
+      </div>
 
 {% endblock %}
 {% block extra_js %}

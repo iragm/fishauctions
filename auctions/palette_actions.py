@@ -487,7 +487,9 @@ def _create_one_lot(request, auction, tos, for_self, params: dict[str, Any]) -> 
     previous, name_was_exact = find_lot_to_copy(tos.user, lot_name, exclude_auction=auction)
     if previous:
         data = clone_lot_values(previous)
+        # This dict is form *data*, not initial, so the two foreign keys have to be pks.
         data["species_category"] = previous.species_category_id
+        data["species"] = previous.species_id
         if not name_was_exact:
             # A partial match reuses the old lot's contents but not its name: "add shrimp" must not
             # come out as a lot called "Blue Dream Shrimp — F1 juveniles".
@@ -1962,6 +1964,7 @@ _CLUB_BAP_SETTINGS = (
     "points_per_lot",
     "min_quantity",
     "days_between_same_name_lots",
+    "days_between_same_species_lots",
     "points_for_custom_checkbox",
     "only_donation_lots",
     "only_sold_lots",
@@ -4973,6 +4976,12 @@ NOT_A_SKILL: dict[str, str] = {
         "worse than typing it into the box on the speaker's page, which the palette can reach."
     ),
     "SpeakerCommentDeleteView": _NEEDS_THE_ROW,
+    # The two buttons on the remote-print waiting page (LotLabelView renders it in place of the PDF
+    # when the labels are going to the phone's Bluetooth printer). Both act on the job that page is
+    # already watching and have no meaning apart from it: "try again" means *these* labels, and
+    # cancelling anything else would be cancelling a print somebody is standing next to.
+    "RemotePrintJobRetryView": _NEEDS_THE_ROW,
+    "RemotePrintJobCancelView": _NEEDS_THE_ROW,
     # Pages with forms on them
     "AccountDeleteView": _DESTRUCTIVE,
     "AdminUserFlow": _FORM_PAGE,
@@ -4984,6 +4993,60 @@ NOT_A_SKILL: dict[str, str] = {
     "AuctionLabelConfig": _FORM_PAGE,
     "AuctionUpdate": _FORM_PAGE,
     "AuctionVolunteers": _FORM_PAGE,
+    "SpeciesCreateView": (
+        "Adding a species is a taxonomic decision, and the form is where the decisions are visible: "
+        "whether this is a species or a strain of one, which species it is a strain of, which of "
+        "its names people actually type. Half-filling that from one spoken line is how a wrong "
+        "name ends up on a printed label and in breeder points, which the whole species feature is "
+        "written to avoid. The palette navigates to the page instead."
+    ),
+    "SpeciesCommonNameCreateView": (
+        "Same reason as SpeciesCreateView, plus one of its own: the decision is which of 36,000 "
+        "species a typed name belongs to, and getting it wrong does not add a bad row, it takes a "
+        "good name away from the species that had it. That is a picker and a page, not a spoken "
+        "line. The palette navigates to the page instead."
+    ),
+    "SpeciesSearchCacheForgetView": (
+        "One button on the species gaps page, and the decision is the row next to it: this "
+        "remembered answer is wrong, throw it away. Naming the row out loud means saying a "
+        "normalised lot name exactly, which nobody can do without reading it off the page they "
+        "are already on. The palette navigates there instead."
+    ),
+    "SpeciesApproveView": (
+        "Approving a species for the whole site is a judgement about somebody else's taxonomy, and "
+        "the evidence is the row: what the auction admin typed, which category it landed in, how "
+        "many lots are waiting on it. That is a page to read, not a sentence to say -- and getting "
+        "it wrong puts a wrong name in every club's picker at once."
+    ),
+    "SpeciesNameRejectionDeleteView": (
+        "The other button on the same row as SpeciesSearchCacheForgetView, and the same problem: "
+        "the thing being named is a normalised lot name paired with a species, and reading it out "
+        "loud is harder than clicking it on the page it is printed on."
+    ),
+    "SpeciesDuplicateDismissView": (
+        "“These two species are not the same” is a judgement about two rows sitting side "
+        "by side -- their sources, their lot counts, which of them a club added last week. The "
+        "evidence is the page; saying one of the names out loud carries none of it."
+    ),
+    "SpeciesMergeView": (
+        "Merging two species rows is irreversible and it decides which name the whole site keeps: "
+        "the lots, the strains and the hobby names all move, and the other row stops existing. "
+        "That is a decision made by reading the pair, with a confirmation dialog, not by saying a "
+        "binomial into a microphone that has to get both halves of it right."
+    ),
+    "ClubAnnouncementsView": (
+        "The text is the easy half; the channels are not. Which of Discord, push, Mailchimp, Brevo "
+        "and the website an announcement goes to is five deliberate decisions about who gets "
+        "interrupted, and the form shows how many members each one would actually reach before you "
+        "tick it. A dictated one-liner would have to guess all of them, and one of the guesses "
+        "sends an email campaign to the whole club."
+    ),
+    "ClubAnnouncementRetractView": (
+        "Acts on one announcement in the list you are already looking at, and what it can undo "
+        "depends on which one: the Discord post and the website copy come back, a delivered push "
+        "and a sent email never do. The page names the announcement and says which of those apply "
+        "before you confirm. The palette navigates there instead."
+    ),
     "ClubBapSettingsView": _FORM_PAGE,
     "ClubDetailView": _FORM_PAGE,
     "ClubEditView": _FORM_PAGE,
@@ -5025,6 +5088,7 @@ NOT_A_SKILL: dict[str, str] = {
     "BapAwardDeleteView": _DESTRUCTIVE,
     "BidDelete": _DESTRUCTIVE,
     "ClubBapCategoryOverrideDeleteView": _DESTRUCTIVE,
+    "ClubBapGenusOverrideDeleteView": _DESTRUCTIVE,
     "ClubMemberDeleteView": _DESTRUCTIVE,
     "ClubMemberMergeView": _DESTRUCTIVE,
     "ClubMemberPermanentDeleteView": _DESTRUCTIVE,
@@ -5069,6 +5133,7 @@ NOT_A_SKILL: dict[str, str] = {
     # One row of a table you're already looking at
     "AuctionChatDeleteUndelete": _NEEDS_THE_ROW,
     "ClubBapCategoryOverrideSaveView": _NEEDS_THE_ROW,
+    "ClubBapGenusOverrideSaveView": _NEEDS_THE_ROW,
     "ClubBapLotCategoryView": _NEEDS_THE_ROW,
     "ClubMemberReactivateView": _NEEDS_THE_ROW,
     "ClubMembershipNumberView": _NEEDS_THE_ROW,
@@ -5114,12 +5179,14 @@ NOT_A_SKILL: dict[str, str] = {
     "NoLotAuctions": _MACHINE,
     "PageViewCreate": _MACHINE,
     "SetCoordinates": _MACHINE,
+    "SpeciesSuggestions": _MACHINE,
     "VoiceCommandLogView": _MACHINE,
     # Autocomplete and live validation feeds
     "AuctionAutocomplete": _MACHINE,
     "AuctionTOSAutocomplete": _MACHINE,
     "AuctionTOSValidation": _MACHINE,
     "CategoryAutocomplete": _MACHINE,
+    "SpeciesAutocomplete": _MACHINE,
     "ClubMemberAutocomplete": _MACHINE,
     "ClubMemberMergeAutocomplete": _MACHINE,
     "ClubMemberValidation": _MACHINE,
@@ -5139,6 +5206,8 @@ NOT_A_SKILL: dict[str, str] = {
     "ClubMemberBapAwardAPIView": _EXTERNAL_API,
     "ClubMemberListCreateAPIView": _EXTERNAL_API,
     "ClubMemberRenewAPIView": _EXTERNAL_API,
+    "ClubSpeciesCommonNameAPIView": _EXTERNAL_API,
+    "ClubSpeciesLookupAPIView": _EXTERNAL_API,
     "PickupLocationsDelete": _DESTRUCTIVE,
     # Us
     "CommandPaletteAssistView": _PALETTE,

@@ -45,6 +45,10 @@ CATEGORY_LOT_SELLING = "lot_selling"
 # emailing its own text -- that would be a third message that is neither of the two required ones,
 # on top of the launch email the same command already sent.
 CATEGORY_TAP_TO_PAY_LAUNCH = "tap_to_pay_launch"
+# "Your club just said something." Push-only by nature: the club picks its channels one by one on
+# the announcement form, and a member who didn't get the push is reached by the Discord post or the
+# club's own website -- not by a surprise email nobody ticked a box for.
+CATEGORY_CLUB_ANNOUNCEMENT = "club_announcement"
 
 # Categories with no email equivalent -- either app-native, or so time-critical that a late email is
 # worse than nothing. A push that can't be delivered in these categories is simply dropped; every
@@ -56,6 +60,7 @@ PUSH_ONLY_CATEGORIES = frozenset(
         CATEGORY_VOLUNTEER,
         CATEGORY_LOT_SELLING,
         CATEGORY_TAP_TO_PAY_LAUNCH,
+        CATEGORY_CLUB_ANNOUNCEMENT,
     }
 )
 
@@ -213,4 +218,48 @@ def send_fcm_message(token, *, title, body, url, category, collapse_key=None):
         return SEND_INVALID_TOKEN
     except Exception:
         logger.exception("FCM send failed (transient) for category %s", category)
+        return SEND_ERROR
+
+
+def send_fcm_data_message(token, data):
+    """Send a **data-only** FCM message to *token*. Same return values as :func:`send_fcm_message`.
+
+    No ``notification`` block, deliberately: this is used to tell an app that is already open and on
+    screen to do something (print a batch of labels), and it draws its own progress UI. A notification
+    block would make the OS post an alert as well, which is wrong for a job the user started from
+    their computer thirty seconds ago and is watching on that computer.
+
+    FCM data values must be strings — the caller is responsible for that, and this asserts nothing
+    about the keys beyond what the app agrees to read.
+
+    iOS needs ``apns-push-type: background`` with ``content-available``, and Apple requires priority
+    5 (not 10) for those; a background push at priority 10 is rejected outright. That is fine here:
+    the contract for this feature is already that the app is foregrounded, where delivery is prompt.
+    """
+    app = _get_firebase_app()
+    if app is None:
+        return SEND_ERROR
+    try:
+        from firebase_admin import messaging
+    except ImportError:
+        return SEND_ERROR
+
+    message = messaging.Message(
+        data={str(key): str(value) for key, value in data.items()},
+        token=token,
+        android=messaging.AndroidConfig(priority="high"),
+        apns=messaging.APNSConfig(
+            headers={"apns-priority": "5", "apns-push-type": "background"},
+            payload=messaging.APNSPayload(aps=messaging.Aps(content_available=True)),
+        ),
+    )
+    try:
+        messaging.send(message, app=app)
+        return SEND_OK
+    except (messaging.UnregisteredError, messaging.SenderIdMismatchError):
+        return SEND_INVALID_TOKEN
+    except ValueError:
+        return SEND_INVALID_TOKEN
+    except Exception:
+        logger.exception("FCM data-message send failed (transient); data keys: %s", sorted(data))
         return SEND_ERROR

@@ -33,10 +33,10 @@ function toggleCustomDropdownSettings() {
 function renderDropdownOption(option) {
     const escapedValue = $('<div>').text(option.value).html();
     return `
-        <li class="list-group-item d-flex align-items-center gap-2" data-option-id="${option.id}">
+        <li class="list-group-item d-flex align-items-center flex-wrap gap-2" data-option-id="${option.id}">
             <input type="text" class="form-control form-control-sm dropdown-option-value" maxlength="{{ custom_dropdown_max_length }}" value="${escapedValue}">
-            <button type="button" class="btn btn-sm btn-outline-success dropdown-option-save">Save</button>
-            <button type="button" class="btn btn-sm btn-outline-danger dropdown-option-delete">Delete</button>
+            <button type="button" class="btn btn-sm btn-primary dropdown-option-save">Save</button>
+            <button type="button" class="btn btn-sm btn-danger dropdown-option-delete">Delete</button>
         </li>
     `;
 }
@@ -49,13 +49,16 @@ function postDropdownOption(data, onSuccess) {
         headers: { "X-CSRFToken": "{{ csrf_token }}" },
         success: function(response) {
             if (!response.success) {
-                alert(response.error || "Error updating dropdown options");
+                {# Toast, never alert(): the app's WebView suppresses native dialogs. #}
+                window.jQuery.toast({title: "Couldn't save that option",
+                    content: response.error || "Error updating dropdown options", type: 'danger', delay: 8000});
                 return;
             }
             onSuccess(response);
         },
         error: function() {
-            alert("Error updating dropdown options");
+            window.jQuery.toast({title: "Couldn't save that option",
+                content: "Error updating dropdown options", type: 'danger', delay: 8000});
         }
     });
 }
@@ -121,14 +124,14 @@ $(document).ready(function() {
                 <h5>Custom dropdown options</h5>
                 <div class="input-group mb-2">
                     <input type="text" id="new-dropdown-option" class="form-control" maxlength="{{ custom_dropdown_max_length }}" placeholder="Add option">
-                    <button type="button" id="add-dropdown-option-btn" class="btn btn-outline-success">Add</button>
+                    <button type="button" id="add-dropdown-option-btn" class="btn btn-primary">Add</button>
                 </div>
                 <ul class="list-group" id="custom-dropdown-options-list">
                     {% for option in dropdown_options %}
-                    <li class="list-group-item d-flex align-items-center gap-2" data-option-id="{{ option.pk }}">
+                    <li class="list-group-item d-flex align-items-center flex-wrap gap-2" data-option-id="{{ option.pk }}">
                         <input type="text" class="form-control form-control-sm dropdown-option-value" maxlength="{{ custom_dropdown_max_length }}" value="{{ option.value }}">
-                        <button type="button" class="btn btn-sm btn-outline-success dropdown-option-save">Save</button>
-                        <button type="button" class="btn btn-sm btn-outline-danger dropdown-option-delete">Delete</button>
+                        <button type="button" class="btn btn-sm btn-primary dropdown-option-save">Save</button>
+                        <button type="button" class="btn btn-sm btn-danger dropdown-option-delete">Delete</button>
                     </li>
                     {% endfor %}
                 </ul>

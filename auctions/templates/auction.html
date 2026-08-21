@@ -147,8 +147,11 @@ function initMap() {
             {% include 'auction_ribbon.html' %}
 
             {% if can_make_current_auction %}
+            {% comment %}The sentence explaining what pinning does is desktop-only: on a phone it wrapped
+            onto two lines above a button that already says the same thing, so the banner cost three lines
+            to deliver one link.{% endcomment %}
             <div class="alert alert-info d-flex flex-wrap align-items-center justify-content-between gap-2 mb-4">
-              <span><i class="bi bi-star"></i> Pin this auction to {{ auction.club.name }}'s sidebar.</span>
+              <span class="d-none d-md-inline"><i class="bi bi-star"></i> Pin this auction to {{ auction.club.name }}'s sidebar.</span>
               <a href="{% url 'auction_main' slug=auction.slug %}?make_current_auction=true" class="btn btn-sm btn-info">
                 <i class="bi bi-pin-angle"></i> Make this the current club auction
               </a>
@@ -159,38 +162,42 @@ function initMap() {
             <div class="card mb-4">
                 <div class="card-body">
                     <div class="row g-2">
-                        <div class="col-12 col-md-auto">
+                        <div class="col-6 col-md-auto">
                             <a href='{{ auction.view_lot_link }}' class="btn btn-primary btn-sm w-100"><i class="bi bi-calendar"></i> View Lots</a>
                         </div>
-                        {% comment %} Lot scanning is app-only (native camera); deep-link into it. Visible to every user. {% endcomment %}
-                        {% if request.is_mobile_app %}
-                        <div class="col-12 col-md-auto">
+                        {% comment %} Lot scanning is app-only (native camera); deep-link into it. Visible to every user, in-person auctions only -- there is no room to walk across at an online one, which is the same rule the command palette's Lot scanning row uses. {% endcomment %}
+                        {% if request.is_mobile_app and not auction.is_online %}
+                        <div class="col-6 col-md-auto">
                             <a href="fishauctions://ar/{{ auction.slug }}" class="btn btn-primary btn-sm w-100"><i class="bi bi-camera"></i> Scan lots</a>
                         </div>
                         {% endif %}
-                        <div class="col-12 col-md-auto">
+                        <div class="col-6 col-md-auto">
                             {% if auction.is_online or not auction.allow_bulk_adding_lots %}
                             <a href='{{auction.add_lot_link}}' class="btn btn-success btn-sm w-100"><i class="bi bi-calendar-plus"></i> Add Lot</a>
                             {% else %}
                             <a href='{% url "bulk_add_lots_auto_for_myself" slug=auction.slug %}' class="btn btn-success btn-sm w-100"><i class="bi bi-calendar-plus"></i> Add Lots</a>
                             {% endif %}
                         </div>
-                        <div class="col-12 col-md-auto">
+                        <div class="col-6 col-md-auto">
                             <a href='{% url "my_auction_invoice" slug=auction.slug %}' class="btn btn-info btn-sm w-100"><i class="bi bi-bag"></i> My Invoice</a>
                         </div>
                         {% if auction_contact_email and request.user.is_authenticated %}
-                        <div class="col-12 col-md-auto">
-                            <a href="mailto:{{ auction_contact_email }}" class="btn btn-secondary btn-sm w-100"><i class="bi bi-envelope"></i> Email</a>
+                        <div class="col-6 col-md-auto">
+                            <a href="mailto:{{ auction_contact_email }}" class="btn btn-primary btn-sm w-100"><i class="bi bi-envelope"></i> Email</a>
                         </div>
                         {% endif %}
                         {% if request.user.is_authenticated and user_has_lots %}
-                        <div class="col-12 col-md-auto">
-                            <a href='{% url "print_my_labels" slug=auction.slug %}' class="btn btn-secondary btn-sm w-100"><i class="bi bi-tags"></i> Print Labels</a>
+                        <div class="col-6 col-md-auto">
+                            <a href='{% url "print_my_labels" slug=auction.slug %}' class="btn btn-primary btn-sm w-100"><i class="bi bi-tags"></i> Print Labels</a>
                         </div>
                         {% endif %}
                     </div>
 
-                    {# Admin Actions - Collapsible Section #}
+                    {% comment %}Admin Actions was a collapsed grid of every admin link, duplicating the
+                    club sidebar and the auction ribbon on the page every bidder lands on. Hidden rather
+                    than deleted while we find out whether anything is missed; every link in it is also
+                    in the club sidebar. Inner comment/tag syntax is stripped so this stays one comment.
+                    [[ Admin Actions - Collapsible Section ]]
                     {% if view.is_auction_admin or request.user.is_superuser %}
                     <hr class="my-3">
                     <div class="d-grid">
@@ -258,6 +265,7 @@ function initMap() {
                         </div>
                     </div>
                     {% endif %}
+                    {% endcomment %}
                 </div>
             </div>
 
@@ -315,7 +323,7 @@ function initMap() {
             {% if not auction.no_location %}
             <div class="card mb-4">
                 <div class="card-body p-0">
-                    <div id="map_wrapper" style='height: 400px;'>
+                    <div id="map_wrapper" style="height: clamp(220px, 45vh, 400px);">
                         {% if google_maps_api_key %}
                         <div id="map_canvas" class="mapping" style='width: 100%; height: 100%;'></div>
                         {% else %}
@@ -370,7 +378,7 @@ function initMap() {
                                 {% include 'auction_calendar_button.html' with location=location second="False" label="Add to calendar" %}
                                 {% endif %}
                                 {% if view.is_auction_admin %}
-                                <a href="/locations/edit/{{ location.pk }}/?next=/auctions/{{auction.slug}}" class="btn btn-sm btn-warning"><i class="bi bi-gear-fill"></i> Edit</a>
+                                <a href="/locations/edit/{{ location.pk }}/?next=/auctions/{{auction.slug}}" class="btn btn-sm btn-info"><i class="bi bi-gear-fill"></i> Edit</a>
                                 {% endif %}
                             </div>
                             {% if location.second_pickup_time %}
@@ -445,7 +453,7 @@ function initMap() {
                                     {% include 'auction_calendar_button.html' with location=location second="False" label="Add to calendar" %}
                                     {% endif %}
                                     {% if view.is_auction_admin %}
-                                    <a href="/locations/edit/{{ location.pk }}/?next=/auctions/{{auction.slug}}" class="btn btn-sm btn-warning"><i class="bi bi-gear-fill"></i> Edit</a>
+                                    <a href="/locations/edit/{{ location.pk }}/?next=/auctions/{{auction.slug}}" class="btn btn-sm btn-info"><i class="bi bi-gear-fill"></i> Edit</a>
                                     {% if auction.all_location_count > 1 %}
                                     <a href='{% url "location_incoming" pk=location.pk %}' class="btn btn-sm btn-primary"><i class="bi bi-box-arrow-in-down-right"></i> Incoming lot list</a>
                                     <a href='{% url "location_outgoing" pk=location.pk %}' class="btn btn-sm btn-primary"><i class="bi bi-box-arrow-down-right"></i> Outgoing lot list</a>
@@ -497,8 +505,8 @@ function initMap() {
                     </div>
                     <div class="col-12 col-md-auto">
                         <div class="btn-group" role="group">
-                            <a href="https://twitter.com/share?ref_src=twsrc%5Etfw" class="btn btn-sm btn-outline-info twitter-share-button" data-text="Check out the {{ auction.title }}" data-url="https://{{ domain }}/?{{ auction.slug }}" data-dnt="true" data-show-count="false"><i class="bi bi-twitter"></i> Tweet</a>
-                            <a target="_blank" href="https://www.facebook.com/sharer/sharer.php?u={{ domain|urlencode }}/?{{ auction.slug|urlencode }}&amp;src=sdkpreparse" class="btn btn-sm btn-outline-primary"><i class="bi bi-facebook"></i> Share</a>
+                            <a href="https://twitter.com/share?ref_src=twsrc%5Etfw" class="btn btn-sm btn-primary twitter-share-button" data-text="Check out the {{ auction.title }}" data-url="https://{{ domain }}/?{{ auction.slug }}" data-dnt="true" data-show-count="false"><i class="bi bi-twitter"></i> Tweet</a>
+                            <a target="_blank" href="https://www.facebook.com/sharer/sharer.php?u={{ domain|urlencode }}/?{{ auction.slug|urlencode }}&amp;src=sdkpreparse" class="btn btn-sm btn-primary"><i class="bi bi-facebook"></i> Share</a>
                         </div>
                     </div>
                 </div>

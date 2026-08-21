@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block title %}Website integration - {{ club.name }}{% endblock %}
+{% block content %}
+{% include "club_ribbon.html" %}
+<h3 class="mb-2">Website integration</h3>
+<div class="help-note"><i class="bi bi-lightbulb-fill"></i><div>
+  Your club almost certainly has its own website, and keeping it in step with this one by hand is
+  a job nobody ever finishes. Paste one of these into WordPress (a Custom HTML block), Wix,
+  Squarespace or anything else that takes HTML, and it reads this site live &mdash; add an event
+  or send an announcement here and your own site updates itself.
+</div></div>
+{% for snippet in snippets %}
+{% include "auctions/partials/website_snippet.html" with snippet=snippet %}
+{% endfor %}
+{% endblock %}

@@ -7,7 +7,7 @@
     hx-vals='{"action": "undo"}'
     hx-target="#bap-actions-{{ lot.pk }}"
     hx-swap="outerHTML"
-    class="btn btn-sm btn-outline-secondary text-light">Undo</button>
+    class="btn btn-sm btn-primary">Undo</button>
 {% elif award %}
   {% if award.points %}<span class="badge bg-success">{{ award.points }} BAP</span>{% endif %}
   {% if award.hap_points %}<span class="badge bg-primary">{{ award.hap_points }} HAP</span>{% endif %}
@@ -17,7 +17,7 @@
     hx-vals='{"action": "undo"}'
     hx-target="#bap-actions-{{ lot.pk }}"
     hx-swap="outerHTML"
-    class="btn btn-sm btn-outline-secondary text-light">Undo</button>
+    class="btn btn-sm btn-primary">Undo</button>
 {% else %}
   {% with placeholder=lot.bap_placeholder %}
   {% if placeholder == "HAP" %}
@@ -45,7 +45,7 @@
     hx-vals='{"action": "reject"}'
     hx-target="#bap-actions-{{ lot.pk }}"
     hx-swap="outerHTML"
-    class="btn btn-sm btn-outline-danger" title="Reject">
+    class="btn btn-sm btn-danger" title="Reject">
     <i class="bi bi-x-lg"></i>
   </button>
 {% endif %}

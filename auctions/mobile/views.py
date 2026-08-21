@@ -213,6 +213,65 @@ POST /api/mobile/devices/register/
           "last_seen":  "2024-06-01T12:00:00Z"
         }
 
+POST /api/mobile/devices/heartbeat/
+    "This phone is awake, and here is whether it could print something right now." Posted at shell
+    mount, on resume, and every 5 minutes while foregrounded. It is what makes printing from a
+    *computer* to this phone's Bluetooth printer possible at all: a phone cannot be woken on demand,
+    so the website measures whether the app is already open instead of pushing hopefully and timing
+    out (see ``auctions.mobile.services.remote_print`` for why that is not solvable another way).
+
+    ``print_ready`` is the app's own answer to "is a printer paired AND does its profile resolve" —
+    never derived from ``print_method``, because a printer saved by an older build, or one whose
+    profile the site has since withdrawn, cannot print and must not be advertised.
+
+    Request::
+
+        {
+          "device_uuid":   "550e8400-e29b-41d4-a716-446655440000",
+          "print_ready":   true,
+          "printer_name":  "Y486BT",
+          "print_method":  "bluetooth"
+        }
+
+    Response 204. 404 when the device isn't registered to the caller — which the app treats as
+    "this deployment doesn't have the feature" and self-disables on, so an older server costs it
+    nothing.
+
+Remote print jobs
+-----------------
+POST /api/mobile/printjobs/<uuid>/progress/
+    One more label came out. Best-effort and throttled by the app (at most one per label, never two
+    inside a second, dropped silently on error): a phone that can still print but has lost the
+    network must finish the batch rather than stop to report.
+
+    Request::
+
+        { "status": "printing", "printed": 3, "total": 12 }
+
+    Response 204. Counts only ever go up — these arrive out of order.
+
+POST /api/mobile/printjobs/<uuid>/result/
+    The batch is over. This is the post that matters; progress is decoration.
+
+    Request::
+
+        {
+          "status":  "printed",   // or "failed"
+          "printed": 12,
+          "total":   12,
+          "message": "Couldn't connect to the printer. …"
+        }
+
+    ``message`` is the app's own failure text and is shown to the person at the computer *verbatim* —
+    the app already distinguishes no-printer-paired from couldn't-connect from lost-the-link-mid-print
+    from label-wider-than-the-printhead, and a second copy of that vocabulary on the server would be
+    free to drift.
+
+    A result with ``printed > 0`` also marks those labels printed (what ``labels/printed/`` does), so
+    the app does not have to post twice.
+
+    Response 204. Both endpoints 404 on a job belonging to anyone else.
+
 Notifications
 -------------
 GET /api/mobile/notifications/prefs/
@@ -591,6 +650,7 @@ from auctions.models import (
     Club,
     ClubMember,
     Lot,
+    RemotePrintJob,
     ThermalPrinterProfile,
     UserData,
     UserLabelPrefs,
@@ -609,6 +669,7 @@ from .serializers import (
     CheckinSetLocationSerializer,
     CommandPaletteLogSerializer,
     MobileClubSerializer,
+    MobileDeviceHeartbeatSerializer,
     MobileDeviceSerializer,
     MobileDeviceUnregisterSerializer,
     MobileGoogleAuthSerializer,
@@ -618,6 +679,8 @@ from .serializers import (
     MobileNotificationPrefsSerializer,
     MobilePaymentConfirmSerializer,
     MobilePaymentCreateSerializer,
+    MobileRemotePrintProgressSerializer,
+    MobileRemotePrintResultSerializer,
     MobileSocialAuthSerializer,
     MobileSocialCompleteSerializer,
     MobileUserSerializer,
@@ -628,6 +691,7 @@ from .serializers import (
 from .services import ar as ar_service
 from .services import checkin as checkin_service
 from .services import printers as printer_service
+from .services import remote_print
 from .services.auth import MobileAuthService
 from .services.checkin import _single_pickup_location
 from .services.devices import DeviceService
@@ -1267,6 +1331,124 @@ class MobileDeviceUnregisterView(APIView):
         found = DeviceService.unregister(user=request.user, device_uuid=serializer.validated_data["device_uuid"])
         if not found:
             return Response({"detail": "Device not found."}, status=status.HTTP_404_NOT_FOUND)
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class MobileDeviceHeartbeatView(APIView):
+    """POST /api/mobile/devices/heartbeat/ — "this phone is awake, and here's whether it can print".
+
+    Posted at shell mount, on resume, and every 5 minutes while foregrounded. Cheap on purpose: it
+    writes three columns on one row and returns no body.
+
+    It exists because a phone cannot be summoned. Printing from a computer to the phone's Bluetooth
+    printer only works while the app is already open, so the website has to *measure* that instead of
+    pushing hopefully and timing out — see ``auctions.mobile.services.remote_print``.
+
+    404 on an unregistered device is meaningful to the app: the whole feature self-disables for the
+    process on a 404, so a deployment without this endpoint costs an older app nothing.
+    """
+
+    permission_classes = [IsMobileAuthenticated]
+    throttle_scope = "mobile_api"
+    throttle_classes = [ScopedRateThrottle]
+
+    def post(self, request):
+        serializer = MobileDeviceHeartbeatSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        data = serializer.validated_data
+        device = remote_print.heartbeat(
+            request.user,
+            data["device_uuid"],
+            print_ready=data.get("print_ready", False),
+            printer_name=data.get("printer_name", ""),
+            print_method=data.get("print_method", ""),
+        )
+        if device is None:
+            return Response({"detail": "Device not found."}, status=status.HTTP_404_NOT_FOUND)
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+# ---------------------------------------------------------------------------
+# Remote print jobs (computer -> phone)
+# ---------------------------------------------------------------------------
+
+
+class MobileRemotePrintJobMixin:
+    """Shared lookup: the job, or 404 — including when it belongs to somebody else.
+
+    404 rather than 403 for another user's job, deliberately: a job uuid is unguessable, and telling
+    a caller that one exists but isn't theirs is the only thing a 403 would add.
+    """
+
+    permission_classes = [IsMobileAuthenticated]
+    throttle_scope = "mobile_api"
+    throttle_classes = [ScopedRateThrottle]
+
+    def get_job(self, request, job_uuid):
+        return RemotePrintJob.objects.filter(uuid=job_uuid, user=request.user).first()
+
+
+class MobileRemotePrintProgressView(MobileRemotePrintJobMixin, APIView):
+    """POST /api/mobile/printjobs/<uuid>/progress/ — one more label came out.
+
+    Best-effort: the app throttles these and drops them silently on error, because a phone that can
+    still print but has lost the network must finish the batch rather than stop to report. A job that
+    has already reported a result ignores late progress — the batch is over and the page has the
+    answer that matters.
+    """
+
+    def post(self, request, job_uuid):
+        job = self.get_job(request, job_uuid)
+        if job is None:
+            return Response({"detail": "Job not found."}, status=status.HTTP_404_NOT_FOUND)
+        if job.is_terminal:
+            return Response(status=status.HTTP_204_NO_CONTENT)
+        serializer = MobileRemotePrintProgressSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        data = serializer.validated_data
+        # Counts only ever go up: progress posts can arrive out of order (the app drops and retries
+        # them), and a page that counted 7 of 12 must never fall back to 5.
+        job.printed_count = max(job.printed_count, data.get("printed", 0))
+        if data.get("total"):
+            job.total_count = data["total"]
+        job.status = RemotePrintJob.STATUS_PRINTING
+        job.save(update_fields=["printed_count", "total_count", "status", "updated_at"])
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class MobileRemotePrintResultView(MobileRemotePrintJobMixin, APIView):
+    """POST /api/mobile/printjobs/<uuid>/result/ — the batch is over, one way or the other.
+
+    This is the post that matters; progress is decoration. ``message`` is the app's own text and is
+    stored and shown verbatim.
+
+    A result with ``printed > 0`` also marks those labels printed, so the app doesn't have to post to
+    ``labels/printed/`` as well — one round trip for one event, and no window in which the batch is
+    finished but the site still thinks the labels are pending.
+    """
+
+    def post(self, request, job_uuid):
+        job = self.get_job(request, job_uuid)
+        if job is None:
+            return Response({"detail": "Job not found."}, status=status.HTTP_404_NOT_FOUND)
+        serializer = MobileRemotePrintResultSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        data = serializer.validated_data
+        # A job the page already gave up on (20 s of silence) is still allowed to report: the phone
+        # demonstrably was reachable, and the real outcome beats the earlier guess. A cancelled job is
+        # not — the person at the computer said stop, and that answer is theirs to keep.
+        if job.status == RemotePrintJob.STATUS_CANCELLED:
+            return Response(status=status.HTTP_204_NO_CONTENT)
+        job.status = data["status"]
+        job.printed_count = max(job.printed_count, data.get("printed", 0))
+        if data.get("total"):
+            job.total_count = data["total"]
+        job.message = data.get("message", "")
+        job.save(update_fields=["status", "printed_count", "total_count", "message", "updated_at"])
+        job.mark_labels_printed(job.printed_count)
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 

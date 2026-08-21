@@ -5,7 +5,11 @@
 {% load static %}
 {% block content %}
   {% include 'auction_ribbon.html' %}
-  <small>These are messages users have posted on lots in your auction.  Deleted messages will show up here, but won't be visible to users on the lot page. {% if not auction.is_chat_allowed %}Chat has been disabled in this auction.{% endif %}</small><p>
+  <div class="help-note">
+    <i class="bi bi-lightbulb-fill"></i>
+    <div>These are messages users have posted on lots in your auction.  Deleted messages will show up here, but won't be visible to users on the lot page. {% if not auction.is_chat_allowed %}Chat has been disabled in this auction.{% endif %}</div>
+  </div>
+    <div class="table-responsive">
     <table class="table">
       <thead>
           <tr>
@@ -34,9 +38,9 @@
                           hx-target="#message_{{ history.pk }}"
                           hx-swap="outerHTML">
                           {% if not history.removed %}
-                            <span id="message_{{history.pk}}" class='badge bg-info'>Delete</span>
+                            <span id="message_{{history.pk}}" class="btn btn-sm btn-danger">Delete</span>
                           {% else %}
-                            <span id="message_{{history.pk}}" class="badge bg-danger">Deleted</span>
+                            <span id="message_{{history.pk}}" class="btn btn-sm btn-secondary">Deleted</span>
                           {% endif %}</a><br>
                         <small>on <a href='{{history.lot.lot_link}}'>{{ history.lot.lot_name }}</a></small>
                   </td>
@@ -44,8 +48,8 @@
           {% endfor %}
       </tbody>
   </table>
+    </div>
   {% if not object_list %}No chat messages in your auction yet.{% endif %}
-</div>
 <div id="modals-here"></div>
     {% endblock %}
 {% block extra_js %}

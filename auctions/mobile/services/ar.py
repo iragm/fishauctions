@@ -168,7 +168,14 @@ def build_lot_metadata(auction, pks, user, request):
     lots = {
         lot.pk: lot
         for lot in Lot.objects.filter(pk__in=pks, is_deleted=False).select_related(
-            "auction", "user", "winner", "auctiontos_winner"
+            # species__parent: a strain with no common name of its own falls back to its parent's,
+            # which the overlay draws -- see Lot.common_name_line.
+            "auction",
+            "user",
+            "winner",
+            "auctiontos_winner",
+            "species",
+            "species__parent",
         )
     }
     watched = (
@@ -204,6 +211,14 @@ def build_lot_metadata(auction, pks, user, request):
                 "in_auction": True,
                 "lot_number": str(lot.lot_number_display),
                 "name": lot.lot_name,
+                # The other name, blank when there isn't one.  The overlay draws these under the
+                # lot name -- the one piece of a lot worth reading in a room where you can't get
+                # close enough to read the label -- and which of the two is filled in depends on
+                # what the seller typed: a lot called "Chindongo saulosi" gets the common name
+                # here and an empty scientific_name, because the scientific name is already the
+                # thing being drawn above it.  See Lot.scientific_name_line.
+                "scientific_name": lot.scientific_name_line,
+                "common_name": lot.common_name_line,
                 "thumbnail_url": _thumbnail_url(lot, request),
                 "image_url": _image_url(lot, request),
                 "watched": pk in watched,
@@ -366,9 +381,10 @@ def positions_payload(auction, *, include_lot_details=False):
     # Unsold + not-removed, filtered in SQL (winning_price__isnull mirrors the app's total_unsold_lots
     # convention and avoids an N+1 from the Lot.sold property's winner/auctiontos_winner FK lookups).
     unsold = list(
+        # auction as well as species: lot.scientific_name reads the auction's use_scientific_name.
         Lot.objects.filter(
             auction=auction, is_deleted=False, banned=False, deactivated=False, winning_price__isnull=True
-        )
+        ).select_related("species", "species__parent", "auction")
     )
 
     positions = []
@@ -383,6 +399,9 @@ def positions_payload(auction, *, include_lot_details=False):
             if include_lot_details:
                 row["lot_number"] = str(lot.lot_number_display)
                 row["name"] = lot.lot_name
+                # The other name, the same rule the overlay and the printed label follow.
+                row["scientific_name"] = lot.scientific_name_line
+                row["common_name"] = lot.common_name_line
             positions.append(row)
         if include_lot_details:
             unsold_list.append(
@@ -390,6 +409,8 @@ def positions_payload(auction, *, include_lot_details=False):
                     "pk": lot.pk,
                     "lot_number": str(lot.lot_number_display),
                     "name": lot.lot_name,
+                    "scientific_name": lot.scientific_name_line,
+                    "common_name": lot.common_name_line,
                     "has_position": has_pos,
                 }
             )

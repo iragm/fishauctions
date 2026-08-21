@@ -5,7 +5,7 @@
         {% if lot.image_count %}
             <div class="col-md-6 offset-md1">
                 {% for image in lot.images|slice:":1" %}
-                {% if lot.sold %}<h1 class='text-danger font-weight-bold' style="position: absolute;-ms-transform: rotate(-20deg);transform: rotate(-20deg);">SOLD</h1>{% endif %}
+                {% if lot.sold %}<h1 class='text-danger fw-bold' style="position: absolute;-ms-transform: rotate(-20deg);transform: rotate(-20deg);">SOLD</h1>{% endif %}
                 <img src="{{ image.display_url }}" class="img-fluid"><br>
                 <span class="text-muted"><small>{{ image.get_image_source_display }}</small></span>{%if image.caption%}<div>{{ image.caption }}</div>{%endif%}
                 {% endfor %}
@@ -13,7 +13,7 @@
         {% else %}
           {% if lot.auto_image %}
             <div class="col-md-6 offset-md1">
-            {% if lot.sold %}<h1 class='text-danger font-weight-bold' style="position: absolute;-ms-transform: rotate(-20deg);transform: rotate(-20deg);">SOLD</h1>{% endif %}
+            {% if lot.sold %}<h1 class='text-danger fw-bold' style="position: absolute;-ms-transform: rotate(-20deg);transform: rotate(-20deg);">SOLD</h1>{% endif %}
             <img src="{{ lot.auto_image.display_url }}" class="img-fluid"><br>
             <span class="text-muted"><small>This image was automatically added from another lot with the same name and may not be representative of this lot</small></span>
             </div>
@@ -21,6 +21,8 @@
         {% endif %}
         <div class="col-md-6 offset-md1">
             <h3>{{ lot.lot_name }}</h3>
+            {% comment %}The other name, whichever one that is -- see Lot.scientific_name_line.{% endcomment %}
+            {% if lot.scientific_name_line %}<div class="text-muted"><i>{{ lot.scientific_name_line }}</i></div>{% elif lot.common_name_line %}<div class="text-muted">{{ lot.common_name_line }}</div>{% endif %}
             {% if lot.auction.use_quantity_field %}<b>Quantity:</b> {{ lot.quantity }}<br>{% endif %}
             {% if lot.reserve_price > lot.auction.minimum_bid %}<b>Minimum bid:</b> {{ lot.currency_symbol }}{{ lot.reserve_price }}<br>{% endif %}
             {% if lot.buy_now_price %}<b>Buy now:</b> {{ lot.currency_symbol }}{{ lot.buy_now_price }}<br>{% endif %}

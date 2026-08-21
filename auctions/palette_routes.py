@@ -506,6 +506,20 @@ ROUTE_LIST: list[Route] = [
     _r("club_events_embed", "Embeddable club events", "Club", scope=SCOPE_CLUB, keywords=["embed", "widget"]),
     _r("bap_embed", "Embeddable Breeder Award list", "Club", scope=SCOPE_CLUB, keywords=["bap embed", "widget"]),
     _r(
+        "club_announcements_embed",
+        "Embeddable club announcements",
+        "Club",
+        scope=SCOPE_CLUB,
+        keywords=["announcement embed", "widget", "news"],
+    ),
+    _r(
+        "club_auction_embed",
+        "Embeddable current auction",
+        "Club",
+        scope=SCOPE_CLUB,
+        keywords=["auction embed", "widget"],
+    ),
+    _r(
         "club_admin",
         "Club member list",
         "Club admin",
@@ -520,6 +534,22 @@ ROUTE_LIST: list[Route] = [
         scope=SCOPE_CLUB,
         admin=ADMIN_CLUB,
         keywords=["setup", "getting started", "checklist"],
+    ),
+    _r(
+        "club_announcements",
+        "Send an announcement to a club",
+        "Club admin",
+        scope=SCOPE_CLUB,
+        admin=ADMIN_CLUB,
+        keywords=["announcement", "tell members", "news", "broadcast"],
+    ),
+    _r(
+        "club_website_integration",
+        "Put club information on the club's own website",
+        "Club admin",
+        scope=SCOPE_CLUB,
+        admin=ADMIN_CLUB,
+        keywords=["website", "embed", "widget", "wordpress", "snippet", "iframe"],
     ),
     _r(
         "club_edit",
@@ -544,6 +574,22 @@ ROUTE_LIST: list[Route] = [
         scope=SCOPE_CLUB,
         admin=ADMIN_CLUB,
         keywords=["email", "sender", "from address"],
+    ),
+    _r(
+        "club_donation_vendors",
+        "Donation tracking",
+        "Club admin",
+        scope=SCOPE_CLUB,
+        admin=ADMIN_CLUB,
+        keywords=["donations", "vendors", "sponsors", "raffle prizes", "who has donated", "ask for a donation"],
+    ),
+    _r(
+        "club_donation_settings",
+        "Donation tracking settings",
+        "Club admin",
+        scope=SCOPE_CLUB,
+        admin=ADMIN_CLUB,
+        keywords=["turn on donations", "donation email", "donation settings"],
     ),
     _r(
         "club_link_payment_account",
@@ -905,6 +951,33 @@ ROUTE_LIST: list[Route] = [
         admin=ADMIN_SUPERUSER,
         keywords=["palette", "what do people search for", "llm usage"],
     ),
+    _r(
+        "species_gaps",
+        "Lots with no scientific name",
+        "Site admin",
+        admin=ADMIN_SUPERUSER,
+        keywords=[
+            "species gaps",
+            "missing species",
+            "no scientific name",
+            "unmatched lots",
+            "species backlog",
+        ],
+    ),
+    _r(
+        "species_create",
+        "Add a species or strain",
+        "Site admin",
+        admin=ADMIN_SUPERUSER,
+        keywords=["add species", "new species", "add a strain", "new strain", "cultivar", "add a fish"],
+    ),
+    _r(
+        "species_name_create",
+        "Add a common name to a species",
+        "Site admin",
+        admin=ADMIN_SUPERUSER,
+        keywords=["common name", "add a name", "name a species", "hobby name", "what people call it"],
+    ),
     _r("admin_traffic", "Site traffic", "Site admin", admin=ADMIN_SUPERUSER, keywords=["traffic", "pageviews"]),
     _r("admin_referrers", "Where visitors come from", "Site admin", admin=ADMIN_SUPERUSER, keywords=["referrers"]),
     _r("admin_user_flow", "How visitors move around", "Site admin", admin=ADMIN_SUPERUSER, keywords=["user flow"]),
@@ -944,6 +1017,8 @@ def _user_sees_nec_speakers(user):
         "permission_money",
         "permission_manage_auctions",
         "permission_manage_bap",
+        "permission_manage_donations",
+        "permission_send_announcements",
     ]
     any_permission = Q()
     for field_name in permission_fields:
@@ -979,6 +1054,7 @@ EXCLUDED: dict[str, str] = {
     "club-member-autocomplete": _AUTOCOMPLETE,
     "club-member-merge-autocomplete": _AUTOCOMPLETE,
     "category-autocomplete": _AUTOCOMPLETE,
+    "species-autocomplete": _AUTOCOMPLETE,
     "clubmember_validation": _AUTOCOMPLETE,
     "auctiontos_validation": _AUTOCOMPLETE,
     "check_username": _AUTOCOMPLETE,
@@ -1008,6 +1084,16 @@ EXCLUDED: dict[str, str] = {
     "auction_lot_map_data": _API,
     "auction_show_high_bidder": _API,
     "auto_image_available": _API,
+    "species_suggestions": _AUTOCOMPLETE,
+    # The buttons on the species gaps page, and an API endpoint for a club's own software.  All of
+    # them are POST/GET-with-a-key rather than pages; the palette sends people to species_gaps.
+    "species_cache_forget": _API,
+    "species_approve": _API,
+    "species_rejection_delete": _API,
+    "species_duplicate_dismiss": _API,
+    "species_merge": _API,
+    "api_club_species_lookup": _API,
+    "api_club_species_common_names": _API,
     "auction_no_show_dialog": _API,
     "lot_refund": _API,
     "bulk_set_lots_won": _API,
@@ -1035,6 +1121,8 @@ EXCLUDED: dict[str, str] = {
     "club_bap_lot_category": _API,
     "club_bap_category_override_save": _API,
     "club_bap_category_override_delete": _API,
+    "club_bap_genus_override_save": _API,
+    "club_bap_genus_override_delete": _API,
     "club_api_key_detail": _API,
     "club_api_key_revoke": _API,
     "club_api_key_mapping_add": _API,
@@ -1072,6 +1160,17 @@ EXCLUDED: dict[str, str] = {
     "api_club_member_bap_awards": _API,
     "api_club_bap_lots": _API,
     "inbound_email_routing": _API,
+    # Donation tracking. The two real pages are in the catalog; these are the modals opened from
+    # them, all of which need a vendor or a stored email the user can't be asked to name.
+    "club_donation_vendor": _API,
+    "club_donation_vendor_create": _API,
+    "club_donation_contact": _API,
+    "club_donation_email": _API,
+    "club_donation_vendor_delete": _ACTION_ONLY,
+    "club_announcement_retract": (
+        "POST-only, from the Retract button beside a row on club_announcements. Keyed on the "
+        "announcement's uuid, and destructive in a way the palette should not offer blind."
+    ),
     # Webhooks and machine-to-machine
     "paypal-webhook": _WEBHOOK,
     "club_paypal_subscription_webhook": _WEBHOOK,
@@ -1081,6 +1180,7 @@ EXCLUDED: dict[str, str] = {
     "handle-event-webhook": _WEBHOOK,
     "apple_server_notifications": _WEBHOOK,
     "discord_interactions": _WEBHOOK,
+    "inbound_donation_email": _WEBHOOK,
     "passkit_registration": _WEBHOOK,
     "passkit_device_registrations": _WEBHOOK,
     "passkit_pass": _WEBHOOK,
@@ -1098,6 +1198,10 @@ EXCLUDED: dict[str, str] = {
     "club_member_by_uuid": _TOKEN,
     "club_member_by_number": _TOKEN,
     "club_member_unsubscribe": _TOKEN,
+    "donation_unsubscribe": (
+        "Vendor-facing opt-out, keyed on the vendor's uuid and only ever reached from a link in the "
+        "mail we sent them. The vendors it is for don't have accounts here."
+    ),
     "club_member_resubscribe": _TOKEN,
     "club_member_nocomm": _TOKEN,
     "club_member_contact_pref": _TOKEN,
@@ -1115,6 +1219,18 @@ EXCLUDED: dict[str, str] = {
     "mobile_socialaccount_signup": _MOBILE,
     "mobile_socialaccount_connections": _MOBILE,
     "paypal_csv": "Needs a chunk number that only makes sense from the invoices page it's linked from.",
+    # App-association files. Fetched by Google's and Apple's infrastructure to decide whether a link
+    # to this site may open in the app; there is no page and no person on either end. The Apple one is
+    # listed even though `apple_` is in THIRD_PARTY_PREFIXES -- it is ours, not allauth's, and an
+    # explicit entry keeps it from being excused by an accident of naming.
+    "android_assetlinks": _INFRA,
+    "apple_app_site_association": _INFRA,
+    # Printing from a computer to the phone's Bluetooth printer. The waiting page LotLabelView
+    # renders owns all three: it polls the first once a second, and the other two are its "Try
+    # again" and "Cancel" buttons, which only mean anything against the job it is already watching.
+    "remote_print_job": _API,
+    "remote_print_job_retry": _API,
+    "remote_print_job_cancel": _API,
     # Duplicates of catalog entries
     "lot_by_pk_and_slug": _DUPLICATE,
     "lot_in_auction": _DUPLICATE,

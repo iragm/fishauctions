@@ -1,6 +1,7 @@
 import datetime
 import logging
 import re
+import secrets
 import uuid as uuid_module
 from datetime import time
 from decimal import ROUND_HALF_UP, Decimal
@@ -53,7 +54,7 @@ from pytz import timezone as pytz_timezone
 from webpush.models import PushInformation
 
 from . import cloudflare_images, printer_programs, voice
-from .email_routing import admin_routing_email, build_routed_sender_address
+from .email_routing import admin_routing_email, build_routed_sender_address, email_routing_enabled
 from .helper_functions import bin_data, get_currency_symbol
 
 logger = logging.getLogger(__name__)
@@ -909,6 +910,12 @@ class Club(CloudflareImageMixin, models.Model):
         null=True,
         help_text="Discord channel ID for auction announcements. Set via /auctions_here.",
     )
+    announcement_channel_id = models.CharField(
+        max_length=100,
+        blank=True,
+        null=True,
+        help_text="Discord channel ID for club announcements. Set via /announcements_here.",
+    )
     create_events_for_auctions = models.BooleanField(
         default=False,
         help_text="Automatically create a Discord scheduled event for each promoted auction.",
@@ -964,9 +971,24 @@ class Club(CloudflareImageMixin, models.Model):
         default=0,
         help_text="Minimum days between awarding BAP points for lots with the same name. Leave at 0 to allow points every time.",
     )
-    points_per_lot = models.IntegerField(
+    days_between_same_species_lots = models.IntegerField(
         default=0,
-        help_text="Default BAP points. Override these with per-category points below",
+        verbose_name="Days between same species lots",
+        help_text=(
+            "Minimum days between awarding BAP points for lots with the same scientific name. Leave at 0 to "
+            "allow points every time. Stricter than the rule above, because it sees through what the lot was "
+            "called: “Yellow labs” and “Labidochromis caeruleus” are the same fish. A named strain counts as "
+            "its own species, so blue and red cherry shrimp both earn points."
+        ),
+    )
+    points_per_lot = models.IntegerField(
+        null=True,
+        blank=True,
+        default=None,
+        help_text=(
+            "Default BAP points for every lot. Override these with per-category points below. "
+            "Leave blank to use the per-category points instead; set it to 0 to award nothing by default."
+        ),
     )
     separate_hap = models.BooleanField(
         default=False,
@@ -1069,6 +1091,14 @@ class Club(CloudflareImageMixin, models.Model):
         blank=True,
         help_text="Brevo folder that holds the club's list (Brevo requires lists to live in a folder).",
     )
+    brevo_sender_id = models.CharField(
+        max_length=50,
+        blank=True,
+        help_text=(
+            "Which of the account's verified senders announcement emails go out as. Blank means "
+            "the first active one, which is the only one most accounts have."
+        ),
+    )
     brevo_connected_on = models.DateTimeField(null=True, blank=True)
     brevo_connected_by = models.ForeignKey(
         User,
@@ -1149,6 +1179,63 @@ class Club(CloudflareImageMixin, models.Model):
             "Create a Discord scheduled event for each club event. Auctions are handled by the "
             "Discord auction event setting instead, so they are never doubled up."
         ),
+    )
+
+    # Donation tracking: asking local businesses to donate to a raffle or auction, and keeping
+    # track of who was asked, who said yes, and who needs chasing.  See auctions/donations.py.
+    enable_donation_tracking = models.BooleanField(
+        default=False,
+        verbose_name="Enable donation tracking",
+        help_text="Track which vendors you've asked for donations, and what they said.",
+    )
+    DONATION_EMAIL_MODE_ROUTED = "routed"
+    DONATION_EMAIL_MODE_COPY = "copy"
+    DONATION_EMAIL_MODE_CHOICES = (
+        (DONATION_EMAIL_MODE_ROUTED, "Send mail from this site"),
+        (DONATION_EMAIL_MODE_COPY, "Copy/paste to my email"),
+    )
+    donation_email_mode = models.CharField(
+        max_length=20,
+        choices=DONATION_EMAIL_MODE_CHOICES,
+        default=DONATION_EMAIL_MODE_ROUTED,
+        verbose_name="How to send donation emails",
+    )
+    donation_email_member = models.ForeignKey(
+        "ClubMember",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="club_donation_email_destinations",
+        verbose_name="Donation contact",
+        help_text="Incoming mail for club-slug-donations-*@your-domain is forwarded to this member.",
+    )
+    donation_context = models.TextField(
+        blank=True,
+        default="",
+        verbose_name="Club information for donation emails",
+        help_text=(
+            "Passed to the language model with every donation email it writes, so it doesn't have "
+            "to be retyped for each vendor."
+        ),
+    )
+    donation_mailing_address = models.TextField(
+        blank=True,
+        default="",
+        verbose_name="Donation mailing address",
+        help_text="Where vendors should send physical donations. Included in donation emails.",
+    )
+    DONATION_FOLLOWUP_CHOICES = (
+        (1, "1 day"),
+        (3, "3 days"),
+        (7, "1 week"),
+        (14, "2 weeks"),
+        (30, "1 month"),
+    )
+    donation_followup_days = models.PositiveSmallIntegerField(
+        default=7,
+        choices=DONATION_FOLLOWUP_CHOICES,
+        verbose_name="Follow up after",
+        help_text="How long to wait for a reply before a vendor shows up as due for a follow-up.",
     )
 
     class Meta:
@@ -1303,12 +1390,58 @@ class Club(CloudflareImageMixin, models.Model):
         return None
 
     @property
+    def donation_email_recipient(self):
+        """The member donation replies are forwarded to, or None to keep them on the site only.
+
+        Unlike the auction and contact addresses this deliberately has no fallback: a club that
+        hasn't named a donation contact gets its replies recorded against the vendor here and
+        nowhere else, which is the recommended setup (a reply sent straight to a person's inbox
+        is a reply this site can never see).
+        """
+        member = self.donation_email_member
+        if (
+            member
+            and member.club_id == self.pk
+            and member.routing_email
+            and not member.is_deleted
+            and (member.permission_admin or member.permission_manage_donations)
+        ):
+            return member
+        return None
+
+    @property
+    def donation_routing_email(self):
+        """Where to forward donation replies, or None to record them without forwarding."""
+        recipient = self.donation_email_recipient
+        return recipient.routing_email if recipient else None
+
+    @property
     def auction_sender_email(self):
         return build_routed_sender_address(f"{self.slug}-auctions")
 
     @property
     def contact_sender_email(self):
         return build_routed_sender_address(f"{self.slug}-contact")
+
+    @property
+    def donation_tracking_enabled(self):
+        """True when this club may use donation tracking at all."""
+        return bool(self.enable_donation_tracking)
+
+    @property
+    def sends_donation_email(self):
+        """True when donation emails go out from this site rather than the admin's own mail client.
+
+        Routing has to actually be available, not merely selected: a site with no inbound routing
+        has no per-vendor address to send from, and a club whose stored mode still says "routed"
+        (set before routing was turned off, or never saved through the settings form) would
+        otherwise be offered a Send button that can only fail. Copy/paste is the honest fallback.
+        """
+        return (
+            self.enable_donation_tracking
+            and self.donation_email_mode == self.DONATION_EMAIL_MODE_ROUTED
+            and email_routing_enabled()
+        )
 
     @property
     def effective_paypal_seller(self):
@@ -1582,6 +1715,17 @@ class ClubMember(ContactRecord):
     )
     permission_manage_auctions = models.BooleanField(default=False, help_text="Manage auctions for this club.")
     permission_manage_bap = models.BooleanField(default=False, help_text="Manage BAP/HAP points.")
+    permission_manage_donations = models.BooleanField(
+        default=False,
+        help_text="Add and email donation vendors.  Separate from member management: it sends mail in the club's name.",
+    )
+    permission_send_announcements = models.BooleanField(
+        default=False,
+        help_text=(
+            "Write club announcements.  Its own permission because an announcement goes straight "
+            "to Discord, members' phones and the club's mailing list with nobody in between."
+        ),
+    )
     possible_duplicate = models.ForeignKey(
         "ClubMember",
         on_delete=models.SET_NULL,
@@ -1673,6 +1817,8 @@ class ClubMember(ContactRecord):
                 self.permission_money,
                 self.permission_manage_auctions,
                 self.permission_manage_bap,
+                self.permission_manage_donations,
+                self.permission_send_announcements,
             ]
         )
 
@@ -2273,6 +2419,9 @@ class ClubMember(ContactRecord):
             # When soft-deleting, clear all duplicate links involving this member
             if self.possible_duplicate_id:
                 ClubMember.objects.filter(pk=self.possible_duplicate_id).update(possible_duplicate=None)
+                # our own column needs an update() too: callers soft-delete with
+                # update_fields=["is_deleted"], so the save below would skip it entirely
+                ClubMember.objects.filter(pk=self.pk).update(possible_duplicate=None)
                 self.possible_duplicate_id = None
             # Clear any other members that point to this member as a duplicate
             ClubMember.objects.filter(possible_duplicate_id=self.pk).update(possible_duplicate=None)
@@ -2289,10 +2438,14 @@ class ClubMember(ContactRecord):
             if duplicate:
                 ClubMember.objects.filter(pk=self.pk).update(possible_duplicate=duplicate.pk)
                 ClubMember.objects.filter(pk=duplicate.pk).update(possible_duplicate=self.pk)
+                # keep this instance in sync with what update() just wrote, or the caller's next
+                # save() writes the stale value straight back over it
+                self.possible_duplicate = duplicate
             else:
                 if self.possible_duplicate_id:
                     ClubMember.objects.filter(pk=self.possible_duplicate_id).update(possible_duplicate=None)
                 ClubMember.objects.filter(pk=self.pk).update(possible_duplicate=None)
+                self.possible_duplicate = None
 
     def generate_bidder_number(self, save=True):
         """Assign a unique bidder_number scoped to this member's club.
@@ -2357,6 +2510,8 @@ class ClubHistory(models.Model):
             ("MEMBERSHIP", "Membership"),
             ("SETTINGS", "Settings"),
             ("BAP", "BAP"),
+            ("DONATIONS", "Donations"),
+            ("ANNOUNCEMENTS", "Announcements"),
         ),
         blank=True,
         null=True,
@@ -2370,6 +2525,239 @@ class ClubHistory(models.Model):
     class Meta:
         ordering = ["-timestamp"]
         verbose_name_plural = "Club history"
+
+
+def _default_donation_routing_key():
+    """Return a random 10-digit key that isn't already in use by another vendor.
+
+    This is the part of ``<club-slug>-donations-<key>@<domain>`` that says *which vendor*.  It has
+    to survive a round trip through a stranger's mail client, so it's digits only: no case to be
+    folded, nothing that looks like a typo, and short enough that a vendor who retypes the address
+    by hand gets it right.  Globally unique rather than per-club so an inbound message can be tied
+    to exactly one vendor even if the club slug in the address has since changed.
+    """
+    for _attempt in range(20):
+        key = str(secrets.randbelow(9_000_000_000) + 1_000_000_000)
+        if not DonationVendor.objects.filter(routing_key=key).exists():
+            return key
+    # 9 billion keys and 20 misses means something is very wrong; let the unique constraint say so.
+    return str(secrets.randbelow(9_000_000_000) + 1_000_000_000)
+
+
+class DonationUnsubscribe(models.Model):
+    """A vendor who has asked, from their own inbox, never to be contacted about donations again.
+
+    Deliberately keyed on the email address rather than on a vendor row, and deliberately global
+    rather than per-club: the person who clicked the link was telling *this site* to stop, not one
+    club, and re-adding them under a new vendor record in a different club must not start the mail
+    flowing again.  There is no un-unsubscribe path in the club UI on purpose -- see
+    :meth:`DonationVendor.can_be_contacted`.
+    """
+
+    email = models.CharField(max_length=255, unique=True, db_index=True)
+    createdon = models.DateTimeField(auto_now_add=True)
+    club = models.ForeignKey(
+        Club,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="+",
+        help_text="The club whose email carried the unsubscribe link that was clicked.",
+    )
+
+    class Meta:
+        verbose_name = "Donation unsubscribe"
+        verbose_name_plural = "Donation unsubscribes"
+
+    def __str__(self):
+        return str(self.email)
+
+    @classmethod
+    def is_unsubscribed(cls, email):
+        email = normalize_email(email)
+        if not email:
+            return False
+        return cls.objects.filter(email=email).exists()
+
+
+class DonationVendor(models.Model):
+    """A business a club is asking to donate, and where that conversation has got to."""
+
+    STATUS_NEW = "new"
+    STATUS_EMAIL_SENT = "sent"
+    STATUS_INTERESTED = "interested"
+    STATUS_PROMISED = "promised"
+    STATUS_RECEIVED = "received"
+    STATUS_NOT_INTERESTED = "not_interested"
+    STATUS_DO_NOT_CONTACT = "do_not_contact"
+    STATUS_CHOICES = (
+        (STATUS_NEW, "New"),
+        (STATUS_EMAIL_SENT, "Initial email sent"),
+        (STATUS_INTERESTED, "Interested"),
+        (STATUS_PROMISED, "Donation promised"),
+        (STATUS_RECEIVED, "Donation received"),
+        (STATUS_NOT_INTERESTED, "Not interested"),
+        (STATUS_DO_NOT_CONTACT, "Do not contact"),
+    )
+    #: The only statuses the language model is allowed to move a vendor to when a reply arrives.
+    #: "Donation received" is left to a human -- a promise in an email is not a box of fish food --
+    #: and "Do not contact" only ever comes from the vendor clicking unsubscribe.
+    LLM_ASSIGNABLE_STATUSES = (STATUS_INTERESTED, STATUS_PROMISED, STATUS_NOT_INTERESTED)
+
+    club = models.ForeignKey(Club, on_delete=models.CASCADE, related_name="donation_vendors")
+    name = models.CharField(max_length=255, verbose_name="Vendor name")
+    contact_name = models.CharField(max_length=255, blank=True, default="")
+    email = models.CharField(max_length=255, blank=True, default="", db_index=True)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_NEW, db_index=True)
+    last_contact = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="When this vendor was last emailed, or last replied.",
+    )
+    followup_due = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="When to chase this vendor again if they haven't replied.",
+    )
+    context = models.TextField(
+        blank=True,
+        default="",
+        help_text="What this vendor does, any history of donations, and anything else worth telling the model.",
+    )
+    routing_key = models.CharField(
+        max_length=10,
+        unique=True,
+        db_index=True,
+        default=_default_donation_routing_key,
+        editable=False,
+        help_text="Identifies this vendor in the reply-to address so their replies land on their row.",
+    )
+    uuid = models.UUIDField(default=uuid_module.uuid4, unique=True, editable=False, db_index=True)
+    unsubscribed = models.BooleanField(
+        default=False,
+        help_text="The vendor used the unsubscribe link. Permanent, and applies to every club on this site.",
+    )
+    createdon = models.DateTimeField(auto_now_add=True)
+    createdby = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL, related_name="+")
+    is_deleted = models.BooleanField(default=False, db_index=True)
+
+    class Meta:
+        ordering = ["name"]
+        # No DB-level uniqueness on (club, email): it would have to be conditional to allow the
+        # several blank-email vendors a club may legitimately have, and MariaDB silently declines
+        # to create conditional unique indexes (W036) -- leaving a constraint that looks enforced
+        # and isn't. Duplicate addresses are caught in DonationVendorForm.clean_email instead.
+        indexes = [models.Index(fields=["club", "status"])]
+
+    def __str__(self):
+        return str(self.name)
+
+    def save(self, *args, **kwargs):
+        self.email = normalize_email(self.email)
+        # A vendor who unsubscribed anywhere on this site is unsubscribed here too, even though
+        # this row may have been typed in by a different club that never heard about it.
+        if self.email and not self.unsubscribed and DonationUnsubscribe.is_unsubscribed(self.email):
+            self.unsubscribed = True
+            if "update_fields" in kwargs and kwargs["update_fields"] is not None:
+                kwargs["update_fields"] = list(kwargs["update_fields"]) + ["unsubscribed"]
+        if self.unsubscribed and self.status != self.STATUS_DO_NOT_CONTACT:
+            self.status = self.STATUS_DO_NOT_CONTACT
+            if "update_fields" in kwargs and kwargs["update_fields"] is not None:
+                kwargs["update_fields"] = list(kwargs["update_fields"]) + ["status"]
+        super().save(*args, **kwargs)
+
+    @property
+    def can_be_contacted(self):
+        """Whether we're allowed to write to this vendor at all."""
+        if self.is_deleted or not self.email:
+            return False
+        if self.unsubscribed or self.status == self.STATUS_DO_NOT_CONTACT:
+            return False
+        return not DonationUnsubscribe.is_unsubscribed(self.email)
+
+    @property
+    def cannot_contact_reason(self):
+        """Why the Contact button is unavailable, or "" when it isn't. Shown as a tooltip."""
+        if not self.email:
+            return "Add an email address for this vendor first"
+        if self.unsubscribed:
+            return "This vendor unsubscribed and cannot be contacted again"
+        if self.status == self.STATUS_DO_NOT_CONTACT:
+            return "This vendor is marked do not contact"
+        if DonationUnsubscribe.is_unsubscribed(self.email):
+            return "This email address unsubscribed from donation requests"
+        return ""
+
+    @property
+    def reply_to_address(self):
+        """The per-vendor address their replies come back to, or None when routing is off."""
+        return build_routed_sender_address(f"{self.club.slug}-donations-{self.routing_key}")
+
+    @property
+    def unsubscribe_url(self):
+        return reverse("donation_unsubscribe", kwargs={"uuid": self.uuid})
+
+    @property
+    def is_followup_due(self):
+        return bool(self.followup_due and self.followup_due <= timezone.now())
+
+    def schedule_followup(self, *, from_time=None):
+        """Set the follow-up date to the club's configured interval from now."""
+        base = from_time or timezone.now()
+        self.followup_due = base + datetime.timedelta(days=self.club.donation_followup_days or 7)
+        return self.followup_due
+
+
+class DonationEmail(models.Model):
+    """One message to or from a donation vendor.
+
+    Outgoing rows are written when an admin sends (or copies) a request; incoming rows are written
+    by the inbound mail webhook.  The body is stored as plain text with images stripped -- this is
+    a record of the conversation, not a mail client.
+    """
+
+    DIRECTION_INCOMING = "in"
+    DIRECTION_OUTGOING = "out"
+    DIRECTION_CHOICES = (
+        (DIRECTION_INCOMING, "Incoming"),
+        (DIRECTION_OUTGOING, "Outgoing"),
+    )
+
+    vendor = models.ForeignKey(DonationVendor, on_delete=models.CASCADE, related_name="emails")
+    direction = models.CharField(max_length=3, choices=DIRECTION_CHOICES, db_index=True)
+    sender = models.CharField(max_length=255, blank=True, default="")
+    recipients = models.CharField(max_length=1000, blank=True, default="")
+    subject = models.CharField(max_length=500, blank=True, default="")
+    body = models.TextField(blank=True, default="")
+    summary = models.CharField(
+        max_length=200,
+        blank=True,
+        default="",
+        help_text="One-line summary, written by the language model for incoming mail.",
+    )
+    date = models.DateTimeField(default=timezone.now, db_index=True)
+    message_id = models.CharField(
+        max_length=500,
+        blank=True,
+        default="",
+        db_index=True,
+        help_text="The Message-ID header, used to drop duplicates when a message is delivered twice.",
+    )
+    bounced = models.BooleanField(
+        default=False,
+        help_text="Set when a bounce notification comes back for this message.",
+    )
+    sent_by = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL, related_name="+")
+
+    class Meta:
+        ordering = ["-date"]
+
+    def __str__(self):
+        return f"{self.get_direction_display()} {self.subject or '(no subject)'}"
+
+    @property
+    def is_incoming(self):
+        return self.direction == self.DIRECTION_INCOMING
 
 
 class ClubEvent(models.Model):
@@ -2535,6 +2923,35 @@ class ClubEvent(models.Model):
         return self.date_start + datetime.timedelta(hours=2)
 
     @property
+    def when_display(self):
+        """One line saying when this event is, in the viewer's timezone.
+
+        The end is only spelled out when it says something the start doesn't: an event that runs
+        past midnight repeats the date, one that finishes the same day shows just the end time, and
+        one with no end shows nothing extra. Online auctions are the case this exists for — they
+        run for days, and printing only the end *time* read as an auction that started and finished
+        in one evening.
+
+        ``all_day`` events store an exclusive end the way Google and iCal write it, so the last day
+        shown is the day before ``date_end``.
+        """
+        from django.template.defaultfilters import date as date_filter
+
+        start = timezone.localtime(self.date_start)
+        end = timezone.localtime(self.date_end) if self.date_end else None
+        if self.all_day:
+            last_day = (end - datetime.timedelta(days=1)) if end else None
+            if last_day and last_day.date() > start.date():
+                return f"{date_filter(start, 'D, N j')} – {date_filter(last_day, 'D, N j, Y')} — all day"
+            return f"{date_filter(start, 'D, N j, Y')} — all day"
+        when = f"{date_filter(start, 'D, N j, Y')} at {date_filter(start, 'g:i A')}"
+        if not end or end <= start:
+            return when
+        if end.date() == start.date():
+            return f"{when} – {date_filter(end, 'g:i A')}"
+        return f"{when} – {date_filter(end, 'D, N j, Y')} at {date_filter(end, 'g:i A')}"
+
+    @property
     def is_recurring(self):
         """True for a series. One row stands for all of it — see auctions/recurrence.py."""
         return bool(self.recurrence and self.recurrence_start)
@@ -2616,6 +3033,164 @@ class ClubEvent(models.Model):
         return "https://calendar.google.com/calendar/render?" + urlencode(params)
 
 
+class ClubAnnouncement(models.Model):
+    """One short message a club sent to its members, and where it went.
+
+    An announcement is deliberately not an event, a blog post, or an email campaign: it is a
+    sentence or two ("bring plants to Saturday's meeting") that a club wants in front of members
+    *now*, in whatever places its members actually look. The row records both the text and which
+    channels were picked, because "where did that go?" is the first question asked a week later
+    and the only place that can answer it is the announcement itself.
+
+    Channels are stored as they were chosen, not as they are configured now: a club that later
+    disconnects Discord must not have its history rewritten into "this never went to Discord".
+    """
+
+    club = models.ForeignKey(Club, on_delete=models.CASCADE, related_name="announcements")
+    text = models.TextField(
+        verbose_name="Announcement",
+        help_text="A sentence or two — this is read on a lock screen.",
+    )
+    created_by = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL, related_name="+")
+    created_at = models.DateTimeField(auto_now_add=True)
+    uuid = models.UUIDField(default=uuid_module.uuid4, unique=True, editable=False, db_index=True)
+    scheduled_for = models.DateTimeField(
+        null=True,
+        blank=True,
+        db_index=True,
+        verbose_name="Send later",
+        help_text="When it goes out. Blank on the form means a few seconds from now.",
+    )
+    sent_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        db_index=True,
+        help_text="When it actually went out. Null means scheduled and not sent yet -- nothing may show it.",
+    )
+
+    subject = models.CharField(
+        max_length=150,
+        blank=True,
+        default="",
+        verbose_name="Email subject",
+        help_text="Legacy. Subjects are now always '<Club> announcement' -- see email_subject.",
+    )
+
+    # --- what was asked for ---
+    send_to_discord = models.BooleanField(default=False)
+    send_to_push = models.BooleanField(default=False)
+    show_on_website = models.BooleanField(default=True)
+    # Two boolean columns rather than one "email" flag so the row records *which* provider carried
+    # it, which is the question asked a month later. Only one may be set: this site syncs every
+    # member to whichever lists a club has connected, so a club with both has the same people on
+    # both and ticking both would mail all of them twice. ClubAnnouncementForm.clean refuses it.
+    send_to_mailchimp = models.BooleanField(default=False)
+    send_to_brevo = models.BooleanField(default=False)
+
+    # --- what actually happened ---
+    discord_sent = models.BooleanField(
+        default=False,
+        help_text="Discord accepted the message. False with send_to_discord set means it failed.",
+    )
+    discord_message_id = models.CharField(max_length=100, blank=True, default="")
+    push_recipients = models.PositiveIntegerField(
+        default=0,
+        help_text="How many members the push was handed to. Delivery, not readership — see the view table.",
+    )
+    mailchimp_campaign_id = models.CharField(max_length=100, blank=True, default="")
+    brevo_campaign_id = models.CharField(max_length=100, blank=True, default="")
+    email_opens = models.PositiveIntegerField(
+        default=0,
+        help_text="Unique opens reported by the email provider. The only real read receipt any channel has.",
+    )
+    email_error = models.CharField(
+        max_length=300,
+        blank=True,
+        default="",
+        help_text="Why the email didn't go out. Set means the campaign failed; the club needs to see it.",
+    )
+    website_views = models.PositiveIntegerField(
+        default=0,
+        help_text=(
+            "How many times this was rendered on a website -- the club's own page here, or one of "
+            "its embeds. An impression, not a read: it says the announcement was put in front of "
+            "somebody, which is a weaker claim than the email provider's open count."
+        ),
+    )
+    is_deleted = models.BooleanField(default=False, db_index=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["club", "is_deleted", "-created_at"]),
+            # The beat task's only query: due, not sent, not deleted.
+            models.Index(fields=["sent_at", "scheduled_for"]),
+        ]
+
+    def __str__(self):
+        return f"{self.club}: {self.short_text}"
+
+    @property
+    def short_text(self):
+        """The first line, for a table row or a push notification title."""
+        first = (self.text or "").strip().splitlines()
+        first = first[0] if first else ""
+        return first if len(first) <= 80 else first[:77] + "…"
+
+    @property
+    def email_subject(self):
+        """What the emailed version is titled, and it is not something anybody picks.
+
+        A club given a subject box types the announcement into it a second time, worse: the body is
+        one sentence and the box sits right above it, so the inbox ends up showing the same words
+        twice. "<Club> announcement" is the line that is actually useful in a list of unread mail --
+        it says who it is from and that it will be short. The ``subject`` column stays for the rows
+        written while it was editable; nothing reads it any more.
+        """
+        return f"{self.club.name} announcement"
+
+    def save(self, *args, **kwargs):
+        """An announcement with no schedule at all is sent the moment it is created.
+
+        sent_at is the column everything public filters on, so leaving it to the caller would mean
+        every code path that makes an announcement has to remember to stamp it or the club's own
+        website silently never shows it. The one case that legitimately has no sent_at is one with
+        a ``scheduled_for``, and that is exactly the case this skips -- which covers both a club
+        scheduling next Friday and the few seconds of retract window the form gives every
+        announcement (announcements.GRACE_SECONDS).
+        """
+        if self.sent_at is None and self.scheduled_for is None:
+            self.sent_at = timezone.now()
+            update_fields = kwargs.get("update_fields")
+            if update_fields is not None and "sent_at" not in update_fields:
+                kwargs["update_fields"] = [*update_fields, "sent_at"]
+        super().save(*args, **kwargs)
+
+    @property
+    def is_in_grace_period(self):
+        """Waiting out the retract window rather than waiting for a date the club picked.
+
+        Both are ``scheduled_for`` in the future, and they read completely differently to a person:
+        one is "going out in a moment, stop me if it's wrong" and the other is "Friday at 9". The
+        gap between when it was written and when it goes is what tells them apart.
+        """
+        if self.sent_at or not self.scheduled_for or not self.created_at:
+            return False
+        from auctions.announcements import GRACE_SECONDS
+
+        return (self.scheduled_for - self.created_at).total_seconds() <= GRACE_SECONDS * 4
+
+    @property
+    def is_scheduled(self):
+        """Waiting for its time. Nothing public may show one -- see latest_for_website."""
+        return self.sent_at is None and self.scheduled_for is not None
+
+    @property
+    def sent_by_email(self):
+        """Whether either email provider actually accepted a campaign for this announcement."""
+        return bool(self.mailchimp_campaign_id or self.brevo_campaign_id)
+
+
 class ClubAPIKey(models.Model):
     """API key scoped to a single Club, used by external services to ingest ClubMember records."""
 
@@ -2631,6 +3206,14 @@ class ClubAPIKey(models.Model):
     can_renew_memberships = models.BooleanField(
         default=False,
         help_text="Renew a membership from an external system, creating the member if they're new.",
+    )
+    can_look_up_species = models.BooleanField(
+        default=False,
+        help_text=(
+            'Turns a typed name ("yellow lab") into a species from this site\'s list, add new '
+            "species or attach common names to existing species.  Newly added species are only "
+            "visible to your club."
+        ),
     )
     created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -2702,23 +3285,671 @@ class Category(models.Model):
         ordering = ["name"]
 
 
-class Product(models.Model):
-    """A species or item in the auction
-    This is not really used much anymore,
-    it was intended to exist for every possible species of fish, but that's just too much for the scope of this project"""
+def normalize_species_name(text):
+    """Lowercase, strip punctuation, collapse whitespace.  The key both sides of a name lookup use.
 
-    common_name = models.CharField(max_length=255)
+    Lives here rather than in ``species_matching`` -- which is where it is used and where it is
+    re-exported as ``normalize`` -- because the *stored* columns have to be built with exactly the
+    same function that builds the query, and models.py cannot import from a module that imports it.
+
+    Without a stored, normalised copy of every name, a query that has had its punctuation stripped
+    can never match a name that still has its own: 9,527 of FishBase's 49,917 English names carry
+    an apostrophe or a hyphen, so "Ram's horn snail", "Adolf's catfish" and "Agassiz's corydoras"
+    all answered "no such species" and fell through to a paid model call.  Hence
+    :attr:`SpeciesCommonName.name_normalized` and :attr:`Species.common_name_normalized`.
+
+    An apostrophe is *deleted* where every other punctuation mark becomes a space, because that is
+    the one people leave out: "adolfs catfish" and "Adolf's catfish" have to arrive at the same
+    string, and turning the apostrophe into a space would give "adolf s catfish" for one of them
+    and not the other.  A hyphen really does separate two words -- nobody types
+    "blackbanded leporinus" -- so it stays a space.
+    """
+    text = re.sub(r"['‘’ʼ`]+", "", (text or "").lower())
+    return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9 ]+", " ", text)).strip()[:120]
+
+
+class Species(models.Model):
+    """One species that a lot can be tagged with.
+
+    Started life as ``Product`` -- a stub that was never populated because filling it in by hand
+    was hopeless.  It is now loaded from FishBase (``manage.py import_fishbase``), so the table is
+    a real picklist and :attr:`Lot.species` finally means something.
+
+    Genus and the specific epithet are stored **separately** rather than parsed back out of
+    ``scientific_name`` on demand.  FishBase hands us both columns already split, so there is
+    nothing to parse and nothing to get wrong later on hybrids, ``sp.`` placeholders, or the
+    handful of names with a subgenus in parentheses.  ``scientific_name`` is the denormalised
+    "Genus species" string, rebuilt in :meth:`save`, and exists so searching and display are a
+    single column.  :class:`ClubBapGenusOverride` matches on :attr:`genus`.
+
+    A row with :attr:`variety` set is a **cultivar** -- "Blue Dream" cherry shrimp, a "Full Red"
+    guppy.  Those are not taxonomy: no code of nomenclature has a rank for a line somebody bred in
+    a basement, and two clubs will spell the same strain three ways.  So a variety row carries the
+    *parent's* genus and epithet, which is what makes it invisible to everything that reasons
+    about the science -- breeder points, :class:`ClubBapGenusOverride`, family and category all
+    keep working off the nominal species -- and adds the strain only where a human reads it, in
+    :attr:`label` and on the printed label.  :attr:`parent` points at the nominal species so the
+    two can never drift apart.
+
+    A row with :attr:`is_hybrid` set is a **cross**, and it is the one thing on this table with no
+    scientific name at all: a tibee is a tiger crossed with a bee shrimp, a flowerhorn is nobody
+    is quite sure what, and neither has a binomial to carry.  Filing one under a parent would put
+    a wrong genus on a printed label and inside a genus BAP rule, so a hybrid keeps *only* the
+    name the trade uses -- in :attr:`variety`, with :attr:`genus`, :attr:`species` and
+    :attr:`parent` all empty -- and reads as ``Hybrid 'Tibee'`` wherever a name is shown.  What it
+    is not is invisible: it is a row like any other, so it earns breeder points, counts once in
+    :attr:`Club.days_between_same_species_lots`, and can be told apart from every other cross.
+    The flag is stored rather than worked out from "a variety with no parent" because
+    ``parent__isnull=True`` already means *nominal species* in four places, and one column is
+    cheaper than four filters that have to remember a second meaning.
+    """
+
+    SOURCE_CHOICES = (
+        ("fishbase", "FishBase"),
+        # SeaLifeBase is FishBase's sister database.  It covers the invertebrates, but 100k marine
+        # species is mostly noise for a freshwater club, so it is no longer imported by default --
+        # see auctions/fishbase.py.  The choice stays because rows from it may still be in a
+        # database somewhere.
+        ("sealifebase", "SeaLifeBase"),
+        # The curated aquarium-trade list in auctions/data/aquarium_species.csv: plants, shrimp,
+        # snails and the handful of fish the two big databases get wrong or miss.
+        ("aquarium", "Aquarium trade list"),
+        # Added on the site by an admin, through SpeciesAdminForm.  Deliberately distinct from
+        # "manual": that means a row left over from the old Product table, which import_fishbase
+        # folds into the imported list, and a species somebody added on purpose must never be.
+        ("admin", "Added on the site"),
+        ("manual", "Added by hand"),
+    )
+
+    #: FishBase's ``Aquarium`` column, for the values that mean "this is an aquarium fish".  The
+    #: rest are ``never/rarely``, ``public aquariums`` (zoo displays) and ``show aquarium``.
+    AQUARIUM_TRADE_VALUES = ("commercial", "highly commercial", "potential")
+
+    #: How likely it is that anyone actually keeps this, in three steps.  Used to rank suggestions:
+    #: when a name is shared, the fish being sold at a club auction is overwhelmingly the one in
+    #: the hobby.
+    #:
+    #: The middle step exists because FishBase's own column is *incomplete* in a way that matters.
+    #: It marks 3,475 of its 36,132 fish as aquarium species, and *Chindongo saulosi* -- a mbuna in
+    #: every African cichlid club's auction, and the fish that started this whole search-quality
+    #: exercise -- is filed under "never/rarely".  Two of the seventy-seven *Ancistrus* are flagged.
+    #: So the genus gets a say: seven of the eleven *Chindongo* are flagged, which is a much better
+    #: statement about *Chindongo saulosi* than its own blank entry is.
+    TRADE_RANK_SPECIES = 0
+    TRADE_RANK_GENUS = 1
+    TRADE_RANK_NONE = 2
+
+    common_name = models.CharField(max_length=255, blank=True, db_index=True)
     common_name.help_text = "The name usually used to describe this species"
-    scientific_name = models.CharField(max_length=255, blank=True)
-    scientific_name.help_text = "Latin name used to describe this species"
-    breeder_points = models.BooleanField(default=True)
-    category = models.ForeignKey(Category, null=True, on_delete=models.SET_NULL)
+    common_name_normalized = models.CharField(max_length=120, blank=True, db_index=True)
+    common_name_normalized.help_text = (
+        "common_name with the punctuation stripped, so a typed lot name can match it.  Rebuilt on "
+        "save; don't edit by hand."
+    )
+    scientific_name = models.CharField(max_length=255, blank=True, db_index=True)
+    scientific_name.help_text = "Genus and species together; filled in automatically, don't edit by hand"
+    genus = models.CharField(max_length=100, blank=True, db_index=True)
+    genus.help_text = "First half of the scientific name, e.g. Poecilia"
+    species = models.CharField(max_length=150, blank=True, db_index=True)
+    species.help_text = "Second half of the scientific name (the specific epithet), e.g. reticulata"
+    variety = models.CharField(max_length=100, blank=True, db_index=True)
+    variety.help_text = (
+        "Cultivar, strain or morph, e.g. Blue Dream.  Leave blank for a wild-type species.  "
+        "A row with this set must also have a parent."
+    )
+    parent = models.ForeignKey(
+        "self",
+        null=True,
+        blank=True,
+        on_delete=models.CASCADE,
+        related_name="varieties",
+        help_text="The nominal species this variety belongs to.  Only used on variety rows.",
+    )
+    is_hybrid = models.BooleanField(default=False)
+    is_hybrid.help_text = (
+        "A cross with no accepted scientific name -- a tibee shrimp, a flowerhorn.  Put the name "
+        "the trade uses in variety; genus, species and parent are left empty."
+    )
+    breeder_points = models.BooleanField(default=True, verbose_name="Eligible for breeder points")
+    breeder_points.help_text = (
+        "Untick to make a lot with this species ineligible for breeder points, whatever its "
+        "category.  For the things a club won't award points for breeding -- wild-caught only "
+        "species, or anything that isn't really bred."
+    )
+    category = models.ForeignKey(Category, null=True, blank=True, on_delete=models.SET_NULL)
+    speccode = models.PositiveIntegerField(null=True, blank=True)
+    speccode.help_text = (
+        "SpecCode from the source database, used to match rows on re-import.  Blank for hand-added species."
+    )
+    source = models.CharField(max_length=20, choices=SOURCE_CHOICES, default="manual")
+    # FishBase's habitat booleans.  Kept because they are the cheapest way to tell apart the many
+    # species sharing a common name -- there are freshwater and saltwater fish called "perch".
+    freshwater = models.BooleanField(default=False)
+    brackish = models.BooleanField(default=False)
+    saltwater = models.BooleanField(default=False)
+    # Taxonomy above the genus, from FishBase's families table.  Stored as names rather than the
+    # FamCode so nothing has to join back to a table we don't otherwise keep, and so a curated or
+    # hand-added row can fill them in without inventing a code.
+    family = models.CharField(max_length=100, blank=True, db_index=True)
+    family.help_text = "Taxonomic family, e.g. Cichlidae.  Used to derive the lot category."
+    order = models.CharField(max_length=100, blank=True, db_index=True)
+    order.help_text = "Taxonomic order, e.g. Cichliformes."
+    aquarium_use = models.CharField(max_length=30, blank=True, db_index=True)
+    aquarium_use.help_text = (
+        "FishBase's aquarium-trade rating.  Species in the trade are ranked above the rest when "
+        "suggesting a scientific name for a lot."
+    )
+    in_trade_override = models.BooleanField(null=True, blank=True)
+    in_trade_override.help_text = (
+        "Overrules FishBase on whether this species is in the hobby.  Leave unset unless you know "
+        "better than the source -- and you often will, because FishBase marks plenty of fish "
+        "people obviously keep as 'never/rarely'."
+    )
+    trade_rank = models.PositiveSmallIntegerField(default=TRADE_RANK_NONE, db_index=True)
+    trade_rank.help_text = (
+        "Denormalised: 0 = in the hobby, 1 = its genus is, 2 = nothing says anyone keeps it.  "
+        "Rebuilt by Species.recompute_trade_ranks(); don't edit by hand."
+    )
+    added_by = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL, related_name="species_added")
+    added_by.help_text = "Who added this on the site.  Blank for everything the importers loaded."
+    club = models.ForeignKey("Club", null=True, blank=True, on_delete=models.SET_NULL, related_name="species_added")
+    club.help_text = (
+        "The club this was added for, when there was an obvious one.  While the species is "
+        "unapproved this is the second way it can be seen: the person who added it always can, "
+        "and so can anyone else at the same club.  Often blank -- plenty of auctions have no club "
+        "attached at all -- which is why it can never be the *only* way in."
+    )
+    approved = models.BooleanField(default=True, db_index=True)
+    approved.help_text = (
+        "Untick to keep this species out of everyone's suggestions except the person who added "
+        "it.  That is how an auction admin gets a missing species onto their own lots at the "
+        "check-in table without adding it to the whole site; ticking it here is the approval."
+    )
+    possible_duplicate = models.ForeignKey(
+        "self",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="+",
+        help_text=(
+            "Another row that looks like this one -- same scientific name, or the same common "
+            "name.  Set automatically on save; the pair is listed on the species gaps page for a "
+            "site admin to merge or dismiss."
+        ),
+    )
+
+    #: The two lists that number their own species.  A duplicate inside one of them is impossible
+    #: by construction -- ``unique_together`` on source and SpecCode -- so the scan below is
+    #: skipped for them.  It would otherwise cost two queries times 36,000 on every re-import,
+    #: to answer a question the source already answered.
+    IMPORTED_SOURCES = ("fishbase", "sealifebase")
+
+    def find_possible_duplicate(self):
+        """Another species row that is probably this same species, or None.
+
+        Two signals, and both of them are things a person can see on the gaps page and judge:
+
+        * **The same scientific name**, at the same rank -- variety included, so *Neocaridina
+          davidi* and its thirteen colour strains are not thirteen duplicates of each other.  This
+          is the one that actually happens: an auction admin at a check-in table adds
+          *Cryptocoryne wendtii* because searching for "crypt" found nothing, and the row is
+          already there under a name they didn't type.
+        * **The same designated common name.**  Deliberately the ``common_name`` column and not
+          the synonym table: FishBase hands out "Peppered cory" to two different *Corydoras* on
+          purpose, and flagging every shared synonym would bury the real duplicates under
+          thousands of rows that are all correct.
+
+        Never a *variety* against a plain species, and never across the imported lists -- see
+        :attr:`IMPORTED_SOURCES`.
+
+        A hybrid has no scientific name to compare, so the strain name is the whole of its
+        identity and two rows carrying it are the same cross.  Without this branch every hybrid
+        added twice would sail past the check, because the first test below reads a column that is
+        empty on both of them.
+        """
+        others = Species.objects.exclude(pk=self.pk)
+        if self.is_hybrid:
+            match = others.filter(is_hybrid=True, variety__iexact=self.variety).first()
+            if match:
+                return match
+        elif self.scientific_name:
+            match = others.filter(scientific_name__iexact=self.scientific_name, variety__iexact=self.variety).first()
+            if match:
+                return match
+        if self.common_name_normalized:
+            return others.filter(common_name_normalized=self.common_name_normalized).first()
+        return None
+
+    def flag_possible_duplicate(self):
+        """Point this row and its lookalike at each other, or clear a flag that no longer holds.
+
+        Written with ``update()`` rather than ``save()``, exactly as :class:`AuctionTOS` does it
+        and for the same reason: this runs *from* ``save()``, and assigning the field and saving
+        again is an infinite loop.
+        """
+        duplicate = self.find_possible_duplicate()
+        if duplicate:
+            Species.objects.filter(pk=self.pk).update(possible_duplicate=duplicate.pk)
+            Species.objects.filter(pk=duplicate.pk).update(possible_duplicate=self.pk)
+            # Keep the in-memory row in step with what update() just wrote, or the caller's next
+            # save() writes the stale value straight back over it.
+            self.possible_duplicate = duplicate
+        elif self.possible_duplicate_id:
+            # possible_duplicate_id rather than the object: the row it pointed at may have been
+            # deleted by a merge, and touching the attribute would raise instead of clearing.
+            Species.objects.filter(pk=self.possible_duplicate_id).update(possible_duplicate=None)
+            Species.objects.filter(pk=self.pk).update(possible_duplicate=None)
+            self.possible_duplicate = None
+
+    def merge_duplicate(self, duplicate):
+        """Fold *duplicate* into this row and delete it.  Returns a description of what moved.
+
+        A site admin's call and nobody else's -- the two rows are usually one club's hand-added
+        species and one of FishBase's 36,000, and picking which name the whole site keeps is not a
+        decision to hand to whoever happened to add the second one.
+
+        Everything that points at a species is moved rather than cascaded: the lots keep their
+        scientific name, the strains keep their parent, and the common names the losing row
+        carried are what make the merge worth doing at all -- they are usually the hobby names
+        somebody typed in, and the row they were attached to was the wrong one.
+        """
+        if duplicate.pk == self.pk:
+            return {}
+        moved = {
+            "lots": Lot.objects.filter(species=duplicate).update(species=self),
+            "varieties": Species.objects.filter(parent=duplicate).update(parent=self),
+        }
+        # A name we already carry is not worth moving, and moving it would put the same word on
+        # the species twice.
+        have = set(self.common_names.values_list("name_normalized", flat=True)) | {self.common_name_normalized}
+        keep = [name for name in duplicate.common_names.all() if name.name_normalized not in have]
+        SpeciesCommonName.objects.filter(pk__in=[name.pk for name in keep]).update(species=self)
+        duplicate.common_names.all().delete()
+        moved["common_names"] = len(keep)
+        # The designated common name is a name too, and the losing row's is the only place it
+        # lived.  Kept as a synonym rather than overwriting ours: which of the two is *the* name
+        # is a judgement, and the admin doing the merge picked the row to keep.
+        if duplicate.common_name and duplicate.common_name_normalized not in have:
+            SpeciesCommonName.objects.create(
+                species=self,
+                name=duplicate.common_name[:255],
+                source=duplicate.source if duplicate.source in dict(self.SOURCE_CHOICES) else "manual",
+                approved=self.approved,
+            )
+            moved["common_names"] += 1
+        # Remembered answers follow the species, minus the ones that would collide: search_text is
+        # unique in the cache, and a name that already answers with the row we are keeping needs
+        # no second row saying the same thing.
+        kept_texts = set(SpeciesSearchCache.objects.filter(species=self).values_list("search_text", flat=True))
+        SpeciesSearchCache.objects.filter(species=duplicate, search_text__in=kept_texts).delete()
+        moved["remembered_names"] = SpeciesSearchCache.objects.filter(species=duplicate).update(species=self)
+        rejected_texts = set(SpeciesNameRejection.objects.filter(species=self).values_list("search_text", flat=True))
+        SpeciesNameRejection.objects.filter(species=duplicate, search_text__in=rejected_texts).delete()
+        SpeciesNameRejection.objects.filter(species=duplicate).update(species=self)
+        # Nothing points at either row as a duplicate any more.
+        Species.objects.filter(Q(possible_duplicate=duplicate) | Q(possible_duplicate=self)).update(
+            possible_duplicate=None
+        )
+        self.possible_duplicate = None
+        duplicate.delete()
+        return moved
+
+    def save(self, *args, **kwargs):
+        self.genus = (self.genus or "").strip()
+        self.species = (self.species or "").strip()
+        self.variety = (self.variety or "").strip()
+        # The invariant, enforced here rather than trusted to three writers: a hybrid is a name and
+        # nothing else.  A genus left on one would be picked up by ClubBapGenusOverride and by the
+        # scientific-token rule in species_matching, both of which would then be reasoning about a
+        # species this animal is only half of.
+        if self.is_hybrid:
+            self.genus = ""
+            self.species = ""
+            self.parent = None
+        # Rows that predate the import -- hand-typed into the old Product table -- have a
+        # scientific name and no genus, because nothing ever split one for them.  Rebuilding the
+        # denormalised column from two empty strings would erase the only name they have, on any
+        # save at all, including an admin ticking a checkbox.  So the split runs the other way for
+        # those, which also makes them findable: every lookup in species_matching goes via genus.
+        if self.scientific_name and not self.genus and not self.species and not self.is_hybrid:
+            parts = self.scientific_name.split()
+            self.genus = parts[0][:100]
+            self.species = " ".join(parts[1:])[:150]
+        self.scientific_name = " ".join(part for part in (self.genus, self.species) if part)
+        self.common_name_normalized = normalize_species_name(self.common_name)
+        # Keep the row's *own* tier honest without a full pass.  The genus tier can only be worked
+        # out by looking at every sibling, so recompute_trade_ranks() owns that one -- but a
+        # species that says outright it is in the hobby should not have to wait for an import to
+        # be ranked like it.  Demote only from 0: a 1 here is a genus statement, still true.
+        if self.in_aquarium_trade:
+            self.trade_rank = self.TRADE_RANK_SPECIES
+        elif self.trade_rank == self.TRADE_RANK_SPECIES:
+            self.trade_rank = self.TRADE_RANK_NONE
+        super().save(*args, **kwargs)
+        # Everything a person or a club API added, checked against everything already there.  The
+        # two big imports are skipped -- they can't duplicate themselves, and paying two queries a
+        # row for 36,000 rows to find that out is the sort of thing that makes an import time out.
+        if self.source not in self.IMPORTED_SOURCES:
+            self.flag_possible_duplicate()
+
+    @property
+    def in_aquarium_trade(self):
+        """True when something says this species is actually kept in aquariums.
+
+        An admin's word first: :attr:`in_trade_override` exists because whoever is adding a species
+        by hand is doing it *because a club is selling one*, which is better evidence than a
+        database field.  Then the curated list, everything on which is there for the same reason.
+        Then FishBase.
+        """
+        if self.in_trade_override is not None:
+            return self.in_trade_override
+        return self.source == "aquarium" or self.aquarium_use in self.AQUARIUM_TRADE_VALUES
+
+    @classmethod
+    def recompute_trade_ranks(cls, genus=None, batch_size=2000):
+        """Rebuild the denormalised :attr:`trade_rank` column.  Returns rows changed.
+
+        Denormalised rather than worked out per query for one reason: every suggestion lookup
+        orders by it *before* taking a ``LIMIT``, and the alternatives are a correlated subquery
+        per row or an ``IN`` clause holding all 1,142 genera that have a species in the hobby.
+        An indexed integer column costs one pass at import time instead.
+
+        Pass *genus* to redo a single genus, which is what adding one species by hand affects.
+        """
+        traded = cls.objects.filter(in_trade_override=True) | cls.objects.filter(
+            in_trade_override__isnull=True, aquarium_use__in=cls.AQUARIUM_TRADE_VALUES
+        )
+        traded = traded | cls.objects.filter(in_trade_override__isnull=True, source="aquarium")
+        if genus:
+            traded = traded.filter(genus=genus)
+        # order_by() clears Meta.ordering, which would otherwise put scientific_name and variety
+        # into the SELECT DISTINCT and make this one row per species rather than one per genus:
+        # 139,000 rows sorted on disk to build a set of 1,100 strings.
+        # discard(""): a hybrid has no genus, and one of them in the hobby -- which is all of them,
+        # nobody breeds a cross by accident -- would otherwise put "" in this set and promote every
+        # other blank-genus row to the genus tier on the strength of it.
+        traded_genera = set(traded.order_by().values_list("genus", flat=True).distinct())
+        traded_genera.discard("")
+
+        queryset = cls.objects.all() if genus is None else cls.objects.filter(genus=genus)
+        changed = 0
+        batch = []
+        for species in queryset.iterator(chunk_size=batch_size):
+            if species.in_aquarium_trade:
+                rank = cls.TRADE_RANK_SPECIES
+            elif species.genus and species.genus in traded_genera:
+                rank = cls.TRADE_RANK_GENUS
+            else:
+                rank = cls.TRADE_RANK_NONE
+            if species.trade_rank != rank:
+                species.trade_rank = rank
+                batch.append(species)
+            if len(batch) >= batch_size:
+                cls.objects.bulk_update(batch, ["trade_rank"])
+                changed += len(batch)
+                batch = []
+        if batch:
+            cls.objects.bulk_update(batch, ["trade_rank"])
+            changed += len(batch)
+        return changed
+
+    @property
+    def earns_breeder_points(self):
+        """False when a lot of this species is ineligible for breeder points.
+
+        A cultivar answers for its parent as well as itself: the reason a club won't award points
+        for breeding something is a fact about the animal, not about the strain, so unticking the
+        box on *Neocaridina davidi* has to cover its thirteen colour forms too.
+        """
+        if not self.breeder_points:
+            return False
+        if self.parent_id and not self.parent.breeder_points:
+            return False
+        return True
+
+    @property
+    def full_scientific_name(self):
+        """The scientific name, with the cultivar in quotes when there is one.
+
+        Horticulture's convention -- *Neocaridina davidi* 'Blue Dream' -- because it is the one
+        readers already know, and because the quotes say out loud that the last word is not Latin.
+
+        A hybrid has nothing to put in front of the quotes, so the word "Hybrid" goes there.  It is
+        the honest answer and it is the one a BAP judge needs: a class that excludes crosses can
+        only do that if the label says which lots are crosses, and this is the line the label, the
+        lot page, the AR overlay and the lot map all print.
+        """
+        if self.is_hybrid and self.variety:
+            return f"Hybrid '{self.variety}'"
+        if self.variety and self.scientific_name:
+            return f"{self.scientific_name} '{self.variety}'"
+        return self.scientific_name or self.variety
+
+    @property
+    def label(self):
+        """What the user picks from: the scientific name, and nothing else.
+
+        It used to read "Neocaridina davidi (Cherry shrimp)", and the bracket was noise everywhere
+        it appeared.  The field is *called* "scientific name", it sits directly under a lot name the
+        seller has already written in plain English -- "cherry shrimp x10" -- and the common name in
+        brackets is either that same phrase again or, when FishBase disagrees with the hobby, a
+        second name that makes the reader wonder whether they picked the wrong fish.
+
+        The common name still does its real job, which is matching: every one of them is in
+        :class:`SpeciesCommonName` and searchable.  It is only the display that drops it.  The one
+        reader that still gets it is the language model -- see :attr:`label_with_common_name`.
+        """
+        return self.full_scientific_name or self.common_name
+
+    @property
+    def label_with_common_name(self):
+        """The scientific name with the common name in brackets, for the language model.
+
+        The opposite trade-off from :attr:`label`: a shortlist row is read by a model that is being
+        asked to match a *typed lot name*, and the common name is the half of the row that name is
+        likely to resemble.  Dropping it there would be throwing away the evidence.
+        """
+        name = self.full_scientific_name
+        if name and self.common_name:
+            return f"{name} ({self.common_name})"
+        return name or self.common_name
 
     def __str__(self):
-        return f"{self.common_name} ({self.scientific_name})"
+        return self.label
 
     class Meta:
-        verbose_name_plural = "Products and species"
+        verbose_name_plural = "Species"
+        ordering = ["scientific_name", "variety"]
+        # SpecCode is only unique *within* a source database: FishBase and SeaLifeBase both number
+        # their species from 1, so a bare unique on speccode would have SeaLifeBase's first import
+        # overwrite 36,000 fish.
+        unique_together = ("source", "speccode")
+
+
+class SpeciesCommonName(models.Model):
+    """A common name pointing at a :class:`Species`.
+
+    FishBase ships tens of thousands of these ("Guppy", "Millionfish", "Rainbow fish" are all
+    *Poecilia reticulata*), which is what makes matching a typed lot name to a species work at
+    all.  Known misspellings are dropped at import time -- surfacing those as suggestions would
+    teach people the wrong name.
+
+    This is the table the hobby's own vocabulary lives in, and :attr:`source` is what lets it.
+    FishBase is an ichthyology database: it is authoritative about which species exist and has no
+    reason to know that *Labidochromis caeruleus* is a "yellow lab" or that a "cw11" is a
+    *Corydoras*.  Those names have to be ours.  Before this column existed there was nowhere to
+    put one that survived -- ``import_fishbase`` deletes the names for every species it touches
+    and rebuilds them from the snapshot, so a hand-added name lasted until the next pin bump --
+    and the curated CSV could only attach names to its *own* rows, so teaching a FishBase species
+    a name meant creating a second copy of it.  Now every writer stamps what it wrote, deletes
+    only its own, and a name added by hand or by the CSV outlives any number of re-imports.
+    """
+
+    #: Same vocabulary as :attr:`Species.source`, and for the same reason: every importer has to
+    #: be able to clear out exactly what it wrote last time and nothing else.
+    SOURCE_CHOICES = Species.SOURCE_CHOICES
+
+    species = models.ForeignKey(Species, on_delete=models.CASCADE, related_name="common_names")
+    name = models.CharField(max_length=255, db_index=True)
+    name.help_text = "As the source spells it, punctuation and all.  This is what a person reads."
+    name_normalized = models.CharField(max_length=120, blank=True, db_index=True)
+    name_normalized.help_text = (
+        "What lookups match on: name with the punctuation stripped, by normalize_species_name.  "
+        "Rebuilt on save; the importers fill it in on the bulk paths, which skip save()."
+    )
+    language = models.CharField(max_length=50, blank=True, default="English")
+    is_preferred = models.BooleanField(default=False)
+    is_preferred.help_text = "FishBase's primary name for this species in this language.  Ranked first."
+    source = models.CharField(max_length=20, choices=SOURCE_CHOICES, default="manual", db_index=True)
+    source.help_text = (
+        "Which list wrote this name.  An importer only ever deletes its own, so a name added here "
+        "or in aquarium_species.csv survives the next re-import of FishBase."
+    )
+    # Scoped exactly like Species, and for the same reason: a club naming a fish is a club's
+    # opinion until somebody says otherwise.  A name is read *ahead* of everything else the
+    # matcher does -- "yellow lab" is answered by this table -- so one club teaching the site a
+    # name for the wrong fish would be everybody's problem.  Default True because every row the
+    # importers and the curated CSV write is everybody's; what a person or a key adds is not.
+    approved = models.BooleanField(default=True, db_index=True)
+    approved.help_text = "Off means only the person or club that added it is offered it.  Everything imported is on."
+    added_by = models.ForeignKey(
+        User, null=True, blank=True, on_delete=models.SET_NULL, related_name="species_names_added"
+    )
+    added_by.help_text = "Who added this on the site.  Blank for everything the importers loaded."
+    club = models.ForeignKey(
+        "Club", null=True, blank=True, on_delete=models.SET_NULL, related_name="species_names_added"
+    )
+    club.help_text = "The club this was added for, when there was an obvious one.  See Species.club."
+
+    def save(self, *args, **kwargs):
+        self.name_normalized = normalize_species_name(self.name)
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return self.name
+
+    class Meta:
+        ordering = ["name"]
+        # The second one is the one every lookup uses; the first is left alone because the admin
+        # still searches and orders on the name as written.
+        indexes = [
+            models.Index(fields=["name", "is_preferred"]),
+            models.Index(fields=["name_normalized", "is_preferred"]),
+        ]
+
+
+class SpeciesSearchCache(models.Model):
+    """A remembered answer to "what species is a lot called *this*?".
+
+    Lot names repeat relentlessly across auctions, so without this every club would pay for the
+    same language-model call to work out that "blue dream shrimp" is *Neocaridina davidi* again.
+    A row with ``species`` set to null is a real answer too: this name is hardware, or plants, or
+    a mixed bag, and there is no point asking again.
+    """
+
+    SOURCE_CHOICES = (
+        ("llm", "Language model"),
+        ("user", "Chosen by a user"),
+    )
+
+    search_text = models.CharField(max_length=120, unique=True)
+    search_text.help_text = "Normalised lot name: lowercased, punctuation stripped."
+    species = models.ForeignKey(Species, null=True, blank=True, on_delete=models.CASCADE)
+    source = models.CharField(max_length=20, choices=SOURCE_CHOICES, default="llm")
+    created_by = models.ForeignKey(
+        User, null=True, blank=True, on_delete=models.SET_NULL, related_name="species_names_taught"
+    )
+    created_by.help_text = (
+        "Who taught the site this answer, when a person did.  Blank for the language model.  "
+        "Every row here is served to every club, so a wrong one needs to be traceable."
+    )
+    createdon = models.DateTimeField(auto_now_add=True)
+    hits = models.PositiveIntegerField(default=0)
+    hits.help_text = "How many times this cached answer has been served instead of asking again."
+    # What people did with the answer, which is the only evidence there is about whether it is
+    # right.  Before these existed a row was written by one person's first save and then served to
+    # every club forever: one misclick on a bulk-add page taught the whole site that "sponge
+    # filter" is a guppy, and nothing short of a superuser finding it on the gaps page undid it.
+    accepts = models.PositiveIntegerField(default=0)
+    accepts.help_text = (
+        "Lots saved with this answer left alone.  Counted once per lot, on the save that created "
+        "it -- re-saving a lot without touching the species is not new evidence."
+    )
+    rejects = models.PositiveIntegerField(default=0)
+    rejects.help_text = (
+        "Lots this answer was cleared from or changed on.  Counted once per lot, like accepts.  "
+        "Enough of them retires the row; see is_discredited."
+    )
+
+    #: How much disagreement a remembered answer survives.  One rejection in ten is the line, so a
+    #: row needs nine people to leave it alone for every one who takes it off a lot.
+    MAX_REJECT_RATIO = 0.1
+
+    #: ...but never on fewer than this many rejections, whatever the ratio says.  The ratio alone
+    #: retired a fresh row the first time anybody cleared it, on the theory that a first save is
+    #: the one most likely to be a misclick -- which is true, and is exactly as true of the clearing
+    #: as of the answer being cleared.  Somebody hitting the X once because *this* lot is a mixed
+    #: bag is not evidence about the name, and throwing the answer away on it means the next
+    #: hundred sellers of that name get nothing.  Three lots is disagreement; one is a Tuesday.
+    MIN_REJECTS_TO_RETIRE = 3
+
+    @property
+    def is_discredited(self):
+        """True when the rejections have outgrown :attr:`MAX_REJECT_RATIO`.
+
+        Integer arithmetic rather than a division: ``rejects / (accepts + rejects) > 0.1`` is
+        exactly ``9 * rejects > accepts``, and this is read on every lot save.  The floor is
+        checked first because it is the cheap half and the one that fires: on a row with no
+        accepts, the ratio is satisfied by every rejection there will ever be.
+        """
+        return self.rejects >= self.MIN_REJECTS_TO_RETIRE and self.rejects * 9 > self.accepts
+
+    def retire(self):
+        """Throw this answer away, and remember that it was thrown away.
+
+        Deleting the row on its own would not be enough, and this is the question that decides the
+        whole design: the next lookup would ask the language model the same question, get the same
+        wrong answer, and write the same row back.  So the pair -- *this name is not that species*
+        -- is kept as a :class:`SpeciesNameRejection`, which is what
+        :func:`~auctions.species_matching.remember` and the model shortlist both consult.
+
+        The name itself is left with no answer rather than with "not a species": it may well match
+        something in the list, and a rejection is evidence about one species, not about the name.
+        """
+        if self.species_id:
+            SpeciesNameRejection.objects.get_or_create(search_text=self.search_text, species_id=self.species_id)
+        self.delete()
+
+    def __str__(self):
+        return f"{self.search_text} -> {self.species or 'no species'}"
+
+
+class SpeciesNameRejection(models.Model):
+    """ "This lot name is **not** that species" -- the memory that makes a retired answer stay dead.
+
+    :class:`SpeciesSearchCache` is a cache of guesses, and until this table existed a guess could
+    only be added, never withdrawn: deleting a row sent the next lookup back to the same language
+    model with the same shortlist, which produced the same answer and wrote it straight back.  A
+    rejection is the one piece of information that survives that loop.
+
+    Deliberately narrow.  It vetoes a *pair*, not a name and not a species, and it is read only by
+    the two places that make things up -- the cache and the model shortlist.  It never touches
+    :func:`~auctions.species_matching.exact_matches` or the token search, because those answer out
+    of the species list itself, and a handful of people clearing a field must not be able to
+    outvote the list the way a cached guess could.  A site admin can delete one on the gaps page,
+    which is the way back if a name really was rejected in error.
+    """
+
+    search_text = models.CharField(max_length=120, db_index=True)
+    search_text.help_text = "Normalised lot name, the same key SpeciesSearchCache uses."
+    species = models.ForeignKey(Species, on_delete=models.CASCADE, related_name="name_rejections")
+    createdon = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"{self.search_text} is not {self.species}"
+
+    class Meta:
+        unique_together = ("search_text", "species")
 
 
 def _slugify_auction_title(value):
@@ -2995,6 +4226,8 @@ class Auction(models.Model):
     use_description.help_text = "Not shown on the bulk add lots form"
     use_donation_field = models.BooleanField(default=True, blank=True)
     use_i_bred_this_fish_field = models.BooleanField(default=True, blank=True, verbose_name="Use Breeder Points field")
+    use_scientific_name = models.BooleanField(default=True, blank=True, verbose_name="Use scientific name field")
+    use_scientific_name.help_text = "Suggest a species based on the lot name.  Users pick from a short list, or No species for hardware and other non-living lots."
     use_custom_checkbox_field = models.BooleanField(default=False, blank=True)
     use_custom_checkbox_field.help_text = "Optional information such as CARES, native species, difficult to keep, etc."
     custom_dropdown_name = models.CharField(
@@ -3046,7 +4279,7 @@ class Auction(models.Model):
         max_length=1000,
         blank=True,
         null=True,
-        default="qr_code,lot_name,min_bid_label,buy_now_label,quantity_label,seller_name,donation_label,custom_field_1,i_bred_this_fish_label,custom_checkbox_label,custom_dropdown_label",
+        default="qr_code,lot_name,scientific_name,min_bid_label,buy_now_label,quantity_label,seller_name,donation_label,custom_field_1,i_bred_this_fish_label,custom_checkbox_label,custom_dropdown_label",
     )
     use_seller_dash_lot_numbering = models.BooleanField(default=False, blank=True)
     use_seller_dash_lot_numbering.help_text = "Include the seller's bidder number with the lot number.  This option is not recommended as users find it confusing."
@@ -3161,6 +4394,23 @@ class Auction(models.Model):
         if self.created_by and self.created_by.is_superuser:
             return "admin"
         return None
+
+    @property
+    def offers_tap_to_pay(self):
+        """True when *this auction's* Square account can take an in-person card payment.
+
+        The one question the app cannot answer for itself. It used to decide when to show Apple's
+        mandated Tap to Pay awareness modal from a URL prefix plus "the backend once handed this user
+        live Square credentials", which is an approximation of "is the website showing its own Square
+        card to this user on this page?" -- and getting it wrong put the modal in front of an
+        organizer on an unrelated page. Read by auction_ribbon.html, which asks the app for the modal
+        when it is true; see PaymentService for the credentials themselves.
+
+        Connected *and* in-person capable: a seller connected before the Tap to Pay scope existed has
+        a merchant id and cannot take a card in the room, so offering the modal would be a dead end.
+        """
+        seller = self.effective_square_seller
+        return bool(seller and seller.square_merchant_id and seller.supports_tap_to_pay)
 
     @property
     def square_information(self):
@@ -5608,7 +6858,7 @@ class AuctionTOS(models.Model):
             result = self.print_labels_link_html
             if self.print_unprinted_labels_link_html:
                 result += f"""
-                <button type="button" class="btn btn-sm btn-secondary dropdown-toggle dropdown-toggle-split" data-bs-toggle="dropdown" aria-haspopup="true" aria-expanded="false">
+                <button type="button" class="btn btn-sm btn-primary dropdown-toggle dropdown-toggle-split" data-bs-toggle="dropdown" aria-haspopup="true" aria-expanded="false">
                 </button>
                 <div class="dropdown-menu">
                     <span class='dropdown-item'>{self.print_unprinted_labels_link_html}</span>
@@ -5619,7 +6869,7 @@ class AuctionTOS(models.Model):
     @property
     def actions_dropdown_html(self):
         show_on_mobile_string = "d-md-none"
-        result = f"""<button type='button' class='btn btn-sm btn-secondary dropdown-toggle dropdown-toggle-split' data-bs-toggle='dropdown'
+        result = f"""<button type='button' class='btn btn-sm btn-primary dropdown-toggle dropdown-toggle-split' data-bs-toggle='dropdown'
         aria-haspopup='true' aria-expanded='false'>Actions </button>
         <div class = "dropdown-menu" id='actions_dropdown'>
         <span class='dropdown-item {show_on_mobile_string}'>{self.bulk_add_link_html}</span>"""
@@ -5997,12 +7247,18 @@ class AuctionTOS(models.Model):
             # using update here avoids recursion because update does not call save()
             AuctionTOS.objects.filter(pk=self.pk).update(possible_duplicate=duplicate_instance.pk)
             AuctionTOS.objects.filter(pk=duplicate_instance.pk).update(possible_duplicate=self.pk)
+            # keep this instance in sync with what update() just wrote, or the caller's next save()
+            # writes the stale value straight back over it
+            self.possible_duplicate = duplicate_instance
         else:
             # no duplicate found
-            if self.possible_duplicate:
+            # possible_duplicate_id, not possible_duplicate: a dangling id (the row it pointed at was
+            # deleted by a merge) raises DoesNotExist on attribute access instead of being cleared here.
+            if self.possible_duplicate_id:
                 # remove ourselves from the duplicate if it was previously set
-                AuctionTOS.objects.filter(pk=self.possible_duplicate.pk).update(possible_duplicate=None)
+                AuctionTOS.objects.filter(pk=self.possible_duplicate_id).update(possible_duplicate=None)
                 AuctionTOS.objects.filter(pk=self.pk).update(possible_duplicate=None)
+                self.possible_duplicate = None
 
         # If the same user already has another AuctionTOS in this auction, keep the older one
         # and merge the newer one (self) into it to prevent duplicates from race conditions or signal re-attaches.
@@ -6201,6 +7457,13 @@ class AuctionTOS(models.Model):
                 action=merge_action,
                 user=user,
             )
+        # possible_duplicate is a self-FK, and the row about to be deleted is usually the one self is
+        # flagged against - that flag is how an admin finds a merge in the first place. The delete
+        # below SET_NULLs the column in the database, but not on this in-memory copy of self, so
+        # clear it here: callers (the merge review form) save self afterwards, and writing the
+        # dangling id back is a foreign key error.
+        if self.possible_duplicate_id == duplicate.pk:
+            self.possible_duplicate = None
         # Delete the duplicate (cascades to delete its now-empty invoice)
         duplicate.delete()
 
@@ -6452,7 +7715,12 @@ class Lot(models.Model):
     buy_now_price.help_text = (
         "This lot will be sold with no bidding for this price, if someone is willing to pay this much"
     )
-    species = models.ForeignKey(Product, null=True, blank=True, on_delete=models.SET_NULL)
+    species = models.ForeignKey(
+        Species, null=True, blank=True, on_delete=models.SET_NULL, verbose_name="Scientific name"
+    )
+    species.help_text = (
+        "Start typing a lot name and pick from the list.  Leave as No species for hardware and other non-living lots."
+    )
     species_category = models.ForeignKey(
         Category,
         null=True,
@@ -6615,6 +7883,7 @@ class Lot(models.Model):
         ("not_eligible", "Not eligible"),
         ("not_long_enough", "Not long enough since last submission"),
         ("category_not_eligible", "Category not eligible (BAP points = 0)"),
+        ("species_not_eligible", "Species not eligible for breeder points"),
         ("not_club_member", "Not a club member"),
         ("not_bred", "Didn't breed this fish"),
         ("not_active_member", "Not an active club member"),
@@ -6685,7 +7954,25 @@ class Lot(models.Model):
             fix_category = True
         if self.category_checked:
             fix_category = False
-        if fix_category:
+        # A species that knows its category overrules a guess, and keeps overruling it when the
+        # seller changes the species later -- the picker is on the same screen as the lot name, so
+        # "category_checked" from a previous save is about a name, not about this species.  A
+        # category a *person* chose is never touched: category_automatically_added is how we know.
+        #
+        # "Uncategorized" counts as nothing rather than as a choice.  It is where a lot lands when
+        # the guesser had no idea, and a lot sitting there while its species knows the answer is
+        # the exact case this is for -- including the one that reaches it, adding a species from
+        # the admin gaps page to lots that were categorised (as nothing) long ago.
+        uncategorised = not self.species_category or self.species_category.name == "Uncategorized"
+        from_species = self.category_from_species
+        if from_species and (fix_category or uncategorised or self.category_automatically_added):
+            self.category_checked = True
+            if self.auction and not self.auction.use_categories:
+                self.species_category = Category.objects.filter(name="Uncategorized").first()
+            else:
+                self.species_category = from_species
+                self.category_automatically_added = True
+        elif fix_category:
             self.category_checked = True
             if self.auction:
                 if not self.auction.use_categories:
@@ -7451,6 +8738,8 @@ class Lot(models.Model):
             return "not_eligible"
         if not self.i_bred_this_fish:
             return "not_bred"
+        if self.species and not self.species.earns_breeder_points:
+            return "species_not_eligible"
         if club.only_donation_lots and not self.donation:
             return "not_donation"
         if club.no_min_bids and self.reserve_price > self.auction.minimum_bid:
@@ -7471,6 +8760,30 @@ class Lot(models.Model):
             base_prior = Lot.objects.filter(
                 auction__club=club,
                 lot_name=self.lot_name,
+                bap_points_awarded__gt=0,
+                date_end__gte=cutoff,
+            ).exclude(pk=self.pk)
+            prior = False
+            if seller_user:
+                prior = base_prior.filter(user=seller_user).exists()
+            if not prior and seller_email:
+                prior = base_prior.filter(
+                    Q(auctiontos_seller__email__iexact=seller_email) | Q(user__email__iexact=seller_email)
+                ).exists()
+            if prior:
+                return "not_long_enough"
+        # The same rule again, on the species rather than on what the seller typed.  Two lots
+        # called "yellow labs" and "Labidochromis caeruleus" are one fish bred twice, and the name
+        # rule cannot see that; this can, because the scientific name is picked from a list.
+        #
+        # Matched on the species row itself, never on its parent: a strain is a row of its own, so
+        # blue and red cherry shrimp are two different things to breed and both earn points.  That
+        # is the whole reason the strains are rows -- see Species.variety.
+        if club.days_between_same_species_lots > 0 and self.species_id and (seller_user or seller_email):
+            cutoff = timezone.now() - datetime.timedelta(days=club.days_between_same_species_lots)
+            base_prior = Lot.objects.filter(
+                auction__club=club,
+                species_id=self.species_id,
                 bap_points_awarded__gt=0,
                 date_end__gte=cutoff,
             ).exclude(pk=self.pk)
@@ -7521,6 +8834,29 @@ class Lot(models.Model):
                 return "not_sold"
         return self.unsold_lot_no_bap_reason
 
+    def bap_points_for_club(self, club):
+        """How many points this lot is worth to *club*, before any custom checkbox bonus.
+
+        Most specific rule wins: a genus override beats a category override, which beats the
+        club's flat rate, which beats the category's own default.  The genus rule is what lets a
+        club say "*Tropheus* is worth 15" without splitting Cichlids into its own category.
+        """
+        if self.species and self.species.genus:
+            genus_override = ClubBapGenusOverride.objects.filter(club=club, genus=self.species.genus).first()
+            if genus_override is not None:
+                return genus_override.points
+        if self.species_category:
+            category_override = ClubBapCategoryOverride.objects.filter(
+                club=club, category=self.species_category
+            ).first()
+            if category_override is not None:
+                return category_override.points
+        # `is not None`, not `or`: a club that deliberately sets 0 points per lot means zero, and
+        # falling through to the category default there would quietly award points it said not to.
+        if club.points_per_lot is not None:
+            return club.points_per_lot
+        return self.species_category.bap_points if self.species_category else 5
+
     def auto_award_bap_points(self):
         """Always store bap_auto_reason when a winner is set; also create a BapAward if auto_add_points is on.
 
@@ -7545,12 +8881,7 @@ class Lot(models.Model):
             # Eligible but club requires manual approval — reason is "" (eligible), award created by admin
             return
         # Eligible + auto_add_points: create the BapAward now
-        override = (
-            ClubBapCategoryOverride.objects.filter(club=club, category=self.species_category).first()
-            if self.species_category
-            else None
-        )
-        points = override.points if override is not None else (club.points_per_lot or self.species_category.bap_points)
+        points = self.bap_points_for_club(club)
         if club.points_for_custom_checkbox > 0 and self.custom_checkbox:
             points += club.points_for_custom_checkbox
         seller_user = self.user or (self.auctiontos_seller.user if self.auctiontos_seller else None)
@@ -7616,6 +8947,16 @@ class Lot(models.Model):
             return self.date_end
         # I would hope we never get here...but it it theoretically possible that a bug could cause self.date_end to be blank
         return timezone.now()
+
+    @property
+    def ends_when_sold(self):
+        """True when this lot has no end time to show, only "when the auctioneer gets to it".
+
+        An in-person lot ends when the room ends it, so until it has a winner there is no date to
+        print -- which is what calculated_end_for_templates says in words. Templates that put a
+        label in front of it ("Ends ...") need to know which of the two they are about to render.
+        """
+        return self.is_part_of_in_person_auction and not (self.winner_as_str and self.date_end)
 
     @property
     def calculated_end_for_templates(self):
@@ -8323,6 +9664,102 @@ class Lot(models.Model):
         return ""
 
     @property
+    def scientific_name(self):
+        """The lot's scientific name, or an empty string when there is nothing to show.
+
+        Nothing to show means either that the lot has no species -- hardware, mixed lots -- or that
+        its auction has the scientific-name field switched off.  One rule, everywhere: the setting
+        is how a club says it doesn't want scientific names, and it now governs the lot page, the
+        AR overlay, the lot map, the CSV export and the printed label alike, instead of only the
+        two of those that happened to check it.  A lot outside an auction has no setting to obey.
+
+        The species itself is *kept* when the setting is off -- see ``clean_species_for_auction``.
+        This is a display rule, so switching the setting back on brings the names back.
+
+        Includes the cultivar when the seller picked a variety row -- *Neocaridina davidi* 'Blue
+        Dream' is what they are selling, and the bare species would read as a plain cherry shrimp.
+        """
+        if not self.species:
+            return ""
+        if self.auction and not self.auction.use_scientific_name:
+            return ""
+        return self.species.full_scientific_name
+
+    @property
+    def lot_name_says_the_species(self):
+        """True when the seller already typed the scientific name into the lot name.
+
+        Plenty of them do -- "Chindongo saulosi F1", "Cryptocoryne wendtii red", "Tropheus duboisi
+        maswa" -- and for those lots every page on the site printed the same words twice, once as
+        the lot name and once again underneath in italics.
+
+        Matched on the *normalised* names, with a space either side, so it is a match on whole words
+        and "Corydoras" does not find itself inside "Corydorases".  A genus-only species row
+        ("Bucephalandra") counts, because for those the genus *is* the scientific name.  The
+        cultivar is not required: somebody who wrote "Neocaridina davidi blue dream" has said the
+        binomial, and repeating it back with the strain quoted differently is not new information.
+        """
+        if not self.scientific_name or not self.lot_name:
+            return False
+        typed = normalize_species_name(self.lot_name)
+        name = normalize_species_name(self.species.scientific_name)
+        if not typed or not name:
+            return False
+        return f" {name} " in f" {typed} "
+
+    @property
+    def scientific_name_line(self):
+        """The scientific name to print *under the lot name*, or "" when it would be a repeat.
+
+        The pair of this and :attr:`common_name_line` is one rule with two halves: show the seller's
+        own words in the big slot, and put the *other* name underneath.  A lot called "Yellow lab"
+        gets *Labidochromis caeruleus* under it, exactly as before; a lot called "Labidochromis
+        caeruleus" gets "Yellow lab" instead of the same two words again.
+
+        Everything that stores or exports the name -- the CSV columns, the API, the lot map -- goes
+        on using :attr:`scientific_name`, which is the data.  These two are the display rule, and
+        the reason it lives on the model rather than in six templates is that the lot page, the
+        printed label and the AR overlay all have to agree about it.
+        """
+        return "" if self.lot_name_says_the_species else self.scientific_name
+
+    @property
+    def common_name_line(self):
+        """The common name to print under the lot name, for a lot named after the species.
+
+        Blank whenever the seller used a common name themselves, which is the point: they have
+        already said what this fish is called, and a *second* common name for the same species --
+        FishBase lists nineteen for the guppy -- reads as a correction rather than as help.
+
+        A cultivar falls back to its parent's name, for the same reason the category does: nobody
+        is going to write a common name for every strain, and "cherry shrimp" is the honest answer
+        for a *Neocaridina davidi* 'Blue Dream' row that hasn't got one of its own.
+        """
+        if not self.scientific_name or not self.lot_name_says_the_species:
+            return ""
+        species = self.species
+        name = species.common_name or (species.parent.common_name if species.parent_id else "")
+        # Nothing gained by printing the common name when it is the words already on the lot.
+        if name and normalize_species_name(name) in normalize_species_name(self.lot_name):
+            return ""
+        return name
+
+    @property
+    def category_from_species(self):
+        """The category this lot's species implies, or None.
+
+        A variety inherits its parent's category: nobody is going to map every cultivar by hand,
+        and a Blue Dream shrimp belongs wherever a cherry shrimp belongs.  ``Uncategorized`` is
+        treated as "no answer" so it can never beat the name-based guess.
+        """
+        if not self.species_id:
+            return None
+        category = self.species.category or (self.species.parent.category if self.species.parent_id else None)
+        if category and category.name != "Uncategorized":
+            return category
+        return None
+
+    @property
     def donation_label(self):
         if self.donation and self.auction.use_donation_field:
             return "(D)"
@@ -8474,6 +9911,39 @@ class ClubBapCategoryOverride(models.Model):
 
     def __str__(self):
         return f"{self.club} — {self.category}: {self.points} pts"
+
+
+class ClubBapGenusOverride(models.Model):
+    """Per-club, per-genus BAP point overrides -- the finer-grained sibling of
+    :class:`ClubBapCategoryOverride`, for clubs that award "Cichlids" a flat rate but want
+    *Tropheus* worth triple.
+
+    A genus rather than a species so a club writes one rule instead of forty, and because that is
+    how breeder award programs are actually written up.  Deliberately a separate model instead of
+    a nullable ``genus`` column on the category override: MariaDB treats NULLs as distinct in a
+    unique constraint, so one table covering both would silently accept duplicate rules.
+
+    Matching is on :attr:`Species.genus`, the column FishBase gives us, not on the first word of
+    the scientific name.
+    """
+
+    club = models.ForeignKey(Club, on_delete=models.CASCADE, related_name="bap_genus_overrides")
+    genus = models.CharField(max_length=100)
+    genus.help_text = "The first half of a scientific name, e.g. Tropheus.  Applies to every species in it."
+    points = models.IntegerField(default=0)
+    created_on = models.DateField(auto_now_add=True)
+
+    def save(self, *args, **kwargs):
+        # Stored capitalised the way FishBase writes it, so admin typing "tropheus" still matches.
+        self.genus = self.genus.strip().capitalize()
+        super().save(*args, **kwargs)
+
+    class Meta:
+        unique_together = ("club", "genus")
+        ordering = ["genus"]
+
+    def __str__(self):
+        return f"{self.club} — {self.genus}: {self.points} pts"
 
 
 class Invoice(models.Model):
@@ -9943,6 +11413,16 @@ class UserLabelPrefs(models.Model):
         "to a printer configured on your phone. Bluetooth prints directly to a "
         "thermal label printer. System printer and Bluetooth only work in the app."
     )
+    # Printing from a desktop to the phone's Bluetooth printer. Separate from print_method rather
+    # than a fourth choice in it, because it is about the *other* device: someone who prints from
+    # both their phone and their computer wants Bluetooth in the app and this on the web, and a
+    # single dropdown cannot say both. Only offered to an account with a phone that has reported a
+    # paired printer -- see MobileDevice.ever_print_ready and UserLabelPrefsView.
+    print_from_computer = models.BooleanField(default=False, verbose_name="Print from my computer to my phone")
+    print_from_computer.help_text = (
+        "When you print labels on a computer, send them to the printer paired with your phone "
+        "instead of making a PDF. <b>The app has to be open on your phone.</b>"
+    )
 
 
 def get_default_can_create_auctions():
@@ -10365,6 +11845,8 @@ class UserData(models.Model):
                     "permission_money",
                     "permission_manage_auctions",
                     "permission_manage_bap",
+                    "permission_manage_donations",
+                    "permission_send_announcements",
                 ]:
                     if getattr(source_member, field) and not getattr(target_member, field):
                         setattr(target_member, field, True)
@@ -10533,14 +12015,16 @@ class UserData(models.Model):
 
     @property
     def species_sold(self):
-        """Total different species that this user has bred and sold in auctions"""
-        logger.warning(
-            "species_sold is is no longer used, there's no way for users to enter species information anymore"
-        )
-        allLots = (
-            self.my_lots_qs.filter(i_bred_this_fish=True, winner__isnull=False).values("species").distinct().count()
-        )
-        return allLots
+        """Total different species that this user has bred and sold in auctions.
+
+        This used to return nothing useful, because nothing ever set ``Lot.species``.  Lots now
+        carry a species again (see :class:`Species`), so the number is real -- but the
+        breederboard columns that consumed it (``rank_unique_species``,
+        ``number_unique_species``, and the commented-out block in
+        ``manage.py update_breederboard``) are still switched off, and turning a public
+        leaderboard back on is a decision rather than a side effect.
+        """
+        return self.my_lots_qs.filter(i_bred_this_fish=True, winner__isnull=False).values("species").distinct().count()
 
     @property
     def my_won_lots_qs(self):
@@ -10660,6 +12144,65 @@ class UserData(models.Model):
     @property
     def auctions_admined(self):
         return Auction.objects.filter(auctiontos__email=self.user.email, auctiontos__is_admin=True).count()
+
+    @property
+    def auctions_i_admin(self):
+        """Every auction this user may make changes to, as a queryset.
+
+        The set form of :meth:`Auction.permission_check`, which answers the same question one
+        auction at a time and so can't be used to *scope* anything.  The three routes are the same
+        three: they created it, they are an admin on its TOS list, or they hold a club permission
+        over the club running it.
+
+        Superusers are not special-cased here.  This is "which auctions are yours", and a view
+        that means "everybody's" should say so rather than getting it by accident.
+        """
+        user = self.user
+        if not user.is_authenticated:
+            return Auction.objects.none()
+        club_ids = (
+            ClubMember.objects.filter(user=user, is_deleted=False)
+            .filter(Q(permission_admin=True) | Q(permission_manage_auctions=True))
+            .values_list("club_id", flat=True)
+        )
+        return Auction.objects.filter(
+            Q(created_by=user) | Q(auctiontos__is_admin=True, auctiontos__user=user) | Q(club_id__in=club_ids),
+            is_deleted=False,
+        ).distinct()
+
+    @property
+    def only_club(self):
+        """The club this user obviously belongs to, or None.  Never a guess.
+
+        "Which club is this person from" has no reliable answer on this site: somebody can belong
+        to three clubs or to none, and an auction need not have a club at all.  So this answers
+        only when the answer is not in doubt -- the site is running as a single club, or the user
+        belongs to exactly one -- and every caller has to cope with None.
+
+        Used to fill in :attr:`Species.club` when somebody adds a species, so the rest of their
+        club can see it before it is approved.  Getting None back is a normal outcome, not a
+        failure: the species is still visible to the person who added it.
+        """
+        from .site_setup import get_single_club
+
+        single = get_single_club()
+        if single:
+            return single
+        clubs = list(Club.objects.filter(members__user=self.user, members__is_deleted=False).distinct()[:2])
+        return clubs[0] if len(clubs) == 1 else None
+
+    @property
+    def runs_an_auction(self):
+        """True when this user is an admin of *any* auction.
+
+        The standing test for "may add a species to the list".  Adding one is a check-in-table
+        job: somebody is standing there with a bag of fish that isn't in the picker, and until
+        this existed only a site superuser could add it -- which at a real auction means it does
+        not get added, the lot goes out with no scientific name, and the gap is still there next
+        year.  What an auction admin adds is theirs alone until somebody approves it; see
+        :attr:`Species.approved`.
+        """
+        return self.user.is_superuser or self.auctions_i_admin.exists()
 
     @property
     def is_experienced(self):
@@ -11854,12 +13397,177 @@ class MobileDevice(models.Model):
     push_enabled = models.BooleanField(default=True)  # per-device kill switch
     created_at = models.DateTimeField(auto_now_add=True)
     last_seen = models.DateTimeField(auto_now=True)
+    # Presence, for printing from a computer to this phone's Bluetooth printer. The phone cannot be
+    # summoned -- Android forbids starting an Activity from the background and iOS silent pushes are
+    # best-effort and dead once the app is force-quit -- so the honest contract is "the app has to be
+    # open", and these three fields are how the website measures that instead of firing a push into
+    # the void and timing out. Posted by the app at shell mount, on resume, and every 5 minutes while
+    # foregrounded (POST /api/mobile/devices/heartbeat/).
+    last_heartbeat = models.DateTimeField(null=True, blank=True, db_index=True)
+    # The app saying "this phone has a printer paired and a profile that resolves for it, right now".
+    # Deliberately not derived from UserLabelPrefs.print_method: a user can have Bluetooth selected on
+    # an account whose phone has nothing paired, and advertising that would promise a print that fails.
+    print_ready = models.BooleanField(default=False)
+    printer_name = models.CharField(max_length=100, blank=True, default="")
+    # Sticky: has this device EVER reported print_ready? ``print_ready`` is the current state and goes
+    # back to False the moment a printer is unpaired or the app is closed, so it cannot answer "is
+    # this feature worth offering to this account at all" -- which is what decides whether /printing/
+    # shows the checkbox. A switch with nothing behind it is worse than no switch.
+    ever_print_ready = models.BooleanField(default=False)
+
+    # One missed beat of slack on the app's 5-minute interval. Everything that asks "can we print to
+    # this phone" keys off this and nothing else.
+    HEARTBEAT_GRACE = datetime.timedelta(minutes=6)
 
     class Meta:
         ordering = ["-last_seen"]
 
     def __str__(self):
         return f"{self.user} — {self.platform or 'unknown'} device ({self.device_uuid})"
+
+    @property
+    def is_reachable_for_printing(self):
+        """``print_ready`` and heartbeating: the phone can print something right now."""
+        if not self.print_ready or not self.last_heartbeat:
+            return False
+        return self.last_heartbeat >= timezone.now() - self.HEARTBEAT_GRACE
+
+    @classmethod
+    def reachable_printers_for(cls, user):
+        """The user's phones that could print a job this second, freshest heartbeat first."""
+        if not user or not user.is_authenticated:
+            return cls.objects.none()
+        return cls.objects.filter(
+            user=user,
+            print_ready=True,
+            last_heartbeat__gte=timezone.now() - cls.HEARTBEAT_GRACE,
+        ).order_by("-last_heartbeat")
+
+    @classmethod
+    def print_presence_for(cls, user):
+        """``(device, last_seen_datetime_or_None)`` for the "your phone was last seen…" line.
+
+        The device is the reachable one if there is one, otherwise the most recently heard-from phone
+        that has ever been print-ready — because the useful thing to tell someone whose phone is not
+        answering is how long ago it was, not that there is no device.
+        """
+        if not user or not user.is_authenticated:
+            return None, None
+        device = cls.reachable_printers_for(user).first()
+        if device is None:
+            device = (
+                cls.objects.filter(user=user, ever_print_ready=True)
+                .exclude(last_heartbeat=None)
+                .order_by("-last_heartbeat")
+                .first()
+            )
+        return device, (device.last_heartbeat if device else None)
+
+
+class RemotePrintJob(models.Model):
+    """One "print these labels on the phone paired to my printer" request, made from a computer.
+
+    The user is signed in on a desktop with the app open on their phone; they press print on the
+    website and the labels come out of the phone's Bluetooth printer. Everything about the shape of
+    this is decided by one constraint: **the phone cannot be summoned**. Android forbids starting an
+    Activity from the background, and this app's BLE connection lives in a UI-scoped provider on the
+    shell, so a headless isolate woken by a data message would have none of it; iOS silent pushes are
+    rate-limited, best-effort, and dropped entirely once the app is force-quit. So the app must
+    already be open, ``MobileDevice`` measures whether it is, and this row is what lets the *computer*
+    tell the user the truth about what happened rather than time out.
+
+    The row is the whole conversation: the website creates it and pushes it (R4), the phone posts
+    progress and a result against it (R6), and the waiting page polls it (R5). ``message`` is the
+    app's own failure text stored verbatim and shown verbatim -- the app already distinguishes "no
+    printer paired" from "couldn't connect" from "lost the link mid-print" from "label wider than the
+    printhead", and rewording those here would be two copies of the same vocabulary drifting apart.
+    """
+
+    STATUS_QUEUED = "queued"
+    STATUS_SENT = "sent"
+    STATUS_PRINTING = "printing"
+    STATUS_PRINTED = "printed"
+    STATUS_FAILED = "failed"
+    STATUS_CANCELLED = "cancelled"
+    STATUS_UNREACHABLE = "unreachable"
+    STATUS_CHOICES = [
+        (STATUS_QUEUED, "Queued"),
+        (STATUS_SENT, "Sent to the phone"),
+        (STATUS_PRINTING, "Printing"),
+        (STATUS_PRINTED, "Printed"),
+        (STATUS_FAILED, "Failed"),
+        (STATUS_CANCELLED, "Cancelled"),
+        (STATUS_UNREACHABLE, "Couldn't reach the phone"),
+    ]
+    # Statuses nothing further will happen to. Used by the retry/cancel paths and by the staleness
+    # rule, which must not reopen a job that already reported.
+    TERMINAL_STATUSES = {STATUS_PRINTED, STATUS_FAILED, STATUS_CANCELLED, STATUS_UNREACHABLE}
+    # How long a pushed job may go without a word before the page stops waiting. The app posts
+    # progress per label, so silence this long means the message never landed -- the phone was
+    # force-quit, or lost its network between the push and the first label.
+    SILENCE_BEFORE_UNREACHABLE = datetime.timedelta(seconds=20)
+
+    uuid = models.UUIDField(primary_key=True, default=uuid_module.uuid4, editable=False)
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="remote_print_jobs")
+    # SET_NULL rather than CASCADE: a phone that unregisters after printing must not delete the
+    # record of what it printed.
+    device = models.ForeignKey(
+        MobileDevice, on_delete=models.SET_NULL, null=True, blank=True, related_name="print_jobs"
+    )
+    # Lot pks in print order -- the order they come out of the printer, which is the same order the
+    # PDF would have laid them out. A JSON list rather than an m2m because order is the point and a
+    # through-model with a position column would buy nothing else.
+    lots = models.JSONField(default=list, blank=True)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_QUEUED)
+    printed_count = models.IntegerField(default=0)
+    total_count = models.IntegerField(default=0)
+    # The app's failure text, verbatim. Never written by the server.
+    message = models.TextField(blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [models.Index(fields=["user", "-created_at"])]
+
+    def __str__(self):
+        return f"{self.total_count} labels to {self.device or 'no device'} ({self.status})"
+
+    @property
+    def is_terminal(self):
+        return self.status in self.TERMINAL_STATUSES
+
+    @property
+    def has_gone_quiet(self):
+        """Pushed, never answered, and out of time — the page should stop waiting.
+
+        Only counts from ``sent``: a job still ``queued`` has not been pushed yet, and one that has
+        reported anything at all has proved the phone is listening.
+        """
+        if self.status != self.STATUS_SENT:
+            return False
+        return timezone.now() - self.updated_at > self.SILENCE_BEFORE_UNREACHABLE
+
+    def lots_qs(self):
+        """The lots this job is for, in the stored print order (a plain ``filter`` would not be)."""
+        by_pk = Lot.objects.in_bulk(self.lots)
+        return [by_pk[pk] for pk in self.lots if pk in by_pk]
+
+    def mark_labels_printed(self, count):
+        """Mark the first *count* lots printed — what the PDF path does by rendering.
+
+        Called from the app's result post so it does not have to post twice. The first *count* of
+        them because that is the order they printed in, so a batch that died halfway marks exactly
+        what came out.
+        """
+        if count <= 0:
+            return 0
+        lots = [lot for lot in self.lots_qs()[:count] if not lot.is_deleted]
+        for lot in lots:
+            lot.label_printed = True
+            lot.label_needs_reprinting = False
+        Lot.objects.bulk_update(lots, ["label_printed", "label_needs_reprinting"])
+        return len(lots)
 
 
 class MobileOfflineOp(models.Model):
@@ -12354,13 +14062,19 @@ class VoiceCommandLog(models.Model):
     that field before saving, which makes "the word we get wrong most often" a query rather than a
     hunch, and every fix an edit to :class:`VoiceGrammar`.
 
-    Written by the page (it is the side that sees both the command and the correction), so it is
-    session-authenticated and scoped to an auction the user administers.
+    A blank ``slot`` is the other half of that, and the more useful one: an utterance that matched
+    *nothing*. "Bitter" for "bidder" opens no slot, produces no command and reaches no table, so a
+    log of accepted commands can only ever return words we already handle. Group the blank-slot rows
+    by ``heard`` and order by count, and anything frequent is a word to add to ``anchors``.
+
+    Written by the page (it is the side that sees the command, the correction, and the transcript
+    that led nowhere), so it is session-authenticated and scoped to an auction the user administers.
     """
 
     auction = models.ForeignKey(Auction, on_delete=models.CASCADE)
     user = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL)
-    slot = models.CharField(max_length=20, choices=voice.SLOT_CHOICES)
+    slot = models.CharField(max_length=20, choices=voice.SLOT_CHOICES, blank=True, default="")
+    slot.help_text = "Which field was filled. Blank means nothing matched — those are the rows to mine for new words."
     heard = models.CharField(max_length=300, blank=True, default="")
     heard.help_text = "The recognizer's transcript of what was said."
     chosen = models.CharField(max_length=100, blank=True, default="")
@@ -12375,6 +14089,8 @@ class VoiceCommandLog(models.Model):
         ordering = ["-createdon"]
 
     def __str__(self):
+        if self.nothing_matched:
+            return f"nothing matched: heard '{self.heard}'"
         result = f"{self.slot}: heard '{self.heard}' → {self.chosen}"
         if self.corrected_to:
             result += f" (corrected to {self.corrected_to})"
@@ -12383,6 +14099,11 @@ class VoiceCommandLog(models.Model):
     @property
     def was_corrected(self):
         return bool(self.corrected_to)
+
+    @property
+    def nothing_matched(self):
+        """No slot was opened: the recognizer heard this and the grammar had nothing for it."""
+        return not self.slot
 
 
 #: How long a speaker counts as a new arrival, for the "New" badge in the directory.

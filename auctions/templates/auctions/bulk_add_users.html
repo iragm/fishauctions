@@ -25,7 +25,10 @@
   {{ formset.management_form }}
   <form id="form-container" method="POST" action="{% url 'bulk_add_users' slug=auction.slug %}">
     {% crispy formset helper %}
-    <button class='btn bg-info' id="add-form" type="button">Add row</button><input type="submit" class='btn btn-success float-right ms-2' id='save' value="Add users to {{ auction }}">
+    <div class="d-flex flex-wrap gap-2 mt-2">
+      <button class='btn btn-info' id="add-form" type="button">Add row</button>
+      <input type="submit" class='btn btn-success text-dark ms-auto' id='save' value="Add users to {{ auction }}">
+    </div>
   </form>
 {% endblock %}
 

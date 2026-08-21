@@ -1,0 +1,118 @@
+{% comment %}
+The shell every styled club embed uses: an admin pastes an iframe of one of these into WordPress,
+Wix or Squarespace and it has to look like it belongs there without knowing anything about the
+page it lands on. So the CSS lives here once, in four blocks — a light palette, a dark palette, a
+card, and a list — and each embed only supplies its rows.
+
+Three rules this file exists to enforce:
+
+  * **Nothing but the rows.** No heading, no "More from" link, no club name. This is pasted into
+    a page that already has its own heading and its own navigation, and a club that wanted a link
+    back here would have written one; ours reads as somebody else's furniture in their room.
+
+  * **One palette.** Four embeds that each carried their own copy of these variables drifted
+    apart the first time one of them was touched, and a club that used two of them got two
+    slightly different greys on the same page.
+  * **No external requests.** No web fonts, no stylesheet, no script. This renders inside somebody
+    else's site, often over a slow connection, and anything it fetches is another thing that can
+    fail in public.
+
+`embed_mode` is "light" or "dark" and is picked by the ?format= the club chose, not by the
+visitor's system setting — the club knows what colour its own website is and we do not.
+
+Only ever use {% templatetag openblock %} comment {% templatetag closeblock %} blocks in here.
+Django's {% templatetag openbrace %}# … #{% templatetag closebrace %} form is single-line only;
+spread one over two lines and it renders onto the page.
+{% endcomment %}{% autoescape on %}<!doctype html>
+<html lang="en" data-theme="{{ embed_mode }}">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block embed_title %}{{ club_name }}{% endblock %}</title>
+  <style>
+    :root {
+      --bg: #ffffff;
+      --card-bg: #ffffff;
+      --text: #1f2937;
+      --muted: #6b7280;
+      --border: #e5e7eb;
+      --accent: #198754;
+      --link: #0d6efd;
+      --badge-bg: #eef2f7;
+      --badge-text: #374151;
+      --cancelled: #b02a37;
+    }
+    html[data-theme="dark"] {
+      --bg: #111827;
+      --card-bg: #1f2937;
+      --text: #f3f4f6;
+      --muted: #9ca3af;
+      --border: #374151;
+      --accent: #22c55e;
+      --link: #6ea8fe;
+      --badge-bg: #374151;
+      --badge-text: #e5e7eb;
+      --cancelled: #ea868f;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      font-size: 15px;
+      line-height: 1.4;
+    }
+    .ew {
+      max-width: 480px;
+      margin: 0 auto;
+      padding: 16px;
+      background: var(--card-bg);
+    }
+    .ew-list {
+      list-style: none;
+      margin: 0;
+      padding: 0;
+    }
+    .ew-list li {
+      padding: 8px 0;
+      border-bottom: 1px solid var(--border);
+    }
+    .ew-list li:last-child { border-bottom: 0; }
+    .ew-title {
+      color: var(--link);
+      font-weight: 600;
+      text-decoration: none;
+    }
+    .ew-title:hover { text-decoration: underline; }
+    .ew-struck .ew-title { text-decoration: line-through; }
+    .ew-line {
+      display: block;
+      color: var(--muted);
+      font-size: 0.9rem;
+    }
+    .ew-badge {
+      display: inline-block;
+      margin-left: 6px;
+      background: var(--badge-bg);
+      color: var(--badge-text);
+      border-radius: 999px;
+      padding: 1px 9px;
+      font-size: 0.75rem;
+      vertical-align: middle;
+      white-space: nowrap;
+    }
+    .ew-badge-alert { background: var(--cancelled); color: #ffffff; }
+    .ew-badge-accent { background: var(--accent); color: #ffffff; }
+    .ew-empty { color: var(--muted); margin: 0; }
+    .ew-body { margin: 0 0 4px; white-space: pre-wrap; }
+    {% block embed_extra_css %}{% endblock %}
+  </style>
+</head>
+<body>
+  <div class="ew">
+    {% block embed_body %}{% endblock %}
+  </div>
+</body>
+</html>
+{% endautoescape %}

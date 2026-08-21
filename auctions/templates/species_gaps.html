@@ -1,0 +1,263 @@
+{% extends "base.html" %}
+{% load species_tags %}
+{% block title %}Lots with no scientific name{% endblock %}
+{% block content %}
+<h2 class="mb-3">Lots with no scientific name</h2>
+<p class="text-muted">
+  {{ total_missing }} lot{{ total_missing|pluralize }} in auctions that use scientific names have none set;
+  {{ total_with_species }} do. The species list holds {{ species_total }} entries,
+  {{ species_added_here }} of them added here.
+</p>
+{% comment %}
+  Deliberately not filtered down to "the ones that are definitely animals". Nothing separates
+  "sponge filter" from "sponge" reliably, and a filter that hid rows would hide the ones worth
+  finding. The columns are the evidence; the reader does the judging.
+{% endcomment %}
+<div class="help-note">
+  <i class="bi bi-lightbulb-fill"></i>
+  <div>
+    Grouped by lot name and sorted by how many sellers said they bred it &mdash; the strongest sign that a
+    name is a living thing rather than a box of hardware. Hardware and mixed bags belong here too and
+    should simply be left alone.
+  </div>
+</div>
+
+<div class="table-responsive">
+  <table class="table table-sm align-middle">
+    <thead>
+      <tr>
+        <th>Lot name</th>
+        <th class="text-end">Lots</th>
+        <th class="text-end">Bred by seller</th>
+        <th>Last time the matcher looked</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for gap in gaps %}
+      <tr>
+        <td>{{ gap.lot_name }}</td>
+        <td class="text-end">{{ gap.lots }}</td>
+        <td class="text-end">{% if gap.bred %}<span class="badge bg-success">{{ gap.bred }}</span>{% else %}&mdash;{% endif %}</td>
+        <td class="small text-muted">
+          {{ gap.verdict }}{% if gap.verdict_detail %} &middot; {{ gap.verdict_detail }}{% endif %}
+        </td>
+        <td class="text-end text-nowrap">
+          {% comment %}Naming first: most of these rows are a species the list already holds under a name nobody in the hobby types, and adding a second copy of it is what fills the duplicate table below.{% endcomment %}
+          <a class="btn btn-sm btn-primary" href="{% url 'species_name_create' %}?lot_name={{ gap.lot_name|urlencode }}">Add a name</a>
+          <a class="btn btn-sm btn-primary" href="{% url 'species_create' %}?lot_name={{ gap.lot_name|urlencode }}">New species</a>
+        </td>
+      </tr>
+      {% empty %}
+      <tr><td colspan="5" class="text-muted">Nothing to do &mdash; every lot that was offered a scientific name has one.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+{% if pending %}
+<h4 class="mt-4">Species waiting for approval</h4>
+<p class="text-muted small">
+  {% comment %}The whole of the approval workflow.  An auction admin needed a species that wasn't in the picker and added it; until it is approved it is suggested to them and to nobody else.{% endcomment %}
+  Added by an auction admin, and currently suggested only to the person who added it. Approving
+  puts it in everyone's picker and teaches the matcher the lot names it is already on.
+</p>
+<div class="table-responsive">
+  <table class="table table-sm align-middle">
+    <thead>
+      <tr><th>Species</th><th>Category</th><th>Added by</th><th>Club</th><th class="text-end">Lots</th><th></th></tr>
+    </thead>
+    <tbody>
+      {% for species in pending %}
+      <tr>
+        <td><i>{{ species.full_scientific_name }}</i></td>
+        <td class="small text-muted">{{ species.category|default:"&mdash;" }}</td>
+        <td class="small text-muted">{{ species.added_by|default:"&mdash;" }}</td>
+        <td class="small text-muted">{{ species.club|default:"&mdash;" }}</td>
+        <td class="text-end">{{ species.lots }}</td>
+        <td class="text-end">
+          <a class="btn btn-sm btn-primary" href="/admin/auctions/species/{{ species.pk }}/change/">Check it</a>
+          <form method="post" action="{% url 'species_approve' species.pk %}" class="d-inline">
+            {% csrf_token %}
+            <button type="submit" class="btn btn-sm btn-success">Approve</button>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+
+{% if rejected %}
+<h4 class="mt-4">Names the matcher decided were not a species</h4>
+<p class="text-muted small">
+  {% comment %}The direct analogue of the command palette's bounce list: a remembered "no" that keeps being served is either right (it is a sponge filter) or a species missing from the list.{% endcomment %}
+  Each of these is remembered and served without asking again, so a wrong one stays wrong until somebody
+  fixes it. Adding the species clears the answer for every club at once.
+</p>
+<div class="table-responsive">
+  <table class="table table-sm align-middle">
+    <thead>
+      <tr><th>Name</th><th class="text-end">Times served</th><th>Decided by</th><th></th></tr>
+    </thead>
+    <tbody>
+      {% for row in rejected %}
+      <tr>
+        <td>{{ row.search_text }}</td>
+        <td class="text-end">{{ row.hits }}</td>
+        <td class="small text-muted">{{ row.get_source_display }}</td>
+        <td class="text-end">
+          <a class="btn btn-sm btn-primary" href="{% url 'species_create' %}?lot_name={{ row.search_text|urlencode }}">Add species</a>
+          <form method="post" action="{% url 'species_cache_forget' row.pk %}" class="d-inline">
+            {% csrf_token %}
+            <button type="submit" class="btn btn-sm btn-primary">Look it up again</button>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+
+{% if mappings %}
+<h4 class="mt-4">Names the matcher has already decided</h4>
+<p class="text-muted small">
+  {% comment %}The half of the cache that used to be invisible.  A remembered wrong species is worse than a remembered "no": it is served ahead of the token search, to every club, and it ends up on a printed label and in a breeder award.{% endcomment %}
+  These answers are served straight back without looking anything up, for every club, and they are
+  written by the lot forms as well as by the language model. What stops one seller's wrong pick
+  from being the site's answer for good is the last two columns: a lot saved with the answer left
+  alone counts once, a lot it was cleared from or changed on counts against it, and one rejection in
+  ten retires the row by itself. &ldquo;Look it up again&rdquo; throws the answer away without
+  recording a rejection, so the matcher may well arrive at the same one.
+</p>
+<div class="table-responsive">
+  <table class="table table-sm align-middle">
+    <thead>
+      <tr><th>Name</th><th>Answers with</th><th class="text-end">Times served</th><th class="text-end">Left alone</th><th class="text-end">Taken off</th><th>Decided by</th><th></th></tr>
+    </thead>
+    <tbody>
+      {% for row in mappings %}
+      <tr>
+        <td>{{ row.search_text }}</td>
+        <td><i>{{ row.species.full_scientific_name }}</i></td>
+        <td class="text-end">{{ row.hits }}</td>
+        <td class="text-end">{{ row.accepts }}</td>
+        <td class="text-end">{% if row.rejects %}<span class="badge bg-warning text-dark">{{ row.rejects }}</span>{% else %}&mdash;{% endif %}</td>
+        <td class="small text-muted">{{ row.get_source_display }}{% if row.created_by %} &middot; {{ row.created_by }}{% endif %}</td>
+        <td class="text-end">
+          <form method="post" action="{% url 'species_cache_forget' row.pk %}" class="d-inline">
+            {% csrf_token %}
+            <button type="submit" class="btn btn-sm btn-primary">Look it up again</button>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+
+{% if duplicates %}
+<h4 class="mt-4">Possible duplicate species</h4>
+<p class="text-muted small">
+  {% comment %}Flagged by Species.save(), the same way an AuctionTOS gets flagged: same scientific name at the same rank, or the same designated common name.  Merging is a superuser's call because it is not reversible and because it decides which name the whole site keeps.{% endcomment %}
+  Two rows for one species happen when somebody adds a species the list already had under a name they
+  didn&rsquo;t search for. Merging moves the lots, the strains, the hobby names and the remembered
+  lot names onto the row you merge into, and deletes the other one. Two species genuinely sharing a
+  common name is not a duplicate &mdash; keep both, and the pair stops being flagged.
+</p>
+<div class="table-responsive">
+  <table class="table table-sm align-middle">
+    <thead>
+      <tr><th>One row</th><th>The other</th><th>Why flagged</th><th>Neither</th></tr>
+    </thead>
+    <tbody>
+      {% for pair in duplicates %}
+      <tr>
+        {% comment %}The merge button lives in the cell for the row it keeps, rather than as "keep the left one" in an actions column: this table stacks on a phone, where left and right stop meaning anything.{% endcomment %}
+        <td>
+          <i>{{ pair.species.full_scientific_name }}</i>
+          <div class="small text-muted">
+            {{ pair.species.common_name|default:"no common name" }} &middot; {{ pair.species.get_source_display }}
+            &middot; {{ pair.species.lots }} lot{{ pair.species.lots|pluralize }}{% if not pair.species.approved %} &middot; not approved{% endif %}
+            {% if pair.species.added_by %} &middot; added by {{ pair.species.added_by }}{% endif %}
+          </div>
+          <form method="post" action="{% url 'species_merge' pair.other.pk %}" class="d-inline"
+                data-confirm="Everything on {{ pair.other.full_scientific_name }} moves onto {{ pair.species.full_scientific_name }} and that row is deleted. This cannot be undone."
+                data-confirm-title="Merge into {{ pair.species.full_scientific_name }}?"
+                data-confirm-ok="Merge and delete the other"
+                data-confirm-variant="danger">
+            {% csrf_token %}
+            <input type="hidden" name="keep" value="{{ pair.species.pk }}">
+            <button type="submit" class="btn btn-sm btn-danger mt-1" title="Move everything off {{ pair.other.full_scientific_name }} onto this row, then delete that row">Merge into this one</button>
+          </form>
+        </td>
+        <td>
+          <i>{{ pair.other.full_scientific_name }}</i>
+          <div class="small text-muted">
+            {{ pair.other.common_name|default:"no common name" }} &middot; {{ pair.other.get_source_display }}
+            &middot; {{ pair.other_lots }} lot{{ pair.other_lots|pluralize }}{% if not pair.other.approved %} &middot; not approved{% endif %}
+            {% if pair.other.added_by %} &middot; added by {{ pair.other.added_by }}{% endif %}
+          </div>
+          <form method="post" action="{% url 'species_merge' pair.species.pk %}" class="d-inline"
+                data-confirm="Everything on {{ pair.species.full_scientific_name }} moves onto {{ pair.other.full_scientific_name }} and that row is deleted. This cannot be undone."
+                data-confirm-title="Merge into {{ pair.other.full_scientific_name }}?"
+                data-confirm-ok="Merge and delete the other"
+                data-confirm-variant="danger">
+            {% csrf_token %}
+            <input type="hidden" name="keep" value="{{ pair.other.pk }}">
+            <button type="submit" class="btn btn-sm btn-danger mt-1" title="Move everything off {{ pair.species.full_scientific_name }} onto this row, then delete that row">Merge into this one</button>
+          </form>
+        </td>
+        <td class="small text-muted">{% if pair.same_scientific_name %}Same scientific name{% else %}Same common name{% endif %}</td>
+        <td class="text-end">
+          <form method="post" action="{% url 'species_duplicate_dismiss' pair.species.pk %}" class="d-inline">
+            {% csrf_token %}
+            <button type="submit" class="btn btn-sm btn-primary" title="These really are two different species. Both rows stay and the pair stops being flagged.">Keep both</button>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+
+{% if rejections %}
+<h4 class="mt-4">Pairings the site has retired</h4>
+<p class="text-muted small">
+  {% comment %}The memory that makes a retired cache row stay retired: without it the language model answers the same question the same way and the answer is written straight back.  See species_matching.record_choice.{% endcomment %}
+  Enough sellers took this species off the lots with this name, so the matcher will not offer it for
+  that name again &mdash; not from the cache, and not from the language model. It can still be
+  reached by searching, and a lot that already has it keeps it. Allow it again if the rejections were
+  really about the lot name rather than about the species.
+</p>
+<div class="table-responsive">
+  <table class="table table-sm align-middle">
+    <thead>
+      <tr><th>Name</th><th>Is not</th><th>Retired</th><th></th></tr>
+    </thead>
+    <tbody>
+      {% for row in rejections %}
+      <tr>
+        <td>{{ row.search_text }}</td>
+        <td><i>{{ row.species.full_scientific_name }}</i></td>
+        <td class="small text-muted">{{ row.createdon|date:"M j, Y" }}</td>
+        <td class="text-end">
+          <form method="post" action="{% url 'species_rejection_delete' row.pk %}" class="d-inline">
+            {% csrf_token %}
+            <button type="submit" class="btn btn-sm btn-primary">Allow it again</button>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+
+<a class="btn btn-success mt-2" href="{% url 'species_create' %}">Add a species</a>
+{% fishbase_citation %}
+{% endblock %}

@@ -50,13 +50,14 @@
               hx-target="#discord-config-panel"
               hx-swap="outerHTML">
           {% csrf_token %}
-          <button type="submit" class="btn btn-sm btn-secondary">
+          <button type="submit" class="btn btn-sm btn-primary">
             <i class="bi bi-arrow-clockwise"></i> Fetch roles from Discord
           </button>
         </form>
       </div>
 
       {% if roles %}
+        <div class="table-responsive">
         <table class="table table-sm">
           <thead>
             <tr>
@@ -84,7 +85,7 @@
                       hx-target="#discord-config-panel"
                       hx-swap="outerHTML">
                   {% csrf_token %}
-                  <button type="submit" class="btn btn-sm btn-outline-primary">Set as default</button>
+                  <button type="submit" class="btn btn-sm btn-primary">Set as default</button>
                 </form>
                 {% endif %}
               </td>
@@ -92,6 +93,7 @@
             {% endfor %}
           </tbody>
         </table>
+        </div>
       {% else %}
         <p class="text-muted small">No roles fetched yet. Click <em>Fetch roles from Discord</em> above.</p>
       {% endif %}

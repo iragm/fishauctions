@@ -58,6 +58,14 @@ app.conf.beat_schedule = {
         "task": "auctions.tasks.sync_club_calendars",
         "schedule": 900.0,  # Run every 15 minutes
     },
+    # Club announcements waiting to go out. This is the backstop, not the timer: the view queues a
+    # countdown task for the exact moment, and every announcement now waits a few seconds first so
+    # it can be retracted (announcements.GRACE_SECONDS). A minute so that a lost countdown task
+    # costs a short delay rather than five of them; the query is one indexed lookup.
+    "send_scheduled_announcements": {
+        "task": "auctions.tasks.send_scheduled_announcements",
+        "schedule": 60.0,  # Run every minute
+    },
     # Send auction emails - every 4 minutes
     "auction_emails": {
         "task": "auctions.tasks.auction_emails",
