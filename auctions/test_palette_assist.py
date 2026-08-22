@@ -153,6 +153,16 @@ class AssistResponse:
 
 
 @override_settings(SINGLE_CLUB_MODE=False)
+def _unfenced_names(result):
+    """The names in a ``find_person`` result, with the untrusted-text fence taken back off.
+
+    Every name a tool returns is wrapped in guillemets on the way out (``untrusted_short``), which
+    is a mark for the model and not part of the name. A test that compares against the raw name is
+    asserting on the fence; worse, a ``assertNotIn`` that does it passes whatever happens.
+    """
+    return [str(person.get("name", "")).strip("«»").strip() for person in result.get("people", [])]
+
+
 class PaletteAssistTestCase(StandardTestCase):
     """Shared setup: a scripted provider, an open in-person auction, and no leftover throttles."""
 
@@ -556,8 +566,11 @@ class LookupScopeTests(PaletteAssistTestCase):
             bidder_number="901",
         )
         result = self._run(self.member, {"name": "Secret Attendee"})
-        names = [person.get("name", "") for person in result.get("people", [])]
-        self.assertNotIn("Secret Attendee", names, "a plain participant must not be able to look up other attendees")
+        self.assertNotIn(
+            "Secret Attendee",
+            _unfenced_names(result),
+            "a plain participant must not be able to look up other attendees",
+        )
 
     def test_admin_can_look_up_a_participant(self):
         AuctionTOS.objects.create(
@@ -567,8 +580,7 @@ class LookupScopeTests(PaletteAssistTestCase):
             bidder_number="902",
         )
         result = self._run(self.user, {"name": "Visible Attendee"})
-        names = [person.get("name", "") for person in result.get("people", [])]
-        self.assertIn("Visible Attendee", names)
+        self.assertIn("Visible Attendee", _unfenced_names(result))
 
     def test_my_context_only_describes_the_caller(self):
         from django.test import RequestFactory
@@ -2752,6 +2764,23 @@ class NoSaleTests(RunActionTestCase):
         self.in_person_lot.refresh_from_db()
         self.assertTrue(self.in_person_lot.active)
 
+    def test_the_three_lot_writes_say_which_lot_they_landed_on(self):
+        """A sale recorded against the wrong lot is the mistake nobody notices on the night.
+
+        All three carried a primary key and, for a sale, a bidder number -- neither of which is
+        the number printed on the lot. See ``palette_actions._lot_echo``.
+        """
+        for name, params in (
+            ("set_lot_winner", {"lot": "101-1", "winner": "555", "price": "12"}),
+            ("undo_sale", {"lot": "101-1"}),
+            ("no_sale", {"lot": "101-1"}),
+        ):
+            result = self._run(name, params)
+            self.assertNotIn("error", result, name)
+            self.assertEqual(result["lot_number"], self.in_person_lot.lot_number_display, name)
+            self.assertEqual(result["url"], self.in_person_lot.lot_link, name)
+            self.assertEqual(result["auction"], self.in_person_auction.slug, name)
+
 
 class AddLotsTests(RunActionTestCase):
     """Batch entry, which is what a drop-off table actually does."""
@@ -3359,15 +3388,34 @@ class ClubCheckInTests(PaletteAssistTestCase):
         result = self._run("check_in", {"person": "Nobody At All"})
         self.assertIn("error", result)
 
-    def test_the_bidder_number_belongs_to_the_club_not_the_auction(self):
-        """The participant form disables it in club-managed mode, so writing it back was a lie."""
+    def test_the_bidder_number_is_written_to_the_club_member(self):
+        """The participant form disables it in club-managed mode, so writing it there was a lie.
+
+        It used to be refused outright, which read as "I can't do that" for the sentence a
+        check-in desk says most. It now goes where the field actually lives -- the ClubMember --
+        and the signal carries it down to the participant row.
+        """
         member = ClubMember.objects.create(club=self.club, name="Numbered Person")
         self._run("check_in", {"person": "Numbered Person"})
         result = self._run("update_person", {"person": "Numbered Person", "bidder_number": "321"})
-        self.assertIn("error", result)
-        self.assertIn("update_club_member", result["error"])
+        self.assertTrue(result.get("ok"), result)
         member.refresh_from_db()
-        self.assertNotEqual(member.bidder_number, "321")
+        self.assertEqual(member.bidder_number, "321")
+        tos = AuctionTOS.objects.get(auction=self.in_person_auction, clubmember=member)
+        self.assertEqual(tos.bidder_number, "321")
+        # And it says the number it ended up with, never the model's "ERROR" placeholder.
+        self.assertIn("321", result["summary"])
+        self.assertNotIn("ERROR", result["summary"])
+
+    def test_a_bidder_number_the_club_already_uses_is_refused(self):
+        """The club's own duplicate rule, because the write goes through the club's own form."""
+        ClubMember.objects.create(club=self.club, name="Already Has It", bidder_number="322")
+        member = ClubMember.objects.create(club=self.club, name="Wants It", bidder_number="400")
+        self._run("check_in", {"person": "Wants It"})
+        result = self._run("update_person", {"person": "Wants It", "bidder_number": "322"})
+        self.assertIn("error", result)
+        member.refresh_from_db()
+        self.assertEqual(member.bidder_number, "400")
 
 
 class ListClubMembersTests(RunActionTestCase):
@@ -3408,8 +3456,18 @@ class AnswerQuestionTests(RunActionTestCase):
         super().setUp()
         from auctions.models import LotHistory
 
-        self.my_lot = Lot.objects.filter(auction=self.online_auction, user=self.user).first()
-        self.assertIsNotNone(self.my_lot, "fixture has no lot owned by self.user")
+        # Its own lot rather than one fished out of the fixture, for two reasons the old version
+        # got wrong. Ownership is what ``answer_question`` reads -- ``auctiontos_seller.user`` as
+        # well as the ``user`` column -- and no fixture lot sets ``user`` at all, so filtering on
+        # it found nothing. And chat closes when a lot ends: every lot in the fixture's online
+        # auction ended two days ago, while ``PaletteAssistTestCase`` keeps the in-person one open.
+        self.my_lot = Lot.objects.create(
+            lot_name="Question Shrimp",
+            auction=self.in_person_auction,
+            auctiontos_seller=self.in_person_tos,
+            user=self.user,
+            quantity=1,
+        )
         LotHistory.objects.create(
             lot=self.my_lot, user=self.userB, message="are these captive bred?", changed_price=False
         )
@@ -3425,10 +3483,10 @@ class AnswerQuestionTests(RunActionTestCase):
         )
 
     def test_somebody_elses_lot_is_refused(self):
-        other = Lot.objects.filter(auction=self.online_auction).exclude(user=self.user).first()
-        if other is None:
-            self.skipTest("fixture has no lot belonging to somebody else")
-        result = self._run("answer_question", {"lot_id": other.pk, "message": "hello"})
+        # in_person_lot is sold by admin_in_person_tos, which is admin_user's -- named rather than
+        # searched for, so this cannot quietly start testing nothing again.
+        self.assertNotEqual(self.in_person_lot.auctiontos_seller.user, self.user)
+        result = self._run("answer_question", {"lot_id": self.in_person_lot.pk, "message": "hello"})
         self.assertIn("error", result)
 
     def test_it_asks_rather_than_posting_an_empty_reply(self):

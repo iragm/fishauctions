@@ -20,6 +20,11 @@
     <li>Ask it things: &ldquo;how many lots are in my auction?&rdquo;, &ldquo;who hasn't paid yet?&rdquo;, &ldquo;when does lot submission close?&rdquo;</li>
     <li>Have it do things: add lots, check people in, record a sale, mark an invoice paid, add points.</li>
     <li>Anything that would take a page with a form on it &mdash; creating an auction, deleting things, anything involving money changing hands &mdash; it will give you a link to instead of doing.</li>
+    <li>Pick a job off a menu. Claude offers four of them by name &mdash; <em>work the door</em>, <em>chase unpaid invoices</em>,
+        <em>set up next year's auction</em>, <em>write a club announcement</em> &mdash; and each one walks through the whole thing
+        rather than you having to describe it.</li>
+    <li>Ask for something it can't do, and it will write the request down for whoever builds these. Say what you were
+        trying to do; that sentence is the part that gets read.</li>
   </ul>
 
 {% if not opted_in %}
@@ -120,19 +125,6 @@
   {% else %}
   <p class="text-muted mb-4">Nothing yet. Follow the steps above and it will show up here.</p>
   {% endif %}
-
-  <h2 class="h5 mb-2">Connecting to less than all of it</h2>
-  <p class="mb-2">
-    The whole list of tools is sent to your agent every time it connects, and it costs it
-    something to read. If you only want part of it, add <code>?tools=</code> to the address:
-  </p>
-  <ul class="mb-3">
-    <li><code>{{ mcp_url }}?tools=club</code> &mdash; members, points, events, announcements</li>
-    <li><code>{{ mcp_url }}?tools=auction</code> &mdash; lots, bidders, check-in, invoices</li>
-    <li><code>{{ mcp_url }}?tools=read</code> &mdash; only the tools that look things up</li>
-    <li><code>{{ mcp_url }}?tools=club,read</code> &mdash; combine them with commas</li>
-  </ul>
-  <p class="mb-4"><small class="text-muted">The handful that orient it &mdash; what you're working on, where a page is, undo &mdash; are always included.</small></p>
 
   {% comment %}Collapsed by default: signing in is how almost everybody connects, and a key is the exception. It opens by itself when there is a new key to read or keys already exist, because a section nobody can see is no place to put a secret that is shown once.{% endcomment %}
   <h2 class="h5 mb-2">Keys, for everything that can't sign in</h2>

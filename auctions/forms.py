@@ -73,7 +73,7 @@ from .models import (
     normalize_species_name,
     sanitize_summernote_html,
 )
-from .services import clone_lot_values, user_can_clone_lot
+from .services import auction_to_copy, clone_lot_values, user_can_clone_lot
 from .site_setup import SINGLE_CLUB_DEFAULT_MANAGE_MODE, get_single_club
 from .species_matching import (
     species_already_named,
@@ -2399,12 +2399,7 @@ class CreateAuctionForm(forms.ModelForm):
                     self.auction = None
         if not self.auction:
             # either ?copy was not set, or the user didn't make that auction - doesn't matter
-            self.auction = (
-                Auction.objects.exclude(is_deleted=True).filter(created_by=self.user).order_by("-date_end").first()
-            )
-            if self.auction:
-                if not self.auction.permission_check(self.user):
-                    self.auction = None
+            self.auction = auction_to_copy(self.user)
         if self.auction:
             self.fields["cloned_from"].initial = str(self.auction.slug)
             last_auction = str(self.auction)

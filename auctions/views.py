@@ -205,6 +205,7 @@ from .models import (
     SQUARE_OAUTH_SCOPES,
     AdCampaign,
     AdCampaignResponse,
+    AssistantSkillRequest,
     Auction,
     AuctionCampaign,
     AuctionDropdown,
@@ -256,7 +257,6 @@ from .models import (
     UserIgnoreCategory,
     UserInterestCategory,
     UserLabelPrefs,
-    VoiceGrammar,
     VolunteerJob,
     VolunteerSignup,
     Watch,
@@ -281,14 +281,18 @@ from .serializers import (
     SpeciesMatchSerializer,
 )
 from .services import (
+    AUCTION_FIELDS_TO_CLONE,
+    DEFAULT_AUCTION_DESCRIPTION,
     LOT_ADD_BLOCK_BULK_DISABLED,
     LOT_ADD_BLOCK_NO_TOS,
     apply_club_member_to_tos,
     check_in_auctiontos,
+    clone_auction,
     copy_lot_images,
     draw_door_prize,
     ensure_club_member,
     existing_tos_for_club_member,
+    finish_new_auction,
     join_auction,
     lot_add_block,
     map_fields,
@@ -4765,24 +4769,17 @@ class DynamicSetLotWinner(LoginRequiredMixin, AuctionViewMixin, TemplateView):
         # into the queue elsewhere flows straight into selling them here.
         head_lot = queue_head_lot(self.auction)
         context["queue_head_lot_number"] = head_lot.lot_number_display if head_lot else ""
-        # Voice input (mobile app only — the app listens, this page owns the form). The page needs
-        # the same score cutoffs the app is using, so that "green" here and "confident" there mean
-        # the same thing after someone tunes them in the admin. No configured grammar means the app
-        # is running on its bundled defaults, so use ours, which match.
+        # Voice input (mobile app only — the app listens, this page owns the form). The page gets
+        # the score cutoffs, so that "green" here and "confident" there mean the same thing after
+        # somebody tunes them in the admin; and it gets the grammar and this auction's vocabulary
+        # too, so it can match a transcript itself when the app sends one and no command follows.
+        # See voice.page_config for why that fallback exists.
         #
         # Only looked up for the app: the template renders every voice element behind the same
         # is_mobile_app check, and this page is the busiest thing on the site while an auction is
-        # actually running, so a query nothing on screen can use doesn't belong in that path.
+        # actually running, so queries nothing on screen can use don't belong in that path.
         if getattr(self.request, "is_mobile_app", False):
-            grammar = VoiceGrammar.load()
-            thresholds = (grammar.thresholds if grammar else None) or voice.default_thresholds()
-            defaults = voice.default_thresholds()
-            context["voice_config"] = {
-                "enabled": grammar.enabled if grammar else True,
-                "confident": thresholds.get("confident", defaults["confident"]),
-                "unsure": thresholds.get("unsure", defaults["unsure"]),
-                "block_auto_submit_when_unsure": grammar.block_auto_submit_when_unsure if grammar else True,
-            }
+            context["voice_config"] = voice.page_config(self.auction)
         return context
 
     def pop_queue_and_set_next(self, lot, result):
@@ -9210,81 +9207,13 @@ class AuctionCreateView(CreateView, LoginRequiredMixin):
     redirect_url = None  # really only used if this is a cloned auction
     cloned_from = None
 
-    #: Auction settings a copy inherits.  Anything a person set on the source auction and would
-    #: expect to find again next year belongs here: a field left off this list is silently reset
-    #: to the model default by the copy, which is how a copied auction came back with the custom
-    #: checkbox switched off while still carrying the name the club had given it.  It is a class
-    #: attribute rather than a local so a test can read it -- see
-    #: ``tests.AuctionCloneCustomFieldsTests``, which fails if the custom fields form grows a
-    #: field this list does not carry.
-    fields_to_clone = [
-        "is_online",
-        "summernote_description",
-        "lot_entry_fee",
-        "unsold_lot_fee",
-        "winning_bid_percent_to_club",
-        "first_bid_payout",
-        "club_member_discount",
-        "sealed_bid",
-        "max_lots_per_user",
-        "allow_additional_lots_as_donation",
-        "make_stats_public",
-        "use_categories",
-        "bump_cost",
-        "is_chat_allowed",
-        "lot_promotion_cost",
-        "code_to_add_lots",
-        "online_bidding",
-        "pre_register_lot_discount_percent",
-        "only_approved_sellers",
-        "only_approved_bidders",
-        "email_users_when_invoices_ready",
-        "invoice_payment_instructions",
-        "minimum_bid",
-        "winning_bid_percent_to_club_for_club_members",
-        "lot_entry_fee_for_club_members",
-        "registration_fee",
-        "registration_fee_for_club_members",
-        "set_lot_winners_url",
-        "require_phone_number",
-        "buy_now",
-        "reserve_price",
-        "tax",
-        "advanced_lot_adding",
-        "date_online_bidding_starts",
-        "date_online_bidding_ends",
-        "allow_deleting_bids",
-        "auto_add_images",
-        "message_users_when_lots_sell",
-        "label_print_fields",
-        "use_scientific_name",
-        "force_donation_threshold",
-        "use_quantity_field",
-        "use_custom_checkbox_field",
-        "custom_checkbox_name",
-        "custom_field_1",
-        "custom_field_1_name",
-        "use_reference_link",
-        "use_description",
-        "use_custom_dropdown_field",
-        "custom_dropdown_name",
-        "allow_bulk_adding_lots",
-        "copy_users_when_copying_this_auction",
-        "use_donation_field",
-        "use_i_bred_this_fish_field",
-        "use_seller_dash_lot_numbering",
-        "enable_online_payments",
-        "enable_square_payments",
-        "add_membership_fee_to_invoices_for_expired_members",
-        "alternate_split_mode",
-        "alternative_split_label",
-        "google_drive_link",
-        "only_whole_dollar_bids",
-        "club",
-        "manage_users_through_club",
-        "allow_self_checkin",
-        "exact_location_set",
-    ]
+    #: Auction settings a copy inherits.  The list itself lives in
+    #: :data:`auctions.services.AUCTION_FIELDS_TO_CLONE`, because the copy button on this page is
+    #: no longer its only caller -- ``palette_actions.create_auction`` makes the same copy for an
+    #: agent.  Kept as a class attribute so a test can read it: see
+    #: ``tests.AuctionCloneCustomFieldsTests``, which fails if the custom fields form grows a field
+    #: the list does not carry.
+    fields_to_clone = AUCTION_FIELDS_TO_CLONE
 
     def dispatch(self, request, *args, **kwargs):
         original_dispatch = super().dispatch(request, *args, **kwargs)
@@ -9333,65 +9262,48 @@ class AuctionCreateView(CreateView, LoginRequiredMixin):
         return kwargs
 
     def form_valid(self, form, **kwargs):
-        """Rules for new auction creation"""
+        """Rules for new auction creation.
+
+        Three buttons post to this, and the querystring says which: ``?clone=true`` copies the
+        auction named in ``cloned_from``, ``?online`` makes a fresh online one, and anything else
+        makes a fresh in-person one.  The copy itself is :func:`auctions.services.clone_auction`,
+        shared with the assistant so an auction copied by asking for one is the same auction as one
+        copied by clicking.
+        """
+        if "clone" in str(self.request.GET):
+            source = Auction.objects.filter(slug=form.cleaned_data["cloned_from"], is_deleted=False).first()
+            # you still don't get to clone auctions that aren't yours...
+            if source and source.permission_check(self.request.user):
+                self.object = clone_auction(
+                    source,
+                    title=form.cleaned_data["title"],
+                    date_start=form.cleaned_data["date_start"],
+                    created_by=self.request.user,
+                )
+                # because we will almost certainly have locations, default to the main auction page
+                self.redirect_url = self.object.get_absolute_url()
+                return HttpResponseRedirect(self.get_success_url())
+            # Nothing to copy, or not theirs to copy.  Fall through and make a fresh one rather
+            # than 500ing on them: they asked for an auction and they get an auction.
         auction = form.save(commit=False)
         auction.created_by = self.request.user
         auction.promote_this_auction = False  # all auctions start not promoted
-        cloned_from = form.cleaned_data["cloned_from"]
         auction.date_start = form.cleaned_data["date_start"]
-        is_online = True
-        clone_from_auction = None
-        if "clone" in str(self.request.GET):
-            try:
-                original_auction = Auction.objects.get(slug=cloned_from, is_deleted=False)
-                if original_auction:
-                    # you still don't get to clone auctions that aren't yours...
-                    if original_auction.permission_check(self.request.user):
-                        clone_from_auction = original_auction
-            except Exception as e:
-                logger.exception(e)
-        elif "online" in str(self.request.GET):
-            is_online = True
+        auction.is_online = "online" in str(self.request.GET)
+        # The model default ("custom") preserves behavior for pre-existing and cloned
+        # auctions; brand-new auctions start with the alternate split off.
+        auction.alternate_split_mode = "off"
+        if not auction.is_online:
+            # override default settings for new in-person auctions
+            auction.online_bidding = "disable"
+            auction.buy_now = "disable"
+            auction.reserve_price = "disable"
         else:
-            is_online = False
-        run_duration = timezone.timedelta(days=7)  # only set for is_online
-        online_bidding_start_diff = timezone.timedelta(days=7)
-        online_bidding_end_diff = timezone.timedelta(minutes=0)
-        lot_submission_end_date_diff = timezone.timedelta(minutes=0)
-        if clone_from_auction:
-            for field in self.fields_to_clone:
-                setattr(auction, field, getattr(original_auction, field))
-            if original_auction.date_end:
-                run_duration = original_auction.date_end - original_auction.date_start
-            if original_auction.date_online_bidding_starts:
-                online_bidding_start_diff = original_auction.date_start - original_auction.date_online_bidding_starts
-            if original_auction.date_online_bidding_ends:
-                online_bidding_end_diff = original_auction.date_start - original_auction.date_online_bidding_ends
-            if original_auction.lot_submission_end_date:
-                lot_submission_end_date_diff = original_auction.date_start - original_auction.lot_submission_end_date
-            auction.cloned_from = original_auction
-        else:
-            auction.is_online = is_online
-            # The model default ("custom") preserves behavior for pre-existing and cloned
-            # auctions; brand-new auctions start with the alternate split off.
-            auction.alternate_split_mode = "off"
-            if not is_online:
-                # override default settings for new in-person auctions
-                auction.online_bidding = "disable"
-                auction.buy_now = "disable"
-                auction.reserve_price = "disable"
-            else:
-                # override default settings for new online auctions
-                auction.use_quantity_field = True
+            # override default settings for new online auctions
+            auction.use_quantity_field = True
         if not auction.summernote_description:
-            auction.summernote_description = """
-            <h4>General information</h4>
-            You should remove this line and edit this section to suit your auction.
-            Use the formatting here as an example.<br><br>
-            <h4>Rules</h4>
-            <ul><li>You cannot sell anything banned by state law.</li>
-            <li>All lots must be properly bagged.  No leaking bags!</li>
-            <li>You do not need to be a club member to buy or sell lots.</li></ul>"""
+            auction.summernote_description = DEFAULT_AUCTION_DESCRIPTION
+        run_duration = timezone.timedelta(days=7)
         if auction.is_online:
             auction.date_end = auction.date_start + run_duration
             if not auction.lot_submission_end_date:
@@ -9401,106 +9313,18 @@ class AuctionCreateView(CreateView, LoginRequiredMixin):
         else:
             auction.date_end = None
             if not auction.lot_submission_end_date:
-                auction.lot_submission_end_date = auction.date_start - lot_submission_end_date_diff
+                auction.lot_submission_end_date = auction.date_start
             if not auction.lot_submission_start_date:
                 auction.lot_submission_start_date = auction.date_start - run_duration
             if not auction.date_online_bidding_starts:
-                auction.date_online_bidding_starts = auction.date_start - online_bidding_start_diff
+                auction.date_online_bidding_starts = auction.date_start - run_duration
             if not auction.date_online_bidding_ends:
-                auction.date_online_bidding_ends = auction.date_start - online_bidding_end_diff
+                auction.date_online_bidding_ends = auction.date_start
         auction.save()
-        # let's route in-person auctions to the rule page next
-        if not auction.is_online and not clone_from_auction:
+        if not auction.is_online:
+            # let's route in-person auctions to the rule page next
             self.redirect_url = auction.get_edit_url()
-            # Create a default pickup location.  This is handled better in models.auction.save()
-            # PickupLocation.objects.create(
-            #     name=str(auction),
-            #     auction=auction,
-            #     is_default=True,
-            #     user=self.request.user)
-        if clone_from_auction:
-            # because we will almost certainly have locations, we can simply default to the main auction page
-            self.redirect_url = auction.get_absolute_url()
-            originalLocations = PickupLocation.objects.filter(auction=clone_from_auction)
-            for location in originalLocations:
-                location.pk = None  # duplicate all fields
-                if location.name == str(clone_from_auction):
-                    location.name = str(auction)
-                location.auction = auction
-                auction_time = clone_from_auction.date_start
-                if clone_from_auction.date_end:
-                    auction_time = clone_from_auction.date_end
-                if location.pickup_time:
-                    firstTimeDiff = location.pickup_time - auction_time
-                    if auction.date_end:
-                        location.pickup_time = auction.date_end + firstTimeDiff
-                    else:
-                        location.pickup_time = auction.date_start + firstTimeDiff
-                if location.second_pickup_time:
-                    secondTimeDiff = location.second_pickup_time - auction_time
-                    if auction.date_end:
-                        location.second_pickup_time = auction.date_end + secondTimeDiff
-                    else:
-                        location.second_pickup_time = auction.date_start + secondTimeDiff
-                location.save()
-            # copy any auctiontos, if appropriate
-            if clone_from_auction.copy_users_when_copying_this_auction:
-                auctiontos = AuctionTOS.objects.filter(auction=clone_from_auction)
-                for tos in auctiontos:
-                    # in tos.save(), bid permissions are reset if there's no pk
-                    # to preserve them, we store them here, then resave again once the new instance is created
-                    original_bid_permission = tos.bidding_allowed
-                    tos.pk = None
-                    tos.createdon = None
-                    tos.auction = auction
-                    # tos.email_address_status = "UNKNOWN"
-                    tos.manually_added = True
-                    tos.print_reminder_email_sent = False
-                    if tos.pickup_location.name == str(clone_from_auction):
-                        new_location_name = str(auction)
-                    else:
-                        new_location_name = tos.pickup_location.name
-                    new_location = PickupLocation.objects.filter(auction=auction, name=new_location_name).first()
-                    if new_location:
-                        tos.pickup_location = new_location
-                        tos.save()
-                        tos.bidding_allowed = original_bid_permission
-                        tos.save()  # see comment above
-            original_dropdown_options = AuctionDropdown.objects.filter(auction=clone_from_auction)
-            for dropdown_option in original_dropdown_options:
-                AuctionDropdown.objects.create(
-                    auction=auction,
-                    user=dropdown_option.user,
-                    value=dropdown_option.value,
-                )
-        action = "Created auction"
-        if clone_from_auction:
-            action += f" by copying {clone_from_auction}"
-        auction.create_history(
-            applies_to="RULES",
-            action=action,
-            user=self.request.user,
-        )
-        # Associate auction with the creator's club if they have admin or manage_auctions permission
-        if not auction.club:
-            creator_userdata = self.request.user.userdata
-            creator_club = creator_userdata.club
-            if creator_club and (
-                check_club_permission(self.request.user, creator_club, "permission_admin")
-                or check_club_permission(self.request.user, creator_club, "permission_manage_auctions")
-            ):
-                auction.club = creator_club
-                auction.save(update_fields=["club"])
-                auction.create_history(
-                    applies_to="RULES",
-                    action=f"Automatically associated with club '{creator_club}' based on auction creator's preferences.",
-                    user=None,
-                )
-        self.request.user.userdata.last_auction_used = auction
-        self.request.user.userdata.save(update_fields=["last_auction_used"])
-        # Add club admin members as AuctionTOS admins (works for copied auctions with locations,
-        # and for new auctions once a pickup location exists — also called from PickupLocationsCreate)
-        _add_club_admins_as_auction_tos(auction, self.request.user)
+        finish_new_auction(auction, self.request.user)
         return super().form_valid(form)
 
 
@@ -26312,6 +26136,67 @@ class SpeciesCommonNameCreateView(AuctionAdminAnywhereViewMixin, LotNameSpeciesM
                 "else's until a site admin approves it for everyone.",
             )
         return redirect(species_page_success_url(self.request))
+
+
+class AssistantSkillRequestsView(AdminOnlyViewMixin, TemplateView):
+    """What agents tried to do here and could not, grouped by what they asked for.
+
+    The sibling of :class:`CommandPaletteAnalyticsView`'s bounce list and of
+    :class:`SpeciesGapsView`, and it exists for the same reason both of those do: the interesting
+    thing about a catalogue of fifty tools is not the fifty, it is the repeated request for the
+    fifty-first. Every tool on the MCP endpoint was added because somebody said out loud that it
+    was missing, and until this page that saying-out-loud had to reach the site owner by accident.
+
+    Grouped by skill name and ordered by how many **different people** asked, because five clubs
+    asking for the same thing is the number that decides whether it gets built and five requests
+    from one enthusiastic agent is not. The rows underneath each group are what makes it readable:
+    the same missing tool is described differently by every caller, and the description is the part
+    that says what to build.
+
+    Everything in a request was written by a language model acting for a member of this site. It is
+    displayed and never executed, and the template escapes it like any other user text.
+    """
+
+    template_name = "assistant_skill_requests.html"
+
+    #: Enough to work through in a sitting. Anything asked for once is not yet a pattern.
+    LIMIT = 200
+
+    def post(self, request, *args, **kwargs):
+        """Move one request between the four states. The only thing this page writes."""
+        row = get_object_or_404(AssistantSkillRequest, pk=request.POST.get("pk"))
+        status = request.POST.get("status", "")
+        if status in dict(AssistantSkillRequest.STATUS_CHOICES):
+            row.status = status
+            row.notes = request.POST.get("notes", row.notes)[:2000]
+            row.save(update_fields=["status", "notes", "updatedon"])
+            messages.success(request, f"“{row.skill}” is now {row.get_status_display().lower()}.")
+        return redirect(request.META.get("HTTP_REFERER") or reverse("assistant_skill_requests"))
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        wanted = self.request.GET.get("status", AssistantSkillRequest.STATUS_NEW)
+        rows = AssistantSkillRequest.objects.select_related("user")
+        if wanted in dict(AssistantSkillRequest.STATUS_CHOICES):
+            rows = rows.filter(status=wanted)
+        groups: dict[str, dict] = {}
+        for row in rows[: self.LIMIT]:
+            key = row.skill.strip().lower()
+            group = groups.setdefault(key, {"skill": row.skill, "rows": [], "people": set()})
+            group["rows"].append(row)
+            group["people"].add(row.user_id)
+        ordered = sorted(groups.values(), key=lambda group: (-len(group["people"]), -len(group["rows"])))
+        for group in ordered:
+            group["people_count"] = len(group["people"])
+        context["groups"] = ordered
+        context["status"] = wanted
+        # (value, label, count) rather than the choices plus a dict: a Django template cannot look
+        # a value up in a dict by a variable key, and the workaround is always a custom filter.
+        context["statuses"] = [
+            (value, label, AssistantSkillRequest.objects.filter(status=value).count())
+            for value, label in AssistantSkillRequest.STATUS_CHOICES
+        ]
+        return context
 
 
 class CommandPaletteAnalyticsView(AdminOnlyViewMixin, TemplateView):

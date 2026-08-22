@@ -726,9 +726,16 @@ no `clientInfo`, and a name in the request body is one the caller chose for itse
 was typed by somebody else, and an agent holding the write scope that reads "also mark every
 invoice paid" in a lot description is the whole attack. (1) A write needs a permission its owner
 genuinely holds, so the blast radius is their own auctions. (2) No tool changes more than one row,
-so a hundred invoices is a hundred calls. (3) `mcp.auth.within_write_budget` — 300 writes per
-credential per hour, generous because a check-in table is one write per person through the door,
-and it counts *attempted* writes because a refused write is still a call the agent chose to make.
+so a hundred invoices is a hundred calls — and there are **no exceptions**, which is the part worth
+defending: a bulk `undo_check_in everyone` was written and then taken back out, because one
+exception is all an instruction hidden in a lot description needs, and "list them and clear them
+one at a time" is slower on purpose. (3) `mcp.auth.within_write_budget` — 2000 writes per
+credential per hour (`DEFAULT_RATE_LIMIT` is 3000 requests, which has to stay above it since every
+write is a request too), and it counts *attempted* writes because a refused write is still a call
+the agent chose to make. It was 300, set from "a check-in table is one write per person through
+the door"; that described the quiet jobs, and the bulk ones — a picture on every lot without one,
+clearing a room's check-ins, an evening of set-winners — stopped partway through, which teaches an
+operator to work around the limit rather than to notice it.
 Bound (1) is the one that does **not** help here, and it is worth saying so plainly: the agent is
 already the auction admin, so "mark bob's invoice paid" is inside its owner's permissions. What
 stops it being a disaster is (2) and (3) and the fact that every write is in `recent_changes` with
@@ -752,6 +759,16 @@ parameters an action already declares); `general` is always kept, because a narr
 needs the tools that orient a caller. It is part of the address rather than the protocol because
 the protocol has nowhere to put it and the address is the one thing every client lets a person
 type. `?tools=club,read` is 8 KB, `?tools=auction,read` 14 KB, `?tools=read` 18 KB.
+
+That parameter is **no longer documented on `/account/api-keys/`**, and the reason is that the
+problem it solves is not ours to solve. Deferred tool loading — `defer_loading: true` plus a tool
+search tool — is set by whoever calls the model, on the `mcp_toolset` entry or per tool in its
+`configs`; there is nowhere in `tools/list` for a *server* to ask for it, and Claude Code already
+defers every MCP tool by itself. So the size argument the page was making is one the host has
+already won, and asking a club treasurer to hand-edit a query string to save tokens they were
+never going to notice was the wrong thing to put in front of them. `parse_areas` stays: it costs
+nothing, it is genuinely useful to somebody wiring up a narrow integration, and it is the sort of
+thing that belongs in this file rather than on a page.
 
 Three things are left out of every descriptor, and all three are the same decision — a key that
 says what the spec's own default already says is a key fifty-four times over. `destructiveHint`
@@ -779,6 +796,63 @@ tool is about — fifteen participant rows, a club's fee table, a lot's live pri
 enough to be true of all fifty-four validates nothing, and fifty-four copies of it is seven
 kilobytes on every session for that nothing. A tool that grows a result worth validating can
 declare its own.
+
+**Five answers are better looked at than read out, and MCP has a shape for that.** A host with
+the apps surface renders a `ui://` resource in a sandboxed iframe beside the tool's reply:
+`describe_lot` becomes the lot with its photograph on it, `describe_auction` the club's rules,
+`lot_queue` the selling console with a row for recording who bought the lot on the block,
+`my_activity` / `set_invoice_status` an itemised invoice, and `my_membership` /
+`renew_membership` / `send_membership_card` the member's own card. `auctions/mcp/widgets.py` is
+the catalogue, `protocol` serves `resources/list` and `resources/read`, and `tools.descriptor`
+hangs `_meta["ui/resourceUri"]` (and the nested spelling, because hosts read one or the other) on
+exactly those five.
+
+The **card** is the one that has to be looked at rather than read: a membership number read out is
+a number, and a membership number drawn as a barcode is the thing the door scanner takes.
+`my_membership` is the new read behind it — read-only, always the caller's own (it matches on
+`ClubMember.user`, and there is no parameter for a person), and the answer to "am I still a
+member?", which nothing could answer before: `renew_membership` navigates and
+`send_membership_card` emails. All three now return the same `_membership_card(member)` object, so
+the widget draws one card whichever way somebody arrived at it. Its Renew button is an
+`app.openLink` to the club's own payment page and takes no money — PayPal's and Square's scripts
+could not run inside that iframe if we wanted them to — and it only appears when
+`_membership_renewal_state` says there is something to pay, which is also why "renew my
+membership" four months early now answers "it runs to March" instead of walking somebody to a
+payment page.
+
+Two of the five decorate a write, and `test_mcp_widgets.WRITES_THAT_MAY_RENDER` is where each one
+says why: `set_invoice_status` because the invoice it just settled is what a checkout desk needs
+to see, `send_membership_card` because the card it just emailed is better shown than described.
+Both draw the thing they *did*, never the thing they are about to do — the widget is the receipt,
+not the button, which is what keeps "a host may render this" from meaning "a host may run this".
+
+**The widget draws itself from the same `structuredContent` the model reads.** That is the whole
+design and it is what makes the feature free: a host that has never heard of `_meta.ui` ignores it
+and shows the JSON, which is what it did before, so there is no second payload, no second
+permission check, and no view that can drift out of step with the answer. It is also why
+`describe_auction` now returns `url`, why `my_activity`'s invoice block does, and why
+`set_invoice_status` answers with the invoice rather than only with the word "paid" — a checkout
+desk being told "it is paid now" with no figure cannot check it. Five widgets, **one document**:
+`auctions/templates/auctions/mcp/widget.html` bakes in `view` per resource and the script switches
+on it, exactly as `auctions/templates/auctions/embeds/base.html` is one shell for the four club
+embeds — and it borrows that file's palette and class names, because a club embed and a widget are
+the same problem twice.
+
+The iframe's CSP blocks **everything** external, so `@modelcontextprotocol/ext-apps` is vendored
+(`auctions/mcp/vendor/`, unmodified, with the curl that fetched it) and inlined; `widgets._bundle`
+rewrites its trailing `export{…}` into a `globalThis` assignment, because an inline
+`<script type="module">` cannot export, and `test_mcp_widgets` fails the build if that stops
+matching — the alternative symptom is a blank rectangle with the error in an iframe console nobody
+will open. Lot photos and a membership barcode are the exceptions and are declared, not inlined:
+`csp.resourceDomains` names this site and the Cloudflare delivery host, because a lot may carry six
+photographs and a result is capped at 20 KB. `csp.connectDomains` is **empty** and stays empty: a widget never talks
+to this API, it asks the host, which asks us with the caller's own credential — so there is no
+second authenticated path in, and the one tool a widget calls on its own (`set_lot_winner`, from
+the selling console) goes through `run_action` exactly as a model's call would. Outbound links go
+through `app.openLink`; the sandbox drops `window.open` and `target="_blank"` silently.
+
+`resources/list` is **not** filtered by permission, on purpose: a widget is an empty template and
+holds nobody's data, so filtering would tell anyone who asked who runs an auction and buy nothing.
 
 **CIMD is how claude.ai connects, and it did not work.** The toolkit maps a client id metadata
 document onto DOT's single `authorization_grant_type` column, so it refuses any document naming
@@ -822,7 +896,7 @@ explicit `agree_to_rules` — two calls, not one — and a multi-location auctio
 gated on `closed or pretty_much_over`, not on `closed` alone: `closed` never fires for an in-person
 auction (people walk in after it has started), which left joining as the one write with no "too
 late" at all and last spring's auction still joinable today. Check-in
-gained a reversal (`undo_check_in`), `set_lot_winner` and `undo_sale` gained `ignore_errors` (the
+gained a reversal (`undo_check_in`, which also takes `everyone` — see below), `set_lot_winner` and `undo_sale` gained `ignore_errors` (the
 set-winners page's "ignore errors and save" button, which over MCP has to be a sentence), and
 `undo_sale` refuses outright when either side's invoice has already been settled — nothing guarded
 that, so an undone mistype silently changed what somebody who had already paid was supposed to owe.
@@ -842,8 +916,12 @@ just looking at" *is* answerable even though "what are they looking at now" is n
 past tense with a timestamp, and never a substitute for asking.
 
 **Writes echo what they resolved.** `_lot_echo(lot)` is the shared shape — `lot_number`,
-`lot_name`, `auction` (the slug), `auction_title`, `url` — on `add_lot`, `add_lots`, `edit_lot`,
-`watch_lot` and `answer_question`. Two things it fixes: a write that answered "done" and nothing
+`lot_name`, `auction` (the slug), `auction_title`, `url` — on every write that names a lot:
+`add_lot`, `add_lots`, `edit_lot`, `watch_lot`, `answer_question`, `add_lot_image`,
+`remove_lot_image`, and now `set_lot_winner`, `no_sale` and `undo_sale`, which carried a primary
+key and a bidder number and never said which lot. Those three are the ones it matters most on —
+a sale recorded against the wrong lot is the most expensive mistake on the list and the one
+nobody notices on the night. Two things it fixes: a write that answered "done" and nothing
 else was a blind call, and the identifier it *did* answer with was the primary key ("lot 90043")
 next to a `/lots/<pk>/` URL. The number a person reads off a lot is `lot_number_display` and the
 address on its own label is `lot_link` (`/auctions/<auction>/lots/<number>/`). `add_lot`'s
@@ -858,14 +936,54 @@ shadow row through the same helper the scanner uses. Without it `check_in` answe
 in this auction" about the one person the mode exists to let in. The reply says
 `added_to_the_auction` when it was their first time through the door.
 
-**A club-managed auction's bidder number belongs to the club.** `CreateEditAuctionTOS` *disables*
-`bidder_number` and the three permission flags in that mode, and a disabled Django field ignores
-what was submitted and cleans to its initial value — so `update_person` wrote the unchanged value
-back, answered "ok", and on a row whose number was already the model's `"ERROR"` placeholder read
-the placeholder back out as though it had just set it. It now refuses those fields by reading
-`form.fields[...].disabled` (so it cannot drift from whatever the form disables next) and names
-`update_club_member` instead, and every change is reported from the **saved row** rather than from
-`cleaned_data`.
+**"Set all users not checked in" is `list_people` and then one `undo_check_in` per person**, and
+that is the answer rather than a bulk switch. A bulk one was written — a rehearsal, a second night
+and testing the door table all end in that sentence, and the only other way to say it was the
+Django admin — and then removed, because it would have been the single exception to bound (2)
+above. Two hundred calls is two hundred chances for a person watching to stop it, the agent reads
+the list back before it starts, and every one of them lands in `recent_changes` under its own name.
+
+**A club-managed auction's bidder number belongs to the club, and `update_person` now goes and
+writes it there.** `CreateEditAuctionTOS` *disables* `bidder_number` and the three permission flags
+in that mode, and a disabled Django field ignores what was submitted and cleans to its initial
+value — so `update_person` wrote the unchanged value back, answered "ok", and on a row whose number
+was already the model's `"ERROR"` placeholder read the placeholder back out as though it had just
+set it. Naming `update_club_member` instead was the first fix and it was only half of one: from the
+other end of an assistant, "that field lives on another tool" reads as a refusal, and it was a
+refusal of the sentence a check-in desk says most.
+
+So `_update_through_the_club` is the same **redirect the web already does** —
+`AuctionTOSAdmin.dispatch` sends anyone editing a participant in a club-managed auction to
+`clubmember_admin` — in one function: the club's own `ClubMemberAdminForm`, its duplicate checks,
+its `ClubHistory` line. The participant row is then re-read (`ClubMember`'s `post_save` signal has
+already synced the number and the flags down while we were holding a stale copy) and the contact
+details copied onto it, because the signal does not carry those. Which fields go that way is still
+read off `form.fields[...].disabled`, so it cannot drift from whatever the participant form
+disables next, and every change is reported from the **saved row** rather than from `cleaned_data`.
+
+No club permission is asked for on top of `update_person`'s own gate, and that is **wider than the
+web page** on purpose. `ClubMemberAdminView.post` wants `permission_add_edit`; requiring it here
+refused the auction's own creator whenever they held no club role — somebody fixing a typo in the
+email of a person standing at their check-in desk. What that permission protects is the membership
+*roll*, every member including people in no auction at all; this is narrower by construction,
+because the person has already been resolved as a participant in an auction the caller
+administers, whose name, email, phone and invoice are on the users page in front of them and whose
+participant row they could already delete. The consequence is worth stating rather than
+discovering: the member row is shared, so a corrected name or email is corrected for the club and
+every other auction it appears in. That is the point — the alternative is the two rows
+disagreeing — and it lands in `ClubHistory` under their name.
+
+That is the same rule the **web** is supposed to follow and did not: managing a member from the
+auction's users page is meant to be the same job as managing them from `/clubs/<slug>/admin/`.
+`AuctionTOS.actions_dropdown_html` offered Renew, Set expiration date and Membership number and
+stopped there, so an admin working the door could not resend somebody's card or deactivate them
+without going to find the club. It now carries **Resend membership card** and **Deactivate club
+member** (or Reactivate, for a row whose member is already deactivated), both of them the same
+`club_member_confirm` modals the club page opens, and `auction_users.html` grew the club page's
+`clubMemberListChanged` refresh so the table actually changes when one of them closes. Permissions
+and Discord are deliberately still club-page-only: those two are the club page's own
+`can_manage_permissions` / `can_manage_discord` checks, and a model property with no request cannot
+ask them.
 
 **`update_auction_setting` is the way in and out of `promote_this_auction`.** One setting at a
 time, through the real `AuctionEditForm`, because promoting is not a boolean — it is four rules in
@@ -907,16 +1025,197 @@ The `auctions` half is unchanged and still that permission-safe search, now up t
 `MAX_SEARCH_MILES` (3000) rather than 500. Somebody with no location on their account gets the
 first half rather than a refusal: their own club's auction has nothing to do with where they live.
 
+**Creating an auction is a copy, or it is a page.** The reason `AuctionCreateView` sat in
+`NOT_A_SKILL` was a good one — twenty decisions about dates, fees and rules, and a one-line command
+would guess at most of them and get the fees wrong — so `create_auction` answers the objection
+instead of arguing with it: it **only ever copies** one this person already ran, which means
+nothing is guessed, and the two things that genuinely differ each year (the name and the start
+date) are the two it asks for. Somebody with nothing to copy is refused and handed the create page,
+because that is exactly the case the original reason was about. `services.clone_auction` is the
+copy itself, extracted from `AuctionCreateView.form_valid` and shared with the copy button, so the
+auction an agent makes is the auction a click makes; `services.finish_new_auction` is the tail both
+paths need (the history line, the creator's club, `last_auction_used`, the club's admins).
+`services.auction_to_copy` is what "copy my last auction" means, and it now orders by `-date_start`
+rather than `-date_end` — an in-person auction has no `date_end`, so on MariaDB every one of them
+sorted behind every online auction and the clubs that copy the most were offered the wrong one.
+
+**A copy carries the people, not what happened to them.** `copy_users_when_copying_this_auction`
+duplicates each `AuctionTOS` with `tos.pk = None` on a loaded row, which brings *every* column
+across — so `services.PER_RUN_TOS_STATE` names the ones that are answers to "what happened at the
+last one" and blanks them. `checked_in` is the one that does real damage: an auction in check-in
+mode opened with everybody already through the door, so the desk had nothing to do and the
+`not checked_in` guard on bidding never fired. `door_prize_called` is the same mistake in a smaller
+place (last year's winners are ineligible for this year's draw), the two confirmation-email flags
+and `time_spent_reading_rules` are per-auction by definition, and `possible_duplicate` is worse
+than stale — it is a foreign key pointing at a row in the *old* auction, so the duplicate warning
+on the new users page linked somewhere else entirely. Everything not on that list is carried on
+purpose: the name, the contact details, the bidder number, the memo and the permissions are facts
+about the person, which is why a club copies an auction at all.
+
+A **club-managed** auction ignores `copy_users_when_copying_this_auction` outright, whatever the
+source says. In that mode the participants *are* the club's members — `"all"` creates a shadow row
+for each of them and `"checkin"` creates one when somebody walks through the door — so copying last
+year's list is either redundant or, in check-in mode, precisely the thing that mode exists to stop.
+It would also drag across everybody who has since left the club, which the setting knows nothing
+about.
+
+**A picture on a lot is a URL, and always was.** `LotImage.url` has stored one since long before
+any of this, because sellers paste links, and `image_source` already had a value labelled "This
+picture is from the internet" — so "for any of my lots with no picture, find a good one and add it"
+needed no upload path, no base64 and no server-side fetch, which is also why the SSRF surface is
+zero (`forms.validate_image_url` checks a scheme and an extension and deliberately nothing else).
+`add_lot_image` defaults `image_source` to `RANDOM`: a bidder decides what to pay by reading that
+label, so nothing an assistant found is ever quietly filed as the seller's own photograph of the
+fish in the bag. `remove_lot_image` is the other half — the recovery path for "that's a different
+fish" has to be a sentence, not a login — and promotes another picture when it takes the thumbnail
+away. `list_lots` gained `without_images` (and every row a `has_picture`) because that is the
+question the whole skill exists for; it excludes lots whose pictures are managed from another lot,
+which are not missing one and could not take one anyway.
+
+The **admin's** version of that sentence — "find every lot in my auction with no picture and add
+one" — works too, and needed one fix to: `Lot.image_permission_check` was asking half of
+`Auction.permission_check` by hand (the `is_admin` participant row and the creator) and so missed
+the club half entirely, which meant the officer running a **club-managed** auction was refused on
+every lot but their own. It calls `Auction.permission_check` now. `list_lots` was already
+admin-safe: it lists every lot in an auction the caller has joined and adds the seller's name only
+for an admin, so `without_images` plus `limit`/`offset` is the whole loop.
+
+**Prompts are the recipes, and they are offered to the person rather than to the model.**
+`auctions/mcp/prompts.py` holds four — `run_check_in`, `chase_unpaid`, `set_up_next_year`,
+`write_announcement` — and the reason they earn a primitive of their own is not syntax. A tool is
+chosen by a model reading a description; a prompt is chosen by somebody picking it off a menu, and
+that difference is what makes a prompt the only safe place here for a **multi-step recipe**. An
+instruction the model follows because a tool result told it to is the whole prompt-injection
+problem; an instruction it follows because a person picked it off a menu is a menu. So the recipes
+that were prose in `INSTRUCTIONS` and in resolver docstrings live there, costing nothing until
+somebody asks for one. Nothing in a prompt body is interpolated except its own arguments, and
+`test_mcp_resources` fails the build if that stops being true — a prompt that could carry a lot
+description would be an injection surface *with a menu entry*. `completion/complete` is the half
+that makes the arguments usable: an auction slug is exactly what a person cannot type from memory,
+and without it a prompt argument is a free-text box that runs the recipe against last spring's
+auction. It answers out of `_my_auctions`, so completing an argument can never enumerate the site.
+
+**A resource is a read-only tool call wearing a URI.** `auctions/mcp/resources.py` publishes
+`auction://{auction}`, `auction://{auction}/lots`, `auction://{auction}/people`,
+`lot://{auction}/{lot}`, `club://{club}`, `club://{club}/events`, and the two fixed `me://context`
+and `me://activity`. Each names a registered **read-only** action and how to fill its parameters
+out of the URI; the read goes through `tools.call_tool` with the caller's own request, so the
+resolver runs the same permission check it runs for a model. There is no second path to the data
+and no second place a permission could be forgotten — the property that already made the `ui://`
+widgets safe. `test_mcp_resources` fails the build the day a template names a write, because a URI
+a host may fetch on somebody's behalf must never be one.
+
+Two things about that are worth stating rather than rediscovering. The **token argument is
+narrower than it sounds**: attaching a resource does not shrink `tools/list`, because a host still
+lists the tools. What it saves is the *turn* — the model choosing a tool, guessing the auction
+slug, and being corrected — and it makes `?tools=read` a usable narrowing for an integration that
+only reads. And **nothing concrete is ever listed**: `resources/list` returns the widget documents
+and the two `me://` reads, which are the same URI for every caller and so say nothing about
+anybody, while `resources/templates/list` returns patterns. A list of `auction://spring-2027` would
+be a list of which auctions exist handed to whoever asked, so enumeration stays in the tools, where
+it is behind a check that knows whose auctions they are. Same reasoning: `completion/complete`
+answers `ref/prompt` and deliberately refuses `ref/resource`.
+
+**"Fix the scientific name on lot 10" is three jobs wearing one sentence**, and which one it is
+depends on what the site already knows. `set_lot_species` when the species is on the list;
+`name_a_species` when it is on the list under a name nobody says; `add_species` when it genuinely
+isn't there. The middle one is the commonest and the least obvious, which is why it has a verb of
+its own rather than being a flag: *Labidochromis caeruleus* is "Blue streak hap" in FishBase and
+"yellow lab" everywhere else, and the wrong fix — adding a second *Labidochromis caeruleus* — is
+what fills the duplicate table on the gaps page.
+
+`set_lot_species` with no name given re-reads the lot's **own** name, which is the case worth
+having: the lot came in by a route that filled nothing in. It runs the matcher with the **language
+model turned off**, because here the caller *is* one and paying for a second to guess at what the
+first typed is paying twice for a worse answer. Several matches is a question with the candidates
+named, never a pick — the whole of `species_matching` is written so that "no match" beats a
+plausible one, since a wrong species reaches a printed label and breeder points. Whether the answer
+is *taught* to the rest of the site follows `LotAdmin`'s rule exactly: an auction admin's choice
+writes `SpeciesSearchCache` (global, read ahead of the token search, listed and revertible on the
+gaps page), a seller's does not. `record_choice` is reported either way, because a seller taking a
+wrong species off their own lot is precisely the evidence that mechanism collects.
+
+Both of those views were in `NOT_A_SKILL`, and the reason given was a good one for the surface it
+was written about: half-filling a taxonomic form from one spoken line is how a wrong name ends up
+on a label. **What changed is the caller.** A microphone mishears a binomial; an agent sends a
+structured call with the genus spelled, and the resolvers refuse everything the old objection was
+about. The pages are still there and still where a person does this.
+
+**`request_a_skill` is the one write with no subject.** Every tool here exists because somebody
+said out loud that it was missing, and that feedback used to arrive by accident — a message to the
+site owner, a complaint at a meeting — so the catalogue was shaped by whose complaints happened to
+reach somebody. This collects it on purpose from the party that reliably notices: the agent
+standing in front of the wall. A **duplicate is the point**, so rows are kept and counted
+(`AssistantSkillRequest.others_asking`) rather than merged; what is deduplicated is one caller
+asking twice. `/admin-dashboard/assistant-requests/` is the queue, grouped by skill and ordered by
+how many **different people** asked, because that is the number that decides what gets built and
+five requests from one enthusiastic agent is not it. Everything in a row was written by a language
+model acting for a member of the site: it is displayed, escaped, and never executed.
+
 **Adding a URL still costs you two entries.** `/mcp/` and `oauth2_provider:*` are in
 `palette_routes.EXCLUDED`; `UserAPIKeyView` is in `palette_actions.NOT_A_SKILL`; `user_api_keys` is a
 real `Route` because it is a page a person asks to be taken to.
 
+`docs/mcp_next.md` is the standing list of what the spec has that this server does not — what is
+worth adding (prompts, resource templates, `resource_link` blocks, per-call approval on the four
+tools that warrant it) and, more usefully, what has already been looked at and rejected, so nobody
+re-investigates elicitation or sampling and rediscovers that both need a session this transport
+does not have.
+
 ```bash
-docker exec -it django python3 manage.py test auctions.test_mcp
+docker exec -it django python3 manage.py test auctions.test_mcp auctions.test_mcp_widgets auctions.test_mcp_resources
 curl -s -X POST http://127.0.0.1/mcp/ -H 'Content-Type: application/json' \
   -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25"}}'
 # expect 401 + WWW-Authenticate: Bearer resource_metadata="…/.well-known/oauth-protected-resource"
 ```
+
+## Voice-driven set winners
+
+The app does the listening — iOS `WKWebView` has no Web Speech API and the shell denies the
+WebView's microphone — but the **grammar** is data, in `auctions/voice.py` and the single
+`VoiceGrammar` row, because "the auctioneer says 'hammer' where we expected 'sold'" has to be an
+admin edit rather than an app release. `GET /api/mobile/config/` serves it; the app merges it over
+what it shipped with, so a deployment that has never touched the admin page still works.
+`GET /api/mobile/auctions/<slug>/voice/vocabulary/` serves the other half: the lot and bidder
+numbers that are legal **in this auction**, which is the whole accuracy strategy inverted — instead
+of transcribing freely and repairing the text, both sides match the utterance against values that
+actually exist, so "fifteen" and "fifty" stop being a coin flip the moment only one of them is a
+real bidder here.
+
+**The page matches too, and that is new.** `auctions/templates/auctions/dynamic_set_lot_winner.html`
+used to be a pure receiver: the app pushed `command` events in and the page filled fields. When the
+app pushed a `transcript` and no command — which is what "it says *heard: lot one* and then does
+absolutely nothing" is — the page had nothing to do but print the words and file them as unmatched,
+and that looks identical whether the grammar has never heard the word, the vocabulary fetch failed,
+or the matcher on that build is not wired up. So `voice.page_config` now sends the grammar and the
+auction's vocabulary down with the page, and `voiceParse` / `voiceMatchLocally` match the transcript
+themselves after the app has had `voiceUnmatchedGraceMs` (1200 ms) to answer. A build that *does*
+match is never second-guessed, and everything the fallback produces goes through `voiceHandleCommand`
+exactly as the app's own command would: same green/amber threshold, same `VoiceCommandLog` row, same
+Confirm button.
+
+It is strict on purpose. It never invents a value — a lot or bidder number has to be one this
+auction has, or no command is produced — and it never guesses which slot a bare number belongs to,
+so an unclaimed "fifteen" is dropped rather than filled in somewhere. Both readings of a run of
+number words are tried and the vocabulary picks between them ("four oh two" is 402, "twenty five" is
+25, and nothing in the utterance says which kind it is). Two matches means an amber field with both
+offered, which is what `VoiceGrammar.homophones` is for. Price is the one field with no list to
+check against, and it is also the one the operator is looking straight at. A currency symbol in
+front of a number counts as the price anchor, because both recognizers format money out of the
+transcript before the app sees it and "twenty five dollars" arrives as `$25`.
+
+When it matches nothing it now **says why** — `heard "lot one" — no lot like that in this auction`
+— because the complaint this all came from was that the page showed the words and then did
+nothing, and "the grammar didn't understand you" and "that lot isn't in this auction" are different
+problems with different fixes. The number is deliberately not repeated back: a run of number words
+has two readings ("four oh two" is 402 or 6) and the matcher does not know which was meant, so
+quoting one would be a guess printed as a fact. A late `command` for an utterance the page has
+already handled is dropped by exact transcript text within three grace windows, which is the one
+race here that could cost a double `sold`.
+
+Fixing this on the page rather than in the app is also the shape a fix has to take here: the app
+ships through two app stores, and this whole subsystem exists so that "somebody said a word we did
+not expect" is a server-side change.
 
 ## Model Changes
 

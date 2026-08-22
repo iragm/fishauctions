@@ -185,6 +185,11 @@ urlpatterns = [
         views.SpeciesGapsView.as_view(),
         name="species_gaps",
     ),
+    path(
+        "admin-dashboard/assistant-requests/",
+        views.AssistantSkillRequestsView.as_view(),
+        name="assistant_skill_requests",
+    ),
     path("species/new/", views.SpeciesCreateView.as_view(), name="species_create"),
     path("species/name/", views.SpeciesCommonNameCreateView.as_view(), name="species_name_create"),
     path(

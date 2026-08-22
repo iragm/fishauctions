@@ -41,7 +41,7 @@ from typing import Any
 
 from auctions import palette_actions
 
-from . import auth
+from . import auth, widgets
 
 logger = logging.getLogger(__name__)
 
@@ -206,13 +206,23 @@ def descriptor(action: palette_actions.Action) -> dict[str, Any]:
         annotations["destructiveHint"] = action.destructive
         if idempotent(action):
             annotations["idempotentHint"] = True
-    return {
+    built = {
         "name": action.name,
         "title": title_for(action),
         "description": describe(action),
         "inputSchema": input_schema(action),
         "annotations": annotations,
     }
+    # Four tools answer a question that is better looked at than read out, and say so here: a host
+    # with the apps surface renders one of ``auctions.mcp.widgets`` instead of the JSON. On the
+    # fifty that have no widget the key is absent rather than null, and on a host that has never
+    # heard of it the whole thing is ignored and the JSON is what shows -- which is why the widget
+    # draws itself from the same ``structuredContent`` the model reads, and not from a private
+    # payload only it can see. One answer, two ways of looking at it.
+    ui = widgets.tool_meta(action.name)
+    if ui:
+        built["_meta"] = ui
+    return built
 
 
 #: Which half of the site a tool belongs to, for the optional ``?tools=`` filter on the endpoint.

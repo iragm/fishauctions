@@ -33025,3 +33025,66 @@ class LotOwnershipWithUnlinkedTosTests(StandardTestCase):
         self.orphaned_lot.refresh_from_db()
         assert self.unlinked_tos.user == self.seller
         assert self.orphaned_lot.user == self.seller
+
+
+class ParticipantDropdownMirrorsTheClubPageTests(StandardTestCase):
+    """Managing a member from the auction is supposed to be the same job as from /clubs/x/admin/.
+
+    It was not: the participant row's Actions menu offered Renew, Set expiration date and
+    Membership number, and stopped there -- so an admin working the users page for a club-managed
+    auction could not resend somebody's card or deactivate them without going to find the club.
+    """
+
+    def setUp(self):
+        super().setUp()
+        from .views import _upsert_clubmember_shadow_tos
+
+        self.club = Club.objects.create(name="Dropdown Club", active=True, show_member_barcode=True)
+        self.in_person_auction.club = self.club
+        self.in_person_auction.manage_users_through_club = "all"
+        self.in_person_auction.save()
+        self.member = ClubMember.objects.create(
+            club=self.club, name="Dropdown Dave", email="dave@example.com", bidder_number="81"
+        )
+        self.tos = _upsert_clubmember_shadow_tos(self.in_person_auction, self.member)
+
+    def test_the_card_can_be_resent_from_the_auction(self):
+        html = self.tos.actions_dropdown_html
+        self.assertIn(
+            reverse("club_member_confirm", kwargs={"pk": self.member.pk, "action": "resend_card"}),
+            html,
+        )
+        self.assertIn("Resend membership card", html)
+
+    def test_a_member_can_be_deactivated_from_the_auction(self):
+        html = self.tos.actions_dropdown_html
+        self.assertIn(reverse("club_member_confirm", kwargs={"pk": self.member.pk, "action": "delete"}), html)
+        self.assertIn("Deactivate club member", html)
+
+    def test_a_deactivated_member_is_offered_reactivation_instead(self):
+        self.member.is_deleted = True
+        self.member.save()
+        html = self.tos.actions_dropdown_html
+        self.assertIn(reverse("club_member_reactivate", kwargs={"pk": self.member.pk}), html)
+        self.assertNotIn("Deactivate club member", html)
+        # No card to resend for somebody who is not a member; the confirm view 404s on it too.
+        self.assertNotIn("Resend membership card", html)
+
+    def test_a_club_with_no_cards_is_offered_neither_card_action(self):
+        self.club.show_member_barcode = False
+        self.club.save()
+        self.tos.refresh_from_db()
+        html = self.tos.actions_dropdown_html
+        self.assertNotIn("Resend membership card", html)
+        self.assertNotIn("Membership number", html)
+        # Deactivate has nothing to do with cards and stays.
+        self.assertIn("Deactivate club member", html)
+
+    def test_an_auction_with_no_club_gets_none_of_it(self):
+        self.in_person_auction.manage_users_through_club = ""
+        self.in_person_auction.club = None
+        self.in_person_auction.save()
+        tos = AuctionTOS.objects.get(pk=self.tos.pk)
+        html = tos.actions_dropdown_html
+        self.assertNotIn("Resend membership card", html)
+        self.assertNotIn("Deactivate club member", html)

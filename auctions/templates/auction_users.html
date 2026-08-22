@@ -1,9 +1,29 @@
 {% extends "auctions/htmx_table_view.html" %}
+{% load render_table from django_tables2 %}
 
 {% block title %}Users for {{ auction }}{% endblock %}
 
 {% block htmx_table_ribbon %}
   {% include "auction_ribbon.html" %}
+{% endblock %}
+
+{% comment %}
+  Same live refresh the club admin table has, and for the same reason: the club-member actions in
+  each row's dropdown (deactivate, reactivate, renew) close their modal with a clubMemberListChanged
+  trigger and change nothing on screen without this. Managing members from here is supposed to be
+  the same job as managing them from the club page.
+{% endcomment %}
+{% block htmx_table %}
+{% if no_results %}
+  {{ block.super }}
+{% else %}
+  <div class="table-container"
+       hx-get=""
+       hx-trigger="clubMemberListChanged from:body"
+       hx-swap="outerHTML">
+    {% render_table table %}
+  </div>
+{% endif %}
 {% endblock %}
 
 {% block extra_js %}

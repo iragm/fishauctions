@@ -958,6 +958,19 @@ ROUTE_LIST: list[Route] = [
         keywords=["palette", "what do people search for", "llm usage"],
     ),
     _r(
+        "assistant_skill_requests",
+        "Assistant skill requests",
+        "Site admin",
+        admin=ADMIN_SUPERUSER,
+        keywords=[
+            "skill requests",
+            "what agents asked for",
+            "missing tools",
+            "mcp requests",
+            "what can't the assistant do",
+        ],
+    ),
+    _r(
         "species_gaps",
         "Lots with no scientific name",
         "Site admin",

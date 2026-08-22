@@ -387,6 +387,35 @@ class VoicePageTests(StandardTestCase):
         response = self.client.get(self.url, HTTP_USER_AGENT=APP_UA)
         self.assertFalse(response.context["voice_config"]["enabled"])
 
+    def test_the_page_can_match_a_transcript_on_its_own(self):
+        """The app is supposed to match; when it doesn't, "heard: lot one" must not be the end.
+
+        The page gets the grammar and this auction's vocabulary so it can parse a transcript the
+        app sent no command for. Asserted on the page rather than only on the context, because the
+        matcher is JS and the config being present but unread is exactly the failure it fixes.
+        """
+        page = self.client.get(self.url, HTTP_USER_AGENT=APP_UA).content.decode()
+        self.assertIn("voiceMatchLocally", page)
+        self.assertIn("voiceParse", page)
+        self.assertIn("voiceAnchorPhrases", page)
+
+    def test_the_page_gets_the_grammar_and_this_auctions_vocabulary(self):
+        config = self.client.get(self.url, HTTP_USER_AGENT=APP_UA).context["voice_config"]
+        self.assertIn("lot", config["anchors"])
+        self.assertEqual(config["number_words"]["one"], 1)
+        self.assertIn("lot_numbers", config)
+        self.assertIn("bidder_numbers", config)
+        # The vocabulary is this auction's, never the site's: a bidder number that is not legal
+        # here is a wrong answer the matcher would produce with full confidence.
+        self.assertIn(self.in_person_buyer.bidder_number, config["bidder_numbers"])
+
+    def test_an_admin_grammar_reaches_the_matcher_too(self):
+        """The whole reason the grammar is a database row: a new anchor word ships without an app
+        release, and the page-side matcher has to hear about it as well as the app."""
+        VoiceGrammar.objects.create(anchors={"lot": ["lot", "item", "number"], "sold": ["sold"]})
+        config = self.client.get(self.url, HTTP_USER_AGENT=APP_UA).context["voice_config"]
+        self.assertIn("number", config["anchors"]["lot"])
+
     def test_first_run_help_is_on_the_page(self):
         """A phone in a pocket 20 ft from the podium can't hear an auctioneer and no software fixes
         that, so say it the first time rather than letting someone conclude voice is broken."""

@@ -7071,6 +7071,30 @@ class AuctionTOS(models.Model):
                     f"<span class='dropdown-item'><a href='javascript:void(0)' hx-get='{membership_number_url}' "
                     f"hx-target='#modals-here'><i class='bi bi-credit-card-2-front me-1'></i>Membership number</a></span>"
                 )
+                if not cm.is_deleted:
+                    resend_card_url = reverse("club_member_confirm", kwargs={"pk": cm.pk, "action": "resend_card"})
+                    result += (
+                        f"<span class='dropdown-item'><a href='javascript:void(0)' hx-get='{resend_card_url}' "
+                        f"hx-target='#modals-here'><i class='bi bi-send me-1'></i>Resend membership card</a></span>"
+                    )
+            # Deactivating the *member* is not the same thing as the Delete above, which removes
+            # them from this one auction -- and the club page offers both halves of it, so this
+            # page has to as well or "managing members through the auction" quietly means "some of
+            # them". Reactivate is a bare POST with no confirmation, exactly as it is there.
+            if cm.is_deleted:
+                reactivate_url = reverse("club_member_reactivate", kwargs={"pk": cm.pk})
+                result += (
+                    f"<span class='dropdown-item'><a href='javascript:void(0)' hx-post='{reactivate_url}' "
+                    f"hx-target='#modals-here' hx-swap='innerHTML'>"
+                    f"<i class='bi bi-person-check me-1'></i>Reactivate club member</a></span>"
+                )
+            else:
+                deactivate_url = reverse("club_member_confirm", kwargs={"pk": cm.pk, "action": "delete"})
+                result += (
+                    f"<span class='dropdown-item'><a href='javascript:void(0)' hx-get='{deactivate_url}' "
+                    f"hx-target='#modals-here'>"
+                    f"<i class='bi bi-person-dash me-1'></i>Deactivate club member</a></span>"
+                )
         if self.auction.club and not self.auction.is_club_managed:
             club = self.auction.club
             already_in_club = False
@@ -8640,11 +8664,12 @@ class Lot(models.Model):
         if user.is_superuser:
             return True
         if self.auction:
-            tos = AuctionTOS.objects.filter(is_admin=True, user=user, user__isnull=False, auction=self.auction).first()
-            if tos:
-                return True
-            if self.auction.created_by == user:
-                return True
+            # Whoever may run the auction may fix its pictures.  This used to ask half of
+            # Auction.permission_check by hand -- the is_admin participant row and the creator --
+            # and so missed the club half of it entirely: in a club-managed auction admin comes
+            # from ClubMember.permission_admin / permission_manage_auctions, and the officer
+            # running it was refused on every lot but their own.
+            return self.auction.permission_check(user)
         return False
 
     @property
@@ -14543,3 +14568,73 @@ class SpeakerComment(models.Model):
         if not user or not user.is_authenticated:
             return False
         return bool(user.is_superuser or (self.user_id and self.user_id == user.pk))
+
+
+class AssistantSkillRequest(models.Model):
+    """Something an agent tried to do here and could not, in the agent's own words.
+
+    The MCP endpoint has fifty-odd tools and every one of them was added because somebody said out
+    loud that it was missing. That feedback arrived by accident -- a message to the site owner, a
+    complaint at a meeting -- so the tools that exist are the ones whose absence happened to be
+    reported by somebody who knew where to report it. This is the same signal collected on purpose:
+    the assistant hits a wall, writes down what it was trying to do, and the wall is a row.
+
+    Written by the ``request_a_skill`` tool and read on ``/admin-dashboard/assistant-requests/``.
+    Deliberately not an email and not a ticket: a duplicate row is *evidence* (five clubs asking for
+    the same thing is the whole point of counting), where five duplicate emails are a nuisance
+    somebody deletes.
+
+    Everything in ``skill``, ``params`` and ``reason`` was written by a language model acting for a
+    member of this site. It is displayed to a superuser and read by a person deciding what to build;
+    it is never executed, never matched against the registry at write time, and the dashboard
+    escapes it like any other user-supplied text.
+    """
+
+    STATUS_NEW = "new"
+    STATUS_PLANNED = "planned"
+    STATUS_DONE = "done"
+    STATUS_DECLINED = "declined"
+    STATUS_CHOICES = (
+        (STATUS_NEW, "New"),
+        (STATUS_PLANNED, "Planned"),
+        (STATUS_DONE, "Built"),
+        (STATUS_DECLINED, "Not doing"),
+    )
+
+    user = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True)
+    skill = models.CharField(max_length=100, db_index=True)
+    skill.help_text = "What the tool would be called, in the caller's words."
+    params = models.TextField(blank=True, default="")
+    params.help_text = "What it would need to be told."
+    reason = models.TextField(blank=True, default="")
+    reason.help_text = "What the user was actually trying to do, and what happened instead."
+    surface = models.CharField(max_length=100, blank=True, default="")
+    surface.help_text = "Which assistant asked: the OAuth application's name, the API key's, or the command palette."
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_NEW, db_index=True)
+    notes = models.TextField(blank=True, default="")
+    notes.help_text = "Site admin's note. Not shown to the person who asked."
+    createdon = models.DateTimeField(auto_now_add=True, db_index=True)
+    updatedon = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-createdon"]
+        verbose_name = "Assistant skill request"
+
+    def __str__(self):
+        return f"{self.skill} ({self.get_status_display()})"
+
+    @property
+    def others_asking(self):
+        """How many other people have asked for something with the same name.
+
+        The number that decides whether a row is worth building, and the reason duplicates are kept
+        rather than merged. Matched on the normalised name only -- two agents will not phrase the
+        reason the same way, and requiring them to would count every request as unique.
+        """
+        return (
+            AssistantSkillRequest.objects.filter(skill__iexact=self.skill.strip())
+            .exclude(pk=self.pk)
+            .values("user_id")
+            .distinct()
+            .count()
+        )

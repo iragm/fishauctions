@@ -555,3 +555,280 @@ def promoting_makes_it_the_clubs_current_auction(auction, was_promoted) -> bool:
     club.current_auction = auction
     club.save(update_fields=["current_auction"])
     return True
+
+
+#: Auction settings a copy inherits.  Anything a person set on the source auction and would expect
+#: to find again next year belongs here: a field left off this list is silently reset to the model
+#: default by the copy, which is how a copied auction came back with the custom checkbox switched
+#: off while still carrying the name the club had given it.  ``tests.AuctionCloneCustomFieldsTests``
+#: reads it and fails if the custom fields form grows a field this list does not carry.
+#:
+#: It lives here rather than on ``AuctionCreateView`` because the copy button on the create page is
+#: no longer the only caller: ``palette_actions.create_auction`` makes the same copy for an agent,
+#: and two lists would diverge on the first field somebody added.
+AUCTION_FIELDS_TO_CLONE = [
+    "is_online",
+    "summernote_description",
+    "lot_entry_fee",
+    "unsold_lot_fee",
+    "winning_bid_percent_to_club",
+    "first_bid_payout",
+    "club_member_discount",
+    "sealed_bid",
+    "max_lots_per_user",
+    "allow_additional_lots_as_donation",
+    "make_stats_public",
+    "use_categories",
+    "bump_cost",
+    "is_chat_allowed",
+    "lot_promotion_cost",
+    "code_to_add_lots",
+    "online_bidding",
+    "pre_register_lot_discount_percent",
+    "only_approved_sellers",
+    "only_approved_bidders",
+    "email_users_when_invoices_ready",
+    "invoice_payment_instructions",
+    "minimum_bid",
+    "winning_bid_percent_to_club_for_club_members",
+    "lot_entry_fee_for_club_members",
+    "registration_fee",
+    "registration_fee_for_club_members",
+    "set_lot_winners_url",
+    "require_phone_number",
+    "buy_now",
+    "reserve_price",
+    "tax",
+    "advanced_lot_adding",
+    "date_online_bidding_starts",
+    "date_online_bidding_ends",
+    "allow_deleting_bids",
+    "auto_add_images",
+    "message_users_when_lots_sell",
+    "label_print_fields",
+    "use_scientific_name",
+    "force_donation_threshold",
+    "use_quantity_field",
+    "use_custom_checkbox_field",
+    "custom_checkbox_name",
+    "custom_field_1",
+    "custom_field_1_name",
+    "use_reference_link",
+    "use_description",
+    "use_custom_dropdown_field",
+    "custom_dropdown_name",
+    "allow_bulk_adding_lots",
+    "copy_users_when_copying_this_auction",
+    "use_donation_field",
+    "use_i_bred_this_fish_field",
+    "use_seller_dash_lot_numbering",
+    "enable_online_payments",
+    "enable_square_payments",
+    "add_membership_fee_to_invoices_for_expired_members",
+    "alternate_split_mode",
+    "alternative_split_label",
+    "google_drive_link",
+    "only_whole_dollar_bids",
+    "club",
+    "manage_users_through_club",
+    "allow_self_checkin",
+    "exact_location_set",
+]
+
+#: What a participant row records about *one evening* rather than about the person, and what a copy
+#: therefore has to blank.  Copying an auction copies its people when the source says to -- that is
+#: the point of ``copy_users_when_copying_this_auction`` -- but it was doing it with ``tos.pk = None``
+#: on a loaded row, which carries every column across, and several of these columns are answers to
+#: "what happened at the last one".
+#:
+#: ``checked_in`` is the one that does real damage: an auction that uses check-in mode opens with
+#: everybody already through the door, so the desk has nothing to do and the ``not checked_in``
+#: guard on bidding never fires.  ``door_prize_called`` is the same mistake in a smaller place (last
+#: year's winners are ineligible for this year's draw), and ``possible_duplicate`` is worse than
+#: stale -- it is a foreign key pointing at a row in the *old* auction, so the duplicate warning on
+#: the new users page links somewhere else entirely.  The two confirmation-email flags and the
+#: seconds spent reading the rules are per-auction by definition: nobody has been emailed about this
+#: auction yet, and nobody has read rules that may since have been rewritten.
+#:
+#: Everything not listed is deliberately carried: the name, the contact details, the bidder number,
+#: the admin memo and the permissions are facts about the person, which is why a club copies an
+#: auction in the first place.
+PER_RUN_TOS_STATE = {
+    "checked_in": None,
+    "door_prize_called": None,
+    "confirm_email_sent": False,
+    "second_confirm_email_sent": False,
+    "print_reminder_email_sent": False,
+    "time_spent_reading_rules": 0,
+    "possible_duplicate": None,
+}
+
+DEFAULT_AUCTION_DESCRIPTION = """
+            <h4>General information</h4>
+            You should remove this line and edit this section to suit your auction.
+            Use the formatting here as an example.<br><br>
+            <h4>Rules</h4>
+            <ul><li>You cannot sell anything banned by state law.</li>
+            <li>All lots must be properly bagged.  No leaking bags!</li>
+            <li>You do not need to be a club member to buy or sell lots.</li></ul>"""
+
+
+def auction_to_copy(user):
+    """The auction "copy my last auction" means, or ``None`` if they have never run one.
+
+    Ordered by ``-date_start`` rather than by ``-date_end``, which is what this used to do and got
+    wrong for exactly the clubs that copy the most: an in-person auction has no ``date_end`` at
+    all, so on MariaDB every one of them sorted *behind* every online auction, and a club that has
+    only ever run in-person auctions was offered whichever one the database happened to return.
+    ``date_start`` is set on all of them.
+    """
+    from .models import Auction
+
+    for auction in Auction.objects.exclude(is_deleted=True).filter(created_by=user).order_by("-date_start")[:20]:
+        if auction.permission_check(user):
+            return auction
+    return None
+
+
+def clone_auction(source, *, title, date_start, created_by, note=""):
+    """Create a new auction carrying everything from ``source`` except its dates and its bids.
+
+    Extracted from ``views.AuctionCreateView.form_valid`` so the copy button on the create page and
+    :func:`auctions.palette_actions.create_auction` produce the same auction rather than two that
+    drift.  What comes across: every setting in :data:`AUCTION_FIELDS_TO_CLONE`, the pickup
+    locations with their times shifted to the new dates, the custom dropdown options, and -- only
+    when the source says so *and* the copy is not club-managed -- the people, minus everything in
+    :data:`PER_RUN_TOS_STATE`.
+
+    The dates are *offsets*, not values: how long the source ran, and how far ahead of it lot
+    submission and online bidding opened.  A copy made a year later therefore opens for lots the
+    same number of days before the auction as last year's did.
+    """
+    from .models import Auction, AuctionDropdown, PickupLocation
+
+    auction = Auction(title=title, created_by=created_by, date_start=date_start)
+    # Never inherited, whatever the source says. An auction is listed publicly by being promoted on
+    # purpose, and a copy of a promoted auction is not that decision being made a second time.
+    auction.promote_this_auction = False
+    for field in AUCTION_FIELDS_TO_CLONE:
+        setattr(auction, field, getattr(source, field))
+    run_duration = timezone.timedelta(days=7)
+    online_bidding_start_diff = timezone.timedelta(days=7)
+    online_bidding_end_diff = timezone.timedelta(minutes=0)
+    lot_submission_end_date_diff = timezone.timedelta(minutes=0)
+    if source.date_end:
+        run_duration = source.date_end - source.date_start
+    if source.date_online_bidding_starts:
+        online_bidding_start_diff = source.date_start - source.date_online_bidding_starts
+    if source.date_online_bidding_ends:
+        online_bidding_end_diff = source.date_start - source.date_online_bidding_ends
+    if source.lot_submission_end_date:
+        lot_submission_end_date_diff = source.date_start - source.lot_submission_end_date
+    # No ``cloned_from`` is written, because ``Auction`` has no such column -- the create view has
+    # been assigning one to a transient attribute for years and throwing it away on save. Where the
+    # copy came from is recorded where somebody can actually read it: the "Created auction by
+    # copying X" line ``finish_new_auction`` writes to the auction's own history.
+    if not auction.summernote_description:
+        auction.summernote_description = DEFAULT_AUCTION_DESCRIPTION
+    if auction.is_online:
+        auction.date_end = auction.date_start + run_duration
+        if not auction.lot_submission_end_date:
+            auction.lot_submission_end_date = auction.date_end
+        if not auction.lot_submission_start_date:
+            auction.lot_submission_start_date = auction.date_start
+    else:
+        auction.date_end = None
+        if not auction.lot_submission_end_date:
+            auction.lot_submission_end_date = auction.date_start - lot_submission_end_date_diff
+        if not auction.lot_submission_start_date:
+            auction.lot_submission_start_date = auction.date_start - run_duration
+        if not auction.date_online_bidding_starts:
+            auction.date_online_bidding_starts = auction.date_start - online_bidding_start_diff
+        if not auction.date_online_bidding_ends:
+            auction.date_online_bidding_ends = auction.date_start - online_bidding_end_diff
+    auction.save()
+
+    for location in PickupLocation.objects.filter(auction=source):
+        location.pk = None  # duplicate all fields
+        if location.name == str(source):
+            location.name = str(auction)
+        location.auction = auction
+        auction_time = source.date_end or source.date_start
+        if location.pickup_time:
+            first_time_diff = location.pickup_time - auction_time
+            location.pickup_time = (auction.date_end or auction.date_start) + first_time_diff
+        if location.second_pickup_time:
+            second_time_diff = location.second_pickup_time - auction_time
+            location.second_pickup_time = (auction.date_end or auction.date_start) + second_time_diff
+        location.save()
+
+    # A club-managed auction never copies its people, whatever the source says. In that mode the
+    # participants *are* the club's members: "all" creates a shadow row for every one of them, and
+    # "checkin" creates the row when somebody walks through the door -- which is the entire point of
+    # check-in mode, and pre-filling it from last year's list is exactly the thing that mode exists
+    # to stop. Copying would also drag across everybody who has since left the club, since the
+    # setting knows nothing about who is still a member.
+    if source.copy_users_when_copying_this_auction and not auction.is_club_managed:
+        for tos in AuctionTOS.objects.filter(auction=source):
+            # in tos.save(), bid permissions are reset if there's no pk
+            # to preserve them, we store them here, then resave again once the new instance is created
+            original_bid_permission = tos.bidding_allowed
+            tos.pk = None
+            tos.createdon = None
+            tos.auction = auction
+            tos.manually_added = True
+            for field, blank in PER_RUN_TOS_STATE.items():
+                setattr(tos, field, blank)
+            if tos.pickup_location.name == str(source):
+                new_location_name = str(auction)
+            else:
+                new_location_name = tos.pickup_location.name
+            new_location = PickupLocation.objects.filter(auction=auction, name=new_location_name).first()
+            if new_location:
+                tos.pickup_location = new_location
+                tos.save()
+                tos.bidding_allowed = original_bid_permission
+                tos.save()  # see comment above
+
+    for dropdown_option in AuctionDropdown.objects.filter(auction=source):
+        AuctionDropdown.objects.create(auction=auction, user=dropdown_option.user, value=dropdown_option.value)
+
+    finish_new_auction(auction, created_by, copied_from=source, note=note)
+    return auction
+
+
+def finish_new_auction(auction, created_by, *, copied_from=None, note=""):
+    """The bookkeeping every newly created auction gets, however it was created.
+
+    One history line saying where it came from, the creator's club if they have the run of it, the
+    "auction they last used" pointer, and the club's own admins as auction admins.  ``note`` is
+    :func:`auctions.palette_actions.via`, so a club reading its own history can tell an auction an
+    assistant copied from one somebody made on the site.
+    """
+    from .views import _add_club_admins_as_auction_tos, check_club_permission
+
+    action = "Created auction"
+    if copied_from:
+        action += f" by copying {copied_from}"
+    if note:
+        action += f" {note}"
+    auction.create_history(applies_to="RULES", action=action, user=created_by)
+    # Associate auction with the creator's club if they have admin or manage_auctions permission
+    if not auction.club:
+        creator_club = created_by.userdata.club
+        if creator_club and (
+            check_club_permission(created_by, creator_club, "permission_admin")
+            or check_club_permission(created_by, creator_club, "permission_manage_auctions")
+        ):
+            auction.club = creator_club
+            auction.save(update_fields=["club"])
+            auction.create_history(
+                applies_to="RULES",
+                action=f"Automatically associated with club '{creator_club}' based on auction creator's preferences.",
+                user=None,
+            )
+    created_by.userdata.last_auction_used = auction
+    created_by.userdata.save(update_fields=["last_auction_used"])
+    # Add club admin members as AuctionTOS admins (works for copied auctions with locations,
+    # and for new auctions once a pickup location exists — also called from PickupLocationsCreate)
+    _add_club_admins_as_auction_tos(auction, created_by)

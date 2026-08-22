@@ -1149,7 +1149,10 @@ def set_lot_winner(request, params: dict[str, Any]) -> dict[str, Any]:
     return _ok(
         summary,
         lot_id=lot.pk,
-        auction=auction.slug,
+        # Which lot, by the number on its label rather than by its primary key. Recording a sale
+        # against the wrong lot is the most expensive mistake on this list and the one nobody
+        # notices on the night, so the answer names the row it wrote to.
+        **_lot_echo(lot),
         bidder_number=winner.bidder_number,
         followups=[_lot_label_followup(lot)],
         undo={
@@ -1219,8 +1222,7 @@ def no_sale(request, params: dict[str, Any]) -> dict[str, Any]:
     return _ok(
         summary,
         lot_id=lot.pk,
-        lot_name=lot.lot_name,
-        auction=auction.slug,
+        **_lot_echo(lot),
         undo={
             "action": "undo_sale",
             "params": {"lot": lot.lot_number_display, "auction": auction.slug},
@@ -1334,6 +1336,15 @@ def undo_check_in(request, params: dict[str, Any]) -> dict[str, Any]:
 
     Checking the wrong person in is the characteristic mistake of a busy door table -- two Bobs,
     one microphone -- and it was the one write with no way back short of the Django admin.
+
+    **One person per call, and there is deliberately no "everybody" switch.** "Set all users not
+    checked in" is a real sentence -- a rehearsal, a second night, testing the door table -- and it
+    was briefly implemented here as a single bulk write. That was the wrong shape: the agent should
+    read the list back (``list_people`` with ``status="checked_in"``) and clear them one at a time,
+    which is slower and is the point. Two hundred calls is two hundred chances for a person to see
+    what is happening and stop it, and it keeps the rule that makes the prompt-injection bound
+    real -- *no tool on this server changes more than one row*. A bulk switch would have been the
+    single exception, and one exception is all an instruction hidden in a lot description needs.
     """
     from .views import user_can_add_edit_people
 
@@ -1343,6 +1354,7 @@ def undo_check_in(request, params: dict[str, Any]) -> dict[str, Any]:
         return problem
     if not (_is_auction_admin(user, auction) or user_can_add_edit_people(user, auction)):
         return _error(f"You don't have permission to change check-in for {auction.title}.")
+
     tos, problem = resolve_person(user, auction, _str(params, "person") or _str(params, "bidder"))
     if problem:
         return problem
@@ -1518,6 +1530,61 @@ def _change_phrase(label: str, value: Any) -> str:
     return f"{label} to {value}"
 
 
+def _update_through_the_club(request, auction, member, changes: dict[str, Any]) -> dict[str, Any] | None:
+    """Write a club-managed auction's participant change where that field actually lives.
+
+    In a club-managed auction the bidder number, the permission flags and the contact details all
+    belong to the :class:`~auctions.models.ClubMember`, and the web says so by *redirecting*:
+    ``AuctionTOSAdmin.dispatch`` sends anyone editing a participant to ``clubmember_admin``. So
+    this is the same redirect, in one function -- the club's own form, the club's own duplicate
+    checks, the club's own history line -- and it is what makes "change bob's bidder number" work
+    in a club auction rather than answering with the name of another tool.
+
+    That answer was the bug. Naming ``update_club_member`` is only useful to somebody who can see
+    the tool list, knows the auction is club-managed, and knows which club it belongs to; from the
+    other end it reads as a refusal. And it was a refusal of exactly the sentence the tool exists
+    for -- the bidder number is the field a check-in desk changes.
+
+    **This is wider than the web page, on purpose.** ``ClubMemberAdminView.post`` wants
+    ``permission_add_edit`` on the club, and asking for it here would refuse the auction's own
+    creator whenever they hold no club role -- somebody correcting a typo in the email address of a
+    person standing at their own check-in desk. What the club permission protects is the membership
+    *roll*: every member, including people with no connection to any auction. This is narrower than
+    that by construction, because ``update_person`` has already resolved a participant in an
+    auction this caller administers -- whose name, email, phone and invoice are on the users page
+    they are looking at, and whose participant row they could already delete. So no further
+    permission is asked here; ``update_person``'s own gate (auction admin, or ``permission_add_edit``
+    on the club) is the whole of it.
+
+    The consequence is worth stating rather than discovering: the club member row is shared, so a
+    corrected name or email is corrected for the club and for every other auction it appears in.
+    That is the point -- the alternative is the two rows disagreeing -- but it does mean an auction
+    admin's fix is not scoped to their auction. It is written to ``ClubHistory`` under their name.
+
+    Returns a problem, or ``None`` when it wrote.
+    """
+    from .models import ClubHistory
+
+    club = auction.club
+    fields = [name for name in _club_member_form(club, None).fields if name != "send_welcome_email"]
+    data = model_to_dict(member, fields=fields)
+    data = {key: ("" if value is None else value) for key, value in data.items()}
+    data.update({key: value for key, value in changes.items() if key in fields})
+    # Never on an edit: this is a details change, not a welcome.
+    data["send_welcome_email"] = False
+    form = _club_member_form(club, data, instance=member)
+    if not form.is_valid():
+        return _form_problem(form)
+    form.save()
+    ClubHistory.objects.create(
+        club=club,
+        user=request.user,
+        action=f"Edited member {member} {via(request)}",
+        applies_to="MEMBERS",
+    )
+    return None
+
+
 def update_person(request, params: dict[str, Any]) -> dict[str, Any]:
     """Change a participant's contact details (admins / club staff only).
 
@@ -1529,8 +1596,10 @@ def update_person(request, params: dict[str, Any]) -> dict[str, Any]:
 
     Validation is :class:`auctions.forms.CreateEditAuctionTOS`, the same form behind the participant
     edit modal, so the duplicate-email and duplicate-bidder-number rules are the page's rules. In a
-    club-managed auction the ClubMember owns these fields, so the change is written there and copied
-    down -- editing only the participant row would be undone the next time the member syncs.
+    club-managed auction the ClubMember owns these fields, so the whole change goes through
+    :func:`_update_through_the_club` -- the club's own form, exactly as the web redirects a
+    participant edit to ``clubmember_admin`` -- and is copied back down onto the participant row.
+    Editing only the participant row would be undone the next time the member syncs.
     """
     from .forms import CreateEditAuctionTOS
     from .views import user_can_add_edit_people
@@ -1579,32 +1648,44 @@ def update_person(request, params: dict[str, Any]) -> dict[str, Any]:
     # a row whose bidder number was already the model's "ERROR" placeholder it read the placeholder
     # back out as though it had just set it. Read off ``form.fields`` rather than repeating the
     # form's own list, so this cannot drift from whatever it decides to disable next.
-    refused = sorted(name for name in changes if form.fields.get(name) is not None and form.fields[name].disabled)
-    if refused:
-        labels = " and ".join(dict(_PERSON_FIELDS).get(name, name.replace("_", " ")) for name in refused)
+    club_owned = sorted(name for name in changes if form.fields.get(name) is not None and form.fields[name].disabled)
+    member = tos.clubmember if auction.is_club_managed else None
+    if club_owned and not member:
+        # Club-managed, but this row predates club management and has no member to write to. The
+        # web has the same hole and falls through to the plain participant form, which disables
+        # these fields -- so there is genuinely nowhere for the value to go.
+        labels = " and ".join(dict(_PERSON_FIELDS).get(name, name.replace("_", " ")) for name in club_owned)
         club_name = auction.club.name if auction.club else "the club"
         return _error(
-            f"{auction.title} manages its people through {club_name}, so {labels} lives on their club "
-            f"member record rather than on the auction. Use update_club_member for that."
+            f"{auction.title} manages its people through {club_name}, and {tos.name} has no club "
+            f"member record, so there is nowhere to put their {labels}. Add them to {club_name} first."
         )
     if not form.is_valid():
         return _form_problem(form)
 
-    member = tos.clubmember if auction.is_club_managed else None
     # Read before anything is written, so "undo that" can put back exactly what was there. The
     # bidder number is captured too and used to find them again: a rename would otherwise leave the
     # undo looking for somebody who no longer answers to that name.
     previous = {name: getattr(tos, name) for name, _label in _PERSON_FIELDS if name in changes}
     was_bidder_number = tos.bidder_number
-    for name, _label in _PERSON_FIELDS:
-        if name in changes:
-            setattr(tos, name, form.cleaned_data[name])
-            if member:
-                setattr(member, name, form.cleaned_data[name])
     if member:
-        # The ClubMember post_save signal only syncs the bidder number and the two permission flags
-        # down to shadow rows, so the participant row is saved on its own below regardless.
-        member.save(update_fields=sorted(changes))
+        problem = _update_through_the_club(request, auction, member, changes)
+        if problem:
+            return problem
+        # ``ClubMember``'s post_save signal syncs the bidder number and the two permission flags
+        # down to every shadow row, so this row was written while we were holding a copy of it --
+        # re-read it before saving or the copy puts the old values straight back. The contact
+        # details the signal does *not* carry down, so they are copied here, off the member rather
+        # than out of ``cleaned_data``: the club form is what normalised them, and the participant
+        # row has to end up saying what the member says.
+        tos.refresh_from_db()
+        for name, _label in _PERSON_FIELDS:
+            if name in changes:
+                setattr(tos, name, getattr(member, name))
+    else:
+        for name, _label in _PERSON_FIELDS:
+            if name in changes:
+                setattr(tos, name, form.cleaned_data[name])
     tos.save()
     auction.create_history(
         applies_to="USERS",
@@ -2323,6 +2404,123 @@ def join_auction(request, params: dict[str, Any]) -> dict[str, Any]:
     )
 
 
+def _membership_card(member) -> dict[str, Any]:
+    """One club membership, as the card widget draws it and as a model reads it out.
+
+    Shared by ``my_membership``, ``renew_membership`` and ``send_membership_card`` so all three
+    answer with the same object -- which is the whole trick behind the widget: it renders from the
+    tool's own ``structuredContent``, so a host that cannot draw it shows exactly the facts a host
+    that can would have drawn, and there is no second payload to keep in step.
+
+    ``barcode_url`` is this site's own SVG endpoint, which is why the widget can show a scannable
+    card at all: the iframe's CSP names this domain, and nothing else it needs comes from anywhere
+    else. ``renew_url`` is the club's payment page and is filled in only when there is genuinely
+    something to pay -- the same ``_membership_renewal_state`` answer the card page itself uses, so
+    a member who is paid up is never shown a Renew button and a member who is not always is.
+    """
+    from .views import _membership_renewal_state
+
+    club = member.club
+    is_expired, expiring_soon, should_show_payment, _can_pay = _membership_renewal_state(club, member)
+    expires = member.membership_expiration_date
+    card: dict[str, Any] = {
+        "club": club.name,
+        "club_slug": club.slug,
+        "name": member.display_name,
+        "url": reverse("club_member_by_uuid", kwargs={"slug": club.slug, "uuid": member.uuid}),
+        "membership_number": member.membership_number if club.show_member_barcode else None,
+        "barcode_url": member.barcode_image_link if club.show_member_barcode else "",
+        "expires": expires.strftime("%B %-d, %Y") if expires else None,
+        "is_expired": bool(is_expired),
+        "expiring_soon": bool(expiring_soon),
+        "is_paid_member": bool(member.is_paid_member),
+        "member_since": member.createdon.strftime("%B %-d, %Y") if member.createdon else None,
+        "email": member.email or None,
+    }
+    points = {
+        "bap": member.bap_points or 0,
+        "hap": member.hap_points or 0,
+        "culture": member.culture_points or 0,
+    }
+    if any(points.values()):
+        card["points"] = points
+    if should_show_payment:
+        # Deliberately a *link*, not a payment. The widget's button opens this page through the
+        # host; PayPal's and Square's own scripts could never run inside the iframe (its CSP
+        # blocks every external origin), and taking money behind a chat window is not a thing to
+        # build even if they could.
+        card["renew_url"] = reverse("club_membership_pay", kwargs={"slug": club.slug})
+    return card
+
+
+def _my_memberships(user, hint: str):
+    """The user's own club memberships, narrowed to the one they named. ``(members, problem)``.
+
+    The same three-step ``send_membership_card`` and ``renew_membership`` were each doing their own
+    copy of: everything they belong to, filtered by a club name or abbreviation when they said one,
+    and otherwise the club the palette thinks they are in.
+    """
+    members = [
+        member
+        for member in ClubMember.objects.filter(user=user, is_deleted=False).select_related("club")
+        if member.club
+    ]
+    if not members:
+        return [], _error("You don't have a membership of any club on this site that I can see.")
+    if hint:
+        matches = [member for member in members if hint.lower() in (member.club.name or "").lower()] or [
+            member for member in members if hint.lower() in (member.club.abbreviation or "").lower()
+        ]
+        if not matches:
+            return [], _error(f"I couldn't find a membership at “{hint}”.")
+        return matches, None
+    club = command_palette._palette_club(user)
+    return [member for member in members if club and member.club_id == club.id] or members, None
+
+
+def my_membership(request, params: dict[str, Any]) -> dict[str, Any]:
+    """The user's own club membership card: their number, its barcode, and when it runs out.
+
+    The one thing a member does with this site between auctions, and it had no tool at all -- the
+    closest was ``renew_membership``, which navigates, and ``send_membership_card``, which emails.
+    Neither of them can answer "am I still a member?", which is the question.
+
+    Read-only and always about the caller: it reads ``ClubMember.user``, so there is no name to
+    pass and no way to ask it about somebody else.
+    """
+    members, problem = _my_memberships(request.user, _str(params, "club"))
+    if problem:
+        return problem
+    cards = [_membership_card(member) for member in members]
+    # A member of two clubs gets both rather than a question: this is a read, so there is nothing
+    # to get wrong by answering with one card too many, and "which club?" is a poor reply to
+    # "show me my membership card" from somebody who is only in one.
+    if len(cards) == 1:
+        card = cards[0]
+        if card["is_expired"]:
+            summary = f"Your {card['club']} membership has expired"
+            summary += f" — it ran out on {card['expires']}." if card["expires"] else "."
+        elif card["expires"]:
+            when = "expires soon, on" if card["expiring_soon"] else "runs to"
+            summary = f"You're a member of {card['club']}. It {when} {card['expires']}."
+        else:
+            summary = f"You're a member of {card['club']}."
+        if card.get("membership_number"):
+            summary += f" Your membership number is {card['membership_number']}."
+        if card.get("renew_url"):
+            summary += " You can renew it from your membership page."
+    else:
+        summary = "You're a member of " + ", ".join(card["club"] for card in cards) + "."
+    return {
+        "found": True,
+        "summary": summary,
+        "memberships": cards,
+        # The widget draws one card; several is the rare case and it draws the first.
+        "membership": cards[0],
+        "followups": [{"label": f"{card['club']} membership", "url": card["url"]} for card in cards],
+    }
+
+
 def send_membership_card(request, params: dict[str, Any]) -> dict[str, Any]:
     """Email the user their own club membership card again.
 
@@ -2336,28 +2534,18 @@ def send_membership_card(request, params: dict[str, Any]) -> dict[str, Any]:
 
     user = request.user
     hint = _str(params, "club")
-    members = [
-        member
-        for member in ClubMember.objects.filter(user=user, is_deleted=False).select_related("club")
-        if member.club and member.club.show_member_barcode
-    ]
-    if not members:
+    matches, problem = _my_memberships(user, hint)
+    if problem:
+        return problem
+    with_cards = [member for member in matches if member.club.show_member_barcode]
+    if not with_cards:
         return _error("None of your clubs issue membership cards.")
-    if hint:
-        matches = [member for member in members if hint.lower() in (member.club.name or "").lower()] or [
-            member for member in members if hint.lower() in (member.club.abbreviation or "").lower()
-        ]
-    else:
-        club = command_palette._palette_club(user)
-        matches = [member for member in members if club and member.club_id == club.id] or members
-    if not matches:
-        return _error(f"I couldn't find a membership at “{hint}” that has a card.")
-    if len(matches) > 1:
+    if len(with_cards) > 1:
         return _need(
             "Which club's card?",
-            [{"label": member.club.name, "value": member.club.name} for member in matches],
+            [{"label": member.club.name, "value": member.club.name} for member in with_cards],
         )
-    member = matches[0]
+    member = with_cards[0]
     if not member.email:
         return _error(
             f"Your {member.club.name} membership has no email address on it, so there's nowhere to send the card."
@@ -2369,7 +2557,12 @@ def send_membership_card(request, params: dict[str, Any]) -> dict[str, Any]:
         sent = False
     if not sent:
         return _error(f"I couldn't send your {member.club.name} card just now. Try again in a minute.")
-    return _ok(f"Sent your {member.club.name} membership card to {member.email}.")
+    # The card comes back as well as going out, because a host that can draw one should show the
+    # thing that was just emailed rather than a sentence saying an email happened.
+    return _ok(
+        f"Sent your {member.club.name} membership card to {member.email}.",
+        membership=_membership_card(member),
+    )
 
 
 def renew_membership(request, params: dict[str, Any]) -> dict[str, Any]:
@@ -2380,26 +2573,28 @@ def renew_membership(request, params: dict[str, Any]) -> dict[str, Any]:
     """
     user = request.user
     hint = _str(params, "club")
-    members = list(ClubMember.objects.filter(user=user, is_deleted=False).select_related("club"))
-    members = [m for m in members if m.club]
-    if hint:
-        matches = [m for m in members if hint.lower() in (m.club.name or "").lower()]
-        if not matches:
-            matches = [m for m in members if hint.lower() in (m.club.abbreviation or "").lower()]
-    else:
-        club = command_palette._palette_club(user)
-        matches = [m for m in members if club and m.club_id == club.id] or members
-    if not matches:
-        return _error("I couldn't work out which club you mean — you don't have a membership I can see.")
+    matches, problem = _my_memberships(user, hint)
+    if problem:
+        return problem
     if len(matches) > 1:
         return _need(
             "Which club's membership?",
-            [{"label": m.club.name, "value": m.club.name} for m in matches],
+            [{"label": member.club.name, "value": member.club.name} for member in matches],
         )
-    club = matches[0].club
+    member = matches[0]
+    club = member.club
+    # The card rides along so the widget can show what is being renewed -- and, more usefully,
+    # so somebody who says "renew my membership" while it still has four months to run is told
+    # that rather than being walked to a payment page.
+    card = _membership_card(member)
+    if not card.get("renew_url"):
+        summary = f"Your {club.name} membership doesn't need renewing"
+        summary += f" — it runs to {card['expires']}." if card["expires"] else " right now."
+        return _ok(summary, membership=card, url=card["url"])
     return _ok(
         f"Opening the membership payment page for {club.name}.",
-        url=reverse("club_membership_pay", kwargs={"slug": club.slug}),
+        url=card["renew_url"],
+        membership=card,
     )
 
 
@@ -2755,6 +2950,7 @@ def describe_auction(request, params: dict[str, Any]) -> dict[str, Any]:
     # The rules are a summernote field; the model is given the words, not the markup, and only as
     # many of them as an answer in a small box can use.
     data["rules"] = untrusted(plain_text(auction.summernote_description, limit=RULES_LIMIT))
+    data["url"] = auction.get_absolute_url()
     return {"found": True, "auction": data}
 
 
@@ -2886,7 +3082,9 @@ def describe_lot(request, params: dict[str, Any]) -> dict[str, Any]:
         "breeder_points": lot.i_bred_this_fish,
         "sold": bool(lot.winner or lot.auctiontos_winner),
         "winning_price": lot.winning_price,
-        "images": lot.image_count,
+        # The rows rather than the count: an agent that has just been asked to replace the wrong
+        # picture needs the ``image_id`` remove_lot_image takes, and "3" does not carry one.
+        "images": [_image_echo(image) for image in lot.images],
         "yours": bool(lot.user_id and lot.user_id == user.pk),
     }
     data.update(_lot_live_state(lot, user))
@@ -3190,6 +3388,7 @@ def my_activity(request, params: dict[str, Any]) -> dict[str, Any]:
             "the_club_owes_you": bool(invoice.user_should_be_paid),
             "sold_gross": str(invoice.total_sold_gross),
             "lots_bought": invoice.lots_bought,
+            "url": invoice.get_absolute_url(),
         }
     else:
         data["invoice"] = None
@@ -3449,6 +3648,12 @@ def list_lots(request, params: dict[str, Any]) -> dict[str, Any]:
         label = "are donations"
     else:
         label = "are in this auction"
+    if _preference_boolean(params.get("without_images")):
+        # A lot whose pictures are managed from another lot is not missing one, it is borrowing
+        # one -- and nothing can be added to it anyway (``Lot.image_permission_check``), so
+        # listing it here would be handing an agent a job it is about to be refused.
+        lots = lots.filter(lotimage__isnull=True, use_images_from__isnull=True)
+        label += " and have no picture"
     # No further scoping by role: a participant can already browse every lot in an auction they
     # joined, so nothing here is hidden from them. The seller's name is another matter, and it is
     # added per row below only for admins.
@@ -3462,6 +3667,7 @@ def list_lots(request, params: dict[str, Any]) -> dict[str, Any]:
             "sold": bool(lot.winning_price),
             "price": str(lot.winning_price) if lot.winning_price else None,
             "url": lot.lot_link,
+            "has_picture": bool(lot.image_count),
         }
         if is_admin and lot.auctiontos_seller:
             row["seller"] = untrusted_short(lot.auctiontos_seller.name)
@@ -4123,7 +4329,7 @@ def undo_sale(request, params: dict[str, Any]) -> dict[str, Any]:
     return _ok(
         str(result.get("success_message") or f"Un-sold lot {lot.lot_number_display}."),
         lot_id=lot.pk,
-        auction=auction.slug,
+        **_lot_echo(lot),
     )
 
 
@@ -4538,6 +4744,17 @@ def set_invoice_status(request, params: dict[str, Any]) -> dict[str, Any]:
         bidder_number=tos.bidder_number,
         person=tos.name,
         auction=auction.slug,
+        invoice={
+            "status": invoice.get_status_display(),
+            # Signed the way ``my_activity`` signs it, and for the same reason: handed the bare
+            # number, a reader says "you owe $40" to somebody who is owed $40.
+            "total": str(invoice.absolute_amount),
+            "you_owe_the_club": not invoice.user_should_be_paid,
+            "the_club_owes_you": bool(invoice.user_should_be_paid),
+            "sold_gross": str(invoice.total_sold_gross),
+            "lots_bought": invoice.lots_bought,
+            "url": invoice.get_absolute_url(),
+        },
         undo={
             "action": "set_invoice_status",
             "params": {
@@ -5491,7 +5708,944 @@ def _set_one_auction_setting(request, auction, params: dict[str, Any]) -> dict[s
     )
 
 
+# --- the scientific name on a lot --------------------------------------------
+#
+# "Fix the scientific name on lot 10" is three different jobs wearing one sentence, and which one
+# it is depends entirely on what the site already knows:
+#
+#   the species is on the list, under a name the seller didn't type  -> set_lot_species
+#   the species is on the list, and nobody will ever find it again   -> name_a_species
+#   the species is not on the list at all                            -> add_species
+#
+# The middle one is the commonest and the least obvious, which is why it has a verb of its own
+# rather than being a flag on the others: most lot names with no scientific name are one of
+# FishBase's 36,000 filed under a name nobody says. *Labidochromis caeruleus* is "Blue streak hap"
+# there and "yellow lab" everywhere else, and the wrong fix -- adding a second *Labidochromis
+# caeruleus* -- is what fills the duplicate table on the gaps page.
+
+
+def _species_lot(request, params):
+    """The lot whose species is being changed, and whether the caller may. ``(lot, is_admin, problem)``.
+
+    The lot page's rule, the same one ``edit_lot`` applies: the seller, or an admin of the auction.
+    ``is_admin`` comes back because it decides one thing beyond permission -- whether what was
+    picked is taught to the rest of the site. See :func:`_teach_the_lot_name`.
+    """
+    user = request.user
+    lot, problem = _resolve_lot(request, params)
+    if problem:
+        return None, False, problem
+    auction = lot.auction
+    is_admin = bool(auction and _is_auction_admin(user, auction))
+    seller = lot.auctiontos_seller
+    owns = lot.user_id == user.pk or (seller and seller.user_id == user.pk)
+    if not (owns or is_admin):
+        return None, False, _error(f"{lot.lot_name} isn't your lot.")
+    if not is_admin and lot.cannot_be_edited_reason:
+        return None, False, _error(str(lot.cannot_be_edited_reason))
+    return lot, is_admin, None
+
+
+def _species_club(lot):
+    """The club a species lookup is happening for, or ``None``.
+
+    Never ``None`` passed on purpose -- ``visible_species`` is guarded against it precisely because
+    ``club=None`` would read as "every species with no club", which is every unapproved species on
+    the site. So this returns None and the callers leave the argument out.
+    """
+    auction = lot.auction
+    return auction.club if auction and auction.club_id else None
+
+
+def _species_echo(species) -> dict[str, Any]:
+    """One species as a tool reports it. ``full_scientific_name``, never ``scientific_name``.
+
+    That is the rule everywhere a human reads one: a strain carries its parent's genus and epithet,
+    so *Neocaridina davidi* alone is the wrong label for a Blue Dream.
+    """
+    if species is None:
+        return {}
+    return {
+        "species_id": species.pk,
+        "scientific_name": species.full_scientific_name,
+        "common_name": species.common_name or None,
+        "is_hybrid": bool(species.is_hybrid),
+        "category": species.category.name if species.category_id else None,
+        "approved": bool(species.approved),
+    }
+
+
+def _teach_the_lot_name(lot, species, user, is_admin) -> bool:
+    """Remember "this lot name means this species", but only from an auction admin.
+
+    Exactly the rule ``LotAdmin`` follows on the web, and for its reason: ``SpeciesSearchCache`` is
+    global and is read *ahead* of the token search, so one row is served to every club on the site.
+    What makes it safe to write from the admin's lot editor is who is doing it -- an auction admin
+    correcting a lot on purpose, and the answer is listed and revertible on the species gaps page.
+    The seller-facing forms deliberately do not, and neither does a seller here.
+
+    ``record_choice`` is reported either way, because a seller taking a wrong species off their own
+    lot is exactly the evidence that mechanism exists to collect.
+    """
+    from .species_matching import record_choice, remember
+
+    if not lot.lot_name:
+        return False
+    record_choice(lot.lot_name, species, first_save=False, changed=True)
+    if not is_admin or species is None:
+        return False
+    remember(lot.lot_name, species, source="user", user=user)
+    return True
+
+
+def set_lot_species(request, params: dict[str, Any]) -> dict[str, Any]:
+    """Put a scientific name on a lot, resolved against this site's own species list.
+
+    "Fix the scientific name on lot 10" with no name given re-runs the matcher over the lot's own
+    name, which is the case worth having: the lot was added by a route that filled nothing in (the
+    quick-add pages, an agent, a CSV) and the answer was there all along.
+
+    **No language model.** ``suggest_species`` would happily spend one, and on the web that is
+    right -- a seller types a name and the site guesses. Here the caller *is* a language model, so
+    paying for a second one to guess at what the first one typed is paying twice for a worse
+    answer; if the name it sent does not match, the useful reply is "it isn't on the list, here is
+    how to add it" rather than a guess nobody asked for.
+
+    Two candidates is not an answer. The whole module is written so that "no match" beats a
+    plausible one -- a wrong species ends up on a printed label and in breeder points -- so several
+    matches come back as a question with the candidates named, and the caller picks.
+    """
+    from .species_matching import suggest_species
+
+    user = request.user
+    lot, is_admin, problem = _species_lot(request, params)
+    if problem:
+        return problem
+
+    if _preference_boolean(params.get("clear")):
+        was = lot.species
+        if was is None:
+            return _ok(f"Lot {lot.lot_number_display} had no scientific name on it.", **_lot_echo(lot))
+        lot.species = None
+        lot.save()
+        _teach_the_lot_name(lot, None, user, is_admin)
+        return _ok(
+            f"Took {was.full_scientific_name} off lot {lot.lot_number_display}, {lot.lot_name}.",
+            **_lot_echo(lot),
+            was=_species_echo(was),
+            undo={
+                "action": "set_lot_species",
+                "params": {"lot_id": lot.pk, "species": was.full_scientific_name},
+                "describes": f"clearing the species on {lot.lot_name}",
+            },
+        )
+
+    typed = _str(params, "species") or _str(params, "scientific_name") or _str(params, "name")
+    from_the_lot_name = not typed
+    if from_the_lot_name:
+        typed = lot.lot_name or ""
+    if not typed:
+        return _need(f"What is lot {lot.lot_number_display}? Give me a scientific or common name.")
+
+    club = _species_club(lot)
+    kwargs = {"user": user, "use_llm": False}
+    if club:
+        kwargs["club"] = club
+    matches, _source = suggest_species(typed, **kwargs)
+    if not matches:
+        return _error(
+            f"Nothing on the species list matches “{typed}”. If it is on the list under a name "
+            f"nobody says, name_a_species teaches it that name; if it genuinely isn't there, "
+            f"add_species puts it there."
+        )
+    if len(matches) > 1:
+        return _need(
+            f"“{typed}” matches {len(matches)} species. Which one is lot {lot.lot_number_display}?",
+            [
+                {"label": species.full_scientific_name, "value": species.full_scientific_name}
+                for species in matches[:AMBIGUOUS_LIMIT]
+            ],
+        )
+
+    species = matches[0]
+    was = lot.species
+    if was and was.pk == species.pk:
+        return _ok(
+            f"Lot {lot.lot_number_display} was already {species.full_scientific_name}.",
+            **_lot_echo(lot),
+            species=_species_echo(species),
+        )
+    lot.species = species
+    # save() rather than update(): it is what re-derives the lot's category from the species, and
+    # that is half the reason to set one.
+    lot.save()
+    taught = _teach_the_lot_name(lot, species, user, is_admin)
+    summary = f"Lot {lot.lot_number_display}, {lot.lot_name}, is {species.full_scientific_name}."
+    if from_the_lot_name:
+        summary += " I read that off the lot's own name."
+    if taught:
+        summary += f" I've also remembered that “{lot.lot_name}” means that, so the next one matches by itself."
+    return _ok(
+        summary,
+        **_lot_echo(lot),
+        species=_species_echo(species),
+        was=_species_echo(was) if was else None,
+        remembered_the_lot_name=taught,
+        undo={
+            "action": "set_lot_species",
+            "params": (
+                {"lot_id": lot.pk, "species": was.full_scientific_name} if was else {"lot_id": lot.pk, "clear": True}
+            ),
+            "describes": f"the species on {lot.lot_name}",
+        },
+    )
+
+
+def name_a_species(request, params: dict[str, Any]) -> dict[str, Any]:
+    """Teach the site a name people actually type for a species that is already on the list.
+
+    The commonest fix and the least obvious one, and it is deliberately not a side effect of
+    ``set_lot_species``: a ``SpeciesSearchCache`` row is global and can be outvoted, where a
+    ``SpeciesCommonName`` is scoped, durable, and read ahead of everything else the matcher does.
+    Adding a second *Labidochromis caeruleus* to get a name is what fills the duplicate table.
+
+    Validation and scoping are :class:`auctions.forms.SpeciesCommonNameForm`, the form behind
+    ``/species/name/`` -- so a name that already belongs to a different visible species is refused
+    (one name on two species is the loss of a name, not the gain of one), and what a non-superuser
+    adds is ``approved=False``: their own club is answered with it and nobody else is.
+    """
+    from .forms import SpeciesCommonNameForm
+    from .species_matching import suggest_species, visible_species
+
+    user = request.user
+    if not _can_add_species(user):
+        return _error("Only people who run an auction can add names to the species list.")
+
+    lot = None
+    if params.get("lot") or params.get("lot_id"):
+        lot, _is_admin, problem = _species_lot(request, params)
+        if problem:
+            return problem
+
+    names = _str(params, "names") or _str(params, "name") or _str(params, "common_name")
+    if not names and lot:
+        names = lot.lot_name or ""
+    if not names:
+        return _need("What name should it answer to? This is the name people type, e.g. “yellow lab”.")
+
+    wanted = _str(params, "species") or _str(params, "scientific_name")
+    if not wanted:
+        return _need("Which species should that name belong to? Give me its scientific name.")
+    club = _species_club(lot) if lot else None
+    kwargs = {"user": user, "use_llm": False}
+    if club:
+        kwargs["club"] = club
+    matches, _source = suggest_species(wanted, **kwargs)
+    if not matches:
+        return _error(f"Nothing on the species list matches “{wanted}”, so there is nothing to name.")
+    if len(matches) > 1:
+        return _need(
+            f"“{wanted}” matches {len(matches)} species. Which one should answer to “{names}”?",
+            [
+                {"label": species.full_scientific_name, "value": species.full_scientific_name}
+                for species in matches[:AMBIGUOUS_LIMIT]
+            ],
+        )
+    species = matches[0]
+
+    form = SpeciesCommonNameForm(
+        data={"species": species.pk, "names": names, "attach_to_lots": False},
+        added_by=user,
+    )
+    # The form builds its own queryset from visible_species(added_by); this is the same question
+    # asked out loud, so a species the caller cannot see reads as "not on the list" rather than as
+    # a form error about a field they never saw.
+    if not visible_species(user).filter(pk=species.pk).exists():
+        return _error(f"{species.full_scientific_name} isn't a species you can add names to.")
+    if not form.is_valid():
+        return _form_problem(form)
+    created = form.save()
+
+    written = ", ".join(f"“{row.name}”" for row in created)
+    if created:
+        summary = f"{species.full_scientific_name} now answers to {written}."
+    else:
+        summary = f"{species.full_scientific_name} already answered to that."
+    if created and not all(row.approved for row in created):
+        summary += " It's yours for now — it matches on your own lots and nobody else's until a site admin approves it."
+    result = _ok(
+        summary,
+        species=_species_echo(species),
+        names_added=[row.name for row in created],
+        followups=[{"label": "Species with no lots", "url": reverse("species_gaps")}] if user.is_superuser else [],
+    )
+    if lot:
+        # Naming the species is the teaching; putting it on the lot is what the person asked for.
+        if lot.species_id != species.pk:
+            lot.species = species
+            lot.save()
+        result.update(_lot_echo(lot))
+        result["summary"] += f" Lot {lot.lot_number_display} is {species.full_scientific_name}."
+    return result
+
+
+def _can_add_species(user) -> bool:
+    """The gate ``SpeciesCreateView`` applies -- anyone who runs an auction, not just superusers.
+
+    The reason is the check-in table: somebody is standing there with a bag of fish the picker has
+    never heard of, and a workflow that ends in "email the site owner" ends in the lot going out
+    with no scientific name.
+    """
+    if getattr(user, "is_superuser", False):
+        return True
+    userdata = getattr(user, "userdata", None)
+    return bool(userdata and userdata.runs_an_auction)
+
+
+def add_species(request, params: dict[str, Any]) -> dict[str, Any]:
+    """Put a species on the list that genuinely isn't there -- the last resort of the three.
+
+    Try ``set_lot_species`` first and ``name_a_species`` second: the imported list has 36,000 fish
+    in it and the reason a name doesn't match is usually the name, not the fish.
+
+    Three shapes, and the form decides which from what is filled in. An ordinary species is a
+    scientific name. A **strain** ("Blue Dream") is a ``variety`` plus the species it is a strain
+    of, and keeps its parent's genus and epithet so breeder points and genus BAP rules still see
+    the plain species. A **hybrid** ("Tibee") is ``hybrid=true`` with the trade's name in
+    ``variety`` and no scientific name at all -- a cross has no binomial, and filing one under
+    either parent would put a wrong genus into a genus BAP rule.
+
+    Validation is :class:`auctions.forms.SpeciesAdminForm`, the form behind ``/species/new/``, so
+    the duplicate check and the scoping are the page's. What a non-superuser adds is
+    ``approved=False``: it is offered on their own lots and their club's, and nobody else's, until
+    a site admin approves it.
+    """
+    from .forms import SpeciesAdminForm
+
+    user = request.user
+    if not _can_add_species(user):
+        return _error("Only people who run an auction can add to the species list.")
+
+    lot = None
+    if params.get("lot") or params.get("lot_id"):
+        lot, _is_admin, problem = _species_lot(request, params)
+        if problem:
+            return problem
+
+    is_hybrid = bool(_preference_boolean(params.get("hybrid")) or _preference_boolean(params.get("is_hybrid")))
+    scientific_name = _str(params, "scientific_name") or _str(params, "species")
+    variety = _str(params, "variety") or _str(params, "strain")
+    # Deliberately *not* defaulted from the lot's name, which is what /species/new/ prefills.
+    # There a person reads it and edits it before saving; here nobody does, and "6 male guppies"
+    # would go into the shared list as the common name of Poecilia reticulata. The tool's
+    # description asks for one; an agent that means the lot name can send it.
+    common_name = _str(params, "common_name")
+    if not scientific_name and not variety:
+        return _need(
+            "What is the scientific name? Genus and species, like “Ancistrus cirrhosus” — a genus "
+            "on its own is fine. For a cross with no scientific name, send hybrid=true and the "
+            "name the trade uses as the variety."
+        )
+
+    parent = None
+    parent_name = _str(params, "strain_of") or _str(params, "parent")
+    if parent_name:
+        from .species_matching import suggest_species
+
+        matches, _source = suggest_species(parent_name, user=user, use_llm=False)
+        if not matches:
+            return _error(f"“{parent_name}” isn't on the species list, so nothing can be a strain of it.")
+        if len(matches) > 1:
+            return _need(
+                f"“{parent_name}” matches {len(matches)} species. Which one is this a strain of?",
+                [
+                    {"label": species.full_scientific_name, "value": species.full_scientific_name}
+                    for species in matches[:AMBIGUOUS_LIMIT]
+                ],
+            )
+        parent = matches[0]
+
+    data = {
+        "scientific_name_input": scientific_name,
+        "common_name": common_name[:255],
+        "variety": variety,
+        "is_hybrid": is_hybrid,
+        "parent": parent.pk if parent else "",
+        "other_names": _str(params, "other_names"),
+        "attach_to_lots": False,
+        "freshwater": True,
+        "breeder_points": True,
+    }
+    form = SpeciesAdminForm(data=data, added_by=user)
+    if not form.is_valid():
+        return _form_problem(form)
+    species = form.save()
+
+    summary = f"Added {species.full_scientific_name} to the species list."
+    if not species.approved:
+        summary += (
+            " It's yours for now — it will be suggested on your lots and nobody else's until a site admin approves it."
+        )
+    result = _ok(summary, species=_species_echo(species))
+    if lot:
+        lot.species = species
+        lot.save()
+        result.update(_lot_echo(lot))
+        result["summary"] += f" Lot {lot.lot_number_display} is now {species.full_scientific_name}."
+    return result
+
+
+# --- lot images --------------------------------------------------------------
+
+#: What ``LotImage.PIC_CATEGORIES`` calls each kind of picture, keyed on what somebody would say.
+#: The model's own values are ``ACTUAL`` / ``REPRESENTATIVE`` / ``RANDOM``, and the third one is
+#: literally labelled "This picture is from the internet" -- which is exactly what an agent that
+#: went and found one is adding, and the reason this skill needs no new column to be honest.
+_IMAGE_SOURCES = {
+    "actual": "ACTUAL",
+    "mine": "ACTUAL",
+    "exact": "ACTUAL",
+    "photo": "ACTUAL",
+    "representative": "REPRESENTATIVE",
+    "similar": "REPRESENTATIVE",
+    "example": "REPRESENTATIVE",
+    "random": "RANDOM",
+    "internet": "RANDOM",
+    "stock": "RANDOM",
+    "web": "RANDOM",
+}
+
+#: The ceiling ``ImageCreateView.dispatch`` enforces, asked the same way (it refuses at ``> 5``).
+MAX_LOT_IMAGES = 5
+
+
+def _image_problem(lot, user):
+    """Whether ``user`` may put another picture on ``lot``. ``None`` when they may.
+
+    Every check ``ImageCreateView.dispatch`` runs, in its order, because they are all real: a lot
+    whose images are managed from another lot must not grow its own, a sold lot is closed to
+    edits, and six pictures is the limit the page enforces.
+    """
+    if lot.use_images_from_id:
+        return _error(
+            f"Lot {lot.lot_number_display}'s pictures are managed from another lot, so nothing can "
+            "be added here. Add it to that lot instead."
+        )
+    if not lot.image_permission_check(user):
+        return _error(f"You can't add pictures to lot {lot.lot_number_display}, {lot.lot_name}.")
+    if lot.image_count > MAX_LOT_IMAGES:
+        return _error(
+            f"Lot {lot.lot_number_display} already has {lot.image_count} pictures, which is as many "
+            "as it can have. Remove one first."
+        )
+    return None
+
+
+def _image_echo(image) -> dict[str, Any]:
+    """One picture, as a tool reports it. ``image_id`` is what remove_lot_image takes."""
+    return {
+        "image_id": image.pk,
+        "url": image.display_url,
+        "caption": untrusted_short(image.caption) if image.caption else None,
+        "is_primary": bool(image.is_primary),
+        "source": image.get_image_source_display() if image.image_source else None,
+    }
+
+
+def add_lot_image(request, params: dict[str, Any]) -> dict[str, Any]:
+    """Put a picture on a lot, from a URL.
+
+    A URL rather than a file, and that is the whole design rather than a shortcut: ``LotImage``
+    has carried a ``url`` column since long before any of this, because sellers paste links, and
+    the site serves that address directly. So an agent that searched the web for a photo of a
+    plakat betta has nothing to upload and nothing to encode -- it has the one thing this model
+    already stores. Nothing is fetched server-side either, which keeps the SSRF surface at zero;
+    :func:`auctions.forms.validate_image_url` checks the scheme and the extension and that is
+    deliberately all it checks, for exactly that reason.
+
+    ``image_source`` is the part worth being careful about. The three values are the seller's own
+    photo of the actual item, their photo of something like it, and a picture off the internet --
+    and a bidder deciding what to pay is reading that label. A picture an assistant found is the
+    third one, so that is what it defaults to here: nothing an agent adds is ever silently
+    labelled as the seller's own photograph of the fish in the bag.
+
+    Validation is :class:`auctions.forms.CreateImageForm`, the same form behind the add-image page.
+    """
+    from .forms import CreateImageForm
+    from .models import LotImage
+
+    user = request.user
+    lot, problem = _resolve_lot(request, params)
+    if problem:
+        return problem
+    problem = _image_problem(lot, user)
+    if problem:
+        return problem
+
+    url = _str(params, "url") or _str(params, "image_url")
+    if not url:
+        return _need(
+            f"What picture should I put on lot {lot.lot_number_display}? I need a link to the image "
+            "itself — an address ending in .jpg, .png or .webp."
+        )
+    said = _str(params, "image_source") or _str(params, "source")
+    source = _IMAGE_SOURCES.get(said.strip().lower(), "") if said else ""
+    if said and not source:
+        return _error(
+            f"I don't know what kind of picture “{said}” is. It's either the seller's photo of the "
+            "actual item, a representative photo of something like it, or one from the internet."
+        )
+    form = CreateImageForm(
+        data={
+            "url": url,
+            "image_source": source or "RANDOM",
+            "caption": _str(params, "caption")[:60],
+        }
+    )
+    if not form.is_valid():
+        return _form_problem(form)
+    image = form.save(commit=False)
+    image.lot_number = lot
+    # The first picture on a lot is its thumbnail whether anybody asked or not -- a lot with a
+    # picture and no primary shows a placeholder in every list on the site.
+    wants_primary = _preference_boolean(params.get("primary")) or not lot.image_count
+    image.is_primary = bool(wants_primary)
+    image.save()
+    if image.is_primary:
+        LotImage.objects.filter(lot_number=lot).exclude(pk=image.pk).update(is_primary=False)
+
+    kind = image.get_image_source_display()
+    return _ok(
+        f"Added a picture to lot {lot.lot_number_display}, {lot.lot_name}. It's labelled “{kind}”, "
+        f"which is what buyers will see next to it.",
+        **_lot_echo(lot),
+        image=_image_echo(image),
+        images_now=lot.image_count,
+        followups=[{"label": f"Lot {lot.lot_number_display}", "url": lot.lot_link}],
+        undo={
+            "action": "remove_lot_image",
+            "params": {"lot_id": lot.pk, "image_id": image.pk},
+            "describes": f"the picture on {lot.lot_name}",
+        },
+    )
+
+
+def remove_lot_image(request, params: dict[str, Any]) -> dict[str, Any]:
+    """Take a picture off a lot. The reversal of ``add_lot_image``, and the fix for a bad one.
+
+    An assistant that can add a picture it found on the internet has to be able to take one off
+    again in the same sentence, or the recovery path for "no, that's a different fish" is a page
+    and a login. Deleting one that was the lot's thumbnail promotes the next oldest, which is what
+    ``ImageDelete.get_success_url`` does -- otherwise the lot keeps a primary flag on a row that no
+    longer exists and shows a placeholder.
+    """
+    from .models import LotImage
+
+    user = request.user
+    lot, problem = _resolve_lot(request, params)
+    if problem:
+        return problem
+    if not lot.image_permission_check(user):
+        return _error(f"You can't change the pictures on lot {lot.lot_number_display}.")
+    images = list(LotImage.objects.filter(lot_number=lot).order_by("-is_primary", "createdon"))
+    if not images:
+        return _error(f"Lot {lot.lot_number_display}, {lot.lot_name}, has no pictures on it.")
+
+    wanted = params.get("image_id")
+    if wanted in (None, ""):
+        if len(images) > 1:
+            return _need(
+                f"Lot {lot.lot_number_display} has {len(images)} pictures. Which one should I remove?",
+                [
+                    {
+                        "label": f"{image.caption or 'Picture'} {image.display_url}"[:120],
+                        "value": str(image.pk),
+                    }
+                    for image in images
+                ],
+            )
+        image = images[0]
+    else:
+        image = next((one for one in images if str(one.pk) == str(wanted)), None)
+        if not image:
+            return _error(f"Lot {lot.lot_number_display} has no picture with id {wanted}.")
+
+    was_primary = image.is_primary
+    image.delete()
+    promoted = None
+    if was_primary:
+        promoted = LotImage.objects.filter(lot_number=lot).order_by("createdon").first()
+        if promoted:
+            promoted.is_primary = True
+            promoted.save()
+    summary = f"Removed a picture from lot {lot.lot_number_display}, {lot.lot_name}."
+    if promoted:
+        summary += " Another one of its pictures is the thumbnail now."
+    return _ok(
+        summary,
+        **_lot_echo(lot),
+        images_now=lot.image_count,
+        followups=[{"label": f"Lot {lot.lot_number_display}", "url": lot.lot_link}],
+    )
+
+
+# --- request_a_skill ---------------------------------------------------------
+
+
+def request_a_skill(request, params: dict[str, Any]) -> dict[str, Any]:
+    """Write down a tool that should exist here and doesn't. The one write with no subject.
+
+    Every tool on this server exists because somebody said out loud that it was missing, and that
+    feedback arrived by accident -- a message to the site owner, a complaint at a meeting -- so the
+    catalogue is shaped by whose complaints happened to reach somebody. This collects the same
+    signal on purpose, from the only party that reliably notices: the agent standing in front of
+    the wall.
+
+    A **duplicate is the point**, not a problem. Five clubs asking for the same thing is the
+    number that decides whether it gets built, so rows are kept and counted
+    (``AssistantSkillRequest.others_asking``) rather than merged. What *is* deduplicated is one
+    caller asking twice: the same person and the same skill name updates their own row, so an agent
+    that retries after a refusal does not file the same request four times.
+
+    Deliberately writes nothing an agent can read back except its own request. This is a suggestion
+    box, and a suggestion box that answers "three other people asked for that" about somebody
+    else's clubs would be a way of asking what other clubs are doing.
+    """
+    from .models import AssistantSkillRequest
+
+    user = request.user
+    skill = _str(params, "skill") or _str(params, "command") or _str(params, "name")
+    if not skill:
+        return _need("What should the tool be called? Something short, like “refund an invoice”.")
+    reason = _str(params, "reason") or _str(params, "why") or _str(params, "description")
+    if not reason:
+        return _need(
+            f"What were you trying to do with “{skill}”, and what happened instead? That sentence "
+            "is the whole value of the request — the name on its own does not say what it is for."
+        )
+    row, created = AssistantSkillRequest.objects.update_or_create(
+        user=user,
+        skill=skill[:100],
+        defaults={
+            "params": _str(params, "params")[:2000],
+            "reason": reason[:2000],
+            # Which assistant asked, read off the credential rather than out of the request body:
+            # this server is stateless, so a name in the body is one the caller chose for itself.
+            "surface": (getattr(request, "assistant_surface", "") or "")[:100],
+        },
+    )
+    others = row.others_asking
+    summary = f"Noted: “{row.skill}”. It goes on the list the site owner reads."
+    if not created:
+        summary = f"Updated your note about “{row.skill}”."
+    if others:
+        summary += f" {others} other {'person has' if others == 1 else 'people have'} asked for something like it."
+    return _ok(
+        summary + " I can't do it in the meantime — tell the user what you tried, so they know too.",
+        request_id=row.pk,
+        skill=row.skill,
+        others_asking=others,
+    )
+
+
+# --- create_auction ----------------------------------------------------------
+
+
+def _can_create_auctions(user) -> bool:
+    """The gate ``AuctionCreateView.dispatch`` applies, asked the same way."""
+    if getattr(user, "is_superuser", False):
+        return True
+    return bool(getattr(getattr(user, "userdata", None), "can_create_club_auctions", False))
+
+
+def create_auction(request, params: dict[str, Any]) -> dict[str, Any]:
+    """Create next season's auction by copying one this person already ran.
+
+    Creating an auction was the largest thing on the site the assistant could not do, and the
+    reason written down for that was a good one: it is twenty decisions about dates, fees and
+    rules, and a one-line command would guess at most of them and get the fees wrong. Copying
+    answers the objection rather than arguing with it -- nothing is guessed, because every fee,
+    every permission and every custom field comes off an auction this club actually ran, and the
+    two things that genuinely differ each time (what it is called and when it starts) are the two
+    things they have to say out loud.
+
+    So this **only ever copies**. Somebody with nothing to copy is sent to the create page, which
+    is where a first auction belongs: that is the case the original reason was about, and it has
+    not stopped being true. The copy itself is :func:`auctions.services.clone_auction`, shared with
+    the copy button on that page, so the auction an agent makes is the same auction a click makes.
+
+    Deliberately not undoable. Deleting an auction is not on the list of things this assistant may
+    do, and an ``undo`` that could not actually reverse the write would be a lie; a copy made by
+    mistake is edited or deleted from its own rules page, which the answer links to.
+    """
+    from .services import auction_to_copy, clone_auction
+
+    user = request.user
+    if not _can_create_auctions(user):
+        return _error(
+            "Your account can't create auctions yet. Ask the site admin to turn that on, or join a club that runs them."
+        )
+    title = _str(params, "title") or _str(params, "name")
+    if not title:
+        return _need("What should the new auction be called? Something like “Spring Auction 2027”.")
+    when, problem = _parse_when(user, _str(params, "date_start") or _str(params, "when"))
+    if problem:
+        return _error(problem)
+    if not when:
+        return _need(f"When does {title} start? A date and a time, like 2027-04-17T10:00.")
+
+    hint = _str(params, "copy_from") or _str(params, "copy")
+    if hint:
+        source, problem = resolve_auction(user, hint)
+        if problem:
+            return problem if isinstance(problem, dict) else _error(problem)
+        if not source.permission_check(user):
+            return _error(f"{source.title} isn't yours to copy. You can only copy auctions you run.")
+    else:
+        source = auction_to_copy(user)
+    if not source:
+        # The first one is a page, on purpose. See the docstring.
+        nothing_to_copy = _error(
+            "You haven't run an auction I can copy yet, and I won't invent the fees for your "
+            "first one — the create page walks through them. Open it and I'll be able to copy "
+            "this auction from then on."
+        )
+        nothing_to_copy["followups"] = [{"label": "Create an auction", "url": reverse("create_auction")}]
+        return nothing_to_copy
+
+    auction = clone_auction(source, title=title, date_start=when, created_by=user, note=via(request))
+    remember_auction(request, auction)
+    # Said out loud because a copy is not a blank auction and somebody who does not know that will
+    # go looking for the fees. The people are named separately: copying them is a per-auction
+    # setting on the source, so it is the one part of a copy that is different every time.
+    carried = "the fees, the rules text, the custom fields and the pickup locations"
+    if source.copy_users_when_copying_this_auction:
+        carried += ", and everybody who was in it"
+    return _ok(
+        f"Created {auction.title}, copied from {source.title}. It has {carried}. "
+        f"Nothing is listed publicly until you promote it, and the dates are the only thing I "
+        f"moved — check them before you open it for lots.",
+        auction=auction.slug,
+        auction_title=auction.title,
+        copied_from=source.slug,
+        url=auction.get_absolute_url(),
+        starts=user_time(user, auction.date_start),
+        is_online=bool(auction.is_online),
+        followups=[
+            {"label": auction.title, "url": auction.get_absolute_url()},
+            {"label": "Dates, fees and rules", "url": auction.get_edit_url()},
+        ],
+    )
+
+
 # --- registry ----------------------------------------------------------------
+
+register(
+    Action(
+        name="request_a_skill",
+        description=(
+            "Write down a tool this site should have and doesn't. Call it when the user asked for "
+            "something and nothing here can do it — after you have said so, not instead of saying "
+            "so. It changes nothing and does not do the thing they wanted; it puts the request in "
+            "front of the person who builds these. Say what the tool would be called, what it "
+            "would need to be told, and what the user was actually trying to do. Do not call it "
+            "for something a tool here already does, and do not call it twice for the same thing "
+            "in one conversation."
+        ),
+        params={
+            "skill": "string, required. Short name for the tool, e.g. 'refund an invoice'.",
+            "reason": (
+                "string, required. What the user was trying to do and what happened instead. This "
+                "sentence is the whole value of the request."
+            ),
+            "params": "string, optional. What the tool would need to be told, e.g. 'a lot number and an amount'.",
+        },
+        danger=DANGER_CONFIRM,
+        idempotent=True,
+        resolver=request_a_skill,
+        aliases={"command", "name", "why", "description"},
+        confirm_template="Ask for a new assistant skill",
+        examples=["there's no way to do that here", "ask them to add a way to refund an invoice"],
+    )
+)
+
+register(
+    Action(
+        name="set_lot_species",
+        description=(
+            "Put the scientific name on a lot, matched against this site's own species list. The "
+            "seller or an auction admin only. This is what 'fix the scientific name on lot 10', "
+            "'lot 12 is Neocaridina davidi' and 'what species is this lot?' mean. Leave 'species' "
+            "out to re-read it off the lot's own name, which is the fix for a lot added by a route "
+            "that filled nothing in. A name matching several species comes back as a question with "
+            "the candidates rather than a guess: a wrong species reaches a printed label and "
+            "breeder points. If nothing matches, the species is usually on the list under a name "
+            "nobody says — try name_a_species before add_species."
+        ),
+        params={
+            "lot": "string, optional. Lot number or name. Required unless the user is on that lot's page.",
+            "species": ("string, optional. A scientific or common name to match. Omit to re-read the lot's own name."),
+            "clear": "boolean, optional. True to take the scientific name off the lot entirely.",
+            "auction": "string, optional. Auction slug or title. See my_context.",
+        },
+        danger=DANGER_CONFIRM,
+        idempotent=True,
+        resolver=set_lot_species,
+        aliases={"lot_id", "scientific_name", "name"},
+        confirm_template="Set the species on a lot",
+        examples=["fix the scientific name on lot 10", "lot 12 is a blue dream shrimp"],
+    )
+)
+
+register(
+    Action(
+        name="name_a_species",
+        description=(
+            "Teach the site a name people actually type for a species that is ALREADY on the "
+            "list — 'yellow lab' for Labidochromis caeruleus, which FishBase files under 'Blue "
+            "streak hap'. For anyone who runs an auction. This is the right answer far more often "
+            "than add_species: the list has 36,000 fish in it and the reason a name doesn't match "
+            "is usually the name. Give the species' scientific name and the name people type. Pass "
+            "a lot as well and it gets that species too. A name that already belongs to a "
+            "different species is refused, because one name on two species means neither can be "
+            "found by it."
+        ),
+        params={
+            "species": "string, required. The scientific name of the species that should answer to it.",
+            "names": (
+                "string, optional. The name or names people type, separated by commas. Omit only "
+                "when a lot is given, in which case the lot's own name is used."
+            ),
+            "lot": "string, optional. A lot to set that species on at the same time.",
+            "auction": "string, optional. Auction slug or title. See my_context.",
+        },
+        danger=DANGER_CONFIRM,
+        resolver=name_a_species,
+        aliases={"lot_id", "scientific_name", "name", "common_name"},
+        confirm_template="Add a name to a species",
+        examples=["yellow lab means Labidochromis caeruleus", "teach it that this lot name is a bristlenose"],
+    )
+)
+
+register(
+    Action(
+        name="add_species",
+        description=(
+            "Add a species to the list that genuinely isn't on it. For anyone who runs an "
+            "auction. Try set_lot_species first and name_a_species second — the list is imported "
+            "and has 36,000 fish in it. Three shapes: an ordinary species is a scientific name; a "
+            "strain like 'Blue Dream' is a variety plus the species it is a strain of; a hybrid "
+            "like 'Tibee' has no scientific name at all, so send hybrid=true and put the trade's "
+            "name in variety. What somebody who isn't a site admin adds is suggested on their own "
+            "lots and their club's until a site admin approves it for everyone."
+        ),
+        params={
+            "scientific_name": (
+                "string, optional. Genus and species, e.g. 'Ancistrus cirrhosus'. A genus on its "
+                "own is fine. Leave blank for a strain or a hybrid."
+            ),
+            "common_name": "string, optional. What people call it, e.g. 'Bristlenose pleco'.",
+            "variety": "string, optional. The strain or hybrid name, e.g. 'Blue Dream' or 'Tibee'.",
+            "strain_of": "string, optional. For a strain: the scientific name of the species it is a strain of.",
+            "hybrid": (
+                "boolean, optional. True for a cross with no accepted scientific name. Leave the "
+                "scientific name blank and put the trade's name in variety."
+            ),
+            "other_names": "string, optional. Further names people type, separated by commas.",
+            "lot": "string, optional. A lot to set the new species on straight away.",
+            "auction": "string, optional. Auction slug or title. See my_context.",
+        },
+        danger=DANGER_CONFIRM,
+        resolver=add_species,
+        aliases={"lot_id", "species", "strain", "parent", "is_hybrid"},
+        confirm_template="Add a species to the list",
+        examples=["add Ancistrus sp. L046 to the species list", "add a hybrid called tibee"],
+    )
+)
+
+register(
+    Action(
+        name="add_lot_image",
+        description=(
+            "Put a picture on a lot, from a link to the image. The seller or an auction admin "
+            "only, up to six pictures per lot. This is what 'add a photo of this', 'find a picture "
+            "of a blue dream shrimp for lot 12' and 'my lots need pictures' mean. Give the address "
+            "of the image itself — one ending .jpg, .png or .webp — not the page it sits on. A "
+            "picture found on the internet is labelled as such next to the lot, which is what "
+            "bidders read, and 'actual' means the seller photographed this exact item. To find "
+            "the lots that need one, use list_lots with without_images."
+        ),
+        params={
+            "lot": "string, optional. Lot number or name. Required unless the user is on that lot's page.",
+            "url": "string, required. Direct link to the image file, e.g. https://example.com/betta.jpg",
+            "caption": "string, optional. A few words shown under it, 60 characters at most.",
+            "image_source": (
+                "string, optional, default 'internet'. What kind of picture it is: 'actual' (the "
+                "seller's photo of this exact item), 'representative' (their photo of something "
+                "like it), or 'internet'. 'actual' is for a photo the user says is their own."
+            ),
+            "primary": "boolean, optional. True to make it the lot's thumbnail. The first picture always is.",
+        },
+        danger=DANGER_CONFIRM,
+        resolver=add_lot_image,
+        aliases={"name", "query", "lot_id", "image_url", "source"},
+        confirm_template="Add a picture to a lot",
+        examples=["add a picture to lot 12", "find photos for my lots that don't have any"],
+    )
+)
+
+register(
+    Action(
+        name="remove_lot_image",
+        description=(
+            "Take a picture off a lot. The seller or an auction admin only. This is 'remove that "
+            "photo', 'that's the wrong fish, take it off' and undoing add_lot_image. A lot with "
+            "more than one picture needs image_id, which describe_lot lists."
+        ),
+        params={
+            "lot": "string, optional. Lot number or name. Required unless the user is on that lot's page.",
+            "image_id": "integer, optional. Which picture, from describe_lot. Not needed when the lot has one.",
+        },
+        danger=DANGER_CONFIRM,
+        destructive=True,
+        resolver=remove_lot_image,
+        aliases={"name", "query", "lot_id", "image"},
+        confirm_template="Remove a picture from a lot",
+        examples=["remove the picture from lot 12", "take that photo off"],
+    )
+)
+
+register(
+    Action(
+        name="create_auction",
+        description=(
+            "Create a new auction by copying one this person has already run — next year's version "
+            "of last year's auction. Every fee, rule, custom field and pickup location comes from "
+            "the auction it copies; only the name and the start date are new. This is what 'set up "
+            "the spring auction', 'create next month's auction' and 'make a copy of last year's "
+            "auction for March 14th' mean. It cannot create a first auction from nothing — the "
+            "answer says so and links to the page that can. The new auction is NOT listed publicly "
+            "until it is promoted (update_auction_setting), and its dates are worth checking."
+        ),
+        params={
+            "title": "string, required. What to call it, e.g. 'Spring Auction 2027'.",
+            "date_start": (
+                "string, required. When it starts, ISO 8601 in the user's own timezone, e.g. "
+                "'2027-04-17T10:00'. For an online auction this is when bidding opens."
+            ),
+            "copy_from": (
+                "string, optional. Slug or title of the auction to copy. Defaults to the most "
+                "recent one they created — which is almost always what they mean."
+            ),
+        },
+        danger=DANGER_CONFIRM,
+        resolver=create_auction,
+        aliases={"name", "when", "copy"},
+        confirm_template="Create an auction",
+        examples=["set up next year's spring auction for April 17th", "copy last year's auction to March 14 2027"],
+        needs=NEEDS_AUCTION_ADMIN,
+    )
+)
 
 register(
     Action(
@@ -5658,6 +6812,23 @@ register(
 
 register(
     Action(
+        name="my_membership",
+        description=(
+            "Show the user their OWN club membership card: their membership number and its "
+            "barcode, when the membership runs out, and whether it needs renewing. Read-only, and "
+            "about the signed-in user only — it cannot be asked about anybody else. 'show me my "
+            "membership card', 'am I still a member?', 'when does my membership expire?'."
+        ),
+        params={"club": "string, optional. Club name; omit for every club they belong to."},
+        danger=DANGER_SAFE,
+        lookup=True,
+        resolver=my_membership,
+        examples=["show me my membership card", "when does my membership expire?"],
+    )
+)
+
+register(
+    Action(
         name="send_membership_card",
         description=(
             "Email the user their OWN club membership card again, to the address already on their "
@@ -5724,8 +6895,10 @@ register(
     Action(
         name="undo_check_in",
         description=(
-            "Un-check-in somebody who was checked in by mistake — the reversal of check_in, and "
-            "what 'undo that' runs after a misheard name. For auction admins and club staff only."
+            "Un-check-in ONE person who was checked in by mistake — the reversal of check_in, and "
+            "what 'undo that' runs after a misheard name. To clear a whole auction, call "
+            "list_people with status='checked_in' and then call this once per person. For auction "
+            "admins and club staff only."
         ),
         params={
             "person": "string, required. Name or bidder number of the person to un-check-in.",
@@ -6484,6 +7657,10 @@ register(
         params={
             "status": "string, required. One of: 'unsold', 'sold', 'mine', 'donations', 'all'.",
             "auction": "string, optional. Auction slug or title. See my_context.",
+            "without_images": (
+                "boolean, optional. True for only the lots with no picture on them yet — combine "
+                "it with status 'mine' for 'which of my lots still need a photo?'."
+            ),
             **PAGING_PARAMS,
         },
         danger=DANGER_SAFE,
@@ -6858,6 +8035,22 @@ def actions_for(user=None) -> list[Action]:
 SKILLS: dict[str, str] = {
     "AuctionBulkPrinting": "print_labels",
     "AuctionCheckIn": "check_in",
+    # Both of these sat in NOT_A_SKILL, and the reason given was a good one for the surface it was
+    # written about: "half-filling a taxonomic form from one spoken line is how a wrong name ends
+    # up on a printed label". What changed is the caller. A microphone mishears a binomial; an
+    # agent sends a structured call with the genus spelled, and the resolvers refuse everything the
+    # old objection was about -- several matches is a question and never a pick, a name already
+    # belonging to another species is refused outright, and what a non-superuser adds is scoped to
+    # their own club until a site admin approves it. The pages are still there and still where a
+    # person does this.
+    "SpeciesCreateView": "add_species",
+    "SpeciesCommonNameCreateView": "name_a_species",
+    # Covers the copy button on that page and nothing else, which is the honest half: a *first*
+    # auction is still twenty decisions and still a form, and ``create_auction`` says so and links
+    # here rather than guessing at the fees.
+    "AuctionCreateView": "create_auction",
+    "ImageCreateView": "add_lot_image",
+    "ImageDelete": "remove_lot_image",
     "AuctionInfo": "join_auction",
     "ClubAnnouncementsView": "send_club_announcement",
     "ClubAnnouncementRetractView": "retract_announcement",
@@ -6948,25 +8141,15 @@ NOT_A_SKILL: dict[str, str] = {
         "go_to_page opens it."
     ),
     "AdminUserFlow": _FORM_PAGE,
-    "AuctionCreateView": (
-        "Creating an auction is twenty decisions about dates, fees and rules. The create page walks "
-        "through them; a one-line command would guess at most of them and get the fees wrong."
-    ),
     "AuctionCustomFieldsUpdate": _FORM_PAGE,
     "AuctionLabelConfig": _FORM_PAGE,
     "AuctionVolunteers": _FORM_PAGE,
-    "SpeciesCreateView": (
-        "Adding a species is a taxonomic decision, and the form is where the decisions are visible: "
-        "whether this is a species or a strain of one, which species it is a strain of, which of "
-        "its names people actually type. Half-filling that from one spoken line is how a wrong "
-        "name ends up on a printed label and in breeder points, which the whole species feature is "
-        "written to avoid. The palette navigates to the page instead."
-    ),
-    "SpeciesCommonNameCreateView": (
-        "Same reason as SpeciesCreateView, plus one of its own: the decision is which of 36,000 "
-        "species a typed name belongs to, and getting it wrong does not add a bad row, it takes a "
-        "good name away from the species that had it. That is a picker and a page, not a spoken "
-        "line. The palette navigates to the page instead."
+    "AssistantSkillRequestsView": (
+        "The POST is the four status buttons on the page, and the decision is the thing being read: "
+        "how many different people asked for it, in whose words, and whether the site should build "
+        "it. That is a queue to sit down with, not a sentence -- and an assistant marking its own "
+        "request as built is exactly the shape of thing this page exists to keep a person in front "
+        "of. go_to_page opens it."
     ),
     "SpeciesSearchCacheForgetView": (
         "One button on the species gaps page, and the decision is the row next to it: this "
@@ -7032,7 +8215,6 @@ NOT_A_SKILL: dict[str, str] = {
     "ClubMemberPermanentDeleteView": _DESTRUCTIVE,
     "CreateUserBan": _DESTRUCTIVE,
     "UserUnban": _NEEDS_THE_ROW,
-    "ImageDelete": _DESTRUCTIVE,
     "LotDelete": _DESTRUCTIVE,
     "LotDeactivate": _DESTRUCTIVE,
     "ClubAPIKeyRevokeView": _DESTRUCTIVE,
@@ -7061,9 +8243,15 @@ NOT_A_SKILL: dict[str, str] = {
     # Files and photos
     "BapAwardCSVImportView": _NEEDS_A_FILE,
     "ClubMemberCSVImportView": _NEEDS_A_FILE,
-    "ImageCreateView": _NEEDS_A_FILE,
-    "ImageUpdateView": _NEEDS_A_FILE,
-    "ImagesPrimary": _NEEDS_A_FILE,
+    "ImageUpdateView": (
+        "Changing a picture that is already there is a page: the thing being edited is the picture, "
+        "it is on screen while you edit it, and the field that matters most is the file. Adding one "
+        "and taking one off are the two halves an assistant can do without seeing it."
+    ),
+    "ImagesPrimary": (
+        "One click on a picture that is on screen — 'use this one'. Naming it out loud means naming "
+        "a row nobody can see, and add_lot_image sets the thumbnail on the way in."
+    ),
     "ImagesRotate": _NEEDS_A_FILE,
     "ImportFromGoogleDrive": _NEEDS_A_FILE,
     "ImportLotsFromCSV": _NEEDS_A_FILE,

@@ -15,6 +15,7 @@ from .models import (
     AdCampaignGroup,
     AdCampaignResponse,
     AppleDeviceRegistration,
+    AssistantSkillRequest,
     Auction,
     AuctionCampaign,
     AuctionHistory,
@@ -1611,3 +1612,19 @@ class SpeakerCommentAdmin(admin.ModelAdmin):
 admin.site.register(SpeakerTopic, SpeakerTopicAdmin)
 admin.site.register(Speaker, SpeakerAdmin)
 admin.site.register(SpeakerComment, SpeakerCommentAdmin)
+
+
+@admin.register(AssistantSkillRequest)
+class AssistantSkillRequestAdmin(admin.ModelAdmin):
+    """The Django-admin view of what agents asked for. The dashboard page is the one to use.
+
+    Here for the same reason ``VoiceCommandLog`` is: bulk edits, and a search across every status
+    at once. ``/admin-dashboard/assistant-requests/`` is where the decision gets made, because it
+    groups by skill and counts the people asking, which is the number that matters.
+    """
+
+    list_display = ("skill", "user", "status", "surface", "createdon")
+    list_filter = ("status", "surface")
+    search_fields = ("skill", "reason", "params", "user__username")
+    readonly_fields = ("createdon", "updatedon")
+    list_select_related = ("user",)

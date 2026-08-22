@@ -35,16 +35,23 @@ from django.utils import timezone
 
 logger = logging.getLogger(__name__)
 
-#: Requests per hour for a credential that names no limit of its own.
-DEFAULT_RATE_LIMIT = 600
+#: Requests per hour for a credential that names no limit of its own. It has to sit above
+#: :data:`DEFAULT_WRITE_BUDGET` with room over: every write is a request too, and an agent doing a
+#: run of writes reads between them (which lot, which bidder, did that work). A write budget above
+#: the request limit would be a number that never applies, which is worse than a low one.
+DEFAULT_RATE_LIMIT = 3000
 
-#: Writes per hour for one credential. Generous, because the busiest legitimate hour on this site
-#: is a check-in table and that is one write per person through the door -- a club of 200 is inside
-#: this. It is a ceiling on a runaway, not a security boundary: what it bounds is the number of
-#: rows an agent following an instruction it read in a lot description can reach before somebody
-#: notices. Every write is still one row, still needs a permission its owner really holds, and is
-#: still recorded in the auction's history with the assistant named.
-DEFAULT_WRITE_BUDGET = 300
+#: Writes per hour for one credential. It is a ceiling on a runaway, not a security boundary: what
+#: it bounds is the number of rows an agent following an instruction it read in a lot description
+#: can reach before somebody notices. Every write is still one row, still needs a permission its
+#: owner really holds, and is still recorded in the auction's history with the assistant named.
+#:
+#: Raised from 300, which was set from "a check-in table is one write per person through the door"
+#: and turned out to describe the *quiet* jobs. The ones that actually spend this are the bulk
+#: ones -- a picture on every lot without one, clearing a room's check-ins one call at a time,
+#: setting winners through an evening -- and 300 stopped a real afternoon's work partway through,
+#: which teaches an operator to work around the limit rather than to notice it.
+DEFAULT_WRITE_BUDGET = 2000
 
 #: How often a key's ``last_used_at`` is worth writing. Every request would be a database write per
 #: tool call to record something nobody reads to the minute; the column exists to answer "is this
@@ -265,8 +272,8 @@ def within_write_budget(credential: Credential) -> bool:
     """Count one write against this credential's hourly budget. False when it is spent.
 
     Separate from :func:`within_rate_limit` because the two bound different things. The rate limit
-    is about load: six hundred requests an hour, reads included. This is about *damage*, and it is
-    the only structural answer this server has to prompt injection.
+    is about load: every request, reads included. This is about *damage*, and it is the only
+    structural answer this server has to prompt injection.
 
     The attack is not exotic: every string these tools return was typed by somebody else -- lot
     names, lot descriptions, member memos, chat messages -- and an agent holding the write scope

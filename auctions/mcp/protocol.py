@@ -12,22 +12,27 @@ to the resolvers because they need a real Django request to run the same views t
 it is carried, never inspected.
 
 Only the methods this server actually implements are here. MCP is a large protocol and most of it
-is optional; a stateless tools-only server needs ``initialize``, ``tools/list``, ``tools/call`` and
-``ping``, and must not *advertise* anything else. Resources and prompts are deliberately absent
-rather than stubbed: a capability we declare is one a client is entitled to use.
+is optional, and a capability we declare is one a client is entitled to use -- so nothing here is
+stubbed. What is implemented is tools, resources (the ``ui://`` widget documents and the
+addressable reads in :mod:`auctions.mcp.resources`), prompts, and the argument completion that
+makes a prompt's ``auction`` argument something a person can pick rather than spell.
+
+Everything still absent needs the server to speak first -- elicitation, sampling, progress,
+subscriptions -- and this transport answers one POST with one JSON body and holds no session. See
+``docs/mcp_next.md``, which says so once so nobody rediscovers it.
 """
 
 from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, NamedTuple
 
 from django.conf import settings
 
 from auctions import palette_actions
 
-from . import tools
+from . import prompts, resources, tools, widgets
 
 logger = logging.getLogger(__name__)
 
@@ -143,7 +148,20 @@ def _initialize(caller: Caller, params: dict[str, Any]) -> dict[str, Any]:
         # and the recovery path holds either way: ``tools.call_tool`` looks a name up in the whole
         # registry, so an agent that knows the name of a tool it was not offered can still call it
         # and the resolver decides. ``/account/api-keys/`` says this in the page's own words.
-        "capabilities": {"tools": {"listChanged": False}},
+        "capabilities": {
+            "tools": {"listChanged": False},
+            # The ui:// widget documents and the addressable reads. ``subscribe`` and
+            # ``listChanged`` are both false and stay false for the same reason
+            # ``tools.listChanged`` is: no session, no server-initiated stream, nowhere to send the
+            # notification a ``true`` would promise. Nothing here is polled either -- a data
+            # resource is read on demand and is as current as the read.
+            "resources": {"subscribe": False, "listChanged": False},
+            # The recipes. Fixed text in a module, so there is genuinely nothing to notify about.
+            "prompts": {"listChanged": False},
+            # Argument completion for those recipes. An empty object is the whole declaration:
+            # the capability has no options.
+            "completions": {},
+        },
         "serverInfo": {
             # ``name`` is the stable identifier a host stores; ``title`` is what a person reads,
             # so it takes the deployment's own domain -- one of these tools' answers is about
@@ -162,32 +180,118 @@ def _tools_list(caller: Caller, params: dict[str, Any]) -> dict[str, Any]:
     return {"tools": tools.tool_descriptors(caller.user, writes=caller.writes, areas=caller.areas)}
 
 
-def _tools_call(caller: Caller, params: dict[str, Any]) -> dict[str, Any]:
+def _resources_list(caller: Caller, params: dict[str, Any]) -> dict[str, Any]:
+    """The ``ui://`` widget documents plus the two ``me://`` reads. Not paginated: there are seven.
+
+    Unfiltered by permission on purpose, and the two kinds of entry earn that separately. A widget
+    is a *template* -- an empty lot card, an empty invoice table -- and holds nobody's data; what
+    fills it is a tool result the caller already had to be allowed to fetch. The ``me://`` reads
+    hold plenty of data, but they are the same URI for every caller, so knowing one exists says
+    nothing about anybody; the answer is permission-checked when it is read.
+
+    What is deliberately **not** here is anything concrete with a slug in it. A list of
+    ``auction://spring-2027`` would be a list of which auctions exist handed to whoever asked, so
+    enumeration stays in the tools, where it is behind a check that knows whose auctions they are.
+    """
+    return {"resources": widgets.resource_descriptors() + resources.fixed_descriptors()}
+
+
+def _resources_templates_list(caller: Caller, params: dict[str, Any]) -> dict[str, Any]:
+    """The addressable reads, as URI patterns. See :mod:`auctions.mcp.resources`."""
+    return {"resourceTemplates": resources.template_descriptors()}
+
+
+def _resources_read(caller: Caller, params: dict[str, Any]) -> dict[str, Any] | _Problem:
+    uri = params.get("uri")
+    if not isinstance(uri, str) or not uri.strip():
+        return _Problem(INVALID_PARAMS, "A resource uri is required.")
+    uri = uri.strip()
+    # The widget documents first: they are static and need no request, and their scheme cannot
+    # collide with a data resource's.
+    contents = widgets.read_resource(uri)
+    if contents is None:
+        contents = resources.read(caller.request, uri)
+    if contents is None:
+        return _Problem(INVALID_PARAMS, f"There is no resource at “{uri}”.")
+    return {"contents": [contents]}
+
+
+def _prompts_list(caller: Caller, params: dict[str, Any]) -> dict[str, Any]:
+    return {"prompts": prompts.descriptors()}
+
+
+def _prompts_get(caller: Caller, params: dict[str, Any]) -> dict[str, Any] | _Problem:
     name = params.get("name")
     if not isinstance(name, str) or not name.strip():
-        msg = "A tool name is required."
-        raise _InvalidParams(msg)
+        return _Problem(INVALID_PARAMS, "A prompt name is required.")
+    arguments = params.get("arguments")
+    rendered = prompts.render(name.strip(), arguments if isinstance(arguments, dict) else {})
+    if rendered is None:
+        return _Problem(INVALID_PARAMS, f"There is no prompt called “{name}”.")
+    return rendered
+
+
+def _completion_complete(caller: Caller, params: dict[str, Any]) -> dict[str, Any] | _Problem:
+    """Suggestions for one prompt argument. The half that makes a prompt argument usable.
+
+    Only ``ref/prompt`` is answered. A ``ref/resource`` completion would be asked to complete an
+    auction slug inside ``auction://{auction}``, and answering it means listing this person's
+    auctions in response to a URI pattern -- which is the enumeration ``resources/list`` is
+    careful not to do. The tools answer that question, with the permission check attached.
+    """
+    reference = params.get("ref")
+    argument = params.get("argument")
+    if not isinstance(reference, dict) or not isinstance(argument, dict):
+        return _Problem(INVALID_PARAMS, "A completion needs a ref and an argument.")
+    if reference.get("type") != "ref/prompt":
+        return {"completion": {"values": [], "total": 0, "hasMore": False}}
+    kind = prompts.completes(str(reference.get("name") or ""), str(argument.get("name") or ""))
+    values = prompts.complete(caller.user, kind, str(argument.get("value") or "")) if kind else []
+    return {"completion": {"values": values, "total": len(values), "hasMore": False}}
+
+
+def _tools_call(caller: Caller, params: dict[str, Any]) -> dict[str, Any] | _Problem:
+    name = params.get("name")
+    if not isinstance(name, str) or not name.strip():
+        return _Problem(INVALID_PARAMS, "A tool name is required.")
     try:
         return tools.call_tool(caller.request, name, params.get("arguments"), writes=caller.writes)
     except tools.UnknownTool:
         # A name that isn't in the registry is a protocol error, not a tool that failed: the
         # client asked for something tools/list never offered.
-        msg = f"There is no tool called “{name}”."
-        raise _InvalidParams(msg) from None
+        return _Problem(INVALID_PARAMS, f"There is no tool called “{name}”.")
 
 
 def _ping(caller: Caller, params: dict[str, Any]) -> dict[str, Any]:
     return {}
 
 
-class _InvalidParams(Exception):
-    """Raised by a handler when the params were wrong. Becomes a ``-32602``."""
+class _Problem(NamedTuple):
+    """A handler saying "send this instead", rather than a result. Becomes a JSON-RPC error.
+
+    This was an exception, and the dispatcher pulled its message back out with ``str(problem)``.
+    That is a value we wrote ourselves, but "the text of a caught exception is written into an HTTP
+    response" is exactly the shape of an accidental traceback disclosure, and neither a reader nor a
+    static analyser can tell the two apart by looking. Nothing here is exceptional anyway -- a
+    client naming a tool that does not exist is an ordinary Tuesday -- so a returned value says it
+    better than a raise does, and the ``except Exception`` below is left meaning only what it says:
+    the protocol layer itself broke.
+    """
+
+    code: int
+    message: str
 
 
 HANDLERS = {
     "initialize": _initialize,
     "tools/list": _tools_list,
     "tools/call": _tools_call,
+    "resources/list": _resources_list,
+    "resources/templates/list": _resources_templates_list,
+    "resources/read": _resources_read,
+    "prompts/list": _prompts_list,
+    "prompts/get": _prompts_get,
+    "completion/complete": _completion_complete,
     "ping": _ping,
 }
 
@@ -209,11 +313,13 @@ def handle(message: Any, caller: Caller) -> dict[str, Any] | None:
     if not isinstance(params, dict):
         params = {}
     try:
-        return _response(message_id, handler(caller, params))
-    except _InvalidParams as problem:
-        return error(message_id, INVALID_PARAMS, str(problem))
+        result = handler(caller, params)
     except Exception:
         # A resolver that raises is already caught inside run_action and turned into a tool error,
-        # so reaching here means the protocol layer itself broke. Say so without a traceback.
+        # so reaching here means the protocol layer itself broke. Say so without a traceback: no
+        # part of what we send back is derived from the exception.
         logger.exception("MCP handler for %s failed", method)
         return error(message_id, INTERNAL_ERROR, "Something went wrong handling that request.")
+    if isinstance(result, _Problem):
+        return error(message_id, result.code, result.message)
+    return _response(message_id, result)

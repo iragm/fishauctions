@@ -37,7 +37,9 @@ class ClubEventModelTests(TestCase):
         self.assertEqual(event.effective_end, self.start + datetime.timedelta(hours=2))
 
     def test_auction_events_are_not_editable_by_hand(self):
-        auction = Auction.objects.create(title="Auction", date_start=self.start, club=self.club)
+        auction = Auction.objects.create(
+            title="Auction", date_start=self.start, club=self.club, promote_this_auction=True
+        )
         event = ClubEvent.objects.filter(auction=auction).first()
         self.assertIsNotNone(event)
         self.assertFalse(event.is_editable)
@@ -55,11 +57,16 @@ class ClubEventModelTests(TestCase):
 
     def test_the_subscribe_link_falls_back_to_our_own_feed(self):
         """Every club has one of these, connected to Google or not — webcal:// so a click
-        subscribes instead of downloading a snapshot that never updates again."""
-        url = self.club.calendar_subscribe_url("example.com")
-        self.assertTrue(url.startswith("webcal://example.com"))
-        self.assertIn(self.club.slug, url)
-        self.assertTrue(self.club.calendar_feed_url("example.com").startswith("https://example.com"))
+        subscribes instead of downloading a snapshot that never updates again.
+
+        Asserted as the whole address rather than as a prefix: ``startswith("https://example.com")``
+        is not a test that a URL points at that host, because ``https://example.com.evil.test/``
+        passes it too. That is a real bug in a sanitiser and a false alarm in a test, and the way to
+        settle both is to say which URL we expected.
+        """
+        path = reverse("club_events_ical", kwargs={"slug": self.club.slug})
+        self.assertEqual(self.club.calendar_subscribe_url("example.com"), f"webcal://example.com{path}")
+        self.assertEqual(self.club.calendar_feed_url("example.com"), f"https://example.com{path}")
 
     def test_a_shared_google_calendar_wins_both_links(self):
         self.club.google_calendar_refresh_token = "token"
@@ -579,7 +586,9 @@ class ClubEventViewTests(TestCase):
         self.assertTrue(event.is_deleted)
 
     def _auction_event(self):
-        auction = Auction.objects.create(title="Auction", date_start=self.start, club=self.club)
+        auction = Auction.objects.create(
+            title="Auction", date_start=self.start, club=self.club, promote_this_auction=True
+        )
         return auction, ClubEvent.objects.get(auction=auction)
 
     def test_an_auction_events_wording_can_be_edited_but_nothing_else(self):
@@ -785,6 +794,7 @@ class ClubEventsEmbedTests(TestCase):
             date_end=self.start + datetime.timedelta(days=2),
             club=self.club,
             is_online=True,
+            promote_this_auction=True,
         )
         PickupLocation.objects.create(
             auction=auction,
@@ -804,6 +814,7 @@ class ClubEventsEmbedTests(TestCase):
             date_end=self.start + datetime.timedelta(hours=2),
             club=self.club,
             is_online=True,
+            promote_this_auction=True,
         )
         PickupLocation.objects.create(
             auction=auction,
@@ -1115,7 +1126,9 @@ class GoogleCalendarSyncTests(TestCase):
 
     def test_deleting_an_auction_event_in_google_puts_it_back(self):
         """The auction is still real, so the club page must keep showing it."""
-        auction = Auction.objects.create(title="Auction", date_start=self.start, club=self.club)
+        auction = Auction.objects.create(
+            title="Auction", date_start=self.start, club=self.club, promote_this_auction=True
+        )
         event = ClubEvent.objects.get(auction=auction)
         event.google_event_id = "g-300"
         event.save()
@@ -1128,7 +1141,9 @@ class GoogleCalendarSyncTests(TestCase):
         self.assertEqual(event.google_event_id, "")
 
     def test_a_google_edit_never_overwrites_an_auction_event(self):
-        auction = Auction.objects.create(title="Real Title", date_start=self.start, club=self.club)
+        auction = Auction.objects.create(
+            title="Real Title", date_start=self.start, club=self.club, promote_this_auction=True
+        )
         event = ClubEvent.objects.get(auction=auction)
         event.google_event_id = "g-400"
         event.save()
@@ -1423,7 +1438,7 @@ class DiscordClubEventTests(TestCase):
 
     def test_auction_events_are_skipped_so_they_are_never_doubled_up(self):
         """auction_emails owns Discord events for auctions; this path must stay out of the way."""
-        Auction.objects.create(title="Auction", date_start=self.start, club=self.club)
+        Auction.objects.create(title="Auction", date_start=self.start, club=self.club, promote_this_auction=True)
         with patch.object(discord_events, "create_scheduled_event", return_value="d-1") as create:
             self.assertEqual(discord_events.sync_club_events(self.club), 0)
         create.assert_not_called()
@@ -1431,7 +1446,9 @@ class DiscordClubEventTests(TestCase):
     def test_pickup_events_are_skipped_too(self):
         """Four pickup slots on one auction would otherwise be four more Discord events, for
         logistics that only concern people who already won a lot."""
-        auction = Auction.objects.create(title="Auction", date_start=self.start, club=self.club, is_online=True)
+        auction = Auction.objects.create(
+            title="Auction", date_start=self.start, club=self.club, is_online=True, promote_this_auction=True
+        )
         location = PickupLocation.objects.create(
             name="Shop", auction=auction, pickup_time=self.start, address="1 Main St"
         )
@@ -1638,6 +1655,7 @@ class NextEventInMemberEmailTests(TestCase):
             date_end=self.start + datetime.timedelta(days=2),
             club=self.club,
             is_online=True,
+            promote_this_auction=True,
         )
         text, _ = self._fragment()
         self.assertIn("Our next event is Spring Auction", text)
@@ -1662,6 +1680,7 @@ class NextEventInMemberEmailTests(TestCase):
             date_end=self.start + datetime.timedelta(days=12),
             club=self.club,
             is_online=True,
+            promote_this_auction=True,
         )
         PickupLocation.objects.create(auction=auction, name="Clubhouse", address="1 Fish Lane", pickup_time=self.start)
         text, _ = self._fragment()
@@ -1741,6 +1760,7 @@ class NextEventInMemberEmailTests(TestCase):
             date_end=self.start + datetime.timedelta(days=2),
             club=self.club,
             is_online=True,
+            promote_this_auction=True,
         )
         PickupLocation.objects.create(
             auction=auction,
@@ -1762,6 +1782,7 @@ class NextEventInMemberEmailTests(TestCase):
             date_end=self.start + datetime.timedelta(days=2),
             club=self.club,
             is_online=True,
+            promote_this_auction=True,
         )
         PickupLocation.objects.create(
             auction=auction,
@@ -1790,6 +1811,7 @@ class NextEventInMemberEmailTests(TestCase):
             date_end=None,
             club=self.club,
             is_online=False,
+            promote_this_auction=True,
         )
         gather = (self.start + datetime.timedelta(days=1)).replace(hour=19, minute=30)
         PickupLocation.objects.create(auction=auction, name="Clubhouse", address="1 Fish Lane", pickup_time=gather)
@@ -1800,7 +1822,12 @@ class NextEventInMemberEmailTests(TestCase):
 
     def test_an_in_person_auction_with_several_locations_falls_back_to_its_own_time(self):
         auction = Auction.objects.create(
-            title="Fall Auction", date_start=self.start, date_end=None, club=self.club, is_online=False
+            title="Fall Auction",
+            date_start=self.start,
+            date_end=None,
+            club=self.club,
+            is_online=False,
+            promote_this_auction=True,
         )
         for name in ("North", "South"):
             PickupLocation.objects.create(
@@ -1818,6 +1845,7 @@ class NextEventInMemberEmailTests(TestCase):
             date_end=self.start + datetime.timedelta(days=2),
             club=self.club,
             is_online=True,
+            promote_this_auction=True,
         )
         auction.is_online = False
         auction.save()
@@ -1945,7 +1973,9 @@ class GoogleCalendarPullSafetyTests(TestCase):
     def test_a_pickup_event_deleted_in_google_comes_back(self):
         """It's generated from the auction's pickup time, so dropping it would leave the club
         page disagreeing with the auction — and the next sync would recreate it anyway."""
-        auction = Auction.objects.create(title="Spring Auction", date_start=self.start, club=self.club, is_online=True)
+        auction = Auction.objects.create(
+            title="Spring Auction", date_start=self.start, club=self.club, is_online=True, promote_this_auction=True
+        )
         PickupLocation.objects.create(name="Shop", auction=auction, pickup_time=self.start, address="1 Main St")
         event = ClubEvent.objects.get(source=ClubEvent.SOURCE_PICKUP)
         event.google_event_id = "g-1"
@@ -1960,7 +1990,9 @@ class GoogleCalendarPullSafetyTests(TestCase):
         self.assertTrue(event.needs_google_sync)
 
     def test_a_google_edit_never_overwrites_a_pickup_event(self):
-        auction = Auction.objects.create(title="Spring Auction", date_start=self.start, club=self.club, is_online=True)
+        auction = Auction.objects.create(
+            title="Spring Auction", date_start=self.start, club=self.club, is_online=True, promote_this_auction=True
+        )
         PickupLocation.objects.create(name="Shop", auction=auction, pickup_time=self.start, address="1 Main St")
         event = ClubEvent.objects.get(source=ClubEvent.SOURCE_PICKUP)
         event.google_event_id = "g-1"

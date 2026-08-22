@@ -431,7 +431,11 @@ class EndpointTests(StandardTestCase):
     def test_initialize_negotiates_and_advertises_only_what_exists(self):
         result = self.result(self.rpc("initialize", {"protocolVersion": protocol.LATEST_PROTOCOL_VERSION}))
         self.assertEqual(result["protocolVersion"], protocol.LATEST_PROTOCOL_VERSION)
-        self.assertEqual(set(result["capabilities"]), {"tools"})
+        # Everything implemented and nothing else: tools, resources (the ui:// widget documents
+        # and the addressable reads), prompts, and completion for the prompts' arguments. Logging,
+        # sampling and elicitation stay out -- all three need the server to speak first, which this
+        # transport cannot do. See docs/mcp_next.md.
+        self.assertEqual(set(result["capabilities"]), {"tools", "resources", "prompts", "completions"})
         self.assertTrue(result["serverInfo"]["name"])
         self.assertTrue(result["instructions"].strip())
 
@@ -462,7 +466,11 @@ class EndpointTests(StandardTestCase):
         self.assertFalse(response.content)
 
     def test_an_unknown_method_is_a_jsonrpc_error_not_a_crash(self):
-        response = self.rpc("resources/list")
+        # ``logging/setLevel``, because log level is a deployment decision and this server will
+        # never implement it. This test has now been round the houses twice -- it named
+        # ``resources/list`` until the widgets shipped and ``prompts/list`` until the recipes did --
+        # so it is pointed at something on the "not worth doing" half of docs/mcp_next.md.
+        response = self.rpc("logging/setLevel", {"level": "debug"})
         self.assertEqual(response.status_code, 200)
         self.assertEqual(json.loads(response.content)["error"]["code"], protocol.METHOD_NOT_FOUND)
 
