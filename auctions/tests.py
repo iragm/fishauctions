@@ -36,6 +36,7 @@ from .forms import (
     CreateLotForm,
     CustomResetPasswordForm,
     CustomSignupForm,
+    quick_add_lot_form_class,
 )
 from .models import (
     PRIVACY_POLICY_SLUG,
@@ -6309,6 +6310,83 @@ class AuctionCustomFieldsViewTests(StandardTestCase):
         )
         self.assertIn(response.status_code, [302, 403])
         self.assertFalse(AuctionDropdown.objects.filter(auction=self.online_auction, value="River").exists())
+
+
+class AuctionCloneCustomFieldsTests(StandardTestCase):
+    """Copying an auction has to bring the custom fields with it.
+
+    A setting that is missing from ``AuctionCreateView.fields_to_clone`` is not copied, and because
+    the copy starts from a fresh ``Auction`` it silently takes the model default instead.  That is
+    invisible on the create form -- the club sees a new auction that looks right -- and only turns
+    up when the first seller adds a lot and the field they were told to fill in is not there.
+    """
+
+    def setUp(self):
+        super().setUp()
+        userdata = self.user.userdata
+        # ALLOW_USERS_TO_CREATE_AUCTIONS is read from the environment, and CI's differs from dev's.
+        userdata.can_create_club_auctions = True
+        userdata.save()
+        self.client.login(username="my_lot", password="testpassword")
+
+    def _copy(self, source):
+        """Copy ``source`` the way the Copy button does, and return the new auction."""
+        response = self.client.post(
+            reverse("create_auction") + f"?copy={source.slug}&clone",
+            {
+                "title": "Next year's auction",
+                "date_start": timezone.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "cloned_from": source.slug,
+            },
+        )
+        self.assertEqual(response.status_code, 302)
+        clone = Auction.objects.filter(title="Next year's auction").first()
+        self.assertIsNotNone(clone)
+        return clone
+
+    def test_copying_an_auction_keeps_the_custom_checkbox(self):
+        self.online_auction.use_custom_checkbox_field = True
+        self.online_auction.custom_checkbox_name = "CARES species"
+        self.online_auction.save()
+        clone = self._copy(self.online_auction)
+        self.assertTrue(clone.use_custom_checkbox_field)
+        self.assertEqual(clone.custom_checkbox_name, "CARES species")
+
+    def test_the_copy_shows_the_custom_checkbox_when_a_lot_is_added(self):
+        # The name alone is not enough: both halves are read together everywhere the field is
+        # shown, so a copy that kept the name and lost the switch shows the seller nothing.
+        self.online_auction.use_custom_checkbox_field = True
+        self.online_auction.custom_checkbox_name = "CARES species"
+        self.online_auction.save()
+        form_class = quick_add_lot_form_class()
+        form = form_class(auction=self._copy(self.online_auction), is_admin=True, tos=None)
+        self.assertNotIsInstance(form.fields["custom_checkbox"].widget, forms.HiddenInput)
+        self.assertEqual(form.fields["custom_checkbox"].label, "CARES species")
+
+    def test_copying_an_auction_keeps_switched_off_fields_switched_off(self):
+        # These two default to True, so leaving them out of the copy turns them back on -- the
+        # opposite failure, and just as unwanted by a club that stripped its lot form down.
+        self.online_auction.use_description = False
+        self.online_auction.use_reference_link = False
+        self.online_auction.save()
+        clone = self._copy(self.online_auction)
+        self.assertFalse(clone.use_description)
+        self.assertFalse(clone.use_reference_link)
+
+    def test_every_custom_field_setting_is_copied(self):
+        """The custom fields form is entirely settings, so all of it belongs in the copy."""
+        from .forms import AuctionCustomFieldsForm
+        from .views import AuctionCreateView
+
+        missing = [
+            field for field in AuctionCustomFieldsForm.Meta.fields if field not in AuctionCreateView.fields_to_clone
+        ]
+        self.assertEqual(
+            missing,
+            [],
+            f"{missing} are on the custom fields form but not in AuctionCreateView.fields_to_clone, "
+            "so copying an auction resets them to the model default.",
+        )
 
 
 class PayPalFormFieldVisibilityTests(StandardTestCase):
