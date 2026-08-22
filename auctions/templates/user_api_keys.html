@@ -10,9 +10,29 @@
     It acts <strong>as you</strong>: every auction and club still checks your own permissions, so it can never do anything you couldn't do yourself.
   </p>
   <p class="mb-4">
-    You currently have <strong>{{ tool_count }}</strong> things it can do, <strong>{{ read_tool_count }}</strong> of which only look things up and never change anything.
+    You currently have <strong>{{ tool_count }}</strong> things it can do{% if opted_in %}, <strong>{{ read_tool_count }}</strong> of which only look things up and never change anything{% endif %}.
   </p>
 
+  <h2 class="h5 mb-2">What it can do</h2>
+  <ul class="mb-4">
+    <li>Ask it things: &ldquo;how many lots are in my auction?&rdquo;, &ldquo;who hasn't paid yet?&rdquo;, &ldquo;when does lot submission close?&rdquo;</li>
+    <li>Have it do things: add lots, check people in, record a sale, mark an invoice paid, add points.</li>
+    <li>Anything that would take a page with a form on it &mdash; creating an auction, deleting things, anything involving money changing hands &mdash; it will give you a link to instead of doing.</li>
+    <li>It gets a shorter list if you don't run an auction or a club, because most of the list is only useful to somebody who does.</li>
+  </ul>
+
+{% if not opted_in %}
+  {% comment %}Not a 403. This is the only page that explains what connecting an assistant is, and it is exactly what somebody is reading when they find out they cannot have it yet -- a permission-denied page gives them nothing to read and nothing to forward. Everything that issues or revokes a credential is simply not rendered, and post() still refuses.{% endcomment %}
+  <div class="help-note">
+    <i class="bi bi-lightbulb-fill"></i>
+    <div>
+      <strong>This is still in beta, and it isn't switched on for your account yet.</strong>
+      Ask whoever runs this site to turn on <em>AI assistant and connected apps</em> for you, and this page will
+      have everything you need to connect. Nothing else about your account changes either way.
+    </div>
+  </div>
+</div>
+{% else %}
   {% if new_raw_key %}
   <div class="alert alert-success text-dark">
     <h5><i class="bi bi-key-fill"></i> Here is your new key</h5>
@@ -53,13 +73,35 @@
     </div>
   </div>
 
-  <h2 class="h5 mb-2">What it can do</h2>
-  <ul class="mb-4">
-    <li>Ask it things: &ldquo;how many lots are in my auction?&rdquo;, &ldquo;who hasn't paid yet?&rdquo;, &ldquo;when does lot submission close?&rdquo;</li>
-    <li>Have it do things: add lots, check people in, record a sale, mark an invoice paid, add points.</li>
-    <li>Anything that would take a page with a form on it &mdash; creating an auction, deleting things, anything involving money changing hands &mdash; it will give you a link to instead of doing.</li>
-    <li>It gets a shorter list if you don't run an auction or a club, because most of the list is only useful to somebody who does.</li>
-  </ul>
+  {% comment %}Signing in is how almost everybody connects, so the list of what is connected belongs above the key form rather than under it. Until it existed, "how do I disconnect Claude?" had no answer on this page at all -- revoking a key is no help to somebody who never made one.{% endcomment %}
+  <h2 class="h5 mb-2">What's connected</h2>
+  {% if connected_apps %}
+  <div class="table-responsive mb-4">
+    <table class="table align-middle">
+      <thead>
+        <tr><th>Assistant</th><th>Can change things</th><th>Connected</th><th></th></tr>
+      </thead>
+      <tbody>
+        {% for app in connected_apps %}
+        <tr{% if not app.live %} class="text-muted"{% endif %}>
+          <td>{{ app.name }}{% if not app.live %} <span class="badge bg-secondary rounded-pill">Signed out</span>{% endif %}</td>
+          <td>{% if app.writes %}Yes{% else %}No, read only{% endif %}</td>
+          <td>{{ app.connected|timesince }} ago</td>
+          <td class="text-end">
+            <form method="post" data-confirm="Disconnect {{ app.name }}? It stops working straight away, and you'll be asked to sign in again if you reconnect it." data-confirm-title="Disconnect {{ app.name }}?" data-confirm-ok="Disconnect" data-confirm-variant="danger">
+              {% csrf_token %}
+              <input type="hidden" name="disconnect" value="{{ app.pk }}">
+              <button type="submit" class="btn btn-sm btn-danger"><i class="bi bi-x-lg"></i> Disconnect</button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <p class="text-muted mb-4">Nothing yet. Follow the steps above and it will show up here.</p>
+  {% endif %}
 
   <h2 class="h5 mb-2">Keys, for everything that can't sign in</h2>
   <div class="help-note">
@@ -82,6 +124,16 @@
           <label class="form-check-label" for="allow-writes">Let this key change things</label>
           <div class="form-text">Off by default. With it off the key can look things up but cannot add lots, check people in, or change an invoice.</div>
         </div>
+        <div class="mb-3">
+          <label class="form-label" for="expires-in">Stop working after</label>
+          <select class="form-select" name="expires_in" id="expires-in">
+            <option value="">Never</option>
+            <option value="30">30 days</option>
+            <option value="90">90 days</option>
+            <option value="365">A year</option>
+          </select>
+          <div class="form-text">A key with an end date is the one that can't be forgotten about. Leave it on Never for something that has to keep running.</div>
+        </div>
         <button type="submit" class="btn btn-success text-dark"><i class="bi bi-plus-lg"></i> Create key</button>
       </form>
     </div>
@@ -92,7 +144,7 @@
   <div class="table-responsive mb-4">
     <table class="table align-middle">
       <thead>
-        <tr><th>Name</th><th>Key</th><th>Can change things</th><th>Last used</th><th></th></tr>
+        <tr><th>Name</th><th>Key</th><th>Can change things</th><th>Expires</th><th>Last used</th><th></th></tr>
       </thead>
       <tbody>
         {% for key in keys %}
@@ -100,6 +152,7 @@
           <td>{{ key.name }}</td>
           <td><code>{{ key.prefix }}&hellip;</code></td>
           <td>{% if key.allow_writes %}Yes{% else %}No, read only{% endif %}</td>
+          <td>{% if key.expires_at %}{{ key.expires_at|date:"N j, Y" }}{% else %}Never{% endif %}</td>
           <td>{% if key.last_used_at %}{{ key.last_used_at|timesince }} ago{% else %}Never{% endif %}</td>
           <td class="text-end">
             {% if key.is_active %}
@@ -126,11 +179,27 @@
   -H "Content-Type: application/json" \
   -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'</code></pre>
 
+  <h2 class="h5 mb-2">Connecting to less than all of it</h2>
+  <p class="mb-2">
+    The whole list of {{ tool_count }} tools is sent to your assistant every time it connects, and it costs it
+    something to read. If you only want part of it, add <code>?tools=</code> to the address:
+  </p>
+  <ul class="mb-3">
+    <li><code>{{ mcp_url }}?tools=club</code> &mdash; members, points, events, announcements</li>
+    <li><code>{{ mcp_url }}?tools=auction</code> &mdash; lots, bidders, check-in, invoices</li>
+    <li><code>{{ mcp_url }}?tools=read</code> &mdash; only the tools that look things up</li>
+    <li><code>{{ mcp_url }}?tools=club,read</code> &mdash; combine them with commas</li>
+  </ul>
+  <p class="mb-4"><small class="text-muted">The handful that orient it &mdash; what you're working on, where a page is, undo &mdash; are always included.</small></p>
+
   <h2 class="h5 mb-2">Good to know</h2>
   <ul class="mb-0">
-    <li>Signing in and keys are independent &mdash; revoking a key doesn't disconnect Claude, and disconnecting Claude doesn't revoke your keys.</li>
-    <li>Claude asks before it does anything that changes something. It won't ask before looking something up.</li>
+    <li>A connection can change at most 300 things an hour. That's far more than a busy check-in table needs, and it's the ceiling on how far something can go wrong before you notice.</li>
+    <li>Whether a connection can change things is fixed when you make it. To turn writing on or off, disconnect it and connect it again.</li>
+    <li>Signing in and keys are independent &mdash; revoking a key doesn't disconnect Claude, and disconnecting Claude doesn't revoke your keys. Both lists are on this page.</li>
+    <li>Every tool that changes something is marked as such, and Claude asks you before running one. That marking is what this site guarantees &mdash; whether you get asked is up to the assistant you connected.</li>
     <li>Nothing here is specific to Claude: this is a standard Model Context Protocol endpoint and any agent that speaks it can connect.</li>
   </ul>
 </div>
+{% endif %}
 {% endblock %}

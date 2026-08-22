@@ -16,7 +16,9 @@ in CI instead.
 import datetime
 import json
 import re
+from unittest.mock import patch
 
+from django.conf import settings
 from django.test import RequestFactory, SimpleTestCase
 from django.utils import timezone
 
@@ -118,20 +120,29 @@ class RegistryConformance(SimpleTestCase):
             annotations = descriptor["annotations"]
             action = palette_actions.ACTIONS[name]
             self.assertIsInstance(annotations["readOnlyHint"], bool)
-            self.assertIsInstance(annotations["destructiveHint"], bool)
             self.assertEqual(annotations["readOnlyHint"], action.danger != palette_actions.DANGER_CONFIRM)
             self.assertFalse(annotations["openWorldHint"], f"{name} reaches outside this site?")
 
-    def test_nothing_is_read_only_and_destructive_at_once(self):
+    def test_a_write_says_whether_it_destroys_and_whether_it_repeats(self):
         for name, descriptor in self.by_name.items():
             annotations = descriptor["annotations"]
             if annotations["readOnlyHint"]:
-                self.assertFalse(annotations["destructiveHint"], f"{name} claims to both read only and destroy")
+                continue
+            self.assertIsInstance(annotations["destructiveHint"], bool, f"{name} does not say if it destroys")
+            self.assertIsInstance(annotations["idempotentHint"], bool, f"{name} does not say if it repeats")
 
-    def test_reads_are_idempotent(self):
+    def test_a_read_carries_neither_hint(self):
+        """Both are defined only when readOnlyHint is false, so on a read they are two dead keys.
+
+        tools/list is paid for in full, in context, by every host on every session -- fifty-odd
+        tools times two keys that say nothing is not free.
+        """
         for name, descriptor in self.by_name.items():
-            if descriptor["annotations"]["readOnlyHint"]:
-                self.assertTrue(descriptor["annotations"]["idempotentHint"], f"{name} reads but is not idempotent")
+            annotations = descriptor["annotations"]
+            if not annotations["readOnlyHint"]:
+                continue
+            self.assertNotIn("destructiveHint", annotations, f"{name} reads; the hint means nothing")
+            self.assertNotIn("idempotentHint", annotations, f"{name} reads; the hint means nothing")
 
     def test_every_parameter_declares_its_type(self):
         """The convention the whole schema is derived from. See this module's docstring."""
@@ -279,8 +290,20 @@ class CallToolTests(StandardTestCase):
     def test_a_result_is_bounded(self):
         long_result = {"ok": True, "summary": "x" * (tools.MAX_RESULT_CHARS * 2)}
         text = tools._text(tools._payload(long_result))
-        self.assertLess(len(text), tools.MAX_RESULT_CHARS + 200)
-        self.assertIn("truncated", text)
+        self.assertLess(len(text), tools.MAX_RESULT_CHARS)
+        self.assertIn("too big", text)
+
+    def test_a_result_that_does_not_fit_is_still_valid_json(self):
+        """It used to be sliced at 20 000 characters, which lands mid-string.
+
+        A host that parses tool output got a parse error where the answer should have been -- and
+        the "narrow the query" note was appended after the break, so the one instruction the caller
+        needed was the part that got cut off.
+        """
+        long_result = {"ok": True, "summary": "fine", "rows": ["x" * 200] * 500}
+        parsed = json.loads(tools._text(tools._payload(long_result)))
+        self.assertEqual(parsed["summary"], "fine")
+        self.assertIn("limit and offset", parsed["what_to_do"])
 
 
 @isolated_cache("mcp-endpoint")
@@ -725,9 +748,30 @@ class OptInTests(StandardTestCase):
             HTTP_MCP_PROTOCOL_VERSION=protocol.LATEST_PROTOCOL_VERSION,
         )
 
-    def test_a_key_belonging_to_somebody_not_opted_in_does_not_work(self):
+    def test_a_key_belonging_to_somebody_not_opted_in_is_refused_with_a_403(self):
+        """A 403, deliberately, and it is the status that matters more than the refusal.
+
+        A 401 is an instruction to authenticate. A client that gets one here runs the whole OAuth
+        flow again, is issued another perfectly valid token, presents it, and is refused again --
+        a loop with no message in it anywhere and nothing on screen that says why. The 403 ends it
+        and carries the sentence that says what to do about it.
+        """
         self._opt_in(self.user, False)
-        self.assertEqual(self.rpc().status_code, 401)
+        response = self.rpc()
+        self.assertEqual(response.status_code, 403)
+        self.assertNotIn("WWW-Authenticate", response)
+        self.assertIn("administrator", json.loads(response.content)["error"]["message"])
+
+    def test_no_credential_at_all_is_still_a_401_with_a_challenge(self):
+        """The other half: a 401 is what *starts* an OAuth flow, so it has to survive the change."""
+        response = self.client.post(
+            self.url,
+            data=json.dumps({"jsonrpc": "2.0", "id": 1, "method": "ping"}),
+            content_type="application/json",
+            HTTP_MCP_PROTOCOL_VERSION=protocol.LATEST_PROTOCOL_VERSION,
+        )
+        self.assertEqual(response.status_code, 401)
+        self.assertIn("WWW-Authenticate", response)
 
     def test_the_same_key_works_once_they_are_opted_in(self):
         self._opt_in(self.user, True)
@@ -737,7 +781,7 @@ class OptInTests(StandardTestCase):
         self._opt_in(self.user, True)
         self.assertEqual(self.rpc().status_code, 200)
         self._opt_in(self.user, False)
-        self.assertEqual(self.rpc().status_code, 401)
+        self.assertEqual(self.rpc().status_code, 403)
 
 
 class ConnectPageTests(StandardTestCase):
@@ -745,14 +789,25 @@ class ConnectPageTests(StandardTestCase):
 
     url = "/account/api-keys/"
 
-    def test_it_is_refused_to_somebody_not_opted_in(self):
+    def test_somebody_not_opted_in_gets_the_explanation_not_a_403(self):
+        """This is the one page that says what connecting an assistant is.
+
+        A permission-denied page hands the person nothing to read and nothing to forward, which
+        is the opposite of what somebody who has just found out they can't have it yet needs.
+        """
         self.user.userdata.use_llm_search = False
         self.user.userdata.save()
         self.client.force_login(self.user)
-        self.assertEqual(self.client.get(self.url).status_code, 403)
+        response = self.client.get(self.url)
+        self.assertEqual(response.status_code, 200)
+        body = response.content.decode()
+        self.assertIn("isn't switched on for your account yet", body)
+        # ...and nothing that issues or ends a credential is on the page.
+        self.assertNotIn("Create key", body)
+        self.assertNotIn("Disconnect", body)
 
     def test_creating_a_key_is_refused_too(self):
-        """The gate is on dispatch, so it covers the POST and not just the page."""
+        """The explanation degrades; the credential form refuses."""
         self.user.userdata.use_llm_search = False
         self.user.userdata.save()
         self.client.force_login(self.user)
@@ -803,3 +858,308 @@ class ConnectPageTests(StandardTestCase):
         self.client.post(self.url, {"revoke": theirs.pk})
         theirs.refresh_from_db()
         self.assertTrue(theirs.is_active)
+
+
+@isolated_cache("mcp-oauth-optin")
+class OAuthOptInTests(StandardTestCase):
+    """The same rule, on the credential Claude's own surfaces actually use.
+
+    The key path and the token path have to agree here, and the token path is the one that loops:
+    an OAuth client answered with a 401 goes and gets another token.
+    """
+
+    url = "/mcp/"
+
+    def setUp(self):
+        super().setUp()
+        from oauth2_provider.models import get_access_token_model, get_application_model
+
+        self.application = get_application_model().objects.create(
+            name="Test client",
+            client_type="public",
+            authorization_grant_type="authorization-code",
+            redirect_uris="https://claude.ai/api/mcp/auth_callback",
+        )
+        self.AccessToken = get_access_token_model()
+
+    def token_for(self, user, scope="read"):
+        import secrets
+
+        return self.AccessToken.objects.create(
+            user=user,
+            application=self.application,
+            token=secrets.token_hex(20),
+            expires=timezone.now() + datetime.timedelta(hours=1),
+            scope=scope,
+        ).token
+
+    def ping(self, token):
+        return self.client.post(
+            self.url,
+            data=json.dumps({"jsonrpc": "2.0", "id": 1, "method": "ping"}),
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Bearer {token}",
+            HTTP_MCP_PROTOCOL_VERSION=protocol.LATEST_PROTOCOL_VERSION,
+        )
+
+    def test_a_token_for_somebody_not_opted_in_gets_a_403_not_a_reauth_loop(self):
+        self.user.userdata.use_llm_search = False
+        self.user.userdata.save()
+        response = self.ping(self.token_for(self.user))
+        self.assertEqual(response.status_code, 403)
+        self.assertNotIn("WWW-Authenticate", response)
+
+    def test_a_token_for_somebody_opted_in_still_works(self):
+        self.user.userdata.use_llm_search = True
+        self.user.userdata.save()
+        self.assertEqual(self.ping(self.token_for(self.user)).status_code, 200)
+
+
+class ConnectedAppsTests(StandardTestCase):
+    """The list of what is signed in, on the page that explains signing in.
+
+    Signing in is how almost everybody connects, and until this list existed the page described a
+    connection it could not show and offered no way to end: "revoke your key" is no help to
+    somebody who never made a key, and the only other route was the Django admin.
+    """
+
+    url = "/account/api-keys/"
+
+    def setUp(self):
+        super().setUp()
+        self.user.userdata.use_llm_search = True
+        self.user.userdata.save()
+        from oauth2_provider.models import get_access_token_model, get_application_model
+
+        self.application = get_application_model().objects.create(
+            name="Claude",
+            client_type="public",
+            authorization_grant_type="authorization-code",
+            redirect_uris="https://claude.ai/api/mcp/auth_callback",
+        )
+        self.AccessToken = get_access_token_model()
+        self.client.force_login(self.user)
+
+    def token_for(self, user, scope="read write"):
+        import secrets
+
+        return self.AccessToken.objects.create(
+            user=user,
+            application=self.application,
+            token=secrets.token_hex(20),
+            expires=timezone.now() + datetime.timedelta(hours=1),
+            scope=scope,
+        )
+
+    def test_a_connected_assistant_is_listed(self):
+        self.token_for(self.user)
+        body = self.client.get(self.url).content.decode()
+        self.assertIn("Claude", body)
+        self.assertIn("Disconnect", body)
+
+    def test_disconnecting_removes_every_token(self):
+        self.token_for(self.user)
+        self.client.post(self.url, {"disconnect": self.application.pk})
+        self.assertEqual(self.AccessToken.objects.filter(user=self.user).count(), 0)
+
+    def test_disconnecting_does_not_touch_anybody_else(self):
+        theirs = self.token_for(self.admin_user)
+        self.token_for(self.user)
+        self.client.post(self.url, {"disconnect": self.application.pk})
+        self.assertTrue(self.AccessToken.objects.filter(pk=theirs.pk).exists())
+
+    def test_a_hand_written_application_id_is_answered_not_crashed(self):
+        response = self.client.post(self.url, {"disconnect": "not-a-number"}, follow=True)
+        self.assertEqual(response.status_code, 200)
+
+    def test_a_key_can_be_given_an_end_date(self):
+        self.client.post(self.url, {"name": "Ninety days", "expires_in": "90"})
+        key = UserAPIKey.objects.get(name="Ninety days")
+        self.assertIsNotNone(key.expires_at)
+        self.assertTrue(key.is_usable)
+
+    def test_a_key_with_no_end_date_still_never_expires(self):
+        self.client.post(self.url, {"name": "Forever"})
+        self.assertIsNone(UserAPIKey.objects.get(name="Forever").expires_at)
+
+    def test_an_expired_key_stops_working(self):
+        raw, prefix, key_hash = UserAPIKey.generate()
+        UserAPIKey.objects.create(
+            user=self.user,
+            name="Lapsed",
+            prefix=prefix,
+            key_hash=key_hash,
+            expires_at=timezone.now() - datetime.timedelta(days=1),
+        )
+        response = self.client.post(
+            "/mcp/",
+            data=json.dumps({"jsonrpc": "2.0", "id": 1, "method": "ping"}),
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Bearer {raw}",
+            HTTP_MCP_PROTOCOL_VERSION=protocol.LATEST_PROTOCOL_VERSION,
+        )
+        self.assertEqual(response.status_code, 401)
+
+
+@isolated_cache("mcp-dcr")
+class AuthorizationServerHardeningTests(StandardTestCase):
+    """Two things django-oauth-toolkit leaves open that a public site cannot.
+
+    Both are the toolkit behaving correctly for the deployment it assumes -- a service whose only
+    users are its own developers -- and wrongly for one where anybody can sign up.
+    """
+
+    def test_the_application_pages_are_not_open_to_every_signed_in_member(self):
+        """``/o/applications/`` registers OAuth clients. It belongs to whoever runs the server."""
+        self.client.force_login(self.user)
+        for path in ("/o/applications/", "/o/applications/register/"):
+            response = self.client.get(path)
+            self.assertIn(response.status_code, (302, 403), path)
+
+    def test_a_superuser_can_still_reach_them(self):
+        self.admin_user.is_superuser = True
+        self.admin_user.is_staff = True
+        self.admin_user.save()
+        self.client.force_login(self.admin_user)
+        self.assertEqual(self.client.get("/o/applications/").status_code, 200)
+
+    def test_dynamic_registration_is_rate_limited_per_address(self):
+        """DCR has to stay open to anonymous callers, which makes the table writable by strangers."""
+        from auctions.mcp import auth as mcp_auth
+
+        body = json.dumps(
+            {
+                "redirect_uris": ["https://claude.ai/api/mcp/auth_callback"],
+                "grant_types": ["authorization_code", "refresh_token"],
+                "client_name": "A test client",
+                "token_endpoint_auth_method": "none",
+            }
+        )
+        statuses = []
+        for _ in range(mcp_auth.DCR_REGISTRATIONS_PER_HOUR + 2):
+            statuses.append(
+                self.client.post("/o/register/", data=body, content_type="application/json", secure=True).status_code
+            )
+        self.assertIn(201, statuses, "a real client must still be able to register")
+        self.assertEqual(statuses[-1], 429, "an unbounded registration endpoint is an unbounded table")
+
+
+class ClientMetadataDocumentTests(SimpleTestCase):
+    """CIMD, which is the only way claude.ai can connect.
+
+    The bug these cover was found on staging, not here: every attempt to connect died on
+    ``invalid_request: Invalid client_id parameter value`` with nothing in the message to act on,
+    because Claude's metadata document names a grant type this server doesn't offer and the
+    toolkit refuses any document that names more than one.
+    """
+
+    #: What claude.ai actually serves, fetched from the live document.
+    CLAUDE_DOCUMENT = {
+        "client_id": "https://claude.ai/oauth/mcp-oauth-client-metadata",
+        "client_name": "Claude",
+        "client_uri": "https://claude.ai",
+        "redirect_uris": ["https://claude.ai/api/mcp/auth_callback"],
+        "grant_types": ["authorization_code", "refresh_token", "urn:ietf:params:oauth:grant-type:jwt-bearer"],
+        "response_types": ["code"],
+        "token_endpoint_auth_method": "none",
+    }
+
+    def test_claudes_document_maps_to_a_single_grant(self):
+        from oauth2_provider.cimd import _resolve_grant_type
+
+        from auctions.mcp.cimd import narrow_grant_types
+
+        narrowed = narrow_grant_types(self.CLAUDE_DOCUMENT)
+        self.assertEqual(narrowed["grant_types"], ["authorization_code", "refresh_token"])
+        # This is the call that used to raise, which is what made Claude look like an unknown client.
+        self.assertEqual(_resolve_grant_type(narrowed["grant_types"]), "authorization-code")
+
+    def test_it_narrows_rather_than_widens(self):
+        """A document that asks for nothing we support still fails, which is the right answer."""
+        from auctions.mcp.cimd import narrow_grant_types
+
+        narrowed = narrow_grant_types({"grant_types": ["implicit", "password"]})
+        self.assertEqual(narrowed["grant_types"], [])
+
+    def test_a_document_with_nothing_to_drop_is_passed_through_untouched(self):
+        from auctions.mcp.cimd import narrow_grant_types
+
+        document = {"grant_types": ["authorization_code", "refresh_token"], "client_name": "Fine"}
+        self.assertIs(narrow_grant_types(document), document)
+
+    def test_the_supported_set_is_read_off_the_discovery_document(self):
+        """Two lists that have to agree are one list, or they drift."""
+        from auctions.mcp.cimd import supported_grant_types
+
+        advertised = set(settings.OAUTH2_PROVIDER["OAUTH2_GRANT_TYPES_SUPPORTED"])
+        self.assertTrue(advertised.issubset(supported_grant_types()))
+        self.assertNotIn("urn:ietf:params:oauth:grant-type:jwt-bearer", supported_grant_types())
+
+    def test_the_fetcher_narrows_what_it_fetched(self):
+        from auctions.mcp.cimd import ClientMetadataFetcher
+
+        with patch("oauth2_provider.cimd.SafeMetadataFetcher.fetch", return_value=(self.CLAUDE_DOCUMENT, 300)):
+            metadata, max_age = ClientMetadataFetcher().fetch("https://claude.ai/oauth/mcp-oauth-client-metadata")
+        self.assertEqual(max_age, 300)
+        self.assertEqual(metadata["grant_types"], ["authorization_code", "refresh_token"])
+
+    def test_the_deployment_actually_uses_it(self):
+        """Writing the class is half of it; the setting is the half that fails silently."""
+        self.assertEqual(
+            settings.OAUTH2_PROVIDER["CIMD_METADATA_FETCHER"],
+            "auctions.mcp.cimd.ClientMetadataFetcher",
+        )
+
+
+class InactiveAccountTests(StandardTestCase):
+    """A credential outliving the account behind it.
+
+    On the web ``is_active=False`` stops somebody at the login form. Over ``/mcp/`` nothing looked
+    at the user at all, so deleting an account or banning somebody left whatever they had connected
+    still acting as them.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.user.userdata.use_llm_search = True
+        self.user.userdata.save()
+        raw, prefix, key_hash = UserAPIKey.generate()
+        self.raw_key = raw
+        UserAPIKey.objects.create(user=self.user, name="a key", prefix=prefix, key_hash=key_hash, allow_writes=True)
+
+    def _rpc(self):
+        return self.client.post(
+            "/mcp/",
+            data=json.dumps({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}),
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Bearer {self.raw_key}",
+        )
+
+    def test_a_live_account_works(self):
+        self.assertEqual(self._rpc().status_code, 200)
+
+    def test_a_deactivated_account_is_refused(self):
+        self.user.is_active = False
+        self.user.save()
+        response = self._rpc()
+        self.assertEqual(response.status_code, 403)
+        # A 403 and not a 401: there is no credential they could go and fetch that would work.
+        self.assertNotIn("WWW-Authenticate", response)
+
+
+class ResultUrlTests(StandardTestCase):
+    """A link an agent hands to a person has to be a link they can follow."""
+
+    def test_relative_urls_are_made_absolute(self):
+        from auctions.mcp import tools as mcp_tools
+
+        payload = {
+            "url": "/lots/all/?q=shrimp",
+            "followups": [{"label": "A lot", "url": "/lots/1/"}, {"label": "Elsewhere", "url": "https://example.com/"}],
+            "count": 3,
+        }
+        absolute = mcp_tools._absolute(payload, lambda path: "https://auction.test" + path)
+        self.assertEqual(absolute["url"], "https://auction.test/lots/all/?q=shrimp")
+        self.assertEqual(absolute["followups"][0]["url"], "https://auction.test/lots/1/")
+        self.assertEqual(absolute["followups"][1]["url"], "https://example.com/", "already absolute")
+        self.assertEqual(absolute["count"], 3)

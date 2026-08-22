@@ -791,6 +791,10 @@ I_BRED_THIS_FISH_LABEL = os.environ.get("I_BRED_THIS_FISH_LABEL", "I bred this f
 ALLOW_USERS_TO_CREATE_AUCTIONS = parse_bool_env(os.environ.get("ALLOW_USERS_TO_CREATE_AUCTIONS") or None, default=True)
 ALLOW_USERS_TO_CREATE_LOTS = parse_bool_env(os.environ.get("ALLOW_USERS_TO_CREATE_LOTS") or None, default=True)
 PAYPAL_ENABLED_FOR_USERS = parse_bool_env(os.environ.get("PAYPAL_ENABLED_FOR_USERS") or None, default=False)
+# Whether a newly created user gets the AI assistant (natural-language command palette and the
+# /mcp/ endpoint).  Off by default: this is a beta, and `manage.py change_assistant on` is what
+# turns it on for everybody who already exists.  See UserData.use_llm_search.
+ASSISTANT_ENABLED_FOR_USERS = parse_bool_env(os.environ.get("ASSISTANT_ENABLED_FOR_USERS") or None, default=False)
 SQUARE_ENABLED_FOR_USERS = parse_bool_env(os.environ.get("SQUARE_ENABLED_FOR_USERS") or None, default=False)
 USERS_ARE_TRUSTED_BY_DEFAULT = parse_bool_env(os.environ.get("USERS_ARE_TRUSTED_BY_DEFAULT") or None, default=True)
 UNTRUSTED_MESSAGE = os.environ.get(
@@ -1220,7 +1224,14 @@ OAUTH2_PROVIDER = {
         "write": "Add and change things you could change yourself on the website",
         "offline_access": "Stay connected without signing in again",
     },
-    "DEFAULT_SCOPES": ["read"],
+    # What a client gets when it asks for nothing.  All three, deliberately: a connector that
+    # doesn't name its scopes used to come up looking perfectly healthy with 19 of the 43 tools
+    # simply absent from tools/list, so the assistant reported that *the site* could not check
+    # people in.  A scope is a ceiling and never a grant -- every tool still asks the database
+    # what this user may do -- so defaulting to the full ceiling costs nothing and removes a
+    # failure with no symptom.  ``offline_access`` is in for the same reason: without a refresh
+    # token the connection dies an hour after it is made.
+    "DEFAULT_SCOPES": ["read", "write", "offline_access"],
     # OAuth 2.1, and the MCP spec, require PKCE. Claude always sends S256.
     "PKCE_REQUIRED": True,
     # DCR and CIMD are the two ways a client Anthropic runs can register itself without anybody
@@ -1230,6 +1241,13 @@ OAUTH2_PROVIDER = {
     # ``token_endpoint_auth_methods_supported``, so both are on and the second is asserted below.
     "DCR_ENABLED": True,
     "CIMD_ENABLED": True,
+    # The toolkit's own SSRF-hardened fetcher, with the grant types this server does not advertise
+    # dropped before the document is mapped onto an Application. Without it claude.ai cannot
+    # connect at all: its metadata document declares a JWT-bearer grant alongside the
+    # authorization code, and the toolkit refuses any document naming more than one non-refresh
+    # grant -- which surfaces to the person who clicked Connect as "Invalid client_id parameter
+    # value". See auctions/mcp/cimd.py.
+    "CIMD_METADATA_FETCHER": "auctions.mcp.cimd.ClientMetadataFetcher",
     # Claude Code is a native client: it listens on a loopback redirect whose port is picked per
     # session, and declares the portless ``http://localhost/callback`` in its metadata document.
     # RFC 8252 §7.3 exempts the 127.0.0.1 literal from port matching out of the box; this setting
@@ -1254,7 +1272,12 @@ OAUTH2_PROVIDER = {
     # proactively up to five minutes before expiry), so a short life costs a round trip, not a
     # re-consent.
     "ACCESS_TOKEN_EXPIRE_SECONDS": 60 * 60,
-    "REFRESH_TOKEN_EXPIRE_SECONDS": 60 * 60 * 24 * 30,
+    # Six months, and the number is chosen from how often this gets used rather than from a
+    # security default.  Rotation runs the clock from the *last* refresh, so at 30 days a club
+    # that connected in March and reached for it at the May auction was signed out -- during
+    # setup, in a hall, on a phone.  Clubs here meet monthly and auction quarterly.  What is
+    # actually carrying the security is rotation plus reuse protection above, not the expiry.
+    "REFRESH_TOKEN_EXPIRE_SECONDS": 60 * 60 * 24 * 180,
     "OAUTH2_PROTECTED_RESOURCE_NAME": "Auction site MCP endpoint",
     # Dynamic client registration has to be reachable *before* anybody has signed in — it is the
     # first call a client makes, with no user in the loop — so the toolkit's default

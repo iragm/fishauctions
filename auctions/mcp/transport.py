@@ -18,6 +18,7 @@ limit and the resolvers' own bounded queries are for.
 ``Origin`` present and foreign   ``403`` — the DNS-rebinding rule
 unknown ``MCP-Protocol-Version`` ``400``
 no or bad credential             ``401`` + ``WWW-Authenticate``, never a tool error
+good credential, feature off     ``403`` and no challenge — see ``auth.Refusal``
 over the rate limit              ``429`` with ``Retry-After``
 ===============================  ===========================================================
 
@@ -37,7 +38,7 @@ from django.utils.decorators import method_decorator
 from django.views import View
 from django.views.decorators.csrf import csrf_exempt
 
-from . import auth, protocol
+from . import auth, protocol, tools
 
 logger = logging.getLogger(__name__)
 
@@ -105,6 +106,15 @@ class MCPEndpointView(View):
         response["WWW-Authenticate"] = auth.challenge(request)
         return response
 
+    def forbidden(self, message):
+        """A credential we recognised and won't act on. Deliberately *not* a 401.
+
+        No ``WWW-Authenticate``: the credential is not the problem, so telling the client to go and
+        get another one sends it round the OAuth flow to be refused again. See
+        :class:`auctions.mcp.auth.Refusal`.
+        """
+        return _rpc_error(protocol.INVALID_REQUEST, message, status=403)
+
     def get(self, request, *args, **kwargs):
         # The spec's own way of saying "I have nothing to push you".
         return HttpResponse(status=405)
@@ -119,6 +129,8 @@ class MCPEndpointView(View):
             return wrong_version
 
         credential = auth.authenticate(request)
+        if isinstance(credential, auth.Refusal):
+            return self.forbidden(credential.message)
         if credential is None:
             return self.unauthorized(request)
         if not auth.within_rate_limit(credential):
@@ -141,8 +153,19 @@ class MCPEndpointView(View):
         # came from a bearer token.
         request.user = credential.user
         request.mcp_credential = credential
+        # What the auction history says did this, instead of "(command palette)" for everything.
+        # See ``palette_actions.via``.
+        request.assistant_surface = credential.label
 
-        caller = protocol.Caller(request=request, writes=credential.writes, protocol_version=version)
+        caller = protocol.Caller(
+            request=request,
+            writes=credential.writes,
+            protocol_version=version,
+            # ``/mcp/?tools=club`` narrows the catalogue. Part of the address rather than the
+            # protocol because the protocol has nowhere to put it, and the address is the one
+            # thing every client lets a person type.
+            areas=tools.parse_areas(request.GET.get("tools", "")),
+        )
         answer = protocol.handle(message, caller)
         if answer is None:
             # A notification or a client response: accepted, nothing to say back.

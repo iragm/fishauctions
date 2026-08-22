@@ -11557,6 +11557,11 @@ def get_default_paypal_enabled():
     return settings.PAYPAL_ENABLED_FOR_USERS
 
 
+def get_default_use_llm_search():
+    """Whether new users get the assistant. Off until a site turns it on -- see ASSISTANT_ENABLED_FOR_USERS."""
+    return getattr(settings, "ASSISTANT_ENABLED_FOR_USERS", False)
+
+
 def get_default_square_enabled():
     return getattr(settings, "SQUARE_ENABLED_FOR_USERS", False)
 
@@ -11678,12 +11683,15 @@ class UserData(models.Model):
     dismissed_cookies_tos = models.BooleanField(default=False)
     show_ad_controls = models.BooleanField(default=False, blank=True)
     show_ad_controls.help_text = "Show a tab for ads on all pages"
-    use_llm_search = models.BooleanField(default=False, blank=True, verbose_name="Natural-language command palette")
+    use_llm_search = models.BooleanField(
+        default=get_default_use_llm_search, blank=True, verbose_name="AI assistant and connected apps"
+    )
     use_llm_search.help_text = (
-        "Let this user type or speak commands into the command palette and have a language model "
-        "work out what they meant.  Off for everyone by default: it costs money per use, and with it "
-        "off the palette is plain search, exactly as it was before the feature existed.  Also needs an "
-        "LLM to be configured site-wide (see auctions.llm.assist_enabled)."
+        "Let this user talk to the site in plain English -- typing or speaking into the command "
+        "palette, and connecting Claude or another assistant to their account (see /account/api-keys/).  "
+        "Off for everyone by default; turn it on site-wide with `manage.py change_assistant on`.  "
+        "The command palette half also needs an LLM configured site-wide (auctions.llm.assist_enabled); "
+        "the connected-app half does not, because the assistant brings its own."
     )
     credit = models.DecimalField(max_digits=6, decimal_places=2, default=0)
     credit.help_text = "The total balance in your account"

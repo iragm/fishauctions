@@ -146,6 +146,106 @@ def ensure_club_member(
     return member, created
 
 
+def join_auction(user, auction, pickup_location, *, time_spent_reading_rules=0):
+    """Sign ``user`` up for ``auction``, or bring their existing record up to date.
+
+    Extracted verbatim from ``views.AuctionInfo.post`` so joining is one implementation with two
+    callers: the Join button, and the assistant. It was a hundred lines inside a view method, which
+    is why "join me up for the fall auction" could only ever be a link to the page -- and a link is
+    a poor answer on a phone to somebody standing in the room.
+
+    Returns ``(tos, created, problem)``. ``problem`` is ``""`` or one of ``"phone_number"`` /
+    ``"address"``: the auction demands a detail this account has not got, and the two callers word
+    that differently (the web redirects to the contact page, the assistant says what to do). It is
+    returned rather than raised because it is not an error -- it is a step the person has to take.
+    """
+    from django.utils import timezone as django_timezone
+
+    userdata = user.userdata
+    if auction.require_phone_number and not userdata.phone_number:
+        return None, False, "phone_number"
+    if pickup_location is not None and pickup_location.pickup_by_mail and not userdata.address:
+        return None, False, "address"
+
+    find_by_email = AuctionTOS.objects.filter(email=user.email, auction=auction).first()
+    is_new_join = False
+    if find_by_email:
+        # An admin may have typed them in by email before they ever signed in, and they may also
+        # have joined under their user id -- keep the oldest row as canonical and fold the other in.
+        existing_by_user = AuctionTOS.objects.filter(user=user, auction=auction).exclude(pk=find_by_email.pk).first()
+        if existing_by_user:
+            if (
+                find_by_email.createdon
+                and existing_by_user.createdon
+                and find_by_email.createdon < existing_by_user.createdon
+            ):
+                canonical, duplicate = find_by_email, existing_by_user
+            else:
+                canonical, duplicate = existing_by_user, find_by_email
+            canonical.merge_duplicate(duplicate, reason="duplicate detected on join")
+            obj = canonical
+        else:
+            obj = find_by_email
+            obj.user = user
+    else:
+        obj, is_new_join = AuctionTOS.objects.get_or_create(
+            user=user,
+            auction=auction,
+            defaults={
+                "pickup_location": pickup_location,
+                # Seed the email on creation so the record never takes the None->email transition
+                # that used to trip AuctionTOS.save()'s email-change guard and clear this freshly
+                # linked user. ``or None`` (not "") keeps the "no email" admin filter working,
+                # which relies on email__isnull.
+                "email": user.email or None,
+            },
+        )
+    if pickup_location is not None:
+        obj.pickup_location = pickup_location
+    if obj.pickup_location and obj.pickup_location.pickup_by_mail and not userdata.address:
+        return None, False, "address"
+    obj.time_spent_reading_rules = max(obj.time_spent_reading_rules or 0, time_spent_reading_rules or 0)
+    # Even if this row was originally added by hand, joining means they are not manually added.
+    obj.manually_added = False
+    if obj.email_address_status == "UNKNOWN":
+        # If it bounced in the past, the user may have had a full inbox or something.
+        obj.email_address_status = "VALID"
+    if not obj.name or obj.name == "Unknown":
+        obj.name = f"{user.first_name} {user.last_name}".strip()
+    if not obj.email:
+        obj.email = user.email
+    if not obj.phone_number:
+        obj.phone_number = userdata.phone_number
+    if not obj.address:
+        obj.address = userdata.address
+    if auction.is_club_managed:
+        # The club owns the bidder number and permissions here, so joining has to create or link
+        # the member record. Shared with the app's proximity join.
+        club_member, _created = ensure_club_member(
+            auction,
+            user=user,
+            name=obj.name,
+            email=obj.email,
+            phone_number=obj.phone_number or "",
+            address=obj.address or "",
+            admin_edited=False,
+        )
+        apply_club_member_to_tos(auction, obj, club_member)
+    obj.save()
+    userdata.last_auction_used = auction
+    userdata.last_activity = django_timezone.now()
+    userdata.save()
+    if auction.is_club_managed and obj.clubmember_id:
+        obj.clubmember.update_last_club_activity()
+    if is_new_join:
+        auction.create_history(
+            applies_to="USERS",
+            action=f"{obj.name} has joined this auction",
+            user=user,
+        )
+    return obj, is_new_join, ""
+
+
 def existing_tos_for_club_member(auction, member):
     """The participant record already linked to *member* in *auction*, or None.
 
@@ -211,6 +311,29 @@ def check_in_auctiontos(tos, *, acting_user, bidder_number="", note=""):
     tos.auction.create_history(
         applies_to="USERS",
         action=f"Checked in {tos.name}{f' {note}' if note else ''}",
+        user=acting_user,
+    )
+    return tos
+
+
+def undo_check_in_auctiontos(tos, *, acting_user, note=""):
+    """Un-check-in a participant: clear ``checked_in`` and say so in the auction's history.
+
+    The reversal of :func:`check_in_auctiontos`, and new -- the web has no Undo on the check-in
+    modal, because at a desk with a queue in front of it the fix for a wrong name is to check in
+    the right one. An assistant needs it for a different reason: it mishears, and "undo that" has
+    to reach the thing it just did.
+
+    Deliberately does **not** touch ``bidding_allowed``. Checking somebody in turns it on, but so
+    do half a dozen other things, and turning it back off on the strength of an undo would quietly
+    stop somebody bidding who was allowed to before any of this happened.
+    """
+    if tos.checked_in:
+        tos.checked_in = None
+        tos.save(update_fields=["checked_in"])
+    tos.auction.create_history(
+        applies_to="USERS",
+        action=f"Undid the check-in for {tos.name}{f' {note}' if note else ''}",
         user=acting_user,
     )
     return tos
