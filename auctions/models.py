@@ -4208,7 +4208,14 @@ class Auction(models.Model):
     first_bid_payout.help_text = "This is a feature to encourage bidding.  Give each bidder this amount, for free.  <a href='/blog/encouraging-participation/' target='_blank'>More information</a>"
     club_member_discount = models.PositiveIntegerField(default=0, validators=[MinValueValidator(0)])
     club_member_discount.help_text = "Automatically add a discount in this amount if a paid club member has purchased at least one lot in this auction"
-    promote_this_auction = models.BooleanField(default=True)
+    # Off by default, because being on the public list is a decision and not a starting state.
+    # ``AuctionCreateView`` has always overridden this to False with the comment "all auctions start
+    # not promoted", so the column default was only ever reached by code that creates an Auction
+    # some other way -- and what it did there was list somebody's auction publicly without being
+    # asked. ``AuctionEditForm.clean`` is where the decision belongs: it refuses a test-looking
+    # slug, an auction with no location set, one with the placeholder still in its rules, and an
+    # account that isn't trusted.
+    promote_this_auction = models.BooleanField(default=False)
     promote_this_auction.help_text = "Show this to everyone in the list of auctions"
     is_chat_allowed = models.BooleanField(default=True)
     max_lots_per_user = models.PositiveIntegerField(null=True, blank=True, validators=[MaxValueValidator(100)])

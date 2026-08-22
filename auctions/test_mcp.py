@@ -113,7 +113,9 @@ class RegistryConformance(SimpleTestCase):
         for name, descriptor in self.by_name.items():
             self.assertTrue(descriptor["title"].strip(), f"{name} has no title")
             self.assertTrue(descriptor["description"].strip(), f"{name} has no description")
-            self.assertEqual(descriptor["annotations"]["title"], descriptor["title"])
+            # Only once. The spec says the top-level ``title`` wins over ``annotations.title``, so
+            # sending both is the same string twice on every tool on every session.
+            self.assertNotIn("title", descriptor["annotations"], f"{name} sends its title twice")
 
     def test_annotations_declare_the_read_write_split(self):
         for name, descriptor in self.by_name.items():
@@ -129,7 +131,12 @@ class RegistryConformance(SimpleTestCase):
             if annotations["readOnlyHint"]:
                 continue
             self.assertIsInstance(annotations["destructiveHint"], bool, f"{name} does not say if it destroys")
-            self.assertIsInstance(annotations["idempotentHint"], bool, f"{name} does not say if it repeats")
+            # ``idempotentHint`` is only sent when it is true: false is the spec's own default for
+            # it, and a write that repeats is the exception rather than the rule here.
+            if tools.idempotent(palette_actions.ACTIONS[name]):
+                self.assertIs(annotations["idempotentHint"], True, f"{name} repeats but does not say so")
+            else:
+                self.assertNotIn("idempotentHint", annotations, f"{name} says the default out loud")
 
     def test_a_read_carries_neither_hint(self):
         """Both are defined only when readOnlyHint is false, so on a read they are two dead keys.
@@ -286,6 +293,38 @@ class CallToolTests(StandardTestCase):
         result = tools.call_tool(request, "watch_lot", {"lot": str(self.lot.pk)})
         if not result["isError"]:
             self.assertNotIn("undo", json.loads(self._text(result)))
+
+    def test_a_read_carries_the_parsed_object_as_well_as_the_text(self):
+        """MCP 2025-06-18's ``structuredContent``: the host gets an object, not a string to parse."""
+        result = tools.call_tool(self._request_for(self.user), "my_context", {})
+        self.assertEqual(result["structuredContent"], json.loads(self._text(result)))
+        self.assertEqual(result["structuredContent"]["username"], self.user.username)
+
+    def test_the_structure_and_the_text_are_always_the_same_answer(self):
+        """Including when the text is a refusal: the structure must not carry what was withheld."""
+        request = self._request_for(self.user)
+        with patch.object(tools, "MAX_RESULT_CHARS", 200):
+            result = tools.call_tool(request, "my_context", {})
+        self.assertEqual(result["structuredContent"], json.loads(self._text(result)))
+        self.assertIn("too big", result["structuredContent"]["error"])
+
+    def test_a_plain_sentence_error_carries_no_structure(self):
+        """``structuredContent`` has to be an object; a one-line refusal is not one."""
+        result = tools.call_tool(self._request_for(self.user), "add_lot", {"name": "guppies"}, writes=False)
+        self.assertTrue(result["isError"])
+        self.assertNotIn("structuredContent", result)
+
+    def test_a_disambiguation_carries_structure_too(self):
+        """ "Which lot?" is a successful result that has not acted, and it is structured too."""
+        result = tools.call_tool(self._request_for(self.user), "watch_lot", {})
+        self.assertFalse(result["isError"])
+        self.assertEqual(result["structuredContent"]["status"], "needs_more_information")
+        self.assertEqual(result["structuredContent"], json.loads(self._text(result)))
+
+    def test_everything_in_a_result_survives_json(self):
+        """``structuredContent`` is serialised again by the transport, so a Decimal in it is a 500."""
+        result = tools.call_tool(self._request_for(self.user), "describe_lot", {"lot": str(self.lot.lot_name)})
+        json.dumps(result)
 
     def test_a_result_is_bounded(self):
         long_result = {"ok": True, "summary": "x" * (tools.MAX_RESULT_CHARS * 2)}
@@ -821,10 +860,12 @@ class ConnectPageTests(StandardTestCase):
         response = self.client.get(self.url)
         self.assertEqual(response.status_code, 200)
         body = response.content.decode()
-        # The address, and both ways of connecting with it.
+        # The address, and the two assistants the steps are written for.
         self.assertIn("/mcp", body)
-        self.assertIn("Add custom connector", body)
-        self.assertIn("claude mcp add --transport http", body)
+        self.assertIn("Add a custom connector", body)
+        self.assertIn("developer mode", body)
+        # The key form is behind a collapse until somebody asks for it, but it is on the page.
+        self.assertIn("Create key", body)
 
     def test_creating_a_key_shows_it_exactly_once(self):
         self.user.userdata.use_llm_search = True

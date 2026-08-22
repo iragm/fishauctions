@@ -1,35 +1,34 @@
 {% extends "base.html" %}
-{% block title %}Connect an AI assistant{% endblock %}
+{% block title %}Connect an AI agent{% endblock %}
 {% block content %}
 {% include "preferences_ribbon.html" %}
 <div class="container py-4">
-  <h1 class="h4 mb-3">Connect Claude to this site</h1>
+  <h1 class="h4 mb-3">Connect an AI agent to this site</h1>
 
-  <p class="mb-2">
-    Claude can use this site the same way you do &mdash; look up a lot, check who hasn't paid, add lots to your auction, check people in.
-    It acts <strong>as you</strong>: every auction and club still checks your own permissions, so it can never do anything you couldn't do yourself.
-  </p>
-  <p class="mb-4">
-    You currently have <strong>{{ tool_count }}</strong> things it can do{% if opted_in %}, <strong>{{ read_tool_count }}</strong> of which only look things up and never change anything{% endif %}.
-  </p>
+  <div class="help-note">
+    <i class="bi bi-lightbulb-fill"></i>
+    <div>
+      An AI agent &mdash; Claude, ChatGPT, or anything else that speaks the Model Context Protocol &mdash;
+      can use this site the same way you do: look up a lot, check who hasn't paid, add lots to your auction,
+      check people in. It acts <strong>as you</strong>: every auction and club still checks your own
+      permissions, so it can never do anything you couldn't do yourself.
+    </div>
+  </div>
 
   <h2 class="h5 mb-2">What it can do</h2>
   <ul class="mb-4">
     <li>Ask it things: &ldquo;how many lots are in my auction?&rdquo;, &ldquo;who hasn't paid yet?&rdquo;, &ldquo;when does lot submission close?&rdquo;</li>
     <li>Have it do things: add lots, check people in, record a sale, mark an invoice paid, add points.</li>
     <li>Anything that would take a page with a form on it &mdash; creating an auction, deleting things, anything involving money changing hands &mdash; it will give you a link to instead of doing.</li>
-    <li>It gets a shorter list if you don't run an auction or a club, because most of the list is only useful to somebody who does.</li>
   </ul>
 
 {% if not opted_in %}
   {% comment %}Not a 403. This is the only page that explains what connecting an assistant is, and it is exactly what somebody is reading when they find out they cannot have it yet -- a permission-denied page gives them nothing to read and nothing to forward. Everything that issues or revokes a credential is simply not rendered, and post() still refuses.{% endcomment %}
-  <div class="help-note">
-    <i class="bi bi-lightbulb-fill"></i>
-    <div>
-      <strong>This is still in beta, and it isn't switched on for your account yet.</strong>
-      Ask whoever runs this site to turn on <em>AI assistant and connected apps</em> for you, and this page will
-      have everything you need to connect. Nothing else about your account changes either way.
-    </div>
+  <div class="alert alert-warning text-dark" role="alert">
+    <i class="bi bi-exclamation-triangle"></i>
+    <strong>This is still in beta, and it isn't switched on for your account yet.</strong>
+    Ask whoever runs this site to turn on <em>AI assistant and connected apps</em> for you, and this page will
+    have everything you need to connect. Nothing else about your account changes either way.
   </div>
 </div>
 {% else %}
@@ -42,19 +41,25 @@
   {% endif %}
 
   <h2 class="h5 mb-3">Connecting</h2>
-  <p class="mb-3">The address to connect to is:</p>
-  <pre class="bg-dark text-white p-2 rounded mb-4" style="overflow-x:auto"><code>{{ mcp_url }}</code></pre>
-
   <div class="row g-3 mb-4">
     <div class="col-12 col-lg-6">
       <div class="card h-100">
         <div class="card-body">
-          <h5 class="card-title mb-2">Claude, Claude Desktop and the mobile app</h5>
-          <p class="small text-muted mb-2">Nothing to copy but the address &mdash; you sign in instead.</p>
+          <h3 class="card-title h6 mb-2"><i class="bi bi-stars"></i> Claude</h3>
+          <p class="small text-muted mb-2">Web, desktop and mobile. Nothing to copy but the address &mdash; you sign in instead.</p>
           <ol class="mb-0">
-            <li>In Claude, open <strong>Settings &rarr; Connectors</strong> and choose <strong>Add custom connector</strong>.</li>
-            <li>Paste the address above.</li>
-            <li>Claude sends you here to sign in and asks what you're allowing. Say yes.</li>
+            <li class="mb-2">
+              Open <a href="https://claude.ai/new?modal=add-custom-connector#settings/customize-connectors/" target="_blank" rel="noopener">Add a custom connector</a> in Claude.
+              <span class="text-muted small d-block">In the desktop or mobile app it's Settings &rarr; Connectors &rarr; Add custom connector.</span>
+            </li>
+            <li class="mb-2">
+              Paste this address:
+              <div class="input-group input-group-sm mt-1">
+                <input type="text" class="form-control" id="mcp-url-claude" value="{{ mcp_url }}" readonly aria-label="Connector address">
+                <button class="btn btn-primary copy-button" type="button" data-copy-target="mcp-url-claude"><i class="bi bi-clipboard"></i> Copy</button>
+              </div>
+            </li>
+            <li class="mb-2">Claude sends you back here to sign in, and asks what you're allowing. Say yes.</li>
             <li>That's it &mdash; ask Claude about your auction.</li>
           </ol>
         </div>
@@ -64,22 +69,35 @@
     <div class="col-12 col-lg-6">
       <div class="card h-100">
         <div class="card-body">
-          <h5 class="card-title mb-2">Claude Code</h5>
-          <p class="small text-muted mb-2">One command, then the same sign-in in your browser.</p>
-          <pre class="bg-dark text-white p-2 rounded mb-2" style="overflow-x:auto"><code>claude mcp add --transport http auctions {{ mcp_url }}</code></pre>
-          <p class="mb-0 small">Then run <code>/mcp</code> inside Claude Code to sign in.</p>
+          <h3 class="card-title h6 mb-2"><i class="bi bi-chat-dots"></i> ChatGPT</h3>
+          <p class="small text-muted mb-2">Needs a paid plan, and developer mode switched on. You sign in the same way.</p>
+          <ol class="mb-0">
+            <li class="mb-2">
+              In ChatGPT's settings, turn on <strong>developer mode</strong>, then add an app for a remote MCP server.
+              <span class="text-muted small d-block">OpenAI move these menus around; their <a href="https://developers.openai.com/api/docs/guides/developer-mode" target="_blank" rel="noopener">own guide</a> has the current path.</span>
+            </li>
+            <li class="mb-2">
+              Paste this address:
+              <div class="input-group input-group-sm mt-1">
+                <input type="text" class="form-control" id="mcp-url-openai" value="{{ mcp_url }}" readonly aria-label="Connector address">
+                <button class="btn btn-primary copy-button" type="button" data-copy-target="mcp-url-openai"><i class="bi bi-clipboard"></i> Copy</button>
+              </div>
+            </li>
+            <li class="mb-2">Choose <strong>OAuth</strong> when it asks how to authenticate. It sends you back here to sign in.</li>
+            <li>Turn the app on from the <strong>+</strong> menu in a chat.</li>
+          </ol>
         </div>
       </div>
     </div>
   </div>
 
-  {% comment %}Signing in is how almost everybody connects, so the list of what is connected belongs above the key form rather than under it. Until it existed, "how do I disconnect Claude?" had no answer on this page at all -- revoking a key is no help to somebody who never made one.{% endcomment %}
+  {% comment %}Signing in is how almost everybody connects, so the list of what is connected belongs above the key form rather than under it. Until it existed, "how do I disconnect this?" had no answer on this page at all -- revoking a key is no help to somebody who never made one.{% endcomment %}
   <h2 class="h5 mb-2">What's connected</h2>
   {% if connected_apps %}
   <div class="table-responsive mb-4">
     <table class="table align-middle">
       <thead>
-        <tr><th>Assistant</th><th>Can change things</th><th>Connected</th><th></th></tr>
+        <tr><th>Agent</th><th>Can change things</th><th>Connected</th><th></th></tr>
       </thead>
       <tbody>
         {% for app in connected_apps %}
@@ -103,85 +121,9 @@
   <p class="text-muted mb-4">Nothing yet. Follow the steps above and it will show up here.</p>
   {% endif %}
 
-  <h2 class="h5 mb-2">Keys, for everything that can't sign in</h2>
-  <div class="help-note">
-    <i class="bi bi-lightbulb-fill"></i>
-    <div>You don't need a key for Claude &mdash; use the sign-in above. A key is for a script, a cron job, or a connector your organisation's administrator adds once for everybody. Anyone who has the key is you, so treat it like a password.</div>
-  </div>
-
-  <div class="card mt-3 mb-4">
-    <div class="card-body">
-      <h5 class="card-title">Create a key</h5>
-      <form method="post">
-        {% csrf_token %}
-        <div class="mb-3">
-          <label class="form-label" for="key-name">What is this key for?</label>
-          <input class="form-control" type="text" name="name" id="key-name" maxlength="100" required placeholder="My check-in script">
-          <div class="form-text">A name for you, so you can tell your keys apart later.</div>
-        </div>
-        <div class="form-check mb-3">
-          <input class="form-check-input" type="checkbox" name="allow_writes" id="allow-writes">
-          <label class="form-check-label" for="allow-writes">Let this key change things</label>
-          <div class="form-text">Off by default. With it off the key can look things up but cannot add lots, check people in, or change an invoice.</div>
-        </div>
-        <div class="mb-3">
-          <label class="form-label" for="expires-in">Stop working after</label>
-          <select class="form-select" name="expires_in" id="expires-in">
-            <option value="">Never</option>
-            <option value="30">30 days</option>
-            <option value="90">90 days</option>
-            <option value="365">A year</option>
-          </select>
-          <div class="form-text">A key with an end date is the one that can't be forgotten about. Leave it on Never for something that has to keep running.</div>
-        </div>
-        <button type="submit" class="btn btn-success text-dark"><i class="bi bi-plus-lg"></i> Create key</button>
-      </form>
-    </div>
-  </div>
-
-  {% if keys %}
-  <h3 class="h6">Your keys</h3>
-  <div class="table-responsive mb-4">
-    <table class="table align-middle">
-      <thead>
-        <tr><th>Name</th><th>Key</th><th>Can change things</th><th>Expires</th><th>Last used</th><th></th></tr>
-      </thead>
-      <tbody>
-        {% for key in keys %}
-        <tr{% if not key.is_active %} class="text-muted"{% endif %}>
-          <td>{{ key.name }}</td>
-          <td><code>{{ key.prefix }}&hellip;</code></td>
-          <td>{% if key.allow_writes %}Yes{% else %}No, read only{% endif %}</td>
-          <td>{% if key.expires_at %}{{ key.expires_at|date:"N j, Y" }}{% else %}Never{% endif %}</td>
-          <td>{% if key.last_used_at %}{{ key.last_used_at|timesince }} ago{% else %}Never{% endif %}</td>
-          <td class="text-end">
-            {% if key.is_active %}
-            <form method="post" data-confirm="Revoke this key? Anything using it stops working straight away, and it cannot be turned back on." data-confirm-title="Revoke {{ key.name }}?" data-confirm-ok="Revoke key" data-confirm-variant="danger">
-              {% csrf_token %}
-              <input type="hidden" name="revoke" value="{{ key.pk }}">
-              <button type="submit" class="btn btn-sm btn-danger"><i class="bi bi-x-lg"></i> Revoke</button>
-            </form>
-            {% else %}
-            Revoked
-            {% endif %}
-          </td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  </div>
-  {% endif %}
-
-  <h2 class="h5 mb-2">Using a key</h2>
-  <p class="mb-2">Send it as a bearer token on every request:</p>
-  <pre class="bg-dark text-white p-2 rounded mb-4" style="overflow-x:auto"><code>curl -X POST {{ mcp_url }} \
-  -H "Authorization: Bearer ak_your_key_here" \
-  -H "Content-Type: application/json" \
-  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'</code></pre>
-
   <h2 class="h5 mb-2">Connecting to less than all of it</h2>
   <p class="mb-2">
-    The whole list of {{ tool_count }} tools is sent to your assistant every time it connects, and it costs it
+    The whole list of tools is sent to your agent every time it connects, and it costs it
     something to read. If you only want part of it, add <code>?tools=</code> to the address:
   </p>
   <ul class="mb-3">
@@ -192,14 +134,117 @@
   </ul>
   <p class="mb-4"><small class="text-muted">The handful that orient it &mdash; what you're working on, where a page is, undo &mdash; are always included.</small></p>
 
-  <h2 class="h5 mb-2">Good to know</h2>
+  {% comment %}Collapsed by default: signing in is how almost everybody connects, and a key is the exception. It opens by itself when there is a new key to read or keys already exist, because a section nobody can see is no place to put a secret that is shown once.{% endcomment %}
+  <h2 class="h5 mb-2">Keys, for everything that can't sign in</h2>
+  <p class="mb-3">
+    <button class="btn btn-primary btn-sm" type="button" data-bs-toggle="collapse" data-bs-target="#api-key-panel" aria-expanded="{% if new_raw_key or keys %}true{% else %}false{% endif %}" aria-controls="api-key-panel">
+      <i class="bi bi-key"></i> Keys for scripts and cron jobs
+    </button>
+  </p>
+
+  <div class="collapse{% if new_raw_key or keys %} show{% endif %}" id="api-key-panel">
+    <p class="text-muted">
+      You don't need a key to connect Claude or ChatGPT &mdash; use the sign-in above. A key is for a script, a
+      cron job, or a connector your organisation's administrator adds once for everybody. Anyone who has the
+      key is you, so treat it like a password.
+    </p>
+
+    <div class="card mb-4">
+      <div class="card-body">
+        <h3 class="card-title h6">Create a key</h3>
+        <form method="post">
+          {% csrf_token %}
+          <div class="mb-3">
+            <label class="form-label" for="key-name">What is this key for?</label>
+            <input class="form-control" type="text" name="name" id="key-name" maxlength="100" required placeholder="My check-in script">
+            <div class="form-text">A name for you, so you can tell your keys apart later.</div>
+          </div>
+          <div class="form-check mb-3">
+            <input class="form-check-input" type="checkbox" name="allow_writes" id="allow-writes">
+            <label class="form-check-label" for="allow-writes">Let this key change things</label>
+            <div class="form-text">Off by default. With it off the key can look things up but cannot add lots, check people in, or change an invoice.</div>
+          </div>
+          <div class="mb-3">
+            <label class="form-label" for="expires-in">Stop working after</label>
+            <select class="form-select" name="expires_in" id="expires-in">
+              <option value="">Never</option>
+              <option value="30">30 days</option>
+              <option value="90">90 days</option>
+              <option value="365">A year</option>
+            </select>
+            <div class="form-text">A key with an end date is the one that can't be forgotten about. Leave it on Never for something that has to keep running.</div>
+          </div>
+          <button type="submit" class="btn btn-success text-dark"><i class="bi bi-plus-lg"></i> Create key</button>
+        </form>
+      </div>
+    </div>
+
+    {% if keys %}
+    <h3 class="h6">Your keys</h3>
+    <div class="table-responsive mb-4">
+      <table class="table align-middle">
+        <thead>
+          <tr><th>Name</th><th>Key</th><th>Can change things</th><th>Expires</th><th>Last used</th><th></th></tr>
+        </thead>
+        <tbody>
+          {% for key in keys %}
+          <tr{% if not key.is_active %} class="text-muted"{% endif %}>
+            <td>{{ key.name }}</td>
+            <td><code>{{ key.prefix }}&hellip;</code></td>
+            <td>{% if key.allow_writes %}Yes{% else %}No, read only{% endif %}</td>
+            <td>{% if key.expires_at %}{{ key.expires_at|date:"N j, Y" }}{% else %}Never{% endif %}</td>
+            <td>{% if key.last_used_at %}{{ key.last_used_at|timesince }} ago{% else %}Never{% endif %}</td>
+            <td class="text-end">
+              {% if key.is_active %}
+              <form method="post" data-confirm="Revoke this key? Anything using it stops working straight away, and it cannot be turned back on." data-confirm-title="Revoke {{ key.name }}?" data-confirm-ok="Revoke key" data-confirm-variant="danger">
+                {% csrf_token %}
+                <input type="hidden" name="revoke" value="{{ key.pk }}">
+                <button type="submit" class="btn btn-sm btn-danger"><i class="bi bi-x-lg"></i> Revoke</button>
+              </form>
+              {% else %}
+              Revoked
+              {% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% endif %}
+
+    <h3 class="h6">Using a key</h3>
+    <p class="mb-2">Send it as a bearer token on every request:</p>
+    <pre class="bg-dark text-white p-2 rounded mb-0" style="overflow-x:auto"><code>curl -X POST {{ mcp_url }} \
+  -H "Authorization: Bearer ak_your_key_here" \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'</code></pre>
+  </div>
+
+  <h2 class="h5 mt-4 mb-2">Good to know</h2>
   <ul class="mb-0">
     <li>A connection can change at most 300 things an hour. That's far more than a busy check-in table needs, and it's the ceiling on how far something can go wrong before you notice.</li>
     <li>Whether a connection can change things is fixed when you make it. To turn writing on or off, disconnect it and connect it again.</li>
-    <li>Signing in and keys are independent &mdash; revoking a key doesn't disconnect Claude, and disconnecting Claude doesn't revoke your keys. Both lists are on this page.</li>
-    <li>Every tool that changes something is marked as such, and Claude asks you before running one. That marking is what this site guarantees &mdash; whether you get asked is up to the assistant you connected.</li>
-    <li>Nothing here is specific to Claude: this is a standard Model Context Protocol endpoint and any agent that speaks it can connect.</li>
+    <li>Signing in and keys are independent &mdash; revoking a key doesn't disconnect an agent, and disconnecting one doesn't revoke your keys. Both lists are on this page.</li>
+    <li>Every tool that changes something is marked as such, and a well-behaved agent asks you before running one. That marking is what this site guarantees &mdash; whether you get asked is up to the agent you connected.</li>
+    <li>What you can do changes what it can do. If you're given a new permission &mdash; made an admin of a club, say &mdash; reconnect or refresh the connection so it picks up the tools that come with it.</li>
+    <li>Nothing here is specific to one company: this is a standard Model Context Protocol endpoint and any agent that speaks it can connect.</li>
   </ul>
 </div>
+<script>
+  document.querySelectorAll('.copy-button').forEach(function (button) {
+    button.addEventListener('click', function () {
+      var field = document.getElementById(button.getAttribute('data-copy-target'));
+      if (!field) { return; }
+      field.select();
+      var done = function () {
+        button.innerHTML = '<i class="bi bi-clipboard-check"></i> Copied';
+        setTimeout(function () { button.innerHTML = '<i class="bi bi-clipboard"></i> Copy'; }, 2000);
+      };
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(field.value).then(done, function () {});
+      }
+    });
+  });
+</script>
 {% endif %}
 {% endblock %}

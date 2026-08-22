@@ -144,6 +144,11 @@ class StandardTestCase(CsvImportTestMixin, TestCase):
         self.user_who_does_not_join = User.objects.create_user(
             username="no_joins", password="testpassword", email="zxcgv@example.com"
         )
+        # ``promote_this_auction`` is spelled out on both fixture auctions because the model's
+        # default is False (an auction is not on the public list until somebody puts it there),
+        # and several things this fixture is used to test are scoped to promoted auctions --
+        # notably ``models.guess_category``, which excludes lots in unpromoted auctions. Leaving
+        # it to the default made those tests depend on a column default rather than on a fixture.
         self.online_auction = Auction.objects.create(
             created_by=self.user,
             title="This auction is online",
@@ -154,6 +159,7 @@ class StandardTestCase(CsvImportTestMixin, TestCase):
             lot_entry_fee=2,
             unsold_lot_fee=10,
             tax=25,
+            promote_this_auction=True,
         )
         self.in_person_auction = Auction.objects.create(
             created_by=self.user,
@@ -168,6 +174,7 @@ class StandardTestCase(CsvImportTestMixin, TestCase):
             buy_now="allow",
             reserve_price="allow",
             use_seller_dash_lot_numbering=True,
+            promote_this_auction=True,
         )
         self.location = PickupLocation.objects.create(
             name="location", auction=self.online_auction, pickup_time=the_future
@@ -9985,6 +9992,11 @@ class WebSocketConsumerTests(TransactionTestCase):
         self.user_who_does_not_join = User.objects.create_user(
             username="no_joins", password="testpassword", email="zxcgv@example.com"
         )
+        # ``promote_this_auction`` is spelled out on both fixture auctions because the model's
+        # default is False (an auction is not on the public list until somebody puts it there),
+        # and several things this fixture is used to test are scoped to promoted auctions --
+        # notably ``models.guess_category``, which excludes lots in unpromoted auctions. Leaving
+        # it to the default made those tests depend on a column default rather than on a fixture.
         self.online_auction = Auction.objects.create(
             created_by=self.user,
             title="This auction is online",
@@ -9995,6 +10007,7 @@ class WebSocketConsumerTests(TransactionTestCase):
             lot_entry_fee=2,
             unsold_lot_fee=10,
             tax=25,
+            promote_this_auction=True,
         )
         self.in_person_auction = Auction.objects.create(
             created_by=self.user,
@@ -10009,6 +10022,7 @@ class WebSocketConsumerTests(TransactionTestCase):
             buy_now="allow",
             reserve_price="allow",
             use_seller_dash_lot_numbering=True,
+            promote_this_auction=True,
         )
         self.location = PickupLocation.objects.create(
             name="location", auction=self.online_auction, pickup_time=theFuture
@@ -18289,6 +18303,9 @@ class ClubViewTests(TestCase):
                 lot_entry_fee=0,
                 unsold_lot_fee=0,
                 tax=0,
+                # The club page's "recent auctions" list is the promoted ones; the model default is
+                # False, so an auction that is meant to appear there has to say so.
+                promote_this_auction=True,
             )
         self.client.login(username="club_owner2", password="testpass")
         response = self.client.get(reverse("club_detail_tab", kwargs={"slug": self.club.slug, "tab": "my-points"}))

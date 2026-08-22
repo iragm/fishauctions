@@ -292,6 +292,7 @@ from .services import (
     join_auction,
     lot_add_block,
     map_fields,
+    promoting_makes_it_the_clubs_current_auction,
     recalculate_seller_invoice,
     save_new_lot,
     user_can_clone_lot,
@@ -3832,12 +3833,8 @@ class AuctionUpdate(LoginRequiredMixin, AuctionViewMixin, UpdateView):
             return self.form_invalid(form)
         # Promoting a previously-unpromoted auction makes it the club's current auction.
         updated_auction = self.get_object()
-        if not was_promoted and updated_auction.promote_this_auction and updated_auction.club_id:
-            club = updated_auction.club
-            if club.current_auction_id != updated_auction.pk:
-                club.current_auction = updated_auction
-                club.save(update_fields=["current_auction"])
-                messages.info(self.request, f"This is now the current auction for {club.name}.")
+        if promoting_makes_it_the_clubs_current_auction(updated_auction, was_promoted):
+            messages.info(self.request, f"This is now the current auction for {updated_auction.club.name}.")
         if (
             not self.get_object().is_online
             and self.get_object().online_bidding == "buy_now_only"
@@ -25374,13 +25371,13 @@ class ClubDiscordSendJoinMessageView(LoginRequiredMixin, ClubViewMixin, View):
 
 
 class UserAPIKeyView(LoginRequiredMixin, TemplateView):
-    """How to connect Claude (or anything else) to this site, and the keys for doing it.
+    """How to connect an AI agent to this site, and the keys for doing it.
 
     Two ways in, and the page leads with the one most people want. **Signing in** is the whole
-    story for Claude, Claude Desktop, Claude mobile and Claude Code: they run a real OAuth flow
-    against this site and there is no key to copy anywhere. A **key** is for the things that
-    can't do that — a script, a cron job, a connector an administrator adds for a whole
-    organisation with a fixed header.
+    story for Claude and for ChatGPT's developer-mode apps: they run a real OAuth flow against
+    this site and there is no key to copy anywhere. A **key** is for the things that can't do
+    that — a script, a cron job, a connector an administrator adds for a whole organisation with
+    a fixed header.
 
     Either way the credential can never do more than its owner can: the tools re-check the owner's
     real permissions on every call, and ``allow_writes`` (and the OAuth ``write`` scope) is a
@@ -25416,21 +25413,11 @@ class UserAPIKeyView(LoginRequiredMixin, TemplateView):
         context["opted_in"] = self.opted_in
         if not self.opted_in:
             # Nothing that reads or writes a credential runs for somebody who hasn't been given the
-            # feature -- the tool count is the only number worth showing, and it costs no queries.
-            from auctions.mcp import tools as mcp_tools
-
-            context["tool_count"] = len(mcp_tools.tool_descriptors(self.request.user))
+            # feature. The explanation above is the whole of what they get.
             return context
         context["keys"] = UserAPIKey.objects.filter(user=self.request.user).order_by("-created_at")
         context["new_raw_key"] = self.request.session.pop("new_user_api_key", None)
         context["mcp_url"] = self.request.build_absolute_uri(reverse("mcp"))
-        # Every tool this user would actually be offered, so the page can say what connecting gets
-        # them rather than describing the feature in the abstract.
-        from auctions.mcp import tools as mcp_tools
-
-        descriptors = mcp_tools.tool_descriptors(self.request.user)
-        context["tool_count"] = len(descriptors)
-        context["read_tool_count"] = sum(1 for tool in descriptors if tool["annotations"]["readOnlyHint"])
         context["connected_apps"] = self.connected_apps()
         return context
 
@@ -25466,7 +25453,7 @@ class UserAPIKeyView(LoginRequiredMixin, TemplateView):
                 application.pk,
                 {
                     "pk": application.pk,
-                    "name": application.name or "An assistant",
+                    "name": application.name or "An AI agent",
                     "connected": token.created,
                     "live": False,
                     "writes": False,

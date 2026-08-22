@@ -91,6 +91,10 @@ class AuctionMirroringTests(TestCase):
             "date_end": self.start + datetime.timedelta(days=2),
             "club": self.club,
             "is_online": True,
+            # Everything in this file is about what a *promoted* auction puts on a club's calendar,
+            # so the helper says so. The model default is False; tests about the unpromoted case
+            # pass promote_this_auction=False for themselves.
+            "promote_this_auction": True,
         }
         defaults.update(kwargs)
         return Auction.objects.create(**defaults)
@@ -300,6 +304,9 @@ class PickupEventTests(TestCase):
             date_end=self.start + datetime.timedelta(days=2),
             club=self.club,
             is_online=True,
+            # Pickup events only exist for an auction the club is promoting -- see
+            # ``club_events.sync_pickup_events``. Said out loud because the model default is False.
+            promote_this_auction=True,
         )
 
     def _location(self, name, **kwargs):

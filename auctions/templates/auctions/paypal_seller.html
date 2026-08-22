@@ -13,14 +13,17 @@
     then gets told to go find a browser for PayPal is the same review problem one page later.
   {% endcomment %}
   {% if request.user.is_authenticated and not request.user.userdata.paypal_enabled %}
-    <div class="alert alert-info" role="alert">
-      PayPal is currently disabled for your account. A site administrator can re-enable it for you.  You can still connect your PayPal accout, but you won't be able to accept payments until it's enabled.
+    <div class="alert alert-warning text-dark" role="alert">
+      <i class="bi bi-exclamation-triangle"></i>
+      PayPal is currently disabled for your account. A site administrator can re-enable it for you. You can still
+      connect your PayPal account, but you won't be able to accept payments until it's enabled.
     </div>
   {% endif %}
 
-  <p class="mb-2">
-    Connect your PayPal account to let users pay their invoices directly on this site.
-  </p>
+  <div class="help-note">
+    <i class="bi bi-lightbulb-fill"></i>
+    <div>Connect your PayPal account to let users pay their invoices directly on this site.</div>
+  </div>
 
   <ol class="mb-4">
     <li>{% if seller %}Connect your PayPal account{% else %}<a href="{% url 'paypal_connect' %}">Connect your PayPal account</a>{% endif %}</li>
@@ -91,9 +94,9 @@
     <li>There's no fine print here, no fees beyond the standard PayPal fees, and you can disable payments at any time.</li>
   </ul>
 
-  <h4>Ready to get started?</h4>
+  <h2 class="h5 mb-2">Ready to get started?</h2>
   <div class="d-flex align-items-center gap-2 mb-4">
-    <a class="btn btn-primary btn-sm" href="{% url 'paypal_connect' %}">Connect your PayPal account</a>
+    <a class="btn btn-success text-dark" href="{% url 'paypal_connect' %}">Connect your PayPal account</a>
     {% if auction %}
       <span class="small">and start accepting payments in {{ auction }} today!</span>
     {% endif %}

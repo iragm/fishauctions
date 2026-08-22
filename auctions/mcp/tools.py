@@ -182,24 +182,33 @@ def describe(action: palette_actions.Action) -> str:
 def descriptor(action: palette_actions.Action) -> dict[str, Any]:
     """One MCP tool descriptor.
 
-    ``destructiveHint`` and ``idempotentHint`` are omitted for a read-only tool. The spec says both
-    are only meaningful when ``readOnlyHint`` is false, so on a read they are two keys per tool
-    that say nothing -- and ``tools/list`` is paid for in full, in context, by every host on every
-    session.
+    Three things are deliberately *not* in here, and all three are the same decision: ``tools/list``
+    is ~47 KB, it is paid for in full, in context, by every host on every session, and a key that
+    says what the spec's own default already says is a key fifty-four times over.
+
+    ``destructiveHint`` and ``idempotentHint`` are omitted on a read-only tool, because the spec
+    defines them only when ``readOnlyHint`` is false. ``idempotentHint`` is omitted when it is
+    ``false``, which is the spec's default for it. And ``annotations.title`` is gone: the spec says
+    the top-level ``title`` takes precedence over it, so sending both is the same string twice, and
+    a host old enough to read only the annotation falls back to ``name`` -- which for
+    ``set_lot_winner`` differs from "Set lot winner" by two spaces and a capital letter.
+
+    ``openWorldHint: false`` stays even though it is a bare boolean, because the spec's default for
+    it is ``true`` and "this tool reaches out to the open internet" is the wrong thing for a host to
+    assume about a tool that only ever touches this site's own database.
     """
-    title = title_for(action)
     annotations: dict[str, Any] = {
-        "title": title,
         "readOnlyHint": read_only(action),
         # Everything here reads and writes this site's own database. Nothing reaches out.
         "openWorldHint": False,
     }
     if not read_only(action):
         annotations["destructiveHint"] = action.destructive
-        annotations["idempotentHint"] = idempotent(action)
+        if idempotent(action):
+            annotations["idempotentHint"] = True
     return {
         "name": action.name,
-        "title": title,
+        "title": title_for(action),
         "description": describe(action),
         "inputSchema": input_schema(action),
         "annotations": annotations,
@@ -343,8 +352,30 @@ def _text(payload: Any) -> str:
     )
 
 
-def _result(text: str, *, is_error: bool = False) -> dict[str, Any]:
-    return {"content": [{"type": "text", "text": text}], "isError": is_error}
+def _result(text: str, *, is_error: bool = False, structured: Any = None) -> dict[str, Any]:
+    """One ``CallToolResult``: the text block every host can read, plus the parsed object.
+
+    ``structuredContent`` is MCP 2025-06-18's answer to the thing that was wrong here: the result
+    was a JSON document inside a string, so every host had to parse a string to get at it and none
+    of them could be sure it was JSON at all. It is sent alongside the text rather than instead of
+    it -- the spec asks for both, because a host on an older protocol version reads only the text
+    and because the text is what a model actually sees.
+
+    It is only ever an object. The spec requires ``structuredContent`` to be a JSON object, and
+    every resolver returns a dict, so the guard here is for the two error paths whose whole payload
+    is one sentence: those stay text-only rather than being wrapped in an invented key.
+
+    There is deliberately **no** ``outputSchema``. Declaring one obliges every result to conform to
+    it, and these results are one small envelope (``ok``/``found``/``summary``/``followups``) plus
+    whatever the tool is about -- fifteen participant rows, a club's fee table, a lot's live price.
+    A schema loose enough to be true of all fifty-four validates nothing, and fifty-four copies of
+    it is seven kilobytes on every session for that nothing. If a tool ever grows a result worth
+    validating, it can declare its own.
+    """
+    result: dict[str, Any] = {"content": [{"type": "text", "text": text}], "isError": is_error}
+    if isinstance(structured, dict):
+        result["structuredContent"] = structured
+    return result
 
 
 def _needs_more_information(action: palette_actions.Action, result: dict[str, Any]) -> dict[str, Any]:
@@ -378,7 +409,10 @@ def _needs_more_information(action: palette_actions.Action, result: dict[str, An
         payload["choices"] = [
             {"answer": option.get("value") or option.get("label"), "label": option.get("label")} for option in options
         ]
-    return _result(_text(payload))
+    body = _text(payload)
+    # Round-tripped for the same reason ``call_tool`` does it: whatever the text says is what the
+    # structure says, even in the (unlikely, for a question) case where the payload was too big.
+    return _result(body, structured=json.loads(body))
 
 
 def call_tool(request, name: str, arguments: Any, *, writes: bool = True) -> dict[str, Any]:
@@ -430,4 +464,11 @@ def call_tool(request, name: str, arguments: Any, *, writes: bool = True) -> dic
     # Same call the palette's execute endpoint makes, so "undo that" works across both surfaces:
     # the stack is per user, and a lot added by an agent is a lot the same person can undo.
     palette_actions.remember_undo(request.user, action.name, result)
-    return _result(_text(_absolute(_payload(result), request.build_absolute_uri)))
+    body = _text(_absolute(_payload(result), request.build_absolute_uri))
+    # The structure is parsed back out of the text rather than handed over alongside it, for two
+    # reasons. It guarantees the two are the same answer -- when ``_text`` refuses an over-budget
+    # payload and replaces it with an explanation, the structure is that explanation and not the
+    # twenty thousand characters the refusal exists to withhold. And it guarantees the structure is
+    # JSON-safe: ``_text`` serialises Decimals and datetimes with ``default=str``, and a Decimal
+    # left in ``structuredContent`` would blow up when the transport serialises the whole response.
+    return _result(body, structured=json.loads(body))

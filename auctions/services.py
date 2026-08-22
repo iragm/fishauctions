@@ -534,3 +534,24 @@ def copy_lot_images(original_lot, new_lot):
         new_image.save()
         copies.append(new_image)
     return copies
+
+
+def promoting_makes_it_the_clubs_current_auction(auction, was_promoted) -> bool:
+    """Turning promotion on makes an auction its club's current one. Returns True if it did.
+
+    Extracted from ``views.AuctionUpdate.form_valid`` so the edit page and
+    ``palette_actions.update_auction_setting`` cannot disagree about what promoting an auction
+    means. The web version says so in a message; the assistant says so in its answer, and both are
+    reading the same rule.
+
+    Only on the transition. An auction that was already promoted must not steal the club's current
+    auction back every time somebody saves an unrelated setting.
+    """
+    if was_promoted or not auction.promote_this_auction or not auction.club_id:
+        return False
+    club = auction.club
+    if club.current_auction_id == auction.pk:
+        return False
+    club.current_auction = auction
+    club.save(update_fields=["current_auction"])
+    return True
