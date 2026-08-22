@@ -4619,7 +4619,19 @@ class ClubEventForm(forms.ModelForm):
 
     Kept deliberately short — title and a start time are the only things required, everything
     else is optional, so posting a meeting takes a few seconds.
+
+    On a **generated** event (an auction, or one of its pickup times) the form narrows itself to
+    the title and the description, because those are the only two things a club owns there. A
+    club's monthly meeting is often the auction, and "In-person auction." is not what they want
+    members reading on their phone — but the dates, the location and whether the event exists at
+    all belong to the auction, and an event whose date disagrees with its auction is worse than no
+    feature at all. Typing either field sets the matching ``*_is_custom`` flag, which is what stops
+    ``club_events.sync_one_auction_event`` writing over it on the auction's next save; the reset
+    box clears the flag and puts the generated wording straight back.
     """
+
+    reset_title = forms.BooleanField(required=False, label="Use the auction's title instead")
+    reset_description = forms.BooleanField(required=False, label="Use the auction's description instead")
 
     class Meta:
         model = ClubEvent
@@ -4646,25 +4658,58 @@ class ClubEventForm(forms.ModelForm):
         super().__init__(*args, **kwargs)
         self.fields["date_end"].required = False
         is_edit = bool(self.instance and self.instance.pk)
+        self.is_generated = bool(is_edit and self.instance.is_automatic)
+        if self.is_generated:
+            # Imported here rather than at the top: club_events pulls in google_calendar and
+            # discord_events, and forms.py is imported early enough that doing it up there is
+            # asking for an import cycle the day one of those wants a form.
+            from auctions import club_events
+
+            self.generated_title, self.generated_description = club_events.generated_wording(self.instance)
+        else:
+            self.generated_title, self.generated_description = "", ""
         self.helper = FormHelper()
         self.helper.form_method = "post"
-        layout_fields = [
-            "title",
-            Div(
-                Div("date_start", css_class="col-md-6"),
-                Div("date_end", css_class="col-md-6"),
-                css_class="row",
-            ),
-            "location",
-            "description",
-        ]
-        if is_edit:
-            # Only worth offering once the event exists — you don't add an event to call it off.
-            layout_fields.append("cancelled")
+        if self.is_generated:
+            layout_fields = self._narrow_to_the_wording()
         else:
-            del self.fields["cancelled"]
+            layout_fields = [
+                "title",
+                Div(
+                    Div("date_start", css_class="col-md-6"),
+                    Div("date_end", css_class="col-md-6"),
+                    css_class="row",
+                ),
+                "location",
+                "description",
+            ]
+            if is_edit:
+                # Only worth offering once the event exists — you don't add an event to call it off.
+                layout_fields.append("cancelled")
+            else:
+                del self.fields["cancelled"]
+            del self.fields["reset_title"]
+            del self.fields["reset_description"]
         self.helper.layout = Layout(*layout_fields)
         self.helper.add_input(Submit("submit", "Save event", css_class="btn-primary"))
+
+    def _narrow_to_the_wording(self):
+        """Drop every field the auction owns, and label the two that are left."""
+        for name in ("date_start", "date_end", "location", "cancelled"):
+            del self.fields[name]
+        # Both stay required exactly as the model has them — a generated event with a blank title
+        # would show up blank in every member's calendar.
+        title_field = self.fields["title"]
+        title_field.help_text = (
+            f"What members see on their calendar. The auction's own title is “{self.generated_title}”."
+        )
+        self.fields["description"].help_text = (
+            "The details that change from one meeting to the next — doors at 6:30, bring a dish, "
+            f"who's speaking. Replaces “{self.generated_description}”."
+        )
+        for name in ("reset_title", "reset_description"):
+            self.fields[name].help_text = "Tick to go back to what the auction says, now and from now on."
+        return ["title", "reset_title", "description", "reset_description"]
 
     def clean(self):
         cleaned_data = super().clean()
@@ -4673,6 +4718,28 @@ class ClubEventForm(forms.ModelForm):
         if start and end and end <= start:
             self.add_error("date_end", "The end time has to be after the start time.")
         return cleaned_data
+
+    def save(self, commit=True):
+        """Record which of the two fields the club typed, so the next sync leaves them alone."""
+        event = super().save(commit=False)
+        if self.is_generated:
+            for field, reset, generated in (
+                ("title", "reset_title", self.generated_title),
+                ("description", "reset_description", self.generated_description),
+            ):
+                if self.cleaned_data.get(reset):
+                    # Reset wins over anything typed in the box above it: somebody who ticks it and
+                    # edits the text in the same save has said two things, and this is the one they
+                    # can't get back to any other way.
+                    setattr(event, field, generated)
+                    setattr(event, f"{field}_is_custom", False)
+                else:
+                    # Typing the generated wording back in by hand is not a custom value — there
+                    # would be nothing for the flag to protect.
+                    setattr(event, f"{field}_is_custom", getattr(event, field) != generated)
+        if commit:
+            event.save()
+        return event
 
 
 class ClubAnnouncementForm(forms.ModelForm):

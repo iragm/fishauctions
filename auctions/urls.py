@@ -5,6 +5,7 @@ from django.views.generic.base import TemplateView
 from django_ses.views import SESEventWebhookView
 
 from . import app_links, apple_notifications, donation_views, passkit_views, views
+from .mcp.transport import MCPEndpointView
 
 urlpatterns = [
     # App-association files. The paths and filenames are fixed by Google and Apple (Apple's really
@@ -280,6 +281,16 @@ urlpatterns = [
         login_required(views.CommandPaletteReportView.as_view()),
         name="command_palette_report",
     ),
+    # The Model Context Protocol endpoint. Not login_required and deliberately not CSRF-protected:
+    # it authenticates with a bearer token and refuses session cookies outright, which is what makes
+    # a CSRF-exempt POST safe here. See auctions/mcp/auth.py.
+    #
+    # Matched with and without the trailing slash, for the same reason the Apple notification
+    # endpoint above is: APPEND_SLASH cannot rescue a POST, because the 301 drops the body. People
+    # will type both forms into Claude and paste both into scripts, and the RFC 9728 metadata
+    # document names the resource without one — so both have to reach the view directly rather
+    # than one of them redirecting into nothing.
+    re_path(r"^mcp/?$", MCPEndpointView.as_view(), name="mcp"),
     path("", views.ToDefaultLandingPage.as_view(), name="home"),
     path("about/", views.PromoSite.as_view(), name="promo"),
     path("account/", views.MyAccount.as_view(), name="account"),
@@ -614,6 +625,9 @@ urlpatterns = [
     path("account/deleted/", views.AccountDeletedView.as_view(), name="account_deleted"),
     path("messages/", login_required(views.ChatSubscriptions.as_view()), name="messages"),
     path("printing/", login_required(views.UserLabelPrefsView.as_view()), name="printing"),
+    # Keys for the MCP endpoint. Session-authenticated like every other preferences page — this is
+    # where a person issues one; /mcp/ itself never accepts a session.
+    path("account/api-keys/", views.UserAPIKeyView.as_view(), name="user_api_keys"),
     # Printing from a computer to the phone's Bluetooth printer: the waiting page polls the first of
     # these once a second, and the three buttons on a failure use the other two. Session auth -- this
     # is the computer's half of the conversation; the phone's half is under /api/mobile/printjobs/.

@@ -1,19 +1,27 @@
-"""Provider abstraction for the command palette's natural-language assist.
+"""Provider abstraction for everything on this site that talks to a language model.
 
-One small seam so the model behind the palette can be swapped without touching any
-calling code:
+One small seam so the model behind it can be swapped without touching any calling code:
 
-  * ``LLMProvider``    -- the interface: ``complete_json(system, messages)`` -> ``LLMResult``
-  * ``OpenAIProvider`` -- chat-completions over ``httpx`` (already a dependency), JSON mode
+  * ``LLMProvider``    -- the interface
+  * ``OpenAIProvider`` -- chat-completions over ``httpx`` (already a dependency)
   * ``get_provider()`` -- factory reading ``settings.LLM_PROVIDER`` / ``LLM_MODEL``
 
-Everything here speaks JSON in both directions: the caller supplies a system prompt and a
-list of ``{"role", "content"}`` messages, and gets a parsed ``dict`` back plus token usage
-for :class:`auctions.models.LLMUsage`. Nothing in this module knows about auctions -- the
-prompt building and the (untrusted!) validation of whatever the model returns live in
-``palette_assist.py``.
+**Two ways to ask, and the difference matters.**
 
-Adding a provider: subclass ``LLMProvider``, implement ``complete_json`` and
+``complete_json(system, messages)`` asks for a single JSON object back, in the provider's JSON
+mode. Used where the answer is *data* and there is nothing to call: matching a species name,
+reading a donation email, splitting a speaker's talk list.
+
+``complete(system, messages, tools)`` asks the model to *call something*. The tools are real JSON
+Schema, generated from the action registry by :mod:`auctions.mcp.tools`, and the provider enforces
+them: the name is one of the ones supplied and the arguments fit the schema. This is what the
+command palette uses, and it is why ``palette_assist`` no longer carries several hundred lines
+whose whole job was repairing replies that JSON mode had no way to prevent.
+
+Both return an :class:`LLMResult` carrying token usage for :class:`auctions.models.LLMUsage`.
+Nothing in this module knows about auctions.
+
+Adding a provider: subclass ``LLMProvider``, implement ``complete_json``, ``complete`` and
 ``is_configured``, and add it to ``_PROVIDERS``. Set ``LLM_PROVIDER`` in ``.env`` to pick it.
 """
 
@@ -70,11 +78,33 @@ class UnsupportedParameter(Exception):
         self.name = name
 
 
+@dataclass(frozen=True)
+class ToolCall:
+    """One tool the model asked to call.
+
+    ``arguments`` is already parsed. The provider validated the name and the shape against the
+    schema it was given, which is the whole reason this type exists instead of a dict fished out
+    of a free-text reply -- but it is still checked again by the caller before anything runs.
+    """
+
+    id: str
+    name: str
+    arguments: dict[str, Any] = field(default_factory=dict)
+
+
 @dataclass
 class LLMResult:
-    """A single completion: the parsed JSON object plus what it cost."""
+    """A single completion: what the model said, and what it cost.
+
+    Exactly one of ``data`` (from :meth:`LLMProvider.complete_json`) or ``text``/``tool_calls``
+    (from :meth:`LLMProvider.complete`) is filled in, depending on which way it was asked.
+    """
 
     data: dict[str, Any] = field(default_factory=dict)
+    #: A plain-language reply. For a tool-calling call this is the model choosing to answer
+    #: rather than to call something, and it is empty whenever ``tool_calls`` is not.
+    text: str = ""
+    tool_calls: list[ToolCall] = field(default_factory=list)
     model: str = ""
     prompt_tokens: int = 0
     #: The part of ``prompt_tokens`` the provider served from its own cache, billed at a fraction
@@ -128,6 +158,29 @@ class LLMProvider:
         msg = "complete_json must be implemented by a subclass"
         raise NotImplementedError(msg)
 
+    def complete(
+        self,
+        system: str,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]] | None = None,
+        max_tokens: int = DEFAULT_MAX_TOKENS,
+    ) -> LLMResult:
+        """Send ``system`` + ``messages`` and let the model call one of ``tools``, or answer.
+
+        ``tools`` is a list of MCP-shaped tool descriptors (``name`` / ``description`` /
+        ``inputSchema``); the provider is responsible for translating them into whatever its own
+        API calls that, and for enforcing them.
+
+        ``messages`` is richer than ``complete_json``'s: an assistant turn may carry
+        ``tool_calls``, and a ``{"role": "tool", "tool_call_id": ..., "content": ...}`` turn
+        carries the result of one. Building those is :func:`tool_call_message` and
+        :func:`tool_result_message`, so a caller never has to know the provider's spelling.
+
+        Raises :class:`LLMError` on any transport, status, or parsing failure.
+        """
+        msg = "complete must be implemented by a subclass"
+        raise NotImplementedError(msg)
+
 
 class OpenAIProvider(LLMProvider):
     """OpenAI (or any OpenAI-compatible endpoint) via the chat-completions REST API.
@@ -147,29 +200,28 @@ class OpenAIProvider(LLMProvider):
     def _endpoint(self) -> str:
         return f"{(self.base_url or self.default_base_url).rstrip('/')}/chat/completions"
 
-    def complete_json(
-        self,
-        system: str,
-        messages: list[dict[str, str]],
-        max_tokens: int = DEFAULT_MAX_TOKENS,
-    ) -> LLMResult:
-        if not self.is_configured():
-            msg = "No API key configured for the OpenAI provider"
-            raise LLMError(msg)
+    def _payload(self, system: str, messages: list[dict[str, Any]], max_tokens: int) -> dict[str, Any]:
+        """The half of the request body that is the same however we are asking."""
         payload: dict[str, Any] = {
             "model": self.model,
             "messages": [{"role": "system", "content": system}, *messages],
-            "response_format": {"type": "json_object"},
             # Newer models (gpt-5*) renamed this parameter; send the new name and fall back
             # to the old one if the endpoint rejects it, so both generations work unchanged.
             "max_completion_tokens": max_tokens,
         }
         if self.reasoning_effort:
             payload["reasoning_effort"] = self.reasoning_effort
+        return payload
+
+    def _send(self, payload: dict[str, Any], max_tokens: int) -> dict[str, Any]:
+        """POST the payload, stepping back one optional parameter at a time if the endpoint balks."""
+        if not self.is_configured():
+            msg = "No API key configured for the OpenAI provider"
+            raise LLMError(msg)
         # One attempt per optional parameter we might have to give up on, plus the real one.
         for _attempt in range(len(OPTIONAL_PARAMETERS) + 1):
             try:
-                return self._parse(self._post(payload))
+                return self._post(payload)
             except UnsupportedParameter as rejected:
                 logger.info("%s does not accept %s; retrying without it", self.model, rejected.name)
                 payload.pop(rejected.name, None)
@@ -177,6 +229,31 @@ class OpenAIProvider(LLMProvider):
                     payload["max_tokens"] = max_tokens
         msg = "Language model rejected every form of the request"
         raise LLMError(msg)
+
+    def complete_json(
+        self,
+        system: str,
+        messages: list[dict[str, str]],
+        max_tokens: int = DEFAULT_MAX_TOKENS,
+    ) -> LLMResult:
+        payload = self._payload(system, messages, max_tokens)
+        payload["response_format"] = {"type": "json_object"}
+        return self._parse(self._send(payload, max_tokens))
+
+    def complete(
+        self,
+        system: str,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]] | None = None,
+        max_tokens: int = DEFAULT_MAX_TOKENS,
+    ) -> LLMResult:
+        payload = self._payload(system, messages, max_tokens)
+        if tools:
+            payload["tools"] = [as_openai_tool(tool) for tool in tools]
+            # "auto", not "required": answering a question in words is a legitimate outcome, and
+            # forcing a call turns "when does this start?" into a lookup nobody asked for.
+            payload["tool_choice"] = "auto"
+        return self._parse_tools(self._send(payload, max_tokens))
 
     def _post(self, payload: dict[str, Any]) -> dict[str, Any]:
         """POST the payload and return the parsed response body.
@@ -232,15 +309,99 @@ class OpenAIProvider(LLMProvider):
         if not isinstance(data, dict):
             msg = "Language model returned JSON that was not an object"
             raise LLMError(msg)
+        return self._with_usage(body, data=data)
+
+    def _parse_tools(self, body: dict[str, Any]) -> LLMResult:
+        """Pull the tool calls (or the plain reply) out of a chat-completions response body."""
+        try:
+            choice = body["choices"][0]
+            message = choice["message"]
+        except (KeyError, IndexError, TypeError) as error:
+            msg = "Language model response was missing its content"
+            raise LLMError(msg) from error
+        calls = []
+        for raw in message.get("tool_calls") or []:
+            function = (raw or {}).get("function") or {}
+            name = function.get("name")
+            if not name:
+                continue
+            try:
+                arguments = json.loads(function.get("arguments") or "{}")
+            except ValueError:
+                # A model that emits unparseable arguments has failed at the one thing the schema
+                # was supposed to guarantee. Keep the call with nothing in it rather than dropping
+                # it: the resolver will ask for what's missing, which is a better answer for the
+                # person waiting than silence about a call that was made.
+                logger.warning("Unparseable tool arguments from %s for %s", self.model, name)
+                arguments = {}
+            if not isinstance(arguments, dict):
+                arguments = {}
+            calls.append(ToolCall(id=str(raw.get("id") or name), name=str(name), arguments=arguments))
+        text = (message.get("content") or "").strip()
+        if not calls and not text:
+            # Same trap as in ``_parse``: a reasoning model that spends its whole completion budget
+            # thinking replies with a 200 and nothing in it.
+            if choice.get("finish_reason") == "length":
+                msg = "Language model used its whole completion budget before answering"
+                raise LLMError(msg)
+            msg = "Language model returned an empty reply"
+            raise LLMError(msg)
+        return self._with_usage(body, text=text, tool_calls=calls)
+
+    def _with_usage(self, body: dict[str, Any], **fields: Any) -> LLMResult:
+        """Attach the model name and token counts to a result. Shared by both parsers."""
         usage = body.get("usage") or {}
         details = usage.get("prompt_tokens_details") or {}
         return LLMResult(
-            data=data,
             model=str(body.get("model") or self.model),
             prompt_tokens=int(usage.get("prompt_tokens") or 0),
             cached_prompt_tokens=int(details.get("cached_tokens") or 0),
             completion_tokens=int(usage.get("completion_tokens") or 0),
+            **fields,
         )
+
+
+def as_openai_tool(tool: dict[str, Any]) -> dict[str, Any]:
+    """One MCP tool descriptor as an OpenAI function definition.
+
+    The two shapes are the same information under different names, and this is the only place on
+    the site that knows that. Keeping the translation here rather than in the caller is what lets
+    ``auctions/mcp/tools.py`` stay the single catalogue: the palette and the ``/mcp/`` endpoint
+    hand out byte-identical descriptors, and the provider adapts them.
+    """
+    return {
+        "type": "function",
+        "function": {
+            "name": tool["name"],
+            "description": tool.get("description", ""),
+            "parameters": tool.get("inputSchema") or {"type": "object", "properties": {}},
+        },
+    }
+
+
+def tool_call_message(calls: list[ToolCall]) -> dict[str, Any]:
+    """The assistant turn recording that the model asked for these calls.
+
+    It has to go back into the conversation before the results do -- a ``tool`` turn with no
+    matching ``tool_calls`` above it is rejected by the API, not ignored.
+    """
+    return {
+        "role": "assistant",
+        "content": None,
+        "tool_calls": [
+            {
+                "id": call.id,
+                "type": "function",
+                "function": {"name": call.name, "arguments": json.dumps(call.arguments, default=str)},
+            }
+            for call in calls
+        ],
+    }
+
+
+def tool_result_message(call: ToolCall, content: str) -> dict[str, Any]:
+    """The turn carrying what one tool returned."""
+    return {"role": "tool", "tool_call_id": call.id, "content": content}
 
 
 _PROVIDERS: dict[str, type[LLMProvider]] = {
@@ -254,7 +415,7 @@ _provider_override: LLMProvider | None = None
 
 def set_provider_override(provider: LLMProvider | None) -> None:
     """Install (or clear, with ``None``) a provider used by ``get_provider()``. For tests."""
-    global _provider_override  # noqa: PLW0603
+    global _provider_override
     _provider_override = provider
 
 

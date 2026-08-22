@@ -56,6 +56,7 @@ from .models import (
     SpeciesNameRejection,
     SpeciesSearchCache,
     ThermalPrinterProfile,
+    UserAPIKey,
     UserBan,
     UserData,
     UserInterestCategory,
@@ -829,6 +830,22 @@ class ClubDiscordRoleInline(admin.TabularInline):
     readonly_fields = ("createdon",)
 
 
+class UserAPIKeyAdmin(admin.ModelAdmin):
+    """Keys that let an agent use the MCP endpoint as one person.
+
+    The secret half of a key is hashed and is not here, on purpose: this page can revoke a key
+    (``is_active``) and can say when it was last used, but it cannot show anybody what the key is.
+    Issuing one is a job for the account page, which shows it once.
+    """
+
+    model = UserAPIKey
+    list_display = ("name", "user", "prefix", "allow_writes", "is_active", "created_at", "last_used_at", "expires_at")
+    list_filter = ("is_active", "allow_writes")
+    search_fields = ("name", "prefix", "user__username", "user__email")
+    readonly_fields = ("prefix", "key_hash", "created_at", "last_used_at")
+    raw_id_fields = ("user",)
+
+
 class ClubAPIKeyInline(admin.TabularInline):
     model = ClubAPIKey
     extra = 0
@@ -1432,6 +1449,7 @@ admin.site.register(SearchHistory, SearchHistoryAdmin)
 admin.site.register(CommandPalettePage, CommandPalettePageAdmin)
 admin.site.register(CommandPaletteSearch, CommandPaletteSearchAdmin)
 admin.site.register(LLMUsage, LLMUsageAdmin)
+admin.site.register(UserAPIKey, UserAPIKeyAdmin)
 admin.site.register(FAQ, FaqAdmin)
 admin.site.register(LotAutoCategory, LotAutoCategoryAdmin)
 admin.site.register(AuctionTOS, AuctionTOSAdmin)

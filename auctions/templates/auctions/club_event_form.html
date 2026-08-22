@@ -5,7 +5,21 @@
 {% block content %}
 {% include "club_ribbon.html" %}
 
-<h3 class="mb-3">{% if is_edit %}Edit event{% else %}Add an event{% endif %}</h3>
+<h3 class="mb-3">{% if form.is_generated %}Edit event details{% elif is_edit %}Edit event{% else %}Add an event{% endif %}</h3>
+
+{% if form.is_generated %}
+{% comment %}Setup guidance rather than a warning: nothing is wrong, this form is simply narrower
+than the one for a meeting somebody typed in. Saying which half is which up front is what stops an
+admin hunting for a date field that was never going to be here.{% endcomment %}
+<div class="help-note"><i class="bi bi-lightbulb-fill"></i><div>
+  This event comes from {% if event.source == 'pickup' %}a pickup time on {% endif %}<a href="{{ event.related_auction.get_absolute_url }}">{{ event.related_auction.title }}</a>, so
+  its date and place are the auction's and change when the auction does. What it's <em>called</em>
+  and what it <em>says</em> are yours &mdash; this is where a club puts "doors at 6:30, bring a
+  dish", the part that's different every month.
+  <br>
+  Edits you make in Google Calendar to this event don't stick; make them here.
+</div></div>
+{% endif %}
 
 <div class="card mb-3">
   <div class="card-body">
@@ -17,7 +31,7 @@
   <a href="{% url 'club_detail' club.slug %}" class="btn btn-secondary">
     <i class="bi bi-arrow-left"></i> Back to {{ club.name }}
   </a>
-  {% if is_edit %}
+  {% if is_edit and event.is_editable %}
   <form method="post"
         data-confirm="This event will be removed from your club page, your Google Calendar, and Discord, and it will simply vanish from the calendar of everyone who subscribed. If it's only been called off, tick 'This event is cancelled' above instead — that leaves it in place and tells them. Deleting can't be undone."
         data-confirm-title="Delete {{ event.title }}?"
@@ -31,6 +45,14 @@
   </form>
   {% endif %}
 </div>
+
+{% if form.is_generated %}
+<p class="text-muted small mt-3">
+  <i class="bi bi-info-circle"></i>
+  Moving it, changing where it is, or calling it off are all done on
+  <a href="{{ event.related_auction.get_edit_url }}">the auction</a>.
+</p>
+{% endif %}
 
 <p class="text-muted small mt-3">
   <i class="bi bi-info-circle"></i>

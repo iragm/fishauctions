@@ -21,6 +21,9 @@ django-extensions
 django-filter
 django-location-field
 django-markdownfield
+# OAuth 2.1 authorization server for the MCP endpoint at /mcp/ (auctions/mcp/auth.py).
+# 3.4+ is what carries the MCP stack: RFC 8414/9728 metadata, DCR, CIMD, resource indicators.
+django-oauth-toolkit>=3.4.1
 django-post-office
 django-autocomplete-light
 django_tables2

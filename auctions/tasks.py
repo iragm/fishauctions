@@ -103,6 +103,12 @@ def next_event_fragment(club, current_site, *, include_event=True, as_links=True
     Covers auctions and anything else on the club's calendar — meetings, swaps, talks. Shared by
     the real emails and the settings-page preview so the two can't drift; the preview passes
     ``as_links=False`` because a preview shouldn't contain working links.
+
+    It ends with a subscribe link, because one event in an email is a club's whole calendar in
+    miniature and the member is never going to be sent this email again — a welcome goes out once.
+    It rides on this fragment rather than sitting on its own so that a club which turned the next
+    event off (``welcome_include_auction`` and friends) gets no calendar pitch either: that switch
+    means "don't advertise what we're doing next", and a subscribe link is exactly that.
     """
     from auctions import club_events
 
@@ -147,6 +153,17 @@ def next_event_fragment(club, current_site, *, include_event=True, as_links=True
         f" <a href='{escape(details_url)}'>{escape(details_label)}</a>."
         if as_links
         else f" <span class='text-info'>{escape(details_label)}</span>."
+    )
+
+    # The club's Google calendar when they've shared it, our own feed when they haven't — the same
+    # choice the club page's buttons make, for the same reason: a club that keeps its calendar in
+    # Google keeps things there we only see after the next pull.
+    subscribe_url = club.calendar_subscribe_url(current_site.domain)
+    text += f" Add our calendar: {subscribe_url}"
+    html += (
+        f" <a href='{escape(subscribe_url)}'>Add our calendar</a>."
+        if as_links
+        else " <span class='text-info'>Add our calendar</span>."
     )
     return text, html
 
@@ -779,6 +796,39 @@ def _cleanup_invoice_notification_task(invoice_pk):
     """
     task_name = get_invoice_notification_task_name(invoice_pk)
     PeriodicTask.objects.filter(name=task_name).delete()
+
+
+@shared_task(bind=True, ignore_result=True)
+def cleanup_oauth_tokens(self):
+    """Delete expired OAuth tokens and stale registered clients. Daily.
+
+    Two things grow on their own here, and one of them grows because of a deliberate decision:
+
+    * **Expired access and refresh tokens.** Ordinary accumulation — an access token lives an hour
+      and Claude refreshes on a 401, so an active connection leaves a row behind several times a
+      day. ``cleartokens`` removes the ones past their expiry, which are already useless.
+    * **Registered clients.** Dynamic client registration is deliberately open (it has to be: DCR
+      is the first call a client makes, before anyone has signed in — see the OAUTH2_PROVIDER block
+      in settings.py), so anybody can POST to /o/register/ and create an Application row. CIMD is
+      advertised precisely so Claude does not need to, but the fallback is reachable.
+      ``clearcimdapplications`` removes CIMD entries whose cached metadata has expired and that
+      nothing holds a token for.
+
+    A no-op on an install that isn't an authorization server: without ``oauth2_provider`` in
+    INSTALLED_APPS the commands don't exist, and this returns rather than raising every night.
+    """
+    from django.apps import apps
+    from django.core.management import call_command
+
+    if not apps.is_installed("oauth2_provider"):
+        return
+    for command in ("cleartokens", "clearcimdapplications"):
+        try:
+            call_command(command)
+        except Exception:
+            # One of the two failing must not stop the other, and neither is worth waking anyone
+            # for: the next run is in 24 hours and nothing is broken in the meantime.
+            logger.exception("OAuth cleanup command %s failed", command)
 
 
 @shared_task(bind=True, ignore_result=True)

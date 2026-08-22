@@ -33,6 +33,10 @@
           </a>
         </li>
         {% endif %}
+        {% comment %}Same per-user beta flag that opens the natural-language palette -- see UserAPIKeyView, which refuses the page itself rather than relying on this link being hidden.{% endcomment %}
+        {% if request.user.userdata.use_llm_search %}
+        <li><a class="dropdown-item" href="{% url 'user_api_keys' %}"><i class="bi bi-robot"></i> AI agents</a></li>
+        {% endif %}
         <li><a class="dropdown-item" href="{% url 'account' %}"><i class="bi bi-person-fill"></i> My account</a></li>
         <li><hr class="dropdown-divider"></li>
         {% comment %}

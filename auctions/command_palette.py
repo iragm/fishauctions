@@ -130,17 +130,28 @@ def _visible_auctions(user):
 
 
 def _joined_auctions(user):
-    """Auctions the user has actually joined or created — *not* publicly promoted ones.
+    """Auctions the user has a real relationship with — *not* publicly promoted ones.
 
-    Lot search is scoped to these so the palette never surfaces lots from auctions the user
-    has no relationship with, even when those auctions are promoted/public.
+    Three ways in, and the third is the one people forget: they created it, they were added to it,
+    or **a club they help run is running it**. That last clause matters most to the person who
+    needs it least often on the web — a club officer who never joined the auction as a bidder had
+    no relationship with it at all here, so "which auctions am I in?" answered "none" for exactly
+    the people who run them.
+
+    Lot search is scoped to these so the palette never surfaces lots from auctions the user has no
+    relationship with, even when those auctions are promoted/public.
     """
     qs = Auction.objects.exclude(is_deleted=True)
     if user.is_superuser:
         return qs
     if not user.is_authenticated:
         return qs.none()
-    return qs.filter(Q(auctiontos__user=user) | Q(auctiontos__email=user.email) | Q(created_by=user)).distinct()
+    club_admin = Q(club__members__user=user, club__members__is_deleted=False) & (
+        Q(club__members__permission_admin=True) | Q(club__members__permission_manage_auctions=True)
+    )
+    return qs.filter(
+        Q(auctiontos__user=user) | Q(auctiontos__email=user.email) | Q(created_by=user) | club_admin
+    ).distinct()
 
 
 def _use_bulk_add_lots(auction):

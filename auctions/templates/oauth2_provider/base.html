@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% comment %}
+django-oauth-toolkit's own pages, wearing this site's clothes.
+
+Overriding this one template is what puts the authorization server's pages inside the site's
+navigation, palette and theme. The default is a bare HTML document with the toolkit's own
+stylesheet, which matters more here than on an ordinary page: the consent screen is reached by
+being *redirected off* an assistant, and an unbranded page asking somebody to approve access to
+their account is indistinguishable from the phishing page it looks like.
+
+The toolkit's templates fill {% templatetag openblock %} block content {% templatetag closeblock %},
+which is the same block name base.html uses, so nothing else has to be mapped.
+{% endcomment %}
+{% block title %}{{ block.super }}{% endblock %}

@@ -1,0 +1,70 @@
+{% extends "base.html" %}
+{% load i18n %}
+{% block title %}Connect {{ application.name }}{% endblock %}
+{% comment %}
+The consent screen. Somebody arrives here by being redirected off Claude (or another agent), and
+the two questions in their head are "is this really my auction site?" and "what am I agreeing to?".
+So the page leads with the site and the account, then the application asking, then the permissions
+in the site's own words rather than OAuth's -- the scope descriptions come from OAUTH2_PROVIDER's
+SCOPES, which are written as sentences for exactly this screen.
+
+The one thing this page must not do is look like a form to skim: Authorize hands an outside program
+the ability to act as this person, so Cancel is a real button beside it rather than a link
+underneath, and the "acts as you" sentence is on screen rather than in a tooltip.
+
+Only ever use {% templatetag openblock %} comment {% templatetag closeblock %} blocks in here.
+{% endcomment %}
+{% block content %}
+<div class="container py-4" style="max-width: 40rem">
+  {% if not error %}
+  <div class="card">
+    <div class="card-body">
+      <h1 class="h4 mb-3"><i class="bi bi-robot"></i> Connect {{ application.name }}</h1>
+
+      <p class="mb-2">
+        <strong>{{ application.name }}</strong> wants to use <strong>{{ request.get_host }}</strong>
+        as {% if request.user.is_authenticated %}<strong>{{ request.user.username }}</strong>{% else %}you{% endif %}.
+      </p>
+      <p class="text-muted small">
+        It acts <strong>as you</strong>: every auction and club still checks your own permissions,
+        so it can never do anything you couldn't do yourself on this site.
+      </p>
+
+      <h2 class="h6 mt-4">It will be able to:</h2>
+      <ul>
+        {% for scope in scopes_descriptions %}
+        <li>{{ scope }}</li>
+        {% endfor %}
+      </ul>
+
+      <div class="help-note">
+        <i class="bi bi-lightbulb-fill"></i>
+        <div>You can disconnect it at any time from
+          <a href="{% url 'user_api_keys' %}">Connect an AI assistant</a> in your preferences.
+          Disconnecting stops it immediately.</div>
+      </div>
+
+      <form id="authorizationForm" method="post" class="mt-3">
+        {% csrf_token %}
+        {% for field in form %}{% if field.is_hidden %}{{ field }}{% endif %}{% endfor %}
+        {{ form.errors }}
+        {{ form.non_field_errors }}
+        <div class="d-flex flex-wrap gap-2">
+          <button type="submit" name="allow" value="Authorize" class="btn btn-success text-dark">
+            <i class="bi bi-check-lg"></i> {% trans "Authorize" %}
+          </button>
+          <button type="submit" class="btn btn-secondary">{% trans "Cancel" %}</button>
+        </div>
+      </form>
+    </div>
+  </div>
+  {% else %}
+  <div class="alert alert-danger">
+    <h2 class="h5">Something went wrong connecting</h2>
+    <p class="mb-1">{{ error.error }}</p>
+    <p class="mb-0">{{ error.description }}</p>
+  </div>
+  <p><a href="{% url 'user_api_keys' %}" class="btn btn-primary">Back to connection settings</a></p>
+  {% endif %}
+</div>
+{% endblock %}

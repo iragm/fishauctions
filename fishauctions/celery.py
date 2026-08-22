@@ -146,6 +146,12 @@ app.conf.beat_schedule = {
         "task": "auctions.tasks.migrate_to_cloudflare_images",
         "schedule": 60.0,  # Run every minute
     },
+    # Expired OAuth tokens and stale registered clients from the MCP endpoint's authorization
+    # server - every 24 hours (no-op unless oauth2_provider is installed)
+    "cleanup_oauth_tokens": {
+        "task": "auctions.tasks.cleanup_oauth_tokens",
+        "schedule": 86400.0,  # Run every 24 hours
+    },
     # Note: update_auction_stats is NOT in beat_schedule as it's self-scheduling.
     # It starts on worker_ready and schedules itself based on when the next
     # auction's stats are due for update.

@@ -52,7 +52,8 @@
     <p class="mb-2">
       Your calendar is syncing, but it's still private, so members can't add it to their own
       Google Calendar yet. We can't make it public for you &mdash; that would mean asking for
-      access to all of your calendars instead of just this one.
+      access to all of your calendars instead of just this one. Do it in Google and this notice
+      goes away on its own; we check every time we sync.
     </p>
     <a href="#share-with-members" class="btn btn-sm btn-light">Show me how &mdash; takes a minute</a>
   </div>
@@ -120,10 +121,15 @@
   <div class="card mb-4" id="share-with-members">
     <div class="card-header">
       Share it with your members
+      {% comment %}A status, not a control. Whichever badge is showing is what Google served us
+      the last time we asked, which is the same thing a member's calendar app would get.{% endcomment %}
       {% if club.google_calendar_is_public %}
       <span class="badge bg-success text-dark ms-1"><i class="bi bi-check-circle-fill"></i> Public</span>
       {% else %}
       <span class="badge bg-secondary ms-1">Private</span>
+      {% endif %}
+      {% if club.google_calendar_public_checked %}
+      <span class="text-muted small ms-1">checked {{ club.google_calendar_public_checked|timesince }} ago</span>
       {% endif %}
     </div>
     <div class="card-body">
@@ -141,8 +147,17 @@
         <li>Open <a href="https://calendar.google.com/calendar/r/settings" target="_blank" rel="noopener">Google Calendar settings</a>.</li>
         <li>Pick <strong>{{ club.name }} events</strong> from the list on the left.</li>
         <li>Under <strong>Access permissions for events</strong>, tick <strong>Make available to public</strong>.</li>
-        <li>Come back here and tick the box below.</li>
       </ol>
+      {% comment %}No fourth step telling them to come back and confirm it. We ask Google
+      ourselves on every sync -- a shared calendar serves its iCal feed to anybody, so fetching
+      that feed with no credentials is the same question a member's calendar app asks. The badge
+      above is the answer, not a setting.{% endcomment %}
+      <p class="text-muted small">
+        <i class="bi bi-info-circle"></i>
+        Nothing to confirm here afterwards &mdash; we check when we sync, and the badge above
+        follows what Google will actually serve. In a hurry? <strong>Sync now</strong> checks
+        straight away.
+      </p>
       {% if club.google_calendar_is_public %}
       <div class="d-flex flex-wrap gap-2">
         <a href="{{ club.google_calendar_public_url }}" target="_blank" rel="noopener" class="btn btn-sm btn-primary">
@@ -185,20 +200,6 @@
           </small>
         </label>
       </div>
-      {% if club.google_calendar_connected %}
-      <div class="form-check form-switch mb-3">
-        <input class="form-check-input" type="checkbox" role="switch" id="google_calendar_is_public"
-               name="google_calendar_is_public" {% if club.google_calendar_is_public %}checked{% endif %}>
-        <label class="form-check-label" for="google_calendar_is_public">
-          <strong>I've shared this calendar publicly in Google Calendar</strong><br>
-          <small class="text-muted">
-            Shows the Google subscribe links on your club page. Do the four steps above first &mdash;
-            when you save, we try to load the calendar the way a member would, and untick this if it
-            isn't really shared yet.
-          </small>
-        </label>
-      </div>
-      {% endif %}
       <button type="submit" class="btn btn-primary">Save settings</button>
     </form>
   </div>
