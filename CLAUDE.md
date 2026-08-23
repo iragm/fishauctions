@@ -463,14 +463,33 @@ under `ANNOUNCEMENTS`, which for a retraction is the only surviving record.
 `docs/club_announcements.md` has the whole design.
 
 Everything a club can put on **its own website** is on one page, `/clubs/<slug>/website/`: the
-event calendar, the current auction, the latest announcement and the BAP leaderboard. Snippets are
+event calendar, the events that have already happened, the current auction, the latest announcement
+and the BAP leaderboard. Snippets are
 listed whether or not the feature behind them is switched on, with a note saying so — somebody
 choosing what to put on the club website is exactly who should find out that turning BAP on would
-give them a leaderboard. The four embeds share one shell (`auctions/templates/auctions/embeds/`)
+give them a leaderboard. The five embeds share one shell (`auctions/templates/auctions/embeds/`)
 so their palette can't drift; each has a styled template and an `_unstyled` one, and
 `embed_mode_from_request` / `embed_response` in `views.py` are the one reader of `?format=`.
 
-A fifth card on that page is **not** an embed: **Calendar links** hands over two plain addresses —
+**Past events** is the events embed pointed backwards — `ClubPastEventsEmbedView` subclasses
+`ClubEventsEmbedView` and changes three class attributes — because a club's own site wants "what's
+on" at the top of a page and "what we've been doing" further down, and the second is the half
+somebody deciding whether to join actually reads. `count=1` is the thing that happened last. It is
+deliberately the **same** `events.html`, the same row shape and the same `_club_events_embed_rows`:
+two lists on one page that drift apart is worse than either of them being wrong.
+
+**An iframe cannot size itself, so the embed measures itself and the snippet listens.** A height
+picked for ten events shows two events and 700 pixels of nothing under them, and no CSS on our side
+can fix that — the box is in somebody else's document. Every styled embed ends with a dozen inline
+lines that post `{clubEmbed: "height", height: N}` to `window.parent` (on load, on resize, and
+through a `ResizeObserver`), and `website_snippet.html` hands over a two-line listener *inside the
+same `<pre>`* so it is still one copy-paste. The listener checks `event.origin` against this site
+and matches frames on `event.source`, so a page carrying several embeds sizes each one
+independently and nothing else on it can resize them. The `height` in the snippet is now only the
+size the box starts at: a CMS that strips the script leaves exactly the behaviour clubs have today,
+which is why this needed no migration and no second thing to paste.
+
+A sixth card on that page is **not** an embed: **Calendar links** hands over two plain addresses —
 a subscribe link and the raw `.ics` feed — because a club's own site already has somewhere to put
 a link and an iframe is the wrong shape for "subscribe to our calendar". Both follow one rule,
 `Club.calendar_subscribe_url` / `.calendar_feed_url`: **the club's Google calendar when it is
@@ -507,6 +526,33 @@ and the reset. `ClubEventForm` narrows itself to those two fields when `instance
 dates, location, cancellation and delete stay with the auction (`is_editable` still gates delete;
 `details_are_editable` is the new, always-true guard on the form). `docs/club_event_details.md`
 has the whole design.
+
+**Nobody rewrote that wording, because nobody knew it was being read.** The generated title is
+fine on this site, where the admin can see the auction it came from; it is a stranger's sentence
+on the club's own home page. So `Club.events_website_views` / `events_website_last_view` count
+renders of the events embed — modelled on `ClubAnnouncement.website_views`, `F()` and one UPDATE,
+every `?format=` including JSON — and `Club.embeds_events_on_website` is "a render inside
+`EVENTS_EMBED_ACTIVE_DAYS` (90)". Three things it deliberately does differently from the
+announcements counter: it counts on the **club** rather than on a row, so an embed that came back
+empty still counts (a club with nothing on has the snippet installed exactly as much as one with
+ten meetings, and *installed* is the fact being collected); the **club page here is not counted**,
+because telling the club's website apart from ours is the entire point of the number; and an
+**admin's own view is not counted**, so checking your own snippet doesn't read as your members
+reading it.
+
+`Auction.event_needing_custom_wording` is the one reader, and it puts a banner beside the setup
+checklist on the auction page: this club's website is showing our calendar, "<generated title>" is
+what your members are reading on it right now, here is the button to write your own. All four
+conditions live in that one property rather than in template `{% if %}`s — a club that embeds, a
+generated event, **neither** field typed by hand (either one is somebody having already decided),
+and an auction that hasn't happened. It sits **outside** the checklist's if/else, unlike the
+promotion and payment banners: the event exists from the moment the auction is promoted, so the
+generated title is being read while the checklist is still up. Dismissing writes
+`Auction.dismissed_customize_event_banner`, which is deliberately not in
+`AUCTION_FIELDS_TO_CLONE` — next year's copy gets a new event and the same generated sentence, and
+that is worth asking about again. `ClubEventUpdateView` had to widen by one clause for the button
+to work at all: an admin of the auction behind a generated event may hold no club role, and the
+auction's own creator usually doesn't, so the prompt written for them led to a 403.
 
 There is deliberately **no per-event "add this to my calendar" link** on the club page's event
 list. It wrote Google's `TEMPLATE` screen — a dead copy of one event that never hears about a

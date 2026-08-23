@@ -510,6 +510,13 @@ ROUTE_LIST: list[Route] = [
     _r("club_membership_pay", "Pay or renew my club membership", "Club", scope=SCOPE_CLUB, keywords=["renew", "dues"]),
     _r("club_events_ical", "Club calendar feed", "Club", scope=SCOPE_CLUB, keywords=["calendar", "ics", "events"]),
     _r("club_events_embed", "Embeddable club events", "Club", scope=SCOPE_CLUB, keywords=["embed", "widget"]),
+    _r(
+        "club_past_events_embed",
+        "Embeddable past club events",
+        "Club",
+        scope=SCOPE_CLUB,
+        keywords=["embed", "widget", "past events", "history"],
+    ),
     _r("bap_embed", "Embeddable Breeder Award list", "Club", scope=SCOPE_CLUB, keywords=["bap embed", "widget"]),
     _r(
         "club_announcements_embed",

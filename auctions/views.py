@@ -9346,6 +9346,9 @@ class AuctionInfo(FormMixin, DetailView, AuctionViewMixin):
             if str(request.GET.get("dismissed_promo_banner", "")).lower() in ("1", "true"):
                 self.auction.dismissed_promo_banner = True
                 self.auction.save()
+            if str(request.GET.get("dismissed_customize_event_banner", "")).lower() in ("1", "true"):
+                self.auction.dismissed_customize_event_banner = True
+                self.auction.save()
             if str(request.GET.get("make_current_auction", "")).lower() in ("1", "true") and self.auction.club_id:
                 club = self.auction.club
                 club.current_auction = self.auction
@@ -12935,9 +12938,9 @@ class ClubEventUpdateView(LoginRequiredMixin, ClubViewMixin, View):
 
     def dispatch(self, request, *args, **kwargs):
         self.get_club(kwargs.get("slug", ""))
+        self.event = get_object_or_404(ClubEvent, club=self.club, pk=kwargs.get("pk"), is_deleted=False)
         if request.user.is_authenticated and not self._can_manage():
             raise PermissionDenied()
-        self.event = get_object_or_404(ClubEvent, club=self.club, pk=kwargs.get("pk"), is_deleted=False)
         # A generated event reaches this form too, and the form narrows itself to the two fields
         # a club owns there. It used to 404, which left "our meeting is at the auction" with
         # nowhere to be typed except Google Calendar, where the next push overwrote it.
@@ -12946,11 +12949,20 @@ class ClubEventUpdateView(LoginRequiredMixin, ClubViewMixin, View):
         return super().dispatch(request, *args, **kwargs)
 
     def _can_manage(self):
-        return (
+        if (
             self.user_has_club_permission("permission_admin")
             or self.user_has_club_permission("permission_manage_auctions")
             or self.user_has_club_permission("permission_edit_club")
-        )
+        ):
+            return True
+        # An admin of the auction behind a generated event, who may hold no club role at all --
+        # the auction's own creator is the usual one. The wording of that event is the auction's
+        # to write: ClubEventForm narrows itself to the title and description on anything
+        # generated, and delete is refused below, so this reaches nothing else on the calendar.
+        # Without it the "customize this event" prompt on the auction page led to a 403 for
+        # exactly the person it was written for.
+        related_auction = self.event.related_auction
+        return bool(related_auction and related_auction.permission_check(self.request.user))
 
     def get(self, request, slug, pk):
         form = ClubEventForm(instance=self.event, user_timezone=_browser_timezone(request))
@@ -20285,17 +20297,25 @@ class BapEmbedView(View):
 CLUB_EVENTS_EMBED_MAX = 10
 
 
-def _club_events_embed_rows(request, club, count):
+def _club_events_embed_rows(request, club, count, *, past=False):
     """The club's next few events, flattened for the embed: what, when, where, and a link back.
 
     Everything here is already on the public club page and in the public iCal feed — no member
     data of any kind. Pickup events are left out for the same reason
     ``club_events.next_member_facing_event`` drops them: they're logistics for people who
     already won lots, not something to put on the club's website.
+
+    ``past=True`` is the same rows in the other direction, newest first, so ``count=1`` is the
+    thing that happened most recently. One function rather than two because a club pasting both
+    embeds onto one page must get two lists that look alike — the moment the formatting lives in
+    two places, one of them grows a field the other doesn't.
     """
-    upcoming, _ = club_events.upcoming_events(club, limit=count, exclude_pickups=True)
+    if past:
+        events = club_events.past_events(club, limit=count, exclude_pickups=True)
+    else:
+        events, _ = club_events.upcoming_events(club, limit=count, exclude_pickups=True)
     rows = []
-    for event in upcoming:
+    for event in events:
         start = timezone.localtime(event.date_start)
         rows.append(
             {
@@ -20314,6 +20334,26 @@ def _club_events_embed_rows(request, club, count):
     return rows
 
 
+def _viewer_runs_this_club(request, club):
+    """True when the person asking for an embed is one of the people who pasted it.
+
+    Used to keep an admin checking their own snippet out of ``events_website_views``. The same
+    three permissions gate the website-integration page the URLs are copied from, so this is
+    exactly "somebody who could have been testing it".
+    """
+    if not request.user.is_authenticated:
+        return False
+    if request.user.is_superuser:
+        return True
+    # One query rather than three calls to check_club_permission: this runs on a public endpoint
+    # that a club's own home page hits on every page load.
+    return (
+        ClubMember.objects.filter(club=club, user=request.user, is_deleted=False)
+        .filter(Q(permission_admin=True) | Q(permission_manage_auctions=True) | Q(permission_edit_club=True))
+        .exists()
+    )
+
+
 @method_decorator(xframe_options_exempt, name="dispatch")
 class ClubEventsEmbedView(View):
     """Public, embeddable list of a club's next few events, for WordPress and the like.
@@ -20324,7 +20364,19 @@ class ClubEventsEmbedView(View):
     Framing and cross-origin fetches are allowed so a third-party site can use it. GET-only and
     public, so CSRF never applies; the snippets that produce these URLs are admin-only, but the
     URLs themselves show nothing the club page doesn't.
+
+    ``ClubPastEventsEmbedView`` is the same view pointed the other way; everything that differs
+    between them is one of the three class attributes below.
     """
+
+    #: Newest-first history instead of what's coming up.
+    past = False
+    #: What to say when there is nothing to list. The two directions are empty for opposite
+    #: reasons, and "nothing coming up" under a heading that says "past events" reads as a bug.
+    empty_message = "Nothing coming up right now."
+    #: The key the JSON representation uses. Named for what it holds, so a club's own script
+    #: doesn't have to know which endpoint it fetched.
+    json_key = "events"
 
     def get(self, request, slug):
         club = Club.objects.filter(Q(slug=slug) | Q(abbreviation=slug)).order_by("pk").first()
@@ -20337,10 +20389,16 @@ class ClubEventsEmbedView(View):
             count = CLUB_EVENTS_EMBED_MAX
         count = max(1, min(count, CLUB_EVENTS_EMBED_MAX))
 
-        rows = _club_events_embed_rows(request, club, count)
+        rows = _club_events_embed_rows(request, club, count, past=self.past)
+        # Every format counts, JSON included, and an empty answer counts too: what is being
+        # recorded is that somebody's website asked us for this club's calendar, which is as true
+        # of a club with nothing on as of a club with ten meetings. Admins are left out so that
+        # checking your own snippet doesn't look like your members reading it.
+        if not _viewer_runs_this_club(request, club):
+            club_events.record_website_view(club)
         embed_mode = embed_mode_from_request(request)
         if embed_mode is None:
-            return embed_json({"club": club.name, "events": rows})
+            return embed_json({"club": club.name, self.json_key: rows})
         return embed_response(
             "events",
             embed_mode,
@@ -20348,8 +20406,24 @@ class ClubEventsEmbedView(View):
                 "embed_mode": embed_mode,
                 "club_name": club.name,
                 "events": rows,
+                "past": self.past,
+                "empty_message": self.empty_message,
             },
         )
+
+
+@method_decorator(xframe_options_exempt, name="dispatch")
+class ClubPastEventsEmbedView(ClubEventsEmbedView):
+    """The same embed looking backwards: what this club has been up to, newest first.
+
+    A club's own website usually has room for both — "what's on" at the top of a page and "what
+    we've been doing" further down — and the second one is the half a visitor deciding whether to
+    join actually reads. ``count=1`` is the thing that happened last.
+    """
+
+    past = True
+    empty_message = "Nothing here yet."
+    json_key = "past_events"
 
 
 # A club pasting this into a sidebar wants "what's new", not an archive. Past three it stops being
@@ -20650,6 +20724,9 @@ class ClubWebsiteIntegrationView(LoginRequiredMixin, ClubViewMixin, TemplateView
         club = self.club
         context["club"] = club
         base = f"{self.request.scheme}://{self.request.get_host()}"
+        # The listener pasted alongside each iframe checks event.origin against this before it
+        # resizes anything, so a club's page ignores height messages from any other frame on it.
+        context["embed_origin"] = base
         context["snippets"] = [
             {
                 "key": "events",
@@ -20660,6 +20737,24 @@ class ClubWebsiteIntegrationView(LoginRequiredMixin, ClubViewMixin, TemplateView
                     "your Google Calendar. Only the name, date and place — never anything about your members."
                 ),
                 "url": base + reverse("club_events_embed", kwargs={"slug": club.slug}),
+                "counts": True,
+                "max_count": CLUB_EVENTS_EMBED_MAX,
+                "default_count": 1,
+                "heights": {1: 200, 10: 880},
+                "available": club.enable_club_page,
+                "unavailable_reason": "Your public club page is turned off, so this would show nothing.",
+                "settings_url": reverse("club_edit", kwargs={"slug": club.slug}),
+            },
+            {
+                "key": "past_events",
+                "title": "Past events",
+                "icon": "bi-clock-history",
+                "blurb": (
+                    "The same list looking backwards, newest first — what your club has actually "
+                    "been doing. Somebody deciding whether to come to a meeting reads this one. "
+                    "Set count=1 for just the most recent."
+                ),
+                "url": base + reverse("club_past_events_embed", kwargs={"slug": club.slug}),
                 "counts": True,
                 "max_count": CLUB_EVENTS_EMBED_MAX,
                 "default_count": 1,
@@ -26084,8 +26179,14 @@ class AssistantSkillRequestsView(AdminOnlyViewMixin, TemplateView):
         """
         wanted = request.POST.get("filter", "")
         url = reverse("assistant_skill_requests")
-        if wanted in dict(AssistantSkillRequest.STATUS_CHOICES):
-            return f"{url}?status={wanted}"
+        for status, _label in AssistantSkillRequest.STATUS_CHOICES:
+            if status == wanted:
+                # The value that goes into the URL is the model's own constant, not the string
+                # that was posted. Comparing the two and then interpolating the *posted* one is
+                # the same URL and a worse one: nothing that reads this can see that the check
+                # happened, static analysis included, and the next person to add a status here
+                # would have to notice that the guard is load-bearing.
+                return f"{url}?{urlencode({'status': status})}"
         return url
 
     def get_context_data(self, **kwargs):

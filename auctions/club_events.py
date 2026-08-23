@@ -10,7 +10,7 @@ from __future__ import annotations
 import datetime
 import logging
 
-from django.db.models import Q
+from django.db.models import F, Q
 from django.utils import timezone
 
 from auctions import discord_events, google_calendar
@@ -460,6 +460,52 @@ def next_member_facing_event(club):
         .order_by("date_start")
         .first()
     )
+
+
+def record_website_view(club):
+    """Count one impression of a club's events embed, and stamp when it happened.
+
+    The sibling of :func:`auctions.announcements.record_website_views`, and it exists for the same
+    reason: the only thing anybody can observe about a snippet pasted into somebody else's
+    WordPress is that a browser asked us for it. What it buys is one question that had no answer
+    before -- "is this club's own website showing our calendar?" -- which is what
+    ``Club.embeds_events_on_website`` reads and what the prompt on the auction page is gated on.
+
+    Two deliberate differences from the announcements counter. It counts on the **club**, not on a
+    row, so an embed that came back empty still counts: a club with nothing coming up has the
+    snippet installed exactly as much as a club with ten meetings, and that is the fact being
+    collected. And the club page here is *not* counted -- only the embed is -- because the whole
+    point of the number is to tell the club's website apart from ours.
+
+    ``F()`` rather than read-modify-write, so two visitors at the same moment can't lose each
+    other's count, and one UPDATE rather than a ``save()`` so nothing else on the row is touched.
+    """
+    from auctions.models import Club
+
+    Club.objects.filter(pk=club.pk).update(
+        events_website_views=F("events_website_views") + 1,
+        events_website_last_view=timezone.now(),
+    )
+
+
+def past_events(club, *, limit=5, exclude_pickups=False):
+    """The club's most recent events, newest first, for the "what we've been up to" embed.
+
+    The same rows and the same order the club page's history column shows -- newest first, so
+    ``limit=1`` is the thing that happened last. Split out of :func:`upcoming_events` rather than
+    called through it because the past embed wants nothing else that function returns, and asking
+    for ``include_past`` means also running the upcoming query and throwing it away.
+    """
+    from auctions.models import ClubEvent
+
+    now = timezone.now()
+    rows = ClubEvent.objects.filter(club=club, is_deleted=False).select_related("auction")
+    if exclude_pickups:
+        rows = rows.exclude(source=ClubEvent.SOURCE_PICKUP)
+    rows = rows.filter(Q(date_end__lt=now) | Q(date_end__isnull=True, date_start__lt=now)).order_by("-date_start")
+    if limit:
+        rows = rows[:limit]
+    return rows
 
 
 def upcoming_events(club, *, limit=None, include_past=False, past_limit=5, exclude_pickups=False):

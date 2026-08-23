@@ -926,6 +926,280 @@ class ClubEventsEmbedTests(TestCase):
         self.assertNotIn("webcal://", body)
 
 
+class ClubPastEventsEmbedTests(TestCase):
+    """The backwards half of the events embed: what the club has actually been doing."""
+
+    def setUp(self):
+        self.client = Client()
+        self.club = Club.objects.create(name="History Club", enable_club_page=True)
+        self.url = reverse("club_past_events_embed", kwargs={"slug": self.club.slug})
+        now = timezone.now()
+        for days, title in ((30, "Long ago"), (7, "Last week"), (2, "Two days ago")):
+            ClubEvent.objects.create(
+                club=self.club,
+                title=title,
+                date_start=now - datetime.timedelta(days=days),
+                date_end=now - datetime.timedelta(days=days) + datetime.timedelta(hours=2),
+                location="1 Main St",
+            )
+        ClubEvent.objects.create(club=self.club, title="Next month", date_start=now + datetime.timedelta(days=30))
+
+    def test_it_lists_what_has_already_happened_newest_first(self):
+        payload = self.client.get(self.url).json()
+        self.assertEqual(
+            [e["title"] for e in payload["past_events"]],
+            ["Two days ago", "Last week", "Long ago"],
+        )
+
+    def test_count_one_is_the_most_recent_event(self):
+        payload = self.client.get(self.url, {"count": 1}).json()
+        self.assertEqual([e["title"] for e in payload["past_events"]], ["Two days ago"])
+
+    def test_upcoming_events_are_never_in_it(self):
+        titles = [e["title"] for e in self.client.get(self.url).json()["past_events"]]
+        self.assertNotIn("Next month", titles)
+
+    def test_it_takes_the_same_count_and_format_parameters(self):
+        self.assertEqual(len(self.client.get(self.url, {"count": 99}).json()["past_events"]), 3)
+        self.assertEqual(len(self.client.get(self.url, {"count": 0}).json()["past_events"]), 1)
+        self.assertEqual(len(self.client.get(self.url, {"count": "lots"}).json()["past_events"]), 3)
+        for fmt, theme in (("iframelight", "light"), ("iframedark", "dark")):
+            with self.subTest(fmt=fmt):
+                body = self.client.get(self.url, {"format": fmt}).content.decode()
+                self.assertIn(f'data-theme="{theme}"', body)
+                self.assertIn("Two days ago", body)
+
+    def test_a_row_is_formatted_exactly_like_an_upcoming_one(self):
+        """One formatter, deliberately: two lists on one club website must not drift apart."""
+        upcoming = self.client.get(reverse("club_events_embed", kwargs={"slug": self.club.slug})).json()
+        past = self.client.get(self.url).json()
+        self.assertEqual(sorted(upcoming["events"][0]), sorted(past["past_events"][0]))
+
+    def test_an_empty_history_does_not_say_nothing_coming_up(self):
+        ClubEvent.objects.filter(club=self.club).delete()
+        body = self.client.get(self.url, {"format": "iframelight"}).content.decode()
+        self.assertIn("Nothing here yet", body)
+        self.assertNotIn("Nothing coming up", body)
+
+    def test_it_is_framable_and_fetchable_like_the_others(self):
+        response = self.client.get(self.url, {"format": "iframelight"})
+        self.assertEqual(response["Access-Control-Allow-Origin"], "*")
+        self.assertNotIn("X-Frame-Options", response)
+
+    def test_a_club_with_its_page_disabled_has_no_embed(self):
+        self.club.enable_club_page = False
+        self.club.save()
+        self.assertEqual(self.client.get(self.url).status_code, 404)
+
+
+class EmbedSelfSizingTests(TestCase):
+    """An iframe cannot size itself, so the embed measures itself and the snippet listens."""
+
+    def setUp(self):
+        self.client = Client()
+        self.club = Club.objects.create(name="Sizing Club", enable_club_page=True, enable_breeder_award_program=True)
+        self.admin = User.objects.create_user(username="sz_admin", password="pw", email="sz@example.com")
+        ClubMember.objects.create(club=self.club, user=self.admin, permission_admin=True)
+
+    def _embed(self, name):
+        return self.client.get(reverse(name, kwargs={"slug": self.club.slug}), {"format": "iframelight"})
+
+    def test_every_styled_embed_reports_its_height(self):
+        for name in (
+            "club_events_embed",
+            "club_past_events_embed",
+            "club_announcements_embed",
+            "club_auction_embed",
+            "bap_embed",
+        ):
+            with self.subTest(embed=name):
+                body = self._embed(name).content.decode()
+                self.assertIn("window.parent.postMessage", body)
+                self.assertIn('clubEmbed: "height"', body)
+
+    def test_it_stays_quiet_when_nothing_framed_it(self):
+        """Opening the embed URL directly must not post a message to itself."""
+        self.assertIn("if (window.parent === window) { return; }", self._embed("club_events_embed").content.decode())
+
+    def test_nothing_is_fetched_from_outside(self):
+        body = self._embed("club_events_embed").content.decode()
+        self.assertNotIn("<script src", body)
+        self.assertNotIn("://fonts.", body)
+
+    def test_the_snippet_hands_over_a_listener_with_the_iframe(self):
+        self.client.force_login(self.admin)
+        body = self.client.get(reverse("club_website_integration", kwargs={"slug": self.club.slug})).content.decode()
+        self.assertIn('&lt;script&gt;addEventListener("message"', body)
+        self.assertIn("testserver", body)
+
+    def test_the_listener_checks_where_the_message_came_from(self):
+        """A club page carrying somebody else's iframe must not be resizable by it."""
+        self.client.force_login(self.admin)
+        body = self.client.get(reverse("club_website_integration", kwargs={"slug": self.club.slug})).content.decode()
+        self.assertIn("e.origin!==", body)
+        self.assertIn("contentWindow===e.source", body)
+
+
+class EventsEmbedUsageTrackingTests(TestCase):
+    """Whether a club's own website is actually showing our calendar."""
+
+    def setUp(self):
+        self.client = Client()
+        self.club = Club.objects.create(name="Tracked Club", enable_club_page=True)
+        self.admin = User.objects.create_user(username="tr_admin", password="pw", email="tr@example.com")
+        ClubMember.objects.create(club=self.club, user=self.admin, permission_admin=True)
+        self.member = User.objects.create_user(username="tr_member", password="pw", email="trm@example.com")
+        ClubMember.objects.create(club=self.club, user=self.member)
+        self.url = reverse("club_events_embed", kwargs={"slug": self.club.slug})
+
+    def _views(self):
+        self.club.refresh_from_db()
+        return self.club.events_website_views
+
+    def test_a_club_starts_with_nothing_recorded(self):
+        self.assertEqual(self._views(), 0)
+        self.assertFalse(self.club.embeds_events_on_website)
+
+    def test_every_format_counts(self):
+        for fmt in ("json", "iframelight", "iframedark", "unstyledhtml"):
+            self.client.get(self.url, {"format": fmt})
+        self.assertEqual(self._views(), 4)
+
+    def test_an_empty_calendar_still_counts(self):
+        """The snippet is installed either way, and that is the whole fact being collected."""
+        self.assertFalse(ClubEvent.objects.filter(club=self.club).exists())
+        self.client.get(self.url)
+        self.assertEqual(self._views(), 1)
+
+    def test_the_past_events_embed_counts_too(self):
+        self.client.get(reverse("club_past_events_embed", kwargs={"slug": self.club.slug}))
+        self.assertEqual(self._views(), 1)
+
+    def test_an_admin_checking_their_own_snippet_does_not_count(self):
+        self.client.force_login(self.admin)
+        self.client.get(self.url)
+        self.assertEqual(self._views(), 0)
+
+    def test_an_ordinary_member_counts(self):
+        """A member reading it on the club's website is exactly the thing worth counting."""
+        self.client.force_login(self.member)
+        self.client.get(self.url)
+        self.assertEqual(self._views(), 1)
+
+    def test_the_club_page_here_is_not_the_club_website(self):
+        self.client.get(reverse("club_detail", kwargs={"slug": self.club.slug}))
+        self.assertEqual(self._views(), 0)
+
+    def test_a_recent_render_means_the_embed_is_installed(self):
+        self.client.get(self.url)
+        self.club.refresh_from_db()
+        self.assertTrue(self.club.embeds_events_on_website)
+
+    def test_a_snippet_taken_down_long_ago_stops_counting_as_installed(self):
+        self.client.get(self.url)
+        self.club.refresh_from_db()
+        stale = timezone.now() - datetime.timedelta(days=Club.EVENTS_EMBED_ACTIVE_DAYS + 1)
+        Club.objects.filter(pk=self.club.pk).update(events_website_last_view=stale)
+        self.club.refresh_from_db()
+        self.assertFalse(self.club.embeds_events_on_website)
+
+
+class CustomizeEventPromptTests(TestCase):
+    """The auction-page nudge to write your own wording for the calendar entry members read."""
+
+    def setUp(self):
+        self.client = Client()
+        self.club = Club.objects.create(name="Prompt Club", enable_club_page=True)
+        self.admin = User.objects.create_user(username="pr_admin", password="pw", email="pr@example.com")
+        ClubMember.objects.create(club=self.club, user=self.admin, permission_admin=True)
+        self.auction = Auction.objects.create(
+            title="Prompt Auction",
+            date_start=timezone.now() + datetime.timedelta(days=10),
+            club=self.club,
+            is_online=False,
+            promote_this_auction=True,
+            created_by=self.admin,
+        )
+        self.event = ClubEvent.objects.filter(auction=self.auction).first()
+        self._mark_embedded()
+
+    def _mark_embedded(self):
+        Club.objects.filter(pk=self.club.pk).update(events_website_views=5, events_website_last_view=timezone.now())
+        self.club.refresh_from_db()
+        self.auction.refresh_from_db()
+
+    def test_the_auction_has_a_generated_event_to_offer(self):
+        self.assertIsNotNone(self.event)
+        self.assertTrue(self.event.is_automatic)
+        self.assertEqual(self.auction.event_needing_custom_wording, self.event)
+
+    def test_no_prompt_when_the_club_does_not_embed_our_events(self):
+        Club.objects.filter(pk=self.club.pk).update(events_website_views=0, events_website_last_view=None)
+        self.auction.refresh_from_db()
+        self.assertIsNone(self.auction.event_needing_custom_wording)
+
+    def test_no_prompt_once_either_field_has_been_typed_by_hand(self):
+        for field in ("title_is_custom", "description_is_custom"):
+            with self.subTest(field=field):
+                fields = {"title_is_custom": False, "description_is_custom": False, field: True}
+                ClubEvent.objects.filter(pk=self.event.pk).update(**fields)
+                self.auction.refresh_from_db()
+                self.assertIsNone(self.auction.event_needing_custom_wording)
+
+    def test_no_prompt_for_an_auction_that_is_over(self):
+        long_ago = timezone.now() - datetime.timedelta(days=30)
+        Auction.objects.filter(pk=self.auction.pk).update(
+            date_start=long_ago,
+            date_end=long_ago,
+            date_online_bidding_ends=long_ago,
+            lot_submission_end_date=long_ago,
+        )
+        self.auction.refresh_from_db()
+        self.assertTrue(self.auction.pretty_much_over)
+        self.assertIsNone(self.auction.event_needing_custom_wording)
+
+    def test_no_prompt_for_an_auction_with_no_club(self):
+        Auction.objects.filter(pk=self.auction.pk).update(club=None)
+        self.auction.refresh_from_db()
+        self.assertIsNone(self.auction.event_needing_custom_wording)
+
+    def test_the_banner_is_on_the_auction_page_for_an_admin(self):
+        self.client.force_login(self.admin)
+        response = self.client.get(reverse("auction_main", kwargs={"slug": self.auction.slug}))
+        self.assertContains(response, "website is showing this auction")
+        self.assertContains(response, "Customize this event")
+        self.assertContains(response, reverse("club_event_edit", kwargs={"slug": self.club.slug, "pk": self.event.pk}))
+
+    def test_an_ordinary_user_never_sees_it(self):
+        other = User.objects.create_user(username="pr_other", password="pw", email="pro@example.com")
+        self.client.force_login(other)
+        response = self.client.get(reverse("auction_main", kwargs={"slug": self.auction.slug}))
+        self.assertNotContains(response, "website is showing this auction")
+
+    def test_dismissing_it_sticks(self):
+        self.client.force_login(self.admin)
+        url = reverse("auction_main", kwargs={"slug": self.auction.slug})
+        self.client.get(url, {"dismissed_customize_event_banner": "true"})
+        self.auction.refresh_from_db()
+        self.assertTrue(self.auction.dismissed_customize_event_banner)
+        self.assertIsNone(self.auction.event_needing_custom_wording)
+        self.assertNotContains(self.client.get(url), "website is showing this auction")
+
+    def test_the_customize_link_works_for_an_auction_admin_with_no_club_role(self):
+        """The banner is written for the auction's creator, who often holds no club permission."""
+        creator = User.objects.create_user(username="pr_creator", password="pw", email="prc@example.com")
+        Auction.objects.filter(pk=self.auction.pk).update(created_by=creator)
+        self.client.force_login(creator)
+        response = self.client.get(reverse("club_event_edit", kwargs={"slug": self.club.slug, "pk": self.event.pk}))
+        self.assertEqual(response.status_code, 200)
+
+    def test_an_unrelated_user_still_cannot_edit_the_event(self):
+        stranger = User.objects.create_user(username="pr_stranger", password="pw", email="prs@example.com")
+        self.client.force_login(stranger)
+        response = self.client.get(reverse("club_event_edit", kwargs={"slug": self.club.slug, "pk": self.event.pk}))
+        self.assertEqual(response.status_code, 403)
+
+
 class ClubEventICalTests(TestCase):
     def setUp(self):
         self.client = Client()

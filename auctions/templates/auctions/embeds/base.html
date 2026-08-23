@@ -4,18 +4,25 @@ Wix or Squarespace and it has to look like it belongs there without knowing anyt
 page it lands on. So the CSS lives here once, in four blocks — a light palette, a dark palette, a
 card, and a list — and each embed only supplies its rows.
 
-Three rules this file exists to enforce:
+Four rules this file exists to enforce:
 
   * **Nothing but the rows.** No heading, no "More from" link, no club name. This is pasted into
     a page that already has its own heading and its own navigation, and a club that wanted a link
     back here would have written one; ours reads as somebody else's furniture in their room.
 
-  * **One palette.** Four embeds that each carried their own copy of these variables drifted
+  * **One palette.** Embeds that each carried their own copy of these variables drifted
     apart the first time one of them was touched, and a club that used two of them got two
     slightly different greys on the same page.
-  * **No external requests.** No web fonts, no stylesheet, no script. This renders inside somebody
-    else's site, often over a slow connection, and anything it fetches is another thing that can
-    fail in public.
+  * **No external requests.** No web fonts, no stylesheet, no fetched script. This renders inside
+    somebody else's site, often over a slow connection, and anything it fetches is another thing
+    that can fail in public. The one script here is inline, is a dozen lines, and fetches nothing.
+
+  * **It measures itself and says so.** An iframe is the one box on a page that cannot size itself
+    to its contents, so a snippet pasted with height:880px for ten events shows two events and 700
+    pixels of nothing. The script at the bottom posts this document's real height to whoever framed
+    it, and the snippet on the website-integration page pastes a two-line listener alongside the
+    iframe. Both halves are optional in the sense that matters: no parent, no message; a listener
+    stripped by a CMS leaves the fixed height, which is exactly what a club has today.
 
 `embed_mode` is "light" or "dark" and is picked by the ?format= the club chose, not by the
 visitor's system setting — the club knows what colour its own website is and we do not.
@@ -113,6 +120,28 @@ spread one over two lines and it renders onto the page.
   <div class="ew">
     {% block embed_body %}{% endblock %}
   </div>
+  {% comment %}Tell the framing page how tall this really is, so it can shrink the iframe to fit.
+  Posted to "*" because we cannot know what site framed us, and safe to: the only thing in the
+  message is a number of pixels that is already visible to anyone who can see the frame.  The
+  listener on the other end matches on event.source, so a page carrying several of these gives each
+  iframe its own height.  ResizeObserver covers a narrow phone re-wrapping a long announcement; the
+  load handler covers the first paint.{% endcomment %}
+  <script>
+    (function () {
+      if (window.parent === window) { return; }
+      var last = 0;
+      function report() {
+        var height = Math.ceil(document.documentElement.getBoundingClientRect().height);
+        if (!height || height === last) { return; }
+        last = height;
+        window.parent.postMessage({ clubEmbed: "height", height: height }, "*");
+      }
+      report();
+      window.addEventListener("load", report);
+      window.addEventListener("resize", report);
+      if (window.ResizeObserver) { new ResizeObserver(report).observe(document.documentElement); }
+    })();
+  </script>
 </body>
 </html>
 {% endautoescape %}

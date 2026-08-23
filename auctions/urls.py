@@ -1067,6 +1067,11 @@ urlpatterns = [
         name="club_events_embed",
     ),
     path(
+        "clubs/<slug:slug>/past-events-embed/",
+        views.ClubPastEventsEmbedView.as_view(),
+        name="club_past_events_embed",
+    ),
+    path(
         "clubs/<slug:slug>/announcements-embed/",
         views.ClubAnnouncementsEmbedView.as_view(),
         name="club_announcements_embed",

@@ -1186,6 +1186,27 @@ class Club(CloudflareImageMixin, models.Model):
         ),
     )
 
+    # Is the events embed actually on the club's own website?  Modelled on
+    # ClubAnnouncement.website_views, and for the same reason: the only question anybody can
+    # answer about a snippet pasted into somebody else's WordPress is "did a browser ask us for
+    # it".  Counted for every format of the events embed and never for the club page here, which
+    # is ours rather than theirs -- the whole point of the number is to tell those two apart.
+    events_website_views = models.PositiveIntegerField(
+        default=0,
+        help_text=(
+            "How many times this club's events embed has been rendered on a website. An "
+            "impression, not a read, and evidence the snippet is installed somewhere."
+        ),
+    )
+    events_website_last_view = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text=(
+            "When the events embed was last asked for. A club that took the snippet down stops "
+            "counting, so this is what separates 'embeds our events' from 'tried it once in 2024'."
+        ),
+    )
+
     # Donation tracking: asking local businesses to donate to a raffle or auction, and keeping
     # track of who was asked, who said yes, and who needs chasing.  See auctions/donations.py.
     enable_donation_tracking = models.BooleanField(
@@ -1339,6 +1360,25 @@ class Club(CloudflareImageMixin, models.Model):
     def calendar_feed_url(self, domain):
         """The raw iCal feed behind :meth:`calendar_subscribe_url`, for anything that reads one."""
         return self.google_calendar_ical_url or self._own_ical_url(domain)
+
+    #: How long after the last render we still call a club's events embed "installed". Long
+    #: enough that a quiet club website doesn't fall out of it between meetings, short enough
+    #: that a snippet taken down in the spring is not still being counted at the next auction.
+    EVENTS_EMBED_ACTIVE_DAYS = 90
+
+    @property
+    def embeds_events_on_website(self):
+        """True when this club's own website has been showing our events lately.
+
+        Read off :attr:`events_website_views` and :attr:`events_website_last_view`, which only the
+        embed writes. It is deliberately a *recent* render rather than an all-time count: an
+        answer of "yes" is used to tell an auction admin that members are reading this auction's
+        calendar entry on the club's own site, and that has to stop being said the season after
+        somebody deleted the snippet.
+        """
+        if not self.events_website_views or not self.events_website_last_view:
+            return False
+        return self.events_website_last_view >= timezone.now() - datetime.timedelta(days=self.EVENTS_EMBED_ACTIVE_DAYS)
 
     @property
     def icon_display_url(self):
@@ -4422,6 +4462,15 @@ class Auction(models.Model):
     enable_square_payments.help_text = "Allow users to use Square to pay their invoices themselves."
     dismissed_square_banner = models.BooleanField(default=False, blank=True)
     dismissed_promo_banner = models.BooleanField(default=False, blank=True)
+    dismissed_customize_event_banner = models.BooleanField(
+        default=False,
+        blank=True,
+        help_text=(
+            "Set when an admin dismissed the prompt to write this auction's own calendar wording. "
+            "Deliberately not in AUCTION_FIELDS_TO_CLONE: next year's auction gets a new event and "
+            "the same generated sentence, which is the thing worth asking about again."
+        ),
+    )
     google_drive_link = models.URLField(max_length=500, blank=True, null=True, default="")
     google_drive_link.help_text = "Link to a Google Sheet with user information.  Make sure the sheet is shared with 'anyone with the link can view'."
     last_sync_time = models.DateTimeField(blank=True, null=True)
@@ -5900,6 +5949,39 @@ class Auction(models.Model):
         ):
             return True
         return False
+
+    @property
+    def event_needing_custom_wording(self):
+        """This auction's calendar event, when it is worth asking an admin to reword it.
+
+        The prompt on the auction page is only honest when all four of these hold, which is why
+        this is one property rather than four template conditions:
+
+        * There is a club, and its **own website is showing our events** -- see
+          ``Club.embeds_events_on_website``. Without that the generated sentence is read here, on
+          a page the admin is already looking at, and nagging about it is noise.
+        * The event exists and is the generated one. A manual event was typed by a person, so
+          there is nothing to improve.
+        * **Neither** the title nor the description has been typed by hand. Either one is somebody
+          having already made this decision, and the answer "I only wanted to change the title" is
+          a legitimate one to leave alone.
+        * The auction hasn't happened yet. Rewording the calendar entry for last spring changes
+          what nobody is going to read.
+
+        Returns the event so the caller can link straight at it, or None.
+        """
+        if self.dismissed_customize_event_banner or not self.club_id:
+            return None
+        if self.pretty_much_over:
+            return None
+        if not self.club.embeds_events_on_website:
+            return None
+        event = self.calendar_events.filter(is_deleted=False).first()
+        if not event or not event.is_automatic:
+            return None
+        if event.title_is_custom or event.description_is_custom:
+            return None
+        return event
 
     @property
     def location_link(self):
