@@ -3547,3 +3547,67 @@ class MyAuctionsTests(RunActionTestCase):
         result = self._run("auctions_near_me", {})
         self.assertTrue(result["your_auctions"])
         self.assertIn("don't know where you are", result["summary"])
+
+
+class CheckInSkipsTheCountdownTests(PaletteAssistTestCase):
+    """``asks_first=False``: a write that runs inline because asking is most of its cost.
+
+    Checking somebody in is non-destructive, undone by ``undo_check_in``, and said thirty times in
+    a row by a person standing at a door with a queue behind them. What it loses is the countdown
+    card; what it keeps is every permission check, because both paths go through ``run_action``.
+    """
+
+    def setUp(self):
+        super().setUp()
+        # ``use_check_in_mode`` is a property over these two, and ``check_in`` refuses an auction
+        # that does not use it at all.
+        self.in_person_auction.manage_users_through_club = "checkin"
+        if not self.in_person_auction.club:
+            self.in_person_auction.club = Club.objects.create(name="Door Club", abbreviation="DC")
+        self.in_person_auction.save()
+        self.assertTrue(self.in_person_auction.use_check_in_mode)
+        self.tos = self.in_person_buyer  # user_with_no_lots, bidder 555
+
+    def test_it_runs_in_the_assist_call_rather_than_coming_back_as_a_card(self):
+        self._script({"action": "check_in", "params": {"person": "555"}, "summary": "Check in bidder 555"})
+        data = self._assist("check in bidder 555").json()
+        self.assertEqual(data["kind"], "done", data)
+        self.tos.refresh_from_db()
+        self.assertIsNotNone(self.tos.checked_in, "the write should have happened in the assist call")
+
+    def test_a_write_that_does_ask_still_asks(self):
+        """The contrast, in the same fixture: undoing one destroys an answer, so it counts down."""
+        self._script({"action": "undo_check_in", "params": {"person": "555"}, "summary": "Undo that check-in"})
+        self.assertEqual(self._assist("undo bidder 555's check in").json()["kind"], "countdown")
+
+    def test_the_execute_endpoint_still_honours_it_for_a_page_that_was_already_open(self):
+        """Nothing offers a countdown for it now, so this is only reached by a stale tab.
+
+        Refusing a write the server is perfectly willing to do, because it would rather not have
+        been asked twice, is a worse answer than doing it -- and execute re-checks everything.
+        """
+        data = self._execute("check_in", {"person": "555"}).json()
+        self.assertEqual(data["kind"], "done", data)
+
+    def test_it_still_reaches_the_undo_stack(self):
+        """Skipping the card must not skip the undo stack.
+
+        It did, and the failure was worse than not undoing: ``undo_last`` found the entry from
+        whatever the person had done *before* the check-in and undid that instead.
+        """
+        # The stack lives in the shared cache and is keyed on the user's pk, which is reused
+        # between tests in this class -- see [[parallel-workers-share-one-cache]].
+        cache.delete(palette_actions._undo_key(self.user))
+        self._script({"action": "check_in", "params": {"person": "555"}, "summary": "Check in bidder 555"})
+        self.assertEqual(self._assist("check in bidder 555").json()["kind"], "done")
+        stack = palette_actions._undo_stack(self.user)
+        self.assertEqual([entry["was"] for entry in stack], ["check_in"])
+
+    def test_a_plain_participant_is_still_refused(self):
+        """Losing the card must not lose the gate. The gate was never the card."""
+        self._clear_throttles(self.member)
+        self._script({"action": "check_in", "params": {"person": "555"}, "summary": "Check in bidder 555"})
+        data = self._assist("check in bidder 555", user=self.member).json()
+        self.assertNotEqual(data["kind"], "done", data)
+        self.tos.refresh_from_db()
+        self.assertIsNone(self.tos.checked_in)

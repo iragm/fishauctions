@@ -1237,3 +1237,675 @@ class AssistantSkillRequestsPageTests(StandardTestCase):
         self.client.post(self.url, {"pk": self.row.pk, "status": "done"})
         self.row.refresh_from_db()
         self.assertEqual(self.row.status, "new")
+
+    def test_it_comes_back_to_the_tab_it_was_posted_from(self):
+        self.admin_user.is_superuser = True
+        self.admin_user.save()
+        self.client.login(username="admin_user", password="testpassword")
+        response = self.client.post(self.url, {"pk": self.row.pk, "status": "planned", "filter": "planned"})
+        self.assertEqual(response["Location"], f"{self.url}?status=planned")
+
+    def test_the_referrer_is_never_where_it_goes(self):
+        """Built out of reverse() and one validated word. A referrer is an open redirect."""
+        self.admin_user.is_superuser = True
+        self.admin_user.save()
+        self.client.login(username="admin_user", password="testpassword")
+        response = self.client.post(
+            self.url,
+            {"pk": self.row.pk, "status": "done", "filter": "https://evil.example/"},
+            HTTP_REFERER="https://evil.example/",
+        )
+        self.assertEqual(response["Location"], self.url)
+
+
+class PointsDeskTests(ClubSkillTestCase):
+    """The breeder award review desk: what's waiting, deciding it, and the seller's own side.
+
+    The fixture is the shape a club's points backlog actually has: one lot waiting for a decision,
+    one already denied, and one whose seller never ticked "I bred this" -- which is the third
+    question ("show me lots that should have been marked bap but weren't") and the one that has no
+    other way of being asked.
+    """
+
+    def setUp(self):
+        super().setUp()
+        from auctions.models import Category
+
+        self.club.enable_breeder_award_program = True
+        # Off, or every lot would be awarded the moment it sold and there would be no queue. This
+        # is the setting a club that reviews its own points is running with by definition.
+        self.club.auto_add_points = False
+        self.club.min_quantity = 1
+        self.club.save()
+        self.seller_member = ClubMember.objects.create(
+            club=self.club, user=self.user, name="Selling Sam", email="sam@example.com"
+        )
+        self.category = Category.objects.create(name="Points Cichlids", bap_points=4)
+        self.club_auction = Auction.objects.create(
+            created_by=self.admin_user,
+            club=self.club,
+            title="Points Spring Auction",
+            is_online=False,
+            date_start=timezone.now() - datetime.timedelta(days=3),
+            date_end=timezone.now() - datetime.timedelta(days=1),
+            winning_bid_percent_to_club=25,
+            lot_entry_fee=0,
+            unsold_lot_fee=0,
+            tax=0,
+            promote_this_auction=False,
+        )
+        location = PickupLocation.objects.create(
+            name="Points Hall",
+            auction=self.club_auction,
+            pickup_time=timezone.now() + datetime.timedelta(days=1),
+        )
+        self.seller_tos = AuctionTOS.objects.create(
+            user=self.user, auction=self.club_auction, pickup_location=location, bidder_number="601"
+        )
+        self.buyer_tos = AuctionTOS.objects.create(
+            user=self.userB, auction=self.club_auction, pickup_location=location, bidder_number="602"
+        )
+        self.pending_lot = self._lot("Waiting Wagtails", bred=True)
+        self.denied_lot = self._lot("Denied Danios", bred=True, manually_approved=True)
+        self.missed_lot = self._lot("Forgot The Box Barbs", bred=False)
+
+    def _lot(self, name, *, bred, manually_approved=False, sold=True):
+        return Lot.objects.create(
+            lot_name=name,
+            auction=self.club_auction,
+            auctiontos_seller=self.seller_tos,
+            auctiontos_winner=self.buyer_tos if sold else None,
+            winning_price=12 if sold else None,
+            active=False,
+            quantity=6,
+            i_bred_this_fish=bred,
+            manually_approved=manually_approved,
+            species_category=self.category,
+            date_end=timezone.now() - datetime.timedelta(days=1),
+        )
+
+    def _names(self, result):
+        return {row["name"].strip("«»") for row in result.get("lots", [])}
+
+    # --- the queue ----------------------------------------------------------
+
+    def test_pending_is_what_the_desk_has_to_decide(self):
+        result = self._run("points_queue", {"club": self.club.name}, user=self.admin_user)
+        self.assertTrue(result.get("found"), result)
+        self.assertEqual(self._names(result), {"Waiting Wagtails"})
+
+    def test_denied_lots_from_one_auction(self):
+        result = self._run(
+            "points_queue",
+            {"club": self.club.name, "status": "denied", "auction": "Points Spring"},
+            user=self.admin_user,
+        )
+        self.assertEqual(self._names(result), {"Denied Danios"})
+
+    def test_the_word_last_means_the_clubs_most_recent_auction(self):
+        result = self._run(
+            "points_queue", {"club": self.club.name, "status": "denied", "auction": "last"}, user=self.admin_user
+        )
+        self.assertEqual(self._names(result), {"Denied Danios"})
+
+    def test_lots_the_seller_never_marked_as_bred(self):
+        result = self._run("points_queue", {"club": self.club.name, "status": "missed"}, user=self.admin_user)
+        self.assertEqual(self._names(result), {"Forgot The Box Barbs"})
+
+    def test_a_pending_row_says_what_approving_it_would_give(self):
+        result = self._run("points_queue", {"club": self.club.name}, user=self.admin_user)
+        row = result["lots"][0]
+        self.assertEqual(row["points_if_approved"], 5)  # the club's points_per_lot, not the category's 4
+        self.assertEqual(row["the_site_says"], "eligible")
+
+    def test_a_lot_name_is_fenced(self):
+        """Forty characters somebody else typed, read by an agent holding the write scope."""
+        result = self._run("points_queue", {"club": self.club.name}, user=self.admin_user)
+        self.assertTrue(result["lots"][0]["name"].startswith("«"))
+
+    def test_a_status_nobody_recognises_is_refused_rather_than_defaulted(self):
+        """Quietly answering "pending" hands back a real list that is not the one asked for."""
+        result = self._run("points_queue", {"club": self.club.name, "status": "unsold"}, user=self.admin_user)
+        self.assertIn("isn't a status I know", result.get("error", ""))
+
+    def test_a_stranger_sees_nothing(self):
+        result = self._run("points_queue", {"club": self.club.name}, user=self.userB)
+        self.assertIn("error", result)
+
+    def test_a_club_with_no_program_says_so_rather_than_refusing_a_permission(self):
+        self.club.enable_breeder_award_program = False
+        self.club.save()
+        result = self._run("points_queue", {"club": self.club.name}, user=self.admin_user)
+        self.assertIn("doesn't run a breeder award program", result.get("error", ""))
+
+    # --- deciding one -------------------------------------------------------
+
+    def test_approving_with_no_number_uses_the_clubs_own_rules(self):
+        from auctions.models import BapAward
+
+        result = self._run("review_points", {"lot_id": self.pending_lot.pk}, user=self.admin_user)
+        self.assertTrue(result.get("ok"), result)
+        award = BapAward.objects.get(lot=self.pending_lot)
+        self.assertEqual(award.points, 5)
+        self.assertEqual(award.club_member, self.seller_member)
+        self.assertEqual(award.awarded_by, self.admin_user)
+        self.pending_lot.refresh_from_db()
+        self.assertEqual(self.pending_lot.bap_points_awarded, 5)
+        self.assertTrue(self.pending_lot.manually_approved)
+
+    def test_a_number_overrides_the_default(self):
+        from auctions.models import BapAward
+
+        result = self._run("review_points", {"lot_id": self.pending_lot.pk, "points": 20}, user=self.admin_user)
+        self.assertTrue(result.get("ok"), result)
+        self.assertEqual(BapAward.objects.get(lot=self.pending_lot).points, 20)
+
+    def test_finding_the_lot_by_its_number(self):
+        result = self._run(
+            "review_points",
+            {"lot": str(self.pending_lot.lot_number_int), "club": self.club.name},
+            user=self.admin_user,
+        )
+        self.assertTrue(result.get("ok"), result)
+        self.assertEqual(result["lot_number"], self.pending_lot.lot_number_display)
+
+    def test_denying_leaves_no_award_and_takes_it_off_the_queue(self):
+        from auctions.models import BapAward
+
+        result = self._run("review_points", {"lot_id": self.pending_lot.pk, "decision": "deny"}, user=self.admin_user)
+        self.assertTrue(result.get("ok"), result)
+        self.assertFalse(BapAward.objects.filter(lot=self.pending_lot).exists())
+        self.pending_lot.refresh_from_db()
+        self.assertTrue(self.pending_lot.manually_approved)
+        queue = self._run("points_queue", {"club": self.club.name}, user=self.admin_user)
+        self.assertEqual(self._names(queue), set())
+
+    def test_undo_puts_it_back_on_the_queue(self):
+        self._run("review_points", {"lot_id": self.pending_lot.pk, "decision": "deny"}, user=self.admin_user)
+        result = self._run("review_points", {"lot_id": self.pending_lot.pk, "decision": "undo"}, user=self.admin_user)
+        self.assertTrue(result.get("ok"), result)
+        queue = self._run("points_queue", {"club": self.club.name}, user=self.admin_user)
+        self.assertEqual(self._names(queue), {"Waiting Wagtails"})
+
+    def test_undoing_a_lot_nobody_has_decided_is_a_quiet_no_op(self):
+        """It declares itself idempotent, so a retried call must not come back an error."""
+        from auctions.models import ClubHistory
+
+        result = self._run("review_points", {"lot_id": self.pending_lot.pk, "decision": "undo"}, user=self.admin_user)
+        self.assertTrue(result.get("ok"), result)
+        self.assertFalse(ClubHistory.objects.filter(club=self.club, applies_to="BAP").exists())
+
+    def test_every_decision_lands_in_the_clubs_history(self):
+        """Including undo, which used to roll back the other two and leave no trace at all."""
+        from auctions.models import ClubHistory
+
+        for decision in ("approve", "deny", "undo"):
+            self._run("review_points", {"lot_id": self.pending_lot.pk, "decision": decision}, user=self.admin_user)
+        lines = ClubHistory.objects.filter(club=self.club, applies_to="BAP").count()
+        self.assertEqual(lines, 3)
+
+    def test_a_stranger_cannot_decide_anything(self):
+        from auctions.models import BapAward
+
+        result = self._run("review_points", {"lot_id": self.pending_lot.pk}, user=self.userB)
+        self.assertIn("error", result)
+        self.assertFalse(BapAward.objects.filter(lot=self.pending_lot).exists())
+
+    def test_a_seller_who_is_not_a_member_has_nobody_to_credit(self):
+        from auctions.models import BapAward
+
+        self.seller_member.is_deleted = True
+        self.seller_member.save()
+        result = self._run("review_points", {"lot_id": self.pending_lot.pk}, user=self.admin_user)
+        self.assertIn("error", result)
+        self.assertFalse(BapAward.objects.filter(lot=self.pending_lot).exists())
+
+    def test_hap_points_at_a_club_with_no_separate_hap_are_refused_by_name(self):
+        """A refusal a click cannot produce: the page only ever shows the one column."""
+        result = self._run("review_points", {"lot_id": self.pending_lot.pk, "hap_points": 5}, user=self.admin_user)
+        self.assertIn("separate HAP", result.get("error", ""))
+
+    def test_an_unknown_decision_is_refused_rather_than_guessed(self):
+        result = self._run("review_points", {"lot_id": self.pending_lot.pk, "decision": "maybe"}, user=self.admin_user)
+        self.assertIn("error", result)
+
+    # --- the seller's own side ----------------------------------------------
+
+    def test_my_points_says_what_they_have(self):
+        from auctions.models import BapAward
+
+        BapAward.objects.create(club_member=self.seller_member, date=timezone.now().date(), points=17)
+        result = self._run("my_points", {"auction": "Points Spring"}, user=self.user)
+        self.assertTrue(result.get("found"), result)
+        self.assertEqual(result["points"]["clubs"][0]["points"]["bap"], 17)
+
+    def test_the_summary_names_every_track_the_club_runs(self):
+        """A plant club's whole answer is in the HAP column."""
+        from auctions.models import BapAward
+
+        self.club.separate_hap = True
+        self.club.save()
+        BapAward.objects.create(club_member=self.seller_member, date=timezone.now().date(), hap_points=9)
+        result = self._run("my_points", {"club": "palette-aquarium-society"}, user=self.user)
+        self.assertIn("9 HAP", result["summary"])
+
+    def test_my_points_forecasts_the_auction(self):
+        result = self._run("my_points", {"auction": "Points Spring"}, user=self.user)
+        forecast = result["points"]["this_auction"]
+        self.assertEqual(forecast["already_awarded"], 0)
+        # Only the one lot that is eligible and undecided: the denied one is decided, and the one
+        # whose box was never ticked is not in the program at all.
+        self.assertEqual(forecast["still_to_come"], 5)
+
+    def test_an_awarded_lot_is_reported_as_awarded_rather_than_forecast_twice(self):
+        self._run("review_points", {"lot_id": self.pending_lot.pk}, user=self.admin_user)
+        result = self._run("my_points", {"auction": "Points Spring"}, user=self.user)
+        forecast = result["points"]["this_auction"]
+        self.assertEqual(forecast["already_awarded"], 5)
+        self.assertEqual(forecast["still_to_come"], 0)
+
+    def test_an_unsold_lot_still_counts_towards_if_they_all_sell(self):
+        self._lot("Unsold Uarus", bred=True, sold=False)
+        result = self._run("my_points", {"auction": "Points Spring"}, user=self.user)
+        self.assertEqual(result["points"]["this_auction"]["still_to_come"], 10)
+
+    def test_somebody_in_no_points_club_is_told_so_rather_than_given_a_zero(self):
+        result = self._run("my_points", {}, user=self.user_with_no_lots)
+        self.assertFalse(result.get("found"))
+        self.assertIn("breeder award program", result["summary"])
+
+
+class PlaceBidTests(SkillTestCase):
+    """'bid $20 on lot 14' — the one write on this list with no way back."""
+
+    def setUp(self):
+        super().setUp()
+        # An open online lot belonging to somebody else, so there is something legitimate to bid on.
+        self.online_auction.date_start = timezone.now() - datetime.timedelta(hours=1)
+        self.online_auction.date_end = timezone.now() + datetime.timedelta(days=2)
+        self.online_auction.save()
+        self.for_sale = Lot.objects.create(
+            lot_name="A lot worth bidding on",
+            auction=self.online_auction,
+            auctiontos_seller=self.online_tos,
+            user=self.user,
+            quantity=1,
+            reserve_price=5,
+            active=True,
+            date_end=self.online_auction.date_end,
+        )
+        # ``Lot.bidding_allowed_on`` holds bidding off a lot for its first 20 minutes, and
+        # ``date_posted`` is auto_now_add, so it has to be pushed back after the insert.
+        Lot.objects.filter(pk=self.for_sale.pk).update(date_posted=timezone.now() - datetime.timedelta(hours=1))
+        self.for_sale.refresh_from_db()
+
+    def test_a_bid_is_placed_through_the_lot_page_own_code(self):
+        result = self._run("place_bid", {"lot_id": self.for_sale.pk, "amount": 10}, user=self.user_with_no_lots)
+        self.assertNotIn("error", result)
+        self.for_sale.refresh_from_db()
+        self.assertEqual(self.for_sale.high_bidder.pk, self.user_with_no_lots.pk)
+
+    def test_the_answer_says_it_cannot_be_taken_back(self):
+        result = self._run("place_bid", {"lot_id": self.for_sale.pk, "amount": 10}, user=self.user_with_no_lots)
+        self.assertIn("cannot_be_undone", result)
+        # No undo block at all: there is nothing that reverses a bid, and offering one would be a
+        # promise this site has never been able to keep.
+        self.assertNotIn("undo", result)
+
+    def test_bidding_on_your_own_lot_is_refused_in_the_lot_page_own_words(self):
+        result = self._run("place_bid", {"lot_id": self.for_sale.pk, "amount": 10}, user=self.user)
+        self.assertIn("error", result)
+        self.assertIn("your own lot", result["error"])
+
+    def test_under_the_reserve_is_refused_rather_than_rounded_up(self):
+        result = self._run("place_bid", {"lot_id": self.for_sale.pk, "amount": 1}, user=self.user_with_no_lots)
+        self.assertIn("error", result)
+        self.assertEqual(self.for_sale.bids.count(), 0)
+
+    def test_no_amount_is_a_question(self):
+        result = self._run("place_bid", {"lot_id": self.for_sale.pk}, user=self.user_with_no_lots)
+        self.assertIn("more_info_needed", result)
+
+    def test_a_host_is_told_to_ask_first(self):
+        """``destructive`` here means "cannot be taken back", not "overwrites a row"."""
+        from auctions.mcp import tools
+
+        action = palette_actions.get_action("place_bid")
+        self.assertTrue(action.destructive)
+        self.assertTrue(action.asks_first)
+        self.assertFalse(tools.idempotent(action), "two calls are two bids")
+
+
+class InvoiceLineTests(SkillTestCase):
+    """Looking at an invoice, and putting a line on it that isn't a lot."""
+
+    def setUp(self):
+        super().setUp()
+        self.buyer_invoice, _created = Invoice.objects.get_or_create(auctiontos_user=self.in_person_buyer)
+        Invoice.objects.filter(pk=self.buyer_invoice.pk).update(status="DRAFT", auction=self.in_person_auction)
+        self.buyer_invoice.refresh_from_db()
+
+    def _add(self, params, user=None):
+        payload = {"auction": self.in_person_auction.slug}
+        payload.update(params)
+        return self._run("add_invoice_adjustment", payload, user=user or self.admin_user)
+
+    def test_a_charge_is_added_as_a_line(self):
+        result = self._add({"person": "555", "label": "raffle", "amount": 5})
+        self.assertTrue(result.get("ok"), result)
+        adjustment = self.buyer_invoice.invoiceadjustment_set.get()
+        self.assertEqual(adjustment.adjustment_type, "ADD")
+        self.assertEqual(adjustment.amount, 5)
+        self.assertEqual(adjustment.notes, "raffle")
+        self.assertEqual(adjustment.user, self.admin_user)
+
+    def test_a_negative_amount_is_a_discount(self):
+        result = self._add({"person": "555", "label": "helped pack up", "amount": -10})
+        self.assertTrue(result.get("ok"), result)
+        adjustment = self.buyer_invoice.invoiceadjustment_set.get()
+        self.assertEqual(adjustment.adjustment_type, "DISCOUNT")
+        self.assertEqual(adjustment.amount, 10)
+
+    def test_a_settled_invoice_refuses(self):
+        Invoice.objects.filter(pk=self.buyer_invoice.pk).update(status="PAID")
+        result = self._add({"person": "555", "label": "raffle", "amount": 5})
+        self.assertIn("error", result)
+        self.assertEqual(self.buyer_invoice.invoiceadjustment_set.count(), 0)
+
+    def test_nothing_is_not_an_adjustment(self):
+        result = self._add({"person": "555", "label": "raffle", "amount": 0})
+        self.assertIn("error", result)
+
+    def test_a_line_with_no_label_is_a_question(self):
+        result = self._add({"person": "555", "amount": 5})
+        self.assertIn("more_info_needed", result)
+
+    def test_a_participant_cannot_adjust_anybody(self):
+        result = self._add({"person": "555", "label": "raffle", "amount": 5}, user=self.user_with_no_lots)
+        self.assertIn("error", result)
+        self.assertEqual(self.buyer_invoice.invoiceadjustment_set.count(), 0)
+
+    def test_the_change_is_in_the_auction_history(self):
+        from auctions.models import AuctionHistory
+
+        self._add({"person": "555", "label": "raffle", "amount": 5})
+        self.assertTrue(
+            AuctionHistory.objects.filter(
+                auction=self.in_person_auction, applies_to="INVOICES", action__contains="raffle"
+            ).exists()
+        )
+
+    def test_an_admin_can_read_somebody_elses_invoice(self):
+        result = self._run(
+            "find_invoice", {"person": "555", "auction": self.in_person_auction.slug}, user=self.admin_user
+        )
+        self.assertTrue(result["found"])
+        self.assertEqual(result["bidder_number"], "555")
+        self.assertIn("url", result["invoice"])
+
+    def test_a_participant_cannot_read_somebody_elses(self):
+        result = self._run(
+            "find_invoice", {"person": "502", "auction": self.in_person_auction.slug}, user=self.user_with_no_lots
+        )
+        self.assertIn("error", result)
+        self.assertIn("admin", result["error"].lower())
+
+    def test_a_participant_can_read_their_own(self):
+        result = self._run("find_invoice", {"auction": self.in_person_auction.slug}, user=self.user_with_no_lots)
+        self.assertTrue(result["found"])
+        self.assertIsNone(result["person"])
+
+    def test_the_lines_on_it_come_back_with_it(self):
+        self._add({"person": "555", "label": "raffle", "amount": 5})
+        result = self._run(
+            "find_invoice", {"person": "555", "auction": self.in_person_auction.slug}, user=self.admin_user
+        )
+        self.assertEqual([line["amount"] for line in result["adjustments"]], ["+$5.00"])
+
+    def test_an_invoice_answers_at_its_own_address(self):
+        """``invoice://{auction}/{person}`` — the first resource about a pair of things."""
+        from auctions.mcp import resources
+
+        matched = resources.match(f"invoice://{self.in_person_auction.slug}/555")
+        self.assertIsNotNone(matched)
+        template, arguments = matched
+        self.assertEqual(template.action, "find_invoice")
+        self.assertEqual(arguments, {"auction": self.in_person_auction.slug, "person": "555"})
+
+    def test_a_write_points_at_the_invoice_it_changed(self):
+        from auctions.mcp import resources
+
+        result = self._add({"person": "555", "label": "raffle", "amount": 5})
+        links = resources.links_for("add_invoice_adjustment", result[palette_actions.KEY_ABOUT])
+        self.assertIn(f"invoice://{self.in_person_auction.slug}/555", [link["uri"] for link in links])
+
+
+class SendingAMembershipCardTests(ClubSkillTestCase):
+    """Emailing a card: the caller's own, and — new — another member's."""
+
+    def setUp(self):
+        super().setUp()
+        self.club.show_member_barcode = True
+        self.club.save()
+        self.club_member.membership_number = 4100
+        self.club_member.save()
+        # The caller's own membership, so the "no person" half has something to send.
+        self.club_admin.membership_number = 4001
+        self.club_admin.save()
+
+    def _send(self, params, user=None):
+        return self._run("send_membership_card", params, user=user or self.admin_user)
+
+    def test_an_admin_can_send_another_members_card(self):
+        result = self._send({"person": "Renewable Rita", "club": self.club.name})
+        self.assertTrue(result.get("ok"), result)
+        self.assertIn("rita@example.com", result["summary"])
+        # Sent, not shown. See MembershipCardPrivacyTests for the whole of that line.
+        self.assertNotIn("membership", result)
+
+    def test_sending_somebody_elses_card_is_in_the_club_history(self):
+        from auctions.models import ClubHistory
+
+        self._send({"person": "Renewable Rita", "club": self.club.name})
+        self.assertTrue(ClubHistory.objects.filter(club=self.club, action__contains="rita@example.com").exists())
+
+    def test_the_address_is_the_one_on_the_membership_and_not_one_in_the_request(self):
+        """There is no parameter for an address, which is what makes widening this safe."""
+        action = palette_actions.get_action("send_membership_card")
+        self.assertEqual(set(action.params), {"person", "club"})
+
+    def test_the_persons_name_is_never_read_as_the_club(self):
+        """``_club_or_problem(also=…)`` takes a *club* hint; ``person`` is not one."""
+        result = self._send({"person": "Renewable Rita"})
+        self.assertTrue(result.get("ok"), result)
+
+    def test_a_member_with_no_email_is_refused_rather_than_silently_dropped(self):
+        ClubMember.objects.filter(pk=self.club_member.pk).update(email="")
+        result = self._send({"person": "Renewable Rita", "club": self.club.name})
+        self.assertIn("error", result)
+
+    def test_a_do_not_contact_member_is_refused_exactly_as_the_page_refuses_them(self):
+        ClubMember.objects.filter(pk=self.club_member.pk).update(contact_status="do_not_contact")
+        result = self._send({"person": "Renewable Rita", "club": self.club.name})
+        self.assertIn("error", result)
+        self.assertIn("do-not-contact", result["error"])
+
+    def test_somebody_with_no_club_permission_cannot_send_anybody_a_card(self):
+        result = self._send({"person": "Renewable Rita", "club": self.club.name}, user=self.user_with_no_lots)
+        self.assertIn("error", result)
+
+    def test_the_card_is_no_longer_drawn_in_the_senders_chat_window(self):
+        """It can send another member's card now, and their barcode is the wrong receipt for that."""
+        from auctions.mcp import widgets
+
+        self.assertNotIn("send_membership_card", widgets.TOOL_WIDGETS)
+
+
+class MembershipCardPrivacyTests(ClubSkillTestCase):
+    """A membership number and its barcode are a credential, not a club record.
+
+    Running a club is permission to *send* a member their card, to the address on their membership.
+    It is not permission to be handed the card — and an agent that has been handed one has put a
+    scannable way through the door into a transcript. Every route to ``_membership_card`` is
+    checked here, because a leak would be one keyword argument.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.club.show_member_barcode = True
+        self.club.save()
+        self.club_admin.membership_number = 4001
+        self.club_admin.save()
+        self.club_member.membership_number = 4100
+        self.club_member.save()
+
+    def _cards_in(self, result):
+        """Every membership card object anywhere in one result."""
+        found = []
+        if isinstance(result, dict):
+            for key, value in result.items():
+                if isinstance(value, dict) and "barcode_url" in value:
+                    found.append(value)
+                elif isinstance(value, list):
+                    for item in value:
+                        if isinstance(item, dict) and "barcode_url" in item:
+                            found.append(item)
+                found.extend(self._cards_in(value) if isinstance(value, dict) else [])
+        return found
+
+    def test_an_admin_sending_another_members_card_is_not_handed_it(self):
+        result = self._run(
+            "send_membership_card", {"person": "Renewable Rita", "club": self.club.name}, user=self.admin_user
+        )
+        self.assertTrue(result.get("ok"), result)
+        self.assertEqual(self._cards_in(result), [], "an admin was handed another member's barcode")
+        self.assertNotIn("4100", json.dumps(result), "an admin was handed another member's number")
+
+    def test_sending_your_own_card_still_shows_it_to_you(self):
+        result = self._run("send_membership_card", {"club": self.club.name}, user=self.admin_user)
+        self.assertTrue(result.get("ok"), result)
+        self.assertEqual(result["membership"]["membership_number"], 4001)
+
+    def test_my_membership_has_no_way_to_name_anybody(self):
+        action = palette_actions.get_action("my_membership")
+        self.assertEqual(set(action.params), {"club"})
+        self.assertEqual(action.aliases, set(), "an alias would be a second way to name a person")
+
+    def test_a_club_admin_asking_for_a_card_gets_their_own(self):
+        """``_my_memberships`` matches on ``ClubMember.user``; the club filter cannot reach past it."""
+        result = self._run("my_membership", {"club": self.club.name}, user=self.admin_user)
+        self.assertEqual(result["membership"]["membership_number"], 4001)
+        self.assertNotIn("4100", json.dumps(result))
+
+    def test_a_non_member_of_the_club_gets_nothing_at_all(self):
+        result = self._run("my_membership", {"club": self.club.name}, user=self.user_with_no_lots)
+        self.assertIn("error", result)
+        self.assertNotIn("4100", json.dumps(result))
+
+    def test_no_other_read_hands_out_a_barcode(self):
+        """The club-side reads an admin has: neither carries the scannable half."""
+        for name, params in (
+            ("list_club_members", {"club": self.club.name}),
+            ("describe_club", {"club": self.club.name}),
+        ):
+            result = self._run(name, params, user=self.admin_user)
+            self.assertNotIn("barcode", json.dumps(result).lower(), name)
+
+    def test_only_the_callers_own_membership_can_build_a_card(self):
+        """A guard on the shape rather than on one call site: every card comes from one helper."""
+        card = palette_actions._membership_card(self.club_admin)
+        self.assertIn("barcode_url", card)
+        self.assertIn("membership_number", card)
+
+
+class LotQueueTests(SkillTestCase):
+    """ "What lot are we on?" — and, unlike the web page, not admins only."""
+
+    def setUp(self):
+        super().setUp()
+        from auctions.models import LotQueueEntry
+
+        self.queued = []
+        for order, name in enumerate(["Ancistrus L144", "Java fern", "Ancistrus sp. 3", "A heater"]):
+            lot = Lot.objects.create(
+                lot_name=name,
+                auction=self.in_person_auction,
+                auctiontos_seller=self.admin_in_person_tos,
+                quantity=1,
+                custom_lot_number=f"200-{order}",
+            )
+            LotQueueEntry.objects.create(auction=self.in_person_auction, lot=lot, order=order)
+            self.queued.append(lot)
+
+    def _queue(self, params=None, user=None):
+        payload = {"auction": self.in_person_auction.slug}
+        payload.update(params or {})
+        return self._run("lot_queue", payload, user=user or self.user_with_no_lots)
+
+    def test_a_plain_bidder_can_read_the_queue(self):
+        """The Lot queue *page* is admin-only. This is the one place the two differ on purpose."""
+        result = self._queue()
+        self.assertTrue(result["found"], result)
+        self.assertEqual(result["current_lot"]["lot_number"], self.queued[0].lot_number_display)
+
+    def test_it_is_a_read_and_asks_nobody(self):
+        action = palette_actions.get_action("lot_queue")
+        self.assertEqual(action.danger, palette_actions.DANGER_SAFE)
+
+    def test_a_query_answers_are_there_any_ancistrus_selling_soon(self):
+        result = self._queue({"query": "ancistrus"})
+        self.assertEqual(result["count"], 2)
+        self.assertEqual(
+            [row["lot_number"] for row in result["queue"]],
+            [self.queued[0].lot_number_display, self.queued[2].lot_number_display],
+        )
+
+    def test_a_match_reports_where_it_really_is_in_the_running_order(self):
+        """Third in the queue has to read as third, not as "second in the two things I matched"."""
+        result = self._queue({"query": "ancistrus"})
+        self.assertEqual([row["position"] for row in result["queue"]], ["now", 3])
+
+    def test_nothing_matching_says_so_rather_than_answering_with_the_whole_queue(self):
+        result = self._queue({"query": "discus"})
+        self.assertFalse(result["found"])
+        self.assertEqual(result["queue"], [])
+        self.assertIn("discus", result["summary"])
+
+    def test_a_long_queue_pages(self):
+        result = self._queue({"limit": 2})
+        self.assertEqual(result["showing"], 2)
+        self.assertIn("offset=2", result["summary"])
+
+    def test_an_online_auction_has_no_queue_and_says_why(self):
+        result = self._run("lot_queue", {"auction": self.online_auction.slug}, user=self.user_with_no_lots)
+        self.assertIn("error", result)
+        self.assertIn("online auction", result["error"])
+
+    def test_the_selling_console_widget_is_gone(self):
+        from auctions.mcp import widgets
+
+        self.assertNotIn("lot_queue", widgets.TOOL_WIDGETS)
+        self.assertNotIn("ui://auction.fish/winners", widgets.WIDGETS)
+        for name in ("set_lot_winner", "no_sale", "undo_sale"):
+            self.assertNotIn(name, widgets.TOOL_WIDGETS, f"{name} still draws a form")
+
+
+class MemberListPrivacyTests(ClubSkillTestCase):
+    """What a member row says, and what it deliberately no longer says."""
+
+    def test_a_row_does_not_report_whether_they_have_signed_up_to_this_website(self):
+        result = self._run("list_club_members", {"club": self.club.name}, user=self.admin_user)
+        self.assertTrue(result["members"])
+        for row in result["members"]:
+            self.assertNotIn("has_an_account", row)
+
+    def test_asking_who_has_no_account_still_answers(self):
+        """The filter is a question somebody asked on purpose; the column was on every row."""
+        result = self._run("list_club_members", {"club": self.club.name, "status": "no_account"}, user=self.admin_user)
+        # Fenced, like every other name somebody else typed that reaches a model.
+        self.assertEqual([row["name"] for row in result["members"]], ["«Renewable Rita»"])
+
+    def test_listing_members_is_a_read(self):
+        from auctions.mcp import tools
+
+        self.assertTrue(tools.read_only(palette_actions.get_action("list_club_members")))

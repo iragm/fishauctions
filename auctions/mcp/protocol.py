@@ -32,7 +32,7 @@ from django.conf import settings
 
 from auctions import palette_actions
 
-from . import prompts, resources, tools, widgets
+from . import icons, prompts, resources, tools, widgets
 
 logger = logging.getLogger(__name__)
 
@@ -147,7 +147,7 @@ def _initialize(caller: Caller, params: dict[str, Any]) -> dict[str, Any]:
         # conversation (Claude lists per session) or one press of Refresh (ChatGPT's app settings),
         # and the recovery path holds either way: ``tools.call_tool`` looks a name up in the whole
         # registry, so an agent that knows the name of a tool it was not offered can still call it
-        # and the resolver decides. ``/account/api-keys/`` says this in the page's own words.
+        # and the resolver decides. ``/ai/`` says this in the page's own words.
         "capabilities": {
             "tools": {"listChanged": False},
             # The ui:// widget documents and the addressable reads. ``subscribe`` and
@@ -169,6 +169,10 @@ def _initialize(caller: Caller, params: dict[str, Any]) -> dict[str, Any]:
             "name": SERVER_NAME,
             "title": getattr(settings, "SITE_DOMAIN", "") or SERVER_TITLE,
             "version": SERVER_VERSION,
+            # What somebody looks for by sight in a list of every connector they have added, which
+            # is the site's own mark and not one of the five tool icons. See auctions.mcp.icons.
+            "icons": icons.server(),
+            "websiteUrl": f"https://{icons.domain()}/",
         },
         "instructions": INSTRUCTIONS,
     }

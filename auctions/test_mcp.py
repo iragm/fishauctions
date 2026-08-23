@@ -23,7 +23,7 @@ from django.test import RequestFactory, SimpleTestCase
 from django.utils import timezone
 
 from auctions import palette_actions
-from auctions.mcp import protocol, tools
+from auctions.mcp import icons, prompts, protocol, resources, tools
 from auctions.models import UserAPIKey, UserData
 from auctions.test_support import isolated_cache
 from auctions.tests import StandardTestCase
@@ -438,6 +438,9 @@ class EndpointTests(StandardTestCase):
         self.assertEqual(set(result["capabilities"]), {"tools", "resources", "prompts", "completions"})
         self.assertTrue(result["serverInfo"]["name"])
         self.assertTrue(result["instructions"].strip())
+        # The site's own mark, for the connector list somebody picks this out of by sight.
+        self.assertTrue(result["serverInfo"]["icons"])
+        self.assertTrue(result["serverInfo"]["websiteUrl"].startswith("https://"))
 
     def test_an_unknown_protocol_version_in_the_body_falls_back_to_ours(self):
         result = self.result(self.rpc("initialize", {"protocolVersion": "1999-01-01"}))
@@ -767,11 +770,13 @@ class DiscoveryDocumentTests(StandardTestCase):
 
 @isolated_cache("mcp-opt-in")
 class OptInTests(StandardTestCase):
-    """``UserData.use_llm_search`` gates the whole feature, not just the page that explains it.
+    """There is no per-user opt-in on this endpoint, and there is still one on the account.
 
-    The flag is off by default and flipped per user while this is in beta. A rollout control that
-    covered only the instructions page would be decorative: a person could skip it, run whatever
-    OAuth flow their client offers, and be connected.
+    It used to require ``UserData.use_llm_search``, the flag that opens the natural-language
+    command palette, on the reasoning that the two are one beta reached two ways. They are not the
+    same feature: the palette spends *this site's* language-model budget on every keystroke, which
+    is what that flag is for, while an agent brings its own model and can do nothing its owner
+    could not do by clicking. What is still checked on every credential is ``is_active``.
     """
 
     url = "/mcp/"
@@ -795,19 +800,10 @@ class OptInTests(StandardTestCase):
             HTTP_MCP_PROTOCOL_VERSION=protocol.LATEST_PROTOCOL_VERSION,
         )
 
-    def test_a_key_belonging_to_somebody_not_opted_in_is_refused_with_a_403(self):
-        """A 403, deliberately, and it is the status that matters more than the refusal.
-
-        A 401 is an instruction to authenticate. A client that gets one here runs the whole OAuth
-        flow again, is issued another perfectly valid token, presents it, and is refused again --
-        a loop with no message in it anywhere and nothing on screen that says why. The 403 ends it
-        and carries the sentence that says what to do about it.
-        """
+    def test_a_key_works_without_the_command_palette_flag(self):
+        """The flag is about the palette. Connecting an agent does not go through it."""
         self._opt_in(self.user, False)
-        response = self.rpc()
-        self.assertEqual(response.status_code, 403)
-        self.assertNotIn("WWW-Authenticate", response)
-        self.assertIn("administrator", json.loads(response.content)["error"]["message"])
+        self.assertEqual(self.rpc().status_code, 200)
 
     def test_no_credential_at_all_is_still_a_401_with_a_challenge(self):
         """The other half: a 401 is what *starts* an OAuth flow, so it has to survive the change."""
@@ -820,48 +816,54 @@ class OptInTests(StandardTestCase):
         self.assertEqual(response.status_code, 401)
         self.assertIn("WWW-Authenticate", response)
 
-    def test_the_same_key_works_once_they_are_opted_in(self):
-        self._opt_in(self.user, True)
-        self.assertEqual(self.rpc().status_code, 200)
-
-    def test_turning_the_flag_back_off_disconnects_them(self):
+    def test_the_flag_makes_no_difference_either_way(self):
         self._opt_in(self.user, True)
         self.assertEqual(self.rpc().status_code, 200)
         self._opt_in(self.user, False)
-        self.assertEqual(self.rpc().status_code, 403)
+        self.assertEqual(self.rpc().status_code, 200)
+
+    def test_a_deactivated_account_is_still_a_403_and_not_a_reauth_loop(self):
+        """The one check that remains, and the status is the part that matters.
+
+        A 401 is an *instruction to authenticate*. A client that got one here would run the whole
+        OAuth flow again, be issued another perfectly valid credential, present it, and be refused
+        again -- a loop with no message in it anywhere. The 403 ends it and carries the sentence.
+        """
+        self.user.is_active = False
+        self.user.save()
+        response = self.rpc()
+        self.assertEqual(response.status_code, 403)
+        self.assertNotIn("WWW-Authenticate", response)
+        self.assertIn("no longer active", json.loads(response.content)["error"]["message"])
 
 
 class ConnectPageTests(StandardTestCase):
-    """The page that explains how to connect, and the same gate on it."""
+    """The page that explains how to connect. Open to everybody signed in."""
 
-    url = "/account/api-keys/"
+    url = "/ai/"
 
-    def test_somebody_not_opted_in_gets_the_explanation_not_a_403(self):
-        """This is the one page that says what connecting an assistant is.
-
-        A permission-denied page hands the person nothing to read and nothing to forward, which
-        is the opposite of what somebody who has just found out they can't have it yet needs.
-        """
+    def test_the_command_palette_flag_does_not_gate_this_page(self):
+        """Somebody with the palette switched off can still connect an agent, keys and all."""
         self.user.userdata.use_llm_search = False
         self.user.userdata.save()
         self.client.force_login(self.user)
         response = self.client.get(self.url)
         self.assertEqual(response.status_code, 200)
         body = response.content.decode()
-        self.assertIn("isn't switched on for your account yet", body)
-        # ...and nothing that issues or ends a credential is on the page.
-        self.assertNotIn("Create key", body)
-        self.assertNotIn("Disconnect", body)
+        self.assertIn("Create key", body)
+        self.assertNotIn("isn't switched on for your account yet", body)
 
-    def test_creating_a_key_is_refused_too(self):
-        """The explanation degrades; the credential form refuses."""
+    def test_creating_a_key_works_without_the_flag_too(self):
         self.user.userdata.use_llm_search = False
         self.user.userdata.save()
         self.client.force_login(self.user)
-        self.assertEqual(self.client.post(self.url, {"name": "sneaky"}).status_code, 403)
-        self.assertFalse(UserAPIKey.objects.filter(name="sneaky").exists())
+        self.client.post(self.url, {"name": "no-flag-needed"})
+        self.assertTrue(UserAPIKey.objects.filter(user=self.user, name="no-flag-needed").exists())
 
-    def test_it_renders_for_somebody_opted_in(self):
+    def test_signing_in_is_still_required(self):
+        self.assertNotEqual(self.client.get(self.url).status_code, 200)
+
+    def test_it_renders_the_connection_instructions(self):
         self.user.userdata.use_llm_search = True
         self.user.userdata.save()
         self.client.force_login(self.user)
@@ -951,17 +953,19 @@ class OAuthOptInTests(StandardTestCase):
             HTTP_MCP_PROTOCOL_VERSION=protocol.LATEST_PROTOCOL_VERSION,
         )
 
-    def test_a_token_for_somebody_not_opted_in_gets_a_403_not_a_reauth_loop(self):
+    def test_a_token_works_without_the_command_palette_flag(self):
         self.user.userdata.use_llm_search = False
         self.user.userdata.save()
-        response = self.ping(self.token_for(self.user))
+        self.assertEqual(self.ping(self.token_for(self.user)).status_code, 200)
+
+    def test_a_token_for_a_deactivated_account_is_a_403_not_a_reauth_loop(self):
+        """A 401 here would send the client round the whole OAuth flow to be refused again."""
+        token = self.token_for(self.user)
+        self.user.is_active = False
+        self.user.save()
+        response = self.ping(token)
         self.assertEqual(response.status_code, 403)
         self.assertNotIn("WWW-Authenticate", response)
-
-    def test_a_token_for_somebody_opted_in_still_works(self):
-        self.user.userdata.use_llm_search = True
-        self.user.userdata.save()
-        self.assertEqual(self.ping(self.token_for(self.user)).status_code, 200)
 
 
 class ConnectedAppsTests(StandardTestCase):
@@ -972,7 +976,7 @@ class ConnectedAppsTests(StandardTestCase):
     somebody who never made a key, and the only other route was the Django admin.
     """
 
-    url = "/account/api-keys/"
+    url = "/ai/"
 
     def setUp(self):
         super().setUp()
@@ -1212,3 +1216,223 @@ class ResultUrlTests(StandardTestCase):
         self.assertEqual(absolute["followups"][0]["url"], "https://auction.test/lots/1/")
         self.assertEqual(absolute["followups"][1]["url"], "https://example.com/", "already absolute")
         self.assertEqual(absolute["count"], 3)
+
+    def test_a_key_that_ends_in_url_is_a_url_too(self):
+        """``renew_url`` on the membership card went out relative and the Renew button did nothing.
+
+        The rule matched the key name ``url`` exactly, so the *second* link a resolver returned was
+        left alone -- and a relative href handed to ``app.openLink`` from inside a sandboxed iframe
+        resolves against nothing at all. A suffix rule costs nothing and cannot be forgotten the
+        next time a result grows a second link.
+        """
+        from auctions.mcp import tools as mcp_tools
+
+        payload = {"membership": {"renew_url": "/clubs/x/pay/", "barcode_url": "https://auction.test/b.svg"}}
+        absolute = mcp_tools._absolute(payload, lambda path: "https://auction.test" + path)
+        self.assertEqual(absolute["membership"]["renew_url"], "https://auction.test/clubs/x/pay/")
+        self.assertEqual(absolute["membership"]["barcode_url"], "https://auction.test/b.svg", "already absolute")
+
+    def test_the_membership_card_is_where_that_actually_bit(self):
+        from auctions.mcp import tools as mcp_tools
+
+        self.assertTrue(mcp_tools._is_url_key("renew_url"))
+        self.assertTrue(mcp_tools._is_url_key("url"))
+        self.assertFalse(mcp_tools._is_url_key("urls"))
+        self.assertFalse(mcp_tools._is_url_key("summary"))
+
+
+class IconTests(SimpleTestCase):
+    """Every primitive that may carry an icon carries one, and none of them costs much.
+
+    See :mod:`auctions.mcp.icons` for why they are URLs on this site rather than inlined ``data:``
+    URIs, and why there are five of them derived from the registry rather than fifty-four written
+    down by hand.
+    """
+
+    def setUp(self):
+        self.descriptors = tools.tool_descriptors(None)
+
+    def test_every_tool_carries_exactly_one_icon(self):
+        for descriptor in self.descriptors:
+            found = descriptor.get("icons")
+            self.assertTrue(found, f"{descriptor['name']} has no icon")
+            self.assertEqual(len(found), 1, f"{descriptor['name']} sends more than one")
+
+    def test_an_icon_is_an_absolute_url_a_host_can_fetch(self):
+        for descriptor in self.descriptors:
+            src = descriptor["icons"][0]["src"]
+            self.assertTrue(src.startswith("https://"), f"{descriptor['name']}: {src} is not fetchable")
+            self.assertIn("/static/mcp/", src)
+            self.assertEqual(descriptor["icons"][0]["mimeType"], icons.SVG)
+
+    def test_no_sizes_on_a_scalable_icon(self):
+        """``["any"]`` is twenty-five characters saying what SVG already says, once per tool.
+
+        Same arithmetic that keeps ``annotations.title`` and a defaulted ``idempotentHint`` out of
+        a descriptor: this list is paid for in full, in context, by every host every session.
+        """
+        for descriptor in self.descriptors:
+            self.assertNotIn("sizes", descriptor["icons"][0], descriptor["name"])
+
+    def test_the_five_are_all_that_are_used(self):
+        used = {descriptor["icons"][0]["src"].rsplit("/", 1)[-1] for descriptor in self.descriptors}
+        self.assertEqual(
+            used, {f"{name}.svg" for name in (icons.READ, icons.GO, icons.AUCTION, icons.CLUB, icons.EDIT)}
+        )
+
+    def test_a_read_is_a_magnifier_and_a_write_is_not(self):
+        by_name = {descriptor["name"]: descriptor["icons"][0]["src"] for descriptor in self.descriptors}
+        self.assertIn(f"{icons.READ}.svg", by_name["list_lots"])
+        self.assertIn(f"{icons.GO}.svg", by_name["go_to_page"])
+        self.assertIn(f"{icons.AUCTION}.svg", by_name["check_in"])
+        self.assertIn(f"{icons.CLUB}.svg", by_name["add_club_member"])
+
+    def test_the_icon_files_are_really_there(self):
+        """A broken image beside every tool is worse than no image, and it fails silently."""
+        from pathlib import Path
+
+        from django.conf import settings
+
+        root = Path(settings.BASE_DIR) / "auctions" / "static" / "mcp"
+        for name in (icons.READ, icons.GO, icons.AUCTION, icons.CLUB, icons.EDIT):
+            self.assertTrue((root / f"{name}.svg").exists(), f"{name}.svg is missing")
+
+    def test_the_prompts_and_the_resource_templates_carry_them_too(self):
+        for descriptor in prompts.descriptors():
+            self.assertTrue(descriptor.get("icons"), f"prompt {descriptor['name']} has no icon")
+        for descriptor in resources.template_descriptors() + resources.fixed_descriptors():
+            self.assertTrue(descriptor.get("icons"), f"resource {descriptor['name']} has no icon")
+
+    def test_a_widget_document_deliberately_has_none(self):
+        """A widget is rendered, not browsed. A thumbnail beside its name is a picture of nothing.
+
+        Deriving one would also collapse: four of the five are reads about an auction, so the five
+        would carry two distinct icons between them.
+        """
+        from auctions.mcp import widgets
+
+        for descriptor in widgets.resource_descriptors():
+            self.assertNotIn("icons", descriptor, f"{descriptor['name']} grew an icon")
+
+    def test_they_are_a_small_fraction_of_the_catalogue(self):
+        """The cost is real and this is the number to look at the day it stops being worth it."""
+        with_icons = len(json.dumps({"tools": self.descriptors}))
+        without = len(json.dumps({"tools": [{k: v for k, v in t.items() if k != "icons"} for t in self.descriptors]}))
+        self.assertLess(with_icons - without, without * 0.15, "icons are more than 15% of tools/list")
+
+
+class ResourceLinkTests(StandardTestCase):
+    """``resource_link`` blocks: "there is more about this, at this address" (MCP 2025-06-18).
+
+    They are built from ``palette_actions.KEY_ABOUT``, which the resolver writes because it is the
+    one holding the object. Nothing is sniffed out of the answer: ``auction`` is the slug in
+    ``_lot_echo`` and the *title* in ``list_lots``, and a URI built from a title does not resolve.
+    """
+
+    def setUp(self):
+        super().setUp()
+        UserData.objects.update(use_llm_search=True)
+
+    def _request_for(self, user):
+        request = RequestFactory().post("/mcp/")
+        request.user = user
+        return request
+
+    def _links(self, result):
+        return [block for block in result["content"] if block.get("type") == "resource_link"]
+
+    def test_a_read_about_an_auction_links_to_the_auction(self):
+        result = tools.call_tool(self._request_for(self.user), "list_lots", {"auction": self.online_auction.slug})
+        links = self._links(result)
+        self.assertIn(f"auction://{self.online_auction.slug}", [link["uri"] for link in links])
+
+    def test_a_link_is_a_uri_this_server_really_publishes(self):
+        result = tools.call_tool(self._request_for(self.user), "my_context", {})
+        for link in self._links(result):
+            self.assertIsNotNone(resources.match(link["uri"]), f"{link['uri']} matches no template")
+            self.assertEqual(link["type"], "resource_link")
+            self.assertTrue(link["name"])
+            self.assertTrue(link["title"])
+
+    def test_a_tool_never_links_to_its_own_answer(self):
+        """``describe_lot`` pointing at ``lot://…`` is a pointer at the document it just sent."""
+        links = resources.links_for("describe_lot", {"auction": "spring", "lot": "14"})
+        uris = [link["uri"] for link in links]
+        self.assertNotIn("lot://spring/14", uris)
+        self.assertIn("auction://spring", uris, "the auction it is in is the one worth having")
+
+    def test_what_goes_in_place_of_a_dropped_self_link_is_what_sits_underneath(self):
+        """``describe_auction`` has answered the auction, so it offers its lots and its people."""
+        uris = [link["uri"] for link in resources.links_for("describe_auction", {"auction": "spring"})]
+        self.assertEqual(uris, ["auction://spring/lots", "auction://spring/people"])
+        self.assertEqual(
+            [link["uri"] for link in resources.links_for("describe_club", {"club": "nec"})], ["club://nec/events"]
+        )
+
+    def test_a_tool_that_did_not_answer_the_top_level_thing_gets_only_that(self):
+        """The contrast: ``list_lots`` is not owed the people, which it did not ask about."""
+        uris = [link["uri"] for link in resources.links_for("list_lots", {"auction": "spring"})]
+        self.assertEqual(uris, ["auction://spring"])
+
+    def test_a_lot_result_links_to_the_lot_and_the_auction(self):
+        links = resources.links_for("edit_lot", {"auction": "spring", "lot": "14"})
+        self.assertEqual([link["uri"] for link in links], ["lot://spring/14", "auction://spring"])
+
+    def test_nothing_to_link_is_no_blocks_rather_than_an_empty_one(self):
+        self.assertEqual(resources.links_for("my_context", {}), [])
+        self.assertEqual(resources.links_for("my_context", None), [])
+
+    def test_the_number_of_links_is_bounded(self):
+        many = {"auctions": [f"auction-{index}" for index in range(50)]}
+        self.assertEqual(len(resources.links_for("my_context", many)), resources.MAX_LINKS)
+
+    def test_a_uri_this_server_cannot_build_is_dropped_rather_than_sent(self):
+        """A decoration must never be able to fail a call that otherwise worked."""
+        self.assertEqual(resources.links_for("my_context", {"auction": "one/two/three"}), [])
+
+    def test_the_bookkeeping_key_is_never_in_the_answer(self):
+        """``_about`` is ours. It is not part of what the tool said, on either surface."""
+        result = tools.call_tool(self._request_for(self.user), "my_context", {})
+        self.assertNotIn(palette_actions.KEY_ABOUT, json.loads(result["content"][0]["text"]))
+        self.assertNotIn(palette_actions.KEY_ABOUT, result["structuredContent"])
+
+
+class ConfirmationTierTests(SimpleTestCase):
+    """``asks_first`` is the palette's countdown, and it is not the read/write split."""
+
+    def test_checking_someone_in_does_not_ask_first(self):
+        """Non-destructive, undone by a tool that exists, and said thirty times at a door."""
+        self.assertFalse(palette_actions.get_action("check_in").asks_first)
+
+    def test_it_is_still_a_write_everywhere_that_matters(self):
+        """The opt-out is about a countdown card. It must not widen what MCP advertises."""
+        action = palette_actions.get_action("check_in")
+        self.assertEqual(action.danger, palette_actions.DANGER_CONFIRM)
+        self.assertFalse(tools.read_only(action))
+        descriptor = tools.descriptor(action)
+        self.assertFalse(descriptor["annotations"]["readOnlyHint"])
+        read_only_catalogue = {one["name"] for one in tools.tool_descriptors(None, writes=False)}
+        self.assertNotIn("check_in", read_only_catalogue, "a read-only credential must not be offered it")
+
+    def test_only_a_reversible_write_may_skip_the_countdown(self):
+        """The bar, enforced: confirm-tier, not destructive, and safe to repeat."""
+        for action in palette_actions.ACTIONS.values():
+            if action.asks_first:
+                continue
+            self.assertEqual(action.danger, palette_actions.DANGER_CONFIRM, f"{action.name} is not a write")
+            self.assertFalse(action.destructive, f"{action.name} destroys something and must ask")
+            self.assertTrue(tools.idempotent(action), f"{action.name} is not safe to repeat")
+
+    def test_everything_else_still_asks(self):
+        skipping = {name for name, action in palette_actions.ACTIONS.items() if not action.asks_first}
+        self.assertEqual(
+            skipping,
+            {"check_in", "watch_lot", "review_points"},
+            "a new action opted out of the countdown",
+        )
+
+    def test_a_points_decision_can_always_be_taken_back_by_the_same_tool(self):
+        """Which is why ``review_points`` is allowed to skip the card: undo is one of its own values."""
+        action = palette_actions.get_action("review_points")
+        self.assertIn("undo", action.params["decision"])
+        self.assertFalse(action.destructive)

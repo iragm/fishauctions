@@ -601,7 +601,12 @@ def build_system_prompt(user, page: dict[str, Any] | None = None, app_destinatio
     aren't pages and so can't be in the catalog, but they are places a user asks to be taken to, and
     the catalog holds a plausible wrong answer for each.
     """
-    context = json.dumps(palette_actions.user_context(user, page), indent=None, default=str)
+    # ``strip_internal`` because ``user_context`` also answers the ``my_context`` tool, where it
+    # carries the URIs a host can address things by. That is worth bytes there and is dead weight
+    # here, in a system prompt rebuilt on every keystroke.
+    context = json.dumps(
+        palette_actions.strip_internal(palette_actions.user_context(user, page)), indent=None, default=str
+    )
     pages = palette_routes.catalog_for_prompt(user)
     if app_destinations:
         pages += "\nIn the app, where this user is right now (native screens, same 'page' parameter):\n"
@@ -1189,7 +1194,7 @@ def lookup_payload(name: str, result: Any) -> str:
     ``auctions/test_palette_assist.py`` asserts the describe_* payloads fit without truncation. This
     is the backstop for the day a new field pushes one of them over anyway.
     """
-    body = json.dumps(result, default=str)
+    body = json.dumps(palette_actions.strip_internal(result), default=str)
     if len(body) <= MAX_LOOKUP_RESULT_CHARS:
         return f"Result of {name}: {body}"
     logger.warning("Lookup %s returned %s chars and was truncated to %s", name, len(body), MAX_LOOKUP_RESULT_CHARS)
@@ -1401,9 +1406,14 @@ def assist_stream(request, query: str, context: Any = None, path: str = ""):
         summary = reply["summary"]
         yield _progress(narrate_action(request, action, params))
 
-        if action.danger == palette_actions.DANGER_CONFIRM:
+        if action.danger == palette_actions.DANGER_CONFIRM and action.asks_first:
             # Do NOT execute. The client counts down and then calls the execute endpoint, which
             # runs the resolver (and therefore every permission check) from scratch.
+            #
+            # ``asks_first=False`` skips the card and runs the write here instead. It is still a
+            # write and still goes through ``run_action``, which is the gate; what it loses is the
+            # countdown, on the handful of actions that are non-destructive, idempotent and undone
+            # by a tool the assistant already has. See ``palette_actions.Action.asks_first``.
             usage_id = record_usage(user, result, query, KIND_COUNTDOWN, action.name)
             log_assist(user, query, KIND_COUNTDOWN)
             yield humanize_response(_countdown_response(request, action, params, summary, usage_id), user)
@@ -1411,6 +1421,13 @@ def assist_stream(request, query: str, context: Any = None, path: str = ""):
 
         action_result = palette_actions.run_action(request, action.name, params)
         response = _result_to_response(action, params, action_result, summary)
+        if response["kind"] != KIND_ERROR:
+            # The write that skipped the countdown still has to reach the undo stack. Without this
+            # "check bob in" then "undo that" did not fail -- it silently undid whatever the person
+            # had done *before* that, which is worse than refusing. A no-op unless the resolver
+            # said how to reverse itself, so it costs nothing on a safe action. The execute
+            # endpoint does the same for every write that does count down.
+            palette_actions.remember_undo(request.user, action.name, action_result)
         if response["kind"] == KIND_ERROR:
             # The action was understood but couldn't run (wrong auction, no permission, closed for
             # submissions). Keep the real reason -- it's specific and useful -- but offer the
@@ -1463,6 +1480,10 @@ def execute(request, name: str, params: Any, path: str = "") -> dict[str, Any]:
     if action.danger != palette_actions.DANGER_CONFIRM:
         # Safe actions already ran during assist; navigate actions are the client's job.
         return {"kind": KIND_ERROR, "message": "That isn't something to confirm."}
+    # ``asks_first=False`` is deliberately *not* refused here. Nothing offers a countdown for one
+    # any more, so this is only ever reached by a page that was open when the flag changed -- and
+    # refusing a write the server is perfectly willing to do, because it would rather not have been
+    # asked twice, is a worse answer than doing it. Everything below re-checks it from scratch.
     if not isinstance(params, dict):
         return {"kind": KIND_ERROR, "message": "Those instructions didn't make sense."}
     result = palette_actions.run_action(request, action.name, params)

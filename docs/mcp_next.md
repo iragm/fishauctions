@@ -29,6 +29,40 @@ what makes a prompt the only safe place on this server for a multi-step recipe. 
 body is interpolated except its own arguments, and a test enforces that — a prompt that could carry
 a lot description would be a prompt-injection surface with a menu entry.
 
+**`resource_link` blocks in tool results** (`resources.links_for`). A result that named an
+auction, a club or a lot now carries a link to the URI that *is* that thing, so a host can fetch
+the whole record without the model spending a turn choosing a tool and guessing a slug.
+
+The thing worth writing down is where the slug comes from. The obvious implementation reads it out
+of the answer, and the answer cannot be read: `auction` is the auction's **slug** in `_lot_echo`
+and its **title** in `list_lots` and `describe_lot` — both right where they are, and a URI built by
+guessing between them is a link that 404s. So the resolver says, in `palette_actions.KEY_ABOUT`
+(`_about`), which is bookkeeping and is stripped on every surface before anything reaches a person
+or a model. A tool never links to its own answer: `describe_lot` returning `lot://spring/14` is a
+pointer at the document it just sent, so that one is dropped — and what goes in its place is what
+sits *underneath* it, which is how `describe_auction` comes to offer the auction's lots and its
+people while `list_lots` offers only the auction. One of them has already answered the top-level
+thing and the other has not.
+
+The other design note is what is *not* linked. Rows in a long list are not: linking eight of a
+hundred lots is a sample nobody asked for, and `MAX_LINKS` is twelve because that is the shape of
+`my_context` — every club somebody belongs to and every auction running at once.
+
+**Icons on everything worth putting one on** (`auctions/mcp/icons.py`). Tools, prompts, the data
+resources and resource templates, and the server's own `serverInfo`, which also gained
+`websiteUrl`. Not the `ui://` widget documents: a widget is rendered rather than browsed, so a
+thumbnail beside its name is a picture of nothing.
+
+Two decisions worth keeping. They are **URLs on this site, not inlined `data:` URIs**: `tools/list`
+is paid for in full, in context, by every host every session, and five inlined SVGs at ~400 bytes
+each times sixty-odd tools is a real regression for decoration, where a URL is sixty. As shipped
+they are 9.7% of `tools/list` and a test fails the build above 15%. And there are **five, derived**
+— read off the danger tier and `tools.area_of`, exactly as the annotations are — rather than
+sixty-odd chosen by hand, so there is no second table to keep in step. No `sizes` on them either:
+they are SVG, every size is the right size, and `["any"]` is twenty-five characters saying so once
+per tool. The raster favicons in `serverInfo` are the one place a host has a real choice to make,
+and they are the one place `sizes` is sent.
+
 **Resource templates** (`auctions/mcp/resources.py`). `auction://{auction}`,
 `auction://{auction}/lots`, `auction://{auction}/people`, `lot://{auction}/{lot}`,
 `club://{club}`, `club://{club}/events`, plus the fixed `me://context` and `me://activity`. Each
@@ -47,14 +81,7 @@ reasoning is why `completion/complete` answers `ref/prompt` and refuses `ref/res
 
 ## Worth doing
 
-### 1. `resource_link` blocks in tool results (2025-06-18)
-
-A tool result may contain `resource_link` content blocks alongside text. `print_labels`,
-`go_to_page`, `renew_membership` and every `followups` entry are URLs stuffed into JSON today; as
-resource links they become something the host can render as a real link or offer to open. Small
-change (`mcp/tools.py::_result`), immediate polish, no new concepts.
-
-### 2. `_meta["anthropic/requiresUserInteraction"]` on the tools that deserve it
+### 1. `_meta["anthropic/requiresUserInteraction"]` on the tools that deserve it
 
 Claude-specific, read straight off `tools/list`: it forces the full permission prompt on **every**
 call, in every permission mode, with no "don't ask again" and no one-tap approval from Remote
@@ -64,22 +91,25 @@ which makes it a free improvement rather than something to rely on.
 Our `DANGER_CONFIRM` tier already knows which tools these are, but the tier is coarse — `check_in`
 is a confirm-tier write somebody does eighty times in an evening, and `send_club_announcement` is a
 confirm-tier write that reaches every member of the club at once and cannot be fully taken back.
+`Action.asks_first` has since drawn half of that line for the palette (`check_in` is the one action
+with it set to `False`), but it is the *cheap* half: it says which writes need no ceremony, not
+which ones need more. This entry is still the other half.
 
 Candidates, and only these: `send_club_announcement`, `retract_announcement`, `update_auction_setting`
-(it is the way in and out of `promote_this_auction`), `undo_sale`. Everything else stays as it is;
-a per-call prompt on `check_in` would get the whole connector switched off.
+(it is the way in and out of `promote_this_auction`), `undo_sale`, and `place_bid` — which is the
+strongest case on the list and arrived after it was written, being the only write here that nothing
+can take back. Everything else stays as it is; a per-call prompt on `check_in` would get the whole
+connector switched off.
+
+`place_bid` already carries `destructiveHint` for that reason, which is a widening of what that
+flag meant here (it was "overwrites a previous answer"; a bid overwrites nothing and is simply
+irreversible). Both are the same question from a host's side — must you ask first? — so if this
+entry is ever built, `place_bid` and `destructive` should be checked against each other rather than
+drifting into two half-overlapping lists.
 
 This is the closest thing on the list to free safety, and it is one derived boolean in `descriptor()`.
 
-### 3. Tool icons (SEP-973, 2025-11-25)
-
-Servers may attach icons to tools, resources and prompts — and there are prompts and resources to attach them to now. Fifty-odd tools in a host's list all
-share one generic icon today. A handful of inline SVG data URIs — a fish for the lot tools, a
-person for the check-in ones, a receipt for invoices, a calendar for club events — keyed off
-`tools.area_of`, which already classifies every tool. Cosmetic, cheap, and it makes a fifty-tool
-list scannable.
-
-### 4. Incremental scope consent (SEP-835)
+### 2. Incremental scope consent (SEP-835)
 
 The spec now allows a server to answer a call with a `401` naming the **scope it needed**, so a
 client can go and get consent for just that. Our design already says `allow_writes` and the `write`

@@ -34,7 +34,6 @@ sandbox drops window.open and target="_blank" on the floor.
       --badge-bg: #eef2f7;
       --badge-text: #374151;
       --alert: #b02a37;
-      --field-bg: #ffffff;
       --radius: var(--border-radius-md, 8px);
     }
     :root.dark {
@@ -46,7 +45,6 @@ sandbox drops window.open and target="_blank" on the floor.
       --badge-bg: #374151;
       --badge-text: #e5e7eb;
       --alert: #ea868f;
-      --field-bg: #111827;
     }
     * { box-sizing: border-box; }
     html, body { background: var(--bg); color: var(--text); }
@@ -81,21 +79,14 @@ sandbox drops window.open and target="_blank" on the floor.
     .ew-rows th { color: var(--muted); font-weight: 500; font-size: 0.8rem; text-transform: uppercase; }
     .ew-num { text-align: right; font-variant-numeric: tabular-nums; }
     .ew-total td { font-weight: 700; border-bottom: 0; }
-    .ew-form { display: flex; gap: 6px; flex-wrap: wrap; align-items: flex-end; margin: 10px 0 4px; }
-    .ew-form label { display: block; color: var(--muted); font-size: 0.75rem; }
-    .ew-form input {
-      width: 88px; padding: 6px 8px; font: inherit; color: var(--text);
-      background: var(--field-bg); border: 1px solid var(--border); border-radius: var(--radius);
-    }
+    /* The card's Renew button is the only control any of these draw. Nothing here is a form:
+       every widget shows a thing that already happened. */
     .ew-btn {
       font: inherit; font-weight: 600; padding: 7px 14px; border: 0; border-radius: var(--radius);
       background: var(--accent); color: #fff; cursor: pointer;
     }
-    .ew-btn[disabled] { opacity: 0.55; cursor: default; }
     .ew-card-number { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 1.6rem; margin: 6px 0; }
     .ew-barcode { display: block; width: 100%; max-width: 320px; height: auto; margin: 0 0 10px; background: #fff; border-radius: var(--radius); padding: 6px; }
-    .ew-said { margin: 8px 0 0; font-size: 0.9rem; }
-    .ew-said-bad { color: var(--alert); }
     body.superseded { opacity: 0.45; pointer-events: none; }
   </style>
 </head>
@@ -167,12 +158,6 @@ const { App, applyHostStyleVariables } = globalThis.ExtApps;
     .replace(/»$/, "")
     .trim();
 
-  const say = (text, bad) => {
-    const node = el("p", bad ? "ew-said ew-said-bad" : "ew-said", text);
-    root.append(node);
-    return node;
-  };
-
   const renderers = {
     lot(data) {
       const lot = data.lot || {};
@@ -235,88 +220,6 @@ const { App, applyHostStyleVariables } = globalThis.ExtApps;
       if (data.url) root.append(link("Open the auction", data.url));
     },
 
-    winners(data) {
-      root.append(el("p", "ew-head", data.auction || "Selling now"));
-      if (!data.found && data.summary) {
-        // "Nothing is queued" and "this auction doesn't queue" are different answers; the tool
-        // already distinguishes them and the sentence it wrote is the one to show.
-        root.append(el("p", "ew-empty", data.summary));
-      }
-      if (data.current_lot) {
-        root.append(link(`Lot ${data.current_lot.lot_number} — ${unfence(data.current_lot.name)}`, data.current_lot.url));
-      }
-      const form = el("div", "ew-form");
-      const field = (name, label, placeholder) => {
-        const wrap = el("div");
-        wrap.append(el("label", null, label));
-        const input = el("input");
-        input.name = name;
-        input.placeholder = placeholder;
-        input.autocomplete = "off";
-        wrap.append(input);
-        form.append(wrap);
-        return input;
-      };
-      const lotBox = field("lot", "Lot number", "14");
-      const winnerBox = field("winner", "Bidder", "7");
-      const priceBox = field("price", "Price", "12");
-      if (data.current_lot && data.current_lot.lot_number) lotBox.value = data.current_lot.lot_number;
-      const button = el("button", "ew-btn", "Record sale");
-      form.append(button);
-      root.append(form);
-      const said = say("");
-      button.addEventListener("click", async () => {
-        if (superseded) return;
-        button.disabled = true;
-        said.className = "ew-said";
-        said.textContent = "Saving…";
-        try {
-          const result = await app.callServerTool({
-            name: "set_lot_winner",
-            arguments: {
-              lot: lotBox.value.trim(),
-              winner: winnerBox.value.trim(),
-              // A number, because that is what the tool's schema says and the host validates
-              // against it before the call ever reaches us.
-              price: Number(priceBox.value),
-              // Named rather than left to "whichever auction is running": the queue this widget
-              // was drawn from says which one, and a sale recorded against the wrong auction is
-              // not something anybody notices on the night.
-              auction: data.auction,
-            },
-          });
-          const body = payloadOf(result) || {};
-          said.textContent = body.summary || body.error || "Done.";
-          if (result.isError || body.error) {
-            said.className = "ew-said ew-said-bad";
-          } else {
-            lotBox.value = "";
-            winnerBox.value = "";
-            priceBox.value = "";
-            // Claude never saw this call, so tell it what changed rather than leaving the
-            // conversation describing an auction that has moved on without it.
-            app.updateModelContext({ content: [{ type: "text", text: body.summary || "A lot was sold." }] });
-          }
-        } catch (error) {
-          said.className = "ew-said ew-said-bad";
-          said.textContent = "That didn't go through. Try the set lot winners page.";
-        }
-        button.disabled = false;
-      });
-      // queue[0] is the lot on the block and is already named above it.
-      const upcoming = (data.queue || []).slice(1);
-      if (upcoming.length) {
-        root.append(el("p", "ew-head", "Coming up"));
-        const list = el("ul", "ew-list");
-        for (const item of upcoming) {
-          const row = el("li");
-          row.append(link(`Lot ${item.lot_number} — ${unfence(item.name)}`, item.url));
-          list.append(row);
-        }
-        root.append(list);
-      }
-    },
-
     invoice(payload) {
       // my_activity nests it under `activity`; set_invoice_status returns it at the top level.
       const activity = payload.activity || payload;
@@ -337,6 +240,12 @@ const { App, applyHostStyleVariables } = globalThis.ExtApps;
       row("Lots sold", activity.lots_sold);
       row("Lots bought", data.lots_bought !== undefined ? data.lots_bought : activity.lots_won);
       row("Sold, gross", money(data.sold_gross));
+      // The lines that are not lots -- a raffle ticket, a membership at the door, a discount for
+      // whoever stacked the chairs. find_invoice sends the list; add_invoice_adjustment sends the
+      // one it just wrote, which is the whole reason that write draws this widget at all: a new
+      // line is only checkable against a new total.
+      const lines = activity.adjustments || (payload.adjustment ? [payload.adjustment] : []);
+      for (const line of lines) row(unfence(line.label) || "Adjustment", line.amount);
       // The site's own reading of the sign, never our arithmetic on it: an invoice that says
       // "owed $40" rendered as "owes $40" is the worst answer a checkout desk can be given.
       row(data.the_club_owes_you ? "The club owes them" : "They owe the club", money(data.total), true);

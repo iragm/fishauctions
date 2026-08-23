@@ -96,6 +96,17 @@ TEMPLATES: tuple[Template, ...] = (
         ("auction", "lot"),
     ),
     Template(
+        "invoice://{auction}/{person}",
+        "invoice",
+        "One person's invoice",
+        "What one person owes an auction or is owed by it, itemised, with the extra lines on it. "
+        "The auction's slug and their bidder number go in the URI, e.g. invoice://spring-2027/14. "
+        "Auction admins only for anybody but the caller — for anyone else it reads as a refusal, "
+        "exactly as the tool does.",
+        "find_invoice",
+        ("auction", "person"),
+    ),
+    Template(
         "club://{club}",
         "club",
         "A club",
@@ -141,6 +152,8 @@ ALL: tuple[Template, ...] = TEMPLATES + FIXED
 
 
 def _descriptor(template: Template, *, as_template: bool) -> dict[str, Any]:
+    from . import icons
+
     key = "uriTemplate" if as_template else "uri"
     return {
         key: template.uri,
@@ -148,6 +161,7 @@ def _descriptor(template: Template, *, as_template: bool) -> dict[str, Any]:
         "title": template.title,
         "description": template.description,
         "mimeType": DATA_MIME_TYPE,
+        "icons": icons.for_uri(template.uri),
     }
 
 
@@ -238,3 +252,104 @@ def read(request, uri: str) -> dict[str, Any] | None:
         "mimeType": DATA_MIME_TYPE,
         "text": text,
     }
+
+
+#: How many ``resource_link`` blocks one tool result may carry. A link is about 150 bytes with its
+#: name and description, and the point of them is to save a turn rather than to enumerate an
+#: auction: twelve is every club a person belongs to and every auction running at once, which is
+#: the shape of ``my_context``, and it is nowhere near a hundred lots.
+MAX_LINKS = 12
+
+
+def _link(template: Template, uri: str) -> dict[str, Any]:
+    """One ``resource_link`` content block (MCP 2025-06-18)."""
+    return {
+        "type": "resource_link",
+        "uri": uri,
+        "name": template.name,
+        "title": template.title,
+        "mimeType": DATA_MIME_TYPE,
+    }
+
+
+def _uris(about: dict[str, Any]) -> list[str]:
+    """The URIs one ``_about`` block names, most specific first.
+
+    ``_about`` is written by the resolver that is holding the object (see
+    ``palette_actions.KEY_ABOUT``), so the slugs here are real slugs. Nothing is sniffed out of the
+    answer itself, because the answer cannot be: ``auction`` is a slug in some results and a title
+    in others, and a URI built from a title is a link that does not resolve.
+    """
+    found: list[str] = []
+    auction = about.get("auction")
+    lot = about.get("lot")
+    person = about.get("person")
+    if auction and lot:
+        found.append(f"lot://{auction}/{lot}")
+    if auction and person:
+        # A bidder number, which is what ``find_invoice`` resolves. A name with a slash in it builds
+        # a URI ``match`` will not accept, and :func:`links_for` drops those silently -- which is the
+        # right outcome: a decoration must never fail a call that otherwise worked.
+        found.append(f"invoice://{auction}/{person}")
+    if auction:
+        found.append(f"auction://{auction}")
+    if about.get("club"):
+        found.append(f"club://{about['club']}")
+    for slug in about.get("auctions") or ():
+        found.append(f"auction://{slug}")
+    for slug in about.get("clubs") or ():
+        found.append(f"club://{slug}")
+    return found
+
+
+def _children(uri: str) -> list[str]:
+    """The sub-resources of one subject URI: an auction's lots and people, a club's events.
+
+    Offered only in place of a **dropped self-link** (see :func:`links_for`), which is what makes
+    them precise rather than noise: ``describe_auction`` has just answered ``auction://spring``, so
+    what is left to point at is what is underneath it. ``list_lots`` has not, so it gets the
+    auction itself and no siblings it did not ask about.
+    """
+    return [
+        child.uri.replace("{auction}", uri.removeprefix("auction://")).replace("{club}", uri.removeprefix("club://"))
+        for child in TEMPLATES
+        if child.uri.startswith(uri.split("://")[0] + "://") and child.uri.count("/") > uri.count("/")
+    ]
+
+
+def links_for(action: str, about: Any) -> list[dict[str, Any]]:
+    """The ``resource_link`` blocks to hang off one tool result.
+
+    A link says "there is more about this, at this address, and you can fetch it without asking me
+    again". It is the cheap half of this module: a host that supports resources can pull the whole
+    auction after a write that named one, and a host that has never heard of ``resource_link``
+    ignores an unknown content block, which is what the spec requires of it.
+
+    The tool's **own** answer is never linked. ``describe_lot`` returning a link to
+    ``lot://spring/14`` is a pointer at the document it just sent, which costs bytes and says
+    nothing -- so a URI whose template is answered by *this* action is dropped, and what goes in its
+    place is what sits underneath it (:func:`_children`). That is why ``describe_auction`` offers
+    the auction's lots and its people while ``list_lots`` offers only the auction: one of them has
+    already answered the top-level thing and the other has not.
+    """
+    if not isinstance(about, dict) or not about:
+        return []
+    links: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    queue = list(_uris(about))
+    while queue and len(links) < MAX_LINKS:
+        uri = queue.pop(0)
+        if uri in seen:
+            continue
+        seen.add(uri)
+        matched = match(uri)
+        # Unmatched means this server does not publish it -- a slug with a slash in it, or a
+        # scheme that has been retired. Silently skipped: a decoration must never be able to fail
+        # a call that otherwise worked.
+        if matched is None:
+            continue
+        if matched[0].action == action:
+            queue.extend(_children(uri))
+            continue
+        links.append(_link(matched[0], uri))
+    return links

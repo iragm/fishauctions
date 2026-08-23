@@ -8,35 +8,15 @@
   <div class="help-note">
     <i class="bi bi-lightbulb-fill"></i>
     <div>
-      An AI agent &mdash; Claude, ChatGPT, or anything else that speaks the Model Context Protocol &mdash;
-      can use this site the same way you do: look up a lot, check who hasn't paid, add lots to your auction,
-      check people in. It acts <strong>as you</strong>: every auction and club still checks your own
-      permissions, so it can never do anything you couldn't do yourself.
+      <p class="mb-2">An AI agent &mdash; Claude, ChatGPT, or anything else that speaks the Model Context Protocol &mdash; can use this site the same way you do. Once connected, you can ask things like:</p>
+      <ul class="mb-0">
+        <li>&ldquo;Add a trio of guppies to this auction&rdquo;</li>
+        <li>&ldquo;Find any cichlids in this auction and watch them so I get a notification when they go up for bidding&rdquo;</li>
+        <li>&ldquo;Add a good picture from the internet to each of my lots that doesn't already have one&rdquo;</li>
+      </ul>
     </div>
   </div>
 
-  <h2 class="h5 mb-2">What it can do</h2>
-  <ul class="mb-4">
-    <li>Ask it things: &ldquo;how many lots are in my auction?&rdquo;, &ldquo;who hasn't paid yet?&rdquo;, &ldquo;when does lot submission close?&rdquo;</li>
-    <li>Have it do things: add lots, check people in, record a sale, mark an invoice paid, add points.</li>
-    <li>Anything that would take a page with a form on it &mdash; creating an auction, deleting things, anything involving money changing hands &mdash; it will give you a link to instead of doing.</li>
-    <li>Pick a job off a menu. Claude offers four of them by name &mdash; <em>work the door</em>, <em>chase unpaid invoices</em>,
-        <em>set up next year's auction</em>, <em>write a club announcement</em> &mdash; and each one walks through the whole thing
-        rather than you having to describe it.</li>
-    <li>Ask for something it can't do, and it will write the request down for whoever builds these. Say what you were
-        trying to do; that sentence is the part that gets read.</li>
-  </ul>
-
-{% if not opted_in %}
-  {% comment %}Not a 403. This is the only page that explains what connecting an assistant is, and it is exactly what somebody is reading when they find out they cannot have it yet -- a permission-denied page gives them nothing to read and nothing to forward. Everything that issues or revokes a credential is simply not rendered, and post() still refuses.{% endcomment %}
-  <div class="alert alert-warning text-dark" role="alert">
-    <i class="bi bi-exclamation-triangle"></i>
-    <strong>This is still in beta, and it isn't switched on for your account yet.</strong>
-    Ask whoever runs this site to turn on <em>AI assistant and connected apps</em> for you, and this page will
-    have everything you need to connect. Nothing else about your account changes either way.
-  </div>
-</div>
-{% else %}
   {% if new_raw_key %}
   <div class="alert alert-success text-dark">
     <h5><i class="bi bi-key-fill"></i> Here is your new key</h5>
@@ -126,15 +106,15 @@
   <p class="text-muted mb-4">Nothing yet. Follow the steps above and it will show up here.</p>
   {% endif %}
 
-  {% comment %}Collapsed by default: signing in is how almost everybody connects, and a key is the exception. It opens by itself when there is a new key to read or keys already exist, because a section nobody can see is no place to put a secret that is shown once.{% endcomment %}
+  {% comment %}Collapsed by default, always, except when there is a new key to read &mdash; a section nobody can see is no place to put a secret that is shown once.{% endcomment %}
   <h2 class="h5 mb-2">Keys, for everything that can't sign in</h2>
   <p class="mb-3">
-    <button class="btn btn-primary btn-sm" type="button" data-bs-toggle="collapse" data-bs-target="#api-key-panel" aria-expanded="{% if new_raw_key or keys %}true{% else %}false{% endif %}" aria-controls="api-key-panel">
+    <button class="btn btn-primary btn-sm" type="button" data-bs-toggle="collapse" data-bs-target="#api-key-panel" aria-expanded="{% if new_raw_key %}true{% else %}false{% endif %}" aria-controls="api-key-panel">
       <i class="bi bi-key"></i> Keys for scripts and cron jobs
     </button>
   </p>
 
-  <div class="collapse{% if new_raw_key or keys %} show{% endif %}" id="api-key-panel">
+  <div class="collapse{% if new_raw_key %} show{% endif %}" id="api-key-panel">
     <p class="text-muted">
       You don't need a key to connect Claude or ChatGPT &mdash; use the sign-in above. A key is for a script, a
       cron job, or a connector your organisation's administrator adds once for everybody. Anyone who has the
@@ -211,16 +191,6 @@
   -H "Content-Type: application/json" \
   -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'</code></pre>
   </div>
-
-  <h2 class="h5 mt-4 mb-2">Good to know</h2>
-  <ul class="mb-0">
-    <li>A connection can change at most 300 things an hour. That's far more than a busy check-in table needs, and it's the ceiling on how far something can go wrong before you notice.</li>
-    <li>Whether a connection can change things is fixed when you make it. To turn writing on or off, disconnect it and connect it again.</li>
-    <li>Signing in and keys are independent &mdash; revoking a key doesn't disconnect an agent, and disconnecting one doesn't revoke your keys. Both lists are on this page.</li>
-    <li>Every tool that changes something is marked as such, and a well-behaved agent asks you before running one. That marking is what this site guarantees &mdash; whether you get asked is up to the agent you connected.</li>
-    <li>What you can do changes what it can do. If you're given a new permission &mdash; made an admin of a club, say &mdash; reconnect or refresh the connection so it picks up the tools that come with it.</li>
-    <li>Nothing here is specific to one company: this is a standard Model Context Protocol endpoint and any agent that speaks it can connect.</li>
-  </ul>
 </div>
 <script>
   document.querySelectorAll('.copy-button').forEach(function (button) {
@@ -238,5 +208,4 @@
     });
   });
 </script>
-{% endif %}
 {% endblock %}

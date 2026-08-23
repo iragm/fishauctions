@@ -2,11 +2,10 @@
 
 An MCP host that supports the apps surface renders a tool's answer as a *page* rather than as
 JSON: it reads a ``ui://`` resource from us, mounts it in a sandboxed iframe, and pipes the tool
-result into it. Five things on this site are worth looking at rather than reading out --
+result into it. Four things on this site are worth looking at rather than reading out --
 
     ``ui://auction.fish/lot``      one lot, with its photo, its price and where to collect it
     ``ui://auction.fish/rules``    an auction's dates and the club's own rules text
-    ``ui://auction.fish/winners``  the selling console: what's on the block, and a row to record it
     ``ui://auction.fish/invoice``  what somebody owes or is owed, itemised
     ``ui://auction.fish/card``     a membership card, with the barcode a door scanner reads
 
@@ -16,14 +15,14 @@ always did; that is the whole reason the widget renders from the tool's own ``st
 rather than from a payload only a widget can read. There is one answer, and the picture is a way
 of looking at it.
 
-The card is the one of the five that has to be *looked at* rather than read: a membership number
+The card is the one of the four that has to be *looked at* rather than read: a membership number
 read out is a number, and a membership number drawn as a barcode is the thing the door scanner
 takes. Its Renew button opens the club's payment page through the host rather than taking money --
 PayPal's and Square's own scripts could not run inside the iframe if we wanted them to, and a chat
 window is the wrong place to be entering a card number.
 
-**One document, five renderers.** ``auctions/templates/auctions/mcp/widget.html`` is the only HTML
-here; ``view`` is baked in per resource and the script switches on it. Five documents would be five
+**One document, four renderers.** ``auctions/templates/auctions/mcp/widget.html`` is the only HTML
+here; ``view`` is baked in per resource and the script switches on it. Four documents would be four
 copies of the palette, the theming and the runtime -- the drift that
 ``auctions/templates/auctions/embeds/base.html`` exists to prevent for the club embeds, which is
 also where this file's CSS class names come from. A club embed and a widget are the same problem
@@ -36,10 +35,20 @@ an ES module ending in ``export{…}``, which an inline ``<script type="module">
 only edit made to somebody else's bytes, and ``test_mcp_widgets`` fails if it stops matching.
 
 **Nothing here is a capability.** Every widget is a way of *showing* an answer a registered action
-already produced, and the only tool a widget calls on its own (``set_lot_winner``, from the selling
-console) goes through ``palette_actions.run_action`` exactly as it would if a model had called it.
-So there is no second permission model to keep in step with the first, which is the property that
-makes it safe for the host to render one of these without asking.
+already produced. Nothing here initiates a write, and every one of the four draws a thing that has
+already happened, which is what keeps "a host may render this" from meaning "a host may run this".
+
+**There is deliberately no selling console, and that is a reversal.** One was built: the lot queue
+with three fields under it, validating against
+:class:`auctions.views.DynamicSetLotWinner`'s own checks and recording the sale through
+``set_lot_winner``. It worked, and it was the wrong thing to put in a chat window. Selling is the
+busiest, most time-critical job on this site and it already has a full-screen page with a keyboard
+flow, voice input and a lot queue that advances itself; a second half-sized copy of it inside an
+iframe, with a debounce between the operator and every check, is not a better version of that page.
+It is a *confusing* one -- two places to do the same job, one of which is quietly worse, and no way
+for somebody mid-auction to tell which one they are looking at. The tools stay
+(``set_lot_winner``, ``no_sale``, ``undo_sale``, ``lot_queue``), because saying "lot 14, bidder
+seven, twelve dollars" out loud is a real thing to want. Drawing a form for it is not.
 """
 
 from __future__ import annotations
@@ -92,25 +101,22 @@ WIDGETS: dict[str, dict[str, Any]] = {
         "An auction's dates, whether it is taking lots, and the club's own rules in full.",
         ("describe_auction",),
     ),
-    "ui://auction.fish/winners": _widget(
-        "winners",
-        "Selling now",
-        "The selling console for an in-person auction: the lot on the block, what is coming up, "
-        "and a row for recording who bought it and for how much.",
-        ("lot_queue",),
-    ),
     "ui://auction.fish/invoice": _widget(
         "invoice",
         "Invoice",
         "What one person owes the club or is owed by it, itemised.",
-        ("my_activity", "set_invoice_status"),
+        ("my_activity", "find_invoice", "set_invoice_status", "add_invoice_adjustment"),
     ),
     "ui://auction.fish/card": _widget(
         "card",
         "Membership card",
         "The signed-in member's own club card: the membership number, its barcode, when it runs "
         "out, and a way to renew when it needs it.",
-        ("my_membership", "renew_membership", "send_membership_card"),
+        # Deliberately not ``send_membership_card``. That one now sends somebody *else's* card as
+        # well as the caller's, and drawing the recipient's card in the caller's chat window is the
+        # wrong receipt for it -- "sent Jane's card to jane@example.com" is the whole answer, and a
+        # picture of Jane's barcode next to it is a membership number nobody asked to be shown.
+        ("my_membership", "renew_membership"),
     ),
 }
 
@@ -168,6 +174,12 @@ def resource_descriptors() -> list[dict[str, Any]]:
     ``prefersBorder`` is set explicitly on every one of them because the note in the schema says
     host defaults vary, and a card drawn inside a card is the commonest way one of these looks
     wrong. Ours draw their own spacing and no chrome, so the host's border is the one to keep.
+
+    Deliberately **no** ``icons``, though everything else that appears in a list here has them (see
+    :mod:`auctions.mcp.icons`). A widget is not browsed, it is rendered: what a person sees of one
+    is the lot with its photograph on it, and a thumbnail beside its name in a resource list is a
+    picture of nothing. Deriving one would also collapse -- three of the four are reads about an
+    auction, so four widgets would carry two distinct icons between them.
     """
     return [
         {
@@ -180,10 +192,10 @@ def resource_descriptors() -> list[dict[str, Any]]:
                 "ui": {
                     "prefersBorder": True,
                     "csp": {
-                        # No connectDomains at all: a widget never talks to this site directly. It
-                        # asks the host, which asks us with the caller's own credential -- so a
-                        # widget cannot reach anything its owner could not, and there is no second
-                        # authenticated path into the API to reason about.
+                        # No connectDomains at all: a widget never talks to this site directly.
+                        # Since the selling console came out it does not talk to it *at all* --
+                        # nothing in the document calls ``callServerTool`` any more, so the only
+                        # bytes any of these fetch are the lot photo and the barcode named below.
                         "connectDomains": [],
                         "resourceDomains": _resource_domains(),
                     },

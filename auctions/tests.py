@@ -55,6 +55,7 @@ from .models import (
     ClubAPIKey,
     ClubAPIKeyFieldMap,
     ClubBapCategoryOverride,
+    ClubBapGenusOverride,
     ClubHistory,
     ClubMember,
     ClubMoney,
@@ -21702,6 +21703,57 @@ class ClubBapLotsViewTests(TestCase):
         self.pending_lot.refresh_from_db()
         self.assertEqual(self.pending_lot.species_category, self.other_category)
         self.assertContains(response, "bapLotListChanged")
+
+    # --- the three buttons on each row --------------------------------------
+    #
+    # These went through ``services.review_lot_points`` when ``review_points`` needed to press them
+    # without being a browser, and until then nothing tested them at all.
+
+    def _press(self, lot, action, **extra):
+        return self.client.post(reverse("lot_bap_points", kwargs={"pk": lot.pk}), {"action": action, **extra})
+
+    def test_approving_creates_the_award_and_a_history_line(self):
+        self.client.login(username="bap_lots_user", password="testpass")
+        response = self._press(self.pending_lot, "approve", bap_points=7)
+        self.assertEqual(response.status_code, 200)
+        award = BapAward.objects.get(lot=self.pending_lot)
+        self.assertEqual(award.points, 7)
+        self.assertEqual(award.club_member, self.seller_member)
+        self.pending_lot.refresh_from_db()
+        self.assertTrue(self.pending_lot.manually_approved)
+        self.assertTrue(ClubHistory.objects.filter(club=self.club, applies_to="BAP", action__startswith="Awarded"))
+
+    def test_rejecting_leaves_no_award(self):
+        self.client.login(username="bap_lots_user", password="testpass")
+        self._press(self.pending_lot, "reject")
+        self.assertFalse(BapAward.objects.filter(lot=self.pending_lot).exists())
+        self.pending_lot.refresh_from_db()
+        self.assertTrue(self.pending_lot.manually_approved)
+
+    def test_undo_puts_the_lot_back_and_says_so_in_the_history(self):
+        self.client.login(username="bap_lots_user", password="testpass")
+        self._press(self.approved_lot, "undo")
+        self.assertFalse(BapAward.objects.filter(lot=self.approved_lot).exists())
+        self.approved_lot.refresh_from_db()
+        self.assertFalse(self.approved_lot.manually_approved)
+        self.assertTrue(ClubHistory.objects.filter(club=self.club, applies_to="BAP", action__startswith="Undid"))
+
+    def test_a_plain_member_cannot_press_anything(self):
+        self.client.login(username="bap_lots_plain", password="testpass")
+        response = self._press(self.pending_lot, "approve", bap_points=7)
+        self.assertEqual(response.status_code, 403)
+        self.assertFalse(BapAward.objects.filter(lot=self.pending_lot).exists())
+
+    def test_the_default_the_button_offers_follows_the_genus_rule(self):
+        """It read the category override and not the genus one, so the row re-rendered with a
+        number the table had never shown."""
+        species = Species.objects.create(scientific_name="Tropheus moorii", genus="Tropheus", species="moorii")
+        self.pending_lot.species = species
+        self.pending_lot.save()
+        ClubBapGenusOverride.objects.create(club=self.club, genus="Tropheus", points=15)
+        self.client.login(username="bap_lots_user", password="testpass")
+        response = self._press(self.pending_lot, "undo")
+        self.assertContains(response, 'name="bap_points" value="15"')
 
 
 class ClubAPIKeyModelTests(TestCase):

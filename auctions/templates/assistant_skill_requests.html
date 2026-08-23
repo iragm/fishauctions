@@ -53,6 +53,8 @@
         <form method="post" class="d-flex flex-wrap gap-2 align-items-center mt-2">
           {% csrf_token %}
           <input type="hidden" name="pk" value="{{ row.pk }}">
+          {% comment %}Which tab to come back to. Not the referrer — see AssistantSkillRequestsView.back_to.{% endcomment %}
+          <input type="hidden" name="filter" value="{{ status }}">
           <input type="text" name="notes" class="form-control form-control-sm" style="max-width: 24rem;"
                  placeholder="Note (only you see this)" value="{{ row.notes }}">
           {% for value, label, count in statuses %}

@@ -282,10 +282,12 @@ from .serializers import (
 )
 from .services import (
     AUCTION_FIELDS_TO_CLONE,
+    BAP_DECISIONS,
     DEFAULT_AUCTION_DESCRIPTION,
     LOT_ADD_BLOCK_BULK_DISABLED,
     LOT_ADD_BLOCK_NO_TOS,
     apply_club_member_to_tos,
+    bap_review_lots,
     check_in_auctiontos,
     clone_auction,
     copy_lot_images,
@@ -298,6 +300,7 @@ from .services import (
     map_fields,
     promoting_makes_it_the_clubs_current_auction,
     recalculate_seller_invoice,
+    review_lot_points,
     save_new_lot,
     user_can_clone_lot,
 )
@@ -21952,27 +21955,9 @@ class ClubBapLotsView(LoginRequiredMixin, ClubViewMixin, HTMxTableView):
         return super().dispatch(request, *args, **kwargs)
 
     def get_queryset(self):
-        matching_member = ClubMember.objects.filter(
-            club=self.club,
-            is_deleted=False,
-        ).filter(
-            Q(user=OuterRef("auctiontos_seller__user"))
-            | Q(user=OuterRef("user"))
-            | Q(email__iexact=OuterRef("auctiontos_seller__email"))
-        )
-        qs = Lot.objects.filter(
-            auction__club=self.club,
-            is_deleted=False,
-            active=False,
-        )
-        if self.club.only_sold_lots:
-            qs = qs.filter(auctiontos_winner__isnull=False, winning_price__isnull=False)
-        return (
-            qs.filter(Exists(matching_member))
-            .select_related("auctiontos_seller__user", "auction__club", "species_category", "species")
-            .prefetch_related("bap_award")
-            .order_by("-date_end")
-        )
+        # In services because the ``points_queue`` skill lists the same rows, and "which lots is
+        # this club's points desk looking at" must have one answer.
+        return bap_review_lots(self.club)
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
@@ -22065,7 +22050,7 @@ class BapAwardAdminView(APIView):
             initial["club_member"] = member
         if lot.date_end:
             initial["date"] = lot.date_end.date()
-        points = lot.bap_points_for_club(club)
+        points = lot.default_bap_points(club)
         placeholder = lot.bap_placeholder
         if placeholder == "HAP":
             initial["hap_points"] = points
@@ -24865,23 +24850,6 @@ class DiscordInteractionsView(View):
 class LotBapPointsView(LoginRequiredMixin, View):
     """Inline BAP approve/reject/undo endpoint for the Pending BAP table."""
 
-    def _seller_name(self, lot):
-        if lot.auctiontos_seller:
-            return lot.auctiontos_seller.name
-        if lot.user:
-            return f"{lot.user.first_name} {lot.user.last_name}".strip() or lot.user.username or f"user #{lot.user.pk}"
-        return f"lot #{lot.pk}"
-
-    def _resolve_member(self, lot, club):
-        seller_user = lot.user or (lot.auctiontos_seller.user if lot.auctiontos_seller else None)
-        seller_email = (lot.auctiontos_seller.email if lot.auctiontos_seller else None) or ""
-        member = None
-        if seller_user:
-            member = ClubMember.objects.filter(club=club, user=seller_user, is_deleted=False).first()
-        if not member and seller_email:
-            member = ClubMember.objects.filter(club=club, email__iexact=seller_email, is_deleted=False).first()
-        return member
-
     def _render_buttons(self, request, lot, club):
         lot.refresh_from_db()
         try:
@@ -24889,24 +24857,13 @@ class LotBapPointsView(LoginRequiredMixin, View):
         except Exception:
             award = None
         lot.bap_award_cached = award
-        override = (
-            ClubBapCategoryOverride.objects.filter(club=club, category=lot.species_category).first()
-            if lot.species_category
-            else None
-        )
-        if override is not None:
-            default_points = override.points
-        elif club.points_per_lot is not None:
-            # See Lot.bap_points_for_club: a club that sets 0 means 0, not "use the category".
-            default_points = club.points_per_lot
-        else:
-            default_points = lot.species_category.bap_points if lot.species_category else 5
-        if club.points_for_custom_checkbox > 0 and lot.custom_checkbox:
-            default_points += club.points_for_custom_checkbox
         return render(
             request,
             "auctions/bap_lot_buttons.html",
-            {"lot": lot, "club": club, "default_points": default_points},
+            # ``Lot.default_bap_points``, not a third opinion about it: this used to read the
+            # category override and not the genus one, so approving a lot whose genus the club
+            # values differently re-rendered the row with a number the table had never shown.
+            {"lot": lot, "club": club, "default_points": lot.default_bap_points(club)},
         )
 
     def post(self, request, pk):
@@ -24915,71 +24872,28 @@ class LotBapPointsView(LoginRequiredMixin, View):
         if not club or not check_club_permission(request.user, club, "permission_manage_bap"):
             return HttpResponse(status=403)
 
+        # "reject" is what this page's buttons have always posted; the service calls it "deny",
+        # which is the word somebody says out loud. Same decision either way.
         action = request.POST.get("action", "approve")
+        decision = "deny" if action == "reject" else action
+        if decision not in BAP_DECISIONS:
+            return HttpResponse(status=400)
 
-        if action == "undo":
-            existing = BapAward.objects.filter(lot=lot).first()
-            if existing:
-                existing.delete()
-            lot.bap_points_awarded = 0
-            lot.manually_approved = False
-            lot.bap_auto_reason = lot.sold_lot_no_bap_reason or ""
-            lot.save(update_fields=["bap_points_awarded", "manually_approved", "bap_auto_reason"])
-            return self._render_buttons(request, lot, club)
-
-        if action == "reject":
-            existing = BapAward.objects.filter(lot=lot).first()
-            if existing:
-                existing.delete()
-            lot.bap_points_awarded = 0
-            lot.manually_approved = True
-            # Leave bap_auto_reason as-is: it reflects the system's eligibility verdict,
-            # which is still useful to show even when an admin explicitly rejects.
-            lot.save(update_fields=["bap_points_awarded", "manually_approved"])
-            ClubHistory.objects.create(
-                club=club,
-                user=request.user,
-                action=f"Rejected BAP points for {self._seller_name(lot)}: {lot.lot_name}",
-                applies_to="BAP",
-            )
-            return self._render_buttons(request, lot, club)
-
-        # action == "approve"
         def _parse_pts(key):
             try:
                 return max(0, int(str(request.POST.get(key, 0)).strip() or 0))
             except (ValueError, TypeError):
                 return 0
 
-        bap_pts = _parse_pts("bap_points")
-        hap_pts = _parse_pts("hap_points")
-        cap_pts = _parse_pts("cap_points")
-
-        member = self._resolve_member(lot, club)
-        award_date = lot.date_end.date() if lot.date_end else timezone.now().date()
-
-        if (bap_pts or hap_pts or cap_pts) and member:
-            BapAward.objects.update_or_create(
-                lot=lot,
-                defaults={
-                    "club_member": member,
-                    "date": award_date,
-                    "points": bap_pts,
-                    "hap_points": hap_pts,
-                    "cap_points": cap_pts,
-                    "awarded_by": request.user,
-                },
-            )
-            lot.bap_points_awarded = bap_pts + hap_pts + cap_pts
-            lot.manually_approved = True
-            lot.bap_auto_reason = ""
-            lot.save(update_fields=["bap_points_awarded", "manually_approved", "bap_auto_reason"])
-            ClubHistory.objects.create(
-                club=club,
-                user=request.user,
-                action=f"Awarded {lot.bap_points_awarded} BAP point(s) to {self._seller_name(lot)} for {lot.lot_name}",
-                applies_to="BAP",
-            )
+        review_lot_points(
+            lot,
+            club,
+            acting_user=request.user,
+            decision=decision,
+            bap=_parse_pts("bap_points"),
+            hap=_parse_pts("hap_points"),
+            cap=_parse_pts("cap_points"),
+        )
         return self._render_buttons(request, lot, club)
 
 
@@ -25212,33 +25126,23 @@ class UserAPIKeyView(LoginRequiredMixin, TemplateView):
     (:class:`ClubAPIKeyCreateView`), and for the same reason: a key you can go back and read is a
     key that is written down somewhere it can be read from.
 
-    Gated on ``UserData.use_llm_search``, the same per-user flag that opens the natural-language
-    command palette — this is the same beta, reached a different way, and it is rolled out the same
-    way. Deliberately *not* also gated on a language model being configured site-wide
-    (``llm.assist_enabled``): an agent connecting over MCP brings its own model, so this feature
-    works perfectly well on an install that has no API key of its own.
+    Open to **everyone signed in**. It used to be gated on ``UserData.use_llm_search``, the
+    per-user flag that opens the natural-language command palette, on the reasoning that the two
+    are one beta reached two ways. They are not the same feature: the palette spends this site's
+    own language-model budget on every keystroke, which is what that flag is for, while an agent
+    connecting over MCP brings its own model and costs this site nothing beyond the queries a web
+    page would make. It can also do nothing its owner could not do by clicking, because the tools
+    re-check the owner's real permissions on every call. See :mod:`auctions.mcp.auth`.
 
-    Somebody without the flag gets the **page**, not a 403. This is the one place on the site that
-    explains what connecting an assistant is and how it works, and it is exactly what a person is
-    reading when they find out they can't have it yet; a bare permission-denied page gives them
-    nothing to read and nothing to forward. Everything that would act is simply not rendered, and
-    ``post`` refuses outright — the explanation is public, the credentials are not.
+    Deliberately *not* gated on a language model being configured site-wide (``llm.assist_enabled``)
+    either, for the same reason: this works perfectly well on an install with no API key of its own.
     """
 
     template_name = "user_api_keys.html"
 
-    @property
-    def opted_in(self):
-        return bool(getattr(self.request.user, "userdata", None) and self.request.user.userdata.use_llm_search)
-
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         context["active_tab"] = "api_keys"
-        context["opted_in"] = self.opted_in
-        if not self.opted_in:
-            # Nothing that reads or writes a credential runs for somebody who hasn't been given the
-            # feature. The explanation above is the whole of what they get.
-            return context
         context["keys"] = UserAPIKey.objects.filter(user=self.request.user).order_by("-created_at")
         context["new_raw_key"] = self.request.session.pop("new_user_api_key", None)
         context["mcp_url"] = self.request.build_absolute_uri(reverse("mcp"))
@@ -25313,10 +25217,6 @@ class UserAPIKeyView(LoginRequiredMixin, TemplateView):
         return bool(removed)
 
     def post(self, request, *args, **kwargs):
-        # The explanation above is readable by anyone signed in; issuing and revoking credentials
-        # is not. GET degrades, POST refuses.
-        if not self.opted_in:
-            raise PermissionDenied
         disconnect = request.POST.get("disconnect")
         if disconnect:
             if self.disconnect_app(request, disconnect):
@@ -26171,7 +26071,22 @@ class AssistantSkillRequestsView(AdminOnlyViewMixin, TemplateView):
             row.notes = request.POST.get("notes", row.notes)[:2000]
             row.save(update_fields=["status", "notes", "updatedon"])
             messages.success(request, f"“{row.skill}” is now {row.get_status_display().lower()}.")
-        return redirect(request.META.get("HTTP_REFERER") or reverse("assistant_skill_requests"))
+        return redirect(self.back_to(request))
+
+    @staticmethod
+    def back_to(request):
+        """Where the form returns to: this page, on the tab it was posted from.
+
+        Built out of ``reverse()`` and one validated word rather than out of ``HTTP_REFERER``.
+        The referrer is a header the browser sends and anybody can set, so redirecting to it is an
+        open redirect however superuser-only the page is — and it was never the better answer here
+        anyway, because the only place this form has to return to is itself.
+        """
+        wanted = request.POST.get("filter", "")
+        url = reverse("assistant_skill_requests")
+        if wanted in dict(AssistantSkillRequest.STATUS_CHOICES):
+            return f"{url}?status={wanted}"
+        return url
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)

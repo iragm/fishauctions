@@ -63,32 +63,23 @@ SCOPE_READ = "read"
 SCOPE_WRITE = "write"
 
 
-def opted_in(user) -> bool:
-    """Whether this person has the feature turned on at all.
-
-    ``UserData.use_llm_search`` is the same per-user flag that opens the natural-language command
-    palette, and it gates this endpoint for the same reason: it is one beta, reached two ways, and
-    a rollout control that only covers half of it is decorative. Without this a person could skip
-    the page that explains any of this, run the OAuth flow a client offers them, and be connected.
-
-    Deliberately *not* also gated on a language model being configured site-wide: an agent
-    connecting here brings its own, so this works on an install that has no API key of its own.
-    """
-    userdata = getattr(user, "userdata", None)
-    return bool(userdata and userdata.use_llm_search)
+# There is deliberately **no per-user opt-in gate on this endpoint**, and that is a change from how
+# it shipped. It used to require ``UserData.use_llm_search`` -- the flag that opens the
+# natural-language command palette -- on the reasoning that the two are one beta reached two ways.
+# They are not the same feature and the flag was the wrong shape for this one. The palette spends
+# *this site's* language-model budget on every keystroke, which is what that flag is for; an agent
+# connecting over MCP brings its own model, costs this site nothing beyond the queries any web page
+# would make, and can do nothing its owner could not do by clicking. Gating it bought no safety and
+# cost the thing an unreleased feature can least afford: somebody pressing Connect, completing a
+# full OAuth flow, and being refused by their own site with no way to act on it.
+#
+# What is still checked on every credential is ``is_active``. See :data:`INACTIVE_MESSAGE`.
 
 
 #: What a person is told when the account behind a credential has been turned off. Deliberately
 #: says nothing about why: the two reasons an account is inactive are that its owner deleted it and
 #: that somebody here banned it, and neither is a sentence to put in front of a stranger's agent.
 INACTIVE_MESSAGE = "This account is no longer active on this site."
-
-#: What a person is told when their credential is fine but the feature is switched off for them.
-#: Written for somebody reading it inside an agent's error message, which is where it lands.
-NOT_OPTED_IN_MESSAGE = (
-    "This account isn't set up to connect an assistant to this site yet. Ask the site "
-    "administrator to turn it on for you, then reconnect."
-)
 
 
 @dataclass
@@ -210,8 +201,6 @@ def _from_oauth(request) -> Credential | Refusal | None:
         # stops somebody at the login form; here their agent carries on acting as them, so
         # deleting an account or banning somebody would not disconnect what they had connected.
         return Refusal(INACTIVE_MESSAGE)
-    if token.user is not None and not opted_in(token.user):
-        return Refusal(NOT_OPTED_IN_MESSAGE)
     if token.user is None:
         # A client-credentials token has no user behind it. Every tool here acts as a person and
         # checks that person's permissions, so a token with nobody attached has nothing to act as.
@@ -237,8 +226,6 @@ def _from_api_key(request) -> Credential | Refusal | None:
         return None
     if not key.user.is_active:
         return Refusal(INACTIVE_MESSAGE)
-    if not opted_in(key.user):
-        return Refusal(NOT_OPTED_IN_MESSAGE)
     _touch(key)
     return Credential(user=key.user, writes=key.allow_writes, kind="key", token=key)
 
@@ -260,8 +247,8 @@ def authenticate(request) -> Credential | Refusal | None:
     credential meant for the other -- the prefix is what separates them.
 
     A ``Refusal`` is truthy, so it short-circuits the ``or`` below and is never second-guessed by
-    the other credential type: a key whose owner is not opted in must not be answered by falling
-    through and pretending nobody presented anything.
+    the other credential type: a key whose owner has been deactivated must not be answered by
+    falling through and pretending nobody presented anything.
     """
     if not bearer_token(request):
         return None

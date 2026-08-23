@@ -3348,8 +3348,9 @@ class UserAPIKey(HashedAPIKey):
     """
 
     key_prefix = "ak_"
-    # ``user__userdata`` rather than ``user``: every request checks the owner's ``use_llm_search``
-    # flag (see auctions.mcp.auth.opted_in), so fetching it here saves a query per call.
+    # ``user__userdata`` rather than ``user``: the resolvers behind almost every tool read the
+    # owner's UserData (timezone, last auction used, preferences), so fetching it with the key
+    # saves a query per call.
     verify_select_related = ("user__userdata",)
 
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="api_keys")
@@ -9009,6 +9010,26 @@ class Lot(models.Model):
             return club.points_per_lot
         return self.species_category.bap_points if self.species_category else 5
 
+    def default_bap_points(self, club):
+        """What the Approve button offers for this lot: :meth:`bap_points_for_club` plus the bonus.
+
+        The bonus is the club's ``points_for_custom_checkbox`` -- "was this fish spawned in a
+        species tank", or whatever else the auction put on that checkbox -- and it is part of the
+        default rather than a separate figure because it is part of what the lot is worth.
+
+        One method because there were three answers to this question and only one of them was
+        right.  ``auto_award_bap_points`` had it; ``LotBapPointsView._render_buttons`` checked the
+        category override but not the genus one, so approving a *Tropheus* re-rendered the row with
+        a different number than the table had just shown; and ``BapAwardAdminView._lot_initial``
+        had the overrides but dropped the bonus.  ``ClubBapLotHTMxTable.render_actions`` is the one
+        deliberate copy -- it runs once per row on a page that shows hundreds, so it reads the same
+        precedence off two prefetched dicts rather than off two queries per lot.
+        """
+        points = self.bap_points_for_club(club)
+        if club.points_for_custom_checkbox > 0 and self.custom_checkbox:
+            points += club.points_for_custom_checkbox
+        return points
+
     def auto_award_bap_points(self):
         """Always store bap_auto_reason when a winner is set; also create a BapAward if auto_add_points is on.
 
@@ -9033,9 +9054,7 @@ class Lot(models.Model):
             # Eligible but club requires manual approval — reason is "" (eligible), award created by admin
             return
         # Eligible + auto_add_points: create the BapAward now
-        points = self.bap_points_for_club(club)
-        if club.points_for_custom_checkbox > 0 and self.custom_checkbox:
-            points += club.points_for_custom_checkbox
+        points = self.default_bap_points(club)
         seller_user = self.user or (self.auctiontos_seller.user if self.auctiontos_seller else None)
         if not seller_user:
             return
@@ -11716,14 +11735,15 @@ class UserData(models.Model):
     show_ad_controls = models.BooleanField(default=False, blank=True)
     show_ad_controls.help_text = "Show a tab for ads on all pages"
     use_llm_search = models.BooleanField(
-        default=get_default_use_llm_search, blank=True, verbose_name="AI assistant and connected apps"
+        default=get_default_use_llm_search, blank=True, verbose_name="AI command palette"
     )
     use_llm_search.help_text = (
-        "Let this user talk to the site in plain English -- typing or speaking into the command "
-        "palette, and connecting Claude or another assistant to their account (see /account/api-keys/).  "
-        "Off for everyone by default; turn it on site-wide with `manage.py change_assistant on`.  "
-        "The command palette half also needs an LLM configured site-wide (auctions.llm.assist_enabled); "
-        "the connected-app half does not, because the assistant brings its own."
+        "Let this user talk to the site in plain English by typing or speaking into the command "
+        "palette.  Off for everyone by default; turn it on site-wide with "
+        "`manage.py change_assistant on`.  Also needs an LLM configured site-wide "
+        "(auctions.llm.assist_enabled), because every command spends this site's own budget.  "
+        "This does NOT gate connecting Claude or another assistant over MCP (/ai/), "
+        "which is open to everyone: an agent brings its own model and costs this site nothing."
     )
     credit = models.DecimalField(max_digits=6, decimal_places=2, default=0)
     credit.help_text = "The total balance in your account"

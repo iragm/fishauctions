@@ -590,7 +590,7 @@ because no server-initiated stream and no session are offered. A foreign `Origin
 CSRF-exempt POST that performs writes; if it honoured cookies, any page on the internet could drive
 it as whoever was signed in. Two credentials are accepted, both as `Authorization: Bearer`:
 
-* a **`UserAPIKey`** (prefix `ak_`), issued at `/account/api-keys/` and shown once. This is for
+* a **`UserAPIKey`** (prefix `ak_`), issued at `/ai/` and shown once. This is for
   what *cannot* sign in — a script, a cron job, the `static_headers` beta where an org admin enters
   one credential for everybody. It shares `HashedAPIKey.generate` / `.verify` with `ClubAPIKey`:
   prefix in the clear, secret as a salted hash, never stored.
@@ -620,14 +620,19 @@ resource without one. The `WWW-Authenticate` header points at the path-component
 (`/.well-known/oauth-protected-resource/mcp`), not the bare origin: Claude requires the document's
 `resource` to match the URL the user typed, and the origin's document describes the whole site.
 
-**The whole feature is gated on `UserData.use_llm_search`** — the same per-user beta flag that
-opens the natural-language palette, checked by `mcp.auth.opted_in` on every request and by
-`UserAPIKeyView.dispatch` on the page. Gating only the page would be decorative: a person could
-skip it, run whatever OAuth flow their client offers, and be connected. It is deliberately *not*
-also gated on a language model being configured site-wide — an agent brings its own model, so this
-works on an install with no `OPENAI_API_KEY` at all. Turning the flag back off disconnects them.
+**There is no per-user gate on any of this**, and that is a deliberate reversal. It used to
+require `UserData.use_llm_search` — the flag that opens the natural-language palette — on the
+reasoning that the two are one beta reached two ways. They are not the same feature. The palette
+spends *this site's* language-model budget on every keystroke, which is exactly what that flag is
+for; an agent connecting over MCP brings its own model, costs this site nothing beyond the queries
+a web page would make, and can do nothing its owner could not do by clicking. Gating it bought no
+safety and cost the thing an unreleased feature can least afford: somebody pressing Connect,
+completing a full OAuth flow, and being refused by their own site with nothing to act on. What is
+still checked on every credential is `is_active`. It is also deliberately *not* gated on a language
+model being configured site-wide, for the same reason: this works on an install with no
+`OPENAI_API_KEY` at all.
 
-`/account/api-keys/` is the page that explains all of this, written for a person rather than for a
+`/ai/` is the page that explains all of this, written for a person rather than for a
 developer: the address, the two ways to connect (custom connector, `claude mcp add`), what it can
 do, and the key form underneath for the cases that need one. It leads with signing in because
 that is what almost everyone wants — Claude Code runs its own OAuth flow too, so a key is the
@@ -635,10 +640,10 @@ exception, not the default.
 
 **A credential we recognise and won't act on is a `403`, never a `401`** (`mcp.auth.Refusal`).
 That distinction is the difference between a working rollout and a loop: a `401` is an
-*instruction to authenticate*, so a client that gets one because its owner lacks
-`use_llm_search` runs the whole OAuth flow again, is issued another perfectly valid token,
-presents it, and is refused again — with no message anywhere for the person watching. The `403`
-carries no `WWW-Authenticate` and does carry the sentence that says what to do.
+*instruction to authenticate*, so a client that gets one because its owner's account has been
+deactivated runs the whole OAuth flow again, is issued another perfectly valid token, presents it,
+and is refused again — with no message anywhere for the person watching. The `403` carries no
+`WWW-Authenticate` and does carry the sentence that says what to do.
 
 **The authorization server is not the toolkit's out of the box**, and `fishauctions/urls.py`
 assembles it by hand rather than `include("oauth2_provider.urls")` for two reasons. The
@@ -657,7 +662,7 @@ ordinary page: a person arrives by being redirected *off* an assistant, and an u
 asking them to approve access to their account is indistinguishable from the phishing page it
 looks like.
 
-`/account/api-keys/` lists **what is signed in** as well as what keys exist, with a Disconnect that
+`/ai/` lists **what is signed in** as well as what keys exist, with a Disconnect that
 deletes the access tokens, the refresh tokens and the grants — an access token alone lives an hour,
 so revoking only those disconnects somebody for less time than it takes to read the page. Before
 that list existed the page described a connection it could not show and offered no way to end:
@@ -753,14 +758,14 @@ it is the shortest piece of attacker-controlled text that reaches an auction adm
 "mark bob's invoice paid" is twenty-three characters. `test_palette_assist.UntrustedTextTests`
 holds the line.
 
-**`tools/list` is ~47 KB and every host pays for it once a session.** `?tools=club`,
+**`tools/list` is ~68 KB and every host pays for it once a session.** `?tools=club`,
 `?tools=auction`, `?tools=read` narrow it (`mcp.tools.parse_areas`, area derived from the
 parameters an action already declares); `general` is always kept, because a narrowed list most
 needs the tools that orient a caller. It is part of the address rather than the protocol because
 the protocol has nowhere to put it and the address is the one thing every client lets a person
-type. `?tools=club,read` is 8 KB, `?tools=auction,read` 14 KB, `?tools=read` 18 KB.
+type. `?tools=club,read` is 13 KB, `?tools=auction,read` 16 KB, `?tools=read` 24 KB.
 
-That parameter is **no longer documented on `/account/api-keys/`**, and the reason is that the
+That parameter is **no longer documented on `/ai/`**, and the reason is that the
 problem it solves is not ours to solve. Deferred tool loading — `defer_loading: true` plus a tool
 search tool — is set by whoever calls the model, on the `mcp_toolset` entry or per tool in its
 `configs`; there is nowhere in `tools/list` for a *server* to ask for it, and Claude Code already
@@ -771,15 +776,15 @@ nothing, it is genuinely useful to somebody wiring up a narrow integration, and 
 thing that belongs in this file rather than on a page.
 
 Three things are left out of every descriptor, and all three are the same decision — a key that
-says what the spec's own default already says is a key fifty-four times over. `destructiveHint`
+says what the spec's own default already says is a key sixty-five times over. `destructiveHint`
 and `idempotentHint` are omitted on a read-only tool (the spec defines them only when
 `readOnlyHint` is false). `idempotentHint` is omitted when it is `false`, which is its default.
 And `annotations.title` is gone, because the spec says the top-level `title` wins over it and a
 host old enough to read only the annotation falls back to `name` — which differs from the title by
 two spaces and a capital letter. `openWorldHint: false` stays despite being a bare boolean: its
 default is `true`, and "this tool reaches out to the open internet" is the wrong thing to assume
-about a tool that only touches this site's own database. What is left is substance: 16 KB of tool
-descriptions and 19 KB of parameter schemas.
+about a tool that only touches this site's own database. What is left is substance: 22 KB of tool
+descriptions and 26 KB of parameter schemas.
 
 **Every result carries `structuredContent` as well as the text.** MCP 2025-06-18's answer to the
 thing that was wrong here: the result was a JSON document inside a string, so every host parsed a
@@ -790,41 +795,102 @@ guarantees the two are the same answer when `_text` refuses an over-budget paylo
 guarantees the structure is JSON-safe (`_text` serialises Decimals with `default=str`, and a
 Decimal left in `structuredContent` would blow up when the transport serialises the response).
 
+**A result that names a thing also links to it.** `resource_link` content blocks (2025-06-18) ride
+alongside the text on every result that named an auction, a club or a lot, so a host can fetch the
+whole record without the model spending a turn choosing a tool and guessing a slug.
+
+Where the slug comes from is the part worth knowing. It cannot be read out of the answer: `auction`
+is the auction's **slug** in `_lot_echo` and its **title** in `list_lots` and `describe_lot` — both
+right where they are, and a URI built by guessing between them 404s. So the resolver says, through
+`palette_actions._about` into `KEY_ABOUT` (`_about`), which is bookkeeping and is stripped on every
+surface (`mcp.tools._payload`, and `lookup_payload` plus the system prompt on the palette) before
+anything reaches a person or a model. A tool never links to **its own** answer — `describe_lot`
+pointing at `lot://spring/14` is a pointer at the document it just sent, so that one is dropped, and
+what goes in its place is what sits *underneath* it. That is why `describe_auction` offers the
+auction's lots and its people while `list_lots` offers only the auction: one has already answered
+the top-level thing and the other has not. Rows in a long list are not linked either: eight of a hundred lots is
+a sample nobody asked for, and `resources.MAX_LINKS` is twelve because that is the shape of
+`my_context`, every club somebody belongs to and every auction running at once. A URI that
+`resources.match` will not accept is silently skipped, because a decoration must never fail a call
+that otherwise worked.
+
+**Icons are URLs, five of them, derived** (`auctions/mcp/icons.py`). Tools, prompts, the data
+resources and resource templates, and `serverInfo`, which also gained `websiteUrl`. Not the `ui://`
+widget documents — a widget is rendered rather than browsed. Not
+inlined `data:` URIs, because `tools/list` is paid for in full, in context, by every host every
+session and five inlined SVGs at ~400 bytes across sixty-odd tools is a real regression for
+decoration — as shipped they are 8.4% of the list and `test_mcp.IconTests` fails the build above
+15%. Five rather than sixty-odd, read off the danger tier and `tools.area_of` exactly as the
+annotations are, so there is no second table to keep in step: a magnifier for a read, an arrow for a
+navigate, a tag for a write on an auction, people for a write on a club, a pencil for the rest. No
+`sizes` on them — they are SVG, every size is the right size, and `["any"]` is twenty-five
+characters saying so once per tool; the raster favicons in `serverInfo` are the one place a host has
+a real choice to make and the one place `sizes` is sent. The stroke is `#2fa4e7`, the site's link
+accent, which is legible on light and dark alike, so there is no `theme` pair either.
+
 There is deliberately **no `outputSchema`**. Declaring one obliges every result to conform to it,
 and these results are one small envelope (`ok`/`found`/`summary`/`followups`) plus whatever the
 tool is about — fifteen participant rows, a club's fee table, a lot's live price. A schema loose
-enough to be true of all fifty-four validates nothing, and fifty-four copies of it is seven
+enough to be true of all sixty-five validates nothing, and sixty-five copies of it is eight
 kilobytes on every session for that nothing. A tool that grows a result worth validating can
 declare its own.
 
-**Five answers are better looked at than read out, and MCP has a shape for that.** A host with
+**Four answers are better looked at than read out, and MCP has a shape for that.** A host with
 the apps surface renders a `ui://` resource in a sandboxed iframe beside the tool's reply:
 `describe_lot` becomes the lot with its photograph on it, `describe_auction` the club's rules,
-`lot_queue` the selling console with a row for recording who bought the lot on the block,
-`my_activity` / `set_invoice_status` an itemised invoice, and `my_membership` /
-`renew_membership` / `send_membership_card` the member's own card. `auctions/mcp/widgets.py` is
-the catalogue, `protocol` serves `resources/list` and `resources/read`, and `tools.descriptor`
+`my_activity` / `find_invoice` / `set_invoice_status` / `add_invoice_adjustment` an itemised
+invoice, and `my_membership` / `renew_membership` the member's own card. `auctions/mcp/widgets.py`
+is the catalogue, `protocol` serves `resources/list` and `resources/read`, and `tools.descriptor`
 hangs `_meta["ui/resourceUri"]` (and the nested spelling, because hosts read one or the other) on
-exactly those five.
+exactly those four.
+
+**There was a fifth and it was scrapped: a selling console.** It was built and it worked — the lot
+queue with three fields under it, each one checked against `DynamicSetLotWinner`'s own
+`validate_lot` / `validate_price` / `validate_winner` / `cross_check_price_and_winner`, a sale
+recorded through `set_lot_winner`, an override, an undo, and the queue advancing itself. It was
+still the wrong thing to build. Selling is the busiest, most time-critical job on this site and it
+already has a **full-screen page** with a keyboard flow, voice input and a queue that advances
+itself; a second, smaller copy of it inside a chat window — with a debounce between the operator
+and every check — is not a better version of that page, it is a *confusing* one. Two places to do
+the same job, one quietly worse, and nobody mid-auction able to tell which they are looking at. The
+read that existed only to feed it (`check_lot_sale`) went with it. The **tools** stay —
+`set_lot_winner`, `no_sale`, `undo_sale` — because saying "lot 14, bidder seven, twelve dollars"
+out loud is a real thing to want; drawing a form for it is not. Nothing in
+`widget.html` calls `callServerTool` any more, so no widget can act at all.
 
 The **card** is the one that has to be looked at rather than read: a membership number read out is
 a number, and a membership number drawn as a barcode is the thing the door scanner takes.
 `my_membership` is the new read behind it — read-only, always the caller's own (it matches on
 `ClubMember.user`, and there is no parameter for a person), and the answer to "am I still a
 member?", which nothing could answer before: `renew_membership` navigates and
-`send_membership_card` emails. All three now return the same `_membership_card(member)` object, so
+`send_membership_card` emails. Both reads return the same `_membership_card(member)` object, so
 the widget draws one card whichever way somebody arrived at it. Its Renew button is an
 `app.openLink` to the club's own payment page and takes no money — PayPal's and Square's scripts
 could not run inside that iframe if we wanted them to — and it only appears when
 `_membership_renewal_state` says there is something to pay, which is also why "renew my
 membership" four months early now answers "it runs to March" instead of walking somebody to a
-payment page.
+payment page. That button **did nothing at all** until recently, for a reason worth knowing about:
+`mcp.tools._absolute` matched the key name `url` exactly, so `renew_url` went out relative, and a
+relative href handed to `app.openLink` from inside a sandboxed iframe resolves against nothing. It
+now matches any key ending in `_url`, which is a rule that cannot be forgotten the next time a
+resolver returns a second link.
 
-Two of the five decorate a write, and `test_mcp_widgets.WRITES_THAT_MAY_RENDER` is where each one
-says why: `set_invoice_status` because the invoice it just settled is what a checkout desk needs
-to see, `send_membership_card` because the card it just emailed is better shown than described.
-Both draw the thing they *did*, never the thing they are about to do — the widget is the receipt,
-not the button, which is what keeps "a host may render this" from meaning "a host may run this".
+**A membership card is a credential, and only its owner is ever handed one.** `send_membership_card`
+can now email *another* member's card, and the reply to that says a sentence and nothing else: no
+`membership_number`, no `barcode_url`. Running a club is permission to **send** somebody their
+card, to the address already on their membership, which only they can read. It is not permission to
+be handed the thing the door scanner accepts — and an agent handed one has put a way through the
+door into a transcript. So `_membership_card` is only ever built for the caller's own membership,
+every route to it (`my_membership`, `renew_membership`, the self half of `send_membership_card`)
+goes through `_my_memberships`, which matches on `ClubMember.user`, and
+`test_palette_skills.MembershipCardPrivacyTests` walks every one of them plus the club-side reads.
+That is also why the card came off the widget: it can now be about somebody else.
+
+Two writes decorate a widget, and `test_mcp_widgets.WRITES_THAT_MAY_RENDER` is where each says why:
+`set_invoice_status` because the invoice it just settled is what a checkout desk needs to see, and
+`add_invoice_adjustment` because a new line is only checkable against a new total. Both draw the
+thing they *did*, never the thing they are about to do — the widget is the receipt, not the button,
+which is what keeps "a host may render this" from meaning "a host may run this".
 
 **The widget draws itself from the same `structuredContent` the model reads.** That is the whole
 design and it is what makes the feature free: a host that has never heard of `_meta.ui` ignores it
@@ -839,7 +905,9 @@ embeds — and it borrows that file's palette and class names, because a club em
 the same problem twice.
 
 The iframe's CSP blocks **everything** external, so `@modelcontextprotocol/ext-apps` is vendored
-(`auctions/mcp/vendor/`, unmodified, with the curl that fetched it) and inlined; `widgets._bundle`
+(`auctions/mcp/vendor/`, unmodified, with the curl that fetched it — and excluded in
+`.pre-commit-config.yaml`, because `trailing-whitespace` had quietly reformatted it and "unmodified"
+has to be true rather than nearly true) and inlined; `widgets._bundle`
 rewrites its trailing `export{…}` into a `globalThis` assignment, because an inline
 `<script type="module">` cannot export, and `test_mcp_widgets` fails the build if that stops
 matching — the alternative symptom is a blank rectangle with the error in an iframe console nobody
@@ -847,8 +915,8 @@ will open. Lot photos and a membership barcode are the exceptions and are declar
 `csp.resourceDomains` names this site and the Cloudflare delivery host, because a lot may carry six
 photographs and a result is capped at 20 KB. `csp.connectDomains` is **empty** and stays empty: a widget never talks
 to this API, it asks the host, which asks us with the caller's own credential — so there is no
-second authenticated path in, and the one tool a widget calls on its own (`set_lot_winner`, from
-the selling console) goes through `run_action` exactly as a model's call would. Outbound links go
+second authenticated path in, and since the selling console came out no widget calls a tool at
+all — the only bytes any of the four fetch are a lot's photographs and a membership barcode. Outbound links go
 through `app.openLink`; the sandbox drops `window.open` and `target="_blank"` silently.
 
 `resources/list` is **not** filtered by permission, on purpose: a widget is an empty template and
@@ -872,13 +940,12 @@ full ceiling costs nothing and removes a failure with no symptom. Refresh tokens
 chosen from how often clubs meet rather than from a security default — rotation runs the clock from
 the last refresh, and at 30 days a club that connected in March was signed out at the May auction.
 
-**`UserData.use_llm_search` is "AI assistant and connected apps"**, defaults from
-`ASSISTANT_ENABLED_FOR_USERS`, and `manage.py change_assistant on|off` turns it on for everybody
-who already exists (modelled on `change_paypal`). `/account/api-keys/` no longer 403s somebody
-without it: that page is the only thing on the site that explains what connecting an assistant is,
-and it is exactly what a person is reading when they find out they cannot have it yet. The
-explanation renders, everything that issues or ends a credential does not, and `post` still
-refuses.
+**`UserData.use_llm_search` is "AI command palette" and nothing else now.** It defaults from
+`ASSISTANT_ENABLED_FOR_USERS` and `manage.py change_assistant on|off` turns it on for everybody who
+already exists (modelled on `change_paypal`), but it no longer reaches `/mcp/` or
+`/ai/` — both are open to anybody signed in, and the "AI agents" link in the
+preferences menu is unconditional. The narrowing is the point: what that flag rations is this
+site's own model spend, which an agent does not touch.
 
 **A club can run its calendar, its announcements and its settings from here.** `add_club_event` /
 `update_club_event` (through `ClubEventForm`, and a generated event still refuses everything the
@@ -889,6 +956,72 @@ page — nothing is delivered inside the request), `set_current_auction`, `updat
 which reads `UserData.timezone`: `_club_events` used to `strftime` a UTC-aware datetime, so an
 8:10pm Friday meeting read back as "Saturday at 12:10 AM". Auction dates still use `local_time`
 and the auction's own timezone, because an auction happens in one place.
+
+**A club's breeder award program is three skills, split by who is asking.** `award_points` gives a
+*member* points out of band and was the whole of it; everything a club actually runs on — lots come
+out of an auction, the site works out which are eligible and what they are worth, an officer says
+yes or no to each — lived on the Pending BAP page and nowhere else. `points_queue` is that page's
+own queryset (`services.bap_review_lots`) filtered by that page's own filter
+(`filters.ClubBapLotFilter`, driven through the little query language its search box takes), because
+"pending" is one particular combination of three columns and there must be exactly one place that
+says which. Four statuses: **pending**, **approved**, **denied**, and **missed** — the last of those
+being lots whose seller never ticked "I bred this", which is the one nobody would go looking for and
+the reason that status exists at all. `review_points` takes one of the three decisions.
+`my_points` is the member's own side.
+
+**Approving with no number is the button's default, and there is now one of those.**
+`Lot.default_bap_points` — genus rule, then category rule, then the club's flat rate, then the
+category's own default, plus the auction's bonus checkbox. There were three answers to that question
+and only one was right: `auto_award_bap_points` had it, `LotBapPointsView._render_buttons` read the
+category override and not the genus one (so approving a *Tropheus* re-rendered the row with a number
+the table had never shown), and `BapAwardAdminView._lot_initial` had the overrides and dropped the
+bonus. `ClubBapLotHTMxTable.render_actions` is the one deliberate copy — it runs once per row on a
+page that shows hundreds, so it reads the same precedence off two prefetched dicts rather than two
+queries per lot. Which of BAP, HAP and CAP the default lands in is `Lot.bap_placeholder`, so a club
+running a separate plant program gets its plants in the HAP column without anybody saying so.
+
+**`review_points` does not ask first**, and it is the third action to opt out of the countdown. The
+bar is the one `check_in` set — confirm-tier, not destructive, idempotent, enforced by
+`test_mcp.ConfirmationTierTests` — and a points decision meets it in a stronger form than most
+writes here can: it is one lot's verdict, each of the three values replaces the last, **`undo` is
+one of its own values**, and so there is no state it can reach that it cannot leave. It is also
+said thirty times in a row by somebody working down a list. `watch_lot` opted out for the plainer
+reason: a countdown before starring a lot is the card costing more than the thing it guards.
+
+The one thing `services.review_lot_points` changes about the web is that **undo now writes a
+history line**. Approve and deny always did; undo silently rolled either of them back, which was
+survivable while the only way to press it was to be looking at the table and is not survivable now
+that an agent can press it — "every write is in the history with who did it" is most of what makes
+handing this to an agent reasonable, and a write that leaves no trace is the exception that would
+prove it wrong. Undoing a lot **nobody has decided** is the exception and writes nothing at all: it
+is a quiet no-op rather than a refusal, because the tool declares itself idempotent and a host
+retrying a dropped connection must not get an error for a call that already worked. `deny` still
+deliberately leaves `bap_auto_reason` alone: that column is the site's own verdict on eligibility
+and stays worth showing beside a human's decision to overrule it. And `hap_points` or `cap_points`
+at a club that does not run that track separately is refused by name — the page can only ever offer
+the one column `bap_placeholder` picked, so it is a mistake only an agent can make, and silently
+zeroing it answered "that would award nothing", which was true and no help at all.
+
+**"How many points will I get this auction if all my lots sell" had no answer anywhere**, which is
+odd for the question people ask *while deciding what to bring*. `my_points` walks each of the
+caller's lots through `Lot.unsold_lot_no_bap_reason` — the club's own rule book, the same one the
+pending page shows a reason out of — which deliberately ignores whether the lot has sold, and that
+ignoring is precisely the "if they all sell" in the question. Four states per lot: awarded, denied,
+waiting for the club, or not eligible with the reason. Bounded at `FORECAST_LOT_CAP` (60) because
+each lot costs a run of those rules, and the answer says so when it stops rather than quietly
+under-reporting. The totals half comes from `_membership_facts`, so it cannot disagree with what
+`my_activity` and the membership card already say.
+
+Scoping is `_bap_club_or_problem`, which is `_club_or_problem` narrowed to clubs where the caller
+actually holds `permission_manage_bap` and the program is switched on. The narrowing is the point:
+somebody in five clubs and on the points desk of one was asked "which club?" and shown all five,
+four of which would then refuse them — and the sticky `_palette_club` pointer could hand back one of
+the four without asking at all. `_bap_lot_or_problem` is the matching narrowing for lots, and it is
+deliberately not `_resolve_lot`: that one searches `command_palette._joined_auctions`, which a club
+officer holding only `permission_manage_bap` is not in — they never joined the auction as a bidder,
+and a club role counts there only for `permission_admin` and `permission_manage_auctions`. It also
+matches a plain integer against `lot_number_int`, which `find_lot` does not and which is the number
+printed on most labels on this site.
 
 **Joining is `services.join_auction`**, extracted from `AuctionInfo.post`, so the assistant signs
 somebody up without sending them to a page. The rules come back in the reply and joining takes an
@@ -927,6 +1060,18 @@ next to a `/lots/<pk>/` URL. The number a person reads off a lot is `lot_number_
 address on its own label is `lot_link` (`/auctions/<auction>/lots/<number>/`). `add_lot`'s
 `reused_a_previous_lot` is a sentence now rather than a bare `true`: which lot it copied, what it
 copied, and that editing the lot undoes it.
+
+**`check_in` no longer counts down.** `Action.asks_first` is the palette's confirmation card, and
+it is now a separate thing from the read/write split: `check_in` stays `DANGER_CONFIRM`, stays
+`readOnlyHint: false`, stays out of a read-only credential's `tools/list` and stays on the write
+budget — it simply runs in the assist call instead of coming back as a card. The bar for the
+opt-out is narrow and enforced by a test: confirm-tier, **not** `destructive`, and idempotent, so
+`undo_check_in` (which destroys a previous answer) still asks. `watch_lot` and `review_points` are
+the other two that meet it — see the breeder award section below for why the second one does. What it is really about is that
+checking somebody in is said thirty times in a row by a person standing at a door with a queue
+behind them, and there the card is most of the cost of the tool. What a *host* does about
+confirmation is still the host's own decision, taken from `destructiveHint`; the countdown was only
+ever the browser's answer to that question.
 
 **Check-in mode creates the participant row.** That is what the mode means, and the web does it
 from a barcode scan (`views.AuctionBarcodeScan` → `_upsert_clubmember_shadow_tos`). There is
@@ -1003,6 +1148,33 @@ auction publicly without being asked. The fixtures in `tests.py` set it explicit
 `models.guess_category` and `command_palette._visible_auctions` are both scoped to promoted
 auctions and were quietly relying on the old default.
 
+**The lot queue is the one thing an agent may read that the web page keeps to admins.**
+`/auctions/<slug>/queue/` is `LotQueueMixin`, which is admin-only, and `lot_queue` deliberately is
+not. What an admin is being trusted with on that page is *editing* the running order; what is on it
+is the same list the kiosk is already projecting at the whole room, and "any ancistrus coming up
+soon?" is a bidder's question — the one person who could not find out was the one who wanted to be
+standing near the front when it went up. `query` is what turns that from readable into answerable:
+forty queued lots is more than anybody scans. The **position is worked out over the whole queue
+before anything is filtered or sliced**, so a match at number 31 still reads as 31 — "third in this
+list" is no use to somebody deciding whether to walk to the front.
+
+**`place_bid` is the one write with no way back, and it says so.** Everything around bidding was
+already here — find a lot, read its price, watch it, hear what it went for — and the thing bidding
+is actually for was a link to a page, which by the time somebody has opened it is the wrong price.
+It runs `bidding.place_bid_and_broadcast`, which is `views.PlaceBid`'s own call: the row lock that
+stops two simultaneous buy-nows both winning, `check_all_permissions` and
+`check_bidding_permissions`, the proxy arithmetic, the outbid email and the websocket broadcast to
+everyone on the lot page. There is deliberately no second bidding path — a bid placed by an agent
+has to be indistinguishable from one typed into the box, because the money is real.
+
+It carries `destructive=True` while destroying no row, and that is a **widening of what that flag
+means** rather than a fudge: every other write here is reversible by some tool, and a bid is a
+commitment to somebody else that this site has never had a way to withdraw. `destructiveHint` is
+the question "must a host ask first?", and for this one the answer is yes for a reason the original
+wording ("overwrites a previous answer") could not express. It returns no `undo` block, it is not
+idempotent — two calls are two bids — and the result itself carries `cannot_be_undone`, because a
+model reaching for "undo that" is looking at the result, not at the registry.
+
 **`answer_question` closes the loop on `my_messages`.** Reading the seller's inbox with no way to
 answer it is the commonest "why can't it just…" a seller has. Replying is bounded rather than
 avoided: **only the seller's own lots**, so the worst case is answering the wrong one of your own,
@@ -1011,11 +1183,51 @@ and the reply echoes the lot it landed on. Everything else is the lot page's own
 row and the broadcast, extracted from `LotConsumer.receive` so a reply typed here appears on the
 page exactly like one typed into the box.
 
+**An invoice is now addressable, and it can carry a line that isn't a lot.** `find_invoice` is the
+read that was missing between `my_activity` (the caller's own) and `set_invoice_status` (which
+writes to it): "what does bidder 14 owe?" used to be answered by `describe_person`, which carries a
+status and a total and no link, or by `list_people`, which carries fifteen rows of everybody —
+both the wrong shape for a question about one person's money. Its permission is the invoice's own:
+an admin of that auction, or the person whose invoice it is. `invoice://{auction}/{person}` is the
+resource template behind it, so a host can attach "bidder 14's invoice" the way it attaches a lot,
+and `set_invoice_status`, `add_invoice_adjustment` and `describe_person` all name it through
+`_about(person=…)` — the first thing on that block that is about a **pair** of objects rather than
+one. The URI carries the bidder number, which is what is printed on the paddle; a participant with
+no number addresses nothing, and `resources.links_for` drops a URI it cannot match rather than
+sending a broken one.
+
+`add_invoice_adjustment` is the other half: the line every club needs and none of them can express
+as a lot — a raffle ticket, a bag of substrate off the club table, a membership taken at the door, a
+fiver off for whoever stacked the chairs. Validation is `InvoiceAdjustmentForm`, the invoice page's
+own, so it is whole dollars and the same 150-character note; the **sign of `amount` picks the
+direction**, because "take five off" is how it is said out loud. A settled invoice refuses, exactly
+as the barcode desk refuses it — changing what somebody owes after they have paid is not an
+adjustment, it is a dispute. There is deliberately no `remove_invoice_adjustment`: an adjustment is
+a row on the invoice page with a delete box beside it, which is where a mistyped one comes off.
+
+**`send_membership_card` can send somebody else's now, and that is why it came off the widget.**
+It started as the caller's own card only, on the reasoning that the admin-side endpoint was already
+excused from the skill audit as "acts on the row you're looking at" — which is true of a person
+looking at a row and false of an agent, which has no row. The commonest thing a club secretary is
+asked at a meeting is "can you send me my card again", and the only tool for it could be pointed
+at the secretary. Naming a `person` takes the web page's own rules (`ClubMemberResendCardView`:
+`permission_add_edit`, a club that issues cards, an address on file, not do-not-contact) and writes
+the same `ClubHistory` line the Resend button writes. **Both halves send to the address already on
+the membership**, and there is no parameter for an address — which is what makes widening it safe
+rather than merely convenient, and is enforced by a test on the action's parameter set.
+
 **`list_club_members` is the club-side `list_people`.** `club_numbers` counts them and every
 member-level tool needs a name up front, so the one thing nobody could do was find out *who* — "12
 have lapsed" with no way to ask which twelve. `is_paid_member` reads the club's own
 `membership_system` and cannot be a `WHERE` clause without becoming a second copy of it, so the
 filtering is one query and one Python pass, exactly as `club_numbers` already counts them.
+
+A row deliberately no longer says **whether that person has an account on this website**. That is a
+fact about them and this site rather than about them and the club, and it was on every row of every
+listing whether or not anybody had asked. The `no_account` *status* stays, because that one is a
+question an admin asked on purpose — "who still needs an invitation" is the club page's own
+segment — and it answers it without putting the answer beside fourteen people who were asked about
+for another reason entirely.
 
 **`auctions_near_me` has two halves.** `your_auctions` is `_my_auctions`: everything this person is
 in, **their clubs' own auctions included**, at any distance and whether or not it is publicly

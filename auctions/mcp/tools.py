@@ -41,7 +41,7 @@ from typing import Any
 
 from auctions import palette_actions
 
-from . import auth, widgets
+from . import auth, icons, resources, widgets
 
 logger = logging.getLogger(__name__)
 
@@ -58,7 +58,7 @@ SUMMARY_CHARS = 500
 #: Result keys that are ours and not the caller's. ``undo`` is the instruction for reversing the
 #: action, which :func:`palette_actions.remember_undo` consumes on the way past; handing it to the
 #: caller would invite them to replay it themselves, bypassing ``undo_last``'s window and stack.
-_INTERNAL_RESULT_KEYS = ("undo",)
+_INTERNAL_RESULT_KEYS = ("undo", *palette_actions.INTERNAL_RESULT_KEYS)
 
 #: The words the registry uses for a parameter's type, mapped onto JSON Schema's.
 _JSON_TYPES = {
@@ -212,6 +212,9 @@ def descriptor(action: palette_actions.Action) -> dict[str, Any]:
         "description": describe(action),
         "inputSchema": input_schema(action),
         "annotations": annotations,
+        # A URL rather than an inlined SVG, deliberately -- see :mod:`auctions.mcp.icons` for what
+        # that costs a list this size, and for why there are five of them and not fifty-four.
+        "icons": icons.for_action(action),
     }
     # Four tools answer a question that is better looked at than read out, and say so here: a host
     # with the apps surface renders one of ``auctions.mcp.widgets`` instead of the JSON. On the
@@ -245,6 +248,13 @@ _AREA_OVERRIDES = {
     "undo_last": AREA_GENERAL,
     "renew_membership": AREA_CLUB,
     "send_membership_card": AREA_CLUB,
+    # The breeder award program belongs to a club, not to an auction. All three take an ``auction``
+    # -- as a filter, as a disambiguator, as the thing being forecast -- which is enough for the
+    # derivation to file them under auctions, next door to ``award_points``, which takes only a
+    # club and lands in the right place. Points are reviewed after the auction, by the club.
+    "points_queue": AREA_CLUB,
+    "review_points": AREA_CLUB,
+    "my_points": AREA_CLUB,
 }
 
 
@@ -312,8 +322,17 @@ def _payload(result: dict[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in result.items() if key not in _INTERNAL_RESULT_KEYS}
 
 
+#: Which keys in a result hold a link. ``url`` is the common one; the suffix catches the rest.
+#: Matching only the exact name is what left ``renew_url`` on the membership card relative -- and a
+#: relative href handed to ``app.openLink`` inside a widget's iframe, or to a person in a chat
+#: window, is a button that does nothing at all. A suffix rule costs nothing and cannot be
+#: forgotten the next time a resolver returns a second link.
+def _is_url_key(key: Any) -> bool:
+    return isinstance(key, str) and (key == "url" or key.endswith("_url"))
+
+
 def _absolute(value: Any, base) -> Any:
-    """Every ``url`` in a result made absolute, wherever it is nested.
+    """Every link in a result made absolute, wherever it is nested.
 
     The resolvers return site-relative paths because the palette is a page on this site and a
     relative link is the right thing there. An agent is not on this site: it hands the link to a
@@ -323,7 +342,9 @@ def _absolute(value: Any, base) -> Any:
     if isinstance(value, dict):
         return {
             key: (
-                base(item) if key == "url" and isinstance(item, str) and item.startswith("/") else _absolute(item, base)
+                base(item)
+                if _is_url_key(key) and isinstance(item, str) and item.startswith("/")
+                else _absolute(item, base)
             )
             for key, item in value.items()
         }
@@ -362,7 +383,9 @@ def _text(payload: Any) -> str:
     )
 
 
-def _result(text: str, *, is_error: bool = False, structured: Any = None) -> dict[str, Any]:
+def _result(
+    text: str, *, is_error: bool = False, structured: Any = None, links: list[dict[str, Any]] | None = None
+) -> dict[str, Any]:
     """One ``CallToolResult``: the text block every host can read, plus the parsed object.
 
     ``structuredContent`` is MCP 2025-06-18's answer to the thing that was wrong here: the result
@@ -383,6 +406,11 @@ def _result(text: str, *, is_error: bool = False, structured: Any = None) -> dic
     validating, it can declare its own.
     """
     result: dict[str, Any] = {"content": [{"type": "text", "text": text}], "isError": is_error}
+    if links:
+        # ``resource_link`` blocks (2025-06-18): "there is more about this, at this address". A host
+        # that has never heard of the type ignores an unknown content block, which is what the spec
+        # asks of it, so this is free where it is not understood. See ``resources.links_for``.
+        result["content"].extend(links)
     if isinstance(structured, dict):
         result["structuredContent"] = structured
     return result
@@ -449,7 +477,7 @@ def call_tool(request, name: str, arguments: Any, *, writes: bool = True) -> dic
         return _result(
             f"“{action.name}” changes data and this credential is read-only. Only read-only tools "
             "are available to it. To change that, disconnect and reconnect this assistant from "
-            "/account/api-keys/ — a credential's read/write ceiling is fixed when it is issued.",
+            "/ai/ — a credential's read/write ceiling is fixed when it is issued.",
             is_error=True,
         )
     credential = getattr(request, "mcp_credential", None)
@@ -459,7 +487,7 @@ def call_tool(request, name: str, arguments: Any, *, writes: bool = True) -> dic
         return _result(
             f"This connection has changed {credential.write_budget} things in the last hour, which "
             "is its limit. Reads still work. If this wasn't you, disconnect it at "
-            "/account/api-keys/.",
+            "/ai/.",
             is_error=True,
         )
     # Resolvers read this to work out which auction the caller means from the page they are
@@ -474,6 +502,7 @@ def call_tool(request, name: str, arguments: Any, *, writes: bool = True) -> dic
     # Same call the palette's execute endpoint makes, so "undo that" works across both surfaces:
     # the stack is per user, and a lot added by an agent is a lot the same person can undo.
     palette_actions.remember_undo(request.user, action.name, result)
+    links = resources.links_for(action.name, result.get(palette_actions.KEY_ABOUT))
     body = _text(_absolute(_payload(result), request.build_absolute_uri))
     # The structure is parsed back out of the text rather than handed over alongside it, for two
     # reasons. It guarantees the two are the same answer -- when ``_text`` refuses an over-budget
@@ -481,4 +510,4 @@ def call_tool(request, name: str, arguments: Any, *, writes: bool = True) -> dic
     # twenty thousand characters the refusal exists to withhold. And it guarantees the structure is
     # JSON-safe: ``_text`` serialises Decimals and datetimes with ``default=str``, and a Decimal
     # left in ``structuredContent`` would blow up when the transport serialises the whole response.
-    return _result(body, structured=json.loads(body))
+    return _result(body, structured=json.loads(body), links=links)

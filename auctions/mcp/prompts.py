@@ -135,6 +135,8 @@ BY_NAME = {prompt.name: prompt for prompt in PROMPTS}
 
 def descriptors() -> list[dict[str, Any]]:
     """The ``prompts/list`` answer."""
+    from . import icons
+
     return [
         {
             "name": prompt.name,
@@ -144,6 +146,7 @@ def descriptors() -> list[dict[str, Any]]:
                 {"name": argument.name, "description": argument.description, "required": argument.required}
                 for argument in prompt.arguments
             ],
+            "icons": icons.for_prompt(prompt),
         }
         for prompt in prompt_list()
     ]

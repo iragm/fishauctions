@@ -83,9 +83,15 @@ class CatalogueTests(SimpleTestCase):
     #: The two writes allowed to carry a widget, and why. Both of them draw the thing they just
     #: acted on rather than the thing they are about to do -- the widget is the receipt, not the
     #: button -- which is what keeps "a host may render this" from meaning "a host may run this".
+    #:
+    #: ``send_membership_card`` came off this list, and so did the three selling-console writes.
+    #: The card because it can now send *another* member's card and must not hand the sender that
+    #: member's barcode; the selling ones because the console itself was scrapped -- see
+    #: :mod:`auctions.mcp.widgets` for why a second, smaller copy of the set-lot-winners page
+    #: inside a chat window was the wrong thing to build.
     WRITES_THAT_MAY_RENDER = {
         "set_invoice_status": "the invoice it just settled is what a checkout desk needs to see",
-        "send_membership_card": "the card it just emailed is better shown than described",
+        "add_invoice_adjustment": "the invoice it just added a line to, so the new total is visible",
     }
 
     def test_a_widget_only_ever_decorates_a_read(self):
@@ -136,7 +142,7 @@ class DocumentTests(SimpleTestCase):
         """
         from django.template.loader import render_to_string
 
-        html = render_to_string("auctions/mcp/widget.html", {"view": "winners", "widget_title": "Selling now"})
+        html = render_to_string("auctions/mcp/widget.html", {"view": "invoice", "widget_title": "Invoice"})
         for leftover in ("{%", "{{"):
             self.assertNotIn(leftover, html, f"{leftover} survived rendering and will show as text")
 

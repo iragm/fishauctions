@@ -832,3 +832,173 @@ def finish_new_auction(auction, created_by, *, copied_from=None, note=""):
     # Add club admin members as AuctionTOS admins (works for copied auctions with locations,
     # and for new auctions once a pickup location exists — also called from PickupLocationsCreate)
     _add_club_admins_as_auction_tos(auction, created_by)
+
+
+# --- breeder award points ----------------------------------------------------
+#
+# The club's BAP/HAP/CAP review desk: which lots are waiting for a decision, and what taking one
+# does. Both halves were methods on views -- ``ClubBapLotsView.get_queryset`` and
+# ``LotBapPointsView.post`` -- so the only way to ask "what am I approving?" or to answer it was
+# to be a browser holding a session cookie and a rendered table.
+
+
+def bap_review_lots(club):
+    """Every lot in this club's auctions that its points desk could have an opinion about.
+
+    The base queryset behind the Pending BAP page, extracted from ``ClubBapLotsView`` so the
+    ``points_queue`` skill lists exactly the rows the page lists. The status filtering on top of it
+    is ``filters.ClubBapLotFilter``'s, for the same reason: "pending" means one particular
+    combination of three columns and there must be only one place that says which.
+
+    ``Exists(matching_member)`` is the load-bearing clause -- a lot only reaches this table when its
+    seller is a member of *this* club, matched on the account or on the email, which is what stops a
+    club's review queue filling up with lots sold by strangers at a shared auction.
+    """
+    from django.db.models import Exists, OuterRef, Q
+
+    from .models import ClubMember, Lot
+
+    matching_member = ClubMember.objects.filter(
+        club=club,
+        is_deleted=False,
+    ).filter(
+        Q(user=OuterRef("auctiontos_seller__user"))
+        | Q(user=OuterRef("user"))
+        | Q(email__iexact=OuterRef("auctiontos_seller__email"))
+    )
+    lots = Lot.objects.filter(auction__club=club, is_deleted=False, active=False)
+    if club.only_sold_lots:
+        lots = lots.filter(auctiontos_winner__isnull=False, winning_price__isnull=False)
+    return (
+        lots.filter(Exists(matching_member))
+        .select_related("auctiontos_seller__user", "auction__club", "species_category", "species")
+        .prefetch_related("bap_award")
+        .order_by("-date_end")
+    )
+
+
+#: The three things a points desk can decide about one lot. ``undo`` is not a fourth decision so
+#: much as the absence of one: it puts the lot back in the pending queue it came out of.
+BAP_DECISIONS = ("approve", "deny", "undo")
+
+
+def review_lot_points(lot, club, *, acting_user, decision, bap=0, hap=0, cap=0):
+    """Approve, deny, or un-decide one lot's breeder award points. Returns the ``BapAward`` or ``None``.
+
+    Extracted from ``views.LotBapPointsView.post``, which rendered the row's buttons back to htmx
+    and so could not be called by anything that wasn't a browser. The three branches are that view's
+    own, unchanged in what they write, and the caller does the permission check
+    (``permission_manage_bap``) exactly as both callers already did.
+
+    The one thing that is new is that **undo writes a history line** -- except on a lot nobody has
+    decided, where it does nothing at all. Approve and deny always wrote one; undo silently rolled
+    either of them back, which was survivable while the only way to press it was to be looking at
+    the table, and is not survivable now that an assistant can press it -- "every write is in the
+    history with who did it" is most of what makes handing this to an agent reasonable, and a write
+    that leaves no trace is the exception that would prove it wrong.
+
+    Note what ``deny`` deliberately does *not* touch: ``bap_auto_reason`` stays as the system left
+    it. That column is the site's own verdict on eligibility and stays worth showing next to a
+    human's decision to overrule it.
+    """
+    from .models import BapAward
+
+    if decision not in BAP_DECISIONS:
+        message = f"{decision!r} is not one of {BAP_DECISIONS}"
+        raise ValueError(message)
+    seller = _bap_seller_name(lot)
+
+    if decision == "undo":
+        existing = BapAward.objects.filter(lot=lot).first()
+        if not existing and not lot.manually_approved:
+            # Nothing was ever decided, so there is nothing to take back and nothing worth a
+            # history line. A quiet no-op rather than a refusal, because ``review_points`` declares
+            # itself idempotent and a host retrying a dropped connection must not get an error for
+            # a call that already worked. The page cannot reach this at all: a pending row has no
+            # Undo button on it.
+            return None
+        if existing:
+            existing.delete()
+        lot.bap_points_awarded = 0
+        lot.manually_approved = False
+        lot.bap_auto_reason = lot.sold_lot_no_bap_reason or ""
+        lot.save(update_fields=["bap_points_awarded", "manually_approved", "bap_auto_reason"])
+        ClubHistory.objects.create(
+            club=club,
+            user=acting_user,
+            action=f"Undid the points decision for {seller}: {lot.lot_name}",
+            applies_to="BAP",
+        )
+        return None
+
+    if decision == "deny":
+        existing = BapAward.objects.filter(lot=lot).first()
+        if existing:
+            existing.delete()
+        lot.bap_points_awarded = 0
+        lot.manually_approved = True
+        lot.save(update_fields=["bap_points_awarded", "manually_approved"])
+        ClubHistory.objects.create(
+            club=club,
+            user=acting_user,
+            action=f"Rejected BAP points for {seller}: {lot.lot_name}",
+            applies_to="BAP",
+        )
+        return None
+
+    bap, hap, cap = (max(0, int(value or 0)) for value in (bap, hap, cap))
+    if not (bap or hap or cap):
+        return None
+    member = bap_member_for_lot(lot, club)
+    if not member:
+        return None
+    award, _created = BapAward.objects.update_or_create(
+        lot=lot,
+        defaults={
+            "club_member": member,
+            "date": lot.date_end.date() if lot.date_end else timezone.now().date(),
+            "points": bap,
+            "hap_points": hap,
+            "cap_points": cap,
+            "awarded_by": acting_user,
+        },
+    )
+    lot.bap_points_awarded = bap + hap + cap
+    lot.manually_approved = True
+    lot.bap_auto_reason = ""
+    lot.save(update_fields=["bap_points_awarded", "manually_approved", "bap_auto_reason"])
+    ClubHistory.objects.create(
+        club=club,
+        user=acting_user,
+        action=f"Awarded {lot.bap_points_awarded} BAP point(s) to {seller} for {lot.lot_name}",
+        applies_to="BAP",
+    )
+    return award
+
+
+def bap_member_for_lot(lot, club):
+    """The club member who would be credited for this lot: its seller, by account then by email.
+
+    The same two-step lookup ``Lot.unsold_lot_no_bap_reason``, ``LotBapPointsView`` and
+    ``BapAwardAdminView`` each wrote out for themselves. The email half is what makes points work
+    at all for somebody who has been in the club for years and never made an account here.
+    """
+    seller_user = lot.user or (lot.auctiontos_seller.user if lot.auctiontos_seller else None)
+    seller_email = (lot.auctiontos_seller.email if lot.auctiontos_seller else None) or (
+        seller_user.email if seller_user else None
+    )
+    member = None
+    if seller_user:
+        member = ClubMember.objects.filter(club=club, user=seller_user, is_deleted=False).first()
+    if not member and seller_email:
+        member = ClubMember.objects.filter(club=club, email__iexact=seller_email, is_deleted=False).first()
+    return member
+
+
+def _bap_seller_name(lot):
+    """Whoever brought the lot, for a history line. ``LotBapPointsView._seller_name``, verbatim."""
+    if lot.auctiontos_seller:
+        return lot.auctiontos_seller.name
+    if lot.user:
+        return f"{lot.user.first_name} {lot.user.last_name}".strip() or lot.user.username or f"user #{lot.user.pk}"
+    return f"lot #{lot.pk}"
