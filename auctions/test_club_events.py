@@ -1036,8 +1036,31 @@ class EmbedSelfSizingTests(TestCase):
         """A club page carrying somebody else's iframe must not be resizable by it."""
         self.client.force_login(self.admin)
         body = self.client.get(reverse("club_website_integration", kwargs={"slug": self.club.slug})).content.decode()
-        self.assertIn("e.origin!==", body)
         self.assertIn("contentWindow===e.source", body)
+        self.assertIn('f[i].src.indexOf(e.origin+"/")===0', body)
+
+    def test_the_listener_names_no_host_of_its_own(self):
+        """The origin it checks comes off the iframe, so copying the snippet between hosts works.
+
+        The first version pasted this site's origin into the script.  A snippet copied from one
+        host with the iframe pointed at another -- staging to production, a club changing
+        domains -- then listened for messages that never came and silently resized nothing.
+        """
+        self.client.force_login(self.admin)
+        body = self.client.get(reverse("club_website_integration", kwargs={"slug": self.club.slug})).content.decode()
+        listeners = [line for line in body.splitlines() if 'addEventListener("message"' in line]
+        self.assertGreaterEqual(len(listeners), 2)
+        for line in listeners:
+            self.assertNotIn("testserver", line)
+            self.assertNotIn("http", line)
+
+    def test_the_embed_repeats_a_height_it_has_already_sent(self):
+        """A listener registered late must not leave the iframe stuck at its pasted height."""
+        body = self._embed("club_announcements_embed").content.decode()
+        self.assertIn("function report(force)", body)
+        self.assertIn("height === last && !force", body)
+        self.assertIn('window.addEventListener("load", again)', body)
+        self.assertIn("setTimeout(again, 1000)", body)
 
 
 class EventsEmbedUsageTrackingTests(TestCase):

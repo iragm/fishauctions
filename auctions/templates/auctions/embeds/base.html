@@ -125,21 +125,33 @@ spread one over two lines and it renders onto the page.
   message is a number of pixels that is already visible to anyone who can see the frame.  The
   listener on the other end matches on event.source, so a page carrying several of these gives each
   iframe its own height.  ResizeObserver covers a narrow phone re-wrapping a long announcement; the
-  load handler covers the first paint.{% endcomment %}
+  load handler covers the first paint.
+
+  The height is repeated rather than only sent when it changes, because the listener is on the
+  other side of a race we cannot see: it is registered while the framing page parses, and a page
+  that defers its inline scripts, restores this frame from the back/forward cache or reveals it
+  from a tab registers it after our first message has already gone.  A missed message is an iframe
+  stuck at the height somebody guessed months ago, with nothing anywhere saying why, so `force`
+  re-sends the same number on load and once a second later.  Everything else still de-duplicates on
+  `last`: a resize that changes nothing costs no message.{% endcomment %}
   <script>
     (function () {
       if (window.parent === window) { return; }
       var last = 0;
-      function report() {
+      function report(force) {
         var height = Math.ceil(document.documentElement.getBoundingClientRect().height);
-        if (!height || height === last) { return; }
+        if (!height || (height === last && !force)) { return; }
         last = height;
         window.parent.postMessage({ clubEmbed: "height", height: height }, "*");
       }
+      function changed() { report(false); }
+      function again() { report(true); }
       report();
-      window.addEventListener("load", report);
-      window.addEventListener("resize", report);
-      if (window.ResizeObserver) { new ResizeObserver(report).observe(document.documentElement); }
+      window.addEventListener("load", again);
+      window.addEventListener("pageshow", again);
+      window.addEventListener("resize", changed);
+      setTimeout(again, 1000);
+      if (window.ResizeObserver) { new ResizeObserver(changed).observe(document.documentElement); }
     })();
   </script>
 </body>

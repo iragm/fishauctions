@@ -1,14 +1,21 @@
 {% comment %}
 One "put this on your website" block, rendered from a dict built by ClubWebsiteIntegrationView.
 Expects `snippet` with: title, icon, blurb, url, heights (a {count: pixel height} map), available,
-unavailable_reason, settings_url, and counts/max_count for the ones that take a ?count=. Also reads
-`embed_origin` from the outer context, which is this site's scheme and host.
+unavailable_reason, settings_url, and counts/max_count for the ones that take a ?count=.
 
 Each snippet is an iframe **and** a two-line listener, in one block, because an iframe is the one
 box on a page that cannot size itself to its contents: a height picked for ten events shows two
 events and 700 pixels of nothing under them. The embed measures itself and posts its height; the
 listener sets it. Pasting both is one copy either way, and a CMS that strips the script leaves the
 height attribute doing what it always did.
+
+The listener names **no host**. It finds the iframe whose `contentWindow` is the message's source
+-- which nothing can forge, and which is what keeps each of several embeds on one page sizing
+itself -- and then checks `e.origin` against that iframe's own `src`. The first version baked this
+site's origin into the script, and the failure was silent in exactly the case that happens: a
+snippet copied from one host with the iframe pointed at another (staging to production, a club
+moving domains) went on listening for messages that never came, resized nothing, and gave nobody
+anything to look at. A check the snippet derives from itself cannot be copied out of step.
 
 A snippet carrying `links` instead is the other kind: plain addresses rather than an iframe, for
 the things a club's own site already knows how to present (a "subscribe" button in their menu).
@@ -51,11 +58,11 @@ spread one over two lines and it renders straight onto the page.
     <label class="form-label small fw-bold mb-1">{% if snippet.counts %}{{ count }} at a time &mdash; {% endif %}light</label>
     <pre class="small border rounded p-2 mb-2" style="white-space:pre-wrap;word-break:break-all;">&lt;iframe src="{{ snippet.url }}?format=iframelight{% if snippet.counts %}&amp;count={{ count }}{% endif %}"
     style="border:0;width:100%;max-width:480px;height:{{ height }}px"&gt;&lt;/iframe&gt;
-&lt;script&gt;addEventListener("message",function(e){if(e.origin!=="{{ embed_origin }}")return;var d=e.data||{};if(d.clubEmbed!=="height")return;var f=document.getElementsByTagName("iframe");for(var i=0;i&lt;f.length;i++)if(f[i].contentWindow===e.source)f[i].style.height=d.height+"px";});&lt;/script&gt;</pre>
+&lt;script&gt;addEventListener("message",function(e){var d=e.data||{};if(d.clubEmbed!=="height")return;var f=document.getElementsByTagName("iframe");for(var i=0;i&lt;f.length;i++)if(f[i].contentWindow===e.source&amp;&amp;f[i].src.indexOf(e.origin+"/")===0)f[i].style.height=d.height+"px";});&lt;/script&gt;</pre>
     <label class="form-label small fw-bold mb-1">{% if snippet.counts %}{{ count }} at a time &mdash; {% endif %}dark</label>
     <pre class="small border rounded p-2 mb-2" style="white-space:pre-wrap;word-break:break-all;">&lt;iframe src="{{ snippet.url }}?format=iframedark{% if snippet.counts %}&amp;count={{ count }}{% endif %}"
     style="border:0;width:100%;max-width:480px;height:{{ height }}px"&gt;&lt;/iframe&gt;
-&lt;script&gt;addEventListener("message",function(e){if(e.origin!=="{{ embed_origin }}")return;var d=e.data||{};if(d.clubEmbed!=="height")return;var f=document.getElementsByTagName("iframe");for(var i=0;i&lt;f.length;i++)if(f[i].contentWindow===e.source)f[i].style.height=d.height+"px";});&lt;/script&gt;</pre>
+&lt;script&gt;addEventListener("message",function(e){var d=e.data||{};if(d.clubEmbed!=="height")return;var f=document.getElementsByTagName("iframe");for(var i=0;i&lt;f.length;i++)if(f[i].contentWindow===e.source&amp;&amp;f[i].src.indexOf(e.origin+"/")===0)f[i].style.height=d.height+"px";});&lt;/script&gt;</pre>
     {% endfor %}
 
     <p class="small text-muted mb-2">

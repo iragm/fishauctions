@@ -20724,9 +20724,6 @@ class ClubWebsiteIntegrationView(LoginRequiredMixin, ClubViewMixin, TemplateView
         club = self.club
         context["club"] = club
         base = f"{self.request.scheme}://{self.request.get_host()}"
-        # The listener pasted alongside each iframe checks event.origin against this before it
-        # resizes anything, so a club's page ignores height messages from any other frame on it.
-        context["embed_origin"] = base
         context["snippets"] = [
             {
                 "key": "events",
