@@ -8,7 +8,7 @@
   <div class="help-note">
     <i class="bi bi-lightbulb-fill"></i>
     <div>
-      <p class="mb-2">An AI agent &mdash; Claude, ChatGPT, or anything else that speaks the Model Context Protocol &mdash; can use this site the same way you do. Once connected, you can ask things like:</p>
+      <p class="mb-2">An AI agent &mdash; Claude, ChatGPT, Grok, or anything else that speaks the Model Context Protocol &mdash; can use this site the same way you do. Once connected, you can ask things like:</p>
       <ul class="mb-0">
         <li>&ldquo;Add a trio of guppies to this auction&rdquo;</li>
         <li>&ldquo;Find any cichlids in this auction and watch them so I get a notification when they go up for bidding&rdquo;</li>
@@ -27,7 +27,7 @@
 
   <h2 class="h5 mb-3">Connecting</h2>
   <div class="row g-3 mb-4">
-    <div class="col-12 col-lg-6">
+    <div class="col-12 col-md-6 col-lg-4">
       <div class="card h-100">
         <div class="card-body">
           <h3 class="card-title h6 mb-2"><i class="bi bi-stars"></i> Claude</h3>
@@ -51,7 +51,7 @@
       </div>
     </div>
 
-    <div class="col-12 col-lg-6">
+    <div class="col-12 col-md-6 col-lg-4">
       <div class="card h-100">
         <div class="card-body">
           <h3 class="card-title h6 mb-2"><i class="bi bi-chat-dots"></i> ChatGPT</h3>
@@ -70,6 +70,30 @@
             </li>
             <li class="mb-2">Choose <strong>OAuth</strong> when it asks how to authenticate. It sends you back here to sign in.</li>
             <li>Turn the app on from the <strong>+</strong> menu in a chat.</li>
+          </ol>
+        </div>
+      </div>
+    </div>
+
+    <div class="col-12 col-md-6 col-lg-4">
+      <div class="card h-100">
+        <div class="card-body">
+          <h3 class="card-title h6 mb-2"><i class="bi bi-robot"></i> Grok</h3>
+          <p class="small text-muted mb-2">Web and apps. Nothing to copy but the address &mdash; you sign in instead.</p>
+          <ol class="mb-0">
+            <li class="mb-2">
+              Open <a href="https://grok.com/connectors" target="_blank" rel="noopener">Connectors</a> in Grok, choose <strong>New connector</strong>, then <strong>Custom</strong>.
+              <span class="text-muted small d-block">On a Grok Business or Enterprise account, an admin has to add it in the console first.</span>
+            </li>
+            <li class="mb-2">
+              Paste this address:
+              <div class="input-group input-group-sm mt-1">
+                <input type="text" class="form-control" id="mcp-url-grok" value="{{ mcp_url }}" readonly aria-label="Connector address">
+                <button class="btn btn-primary copy-button" type="button" data-copy-target="mcp-url-grok"><i class="bi bi-clipboard"></i> Copy</button>
+              </div>
+            </li>
+            <li class="mb-2">Grok sends you back here to sign in, and asks what you're allowing. Say yes.</li>
+            <li>Grok finds the tools on its own &mdash; ask it about your auction.</li>
           </ol>
         </div>
       </div>
@@ -116,7 +140,7 @@
 
   <div class="collapse{% if new_raw_key %} show{% endif %}" id="api-key-panel">
     <p class="text-muted">
-      You don't need a key to connect Claude or ChatGPT &mdash; use the sign-in above. A key is for a script, a
+      You don't need a key to connect Claude, ChatGPT or Grok &mdash; use the sign-in above. A key is for a script, a
       cron job, or a connector your organisation's administrator adds once for everybody. Anyone who has the
       key is you, so treat it like a password.
     </p>

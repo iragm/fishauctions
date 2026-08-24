@@ -25207,8 +25207,8 @@ class UserAPIKeyView(LoginRequiredMixin, TemplateView):
     """How to connect an AI agent to this site, and the keys for doing it.
 
     Two ways in, and the page leads with the one most people want. **Signing in** is the whole
-    story for Claude and for ChatGPT's developer-mode apps: they run a real OAuth flow against
-    this site and there is no key to copy anywhere. A **key** is for the things that can't do
+    story for Claude, for Grok's custom connectors and for ChatGPT's developer-mode apps: they run
+    a real OAuth flow against this site and there is no key to copy anywhere. A **key** is for the things that can't do
     that — a script, a cron job, a connector an administrator adds for a whole organisation with
     a fixed header.
 
