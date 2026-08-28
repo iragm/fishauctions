@@ -47,3 +47,11 @@ fi
 
 mkdir -p logs
 chmod -R 777 logs
+
+# Same treatment for mediafiles/. It is gitignored and untracked, so a clean checkout
+# doesn't have it and Docker creates the bind-mount source root-owned -- the in-container
+# `app` user (PUID, 1000) then can't write uploads and any test that saves a real file
+# dies with PermissionError(13). Tests that write media also point MEDIA_ROOT at a temp
+# dir (auctions/tests.WritableMediaRoot); this keeps the directory itself sane besides.
+mkdir -p mediafiles/images
+chmod -R 777 mediafiles

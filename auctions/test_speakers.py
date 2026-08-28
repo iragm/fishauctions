@@ -32,6 +32,7 @@ from auctions.speaker_topics import (
     ensure_speaker_topics,
     topic_needs_review,
 )
+from auctions.tests import WritableMediaRoot
 
 # A trimmed WXR export with the shapes that actually matter: an entity inside CDATA, the two
 # spellings of cichlids the real file has, a topic that is deliberately thrown away ("General"),
@@ -105,32 +106,11 @@ def tiny_jpeg():
     return buffer.getvalue()
 
 
-class WritableMediaRoot:
-    """Write photos to a throwaway directory instead of the container's mediafiles volume.
-
-    Same pattern as CloudflareImagesTests and ClubIconWalletTests in tests.py, and here for the
-    same reason: MEDIA_ROOT is a bind mount of the repo's `mediafiles/`, which is gitignored and
-    untracked.  A clean checkout doesn't have it, so Docker creates it root-owned and the `app`
-    user can't write into it -- which is CI, every time the runner starts without one.
-
-    The importer catches a failed photo save on purpose (one bad image out of 405 must not abort
-    the import), so an unwritable MEDIA_ROOT doesn't raise here.  It just leaves `speaker.image`
-    empty, and the test that notices reports "<ThumbnailerImageFieldFile: None> is not true"
-    without a word about permissions.  Hence a temp dir rather than a nicer error message.
-    """
-
-    @classmethod
-    def setUpClass(cls):
-        super().setUpClass()
-        cls._media_tmp = tempfile.TemporaryDirectory()
-        cls._media_override = override_settings(MEDIA_ROOT=cls._media_tmp.name)
-        cls._media_override.enable()
-
-    @classmethod
-    def tearDownClass(cls):
-        cls._media_override.disable()
-        cls._media_tmp.cleanup()
-        super().tearDownClass()
+# The speaker importer catches a failed photo save on purpose (one bad image out of 405 must
+# not abort the import), so an unwritable MEDIA_ROOT doesn't raise in these tests.  It just
+# leaves `speaker.image` empty, and the test that notices reports
+# "<ThumbnailerImageFieldFile: None> is not true" without a word about permissions -- hence the
+# shared WritableMediaRoot mixin rather than a nicer error message.
 
 
 def write_sample_export(bio_extra="", without=""):

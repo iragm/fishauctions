@@ -7,6 +7,7 @@ import importlib.util
 import io
 import json
 import re
+import tempfile
 import unittest
 from decimal import Decimal
 from pathlib import Path
@@ -92,6 +93,31 @@ from .test_support import isolated_cache
 # when run in the daphne-free image, e.g. `docker exec django manage.py test`. CI runs
 # the full suite in the `test` image, which has daphne, so coverage is unchanged.
 CHANNELS_TESTING_AVAILABLE = importlib.util.find_spec("daphne") is not None
+
+
+class WritableMediaRoot:
+    """Write uploads to a throwaway directory instead of the container's mediafiles volume.
+
+    MEDIA_ROOT is a bind mount of the repo's `mediafiles/`, which is gitignored and untracked.
+    A clean checkout doesn't have it, so Docker creates the mount source root-owned and the
+    `app` user the tests run as can't write into it -- that is CI, every time, while a dev
+    machine that has ever run the site has a writable one and passes. Mix this in to any test
+    class that saves a real file (an upload, a generated easy-thumbnail, a photo from an
+    importer) so it never depends on the state of that directory.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls._media_tmp = tempfile.TemporaryDirectory()
+        cls._media_override = override_settings(MEDIA_ROOT=cls._media_tmp.name)
+        cls._media_override.enable()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls._media_override.disable()
+        cls._media_tmp.cleanup()
+        super().tearDownClass()
 
 
 class CsvImportTestMixin:
@@ -8962,7 +8988,7 @@ class UserViewTests(StandardTestCase):
         assert response.status_code == 200
 
 
-class ImageViewTests(StandardTestCase):
+class ImageViewTests(WritableMediaRoot, StandardTestCase):
     """Test image create/update/delete views"""
 
     def _image_bytes(self, fmt="JPEG", size=(10, 10)):
@@ -25974,23 +26000,8 @@ class MembershipNumberModeTests(TestCase):
         self.assertEqual(targeted_pks, {self.unpaid.pk})
 
 
-class ClubIconWalletTests(TestCase):
+class ClubIconWalletTests(WritableMediaRoot, TestCase):
     """The uploaded Club.icon must flow into the Google Wallet class and Apple pkpass."""
-
-    @classmethod
-    def setUpClass(cls):
-        super().setUpClass()
-        import tempfile
-
-        cls._media_tmp = tempfile.TemporaryDirectory()
-        cls._media_override = override_settings(MEDIA_ROOT=cls._media_tmp.name)
-        cls._media_override.enable()
-
-    @classmethod
-    def tearDownClass(cls):
-        cls._media_override.disable()
-        cls._media_tmp.cleanup()
-        super().tearDownClass()
 
     def _png_bytes(self, size=(64, 64), color=(220, 30, 30)):
         import io as _io
@@ -30201,26 +30212,8 @@ class LotListUXTests(StandardTestCase):
     CLOUDFLARE_IMAGES_ACCOUNT_HASH="test-hash",
     CLOUDFLARE_IMAGES_DOMAIN="",
 )
-class CloudflareImagesTests(StandardTestCase):
+class CloudflareImagesTests(WritableMediaRoot, StandardTestCase):
     """Cloudflare Images serving, fallback, and the migrate_to_cloudflare_images command"""
-
-    @classmethod
-    def setUpClass(cls):
-        super().setUpClass()
-        import tempfile
-
-        # These tests write real image files and generate local easy-thumbnails, so point
-        # MEDIA_ROOT at a writable temp dir rather than the container's mediafiles volume
-        # (which may not be writable by the test user -> PermissionError).
-        cls._media_tmp = tempfile.TemporaryDirectory()
-        cls._media_override = override_settings(MEDIA_ROOT=cls._media_tmp.name)
-        cls._media_override.enable()
-
-    @classmethod
-    def tearDownClass(cls):
-        cls._media_override.disable()
-        cls._media_tmp.cleanup()
-        super().tearDownClass()
 
     def _image_file(self, name="test.jpg"):
         from PIL import Image as PILImage
