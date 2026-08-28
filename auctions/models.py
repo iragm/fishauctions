@@ -54,7 +54,13 @@ from pytz import timezone as pytz_timezone
 from webpush.models import PushInformation
 
 from . import cloudflare_images, printer_programs, voice
-from .email_routing import admin_routing_email, build_routed_sender_address, email_routing_enabled
+from .email_routing import (
+    admin_routing_email,
+    build_routed_sender_address,
+    email_routing_domain,
+    email_routing_enabled,
+    sender_with_display_name,
+)
 from .helper_functions import bin_data, get_currency_symbol
 
 logger = logging.getLogger(__name__)
@@ -1485,6 +1491,11 @@ class Club(CloudflareImageMixin, models.Model):
     @property
     def contact_sender_email(self):
         return build_routed_sender_address(f"{self.slug}-contact")
+
+    @property
+    def contact_sender_email_with_name(self):
+        """The From line for club mail: the club's name over the club's own address."""
+        return sender_with_display_name(self.name, self.contact_sender_email)
 
     @property
     def donation_tracking_enabled(self):
@@ -4648,6 +4659,19 @@ class Auction(models.Model):
     @property
     def sender_email(self):
         return build_routed_sender_address(self.slug)
+
+    @property
+    def sender_email_with_name(self):
+        """The From line for mail about this auction: who is asking, over the auction's address.
+
+        The club runs the auction, so the club's name is the one a recipient recognises -- the
+        auction's own title is already in the subject and the first line of every one of these.
+        An auction with no club falls back to the site itself rather than showing the bare slug.
+        """
+        return sender_with_display_name(
+            self.club.name if self.club else email_routing_domain(),
+            self.sender_email,
+        )
 
     @property
     def currency(self):

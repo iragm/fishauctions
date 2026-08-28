@@ -32,6 +32,7 @@ from email.utils import parseaddr
 from django.core.cache import cache
 from django.utils import timezone
 
+from .email_routing import sender_with_display_name
 from .llm import LLMError, get_provider
 from .models import ClubHistory, DonationEmail, DonationUnsubscribe, DonationVendor, LLMUsage
 
@@ -780,7 +781,7 @@ def send_request(vendor, *, subject, body, user):
             [vendor.email],
             # Display name as well as address: the From line has to identify who is actually
             # asking, and the bare relay address on this site's domain does not.
-            f'"{club.name}" <{from_address}>',
+            sender_with_display_name(club.name, from_address),
             subject=subject,
             message=text,
             headers={"Reply-To": from_address, **_thread_headers(vendor)},

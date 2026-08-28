@@ -18,7 +18,7 @@ from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.core.exceptions import PermissionDenied
-from django.db.models import F
+from django.db.models import F, OuterRef, Subquery
 from django.http import Http404
 from django.shortcuts import get_object_or_404, render
 from django.urls import reverse
@@ -90,7 +90,22 @@ class ClubDonationVendorsView(LoginRequiredMixin, DonationPermissionMixin, HTMxT
         # the one to write to next. Vendors with no date at all go to the bottom -- a blank date
         # means nobody is waiting on anything, because they unsubscribed or an admin cleared it.
         # Name breaks the ties.
-        return DonationVendor.objects.filter(club=self.club).order_by(F("followup_due").asc(nulls_last=True), "name")
+        return (
+            DonationVendor.objects.filter(club=self.club)
+            .annotate(
+                # What they last said, in one line, without opening anything. A subquery rather
+                # than a prefetch because the table wants one string per vendor, not a page of
+                # conversations. Blank when the newest reply has no summary of its own (the
+                # daily budget ran out, or no model is configured) -- deliberately not the
+                # summary of an older one, which would read as their latest word.
+                latest_reply_summary=Subquery(
+                    DonationEmail.objects.filter(vendor=OuterRef("pk"), direction=DonationEmail.DIRECTION_INCOMING)
+                    .order_by("-date")
+                    .values("summary")[:1]
+                )
+            )
+            .order_by(F("followup_due").asc(nulls_last=True), "name")
+        )
 
     def get_table_kwargs(self, **kwargs):
         # Counted once for the page rather than once per row: every Contact button needs the same
@@ -105,8 +120,11 @@ class ClubDonationVendorsView(LoginRequiredMixin, DonationPermissionMixin, HTMxT
         context["can_send"] = self.club.sends_donation_email
         context["assist_enabled"] = assist_enabled()
         context["quota"] = donations.donation_email_quota(self.club)
-        vendors = self.get_queryset().filter(is_deleted=False)
-        context["followup_due_count"] = vendors.filter(followup_due__lte=timezone.now()).count()
+        # Not self.get_queryset(): counting through the annotation above would run the latest-reply
+        # subquery once per vendor to answer a question that never looks at it.
+        context["followup_due_count"] = DonationVendor.objects.filter(
+            club=self.club, is_deleted=False, followup_due__lte=timezone.now()
+        ).count()
         # Sending from this site is blocked without a postal address (see donations.send_request);
         # say so here rather than letting an admin find out at the end of the contact dialog.
         context["needs_mailing_address"] = self.club.sends_donation_email and not (

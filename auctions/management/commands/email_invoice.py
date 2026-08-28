@@ -24,7 +24,7 @@ class Command(BaseCommand):
                 contact_email = invoice.auction.created_by.email
                 current_site = Site.objects.get_current()
                 send_kwargs = {
-                    "sender": invoice.auction.sender_email,
+                    "sender": invoice.auction.sender_email_with_name,
                     "template": "invoice_ready",
                     "context": {
                         "subject": subject,

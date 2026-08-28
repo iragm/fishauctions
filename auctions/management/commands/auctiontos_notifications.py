@@ -31,7 +31,7 @@ def send_tos_notification(template, tos):
         "website_focus": settings.WEBSITE_FOCUS,
     }
     send_kwargs = {
-        "sender": tos.auction.sender_email,
+        "sender": tos.auction.sender_email_with_name,
         "template": template,
         "context": ctx,
     }
@@ -199,7 +199,7 @@ class Command(BaseCommand):
                     "mailing_address": settings.MAILING_ADDRESS,
                 }
                 campaign_kwargs = {
-                    "sender": campaign.auction.sender_email,
+                    "sender": campaign.auction.sender_email_with_name,
                     "template": "join_auction_reminder",
                     "context": ctx,
                 }
