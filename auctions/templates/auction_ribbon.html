@@ -86,6 +86,25 @@
   </div>
   {% endif %}
 {% endif %}
+{% comment %}Deliberately outside the setup-checklist branch above, unlike the promotion and payment banners: the calendar event exists from the moment the auction is promoted, so members can already be reading the generated title while the checklist is still up -- and a club whose website carries the embed is exactly the club whose new auction should get its own wording early.  Only shown when the club's own website is embedding our calendar -- see Auction.event_needing_custom_wording, which is where all four conditions live.  Members are reading this sentence somewhere other than here, and it is the one the site wrote, which is why this is worth a banner rather than a line in the settings nobody opens.{% endcomment %}
+{% with customizable_event=auction.event_needing_custom_wording %}
+{% if customizable_event %}
+<div class='mt-4 mb-4 p-2 bg-primary text-white rounded bg-gradient bg-opacity-50'><h5>Your club's website is showing this auction</h5>
+  <small>
+    {{ auction.club }}'s website has your club calendar embedded on it, so
+    "<b>{{ customizable_event.title }}</b>" is what your members are reading there right now &mdash;
+    and that title and its description are the ones this site wrote for you.  If this auction is
+    also your monthly meeting, or it just deserves a better line than the one we generated, you can
+    type your own.  Everything else about the event stays tied to the auction, so the date and the
+    location keep looking after themselves.
+  </small>
+  <div>
+    <a href="{% url 'club_event_edit' slug=auction.club.slug pk=customizable_event.pk %}" class="btn btn-info btn-sm mt-2">Customize this event</a>
+    <a href='{% url "auction_main" slug=auction.slug %}?dismissed_customize_event_banner=true' class="btn btn-secondary btn-sm mt-2">Don't show again</a>
+  </div>
+</div>
+{% endif %}
+{% endwith %}
 {% comment %}The opposite state to the "connect your Square account" banner above: Square *is* connected here and can take a card in the room, so this is a page where the website is about to show this admin its own Square card.  That is the only moment Apple's Tap to Pay awareness modal belongs, and it is a question only the server can answer -- the app used to guess it from a URL prefix plus a live credential, which put the modal in front of organizers on unrelated pages.  Called unconditionally: the handler resolves {offered: false} on Android, on a phone that can't do Tap to Pay, when the modal has already been shown on this device, and when Tap to Pay is already set up, so the page needs no capability checks of its own.{% endcomment %}
 {% if request.is_mobile_app and auction.offers_tap_to_pay %}
 <script>

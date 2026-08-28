@@ -8,15 +8,21 @@ language model, and if it does, runs a short, bounded conversation with one:
    ``{"kind": "results"}`` -- no LLM call, no cost, no latency. Typing "invoice" behaves exactly as
    it always has.
 2. **Everything else gets a bounded agent loop** (at most :data:`MAX_ROUNDS` rounds inside
-   :data:`TOTAL_BUDGET_SECONDS`). The system prompt is generated from the action registry, so it can
-   never advertise something the server won't accept. The model may call read-only lookups
-   (``find_person``, ``my_context``) to resolve "bob" into a bidder number, then must finish with an
-   action, a navigation, a clarifying question, or an error.
+   :data:`TOTAL_BUDGET_SECONDS`), with the model **calling tools**. The tools are the same
+   catalogue ``/mcp/`` serves to Claude -- :func:`auctions.mcp.tools.tool_descriptors`, generated
+   from :data:`auctions.palette_actions.ACTIONS` -- so the palette can never be taught a skill the
+   MCP endpoint doesn't have, or shown one the server won't accept. The model may call read-only
+   lookups (``find_person``, ``my_context``) to resolve "bob" into a bidder number, then finishes
+   with an action, a navigation, a clarifying question, an error, or plain text.
 
-**The model is untrusted input.** Its replies are schema-checked here, the action name must be in
-the registry, parameters are checked against that action's own schema, and the resolver re-validates
-everything again against the database and the user's permissions. A reply that doesn't fit the
-contract is discarded, never guessed at.
+**The model is untrusted input**, but the shape of what it says is no longer this module's problem.
+The provider enforces the tool schemas: the name is one of the ones we sent and the arguments fit
+the JSON Schema we generated. This file used to carry ~200 lines whose entire job was reading
+replies that JSON mode had no way to prevent -- a page key in the "action" slot, an auction title
+where a lookup name goes, a call written as ``{"go_to_page": {...}}`` -- and those are gone with the
+thing that caused them. What remains is the part that was never about shape: ``run_action`` refuses
+a parameter the action never advertised, and the resolver re-validates everything against the
+database and the user's permissions.
 
 Danger levels decide what comes back:
 
@@ -61,7 +67,7 @@ from typing import Any
 from django.core.cache import cache
 from django.db.models import F
 
-from . import command_palette, palette_actions, palette_routes
+from . import command_palette, llm, palette_actions, palette_routes
 from .llm import LLMError, assist_enabled, get_provider
 from .models import CommandPalettePage, CommandPaletteSearch, LLMUsage
 
@@ -83,8 +89,6 @@ MAX_ROUNDS = 2
 #: data has earned the round it needs to say what it found, and ending the loop on the lookup itself
 #: wastes everything already spent on it.
 MAX_ROUNDS_AFTER_LOOKUP = 3
-#: How many times a reply that doesn't fit the contract is worth correcting. See the loop.
-MAX_CORRECTIONS = 1
 #: How many times the model is worth telling that it already has what it just asked for again.
 MAX_REPEAT_NUDGES = 1
 TOTAL_BUDGET_SECONDS = 20.0
@@ -106,8 +110,82 @@ MAX_CONTEXT_ENTRIES = 5
 # it again -- and :func:`lookup_payload` says so loudly if that day comes.
 MAX_LOOKUP_RESULT_CHARS = 5000
 
-# How much of the model's own previous reply is quoted back to it when correcting or continuing.
-MAX_REPLY_ECHO_CHARS = 1000
+#: Two things the palette needs the model to be able to do that no auction skill covers: ask the
+#: person a question, and say it can't help. Over ``/mcp/`` neither exists -- a host does its own
+#: asking, and a tool that fails says so through ``isError`` -- so they live here rather than in
+#: the shared catalogue, and they are the only tools the palette adds to it.
+#:
+#: They are tools rather than a "just write some JSON instead" instruction because that is the
+#: whole point of the rewrite: one enforced shape, with the arguments schema-checked by the
+#: provider, instead of a second contract this file has to police.
+ASK_THE_USER = "ask_the_user"
+CANNOT_DO_THIS = "cannot_do_this"
+
+PALETTE_TOOLS: list[dict[str, Any]] = [
+    {
+        "name": ASK_THE_USER,
+        "title": "Ask the user",
+        "description": (
+            "Ask the person a short question when you genuinely cannot tell what they meant. Any "
+            "question offering a choice between things must put each choice in 'options', written "
+            "so it can be clicked as a reply on its own. Only offer choices between things you "
+            "have actually looked up."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "question": {"type": "string", "description": "One short question."},
+                "options": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "The choices, each one clickable on its own.",
+                },
+            },
+            "required": ["question"],
+            "additionalProperties": False,
+        },
+        "annotations": {"title": "Ask the user", "readOnlyHint": True, "destructiveHint": False},
+    },
+    {
+        "name": CANNOT_DO_THIS,
+        "title": "Cannot do this",
+        "description": (
+            "Say that the request is impossible or is not something this site does. Not for "
+            "'I am not sure which page' — go_to_page reaches every page on the site."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {"reason": {"type": "string", "description": "Why it can't be done."}},
+            "required": ["reason"],
+            "additionalProperties": False,
+        },
+        "annotations": {"title": "Cannot do this", "readOnlyHint": True, "destructiveHint": False},
+    },
+]
+
+
+def tools_for(user) -> list[dict[str, Any]]:
+    """Every tool this user's palette may call: the shared catalogue, plus the two above.
+
+    The catalogue is the same object ``/mcp/`` hands to Claude. That is the point of the whole
+    arrangement -- there is one description of what this site can do, one dispatcher, and one set
+    of permission checks, and the palette is simply another client of it.
+
+    ``Action.mcp_only`` is the one subtraction, and it names rather than breaks that rule: the two
+    surfaces differ in who reads the answer, not in what may be done or by whom. ``read_source``
+    hands back a page of Python, which is the right answer for an agent with a context window of
+    its own and the wrong thing to render in a one-line box on somebody's phone at this site's own
+    expense. Nothing else has ever qualified, and a second one should have to argue for itself.
+    """
+    from .mcp import tools as mcp_tools
+
+    shared = [
+        tool
+        for tool in mcp_tools.tool_descriptors(user)
+        if not getattr(palette_actions.get_action(tool["name"]), "mcp_only", False)
+    ]
+    return [*shared, *PALETTE_TOOLS]
+
 
 # A query this short that already has a good match is answered by search alone.
 SHORT_QUERY_WORDS = 4
@@ -401,7 +479,7 @@ def _answered_from(lookups_run: set[tuple[str, str]]) -> str:
     return f"{LOOKUP_DESTINATION_PREFIX}{name}"
 
 
-def _preload_messages(request, query: str, messages: list[dict[str, str]]) -> str:
+def _preload_messages(request, query: str, messages: list[dict[str, Any]]) -> str:
     """Run the lookup this phrase always needs, and hand its result over before the first round.
 
     Returns the lookup's name when one ran, so the loop can record that this request already has it
@@ -460,44 +538,30 @@ def obvious_match(request, query: str) -> list[dict[str, Any]] | None:
 
 SYSTEM_PROMPT = """You turn what a user typed or said into one action on an online fish-auction site.
 
-You always reply with a single JSON object, and it must be exactly one of these shapes:
+You have tools. Call one of them, or reply in plain words.
 
-{{"lookup": "<name>", "params": {{...}}}}
-    Call a read-only lookup and see the result before deciding. Use this to turn a name into a
-    bidder number, or to check what auction the user is in. You may do this a few times.
+**Call a read-only tool** (find_person, find_lot, my_context, describe_*) to look something up
+before deciding — to turn a name into a bidder number, or to check which auction they're in. You'll
+be given the result and can then act. You may do this a few times.
 
-{{"action": "<name>", "params": {{...}}, "summary": "<one short sentence saying what will happen>"}}
-    Do the thing. The summary is shown to the user, so write it for them: "Add a lot of blue
-    shrimp to the Spring Auction for Bob (bidder 14)".
+**Call an action tool** to do the thing. The user gets a 5 second countdown with a cancel button
+before anything is written, so a confident, sensible guess is better than a question.
 
-{{"answer": "<what they asked>"}}
-    Answer a question. Only ever from a lookup above, or from the facts under "About this user" —
-    never from memory, and never a guess. If it isn't in one of those two places, look it up first.
-    Two or three sentences at most; they are reading this in a small box.
-    Answer the question that was asked, and lead with the fact rather than with "Yes" or "No":
-    write "The Fall Auction is in person, not online", never "Yes. The Fall Auction is in person".
-    A yes that contradicts the sentence after it is worse than no answer at all.
+**Call go_to_page** to take them somewhere. Its 'page' parameter takes one of the destination keys
+listed below, which is every page this site has.
 
-{{"clarify": "<question>", "options": ["<choice>", "<choice>"]}}
-    Ask when you genuinely can't tell what they meant. Keep it to one short question. If your
-    question offers a choice between things — anything phrased as "X or Y?" — you MUST put each
-    one in options, written so it can be clicked as a reply on its own. A question with a choice
-    in it and an empty options list is a broken answer.
-    Never offer a choice between things you have not looked up. If they ask about "the split" and
-    you don't know what splits this auction has, call describe_auction and find out — listing
-    plausible-sounding options you invented is worse than asking nothing, because they read like
-    things that exist.
+**Call ask_the_user** when you genuinely can't tell what they meant.
 
-{{"error": "<why this can't be done>"}}
-    Use when the request is impossible or isn't something this site does.
+**Call cannot_do_this** only when the request is not something this site does at all.
+
+**Reply in plain words** to answer a question — but only from a tool result above, or from the
+facts under "About this user". Never from memory, and never a guess: if it isn't in one of those
+two places, look it up first. Two or three sentences at most; they are reading this in a small box.
+Answer the question that was asked, and lead with the fact rather than with "Yes" or "No": write
+"The Fall Auction is in person, not online", never "Yes. The Fall Auction is in person". A yes that
+contradicts the sentence after it is worse than no answer at all.
 
 Rules:
-- Only use the action and lookup names listed below. Never invent one, and never invent a parameter.
-- 'lookup' and 'action' take a NAME FROM THE LIST — never the name of an auction, club, person or
-  lot. Those go in params: {{"lookup": "describe_auction", "params": {{"auction": "Fall Auction"}}}}.
-- Only send parameters that are listed for that action.
-- Prefer doing the obvious thing over asking. The user gets a 5 second countdown with a cancel
-  button before anything is written, so a confident, sensible guess is better than a question.
 - If the user does not say which auction, leave 'auction' out — it defaults to whatever they are
   looking at right now, and then to their most recent auction.
 - When the user refers to something from earlier in the conversation ("print that label", "add
@@ -505,19 +569,18 @@ Rules:
 - Do not make up bidder numbers, lot numbers or prices. Look them up or ask.
 - **Never show the user a slug, a database id, a route key or a URL.** Those are for you. The user
   gets titles and names: "the Spring Auction 2026", not "s-auction-july-2026"; "the lot list", not
-  "auction_lot_list". Never repeat a lookup's raw result back to them.
+  "auction_lot_list". Never repeat a tool result back to them raw.
 - A question about how something works ("what are the rules", "how do I earn points", "when does
-  submission close") wants an answer, not a page. Call the matching describe_* lookup and then
-  answer. Send them to a page only when they asked to go somewhere, or when the answer is genuinely
-  not in what you can look up.
-- **Never reply with an error just because nothing fits.** Every page on this site is listed below,
+  submission close") wants an answer, not a page. Call the matching describe_* tool and then answer
+  in words. Send them to a page only when they asked to go somewhere, or when the answer is
+  genuinely not in anything you can look up.
+- **Never say you can't help just because nothing fits.** Every page on this site is listed below,
   so if you can't work out a specific action, take your best guess at what the user was trying to
   reach and send them there with go_to_page. Landing on roughly the right page is useful; telling
-  them you don't understand is not. Only use the error shape when the request is genuinely not
-  something this site does at all.
-
-Available actions:
-{actions}
+  them you don't understand is not.
+- When you call an action, you may also write one short sentence saying what will happen. It is
+  shown to the user on the countdown card, so write it for them: "Add a lot of blue shrimp to the
+  Spring Auction for Bob (bidder 14)".
 
 Pages you can open with go_to_page (this is every page on the site — the 'page' parameter must be
 one of these keys):
@@ -531,14 +594,13 @@ About this user:
 def build_system_prompt(user, page: dict[str, Any] | None = None, app_destinations=()) -> str:
     """Generate the system prompt from the registry so it can never drift from the server.
 
-    Every action's name, description, parameter list and danger level comes straight out of
-    ``palette_actions.ACTIONS``, and the page list out of ``palette_routes.ROUTE_LIST``, so
-    registering an action or a route is all it takes to teach the model about it.
+    The skills are no longer in here at all: they are tool definitions now (:func:`tools_for`),
+    generated from ``palette_actions.ACTIONS`` by the same code that serves ``/mcp/``. What is
+    left is the page catalog, out of ``palette_routes.ROUTE_LIST``, and the user's own context.
 
-    Both lists are filtered to what this user could plausibly use -- a bidder who runs no club is
-    not shown four club-administration skills, exactly as they aren't shown club admin pages. That
-    is a prompt-size and relevance filter and nothing more: the resolvers re-check every permission,
-    and an action the prompt never mentioned is still accepted if the model names it.
+    The catalog is filtered to what this user could plausibly reach, exactly as the tool list is
+    and for the same reason. That is a prompt-size and relevance filter and nothing more: the
+    resolvers re-check every permission.
 
     The page catalog costs roughly a thousand prompt tokens per call, which buys two things worth
     more than that: the model can see every destination without a round trip to look one up (a
@@ -550,18 +612,28 @@ def build_system_prompt(user, page: dict[str, Any] | None = None, app_destinatio
     aren't pages and so can't be in the catalog, but they are places a user asks to be taken to, and
     the catalog holds a plausible wrong answer for each.
     """
-    actions = json.dumps(palette_actions.registry_for_prompt(user), indent=None)
-    context = json.dumps(palette_actions.user_context(user, page), indent=None, default=str)
+    # ``strip_internal`` because ``user_context`` also answers the ``my_context`` tool, where it
+    # carries the URIs a host can address things by. That is worth bytes there and is dead weight
+    # here, in a system prompt rebuilt on every keystroke.
+    context = json.dumps(
+        palette_actions.strip_internal(palette_actions.user_context(user, page)), indent=None, default=str
+    )
     pages = palette_routes.catalog_for_prompt(user)
     if app_destinations:
         pages += "\nIn the app, where this user is right now (native screens, same 'page' parameter):\n"
         pages += "\n".join(f"  {name}: {description}" for name, description in app_destinations)
-    return SYSTEM_PROMPT.format(actions=actions, pages=pages, context=context)
+    return SYSTEM_PROMPT.format(pages=pages, context=context)
 
 
-def build_messages(query: str, context: list[dict[str, Any]]) -> list[dict[str, str]]:
-    """The user turn: the recent exchanges, then what they just asked for."""
-    messages: list[dict[str, str]] = []
+def build_messages(query: str, context: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The user turn: the recent exchanges, then what they just asked for.
+
+    The list grows as the loop runs, and the turns it grows by are not all ``{role, content}``
+    strings any more: an assistant turn may carry ``tool_calls`` and a tool turn carries a
+    ``tool_call_id``. Both are built by :mod:`auctions.llm` so nothing here has to know the
+    provider's spelling for them.
+    """
+    messages: list[dict[str, Any]] = []
     if context:
         messages.append(
             {
@@ -576,181 +648,73 @@ def build_messages(query: str, context: list[dict[str, Any]]) -> list[dict[str, 
 # --- validating what the model said ------------------------------------------
 
 
-#: Parameters ``go_to_page`` accepts, for rewriting a misplaced page key. Anything else the model
-#: sent alongside it is dropped: ``run_action`` refuses parameters an action never advertised.
-_PAGE_PARAMS = ("target", "tab")
+#: How much of a model-written summary is worth keeping on the countdown card.
+MAX_SUMMARY_CHARS = 300
+#: Cap on one clarifying question and each of its options.
+MAX_QUESTION_CHARS = 400
+MAX_OPTION_CHARS = 120
+MAX_OPTIONS = 6
+#: Cap on a plain-text answer. They are reading it in a small box.
+MAX_ANSWER_CHARS = 1200
 
 
-def _page_in_the_wrong_slot(name: str, params: dict[str, Any]) -> dict[str, Any] | None:
-    """Rewrite a page key that arrived in the ``action`` or ``lookup`` slot as ``go_to_page``.
+def read_reply(result, user=None) -> dict[str, Any]:
+    """Read one model reply into a normalized dict with a ``kind``.
 
-    The model reliably answers ``{"action": "print_my_labels"}`` or ``{"lookup": "watched"}``: it
-    has picked a real destination out of the catalog in the prompt and put it in the wrong slot,
-    because the two lists sit next to each other and both look like names of things to call. That
-    was thrown away as off-contract, and the retry usually produced another near-miss, so a request
-    the model had actually understood ended at "I'm not sure what you meant".
+    Short, now, and that is the whole story of this rewrite. The provider was handed real JSON
+    Schema and enforced it, so the name is one of ours and the arguments fit -- there is no page
+    key in the wrong slot to rescue, no auction title where a verb should be, no call written as
+    its own key. Everything this used to do about *shape* is done before the bytes arrive.
 
-    This widens nothing. ``go_to_page`` already accepts any page name the model cares to send, and
-    the URL is still built by :func:`palette_routes.resolve_route`, which re-runs every permission
-    check. The only thing that changes is which key the name arrived under.
+    What is left is the mapping the palette actually needs: which of the tools the model picked is
+    a read-only lookup (run it and come back), which is a thing to do, and which two are the
+    palette's own (:data:`ASK_THE_USER`, :data:`CANNOT_DO_THIS`). Plain text with no call is an
+    answer.
+
+    ``user`` is unused and kept for the callers that pass it positionally; the scoping it used to
+    do belonged to a repair path that no longer exists.
     """
-    if palette_routes.get_route(name) is None:
-        return None
-    action = palette_actions.get_action("go_to_page")
-    if action is None:  # pragma: no cover - go_to_page is registered at import time
-        return None
-    page_params = {key: params[key] for key in _PAGE_PARAMS if key in params}
-    page_params["page"] = name
-    return {"kind": "action", "action": action, "params": page_params, "summary": ""}
-
-
-def _auction_in_the_wrong_slot(user, name: str, params: dict[str, Any]) -> dict[str, Any] | None:
-    """Rewrite ``{"lookup": "Fall Auction"}`` as ``describe_auction`` for that auction.
-
-    The model's other favourite misfire, and the one that used to cost the most: asked when an
-    auction starts it replies with the auction's *title* in the slot where the lookup's name goes.
-    It has understood the question and identified the subject, and the only thing it got wrong is
-    that "Fall Auction" is a thing rather than a verb.
-
-    Only ever resolves to ``describe_auction``, which is read-only and re-scopes the auction through
-    ``_resolve_described_auction`` -- so a title that names an auction this user can't see comes
-    back as "I couldn't find an auction called that", exactly as if they had asked for it by name.
-    """
-    if not name or len(name) > 100:
-        return None
-    action = palette_actions.get_action("describe_auction")
-    if action is None:  # pragma: no cover - registered at import time
-        return None
-    match = command_palette._visible_auctions(user).filter(title__iexact=name.strip()).first()
-    if match is None:
-        return None
-    # Only the auction travels. Anything else the model sent alongside a misplaced name is guesswork
-    # about a call it wasn't making, and ``run_action`` refuses parameters an action never declared.
-    return {"kind": "lookup", "action": action, "params": {"auction": match.title}}
-
-
-def _misplaced_name(user, name: str, params: dict[str, Any]) -> dict[str, Any] | None:
-    """Read a name that landed in the ``action``/``lookup`` slot but isn't one: a page, or an auction."""
-    return _page_in_the_wrong_slot(name, params) or (
-        _auction_in_the_wrong_slot(user, name, params) if user is not None else None
-    )
-
-
-#: Keys that belong to the reply envelope itself, so they never name the thing being called.
-_ENVELOPE_KEYS = frozenset({"lookup", "action", "params", "summary", "clarify", "options", "error", "message"})
-
-
-def _call_named_by_its_key(data: dict[str, Any]) -> dict[str, Any] | None:
-    """Read ``{"go_to_page": {"page": "club_membership_pay"}}`` -- the name used as the key.
-
-    The other common convention for writing a call as JSON, and one the model falls into often
-    enough to matter: the destination is right, the parameters are right, and only the envelope is
-    missing. Rejecting it cost a whole extra round, and the round after a correction is markedly
-    worse than the first, so a request that was understood on the first try ended up as
-    "I'm not sure what you meant".
-
-    Resolved through the same registry as any other reply, so nothing new becomes reachable:
-    ``run_action`` still refuses parameters the action never advertised and the resolver still
-    checks permissions.
-    """
-    named = [key for key in data if isinstance(key, str) and key not in _ENVELOPE_KEYS]
-    if len(named) != 1:
-        return None
-    name = named[0]
-    params = data[name]
-    if params is None:
-        params = {}
-    if not isinstance(params, dict):
-        return None
-    # "target": null is common in these replies and means "no target", not the string "None".
-    params = {key: value for key, value in params.items() if value is not None}
-    action = palette_actions.get_action(name)
-    if action is None:
-        return _page_in_the_wrong_slot(name, params)
-    if action.lookup:
-        return {"kind": "lookup", "action": action, "params": params}
-    return {"kind": "action", "action": action, "params": params, "summary": ""}
-
-
-def parse_reply(data: Any, user=None) -> dict[str, Any]:
-    """Schema-check one model reply. Returns a normalized dict with a ``kind``.
-
-    Anything that doesn't match the contract exactly comes back as ``{"kind": "invalid"}`` so the
-    loop can tell the model it got the shape wrong rather than acting on a guess. Four near-misses
-    are read rather than discarded -- a page key in the ``action``/``lookup`` slot
-    (:func:`_page_in_the_wrong_slot`), an auction title in the same place
-    (:func:`_auction_in_the_wrong_slot`, needs *user* to scope it), a call named by its own key
-    (:func:`_call_named_by_its_key`), and a lookup written into the ``action`` slot -- because each
-    one names something real that the server re-checks anyway, and throwing them away was the main
-    reason this feature said it didn't understand things it plainly had.
-    """
-    if not isinstance(data, dict):
-        return {"kind": "invalid", "reason": "not an object"}
-
-    params = data.get("params")
-    if params is None:
-        params = {}
-    if not isinstance(params, dict):
-        return {"kind": "invalid", "reason": "params must be an object"}
-
-    if isinstance(data.get("lookup"), str):
-        action = palette_actions.get_action(data["lookup"])
-        if action is None or not action.lookup:
-            return _misplaced_name(user, data["lookup"], params) or {
-                "kind": "invalid",
-                "reason": f"unknown lookup {data['lookup']!r}",
-            }
-        return {"kind": "lookup", "action": action, "params": params}
-
-    if isinstance(data.get("action"), str):
-        action = palette_actions.get_action(data["action"])
-        if action is None:
-            return _misplaced_name(user, data["action"], params) or {
-                "kind": "invalid",
-                "reason": f"unknown action {data['action']!r}",
-            }
+    calls = getattr(result, "tool_calls", None) or []
+    if calls:
+        # One at a time. The loop is a short conversation with a person waiting on it, and a model
+        # that asks for three things at once is asking us to guess an order to do them in --
+        # which, for anything at confirm tier, is a guess about what gets written to the database.
+        call = calls[0]
+        params = call.arguments if isinstance(call.arguments, dict) else {}
+        if call.name == ASK_THE_USER:
+            question = str(params.get("question") or "").strip()
+            if not question:
+                return {"kind": "invalid", "reason": "asked nothing"}
+            options = []
+            raw = params.get("options")
+            if isinstance(raw, list):
+                options = [str(o).strip()[:MAX_OPTION_CHARS] for o in raw[:MAX_OPTIONS] if str(o).strip()]
+            return {"kind": "clarify", "message": question[:MAX_QUESTION_CHARS], "options": options}
+        if call.name == CANNOT_DO_THIS:
+            reason = str(params.get("reason") or "").strip()
+            return {"kind": "error", "message": (reason or "That isn't something this site does.")[:MAX_QUESTION_CHARS]}
+        action = palette_actions.get_action(call.name)
+        if action is None or action.mcp_only:
+            # Only reachable behind an LLM_BASE_URL whose server doesn't enforce the tool list --
+            # which is also the only way an ``mcp_only`` action could be named here, since
+            # ``tools_for`` never sends one. Same answer either way: this palette has no such tool.
+            return {"kind": "invalid", "reason": f"unknown tool {call.name!r}"}
         if action.lookup:
-            # A read-only lookup named in the ``action`` slot, which the model does constantly:
-            # ``{"action": "describe_auction", "summary": "Fetch the auction to explain the fees"}``.
-            # Run as an action that was the end of the story, so the user read "Fetch the auction to
-            # explain the fees" as if it were the answer, and never got one. It's a lookup wherever
-            # it was written, and reading it as one costs nothing -- a lookup changes nothing, and
-            # the loop still has to come back with a real answer afterwards.
             return {"kind": "lookup", "action": action, "params": params}
-        summary = data.get("summary")
+        # A model may write a sentence alongside a call. When it does, it is the summary the
+        # countdown card wants; when it doesn't, ``default_summary`` builds one from the
+        # parameters, which is the case that used to read "Add someone to the auction."
         return {
             "kind": "action",
             "action": action,
             "params": params,
-            "summary": str(summary)[:300] if isinstance(summary, str) else "",
+            "summary": (getattr(result, "text", "") or "").strip()[:MAX_SUMMARY_CHARS],
         }
 
-    answer = data.get("answer")
-    if isinstance(answer, str) and answer.strip():
-        return {"kind": "answer", "message": answer.strip()[:1200]}
-
-    clarify = data.get("clarify")
-    if clarify is None and isinstance(data.get("message"), str):
-        clarify = data["message"]
-    if isinstance(clarify, str) and clarify.strip():
-        options = data.get("options")
-        clean_options = []
-        if isinstance(options, list):
-            for option in options[:6]:
-                if isinstance(option, str) and option.strip():
-                    clean_options.append(option.strip()[:120])
-                elif isinstance(option, dict) and isinstance(option.get("label"), str):
-                    clean_options.append(option["label"].strip()[:120])
-        return {"kind": "clarify", "message": clarify.strip()[:400], "options": clean_options}
-
-    if isinstance(data.get("error"), str) and data["error"].strip():
-        return {"kind": "error", "message": data["error"].strip()[:400]}
-
-    named = _call_named_by_its_key(data)
-    if named is not None:
-        return named
-
-    return {"kind": "invalid", "reason": "no recognized key"}
+    text = (getattr(result, "text", "") or "").strip()
+    if text:
+        return {"kind": "answer", "message": text[:MAX_ANSWER_CHARS]}
+    return {"kind": "invalid", "reason": "empty reply"}
 
 
 # --- keeping identifiers out of what the user reads --------------------------
@@ -1243,7 +1207,7 @@ def lookup_payload(name: str, result: Any) -> str:
     ``auctions/test_palette_assist.py`` asserts the describe_* payloads fit without truncation. This
     is the backstop for the day a new field pushes one of them over anyway.
     """
-    body = json.dumps(result, default=str)
+    body = json.dumps(palette_actions.strip_internal(result), default=str)
     if len(body) <= MAX_LOOKUP_RESULT_CHARS:
         return f"Result of {name}: {body}"
     logger.warning("Lookup %s returned %s chars and was truncated to %s", name, len(body), MAX_LOOKUP_RESULT_CHARS)
@@ -1316,9 +1280,11 @@ def assist_stream(request, query: str, context: Any = None, path: str = ""):
     entries = sanitize_context(context)
     provider = get_provider()
     system = build_system_prompt(user, request.palette_page, command_palette.app_destinations_for_prompt(request))
+    # The same catalogue ``/mcp/`` serves, plus the palette's own two. Built once per request: it
+    # costs two queries (see ``palette_actions.actions_for``) and does not change mid-loop.
+    tools = tools_for(user)
     messages = build_messages(query, entries)
     started = time.monotonic()
-    corrections = 0
     nudges = 0
     lookups_run: set[tuple[str, str]] = set()
     # A phrase this site keeps answering out of one lookup gets that lookup run up front, so the
@@ -1343,7 +1309,7 @@ def assist_stream(request, query: str, context: Any = None, path: str = ""):
             yield {"kind": KIND_ERROR, "message": over_budget}
             return
         try:
-            result = provider.complete_json(system, messages)
+            result = provider.complete(system, messages, tools)
         except LLMError as error:
             logger.warning("Assist provider error: %s", error)
             usage_id = record_usage(user, None, query, FAIL_PROVIDER, success=False)
@@ -1352,35 +1318,19 @@ def assist_stream(request, query: str, context: Any = None, path: str = ""):
             yield _give_up(request, query, "I couldn't reach the assistant just now.", usage_id)
             return
 
-        reply = parse_reply(result.data, user)
+        reply = read_reply(result, user)
         kind = reply["kind"]
 
         if kind == "invalid":
+            # Rare now, and no longer worth a correction round: the provider enforced the tool
+            # schemas, so getting here means the endpoint behind ``LLM_BASE_URL`` doesn't, or the
+            # model said nothing at all. Neither is fixed by asking again -- the whole reason the
+            # old retry existed was replies that were the right idea in the wrong shape, and those
+            # can't happen any more. Fall through to the search ladder, which is faster and more
+            # use to the person waiting.
             record_usage(user, result, query, FAIL_INVALID, success=False)
-            logger.info("Assist got an invalid reply: %s", reply.get("reason"))
-            corrections += 1
-            if corrections > MAX_CORRECTIONS:
-                # Correcting the model a second time does not work. Measured on real traffic: once
-                # a reply comes back off-contract, the rounds that follow return another
-                # off-contract reply far more often than a good one, and each one is a full
-                # ~3k-token call. The search fallback is cheaper, faster, and usually more use to
-                # the person waiting than a fourth guess.
-                logger.info("Assist giving up after %s corrections", corrections)
-                break
-            # Another whole model call, so say so. Without this the strip sits on one line for the
-            # length of a round and reads as a hang -- which is the state the retry is meant to fix.
-            yield _progress("Not quite — trying that again…")
-            messages.append({"role": "assistant", "content": json.dumps(result.data)[:MAX_REPLY_ECHO_CHARS]})
-            messages.append(
-                {
-                    "role": "user",
-                    "content": (
-                        "That was not one of the allowed JSON shapes "
-                        f"({reply.get('reason')}). Reply again with a single valid object."
-                    ),
-                }
-            )
-            continue
+            logger.info("Assist got an unusable reply: %s", reply.get("reason"))
+            break
 
         if kind == "lookup":
             action = reply["action"]
@@ -1401,24 +1351,24 @@ def assist_stream(request, query: str, context: Any = None, path: str = ""):
                 # model call and no database work, and the round budget still caps the whole request.
                 nudges += 1
                 logger.info("Assist repeated the %s lookup; nudging it to answer", action.name)
-                messages.append({"role": "assistant", "content": json.dumps(result.data)[:MAX_REPLY_ECHO_CHARS]})
+                # The call still has to be answered -- a tool call with no matching result turn is
+                # rejected by the API rather than ignored -- so the nudge *is* the result.
+                messages.append(llm.tool_call_message([result.tool_calls[0]]))
                 messages.append(
-                    {
-                        "role": "user",
-                        "content": (
-                            f"You already called {action.name} with those parameters and its result is "
-                            "above. Do not call it again. Answer the user now using that result, or "
-                            "choose an action."
-                        ),
-                    }
+                    llm.tool_result_message(
+                        result.tool_calls[0],
+                        f"You already called {action.name} with those parameters and its result is "
+                        "earlier in this conversation. Do not call it again. Answer the user now "
+                        "using that result, or choose an action.",
+                    )
                 )
                 continue
             lookups_run.add(signature)
             yield _progress(narrate_lookup(action, reply["params"]))
             record_usage(user, result, query, "lookup", action.name)
             lookup_result = palette_actions.run_action(request, action.name, reply["params"])
-            messages.append({"role": "assistant", "content": json.dumps(result.data)[:MAX_REPLY_ECHO_CHARS]})
-            messages.append({"role": "user", "content": lookup_payload(action.name, lookup_result)})
+            messages.append(llm.tool_call_message([result.tool_calls[0]]))
+            messages.append(llm.tool_result_message(result.tool_calls[0], lookup_payload(action.name, lookup_result)))
             continue
 
         if kind == "answer":
@@ -1469,9 +1419,14 @@ def assist_stream(request, query: str, context: Any = None, path: str = ""):
         summary = reply["summary"]
         yield _progress(narrate_action(request, action, params))
 
-        if action.danger == palette_actions.DANGER_CONFIRM:
+        if action.danger == palette_actions.DANGER_CONFIRM and action.asks_first:
             # Do NOT execute. The client counts down and then calls the execute endpoint, which
             # runs the resolver (and therefore every permission check) from scratch.
+            #
+            # ``asks_first=False`` skips the card and runs the write here instead. It is still a
+            # write and still goes through ``run_action``, which is the gate; what it loses is the
+            # countdown, on the handful of actions that are non-destructive, idempotent and undone
+            # by a tool the assistant already has. See ``palette_actions.Action.asks_first``.
             usage_id = record_usage(user, result, query, KIND_COUNTDOWN, action.name)
             log_assist(user, query, KIND_COUNTDOWN)
             yield humanize_response(_countdown_response(request, action, params, summary, usage_id), user)
@@ -1479,6 +1434,13 @@ def assist_stream(request, query: str, context: Any = None, path: str = ""):
 
         action_result = palette_actions.run_action(request, action.name, params)
         response = _result_to_response(action, params, action_result, summary)
+        if response["kind"] != KIND_ERROR:
+            # The write that skipped the countdown still has to reach the undo stack. Without this
+            # "check bob in" then "undo that" did not fail -- it silently undid whatever the person
+            # had done *before* that, which is worse than refusing. A no-op unless the resolver
+            # said how to reverse itself, so it costs nothing on a safe action. The execute
+            # endpoint does the same for every write that does count down.
+            palette_actions.remember_undo(request.user, action.name, action_result)
         if response["kind"] == KIND_ERROR:
             # The action was understood but couldn't run (wrong auction, no permission, closed for
             # submissions). Keep the real reason -- it's specific and useful -- but offer the
@@ -1531,6 +1493,10 @@ def execute(request, name: str, params: Any, path: str = "") -> dict[str, Any]:
     if action.danger != palette_actions.DANGER_CONFIRM:
         # Safe actions already ran during assist; navigate actions are the client's job.
         return {"kind": KIND_ERROR, "message": "That isn't something to confirm."}
+    # ``asks_first=False`` is deliberately *not* refused here. Nothing offers a countdown for one
+    # any more, so this is only ever reached by a page that was open when the flag changed -- and
+    # refusing a write the server is perfectly willing to do, because it would rather not have been
+    # asked twice, is a worse answer than doing it. Everything below re-checks it from scratch.
     if not isinstance(params, dict):
         return {"kind": KIND_ERROR, "message": "Those instructions didn't make sense."}
     result = palette_actions.run_action(request, action.name, params)

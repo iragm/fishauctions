@@ -1,0 +1,238 @@
+{% extends "base.html" %}
+{% block title %}Connect an AI agent{% endblock %}
+{% block content %}
+{% include "preferences_ribbon.html" %}
+<div class="container py-4">
+  <h1 class="h4 mb-3">Connect an AI agent to this site</h1>
+
+  <div class="help-note">
+    <i class="bi bi-lightbulb-fill"></i>
+    <div>
+      <p class="mb-2">An AI agent &mdash; Claude, ChatGPT, Grok, or anything else that speaks the Model Context Protocol &mdash; can use this site the same way you do. Once connected, you can ask things like:</p>
+      <ul class="mb-0">
+        <li>&ldquo;Add a trio of guppies to this auction&rdquo;</li>
+        <li>&ldquo;Find any cichlids in this auction and watch them so I get a notification when they go up for bidding&rdquo;</li>
+        <li>&ldquo;Add a good picture from the internet to each of my lots that doesn't already have one&rdquo;</li>
+        <li>&ldquo;How does the lot recommendation system work?&rdquo; &mdash; it can search this site's own source code to answer</li>
+        <li>&ldquo;Is there anything this site can do that my club isn't using?&rdquo;</li>
+        <li>&ldquo;My new address is 12 Mill Lane&rdquo; &mdash; and it updates every auction and club that has the old one</li>
+      </ul>
+    </div>
+  </div>
+
+  {% if new_raw_key %}
+  <div class="alert alert-success text-dark">
+    <h5><i class="bi bi-key-fill"></i> Here is your new key</h5>
+    <p class="mb-2">Copy it now &mdash; this is the only time it will ever be shown. If you lose it, revoke it and make another.</p>
+    <pre class="bg-dark text-white p-2 rounded mb-0" style="overflow-x:auto"><code>{{ new_raw_key }}</code></pre>
+  </div>
+  {% endif %}
+
+  <h2 class="h5 mb-3">Connecting</h2>
+  <div class="row g-3 mb-4">
+    <div class="col-12 col-md-6 col-lg-4">
+      <div class="card h-100">
+        <div class="card-body">
+          <h3 class="card-title h6 mb-2"><i class="bi bi-stars"></i> Claude</h3>
+          <p class="small text-muted mb-2">Web, desktop and mobile. Nothing to copy but the address &mdash; you sign in instead.</p>
+          <ol class="mb-0">
+            <li class="mb-2">
+              Open <a href="https://claude.ai/new?modal=add-custom-connector#settings/customize-connectors/" target="_blank" rel="noopener">Add a custom connector</a> in Claude.
+              <span class="text-muted small d-block">In the desktop or mobile app it's Settings &rarr; Connectors &rarr; Add custom connector.</span>
+            </li>
+            <li class="mb-2">
+              Paste this address:
+              <div class="input-group input-group-sm mt-1">
+                <input type="text" class="form-control" id="mcp-url-claude" value="{{ mcp_url }}" readonly aria-label="Connector address">
+                <button class="btn btn-primary copy-button" type="button" data-copy-target="mcp-url-claude"><i class="bi bi-clipboard"></i> Copy</button>
+              </div>
+            </li>
+            <li class="mb-2">Claude sends you back here to sign in, and asks what you're allowing. Say yes.</li>
+            <li>That's it &mdash; ask Claude about your auction.</li>
+          </ol>
+        </div>
+      </div>
+    </div>
+
+    <div class="col-12 col-md-6 col-lg-4">
+      <div class="card h-100">
+        <div class="card-body">
+          <h3 class="card-title h6 mb-2"><i class="bi bi-chat-dots"></i> ChatGPT</h3>
+          <p class="small text-muted mb-2">Needs a paid plan, and developer mode switched on. You sign in the same way.</p>
+          <ol class="mb-0">
+            <li class="mb-2">
+              In ChatGPT's settings, turn on <strong>developer mode</strong>, then add an app for a remote MCP server.
+              <span class="text-muted small d-block">OpenAI move these menus around; their <a href="https://developers.openai.com/api/docs/guides/developer-mode" target="_blank" rel="noopener">own guide</a> has the current path.</span>
+            </li>
+            <li class="mb-2">
+              Paste this address:
+              <div class="input-group input-group-sm mt-1">
+                <input type="text" class="form-control" id="mcp-url-openai" value="{{ mcp_url }}" readonly aria-label="Connector address">
+                <button class="btn btn-primary copy-button" type="button" data-copy-target="mcp-url-openai"><i class="bi bi-clipboard"></i> Copy</button>
+              </div>
+            </li>
+            <li class="mb-2">Choose <strong>OAuth</strong> when it asks how to authenticate. It sends you back here to sign in.</li>
+            <li>Turn the app on from the <strong>+</strong> menu in a chat.</li>
+          </ol>
+        </div>
+      </div>
+    </div>
+
+    <div class="col-12 col-md-6 col-lg-4">
+      <div class="card h-100">
+        <div class="card-body">
+          <h3 class="card-title h6 mb-2"><i class="bi bi-robot"></i> Grok</h3>
+          <p class="small text-muted mb-2">Web and apps. Nothing to copy but the address &mdash; you sign in instead.</p>
+          <ol class="mb-0">
+            <li class="mb-2">
+              Open <a href="https://grok.com/connectors" target="_blank" rel="noopener">Connectors</a> in Grok, choose <strong>New connector</strong>, then <strong>Custom</strong>.
+              <span class="text-muted small d-block">On a Grok Business or Enterprise account, an admin has to add it in the console first.</span>
+            </li>
+            <li class="mb-2">
+              Paste this address:
+              <div class="input-group input-group-sm mt-1">
+                <input type="text" class="form-control" id="mcp-url-grok" value="{{ mcp_url }}" readonly aria-label="Connector address">
+                <button class="btn btn-primary copy-button" type="button" data-copy-target="mcp-url-grok"><i class="bi bi-clipboard"></i> Copy</button>
+              </div>
+            </li>
+            <li class="mb-2">Grok sends you back here to sign in, and asks what you're allowing. Say yes.</li>
+            <li>Grok finds the tools on its own &mdash; ask it about your auction.</li>
+          </ol>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  {% comment %}Signing in is how almost everybody connects, so the list of what is connected belongs above the key form rather than under it. Until it existed, "how do I disconnect this?" had no answer on this page at all -- revoking a key is no help to somebody who never made one.{% endcomment %}
+  <h2 class="h5 mb-2">What's connected</h2>
+  {% if connected_apps %}
+  <div class="table-responsive mb-4">
+    <table class="table align-middle">
+      <thead>
+        <tr><th>Agent</th><th>Can change things</th><th>Connected</th><th></th></tr>
+      </thead>
+      <tbody>
+        {% for app in connected_apps %}
+        <tr{% if not app.live %} class="text-muted"{% endif %}>
+          <td>{{ app.name }}{% if not app.live %} <span class="badge bg-secondary rounded-pill">Signed out</span>{% endif %}</td>
+          <td>{% if app.writes %}Yes{% else %}No, read only{% endif %}</td>
+          <td>{{ app.connected|timesince }} ago</td>
+          <td class="text-end">
+            <form method="post" data-confirm="Disconnect {{ app.name }}? It stops working straight away, and you'll be asked to sign in again if you reconnect it." data-confirm-title="Disconnect {{ app.name }}?" data-confirm-ok="Disconnect" data-confirm-variant="danger">
+              {% csrf_token %}
+              <input type="hidden" name="disconnect" value="{{ app.pk }}">
+              <button type="submit" class="btn btn-sm btn-danger"><i class="bi bi-x-lg"></i> Disconnect</button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <p class="text-muted mb-4">Nothing yet. Follow the steps above and it will show up here.</p>
+  {% endif %}
+
+  {% comment %}Collapsed by default, always, except when there is a new key to read &mdash; a section nobody can see is no place to put a secret that is shown once.{% endcomment %}
+  <h2 class="h5 mb-2">Keys, for everything that can't sign in</h2>
+  <p class="mb-3">
+    <button class="btn btn-primary btn-sm" type="button" data-bs-toggle="collapse" data-bs-target="#api-key-panel" aria-expanded="{% if new_raw_key %}true{% else %}false{% endif %}" aria-controls="api-key-panel">
+      <i class="bi bi-key"></i> Keys for scripts and cron jobs
+    </button>
+  </p>
+
+  <div class="collapse{% if new_raw_key %} show{% endif %}" id="api-key-panel">
+    <p class="text-muted">
+      You don't need a key to connect Claude, ChatGPT or Grok &mdash; use the sign-in above. A key is for a script, a
+      cron job, or a connector your organisation's administrator adds once for everybody. Anyone who has the
+      key is you, so treat it like a password.
+    </p>
+
+    <div class="card mb-4">
+      <div class="card-body">
+        <h3 class="card-title h6">Create a key</h3>
+        <form method="post">
+          {% csrf_token %}
+          <div class="mb-3">
+            <label class="form-label" for="key-name">What is this key for?</label>
+            <input class="form-control" type="text" name="name" id="key-name" maxlength="100" required placeholder="My check-in script">
+            <div class="form-text">A name for you, so you can tell your keys apart later.</div>
+          </div>
+          <div class="form-check mb-3">
+            <input class="form-check-input" type="checkbox" name="allow_writes" id="allow-writes">
+            <label class="form-check-label" for="allow-writes">Let this key change things</label>
+            <div class="form-text">Off by default. With it off the key can look things up but cannot add lots, check people in, or change an invoice.</div>
+          </div>
+          <div class="mb-3">
+            <label class="form-label" for="expires-in">Stop working after</label>
+            <select class="form-select" name="expires_in" id="expires-in">
+              <option value="">Never</option>
+              <option value="30">30 days</option>
+              <option value="90">90 days</option>
+              <option value="365">A year</option>
+            </select>
+            <div class="form-text">A key with an end date is the one that can't be forgotten about. Leave it on Never for something that has to keep running.</div>
+          </div>
+          <button type="submit" class="btn btn-success text-dark"><i class="bi bi-plus-lg"></i> Create key</button>
+        </form>
+      </div>
+    </div>
+
+    {% if keys %}
+    <h3 class="h6">Your keys</h3>
+    <div class="table-responsive mb-4">
+      <table class="table align-middle">
+        <thead>
+          <tr><th>Name</th><th>Key</th><th>Can change things</th><th>Expires</th><th>Last used</th><th></th></tr>
+        </thead>
+        <tbody>
+          {% for key in keys %}
+          <tr{% if not key.is_active %} class="text-muted"{% endif %}>
+            <td>{{ key.name }}</td>
+            <td><code>{{ key.prefix }}&hellip;</code></td>
+            <td>{% if key.allow_writes %}Yes{% else %}No, read only{% endif %}</td>
+            <td>{% if key.expires_at %}{{ key.expires_at|date:"N j, Y" }}{% else %}Never{% endif %}</td>
+            <td>{% if key.last_used_at %}{{ key.last_used_at|timesince }} ago{% else %}Never{% endif %}</td>
+            <td class="text-end">
+              {% if key.is_active %}
+              <form method="post" data-confirm="Revoke this key? Anything using it stops working straight away, and it cannot be turned back on." data-confirm-title="Revoke {{ key.name }}?" data-confirm-ok="Revoke key" data-confirm-variant="danger">
+                {% csrf_token %}
+                <input type="hidden" name="revoke" value="{{ key.pk }}">
+                <button type="submit" class="btn btn-sm btn-danger"><i class="bi bi-x-lg"></i> Revoke</button>
+              </form>
+              {% else %}
+              Revoked
+              {% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% endif %}
+
+    <h3 class="h6">Using a key</h3>
+    <p class="mb-2">Send it as a bearer token on every request:</p>
+    <pre class="bg-dark text-white p-2 rounded mb-0" style="overflow-x:auto"><code>curl -X POST {{ mcp_url }} \
+  -H "Authorization: Bearer ak_your_key_here" \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'</code></pre>
+  </div>
+</div>
+<script>
+  document.querySelectorAll('.copy-button').forEach(function (button) {
+    button.addEventListener('click', function () {
+      var field = document.getElementById(button.getAttribute('data-copy-target'));
+      if (!field) { return; }
+      field.select();
+      var done = function () {
+        button.innerHTML = '<i class="bi bi-clipboard-check"></i> Copied';
+        setTimeout(function () { button.innerHTML = '<i class="bi bi-clipboard"></i> Copy'; }, 2000);
+      };
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(field.value).then(done, function () {});
+      }
+    });
+  });
+</script>
+{% endblock %}

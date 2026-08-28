@@ -6,7 +6,7 @@ import uuid as uuid_module
 from datetime import time
 from decimal import ROUND_HALF_UP, Decimal
 from random import randint
-from urllib.parse import quote_plus, urlencode
+from urllib.parse import quote_plus
 
 import channels.layers
 import pytz
@@ -953,11 +953,6 @@ class Club(CloudflareImageMixin, models.Model):
         help_text="The auction whose admin links are surfaced in the club sidebar.",
     )
     description = models.TextField(verbose_name="About this club", default="", blank=True)
-    enable_club_page = models.BooleanField(
-        default=True,
-        verbose_name="Enable public club page",
-        help_text="Enables the public club detail page and membership self-service features (online renewal, expiration reminders). Required to use membership management.",
-    )
     enable_breeder_award_program = models.BooleanField(
         default=False,
         help_text="Track when users breed fish and show a leaderboard of top breeders.",
@@ -1159,11 +1154,16 @@ class Club(CloudflareImageMixin, models.Model):
         default=False,
         verbose_name="This calendar is shared publicly",
         help_text=(
-            "Whether the admin has made the calendar public in Google Calendar. We can't change "
-            "sharing ourselves — that needs a scope granting access to all of their calendars — "
-            "but ticking this box is checked against the calendar's public feed before it sticks. "
-            "It only controls whether the club page advertises the Google subscribe links."
+            "Whether the calendar is shared publicly in Google Calendar. Derived, not typed: we "
+            "can't change sharing ourselves — that needs a scope granting access to all of their "
+            "calendars — but a shared calendar has a public iCal feed, so every sync asks for it "
+            "the way a member would. It only controls whether we advertise the Google links."
         ),
+    )
+    google_calendar_public_checked = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="When we last asked Google whether this calendar is shared. See google_calendar.refresh_public_flag.",
     )
     google_calendar_last_sync = models.DateTimeField(null=True, blank=True)
     google_calendar_last_error = models.TextField(blank=True)
@@ -1178,6 +1178,27 @@ class Club(CloudflareImageMixin, models.Model):
         help_text=(
             "Create a Discord scheduled event for each club event. Auctions are handled by the "
             "Discord auction event setting instead, so they are never doubled up."
+        ),
+    )
+
+    # Is the events embed actually on the club's own website?  Modelled on
+    # ClubAnnouncement.website_views, and for the same reason: the only question anybody can
+    # answer about a snippet pasted into somebody else's WordPress is "did a browser ask us for
+    # it".  Counted for every format of the events embed and never for the club page here, which
+    # is ours rather than theirs -- the whole point of the number is to tell those two apart.
+    events_website_views = models.PositiveIntegerField(
+        default=0,
+        help_text=(
+            "How many times this club's events embed has been rendered on a website. An "
+            "impression, not a read, and evidence the snippet is installed somewhere."
+        ),
+    )
+    events_website_last_view = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text=(
+            "When the events embed was last asked for. A club that took the snippet down stops "
+            "counting, so this is what separates 'embeds our events' from 'tried it once in 2024'."
         ),
     )
 
@@ -1311,6 +1332,48 @@ class Club(CloudflareImageMixin, models.Model):
         if not self.google_calendar_is_public:
             return ""
         return self.google_calendar_ical_url_candidate
+
+    def _own_ical_url(self, domain):
+        """This site's own iCal feed for the club. Every club has one, connected or not."""
+        return f"https://{domain}{reverse('club_events_ical', kwargs={'slug': self.slug})}"
+
+    def calendar_subscribe_url(self, domain):
+        """The one link to hand a member who wants these events in their own calendar.
+
+        Google's own calendar when the club has shared it, because that is the copy the club
+        actually keeps — anything an admin types straight into Google Calendar is on it, whether
+        or not the pull has run yet. Otherwise our feed, which needs no Google connection at all.
+
+        ``webcal://`` rather than ``https://`` for the fallback, deliberately: an https .ics is a
+        *download*, which most calendar apps import as a frozen snapshot, and a frozen snapshot of
+        a club calendar is the thing we keep telling people not to hand out.
+        """
+        if self.google_calendar_public_url:
+            return self.google_calendar_public_url
+        return re.sub(r"^https?://", "webcal://", self._own_ical_url(domain))
+
+    def calendar_feed_url(self, domain):
+        """The raw iCal feed behind :meth:`calendar_subscribe_url`, for anything that reads one."""
+        return self.google_calendar_ical_url or self._own_ical_url(domain)
+
+    #: How long after the last render we still call a club's events embed "installed". Long
+    #: enough that a quiet club website doesn't fall out of it between meetings, short enough
+    #: that a snippet taken down in the spring is not still being counted at the next auction.
+    EVENTS_EMBED_ACTIVE_DAYS = 90
+
+    @property
+    def embeds_events_on_website(self):
+        """True when this club's own website has been showing our events lately.
+
+        Read off :attr:`events_website_views` and :attr:`events_website_last_view`, which only the
+        embed writes. It is deliberately a *recent* render rather than an all-time count: an
+        answer of "yes" is used to tell an auction admin that members are reading this auction's
+        calendar entry on the club's own site, and that has to stop being said the season after
+        somebody deleted the snippet.
+        """
+        if not self.events_website_views or not self.events_website_last_view:
+            return False
+        return self.events_website_last_view >= timezone.now() - datetime.timedelta(days=self.EVENTS_EMBED_ACTIVE_DAYS)
 
     @property
     def icon_display_url(self):
@@ -2383,13 +2446,11 @@ class ClubMember(ContactRecord):
             new_reminder_30_days = self.calculate_membership_expiration_reminder_due(days_before=30)
             min_reminder = timezone.now() + datetime.timedelta(days=30)
             if new_reminder is not None and (previous_reminder_due is None or new_reminder < previous_reminder_due):
-                if new_reminder < min_reminder:
-                    new_reminder = min_reminder
+                new_reminder = max(new_reminder, min_reminder)
             if new_reminder_30_days is not None and (
                 previous_reminder_30_days_due is None or new_reminder_30_days < previous_reminder_30_days_due
             ):
-                if new_reminder_30_days < min_reminder:
-                    new_reminder_30_days = min_reminder
+                new_reminder_30_days = max(new_reminder_30_days, min_reminder)
             self.membership_expiration_reminder_due = new_reminder
             self.membership_expiration_reminder_30_days_due = new_reminder_30_days
         # Inherit email_address_status from another known record, same as AuctionTOS pattern
@@ -2856,6 +2917,17 @@ class ClubEvent(models.Model):
         blank=True,
         help_text="Where the series is anchored — the first occurrence. Only set for repeating events.",
     )
+    title_is_custom = models.BooleanField(
+        default=False,
+        help_text=(
+            "Set when a club admin typed this event's title by hand. Only means anything on a "
+            "generated event, where it stops sync_one_auction_event overwriting it again."
+        ),
+    )
+    description_is_custom = models.BooleanField(
+        default=False,
+        help_text="The same, for the description. Cleared, the auction's own blurb comes back.",
+    )
     cancelled = models.BooleanField(
         default=False,
         verbose_name="This event is cancelled",
@@ -2907,8 +2979,23 @@ class ClubEvent(models.Model):
 
     @property
     def is_editable(self):
-        """Generated events are owned by the auction — edit the auction instead."""
+        """Everything about this event is the club's to change.
+
+        False for a generated event: its dates, its location and its very existence belong to the
+        auction. Its *wording* doesn't — see ``details_are_editable``.
+        """
         return self.source not in self.AUTOMATIC_SOURCES
+
+    @property
+    def details_are_editable(self):
+        """The title and description can always be typed by hand, generated event or not.
+
+        A club's monthly meeting often *is* the auction, and "In-person auction." is not what the
+        club wants members to read on their phone. Everything else about a generated event stays
+        owned by the auction, so this is deliberately narrower than ``is_editable`` rather than a
+        replacement for it.
+        """
+        return True
 
     @property
     def is_automatic(self):
@@ -3013,24 +3100,6 @@ class ClubEvent(models.Model):
         if not self.location:
             return ""
         return "https://www.google.com/maps/search/?api=1&query=" + quote_plus(self.location)
-
-    @property
-    def add_to_calendar_url(self):
-        """A 'save this to my calendar' link that works for anyone, with or without the club
-        having connected Google Calendar."""
-        params = {
-            "action": "TEMPLATE",
-            "text": self.title,
-            "dates": (
-                f"{self.date_start.astimezone(datetime.timezone.utc):%Y%m%dT%H%M%SZ}/"
-                f"{self.effective_end.astimezone(datetime.timezone.utc):%Y%m%dT%H%M%SZ}"
-            ),
-        }
-        if self.description:
-            params["details"] = self.description
-        if self.location:
-            params["location"] = self.location
-        return "https://calendar.google.com/calendar/render?" + urlencode(params)
 
 
 class ClubAnnouncement(models.Model):
@@ -3191,8 +3260,65 @@ class ClubAnnouncement(models.Model):
         return bool(self.mailchimp_campaign_id or self.brevo_campaign_id)
 
 
-class ClubAPIKey(models.Model):
+class HashedAPIKey(models.Model):
+    """A key shown once and stored as a salted hash, with a lookup prefix in front of it.
+
+    Shared by :class:`ClubAPIKey` (a club's own website or software) and :class:`UserAPIKey` (an
+    agent acting as one person over MCP), because a second implementation of "issue a token and
+    check it later" is a second chance to get the storage wrong. The raw key is
+    ``<prefix>.<secret>``: the prefix is indexed and identifies the row, the secret is verified
+    against ``key_hash`` with Django's password hasher and is never written down anywhere.
+
+    A subclass sets :attr:`key_prefix` so the two kinds of key can be told apart on sight, and may
+    narrow :attr:`is_usable`.
+    """
+
+    #: What the prefix of a key from this model starts with. Distinct per subclass so a key pasted
+    #: into the wrong box is recognisable, and so a log line says which kind it was.
+    key_prefix = "k_"
+    #: Passed to ``select_related`` when verifying, since the caller always wants the owner.
+    verify_select_related: tuple[str, ...] = ()
+
+    class Meta:
+        abstract = True
+
+    @property
+    def is_usable(self):
+        """Whether this key may be used right now. Subclasses may add reasons it may not."""
+        return self.is_active
+
+    @classmethod
+    def generate(cls):
+        """Return ``(raw_key, prefix, key_hash)``. Store the last two; show the first once."""
+        import secrets
+
+        prefix = cls.key_prefix + secrets.token_hex(4)
+        secret = secrets.token_hex(16)
+        raw_key = f"{prefix}.{secret}"
+        key_hash = make_password(secret)
+        return raw_key, prefix, key_hash
+
+    @classmethod
+    def verify(cls, raw_key):
+        """Return the key matching ``raw_key``, or ``None``. Never raises on rubbish input."""
+        try:
+            prefix, secret = raw_key.split(".", 1)
+        except (AttributeError, ValueError):
+            return None
+        candidates = cls.objects.filter(prefix=prefix, is_active=True)
+        if cls.verify_select_related:
+            candidates = candidates.select_related(*cls.verify_select_related)
+        for candidate in candidates:
+            if check_password(secret, candidate.key_hash) and candidate.is_usable:
+                return candidate
+        return None
+
+
+class ClubAPIKey(HashedAPIKey):
     """API key scoped to a single Club, used by external services to ingest ClubMember records."""
+
+    key_prefix = "ck_"
+    verify_select_related = ("club",)
 
     club = models.ForeignKey(Club, on_delete=models.CASCADE, related_name="api_keys")
     name = models.CharField(max_length=100, help_text="Label for this integration, e.g. 'WordPress'")
@@ -3220,30 +3346,6 @@ class ClubAPIKey(models.Model):
     last_used_at = models.DateTimeField(null=True, blank=True)
     rate_limit = models.IntegerField(null=True, blank=True, help_text="Max requests per hour. Blank = site default.")
 
-    @staticmethod
-    def generate():
-        """Return (raw_key, prefix, key_hash). Store prefix + key_hash; display raw_key once."""
-        import secrets
-
-        prefix = "ck_" + secrets.token_hex(4)
-        secret = secrets.token_hex(16)
-        raw_key = f"{prefix}.{secret}"
-        key_hash = make_password(secret)
-        return raw_key, prefix, key_hash
-
-    @staticmethod
-    def verify(raw_key):
-        """Return active ClubAPIKey matching raw_key, or None."""
-        try:
-            prefix, secret = raw_key.split(".", 1)
-        except ValueError:
-            return None
-        candidates = ClubAPIKey.objects.filter(prefix=prefix, is_active=True).select_related("club")
-        for candidate in candidates:
-            if check_password(secret, candidate.key_hash):
-                return candidate
-        return None
-
     def __str__(self):
         return f"{self.name} ({self.prefix}…)"
 
@@ -3260,6 +3362,60 @@ class ClubAPIKeyFieldMap(models.Model):
 
     def __str__(self):
         return f"{self.external_field} → {self.internal_field}"
+
+
+class UserAPIKey(HashedAPIKey):
+    """A key that lets an agent act as one person over the MCP endpoint at ``/mcp/``.
+
+    A :class:`ClubAPIKey` is the wrong shape for this. It identifies a *club*, and every tool the
+    MCP endpoint offers is a resolver that asks "may **this user** do this to this auction", so an
+    agent needs a person to be. It also carries a permission per integration feature, which is a
+    list that would have to grow every time a tool is added.
+
+    So this key carries exactly one permission, :attr:`allow_writes`, and it is off by default.
+    That is not the security boundary -- the resolvers are, and they check the user's real
+    permissions on every call. It is a ceiling: a key can only ever do *less* than its owner can,
+    which is what makes handing one to a program a smaller decision than handing over a password.
+
+    OAuth is the other way in (see :mod:`auctions.mcp.auth`) and it is the one Claude's own hosted
+    surfaces use. This exists for everything that cannot do an OAuth dance: Claude Code with a
+    header, a script, a club's own tooling.
+    """
+
+    key_prefix = "ak_"
+    # ``user__userdata`` rather than ``user``: the resolvers behind almost every tool read the
+    # owner's UserData (timezone, last auction used, preferences), so fetching it with the key
+    # saves a query per call.
+    verify_select_related = ("user__userdata",)
+
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="api_keys")
+    name = models.CharField(max_length=100, help_text="What this key is for, e.g. 'Claude on my laptop'")
+    prefix = models.CharField(max_length=12, unique=True, db_index=True)
+    key_hash = models.CharField(max_length=255, db_index=True)  # salted password hash of secret
+    is_active = models.BooleanField(default=True)
+    allow_writes = models.BooleanField(
+        default=False,
+        help_text=(
+            "Let this key add and change things — lots, check-ins, invoices, members. Off by "
+            "default: a key that can only read is a much smaller thing to lose. Either way it can "
+            "never do anything you couldn't do yourself."
+        ),
+    )
+    expires_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="Stop accepting this key after this date. Blank means it never expires on its own.",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    last_used_at = models.DateTimeField(null=True, blank=True)
+    rate_limit = models.IntegerField(null=True, blank=True, help_text="Max requests per hour. Blank = site default.")
+
+    @property
+    def is_usable(self):
+        return self.is_active and not (self.expires_at and self.expires_at <= timezone.now())
+
+    def __str__(self):
+        return f"{self.name} ({self.prefix}…)"
 
 
 class Category(models.Model):
@@ -4088,7 +4244,14 @@ class Auction(models.Model):
     first_bid_payout.help_text = "This is a feature to encourage bidding.  Give each bidder this amount, for free.  <a href='/blog/encouraging-participation/' target='_blank'>More information</a>"
     club_member_discount = models.PositiveIntegerField(default=0, validators=[MinValueValidator(0)])
     club_member_discount.help_text = "Automatically add a discount in this amount if a paid club member has purchased at least one lot in this auction"
-    promote_this_auction = models.BooleanField(default=True)
+    # Off by default, because being on the public list is a decision and not a starting state.
+    # ``AuctionCreateView`` has always overridden this to False with the comment "all auctions start
+    # not promoted", so the column default was only ever reached by code that creates an Auction
+    # some other way -- and what it did there was list somebody's auction publicly without being
+    # asked. ``AuctionEditForm.clean`` is where the decision belongs: it refuses a test-looking
+    # slug, an auction with no location set, one with the placeholder still in its rules, and an
+    # account that isn't trusted.
+    promote_this_auction = models.BooleanField(default=False)
     promote_this_auction.help_text = "Show this to everyone in the list of auctions"
     is_chat_allowed = models.BooleanField(default=True)
     max_lots_per_user = models.PositiveIntegerField(null=True, blank=True, validators=[MaxValueValidator(100)])
@@ -4294,6 +4457,15 @@ class Auction(models.Model):
     enable_square_payments.help_text = "Allow users to use Square to pay their invoices themselves."
     dismissed_square_banner = models.BooleanField(default=False, blank=True)
     dismissed_promo_banner = models.BooleanField(default=False, blank=True)
+    dismissed_customize_event_banner = models.BooleanField(
+        default=False,
+        blank=True,
+        help_text=(
+            "Set when an admin dismissed the prompt to write this auction's own calendar wording. "
+            "Deliberately not in AUCTION_FIELDS_TO_CLONE: next year's auction gets a new event and "
+            "the same generated sentence, which is the thing worth asking about again."
+        ),
+    )
     google_drive_link = models.URLField(max_length=500, blank=True, null=True, default="")
     google_drive_link.help_text = "Link to a Google Sheet with user information.  Make sure the sheet is shared with 'anyone with the link can view'."
     last_sync_time = models.DateTimeField(blank=True, null=True)
@@ -5774,6 +5946,39 @@ class Auction(models.Model):
         return False
 
     @property
+    def event_needing_custom_wording(self):
+        """This auction's calendar event, when it is worth asking an admin to reword it.
+
+        The prompt on the auction page is only honest when all four of these hold, which is why
+        this is one property rather than four template conditions:
+
+        * There is a club, and its **own website is showing our events** -- see
+          ``Club.embeds_events_on_website``. Without that the generated sentence is read here, on
+          a page the admin is already looking at, and nagging about it is noise.
+        * The event exists and is the generated one. A manual event was typed by a person, so
+          there is nothing to improve.
+        * **Neither** the title nor the description has been typed by hand. Either one is somebody
+          having already made this decision, and the answer "I only wanted to change the title" is
+          a legitimate one to leave alone.
+        * The auction hasn't happened yet. Rewording the calendar entry for last spring changes
+          what nobody is going to read.
+
+        Returns the event so the caller can link straight at it, or None.
+        """
+        if self.dismissed_customize_event_banner or not self.club_id:
+            return None
+        if self.pretty_much_over:
+            return None
+        if not self.club.embeds_events_on_website:
+            return None
+        event = self.calendar_events.filter(is_deleted=False).first()
+        if not event or not event.is_automatic:
+            return None
+        if event.title_is_custom or event.description_is_custom:
+            return None
+        return event
+
+    @property
     def location_link(self):
         if not self.location_qs.count():
             return reverse("create_auction_pickup_location", kwargs={"slug": self.slug})
@@ -6517,7 +6722,7 @@ class Auction(models.Model):
         return before + [midpoint] + after
 
     def create_history(self, applies_to, action="Edited", user=None, form=None):
-        """Applies to can be RULES, USERS, INVOICES, LOTS, LOT_WINNERS, user should be the user making the change or None if it's a system change.
+        """Applies to can be RULES, USERS, INVOICES, LOTS, STATS, user should be the user making the change or None if it's a system change.
         Action is a string describing the change, form is a form instance that has changed data
         """
         # Don't create history if the auction hasn't been saved yet
@@ -6943,6 +7148,30 @@ class AuctionTOS(models.Model):
                 result += (
                     f"<span class='dropdown-item'><a href='javascript:void(0)' hx-get='{membership_number_url}' "
                     f"hx-target='#modals-here'><i class='bi bi-credit-card-2-front me-1'></i>Membership number</a></span>"
+                )
+                if not cm.is_deleted:
+                    resend_card_url = reverse("club_member_confirm", kwargs={"pk": cm.pk, "action": "resend_card"})
+                    result += (
+                        f"<span class='dropdown-item'><a href='javascript:void(0)' hx-get='{resend_card_url}' "
+                        f"hx-target='#modals-here'><i class='bi bi-send me-1'></i>Resend membership card</a></span>"
+                    )
+            # Deactivating the *member* is not the same thing as the Delete above, which removes
+            # them from this one auction -- and the club page offers both halves of it, so this
+            # page has to as well or "managing members through the auction" quietly means "some of
+            # them". Reactivate is a bare POST with no confirmation, exactly as it is there.
+            if cm.is_deleted:
+                reactivate_url = reverse("club_member_reactivate", kwargs={"pk": cm.pk})
+                result += (
+                    f"<span class='dropdown-item'><a href='javascript:void(0)' hx-post='{reactivate_url}' "
+                    f"hx-target='#modals-here' hx-swap='innerHTML'>"
+                    f"<i class='bi bi-person-check me-1'></i>Reactivate club member</a></span>"
+                )
+            else:
+                deactivate_url = reverse("club_member_confirm", kwargs={"pk": cm.pk, "action": "delete"})
+                result += (
+                    f"<span class='dropdown-item'><a href='javascript:void(0)' hx-get='{deactivate_url}' "
+                    f"hx-target='#modals-here'>"
+                    f"<i class='bi bi-person-dash me-1'></i>Deactivate club member</a></span>"
                 )
         if self.auction.club and not self.auction.is_club_managed:
             club = self.auction.club
@@ -8513,11 +8742,12 @@ class Lot(models.Model):
         if user.is_superuser:
             return True
         if self.auction:
-            tos = AuctionTOS.objects.filter(is_admin=True, user=user, user__isnull=False, auction=self.auction).first()
-            if tos:
-                return True
-            if self.auction.created_by == user:
-                return True
+            # Whoever may run the auction may fix its pictures.  This used to ask half of
+            # Auction.permission_check by hand -- the is_admin participant row and the creator --
+            # and so missed the club half of it entirely: in a club-managed auction admin comes
+            # from ClubMember.permission_admin / permission_manage_auctions, and the officer
+            # running it was refused on every lot but their own.
+            return self.auction.permission_check(user)
         return False
 
     @property
@@ -8857,6 +9087,26 @@ class Lot(models.Model):
             return club.points_per_lot
         return self.species_category.bap_points if self.species_category else 5
 
+    def default_bap_points(self, club):
+        """What the Approve button offers for this lot: :meth:`bap_points_for_club` plus the bonus.
+
+        The bonus is the club's ``points_for_custom_checkbox`` -- "was this fish spawned in a
+        species tank", or whatever else the auction put on that checkbox -- and it is part of the
+        default rather than a separate figure because it is part of what the lot is worth.
+
+        One method because there were three answers to this question and only one of them was
+        right.  ``auto_award_bap_points`` had it; ``LotBapPointsView._render_buttons`` checked the
+        category override but not the genus one, so approving a *Tropheus* re-rendered the row with
+        a different number than the table had just shown; and ``BapAwardAdminView._lot_initial``
+        had the overrides but dropped the bonus.  ``ClubBapLotHTMxTable.render_actions`` is the one
+        deliberate copy -- it runs once per row on a page that shows hundreds, so it reads the same
+        precedence off two prefetched dicts rather than off two queries per lot.
+        """
+        points = self.bap_points_for_club(club)
+        if club.points_for_custom_checkbox > 0 and self.custom_checkbox:
+            points += club.points_for_custom_checkbox
+        return points
+
     def auto_award_bap_points(self):
         """Always store bap_auto_reason when a winner is set; also create a BapAward if auto_add_points is on.
 
@@ -8881,9 +9131,7 @@ class Lot(models.Model):
             # Eligible but club requires manual approval — reason is "" (eligible), award created by admin
             return
         # Eligible + auto_add_points: create the BapAward now
-        points = self.bap_points_for_club(club)
-        if club.points_for_custom_checkbox > 0 and self.custom_checkbox:
-            points += club.points_for_custom_checkbox
+        points = self.default_bap_points(club)
         seller_user = self.user or (self.auctiontos_seller.user if self.auctiontos_seller else None)
         if not seller_user:
             return
@@ -11325,11 +11573,9 @@ class PageView(models.Model):
         """
         if self.duplicate_count:
             dup = self.duplicates.first()
-            if self.date_start > dup.date_start:
-                self.date_start = dup.date_start
+            self.date_start = min(self.date_start, dup.date_start)
             if self.date_end and dup.date_end:
-                if self.date_end < dup.date_end:
-                    self.date_end = dup.date_end
+                self.date_end = max(self.date_end, dup.date_end)
             self.total_time = self.total_time + dup.total_time
             if not self.source:
                 self.source = dup.source
@@ -11437,6 +11683,11 @@ def get_default_can_submit_lots():
 
 def get_default_paypal_enabled():
     return settings.PAYPAL_ENABLED_FOR_USERS
+
+
+def get_default_use_llm_search():
+    """Whether new users get the assistant. Off until a site turns it on -- see ASSISTANT_ENABLED_FOR_USERS."""
+    return getattr(settings, "ASSISTANT_ENABLED_FOR_USERS", False)
 
 
 def get_default_square_enabled():
@@ -11560,12 +11811,16 @@ class UserData(models.Model):
     dismissed_cookies_tos = models.BooleanField(default=False)
     show_ad_controls = models.BooleanField(default=False, blank=True)
     show_ad_controls.help_text = "Show a tab for ads on all pages"
-    use_llm_search = models.BooleanField(default=False, blank=True, verbose_name="Natural-language command palette")
+    use_llm_search = models.BooleanField(
+        default=get_default_use_llm_search, blank=True, verbose_name="AI command palette"
+    )
     use_llm_search.help_text = (
-        "Let this user type or speak commands into the command palette and have a language model "
-        "work out what they meant.  Off for everyone by default: it costs money per use, and with it "
-        "off the palette is plain search, exactly as it was before the feature existed.  Also needs an "
-        "LLM to be configured site-wide (see auctions.llm.assist_enabled)."
+        "Let this user talk to the site in plain English by typing or speaking into the command "
+        "palette.  Off for everyone by default; turn it on site-wide with "
+        "`manage.py change_assistant on`.  Also needs an LLM configured site-wide "
+        "(auctions.llm.assist_enabled), because every command spends this site's own budget.  "
+        "This does NOT gate connecting Claude or another assistant over MCP (/ai/), "
+        "which is open to everyone: an agent brings its own model and costs this site nothing."
     )
     credit = models.DecimalField(max_digits=6, decimal_places=2, default=0)
     credit.help_text = "The total balance in your account"
@@ -12908,8 +13163,7 @@ class UserInterestCategory(models.Model):
         try:
             maxInterest = UserInterestCategory.objects.filter(user=self.user).order_by("-interest")[0].interest
             self.as_percent = int(((self.interest + 1) / maxInterest) * 100)  # + 1 for the times maxInterest is 0
-            if self.as_percent > 100:
-                self.as_percent = 100
+            self.as_percent = min(self.as_percent, 100)
         except Exception:
             self.as_percent = 100
         super().save(*args, **kwargs)
@@ -12963,7 +13217,12 @@ class AuctionHistory(models.Model):
             ("USERS", "Users"),
             ("INVOICES", "Invoices"),
             ("LOTS", "Lots"),
-            ("LOT_WINNERS", "Set lot winners"),
+            # LOT_WINNERS was here and nothing ever wrote it -- a sale is recorded under LOTS by
+            # DynamicSetLotWinner.commit_winner ("Set lot 14 as sold"). A choice nobody writes is
+            # worse than absent: it is what an admin filtering for sales picks, and it answers
+            # nothing. STATS is the mirror image, written by tasks.update_auction_stats and never
+            # declared, so a row of it read back as a raw column value with no label.
+            ("STATS", "Stats"),
         ),
     )
 
@@ -13190,6 +13449,13 @@ class FAQ(models.Model):
     slug = AutoSlugField(populate_from="question", unique=True)
     createdon = models.DateTimeField(auto_now_add=True)
     include_in_auctiontos_confirm_email = models.BooleanField(default=False, blank=True)
+    agent_only = models.BooleanField(default=False, blank=True)
+    agent_only.help_text = (
+        "Keep this off the FAQ page, but let the site's assistant answer out of it. "
+        "For answers worth having written down that are not worth a heading on a public page: "
+        "an edge case, something only an auction admin ever hits, or a question people ask an "
+        "assistant and never a page. It is not private -- anyone can reach it by asking."
+    )
 
 
 class SearchHistory(models.Model):
@@ -14411,3 +14677,73 @@ class SpeakerComment(models.Model):
         if not user or not user.is_authenticated:
             return False
         return bool(user.is_superuser or (self.user_id and self.user_id == user.pk))
+
+
+class AssistantSkillRequest(models.Model):
+    """Something an agent tried to do here and could not, in the agent's own words.
+
+    The MCP endpoint has fifty-odd tools and every one of them was added because somebody said out
+    loud that it was missing. That feedback arrived by accident -- a message to the site owner, a
+    complaint at a meeting -- so the tools that exist are the ones whose absence happened to be
+    reported by somebody who knew where to report it. This is the same signal collected on purpose:
+    the assistant hits a wall, writes down what it was trying to do, and the wall is a row.
+
+    Written by the ``request_a_skill`` tool and read on ``/admin-dashboard/assistant-requests/``.
+    Deliberately not an email and not a ticket: a duplicate row is *evidence* (five clubs asking for
+    the same thing is the whole point of counting), where five duplicate emails are a nuisance
+    somebody deletes.
+
+    Everything in ``skill``, ``params`` and ``reason`` was written by a language model acting for a
+    member of this site. It is displayed to a superuser and read by a person deciding what to build;
+    it is never executed, never matched against the registry at write time, and the dashboard
+    escapes it like any other user-supplied text.
+    """
+
+    STATUS_NEW = "new"
+    STATUS_PLANNED = "planned"
+    STATUS_DONE = "done"
+    STATUS_DECLINED = "declined"
+    STATUS_CHOICES = (
+        (STATUS_NEW, "New"),
+        (STATUS_PLANNED, "Planned"),
+        (STATUS_DONE, "Built"),
+        (STATUS_DECLINED, "Not doing"),
+    )
+
+    user = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True)
+    skill = models.CharField(max_length=100, db_index=True)
+    skill.help_text = "What the tool would be called, in the caller's words."
+    params = models.TextField(blank=True, default="")
+    params.help_text = "What it would need to be told."
+    reason = models.TextField(blank=True, default="")
+    reason.help_text = "What the user was actually trying to do, and what happened instead."
+    surface = models.CharField(max_length=100, blank=True, default="")
+    surface.help_text = "Which assistant asked: the OAuth application's name, the API key's, or the command palette."
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_NEW, db_index=True)
+    notes = models.TextField(blank=True, default="")
+    notes.help_text = "Site admin's note. Not shown to the person who asked."
+    createdon = models.DateTimeField(auto_now_add=True, db_index=True)
+    updatedon = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-createdon"]
+        verbose_name = "Assistant skill request"
+
+    def __str__(self):
+        return f"{self.skill} ({self.get_status_display()})"
+
+    @property
+    def others_asking(self):
+        """How many other people have asked for something with the same name.
+
+        The number that decides whether a row is worth building, and the reason duplicates are kept
+        rather than merged. Matched on the normalised name only -- two agents will not phrase the
+        reason the same way, and requiring them to would count every request as unique.
+        """
+        return (
+            AssistantSkillRequest.objects.filter(skill__iexact=self.skill.strip())
+            .exclude(pk=self.pk)
+            .values("user_id")
+            .distinct()
+            .count()
+        )

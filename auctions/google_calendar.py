@@ -53,6 +53,13 @@ PULL_WINDOW_AHEAD = datetime.timedelta(days=400)
 # At 250 events a page this is far more than a club calendar holds in the window above.
 MAX_PULL_PAGES = 20
 
+# How stale the "is it shared?" answer is allowed to get. The probe is one anonymous GET, but it
+# rides on a sync that already runs every 15 minutes for every connected club, and sharing is a
+# thing an admin changes roughly once. An hour is quick enough that somebody following the
+# instructions on the settings page sees the banner clear itself while they still remember doing
+# it, and slow enough that it isn't four requests an hour per club for ever.
+PUBLIC_CHECK_INTERVAL = datetime.timedelta(hours=1)
+
 
 class GoogleCalendarError(Exception):
     """Raised for Google problems the caller should surface to the admin and log."""
@@ -677,6 +684,10 @@ def sync_club(club):
     club.google_calendar_last_sync = timezone.now()
     club.google_calendar_last_error = ""
     club.save(update_fields=["google_calendar_last_sync", "google_calendar_last_error"])
+    # Last, and only once the round trip has already been recorded as a success: this is the one
+    # thing that decides whether the club page offers the Google links, and it is a fact we read
+    # rather than something an admin asserts. Rate-limited inside, and it never raises.
+    refresh_public_flag(club)
     return True
 
 
@@ -695,6 +706,11 @@ def disconnect(club, error=""):
     club.google_calendar_sync_token = ""
     club.google_calendar_connected_on = None
     club.google_calendar_last_error = error
+    # Forget what we knew about sharing. Reconnecting a *different* Google account gets a brand
+    # new (and private) calendar from ensure_calendar(), and a leftover "it's public" would have
+    # the club page advertising it in the window before the next probe runs.
+    club.google_calendar_is_public = False
+    club.google_calendar_public_checked = None
     club.save(
         update_fields=[
             "google_calendar_refresh_token",
@@ -704,6 +720,8 @@ def disconnect(club, error=""):
             "google_calendar_sync_token",
             "google_calendar_connected_on",
             "google_calendar_last_error",
+            "google_calendar_is_public",
+            "google_calendar_public_checked",
         ]
     )
     # Everything is queued to go back out, so reconnecting catches the calendar up on whatever
@@ -727,3 +745,36 @@ def is_calendar_public(club):
         msg = f"Could not reach Google to check the calendar's sharing: {exc}"
         raise GoogleCalendarError(msg) from exc
     return resp.status_code == 200
+
+
+def refresh_public_flag(club, *, force=False):
+    """Bring ``club.google_calendar_is_public`` in line with what Google will actually serve.
+
+    This used to be a checkbox on the settings page — the admin's word, checked once, at the
+    moment they said it. That got both halves wrong. A club that followed the four steps in
+    Google Calendar and never came back never got its subscribe links, and a club that later
+    un-shared the calendar went on advertising links that 404 for every member, because nothing
+    ever asked again. Sharing is a fact about a calendar, not a preference about this site, so it
+    is read rather than stored on somebody's say-so.
+
+    Failing to reach Google is **not** evidence either way, so a network error leaves the flag
+    exactly as it was — flipping a working calendar to private because of one timeout would take
+    the links off the club page for an hour for no reason.
+
+    Returns True when the flag changed.
+    """
+    if not club.google_calendar_connected:
+        return False
+    if not force and club.google_calendar_public_checked:
+        if timezone.now() - club.google_calendar_public_checked < PUBLIC_CHECK_INTERVAL:
+            return False
+    try:
+        public = is_calendar_public(club)
+    except GoogleCalendarError as exc:
+        logger.info("Could not check calendar sharing for club %s: %s", club.pk, exc)
+        return False
+    changed = club.google_calendar_is_public != public
+    club.google_calendar_is_public = public
+    club.google_calendar_public_checked = timezone.now()
+    club.save(update_fields=["google_calendar_is_public", "google_calendar_public_checked"])
+    return changed

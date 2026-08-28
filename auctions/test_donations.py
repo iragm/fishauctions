@@ -1067,7 +1067,40 @@ class DonationContactOnEmailSettingsTests(DonationTestMixin, TestCase):
         self.assertIn("Turn on donation tracking", form.fields["donation_email_member"].help_text)
 
     def test_it_recommends_leaving_the_contact_unset(self):
-        self.assertIn("Leave this blank", self.form().fields["donation_email_member"].help_text)
+        """The recommendation stays on the field; the reasoning for it moved to a note above.
+
+        Both used to say the whole thing, on one screen, which made the recommendation easier to
+        skim past rather than harder. The note is on the email settings page (where the field is)
+        rather than the donation settings page (where the field isn't), and only when the club
+        actually runs donation tracking.
+        """
+        self.assertIn("Leave blank (recommended)", self.form().fields["donation_email_member"].help_text)
+
+    @override_settings(**ROUTING_SETTINGS)
+    def test_the_reasoning_is_on_the_email_page_when_donation_tracking_is_on(self):
+        self.client.force_login(self.admin)
+        page = self.client.get(reverse("club_email_settings", kwargs={"slug": self.club.slug}))
+        self.assertContains(page, "Leave the donation contact blank")
+        self.assertContains(page, "never reaches")
+
+    @override_settings(**ROUTING_SETTINGS)
+    def test_a_club_that_does_not_track_donations_is_not_warned_about_it(self):
+        self.club.enable_donation_tracking = False
+        self.club.save()
+        self.client.force_login(self.admin)
+        page = self.client.get(reverse("club_email_settings", kwargs={"slug": self.club.slug}))
+        self.assertNotContains(page, "Leave the donation contact blank")
+
+    @override_settings(**ROUTING_SETTINGS)
+    def test_the_donation_page_says_where_replies_go_and_where_to_change_it(self):
+        self.club.donation_email_member = ClubMember.objects.create(
+            club=self.club, name="Donations", email="don@example.com", permission_manage_donations=True
+        )
+        self.club.save()
+        self.client.force_login(self.admin)
+        page = self.client.get(reverse("club_donation_settings", kwargs={"slug": self.club.slug}))
+        self.assertContains(page, "currently also forwarded to")
+        self.assertContains(page, reverse("club_email_settings", kwargs={"slug": self.club.slug}))
 
     def test_only_members_who_manage_donations_can_be_the_contact(self):
         """Offering anyone else would name a recipient donation_email_recipient then refuses."""

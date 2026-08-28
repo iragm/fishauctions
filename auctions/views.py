@@ -35,7 +35,6 @@ from django.contrib.sites.models import Site
 from django.core.cache import cache
 from django.core.exceptions import ImproperlyConfigured, PermissionDenied, ValidationError
 from django.core.files.base import ContentFile
-from django.core.files.uploadedfile import UploadedFile
 from django.db import transaction
 from django.db.models import (
     Avg,
@@ -205,6 +204,7 @@ from .models import (
     SQUARE_OAUTH_SCOPES,
     AdCampaign,
     AdCampaignResponse,
+    AssistantSkillRequest,
     Auction,
     AuctionCampaign,
     AuctionDropdown,
@@ -250,12 +250,12 @@ from .models import (
     SpeciesNameRejection,
     SpeciesSearchCache,
     SquareSeller,
+    UserAPIKey,
     UserBan,
     UserData,
     UserIgnoreCategory,
     UserInterestCategory,
     UserLabelPrefs,
-    VoiceGrammar,
     VolunteerJob,
     VolunteerSignup,
     Watch,
@@ -280,17 +280,26 @@ from .serializers import (
     SpeciesMatchSerializer,
 )
 from .services import (
+    AUCTION_FIELDS_TO_CLONE,
+    BAP_DECISIONS,
+    DEFAULT_AUCTION_DESCRIPTION,
     LOT_ADD_BLOCK_BULK_DISABLED,
     LOT_ADD_BLOCK_NO_TOS,
     apply_club_member_to_tos,
+    bap_review_lots,
     check_in_auctiontos,
+    clone_auction,
     copy_lot_images,
     draw_door_prize,
     ensure_club_member,
     existing_tos_for_club_member,
+    finish_new_auction,
+    join_auction,
     lot_add_block,
     map_fields,
+    promoting_makes_it_the_clubs_current_auction,
     recalculate_seller_invoice,
+    review_lot_points,
     save_new_lot,
     user_can_clone_lot,
 )
@@ -1323,13 +1332,11 @@ class AuctionStatsPermissionsMixin:
         if not result:
             if not self.auction.make_stats_public:
                 logger.debug("non-admins allowed")
-                pass
 
             else:
                 raise PermissionDenied()
         else:
             logger.debug("allowing user %s to view %s", self.request.user, self.auction)
-            pass
         return result
 
 
@@ -1430,7 +1437,6 @@ class RenderAd(DetailView):
             if campaign.bid > uniform(0, total - 1):
                 if campaign.number_of_clicks > campaign.max_clicks or campaign.number_of_impressions > campaign.max_ads:
                     logger.debug("not selected -- limit exceeded")
-                    pass
                 else:
                     return AdCampaignResponse.objects.create(
                         user=user, campaign=campaign
@@ -3833,12 +3839,8 @@ class AuctionUpdate(LoginRequiredMixin, AuctionViewMixin, UpdateView):
             return self.form_invalid(form)
         # Promoting a previously-unpromoted auction makes it the club's current auction.
         updated_auction = self.get_object()
-        if not was_promoted and updated_auction.promote_this_auction and updated_auction.club_id:
-            club = updated_auction.club
-            if club.current_auction_id != updated_auction.pk:
-                club.current_auction = updated_auction
-                club.save(update_fields=["current_auction"])
-                messages.info(self.request, f"This is now the current auction for {club.name}.")
+        if promoting_makes_it_the_clubs_current_auction(updated_auction, was_promoted):
+            messages.info(self.request, f"This is now the current auction for {updated_auction.club.name}.")
         if (
             not self.get_object().is_online
             and self.get_object().online_bidding == "buy_now_only"
@@ -4769,24 +4771,17 @@ class DynamicSetLotWinner(LoginRequiredMixin, AuctionViewMixin, TemplateView):
         # into the queue elsewhere flows straight into selling them here.
         head_lot = queue_head_lot(self.auction)
         context["queue_head_lot_number"] = head_lot.lot_number_display if head_lot else ""
-        # Voice input (mobile app only — the app listens, this page owns the form). The page needs
-        # the same score cutoffs the app is using, so that "green" here and "confident" there mean
-        # the same thing after someone tunes them in the admin. No configured grammar means the app
-        # is running on its bundled defaults, so use ours, which match.
+        # Voice input (mobile app only — the app listens, this page owns the form). The page gets
+        # the score cutoffs, so that "green" here and "confident" there mean the same thing after
+        # somebody tunes them in the admin; and it gets the grammar and this auction's vocabulary
+        # too, so it can match a transcript itself when the app sends one and no command follows.
+        # See voice.page_config for why that fallback exists.
         #
         # Only looked up for the app: the template renders every voice element behind the same
         # is_mobile_app check, and this page is the busiest thing on the site while an auction is
-        # actually running, so a query nothing on screen can use doesn't belong in that path.
+        # actually running, so queries nothing on screen can use don't belong in that path.
         if getattr(self.request, "is_mobile_app", False):
-            grammar = VoiceGrammar.load()
-            thresholds = (grammar.thresholds if grammar else None) or voice.default_thresholds()
-            defaults = voice.default_thresholds()
-            context["voice_config"] = {
-                "enabled": grammar.enabled if grammar else True,
-                "confident": thresholds.get("confident", defaults["confident"]),
-                "unsure": thresholds.get("unsure", defaults["unsure"]),
-                "block_auto_submit_when_unsure": grammar.block_auto_submit_when_unsure if grammar else True,
-            }
+            context["voice_config"] = voice.page_config(self.auction)
         return context
 
     def pop_queue_and_set_next(self, lot, result):
@@ -5956,7 +5951,7 @@ class CSVContactImportMixin:
 
     def import_target_id(self):
         """A stable id binding a preview token to one auction/club so it cannot be replayed elsewhere."""
-        return None
+        return
 
     def _preview_cache_key(self, token):
         return f"{self.PREVIEW_CACHE_PREFIX}:{token}"
@@ -6780,8 +6775,7 @@ class BulkAddLots(LoginRequiredMixin, AuctionViewMixin, TemplateView):
             else:
                 extra = self.auction.max_lots_per_user - self.queryset.count()
             # but of course sometimes admisn will break the rules for their users:
-            if extra < 0:
-                extra = 0
+            extra = max(extra, 0)
         else:
             extra = 5  # default rows to show if max_lots_per_user is not set for this auction
         self.LotFormSet = modelformset_factory(
@@ -7939,25 +7933,8 @@ class ImageCreateView(LoginRequiredMixin, CreateView):
             image.is_primary = True
         if not image.image_source:
             image.image_source = "RANDOM"
-        uploaded_image = form.cleaned_data.get("image")
-
-        # Attempt to convert non-standard JPEG formats (like MPO) to standard JPEG. The
-        # upload was already validated in the form, so this is best-effort: if it fails we
-        # just fall through and let the normal save path try the original file.
-        if isinstance(uploaded_image, UploadedFile):
-            try:
-                with Image.open(uploaded_image) as img:
-                    if img.format != "JPEG":
-                        img = img.convert("RGB")  # Ensure it's in a JPEG-safe mode
-                        buffer = BytesIO()
-                        img.save(buffer, format="JPEG")
-                        buffer.seek(0)
-                        image.image.save(
-                            uploaded_image.name.replace(".jpeg", "") + ".jpg", ContentFile(buffer.read()), save=False
-                        )
-            except IMAGE_PROCESSING_EXCEPTIONS as e:
-                logger.info("Could not pre-convert uploaded image to JPEG: %s", e)
-
+        # Anything Pillow can't write as a JPEG (an animated GIF, an MPO from a phone's burst
+        # mode) was already converted by CreateImageForm.clean_image -- see forms.jpeg_safe_upload.
         try:
             image.save()
         except IMAGE_PROCESSING_EXCEPTIONS as e:
@@ -8029,7 +8006,19 @@ class ImageUpdateView(UpdateView):
             image.is_primary = True
         if not image.image_source:
             image.image_source = "RANDOM"
-        image.save()
+        try:
+            image.save()
+        except IMAGE_PROCESSING_EXCEPTIONS as e:
+            # Same split as ImageCreateView: an unusable file is the uploader's problem and
+            # gets a friendly inline error, while a disk or permission error is ours and is
+            # left to become a 500 so the admins hear about it.
+            logger.info("Rejected lot image during save: %s", e)
+            form.add_error(
+                "image",
+                "We couldn't process that image -- it may be corrupt or in an unsupported format. "
+                "Please try a different photo.",
+            )
+            return self.form_invalid(form)
         messages.success(self.request, "Image updated")
         return super().form_valid(form)
 
@@ -9215,6 +9204,14 @@ class AuctionCreateView(CreateView, LoginRequiredMixin):
     redirect_url = None  # really only used if this is a cloned auction
     cloned_from = None
 
+    #: Auction settings a copy inherits.  The list itself lives in
+    #: :data:`auctions.services.AUCTION_FIELDS_TO_CLONE`, because the copy button on this page is
+    #: no longer its only caller -- ``palette_actions.create_auction`` makes the same copy for an
+    #: agent.  Kept as a class attribute so a test can read it: see
+    #: ``tests.AuctionCloneCustomFieldsTests``, which fails if the custom fields form grows a field
+    #: the list does not carry.
+    fields_to_clone = AUCTION_FIELDS_TO_CLONE
+
     def dispatch(self, request, *args, **kwargs):
         original_dispatch = super().dispatch(request, *args, **kwargs)
         auction_creation_allowed = False
@@ -9262,131 +9259,48 @@ class AuctionCreateView(CreateView, LoginRequiredMixin):
         return kwargs
 
     def form_valid(self, form, **kwargs):
-        """Rules for new auction creation"""
+        """Rules for new auction creation.
+
+        Three buttons post to this, and the querystring says which: ``?clone=true`` copies the
+        auction named in ``cloned_from``, ``?online`` makes a fresh online one, and anything else
+        makes a fresh in-person one.  The copy itself is :func:`auctions.services.clone_auction`,
+        shared with the assistant so an auction copied by asking for one is the same auction as one
+        copied by clicking.
+        """
+        if "clone" in str(self.request.GET):
+            source = Auction.objects.filter(slug=form.cleaned_data["cloned_from"], is_deleted=False).first()
+            # you still don't get to clone auctions that aren't yours...
+            if source and source.permission_check(self.request.user):
+                self.object = clone_auction(
+                    source,
+                    title=form.cleaned_data["title"],
+                    date_start=form.cleaned_data["date_start"],
+                    created_by=self.request.user,
+                )
+                # because we will almost certainly have locations, default to the main auction page
+                self.redirect_url = self.object.get_absolute_url()
+                return HttpResponseRedirect(self.get_success_url())
+            # Nothing to copy, or not theirs to copy.  Fall through and make a fresh one rather
+            # than 500ing on them: they asked for an auction and they get an auction.
         auction = form.save(commit=False)
         auction.created_by = self.request.user
         auction.promote_this_auction = False  # all auctions start not promoted
-        cloned_from = form.cleaned_data["cloned_from"]
         auction.date_start = form.cleaned_data["date_start"]
-        is_online = True
-        clone_from_auction = None
-        if "clone" in str(self.request.GET):
-            try:
-                original_auction = Auction.objects.get(slug=cloned_from, is_deleted=False)
-                if original_auction:
-                    # you still don't get to clone auctions that aren't yours...
-                    if original_auction.permission_check(self.request.user):
-                        clone_from_auction = original_auction
-            except Exception as e:
-                logger.exception(e)
-                pass
-        elif "online" in str(self.request.GET):
-            is_online = True
+        auction.is_online = "online" in str(self.request.GET)
+        # The model default ("custom") preserves behavior for pre-existing and cloned
+        # auctions; brand-new auctions start with the alternate split off.
+        auction.alternate_split_mode = "off"
+        if not auction.is_online:
+            # override default settings for new in-person auctions
+            auction.online_bidding = "disable"
+            auction.buy_now = "disable"
+            auction.reserve_price = "disable"
         else:
-            is_online = False
-        run_duration = timezone.timedelta(days=7)  # only set for is_online
-        online_bidding_start_diff = timezone.timedelta(days=7)
-        online_bidding_end_diff = timezone.timedelta(minutes=0)
-        lot_submission_end_date_diff = timezone.timedelta(minutes=0)
-        if clone_from_auction:
-            fields_to_clone = [
-                "is_online",
-                "summernote_description",
-                "lot_entry_fee",
-                "unsold_lot_fee",
-                "winning_bid_percent_to_club",
-                "first_bid_payout",
-                "club_member_discount",
-                "sealed_bid",
-                "max_lots_per_user",
-                "allow_additional_lots_as_donation",
-                "make_stats_public",
-                "use_categories",
-                "bump_cost",
-                "is_chat_allowed",
-                "lot_promotion_cost",
-                "code_to_add_lots",
-                "online_bidding",
-                "pre_register_lot_discount_percent",
-                "only_approved_sellers",
-                "only_approved_bidders",
-                "email_users_when_invoices_ready",
-                "invoice_payment_instructions",
-                "minimum_bid",
-                "winning_bid_percent_to_club_for_club_members",
-                "lot_entry_fee_for_club_members",
-                "registration_fee",
-                "registration_fee_for_club_members",
-                "set_lot_winners_url",
-                "require_phone_number",
-                "buy_now",
-                "reserve_price",
-                "tax",
-                "advanced_lot_adding",
-                "date_online_bidding_starts",
-                "date_online_bidding_ends",
-                "allow_deleting_bids",
-                "auto_add_images",
-                "message_users_when_lots_sell",
-                "label_print_fields",
-                "use_scientific_name",
-                "force_donation_threshold",
-                "use_quantity_field",
-                "custom_checkbox_name",
-                "custom_field_1",
-                "custom_field_1_name",
-                "use_custom_dropdown_field",
-                "custom_dropdown_name",
-                "allow_bulk_adding_lots",
-                "copy_users_when_copying_this_auction",
-                "use_donation_field",
-                "use_i_bred_this_fish_field",
-                "use_seller_dash_lot_numbering",
-                "enable_online_payments",
-                "enable_square_payments",
-                "add_membership_fee_to_invoices_for_expired_members",
-                "alternate_split_mode",
-                "alternative_split_label",
-                "google_drive_link",
-                "only_whole_dollar_bids",
-                "club",
-                "manage_users_through_club",
-                "allow_self_checkin",
-                "exact_location_set",
-            ]
-            for field in fields_to_clone:
-                setattr(auction, field, getattr(original_auction, field))
-            if original_auction.date_end:
-                run_duration = original_auction.date_end - original_auction.date_start
-            if original_auction.date_online_bidding_starts:
-                online_bidding_start_diff = original_auction.date_start - original_auction.date_online_bidding_starts
-            if original_auction.date_online_bidding_ends:
-                online_bidding_end_diff = original_auction.date_start - original_auction.date_online_bidding_ends
-            if original_auction.lot_submission_end_date:
-                lot_submission_end_date_diff = original_auction.date_start - original_auction.lot_submission_end_date
-            auction.cloned_from = original_auction
-        else:
-            auction.is_online = is_online
-            # The model default ("custom") preserves behavior for pre-existing and cloned
-            # auctions; brand-new auctions start with the alternate split off.
-            auction.alternate_split_mode = "off"
-            if not is_online:
-                # override default settings for new in-person auctions
-                auction.online_bidding = "disable"
-                auction.buy_now = "disable"
-                auction.reserve_price = "disable"
-            else:
-                # override default settings for new online auctions
-                auction.use_quantity_field = True
+            # override default settings for new online auctions
+            auction.use_quantity_field = True
         if not auction.summernote_description:
-            auction.summernote_description = """
-            <h4>General information</h4>
-            You should remove this line and edit this section to suit your auction.
-            Use the formatting here as an example.<br><br>
-            <h4>Rules</h4>
-            <ul><li>You cannot sell anything banned by state law.</li>
-            <li>All lots must be properly bagged.  No leaking bags!</li>
-            <li>You do not need to be a club member to buy or sell lots.</li></ul>"""
+            auction.summernote_description = DEFAULT_AUCTION_DESCRIPTION
+        run_duration = timezone.timedelta(days=7)
         if auction.is_online:
             auction.date_end = auction.date_start + run_duration
             if not auction.lot_submission_end_date:
@@ -9396,106 +9310,18 @@ class AuctionCreateView(CreateView, LoginRequiredMixin):
         else:
             auction.date_end = None
             if not auction.lot_submission_end_date:
-                auction.lot_submission_end_date = auction.date_start - lot_submission_end_date_diff
+                auction.lot_submission_end_date = auction.date_start
             if not auction.lot_submission_start_date:
                 auction.lot_submission_start_date = auction.date_start - run_duration
             if not auction.date_online_bidding_starts:
-                auction.date_online_bidding_starts = auction.date_start - online_bidding_start_diff
+                auction.date_online_bidding_starts = auction.date_start - run_duration
             if not auction.date_online_bidding_ends:
-                auction.date_online_bidding_ends = auction.date_start - online_bidding_end_diff
+                auction.date_online_bidding_ends = auction.date_start
         auction.save()
-        # let's route in-person auctions to the rule page next
-        if not auction.is_online and not clone_from_auction:
+        if not auction.is_online:
+            # let's route in-person auctions to the rule page next
             self.redirect_url = auction.get_edit_url()
-            # Create a default pickup location.  This is handled better in models.auction.save()
-            # PickupLocation.objects.create(
-            #     name=str(auction),
-            #     auction=auction,
-            #     is_default=True,
-            #     user=self.request.user)
-        if clone_from_auction:
-            # because we will almost certainly have locations, we can simply default to the main auction page
-            self.redirect_url = auction.get_absolute_url()
-            originalLocations = PickupLocation.objects.filter(auction=clone_from_auction)
-            for location in originalLocations:
-                location.pk = None  # duplicate all fields
-                if location.name == str(clone_from_auction):
-                    location.name = str(auction)
-                location.auction = auction
-                auction_time = clone_from_auction.date_start
-                if clone_from_auction.date_end:
-                    auction_time = clone_from_auction.date_end
-                if location.pickup_time:
-                    firstTimeDiff = location.pickup_time - auction_time
-                    if auction.date_end:
-                        location.pickup_time = auction.date_end + firstTimeDiff
-                    else:
-                        location.pickup_time = auction.date_start + firstTimeDiff
-                if location.second_pickup_time:
-                    secondTimeDiff = location.second_pickup_time - auction_time
-                    if auction.date_end:
-                        location.second_pickup_time = auction.date_end + secondTimeDiff
-                    else:
-                        location.second_pickup_time = auction.date_start + secondTimeDiff
-                location.save()
-            # copy any auctiontos, if appropriate
-            if clone_from_auction.copy_users_when_copying_this_auction:
-                auctiontos = AuctionTOS.objects.filter(auction=clone_from_auction)
-                for tos in auctiontos:
-                    # in tos.save(), bid permissions are reset if there's no pk
-                    # to preserve them, we store them here, then resave again once the new instance is created
-                    original_bid_permission = tos.bidding_allowed
-                    tos.pk = None
-                    tos.createdon = None
-                    tos.auction = auction
-                    # tos.email_address_status = "UNKNOWN"
-                    tos.manually_added = True
-                    tos.print_reminder_email_sent = False
-                    if tos.pickup_location.name == str(clone_from_auction):
-                        new_location_name = str(auction)
-                    else:
-                        new_location_name = tos.pickup_location.name
-                    new_location = PickupLocation.objects.filter(auction=auction, name=new_location_name).first()
-                    if new_location:
-                        tos.pickup_location = new_location
-                        tos.save()
-                        tos.bidding_allowed = original_bid_permission
-                        tos.save()  # see comment above
-            original_dropdown_options = AuctionDropdown.objects.filter(auction=clone_from_auction)
-            for dropdown_option in original_dropdown_options:
-                AuctionDropdown.objects.create(
-                    auction=auction,
-                    user=dropdown_option.user,
-                    value=dropdown_option.value,
-                )
-        action = "Created auction"
-        if clone_from_auction:
-            action += f" by copying {clone_from_auction}"
-        auction.create_history(
-            applies_to="RULES",
-            action=action,
-            user=self.request.user,
-        )
-        # Associate auction with the creator's club if they have admin or manage_auctions permission
-        if not auction.club:
-            creator_userdata = self.request.user.userdata
-            creator_club = creator_userdata.club
-            if creator_club and (
-                check_club_permission(self.request.user, creator_club, "permission_admin")
-                or check_club_permission(self.request.user, creator_club, "permission_manage_auctions")
-            ):
-                auction.club = creator_club
-                auction.save(update_fields=["club"])
-                auction.create_history(
-                    applies_to="RULES",
-                    action=f"Automatically associated with club '{creator_club}' based on auction creator's preferences.",
-                    user=None,
-                )
-        self.request.user.userdata.last_auction_used = auction
-        self.request.user.userdata.save(update_fields=["last_auction_used"])
-        # Add club admin members as AuctionTOS admins (works for copied auctions with locations,
-        # and for new auctions once a pickup location exists — also called from PickupLocationsCreate)
-        _add_club_admins_as_auction_tos(auction, self.request.user)
+        finish_new_auction(auction, self.request.user)
         return super().form_valid(form)
 
 
@@ -9513,6 +9339,9 @@ class AuctionInfo(FormMixin, DetailView, AuctionViewMixin):
         if self.is_auction_admin:
             if str(request.GET.get("dismissed_promo_banner", "")).lower() in ("1", "true"):
                 self.auction.dismissed_promo_banner = True
+                self.auction.save()
+            if str(request.GET.get("dismissed_customize_event_banner", "")).lower() in ("1", "true"):
+                self.auction.dismissed_customize_event_banner = True
                 self.auction.save()
             if str(request.GET.get("make_current_auction", "")).lower() in ("1", "true") and self.auction.club_id:
                 club = self.auction.club
@@ -9769,114 +9598,30 @@ class AuctionInfo(FormMixin, DetailView, AuctionViewMixin):
         return context
 
     def post(self, request, *args, **kwargs):
+        """Join. The hundred lines that used to live here are ``services.join_auction``.
+
+        Extracted so the assistant can sign somebody up without sending them to this page: the
+        rules, the duplicate-record merge, the club member link and the history line are one
+        implementation with two callers rather than two that drift.
+        """
         auction = self.auction
         form = self.get_form()
         if request.user.is_authenticated and form.is_valid():
-            userData = self.request.user.userdata
-            if auction.require_phone_number and not userData.phone_number:
+            _tos, _created, problem = join_auction(
+                request.user,
+                auction,
+                form.cleaned_data["pickup_location"],
+                time_spent_reading_rules=form.cleaned_data["time_spent_reading_rules"],
+            )
+            if problem == "phone_number":
+                messages.error(self.request, "This auction requires a phone number before you can join")
+                return redirect(f"{reverse('contact_info')}?next={auction.get_absolute_url()}")
+            if problem == "address":
                 messages.error(
                     self.request,
-                    "This auction requires a phone number before you can join",
+                    "You have to set your address before you can choose pickup by mail",
                 )
                 return redirect(f"{reverse('contact_info')}?next={auction.get_absolute_url()}")
-            find_by_email = AuctionTOS.objects.filter(
-                email=self.request.user.email,
-                auction=auction,
-                # manually_added=True,
-                # user__isnull=True
-            ).first()
-            is_new_join = False
-            if find_by_email:
-                # Check if the user already has a separate TOS (from a prior join by user FK)
-                existing_by_user = (
-                    AuctionTOS.objects.filter(user=self.request.user, auction=auction)
-                    .exclude(pk=find_by_email.pk)
-                    .first()
-                )
-                if existing_by_user:
-                    # Keep the oldest record as canonical
-                    if (
-                        find_by_email.createdon
-                        and existing_by_user.createdon
-                        and find_by_email.createdon < existing_by_user.createdon
-                    ):
-                        canonical, duplicate = find_by_email, existing_by_user
-                    else:
-                        canonical, duplicate = existing_by_user, find_by_email
-                    canonical.merge_duplicate(duplicate, reason="duplicate detected on join")
-                    obj = canonical
-                else:
-                    obj = find_by_email
-                    obj.user = self.request.user
-            else:
-                obj, created = AuctionTOS.objects.get_or_create(
-                    user=self.request.user,
-                    auction=auction,
-                    defaults={
-                        "pickup_location": form.cleaned_data["pickup_location"],
-                        # Seed the email on creation so the record never takes the None->email
-                        # transition that used to trip AuctionTOS.save()'s email-change guard and
-                        # clear this freshly-linked user. `or None` (not "") keeps the "no email"
-                        # admin filter working, which relies on email__isnull.
-                        "email": self.request.user.email or None,
-                    },
-                )
-                is_new_join = created
-            obj.pickup_location = form.cleaned_data["pickup_location"]
-            # check if mail was chosen
-            if obj.pickup_location.pickup_by_mail:
-                if not userData.address:
-                    messages.error(
-                        self.request,
-                        "You have to set your address before you can choose pickup by mail",
-                    )
-                    return redirect(f"{reverse('contact_info')}?next={auction.get_absolute_url()}")
-            if form.cleaned_data["time_spent_reading_rules"] > obj.time_spent_reading_rules:
-                obj.time_spent_reading_rules = form.cleaned_data["time_spent_reading_rules"]
-            # even if an auctiontos was originally manually added, if the user clicked join, mark them as not manually added
-            obj.manually_added = False
-            if obj.email_address_status == "UNKNOWN":
-                # if it bounced in the past, the user may have a full inbox or something
-                obj.email_address_status = "VALID"
-            # fill out some information in the tos if not already filled out
-            if not obj.name or obj.name == "Unknown":
-                obj.name = self.request.user.first_name + " " + self.request.user.last_name
-            if not obj.email:
-                obj.email = self.request.user.email
-            if not obj.phone_number:
-                obj.phone_number = userData.phone_number
-            if not obj.address:
-                obj.address = userData.address
-            if auction.is_club_managed:
-                # The club owns the bidder number and permissions here, so joining has to create or
-                # link the member record. Shared with the app's proximity join — see
-                # auctions.services.ensure_club_member.
-                club_member, _created = ensure_club_member(
-                    auction,
-                    user=self.request.user,
-                    name=obj.name,
-                    email=obj.email,
-                    phone_number=obj.phone_number or "",
-                    address=obj.address or "",
-                    # The user is signing themselves up, same as the app's proximity join: until an
-                    # admin edits it, this row goes with their account.
-                    admin_edited=False,
-                )
-                apply_club_member_to_tos(auction, obj, club_member)
-            obj.save()
-            # also update userdata to reflect the last auction
-            userData.last_auction_used = auction
-            userData.last_activity = timezone.now()
-            userData.save()
-            if auction.is_club_managed and obj.clubmember_id:
-                obj.clubmember.update_last_club_activity()
-            # Only create history if this is a new join
-            if is_new_join:
-                auction.create_history(
-                    applies_to="USERS",
-                    action=f"{obj.name} has joined this auction",
-                    user=self.request.user,
-                )
             return self.form_valid(form)
         else:
             logger.debug(form.cleaned_data)
@@ -9889,6 +9634,16 @@ class FAQ(AdminEmailMixin, ListView):
     model = FAQ
     template_name = "faq.html"
     ordering = ["category_text"]
+
+    def get_queryset(self):
+        """Everything but the agent-only answers.
+
+        ``agent_only`` is not privacy -- anybody can reach one by asking the assistant, and
+        ``search_help`` serves them to every caller. It is about what deserves a heading on a page
+        somebody reads top to bottom: an edge case that is worth writing down and worth keeping out
+        of the twenty questions everybody else came here for.
+        """
+        return super().get_queryset().filter(agent_only=False)
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
@@ -10404,11 +10159,13 @@ class InvoiceView(DetailView, FormMixin, AuctionViewMixin):
         if self.auction and self.auction.invoice_payment_instructions and invoice.status == "UNPAID":
             messages.info(request, self.auction.invoice_payment_instructions)
         if request.user.is_authenticated:
-            if invoice.club and invoice.buyer == request.user:
-                mark_invoice_viewed_by_user = True
-                auth = True
-            elif invoice.auctiontos_user and (
-                invoice.auctiontos_user.email == request.user.email or invoice.auctiontos_user.user == request.user
+            if (
+                invoice.club
+                and invoice.buyer == request.user
+                or invoice.auctiontos_user
+                and (
+                    invoice.auctiontos_user.email == request.user.email or invoice.auctiontos_user.user == request.user
+                )
             ):
                 mark_invoice_viewed_by_user = True
                 auth = True
@@ -12063,7 +11820,7 @@ class PayPalAPIMixin:
         payload = {"amount": {"value": str(amount), "currency_code": str(payment.currency)}}
         result = self.post_to_paypal(f"v2/payments/captures/{payment.external_id}/refund", payload)
         if result.get("status") != "COMPLETED":
-            logger.exception("PayPal refund failed: %s, debug_id: %s", result, self.paypal_debug)
+            logger.error("PayPal refund failed: %s, debug_id: %s", result, self.paypal_debug)
             return "PayPal refund failed"
         # no database recording happens here, that goes through the webhook, see handle_refund()
         return None
@@ -12186,7 +11943,7 @@ class PayPalConnectView(LoginRequiredMixin, PayPalAPIMixin, View):
         # Extract the action_url from the links list
         action_url = next((link["href"] for link in data.get("links", []) if link.get("rel") == "action_url"), None)
         if not action_url:
-            logger.exception("PayPal onboarding failed %s, debug_id %s", data, self.paypal_debug)
+            logger.error("PayPal onboarding failed %s, debug_id %s", data, self.paypal_debug)
             messages.error(request, "Unable to start PayPal onboarding process, please try again later.")
             return redirect(reverse("home"))
         # Redirect seller to PayPal to complete onboarding
@@ -12925,7 +12682,7 @@ class ClubMailchimpConfigView(LoginRequiredMixin, ClubViewMixin, View):
 
 
 GOOGLE_CALENDAR_OAUTH_CLUB_SESSION_KEY = "google_calendar_oauth_club_slug"
-GOOGLE_CALENDAR_OAUTH_STATE_SESSION_KEY = "google_calendar_oauth_state"  # noqa: S105 - a session key name
+GOOGLE_CALENDAR_OAUTH_STATE_SESSION_KEY = "google_calendar_oauth_state"
 
 
 class ClubGoogleCalendarConfigView(LoginRequiredMixin, ClubViewMixin, View):
@@ -12957,42 +12714,20 @@ class ClubGoogleCalendarConfigView(LoginRequiredMixin, ClubViewMixin, View):
     def post(self, request, slug):
         """Save the checkboxes on the settings page.
 
-        google_calendar_is_public is the admin telling us they've shared the calendar in Google.
-        We still can't *set* that — it needs a scope over all their calendars — but we can check
-        it, by asking for the calendar the way a member would.
+        There is deliberately no "this calendar is public" box among them any more. Sharing is a
+        fact about the calendar rather than a preference about this site, and we can read it — see
+        google_calendar.refresh_public_flag, which every sync runs.
         """
-        from auctions import google_calendar as gcal
-
         club = self.club
         club.add_auctions_to_calendar = "add_auctions_to_calendar" in request.POST
         club.create_discord_events_for_club_events = "create_discord_events_for_club_events" in request.POST
-        wants_public = "google_calendar_is_public" in request.POST
-        club.google_calendar_is_public = wants_public
-        # Their word, checked: a shared calendar has a public iCal feed, so fetching it without
-        # credentials tells us whether members can actually subscribe. Advertising links that
-        # 404 for everyone is worse than not advertising them.
-        warning = ""
-        if wants_public and club.google_calendar_connected:
-            try:
-                if not gcal.is_calendar_public(club):
-                    club.google_calendar_is_public = False
-                    warning = (
-                        "That calendar isn't shared publicly yet, so the Google subscribe links stay "
-                        "hidden. Follow the steps below, then tick the box again."
-                    )
-            except gcal.GoogleCalendarError as exc:
-                logger.warning("Could not check calendar sharing for club %s: %s", club.pk, exc)
-                warning = f"We couldn't check the calendar's sharing just now, so we've taken your word for it ({exc})."
         club.save(
             update_fields=[
                 "add_auctions_to_calendar",
                 "create_discord_events_for_club_events",
-                "google_calendar_is_public",
             ]
         )
         messages.success(request, "Calendar settings saved.")
-        if warning:
-            messages.warning(request, warning)
         return redirect(reverse("club_google_calendar_config", kwargs={"slug": club.slug}))
 
 
@@ -13111,6 +12846,8 @@ class GoogleCalendarSyncNowView(LoginRequiredMixin, ClubViewMixin, View):
         return super().dispatch(request, *args, **kwargs)
 
     def post(self, request, slug):
+        from auctions import google_calendar as gcal
+
         club = self.club
         config_url = reverse("club_google_calendar_config", kwargs={"slug": club.slug})
         if not club.google_calendar_connected:
@@ -13120,8 +12857,12 @@ class GoogleCalendarSyncNowView(LoginRequiredMixin, ClubViewMixin, View):
         club.refresh_from_db()
         if club.google_calendar_last_error:
             messages.error(request, f"Sync failed: {club.google_calendar_last_error}")
-        else:
-            messages.success(request, "Calendar synced.")
+            return redirect(config_url)
+        # An admin pressing this has usually just changed something in Google Calendar, and one of
+        # the things they change is sharing. Skipping the hourly rate limit here is what makes
+        # "I ticked the box in Google, why does this still say Private" answerable in one click.
+        gcal.refresh_public_flag(club, force=True)
+        messages.success(request, "Calendar synced.")
         return redirect(config_url)
 
 
@@ -13201,19 +12942,31 @@ class ClubEventUpdateView(LoginRequiredMixin, ClubViewMixin, View):
 
     def dispatch(self, request, *args, **kwargs):
         self.get_club(kwargs.get("slug", ""))
+        self.event = get_object_or_404(ClubEvent, club=self.club, pk=kwargs.get("pk"), is_deleted=False)
         if request.user.is_authenticated and not self._can_manage():
             raise PermissionDenied()
-        self.event = get_object_or_404(ClubEvent, club=self.club, pk=kwargs.get("pk"), is_deleted=False)
-        if not self.event.is_editable:
+        # A generated event reaches this form too, and the form narrows itself to the two fields
+        # a club owns there. It used to 404, which left "our meeting is at the auction" with
+        # nowhere to be typed except Google Calendar, where the next push overwrote it.
+        if not self.event.details_are_editable:
             raise Http404
         return super().dispatch(request, *args, **kwargs)
 
     def _can_manage(self):
-        return (
+        if (
             self.user_has_club_permission("permission_admin")
             or self.user_has_club_permission("permission_manage_auctions")
             or self.user_has_club_permission("permission_edit_club")
-        )
+        ):
+            return True
+        # An admin of the auction behind a generated event, who may hold no club role at all --
+        # the auction's own creator is the usual one. The wording of that event is the auction's
+        # to write: ClubEventForm narrows itself to the title and description on anything
+        # generated, and delete is refused below, so this reaches nothing else on the calendar.
+        # Without it the "customize this event" prompt on the auction page led to a 403 for
+        # exactly the person it was written for.
+        related_auction = self.event.related_auction
+        return bool(related_auction and related_auction.permission_check(self.request.user))
 
     def get(self, request, slug, pk):
         form = ClubEventForm(instance=self.event, user_timezone=_browser_timezone(request))
@@ -13222,6 +12975,10 @@ class ClubEventUpdateView(LoginRequiredMixin, ClubViewMixin, View):
     def post(self, request, slug, pk):
         club_url = reverse("club_detail", kwargs={"slug": self.club.slug})
         if request.POST.get("action") == "delete":
+            # Never for a generated event: the auction is what put it here, and deleting the row
+            # only means the next sync builds it again. Unpromote the auction instead.
+            if not self.event.is_editable:
+                raise Http404
             title = self.event.title
             club_events.retire_event(self.event)
             messages.success(request, f"Deleted {title}.")
@@ -13281,8 +13038,6 @@ class ClubEventsICalView(View):
 
     def get(self, request, slug):
         club = get_object_or_404(Club, slug=slug)
-        if not club.enable_club_page:
-            raise Http404
         upcoming, past = club_events.upcoming_events(club, include_past=True, past_limit=25)
         domain = Site.objects.get_current().domain
         lines = [
@@ -14219,15 +13974,14 @@ class UserLocationUpdate(UpdateView, SuccessMessageMixin):
         return {"first_name": user.first_name, "last_name": user.last_name}
 
     def get_recent_auctiontos(self):
-        """Get AuctionTOS records created in the last 30 days that are not manually added"""
-        thirty_days_ago = timezone.now() - timedelta(days=30)
-        return AuctionTOS.objects.filter(
-            user=self.request.user,
-            manually_added=False,
-            createdon__gte=thirty_days_ago,
-        ).select_related("auction")
+        """The participant rows this page's changes will follow into. See services."""
+        from .services import recent_auctiontos_for
+
+        return recent_auctiontos_for(self.request.user)
 
     def form_valid(self, form):
+        from .services import propagate_contact_info
+
         userData = form.save(commit=False)
         user = User.objects.get(pk=self.get_object().user.pk)
         user.first_name = form.cleaned_data["first_name"]
@@ -14235,55 +13989,10 @@ class UserLocationUpdate(UpdateView, SuccessMessageMixin):
         user.save()
         userData.last_activity = timezone.now()
         userData.save()
-
-        # Update recent AuctionTOS records with new contact info
-        new_name = f"{user.first_name} {user.last_name}"
-        new_phone = userData.phone_number
-        new_address = userData.address
-
-        for tos in self.get_recent_auctiontos():
-            # Track what changed
-            changes = []
-            if tos.name != new_name:
-                changes.append(f"name from '{tos.name}' to '{new_name}'")
-                tos.name = new_name
-            if tos.phone_number != new_phone:
-                changes.append(f"phone from '{tos.phone_number}' to '{new_phone}'")
-                tos.phone_number = new_phone
-            if tos.address != new_address:
-                changes.append(f"address from '{tos.address}' to '{new_address}'")
-                tos.address = new_address
-
-            if changes:
-                tos.save()
-                # Create auction admin history
-                AuctionHistory.objects.create(
-                    auction=tos.auction,
-                    user=user,
-                    action=f"Updated contact info for {new_name}: " + ", ".join(changes),
-                    applies_to="USERS",
-                )
-
-        for club_member in ClubMember.objects.filter(user=user, is_deleted=False).select_related("club"):
-            changes = []
-            if club_member.name != new_name:
-                changes.append(f"name to '{new_name}'")
-                club_member.name = new_name
-            if club_member.phone_number != new_phone:
-                changes.append(f"phone to '{new_phone}'")
-                club_member.phone_number = new_phone
-            if club_member.address != new_address:
-                changes.append(f"address to '{new_address}'")
-                club_member.address = new_address
-            if changes:
-                club_member.save()
-                ClubHistory.objects.create(
-                    club=club_member.club,
-                    user=user,
-                    action=f"Contact info updated for {user.get_full_name()}: " + ", ".join(changes),
-                    applies_to="MEMBERS",
-                )
-
+        # The auctions and clubs holding their own copy of this person's details. Shared with the
+        # assistant's update_contact_info so both routes touch the same rows and write the same
+        # history lines.
+        propagate_contact_info(user, userData)
         return super().form_valid(form)
 
     def get_context_data(self, **kwargs):
@@ -18901,27 +18610,6 @@ class ClubDetailView(ClubViewMixin, TemplateView):
 
     def dispatch(self, request, *args, **kwargs):
         self.get_club(kwargs.get("slug", ""))
-        if not self.club.enable_club_page:
-            # Page is disabled — only users with any club permission may view it; everyone else gets 404
-            has_access = request.user.is_authenticated and (
-                request.user.is_superuser
-                or ClubMember.objects.filter(club=self.club, user=request.user, is_deleted=False)
-                .filter(
-                    Q(permission_admin=True)
-                    | Q(permission_view=True)
-                    | Q(permission_add_edit=True)
-                    | Q(permission_edit_club=True)
-                    | Q(permission_money=True)
-                    | Q(permission_manage_auctions=True)
-                    | Q(permission_export=True)
-                    | Q(permission_manage_bap=True)
-                    | Q(permission_manage_donations=True)
-                    | Q(permission_send_announcements=True)
-                )
-                .exists()
-            )
-            if not has_access:
-                raise Http404
         return super().dispatch(request, *args, **kwargs)
 
     def get_context_data(self, **kwargs):
@@ -19200,9 +18888,7 @@ def _membership_renewal_state(club, member):
     expiration = member.membership_expiration_date
     is_expired = bool(expiration and expiration < today) or (not expiration and not member.is_paid_member)
     expiring_soon = bool(expiration and not is_expired and (expiration - today).days <= 30)
-    can_pay = bool(
-        club.enable_club_page and club.membership_annual_fee and (club.can_accept_paypal or club.can_accept_square)
-    )
+    can_pay = bool(club.membership_annual_fee and (club.can_accept_paypal or club.can_accept_square))
     should_show_payment = can_pay and (is_expired or expiring_soon or not member.is_paid_member)
     return is_expired, expiring_soon, should_show_payment, can_pay
 
@@ -20544,17 +20230,25 @@ class BapEmbedView(View):
 CLUB_EVENTS_EMBED_MAX = 10
 
 
-def _club_events_embed_rows(request, club, count):
+def _club_events_embed_rows(request, club, count, *, past=False):
     """The club's next few events, flattened for the embed: what, when, where, and a link back.
 
     Everything here is already on the public club page and in the public iCal feed — no member
     data of any kind. Pickup events are left out for the same reason
     ``club_events.next_member_facing_event`` drops them: they're logistics for people who
     already won lots, not something to put on the club's website.
+
+    ``past=True`` is the same rows in the other direction, newest first, so ``count=1`` is the
+    thing that happened most recently. One function rather than two because a club pasting both
+    embeds onto one page must get two lists that look alike — the moment the formatting lives in
+    two places, one of them grows a field the other doesn't.
     """
-    upcoming, _ = club_events.upcoming_events(club, limit=count, exclude_pickups=True)
+    if past:
+        events = club_events.past_events(club, limit=count, exclude_pickups=True)
+    else:
+        events, _ = club_events.upcoming_events(club, limit=count, exclude_pickups=True)
     rows = []
-    for event in upcoming:
+    for event in events:
         start = timezone.localtime(event.date_start)
         rows.append(
             {
@@ -20573,6 +20267,26 @@ def _club_events_embed_rows(request, club, count):
     return rows
 
 
+def _viewer_runs_this_club(request, club):
+    """True when the person asking for an embed is one of the people who pasted it.
+
+    Used to keep an admin checking their own snippet out of ``events_website_views``. The same
+    three permissions gate the website-integration page the URLs are copied from, so this is
+    exactly "somebody who could have been testing it".
+    """
+    if not request.user.is_authenticated:
+        return False
+    if request.user.is_superuser:
+        return True
+    # One query rather than three calls to check_club_permission: this runs on a public endpoint
+    # that a club's own home page hits on every page load.
+    return (
+        ClubMember.objects.filter(club=club, user=request.user, is_deleted=False)
+        .filter(Q(permission_admin=True) | Q(permission_manage_auctions=True) | Q(permission_edit_club=True))
+        .exists()
+    )
+
+
 @method_decorator(xframe_options_exempt, name="dispatch")
 class ClubEventsEmbedView(View):
     """Public, embeddable list of a club's next few events, for WordPress and the like.
@@ -20583,11 +20297,23 @@ class ClubEventsEmbedView(View):
     Framing and cross-origin fetches are allowed so a third-party site can use it. GET-only and
     public, so CSRF never applies; the snippets that produce these URLs are admin-only, but the
     URLs themselves show nothing the club page doesn't.
+
+    ``ClubPastEventsEmbedView`` is the same view pointed the other way; everything that differs
+    between them is one of the three class attributes below.
     """
+
+    #: Newest-first history instead of what's coming up.
+    past = False
+    #: What to say when there is nothing to list. The two directions are empty for opposite
+    #: reasons, and "nothing coming up" under a heading that says "past events" reads as a bug.
+    empty_message = "Nothing coming up right now."
+    #: The key the JSON representation uses. Named for what it holds, so a club's own script
+    #: doesn't have to know which endpoint it fetched.
+    json_key = "events"
 
     def get(self, request, slug):
         club = Club.objects.filter(Q(slug=slug) | Q(abbreviation=slug)).order_by("pk").first()
-        if not club or not club.enable_club_page:
+        if not club:
             raise Http404
 
         try:
@@ -20596,10 +20322,16 @@ class ClubEventsEmbedView(View):
             count = CLUB_EVENTS_EMBED_MAX
         count = max(1, min(count, CLUB_EVENTS_EMBED_MAX))
 
-        rows = _club_events_embed_rows(request, club, count)
+        rows = _club_events_embed_rows(request, club, count, past=self.past)
+        # Every format counts, JSON included, and an empty answer counts too: what is being
+        # recorded is that somebody's website asked us for this club's calendar, which is as true
+        # of a club with nothing on as of a club with ten meetings. Admins are left out so that
+        # checking your own snippet doesn't look like your members reading it.
+        if not _viewer_runs_this_club(request, club):
+            club_events.record_website_view(club)
         embed_mode = embed_mode_from_request(request)
         if embed_mode is None:
-            return embed_json({"club": club.name, "events": rows})
+            return embed_json({"club": club.name, self.json_key: rows})
         return embed_response(
             "events",
             embed_mode,
@@ -20607,8 +20339,24 @@ class ClubEventsEmbedView(View):
                 "embed_mode": embed_mode,
                 "club_name": club.name,
                 "events": rows,
+                "past": self.past,
+                "empty_message": self.empty_message,
             },
         )
+
+
+@method_decorator(xframe_options_exempt, name="dispatch")
+class ClubPastEventsEmbedView(ClubEventsEmbedView):
+    """The same embed looking backwards: what this club has been up to, newest first.
+
+    A club's own website usually has room for both — "what's on" at the top of a page and "what
+    we've been doing" further down — and the second one is the half a visitor deciding whether to
+    join actually reads. ``count=1`` is the thing that happened last.
+    """
+
+    past = True
+    empty_message = "Nothing here yet."
+    json_key = "past_events"
 
 
 # A club pasting this into a sidebar wants "what's new", not an archive. Past three it stops being
@@ -20652,7 +20400,7 @@ class ClubAnnouncementsEmbedView(View):
 
     def get(self, request, slug):
         club = Club.objects.filter(Q(slug=slug) | Q(abbreviation=slug)).order_by("pk").first()
-        if not club or not club.enable_club_page:
+        if not club:
             raise Http404
         try:
             count = int(request.GET.get("count") or 1)
@@ -20732,7 +20480,7 @@ class ClubAuctionEmbedView(View):
 
     def get(self, request, slug):
         club = Club.objects.filter(Q(slug=slug) | Q(abbreviation=slug)).order_by("pk").first()
-        if not club or not club.enable_club_page:
+        if not club:
             raise Http404
         row = _club_auction_embed_row(request, _club_current_auction(club))
         embed_mode = embed_mode_from_request(request)
@@ -20817,43 +20565,10 @@ class ClubAnnouncementsView(LoginRequiredMixin, ClubViewMixin, TemplateView):
         announcement = form.save(commit=False)
         announcement.club = self.club
         announcement.created_by = request.user
-        chose_a_time = bool(announcement.scheduled_for)
-        if not chose_a_time:
-            # Nothing sends in the request any more. Half a minute is the whole point: the wrong
-            # date in the sentence is obvious the instant the page reloads and shows it back, and
-            # this is the window in which Retract still means something. It goes down the same path
-            # a real schedule does, so there is one way an announcement is sent rather than two.
-            announcement.scheduled_for = timezone.now() + timedelta(seconds=announcements.GRACE_SECONDS)
-        announcement.save()
-        # The beat is the backstop; this is what makes 30 seconds mean 30 seconds. A lost task
-        # costs a delay, never the announcement.
-        try:
-            from auctions.tasks import send_scheduled_announcements
-
-            send_scheduled_announcements.apply_async(
-                countdown=max(1, int((announcement.scheduled_for - timezone.now()).total_seconds()) + 2)
-            )
-        except Exception:
-            logger.warning("Could not queue the send for announcement %s; the beat will get it", announcement.pk)
-        going_to = []
-        if announcement.send_to_discord:
-            going_to.append("Discord")
-        if announcement.send_to_push:
-            reachable, _total = announcements.member_counts(self.club)
-            going_to.append(f"{reachable} phone{pluralize(reachable)}")
-        for name, ticked in (("Mailchimp", announcement.send_to_mailchimp), ("Brevo", announcement.send_to_brevo)):
-            if ticked:
-                going_to.append(name)
-        if announcement.show_on_website:
-            going_to.append("your website")
-        where = " and ".join(", ".join(going_to).rsplit(", ", 1)) if going_to else "nowhere"
+        # Saving, scheduling and describing where it goes are ``announcements.queue`` -- shared
+        # with the assistant, so an announcement is sent one way rather than two.
+        chose_a_time, where = announcements.queue(announcement, acting_user=request.user)
         if chose_a_time:
-            ClubHistory.objects.create(
-                club=self.club,
-                user=request.user,
-                action=f"Announcement scheduled: {announcement.short_text}",
-                applies_to="ANNOUNCEMENTS",
-            )
             when = timezone.localtime(announcement.scheduled_for)
             messages.success(
                 request,
@@ -20956,9 +20671,23 @@ class ClubWebsiteIntegrationView(LoginRequiredMixin, ClubViewMixin, TemplateView
                 "max_count": CLUB_EVENTS_EMBED_MAX,
                 "default_count": 1,
                 "heights": {1: 200, 10: 880},
-                "available": club.enable_club_page,
-                "unavailable_reason": "Your public club page is turned off, so this would show nothing.",
-                "settings_url": reverse("club_edit", kwargs={"slug": club.slug}),
+                "available": True,
+            },
+            {
+                "key": "past_events",
+                "title": "Past events",
+                "icon": "bi-clock-history",
+                "blurb": (
+                    "The same list looking backwards, newest first — what your club has actually "
+                    "been doing. Somebody deciding whether to come to a meeting reads this one. "
+                    "Set count=1 for just the most recent."
+                ),
+                "url": base + reverse("club_past_events_embed", kwargs={"slug": club.slug}),
+                "counts": True,
+                "max_count": CLUB_EVENTS_EMBED_MAX,
+                "default_count": 1,
+                "heights": {1: 200, 10: 880},
+                "available": True,
             },
             {
                 "key": "auction",
@@ -20972,9 +20701,7 @@ class ClubWebsiteIntegrationView(LoginRequiredMixin, ClubViewMixin, TemplateView
                 "url": base + reverse("club_auction_embed", kwargs={"slug": club.slug}),
                 "counts": False,
                 "heights": {1: 200},
-                "available": club.enable_club_page,
-                "unavailable_reason": "Your public club page is turned off, so this would show nothing.",
-                "settings_url": reverse("club_edit", kwargs={"slug": club.slug}),
+                "available": True,
             },
             {
                 "key": "announcements",
@@ -20989,9 +20716,7 @@ class ClubWebsiteIntegrationView(LoginRequiredMixin, ClubViewMixin, TemplateView
                 "max_count": CLUB_ANNOUNCEMENTS_EMBED_MAX,
                 "default_count": 1,
                 "heights": {1: 160, 3: 340},
-                "available": club.enable_club_page,
-                "unavailable_reason": "Your public club page is turned off, so this would show nothing.",
-                "settings_url": reverse("club_edit", kwargs={"slug": club.slug}),
+                "available": True,
             },
             {
                 "key": "bap",
@@ -21007,6 +20732,37 @@ class ClubWebsiteIntegrationView(LoginRequiredMixin, ClubViewMixin, TemplateView
                 "available": club.enable_breeder_award_program,
                 "unavailable_reason": "The Breeder Award Program is turned off for this club.",
                 "settings_url": reverse("club_bap_settings", kwargs={"slug": club.slug}),
+            },
+            {
+                "key": "calendar",
+                "title": "Calendar links",
+                "icon": "bi-calendar-check",
+                "blurb": (
+                    "Not an embed — just the two addresses behind your events, to put on whatever "
+                    "your site already has: a button, a menu item, a line of text. The first one "
+                    "adds your calendar to somebody's own; the second is the raw feed, for "
+                    "anything that reads one."
+                ),
+                # Google's when the club has shared its calendar, ours when it hasn't. Same rule
+                # as the buttons on the club page: the shared Google calendar is the copy the club
+                # itself keeps, so it has whatever an admin typed straight into it, pull or no pull.
+                "links": [
+                    {
+                        "label": "Add to calendar",
+                        "url": club.calendar_subscribe_url(self.request.get_host()),
+                        "note": (
+                            "Opens Google Calendar."
+                            if club.google_calendar_public_url
+                            else "Opens whatever calendar app the visitor uses."
+                        ),
+                    },
+                    {
+                        "label": "Calendar feed (.ics)",
+                        "url": club.calendar_feed_url(self.request.get_host()),
+                        "note": "For a website plugin or anything else that reads a calendar feed.",
+                    },
+                ],
+                "available": True,
             },
         ]
         return context
@@ -21428,11 +21184,7 @@ class ClubMembershipPaymentView(LoginRequiredMixin, ClubViewMixin, TemplateView)
 
     def dispatch(self, request, *args, **kwargs):
         self.get_club(kwargs.get("slug", ""))
-        if not (
-            self.club.enable_club_page
-            and self.club.membership_annual_fee
-            and (self.club.can_accept_paypal or self.club.can_accept_square)
-        ):
+        if not (self.club.membership_annual_fee and (self.club.can_accept_paypal or self.club.can_accept_square)):
             raise Http404
         # Members whose dues are current have nothing to pay — send them back to their
         # membership card rather than showing an empty/confusing payment page.
@@ -22214,27 +21966,9 @@ class ClubBapLotsView(LoginRequiredMixin, ClubViewMixin, HTMxTableView):
         return super().dispatch(request, *args, **kwargs)
 
     def get_queryset(self):
-        matching_member = ClubMember.objects.filter(
-            club=self.club,
-            is_deleted=False,
-        ).filter(
-            Q(user=OuterRef("auctiontos_seller__user"))
-            | Q(user=OuterRef("user"))
-            | Q(email__iexact=OuterRef("auctiontos_seller__email"))
-        )
-        qs = Lot.objects.filter(
-            auction__club=self.club,
-            is_deleted=False,
-            active=False,
-        )
-        if self.club.only_sold_lots:
-            qs = qs.filter(auctiontos_winner__isnull=False, winning_price__isnull=False)
-        return (
-            qs.filter(Exists(matching_member))
-            .select_related("auctiontos_seller__user", "auction__club", "species_category", "species")
-            .prefetch_related("bap_award")
-            .order_by("-date_end")
-        )
+        # In services because the ``points_queue`` skill lists the same rows, and "which lots is
+        # this club's points desk looking at" must have one answer.
+        return bap_review_lots(self.club)
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
@@ -22327,7 +22061,7 @@ class BapAwardAdminView(APIView):
             initial["club_member"] = member
         if lot.date_end:
             initial["date"] = lot.date_end.date()
-        points = lot.bap_points_for_club(club)
+        points = lot.default_bap_points(club)
         placeholder = lot.bap_placeholder
         if placeholder == "HAP":
             initial["hap_points"] = points
@@ -25070,12 +24804,11 @@ class DiscordInteractionsView(View):
             else:
                 lines.append(f"Status: ❌ Expired <t:{expiry_ts}:D> — please renew your membership")
 
-        if club.enable_club_page:
-            lines.append(f"\n[View your membership]({member.simple_membership_link})")
+        lines.append(f"\n[View your membership]({member.simple_membership_link})")
 
         return _discord_ephemeral("\n".join(lines))
 
-    def _handle_bap_command(self, data):  # noqa: C901 (kept intentional)
+    def _handle_bap_command(self, data):
         guild_id = data.get("guild_id", "")
         member_data = data.get("member") or {}
         user_data = member_data.get("user") or data.get("user") or {}
@@ -25127,23 +24860,6 @@ class DiscordInteractionsView(View):
 class LotBapPointsView(LoginRequiredMixin, View):
     """Inline BAP approve/reject/undo endpoint for the Pending BAP table."""
 
-    def _seller_name(self, lot):
-        if lot.auctiontos_seller:
-            return lot.auctiontos_seller.name
-        if lot.user:
-            return f"{lot.user.first_name} {lot.user.last_name}".strip() or lot.user.username or f"user #{lot.user.pk}"
-        return f"lot #{lot.pk}"
-
-    def _resolve_member(self, lot, club):
-        seller_user = lot.user or (lot.auctiontos_seller.user if lot.auctiontos_seller else None)
-        seller_email = (lot.auctiontos_seller.email if lot.auctiontos_seller else None) or ""
-        member = None
-        if seller_user:
-            member = ClubMember.objects.filter(club=club, user=seller_user, is_deleted=False).first()
-        if not member and seller_email:
-            member = ClubMember.objects.filter(club=club, email__iexact=seller_email, is_deleted=False).first()
-        return member
-
     def _render_buttons(self, request, lot, club):
         lot.refresh_from_db()
         try:
@@ -25151,24 +24867,13 @@ class LotBapPointsView(LoginRequiredMixin, View):
         except Exception:
             award = None
         lot.bap_award_cached = award
-        override = (
-            ClubBapCategoryOverride.objects.filter(club=club, category=lot.species_category).first()
-            if lot.species_category
-            else None
-        )
-        if override is not None:
-            default_points = override.points
-        elif club.points_per_lot is not None:
-            # See Lot.bap_points_for_club: a club that sets 0 means 0, not "use the category".
-            default_points = club.points_per_lot
-        else:
-            default_points = lot.species_category.bap_points if lot.species_category else 5
-        if club.points_for_custom_checkbox > 0 and lot.custom_checkbox:
-            default_points += club.points_for_custom_checkbox
         return render(
             request,
             "auctions/bap_lot_buttons.html",
-            {"lot": lot, "club": club, "default_points": default_points},
+            # ``Lot.default_bap_points``, not a third opinion about it: this used to read the
+            # category override and not the genus one, so approving a lot whose genus the club
+            # values differently re-rendered the row with a number the table had never shown.
+            {"lot": lot, "club": club, "default_points": lot.default_bap_points(club)},
         )
 
     def post(self, request, pk):
@@ -25177,71 +24882,28 @@ class LotBapPointsView(LoginRequiredMixin, View):
         if not club or not check_club_permission(request.user, club, "permission_manage_bap"):
             return HttpResponse(status=403)
 
+        # "reject" is what this page's buttons have always posted; the service calls it "deny",
+        # which is the word somebody says out loud. Same decision either way.
         action = request.POST.get("action", "approve")
+        decision = "deny" if action == "reject" else action
+        if decision not in BAP_DECISIONS:
+            return HttpResponse(status=400)
 
-        if action == "undo":
-            existing = BapAward.objects.filter(lot=lot).first()
-            if existing:
-                existing.delete()
-            lot.bap_points_awarded = 0
-            lot.manually_approved = False
-            lot.bap_auto_reason = lot.sold_lot_no_bap_reason or ""
-            lot.save(update_fields=["bap_points_awarded", "manually_approved", "bap_auto_reason"])
-            return self._render_buttons(request, lot, club)
-
-        if action == "reject":
-            existing = BapAward.objects.filter(lot=lot).first()
-            if existing:
-                existing.delete()
-            lot.bap_points_awarded = 0
-            lot.manually_approved = True
-            # Leave bap_auto_reason as-is: it reflects the system's eligibility verdict,
-            # which is still useful to show even when an admin explicitly rejects.
-            lot.save(update_fields=["bap_points_awarded", "manually_approved"])
-            ClubHistory.objects.create(
-                club=club,
-                user=request.user,
-                action=f"Rejected BAP points for {self._seller_name(lot)}: {lot.lot_name}",
-                applies_to="BAP",
-            )
-            return self._render_buttons(request, lot, club)
-
-        # action == "approve"
         def _parse_pts(key):
             try:
                 return max(0, int(str(request.POST.get(key, 0)).strip() or 0))
             except (ValueError, TypeError):
                 return 0
 
-        bap_pts = _parse_pts("bap_points")
-        hap_pts = _parse_pts("hap_points")
-        cap_pts = _parse_pts("cap_points")
-
-        member = self._resolve_member(lot, club)
-        award_date = lot.date_end.date() if lot.date_end else timezone.now().date()
-
-        if (bap_pts or hap_pts or cap_pts) and member:
-            BapAward.objects.update_or_create(
-                lot=lot,
-                defaults={
-                    "club_member": member,
-                    "date": award_date,
-                    "points": bap_pts,
-                    "hap_points": hap_pts,
-                    "cap_points": cap_pts,
-                    "awarded_by": request.user,
-                },
-            )
-            lot.bap_points_awarded = bap_pts + hap_pts + cap_pts
-            lot.manually_approved = True
-            lot.bap_auto_reason = ""
-            lot.save(update_fields=["bap_points_awarded", "manually_approved", "bap_auto_reason"])
-            ClubHistory.objects.create(
-                club=club,
-                user=request.user,
-                action=f"Awarded {lot.bap_points_awarded} BAP point(s) to {self._seller_name(lot)} for {lot.lot_name}",
-                applies_to="BAP",
-            )
+        review_lot_points(
+            lot,
+            club,
+            acting_user=request.user,
+            decision=decision,
+            bap=_parse_pts("bap_points"),
+            hap=_parse_pts("hap_points"),
+            cap=_parse_pts("cap_points"),
+        )
         return self._render_buttons(request, lot, club)
 
 
@@ -25454,6 +25116,155 @@ class ClubDiscordSendJoinMessageView(LoginRequiredMixin, ClubViewMixin, View):
         else:
             messages.error(request, f"Discord API error {resp.status_code}: could not send message.")
         return redirect(reverse("club_discord_config", kwargs={"slug": self.club.slug}))
+
+
+class UserAPIKeyView(LoginRequiredMixin, TemplateView):
+    """How to connect an AI agent to this site, and the keys for doing it.
+
+    Two ways in, and the page leads with the one most people want. **Signing in** is the whole
+    story for Claude, for Grok's custom connectors and for ChatGPT's developer-mode apps: they run
+    a real OAuth flow against this site and there is no key to copy anywhere. A **key** is for the things that can't do
+    that — a script, a cron job, a connector an administrator adds for a whole organisation with
+    a fixed header.
+
+    Either way the credential can never do more than its owner can: the tools re-check the owner's
+    real permissions on every call, and ``allow_writes`` (and the OAuth ``write`` scope) is a
+    ceiling on top of that rather than a grant.
+
+    A key's secret is shown **once**, on the redirect after creating it, and is never stored — only
+    a salted hash of it is. Same shape as the club API key pages
+    (:class:`ClubAPIKeyCreateView`), and for the same reason: a key you can go back and read is a
+    key that is written down somewhere it can be read from.
+
+    Open to **everyone signed in**. It used to be gated on ``UserData.use_llm_search``, the
+    per-user flag that opens the natural-language command palette, on the reasoning that the two
+    are one beta reached two ways. They are not the same feature: the palette spends this site's
+    own language-model budget on every keystroke, which is what that flag is for, while an agent
+    connecting over MCP brings its own model and costs this site nothing beyond the queries a web
+    page would make. It can also do nothing its owner could not do by clicking, because the tools
+    re-check the owner's real permissions on every call. See :mod:`auctions.mcp.auth`.
+
+    Deliberately *not* gated on a language model being configured site-wide (``llm.assist_enabled``)
+    either, for the same reason: this works perfectly well on an install with no API key of its own.
+    """
+
+    template_name = "user_api_keys.html"
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["active_tab"] = "api_keys"
+        context["keys"] = UserAPIKey.objects.filter(user=self.request.user).order_by("-created_at")
+        context["new_raw_key"] = self.request.session.pop("new_user_api_key", None)
+        context["mcp_url"] = self.request.build_absolute_uri(reverse("mcp"))
+        context["connected_apps"] = self.connected_apps()
+        return context
+
+    def connected_apps(self):
+        """Assistants this person has signed in to the site from, and whether they're still live.
+
+        Signing in is the way almost everybody connects, and until this list existed the page
+        described a connection it could not show and offered no way to end. "Revoke your key" is
+        no help to somebody who never made one; the honest answer to "how do I disconnect Claude?"
+        was to go into the Django admin, which no ordinary user can open.
+
+        Grouped by application rather than by token because a token is an hour long and refreshes
+        itself -- a list of tokens would be a list of the same connection over and over.
+        """
+        from auctions.mcp import auth as mcp_auth
+
+        if not mcp_auth.oauth_enabled():
+            return []
+        from oauth2_provider.models import get_access_token_model
+
+        rows = {}
+        tokens = (
+            get_access_token_model()
+            .objects.filter(user=self.request.user)
+            .select_related("application")
+            .order_by("-created")
+        )
+        for token in tokens:
+            application = token.application
+            if application is None:
+                continue
+            row = rows.setdefault(
+                application.pk,
+                {
+                    "pk": application.pk,
+                    "name": application.name or "An AI agent",
+                    "connected": token.created,
+                    "live": False,
+                    "writes": False,
+                },
+            )
+            row["connected"] = max(row["connected"], token.created)
+            if not token.is_expired():
+                row["live"] = True
+                row["writes"] = row["writes"] or mcp_auth.SCOPE_WRITE in (token.scope or "").split()
+        return sorted(rows.values(), key=lambda row: row["connected"], reverse=True)
+
+    def disconnect_app(self, request, application_pk):
+        """End every session this person has with one application. Returns True if there was one.
+
+        Deletes the refresh tokens as well as the access tokens, and the outstanding grants: an
+        access token alone lives an hour, so revoking only those disconnects somebody for less time
+        than it takes them to read this page.
+        """
+        from auctions.mcp import auth as mcp_auth
+
+        if not mcp_auth.oauth_enabled():
+            return False
+        from oauth2_provider.models import get_access_token_model, get_grant_model, get_refresh_token_model
+
+        try:
+            application_pk = int(application_pk)
+        except (TypeError, ValueError):
+            return False
+        removed = 0
+        for model in (get_refresh_token_model(), get_access_token_model(), get_grant_model()):
+            deleted, _ = model.objects.filter(user=request.user, application_id=application_pk).delete()
+            removed += deleted
+        return bool(removed)
+
+    def post(self, request, *args, **kwargs):
+        disconnect = request.POST.get("disconnect")
+        if disconnect:
+            if self.disconnect_app(request, disconnect):
+                messages.info(request, "Disconnected. It will ask you to sign in again if you reconnect it.")
+            else:
+                messages.info(request, "That was already disconnected.")
+            return redirect(reverse("user_api_keys"))
+        revoke = request.POST.get("revoke", "").strip()
+        if revoke:
+            # Revoked rather than deleted: the row is what says a key existed and when it was last
+            # used, which is exactly what somebody wants to see after revoking one in a hurry.
+            # ``isdigit`` because a hand-written POST with a non-numeric pk raises rather than 404s.
+            UserAPIKey.objects.filter(pk=revoke if revoke.isdigit() else 0, user=request.user).update(is_active=False)
+            messages.info(request, "That key has been revoked and will stop working immediately.")
+            return redirect(reverse("user_api_keys"))
+        name = request.POST.get("name", "").strip()
+        if not name:
+            messages.error(request, "Give the key a name so you can tell it apart later.")
+            return redirect(reverse("user_api_keys"))
+        raw_key, prefix, key_hash = UserAPIKey.generate()
+        # An expiry is the one control that limits the damage of a key nobody remembers issuing,
+        # and the model has always had the column -- it just had no way in from the page, so every
+        # key ever made was immortal. Blank still means "never", because a cron job that stops
+        # working in ninety days with no warning is its own kind of failure.
+        expiry_days = {"30": 30, "90": 90, "365": 365}.get(request.POST.get("expires_in", ""))
+        expires_at = timezone.now() + timedelta(days=expiry_days) if expiry_days else None
+        UserAPIKey.objects.create(
+            user=request.user,
+            name=name[:100],
+            prefix=prefix,
+            key_hash=key_hash,
+            allow_writes=request.POST.get("allow_writes") == "on",
+            expires_at=expires_at,
+        )
+        # Carried in the session rather than rendered straight away so a refresh of the page it
+        # lands on doesn't put the secret back on screen.
+        request.session["new_user_api_key"] = raw_key
+        return redirect(reverse("user_api_keys"))
 
 
 class CommandPaletteView(View):
@@ -26235,6 +26046,88 @@ class SpeciesCommonNameCreateView(AuctionAdminAnywhereViewMixin, LotNameSpeciesM
                 "else's until a site admin approves it for everyone.",
             )
         return redirect(species_page_success_url(self.request))
+
+
+class AssistantSkillRequestsView(AdminOnlyViewMixin, TemplateView):
+    """What agents tried to do here and could not, grouped by what they asked for.
+
+    The sibling of :class:`CommandPaletteAnalyticsView`'s bounce list and of
+    :class:`SpeciesGapsView`, and it exists for the same reason both of those do: the interesting
+    thing about a catalogue of fifty tools is not the fifty, it is the repeated request for the
+    fifty-first. Every tool on the MCP endpoint was added because somebody said out loud that it
+    was missing, and until this page that saying-out-loud had to reach the site owner by accident.
+
+    Grouped by skill name and ordered by how many **different people** asked, because five clubs
+    asking for the same thing is the number that decides whether it gets built and five requests
+    from one enthusiastic agent is not. The rows underneath each group are what makes it readable:
+    the same missing tool is described differently by every caller, and the description is the part
+    that says what to build.
+
+    Everything in a request was written by a language model acting for a member of this site. It is
+    displayed and never executed, and the template escapes it like any other user text.
+    """
+
+    template_name = "assistant_skill_requests.html"
+
+    #: Enough to work through in a sitting. Anything asked for once is not yet a pattern.
+    LIMIT = 200
+
+    def post(self, request, *args, **kwargs):
+        """Move one request between the four states. The only thing this page writes."""
+        row = get_object_or_404(AssistantSkillRequest, pk=request.POST.get("pk"))
+        status = request.POST.get("status", "")
+        if status in dict(AssistantSkillRequest.STATUS_CHOICES):
+            row.status = status
+            row.notes = request.POST.get("notes", row.notes)[:2000]
+            row.save(update_fields=["status", "notes", "updatedon"])
+            messages.success(request, f"“{row.skill}” is now {row.get_status_display().lower()}.")
+        return redirect(self.back_to(request))
+
+    @staticmethod
+    def back_to(request):
+        """Where the form returns to: this page, on the tab it was posted from.
+
+        Built out of ``reverse()`` and one validated word rather than out of ``HTTP_REFERER``.
+        The referrer is a header the browser sends and anybody can set, so redirecting to it is an
+        open redirect however superuser-only the page is — and it was never the better answer here
+        anyway, because the only place this form has to return to is itself.
+        """
+        wanted = request.POST.get("filter", "")
+        url = reverse("assistant_skill_requests")
+        for status, _label in AssistantSkillRequest.STATUS_CHOICES:
+            if status == wanted:
+                # The value that goes into the URL is the model's own constant, not the string
+                # that was posted. Comparing the two and then interpolating the *posted* one is
+                # the same URL and a worse one: nothing that reads this can see that the check
+                # happened, static analysis included, and the next person to add a status here
+                # would have to notice that the guard is load-bearing.
+                return f"{url}?{urlencode({'status': status})}"
+        return url
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        wanted = self.request.GET.get("status", AssistantSkillRequest.STATUS_NEW)
+        rows = AssistantSkillRequest.objects.select_related("user")
+        if wanted in dict(AssistantSkillRequest.STATUS_CHOICES):
+            rows = rows.filter(status=wanted)
+        groups: dict[str, dict] = {}
+        for row in rows[: self.LIMIT]:
+            key = row.skill.strip().lower()
+            group = groups.setdefault(key, {"skill": row.skill, "rows": [], "people": set()})
+            group["rows"].append(row)
+            group["people"].add(row.user_id)
+        ordered = sorted(groups.values(), key=lambda group: (-len(group["people"]), -len(group["rows"])))
+        for group in ordered:
+            group["people_count"] = len(group["people"])
+        context["groups"] = ordered
+        context["status"] = wanted
+        # (value, label, count) rather than the choices plus a dict: a Django template cannot look
+        # a value up in a dict by a variable key, and the workaround is always a custom filter.
+        context["statuses"] = [
+            (value, label, AssistantSkillRequest.objects.filter(status=value).count())
+            for value, label in AssistantSkillRequest.STATUS_CHOICES
+        ]
+        return context
 
 
 class CommandPaletteAnalyticsView(AdminOnlyViewMixin, TemplateView):

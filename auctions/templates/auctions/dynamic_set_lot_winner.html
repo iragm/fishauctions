@@ -255,18 +255,316 @@
   function voiceHeardTranscript(text, partial) {
     if (partial) { return; }
     voiceForgetTranscript();
-    const words = String(text || '').split(/\s+/).filter(Boolean);
-    // One word is as likely to be someone walking past the phone as a command, and the room never
-    // stops talking. Below two, nothing is worth writing down.
-    if (words.length < voiceUnmatchedMinTokens) { return; }
-    const heard = words.join(' ');
+    const heard = String(text || '').trim().replace(/\s+/g, ' ');
+    if (!heard) { return; }
     voicePendingTranscript = {
       text: heard,
       timer: setTimeout(function () {
         voicePendingTranscript = null;
+        // The app heard this and sent no command for it. Match it here before writing it off --
+        // see voiceParse. Only then is it really an utterance nothing understood.
+        if (voiceMatchLocally(heard)) { return; }
+        // One word is as likely to be someone walking past the phone as a command, and the room
+        // never stops talking. Below two, nothing is worth writing down.
+        if (heard.split(' ').length < voiceUnmatchedMinTokens) { return; }
         voiceLogUnmatched(heard, null);
       }, voiceUnmatchedGraceMs)
     };
+  }
+
+  {% comment %}
+    The page's own matcher, and the reason "heard: lot one" can no longer be the whole story.
+
+    The app owns the microphone and is supposed to own the matching too: it hears an utterance,
+    scores it, and pushes a `command` event in. When it pushes a `transcript` and no command, the
+    page used to have nothing to do but print the words and file them as unmatched — which looks
+    identical whether the grammar has never heard the word, the vocabulary fetch failed, or the
+    matcher on that build simply isn't wired up. All three end in the operator saying "lot one" and
+    watching nothing happen.
+
+    So the page matches it too, out of the same two pieces of data the app works from and which
+    voice.page_config now sends down with the page: the grammar's anchor words, and the lot and
+    bidder numbers that actually exist in *this* auction. That is what lets this be strict rather
+    than clever. It never invents a value — a lot number has to be one this auction has, or no
+    command is produced at all — and it never guesses which slot a bare number belongs to. The
+    price is the one field with no list to check against, and it is also the one the operator is
+    looking straight at.
+
+    It runs only after the app has had voiceUnmatchedGraceMs to answer, so a build that does match
+    is never second-guessed, and everything it produces goes through voiceHandleCommand exactly as
+    the app's own command would: the same green/amber threshold, the same telemetry row, the same
+    Confirm button. A fix that lives here also ships the way this feature is supposed to be fixed —
+    on the server, not through two app stores.
+  {% endcomment %}
+  const voiceAnchorPhrases = [];
+  Object.keys(voiceConfig.anchors || {}).forEach(function (slot) {
+    (voiceConfig.anchors[slot] || []).forEach(function (phrase) {
+      const words = String(phrase).toLowerCase().split(/\s+/).filter(Boolean);
+      if (words.length) { voiceAnchorPhrases.push({slot: slot, words: words}); }
+    });
+  });
+  // Longest first, so "lot number" beats "lot" and "no sale" is never read as two ordinary words.
+  voiceAnchorPhrases.sort(function (a, b) { return b.words.length - a.words.length; });
+  const voiceNumberWords = voiceConfig.number_words || {};
+  const voiceHomophonePairs = voiceConfig.homophones || [];
+  const voiceVocabulary = {
+    lot: (voiceConfig.lot_numbers || []).map(String),
+    bidder: (voiceConfig.bidder_numbers || []).map(String)
+  };
+  const voiceValueSlots = ['lot', 'bidder', 'price'];
+
+  function voiceWords(text) {
+    return String(text || '').toLowerCase().replace(/[^a-z0-9$.\-]+/g, ' ').split(/\s+/).filter(Boolean);
+  }
+
+  function voiceIsNumberWord(word) {
+    return /^\d+(\.\d+)?$/.test(word) || Object.prototype.hasOwnProperty.call(voiceNumberWords, word);
+  }
+
+  function voiceNumberValue(word) {
+    return /^\d+(\.\d+)?$/.test(word) ? {digits: word, value: Number(word)}
+                                       : {digits: String(voiceNumberWords[word]), value: Number(voiceNumberWords[word])};
+  }
+
+  // "four oh two" is 402 and "twenty five" is 25, and nothing in the utterance says which kind of
+  // number it is — so both readings are produced and the auction's own vocabulary picks. That is
+  // the same bet the app makes, and it is what lets everything else here refuse to guess.
+  function voiceNumberCandidates(parts) {
+    const spelled = parts.map(function (part) { return part.digits; }).join('');
+    let total = 0;
+    let current = 0;
+    parts.forEach(function (part) {
+      if (part.value === 100 || part.value === 1000) {
+        current = (current || 1) * part.value;
+        if (part.value === 1000) { total += current; current = 0; }
+      } else {
+        current += part.value;
+      }
+    });
+    const composed = String(total + current);
+    return spelled === composed ? [spelled] : [spelled, composed];
+  }
+
+  function voicePriceOf(parts) {
+    const amount = parts.length === 1 ? parts[0].value : Number(voiceNumberCandidates(parts).pop());
+    if (!isFinite(amount)) { return null; }
+    // The auction refuses half dollars when it says so, and offering one is offering a command the
+    // page is about to reject.
+    return voiceConfig.only_whole_dollar_bids ? String(Math.round(amount)) : String(amount);
+  }
+
+  function voiceAlternativesFor(candidate) {
+    const extra = [];
+    voiceHomophonePairs.forEach(function (pair) {
+      const values = (pair || []).map(String);
+      if (values.indexOf(candidate) === -1) { return; }
+      values.forEach(function (value) {
+        if (value !== candidate && extra.indexOf(value) === -1) { extra.push(value); }
+      });
+    });
+    return extra;
+  }
+
+  // Only ever a value this auction actually has. A lot number the page invents is a command the
+  // server refuses; one that lands on somebody else's lot is worse than that.
+  //
+  // The loose pass exists for seller-dash lot numbering, where the real lot numbers are "3-1" and
+  // "BOB-2" and nobody says the dash: "three one" can only ever reach 31 or 4, so an exact match
+  // never fires and voice was simply dead in those auctions. Digits-only is tried *after* the
+  // exact pass so a plain lot 31 always wins over a "3-1" in an auction that has both spellings,
+  // and when two dashed numbers flatten to the same digits ("3-11" and "31-1") it comes back as
+  // two hits, which is the amber field with both offered rather than a guess.
+  function voiceSnapExact(candidates, vocabulary) {
+    const known = {};
+    vocabulary.forEach(function (value) { known[String(value).toLowerCase()] = String(value); });
+    const hits = [];
+    candidates.forEach(function (candidate) {
+      const hit = known[String(candidate).toLowerCase()];
+      if (hit && hits.indexOf(hit) === -1) { hits.push(hit); }
+    });
+    return hits;
+  }
+
+  function voiceDigitsOnly(value) {
+    return String(value).replace(/[^0-9]/g, '');
+  }
+
+  function voiceSnap(candidates, vocabulary) {
+    const exact = voiceSnapExact(candidates, vocabulary);
+    if (exact.length) { return exact; }
+    const wanted = candidates.map(voiceDigitsOnly).filter(Boolean);
+    if (!wanted.length) { return []; }
+    const hits = [];
+    vocabulary.forEach(function (value) {
+      const digits = voiceDigitsOnly(value);
+      if (digits && wanted.indexOf(digits) !== -1 && hits.indexOf(String(value)) === -1) {
+        hits.push(String(value));
+      }
+    });
+    return hits;
+  }
+
+  function voiceReadValue(slot, parts, heard) {
+    if (slot === 'price') {
+      const price = voicePriceOf(parts);
+      return price === null ? null : {slot: slot, value: price, confidence: 1, heard: heard};
+    }
+    const candidates = voiceNumberCandidates(parts);
+    let hits = voiceSnap(candidates, voiceVocabulary[slot] || []);
+    if (hits.length === 1) { return {slot: slot, value: hits[0], confidence: 1, heard: heard}; }
+    if (hits.length > 1) {
+      // Two real values in one utterance: offer both rather than picking, which is what the amber
+      // field and its buttons are for.
+      return {slot: slot, value: hits[0], confidence: voiceConfig.unsure, heard: heard, candidates: hits};
+    }
+    // Nothing matched as heard. "Fifteen" and "fifty" are a coin flip in a room with a PA, so try
+    // the pairs the grammar knows about — but the result is never confident, because the word that
+    // was actually said is the one that did not exist here.
+    const alternatives = [];
+    candidates.forEach(function (candidate) {
+      voiceAlternativesFor(candidate).forEach(function (value) {
+        if (alternatives.indexOf(value) === -1) { alternatives.push(value); }
+      });
+    });
+    hits = voiceSnap(alternatives, voiceVocabulary[slot] || []);
+    if (hits.length) {
+      return {slot: slot, value: hits[0], confidence: voiceConfig.unsure, heard: heard, candidates: hits};
+    }
+    return null;
+  }
+
+  {% comment %}
+    One utterance into commands. Two passes, because "lot fifteen" puts the anchor in front of its
+    number and "twenty five dollars" puts it behind — and a recognizer hands us the second one as
+    "$25", with the spoken anchor gone entirely, which is why a currency symbol counts as one.
+
+    A number nothing claims is dropped on purpose. A bare "fifteen" is as likely to be the room as
+    a command, and there is no reading of it that is worth filling a field with.
+  {% endcomment %}
+  function voiceParse(heard) {
+    const words = voiceWords(heard);
+    const items = [];
+    let index = 0;
+    while (index < words.length) {
+      const word = words[index];
+      const money = word.charAt(0) === '$' && /^\d/.test(word.slice(1));
+      if (money) { items.push({kind: 'anchor', slot: 'price'}); }
+      const bare = money ? word.slice(1) : word;
+      if (voiceIsNumberWord(bare)) {
+        const parts = [voiceNumberValue(bare)];
+        index += 1;
+        while (index < words.length && voiceIsNumberWord(words[index])) {
+          parts.push(voiceNumberValue(words[index]));
+          index += 1;
+        }
+        items.push({kind: 'number', parts: parts});
+        continue;
+      }
+      let matched = null;
+      for (const anchor of voiceAnchorPhrases) {
+        const slice = words.slice(index, index + anchor.words.length).join(' ');
+        if (slice === anchor.words.join(' ')) { matched = anchor; break; }
+      }
+      if (matched) {
+        items.push({kind: 'anchor', slot: matched.slot});
+        index += matched.words.length;
+      } else {
+        items.push({kind: 'word'});
+        index += 1;
+      }
+    }
+
+    const commands = [];
+    const misses = [];
+    const seen = {};
+    const claimed = [];
+    items.forEach(function (item, position) {
+      if (item.kind !== 'anchor' || seen[item.slot]) { return; }
+      if (voiceValueSlots.indexOf(item.slot) === -1) {
+        seen[item.slot] = true;
+        commands.push({slot: item.slot, value: '', confidence: 1, heard: heard});
+        return;
+      }
+      let numberAt = -1;
+      if (items[position + 1] && items[position + 1].kind === 'number' && claimed.indexOf(position + 1) === -1) {
+        numberAt = position + 1;
+      } else if (items[position - 1] && items[position - 1].kind === 'number' && claimed.indexOf(position - 1) === -1) {
+        numberAt = position - 1;
+      }
+      if (numberAt === -1) { return; }
+      const command = voiceReadValue(item.slot, items[numberAt].parts, heard);
+      if (!command) {
+        // An anchor with a number after it that this auction has never heard of. Worth saying out
+        // loud: "no lot like that here" is an answer, and it is the answer somebody staring at a
+        // microphone that appears to do nothing actually needs. The number is deliberately not
+        // repeated back — a run of number words has two readings and the matcher does not know
+        // which one was meant, so quoting one of them would be a guess printed as a fact. What was
+        // heard is already on the same line.
+        misses.push({slot: item.slot});
+        return;
+      }
+      claimed.push(numberAt);
+      seen[item.slot] = true;
+      commands.push(command);
+    });
+    // Fields before actions, always: 'sold' submits the form, so anything it is supposed to submit
+    // has to already be in it.
+    const order = voiceValueSlots.concat(['unsold', 'undo', 'clear', 'confirm', 'sold']);
+    commands.sort(function (a, b) { return order.indexOf(a.slot) - order.indexOf(b.slot); });
+    return {commands: commands, misses: misses};
+  }
+
+  {% comment %}
+    The one race worth guarding. The fallback fires when the app has not answered inside the grace
+    window — but "has not answered yet" and "will never answer" are the same thing from here, and a
+    command that turns up late would act on an utterance the page has already acted on. Saying
+    "sold" twice for one lot is the expensive version of that.
+
+    So a locally matched utterance is remembered by its exact text for a few grace windows, and a
+    command carrying that same text is dropped. Only that text: the next thing said is a new
+    utterance and is handled normally, which is what stops this from swallowing a real second
+    "sold" a moment later.
+  {% endcomment %}
+  let voiceMatchedHere = null;
+  const voiceDuplicateWindowMs = voiceUnmatchedGraceMs * 3;
+
+  function voiceAlreadyHandledHere(event) {
+    // Never our own: two identical utterances in a row ("sold", then "sold" for the next lot) are
+    // two real commands, and both of them come through here carrying the same text.
+    if (event.local || !voiceMatchedHere) { return false; }
+    if (Date.now() - voiceMatchedHere.at > voiceDuplicateWindowMs) {
+      voiceMatchedHere = null;
+      return false;
+    }
+    return String(event.heard || '') === voiceMatchedHere.heard;
+  }
+
+  const voiceMissLabel = {lot: 'lot', bidder: 'bidder'};
+
+  function voiceMatchLocally(heard) {
+    if (voiceConfig.enabled === false) { return false; }
+    let parsed = {commands: [], misses: []};
+    try {
+      parsed = voiceParse(heard);
+    } catch (error) {
+      // Never let the fallback break the page: without it things merely don't get filled in.
+      return false;
+    }
+    if (!parsed.commands.length) {
+      // Nothing to do, but "nothing happened" and "there is no lot 1 here" are different answers
+      // and the second one is the one worth putting on screen.
+      const miss = parsed.misses[0];
+      if (miss && voiceMissLabel[miss.slot]) {
+        voiceStatus('heard "' + heard + '" — no ' + voiceMissLabel[miss.slot] + ' like that in this auction');
+      }
+      return false;
+    }
+    voiceMatchedHere = {heard: heard, at: Date.now()};
+    parsed.commands.forEach(function (command) {
+      command.local = true;
+      voiceHandleCommand(command);
+    });
+    return true;
   }
 
   function voiceSettleTranscript(confidence) {
@@ -381,6 +679,7 @@
   }
 
   function voiceHandleCommand(event) {
+    if (voiceAlreadyHandledHere(event)) { return; }
     const slot = event.slot;
     const value = (event.value === null || event.value === undefined) ? '' : String(event.value);
     const confidence = (typeof event.confidence === 'number') ? event.confidence : 1;

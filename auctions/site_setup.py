@@ -64,7 +64,6 @@ def get_single_club(*, create: bool = False):
         club = Club.objects.create(
             name=club_name,
             allow_joining=True,
-            enable_club_page=True,
             enable_membership=True,
             use_site_paypal_account=site_paypal_configured(),
             allow_non_oauth_paypal=False,
@@ -75,7 +74,6 @@ def get_single_club(*, create: bool = False):
     update_fields = []
     desired_values = {
         "allow_joining": True,
-        "enable_club_page": True,
         "enable_membership": True,
         "allow_non_oauth_paypal": False,
         "use_site_paypal_account": site_paypal_configured(),

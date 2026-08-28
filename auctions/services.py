@@ -146,6 +146,106 @@ def ensure_club_member(
     return member, created
 
 
+def join_auction(user, auction, pickup_location, *, time_spent_reading_rules=0):
+    """Sign ``user`` up for ``auction``, or bring their existing record up to date.
+
+    Extracted verbatim from ``views.AuctionInfo.post`` so joining is one implementation with two
+    callers: the Join button, and the assistant. It was a hundred lines inside a view method, which
+    is why "join me up for the fall auction" could only ever be a link to the page -- and a link is
+    a poor answer on a phone to somebody standing in the room.
+
+    Returns ``(tos, created, problem)``. ``problem`` is ``""`` or one of ``"phone_number"`` /
+    ``"address"``: the auction demands a detail this account has not got, and the two callers word
+    that differently (the web redirects to the contact page, the assistant says what to do). It is
+    returned rather than raised because it is not an error -- it is a step the person has to take.
+    """
+    from django.utils import timezone as django_timezone
+
+    userdata = user.userdata
+    if auction.require_phone_number and not userdata.phone_number:
+        return None, False, "phone_number"
+    if pickup_location is not None and pickup_location.pickup_by_mail and not userdata.address:
+        return None, False, "address"
+
+    find_by_email = AuctionTOS.objects.filter(email=user.email, auction=auction).first()
+    is_new_join = False
+    if find_by_email:
+        # An admin may have typed them in by email before they ever signed in, and they may also
+        # have joined under their user id -- keep the oldest row as canonical and fold the other in.
+        existing_by_user = AuctionTOS.objects.filter(user=user, auction=auction).exclude(pk=find_by_email.pk).first()
+        if existing_by_user:
+            if (
+                find_by_email.createdon
+                and existing_by_user.createdon
+                and find_by_email.createdon < existing_by_user.createdon
+            ):
+                canonical, duplicate = find_by_email, existing_by_user
+            else:
+                canonical, duplicate = existing_by_user, find_by_email
+            canonical.merge_duplicate(duplicate, reason="duplicate detected on join")
+            obj = canonical
+        else:
+            obj = find_by_email
+            obj.user = user
+    else:
+        obj, is_new_join = AuctionTOS.objects.get_or_create(
+            user=user,
+            auction=auction,
+            defaults={
+                "pickup_location": pickup_location,
+                # Seed the email on creation so the record never takes the None->email transition
+                # that used to trip AuctionTOS.save()'s email-change guard and clear this freshly
+                # linked user. ``or None`` (not "") keeps the "no email" admin filter working,
+                # which relies on email__isnull.
+                "email": user.email or None,
+            },
+        )
+    if pickup_location is not None:
+        obj.pickup_location = pickup_location
+    if obj.pickup_location and obj.pickup_location.pickup_by_mail and not userdata.address:
+        return None, False, "address"
+    obj.time_spent_reading_rules = max(obj.time_spent_reading_rules or 0, time_spent_reading_rules or 0)
+    # Even if this row was originally added by hand, joining means they are not manually added.
+    obj.manually_added = False
+    if obj.email_address_status == "UNKNOWN":
+        # If it bounced in the past, the user may have had a full inbox or something.
+        obj.email_address_status = "VALID"
+    if not obj.name or obj.name == "Unknown":
+        obj.name = f"{user.first_name} {user.last_name}".strip()
+    if not obj.email:
+        obj.email = user.email
+    if not obj.phone_number:
+        obj.phone_number = userdata.phone_number
+    if not obj.address:
+        obj.address = userdata.address
+    if auction.is_club_managed:
+        # The club owns the bidder number and permissions here, so joining has to create or link
+        # the member record. Shared with the app's proximity join.
+        club_member, _created = ensure_club_member(
+            auction,
+            user=user,
+            name=obj.name,
+            email=obj.email,
+            phone_number=obj.phone_number or "",
+            address=obj.address or "",
+            admin_edited=False,
+        )
+        apply_club_member_to_tos(auction, obj, club_member)
+    obj.save()
+    userdata.last_auction_used = auction
+    userdata.last_activity = django_timezone.now()
+    userdata.save()
+    if auction.is_club_managed and obj.clubmember_id:
+        obj.clubmember.update_last_club_activity()
+    if is_new_join:
+        auction.create_history(
+            applies_to="USERS",
+            action=f"{obj.name} has joined this auction",
+            user=user,
+        )
+    return obj, is_new_join, ""
+
+
 def existing_tos_for_club_member(auction, member):
     """The participant record already linked to *member* in *auction*, or None.
 
@@ -211,6 +311,29 @@ def check_in_auctiontos(tos, *, acting_user, bidder_number="", note=""):
     tos.auction.create_history(
         applies_to="USERS",
         action=f"Checked in {tos.name}{f' {note}' if note else ''}",
+        user=acting_user,
+    )
+    return tos
+
+
+def undo_check_in_auctiontos(tos, *, acting_user, note=""):
+    """Un-check-in a participant: clear ``checked_in`` and say so in the auction's history.
+
+    The reversal of :func:`check_in_auctiontos`, and new -- the web has no Undo on the check-in
+    modal, because at a desk with a queue in front of it the fix for a wrong name is to check in
+    the right one. An assistant needs it for a different reason: it mishears, and "undo that" has
+    to reach the thing it just did.
+
+    Deliberately does **not** touch ``bidding_allowed``. Checking somebody in turns it on, but so
+    do half a dozen other things, and turning it back off on the strength of an undo would quietly
+    stop somebody bidding who was allowed to before any of this happened.
+    """
+    if tos.checked_in:
+        tos.checked_in = None
+        tos.save(update_fields=["checked_in"])
+    tos.auction.create_history(
+        applies_to="USERS",
+        action=f"Undid the check-in for {tos.name}{f' {note}' if note else ''}",
         user=acting_user,
     )
     return tos
@@ -411,3 +534,561 @@ def copy_lot_images(original_lot, new_lot):
         new_image.save()
         copies.append(new_image)
     return copies
+
+
+def promoting_makes_it_the_clubs_current_auction(auction, was_promoted) -> bool:
+    """Turning promotion on makes an auction its club's current one. Returns True if it did.
+
+    Extracted from ``views.AuctionUpdate.form_valid`` so the edit page and
+    ``palette_actions.update_auction_setting`` cannot disagree about what promoting an auction
+    means. The web version says so in a message; the assistant says so in its answer, and both are
+    reading the same rule.
+
+    Only on the transition. An auction that was already promoted must not steal the club's current
+    auction back every time somebody saves an unrelated setting.
+    """
+    if was_promoted or not auction.promote_this_auction or not auction.club_id:
+        return False
+    club = auction.club
+    if club.current_auction_id == auction.pk:
+        return False
+    club.current_auction = auction
+    club.save(update_fields=["current_auction"])
+    return True
+
+
+#: Auction settings a copy inherits.  Anything a person set on the source auction and would expect
+#: to find again next year belongs here: a field left off this list is silently reset to the model
+#: default by the copy, which is how a copied auction came back with the custom checkbox switched
+#: off while still carrying the name the club had given it.  ``tests.AuctionCloneCustomFieldsTests``
+#: reads it and fails if the custom fields form grows a field this list does not carry.
+#:
+#: It lives here rather than on ``AuctionCreateView`` because the copy button on the create page is
+#: no longer the only caller: ``palette_actions.create_auction`` makes the same copy for an agent,
+#: and two lists would diverge on the first field somebody added.
+AUCTION_FIELDS_TO_CLONE = [
+    "is_online",
+    "summernote_description",
+    "lot_entry_fee",
+    "unsold_lot_fee",
+    "winning_bid_percent_to_club",
+    "first_bid_payout",
+    "club_member_discount",
+    "sealed_bid",
+    "max_lots_per_user",
+    "allow_additional_lots_as_donation",
+    "make_stats_public",
+    "use_categories",
+    "bump_cost",
+    "is_chat_allowed",
+    "lot_promotion_cost",
+    "code_to_add_lots",
+    "online_bidding",
+    "pre_register_lot_discount_percent",
+    "only_approved_sellers",
+    "only_approved_bidders",
+    "email_users_when_invoices_ready",
+    "invoice_payment_instructions",
+    "minimum_bid",
+    "winning_bid_percent_to_club_for_club_members",
+    "lot_entry_fee_for_club_members",
+    "registration_fee",
+    "registration_fee_for_club_members",
+    "set_lot_winners_url",
+    "require_phone_number",
+    "buy_now",
+    "reserve_price",
+    "tax",
+    "advanced_lot_adding",
+    "date_online_bidding_starts",
+    "date_online_bidding_ends",
+    "allow_deleting_bids",
+    "auto_add_images",
+    "message_users_when_lots_sell",
+    "label_print_fields",
+    "use_scientific_name",
+    "force_donation_threshold",
+    "use_quantity_field",
+    "use_custom_checkbox_field",
+    "custom_checkbox_name",
+    "custom_field_1",
+    "custom_field_1_name",
+    "use_reference_link",
+    "use_description",
+    "use_custom_dropdown_field",
+    "custom_dropdown_name",
+    "allow_bulk_adding_lots",
+    "copy_users_when_copying_this_auction",
+    "use_donation_field",
+    "use_i_bred_this_fish_field",
+    "use_seller_dash_lot_numbering",
+    "enable_online_payments",
+    "enable_square_payments",
+    "add_membership_fee_to_invoices_for_expired_members",
+    "alternate_split_mode",
+    "alternative_split_label",
+    "google_drive_link",
+    "only_whole_dollar_bids",
+    "club",
+    "manage_users_through_club",
+    "allow_self_checkin",
+    "exact_location_set",
+]
+
+#: What a participant row records about *one evening* rather than about the person, and what a copy
+#: therefore has to blank.  Copying an auction copies its people when the source says to -- that is
+#: the point of ``copy_users_when_copying_this_auction`` -- but it was doing it with ``tos.pk = None``
+#: on a loaded row, which carries every column across, and several of these columns are answers to
+#: "what happened at the last one".
+#:
+#: ``checked_in`` is the one that does real damage: an auction that uses check-in mode opens with
+#: everybody already through the door, so the desk has nothing to do and the ``not checked_in``
+#: guard on bidding never fires.  ``door_prize_called`` is the same mistake in a smaller place (last
+#: year's winners are ineligible for this year's draw), and ``possible_duplicate`` is worse than
+#: stale -- it is a foreign key pointing at a row in the *old* auction, so the duplicate warning on
+#: the new users page links somewhere else entirely.  The two confirmation-email flags and the
+#: seconds spent reading the rules are per-auction by definition: nobody has been emailed about this
+#: auction yet, and nobody has read rules that may since have been rewritten.
+#:
+#: Everything not listed is deliberately carried: the name, the contact details, the bidder number,
+#: the admin memo and the permissions are facts about the person, which is why a club copies an
+#: auction in the first place.
+PER_RUN_TOS_STATE = {
+    "checked_in": None,
+    "door_prize_called": None,
+    "confirm_email_sent": False,
+    "second_confirm_email_sent": False,
+    "print_reminder_email_sent": False,
+    "time_spent_reading_rules": 0,
+    "possible_duplicate": None,
+}
+
+DEFAULT_AUCTION_DESCRIPTION = """
+            <h4>General information</h4>
+            You should remove this line and edit this section to suit your auction.
+            Use the formatting here as an example.<br><br>
+            <h4>Rules</h4>
+            <ul><li>You cannot sell anything banned by state law.</li>
+            <li>All lots must be properly bagged.  No leaking bags!</li>
+            <li>You do not need to be a club member to buy or sell lots.</li></ul>"""
+
+
+def auction_to_copy(user):
+    """The auction "copy my last auction" means, or ``None`` if they have never run one.
+
+    Ordered by ``-date_start`` rather than by ``-date_end``, which is what this used to do and got
+    wrong for exactly the clubs that copy the most: an in-person auction has no ``date_end`` at
+    all, so on MariaDB every one of them sorted *behind* every online auction, and a club that has
+    only ever run in-person auctions was offered whichever one the database happened to return.
+    ``date_start`` is set on all of them.
+    """
+    from .models import Auction
+
+    for auction in Auction.objects.exclude(is_deleted=True).filter(created_by=user).order_by("-date_start")[:20]:
+        if auction.permission_check(user):
+            return auction
+    return None
+
+
+def clone_auction(source, *, title, date_start, created_by, note=""):
+    """Create a new auction carrying everything from ``source`` except its dates and its bids.
+
+    Extracted from ``views.AuctionCreateView.form_valid`` so the copy button on the create page and
+    :func:`auctions.palette_actions.create_auction` produce the same auction rather than two that
+    drift.  What comes across: every setting in :data:`AUCTION_FIELDS_TO_CLONE`, the pickup
+    locations with their times shifted to the new dates, the custom dropdown options, and -- only
+    when the source says so *and* the copy is not club-managed -- the people, minus everything in
+    :data:`PER_RUN_TOS_STATE`.
+
+    The dates are *offsets*, not values: how long the source ran, and how far ahead of it lot
+    submission and online bidding opened.  A copy made a year later therefore opens for lots the
+    same number of days before the auction as last year's did.
+    """
+    from .models import Auction, AuctionDropdown, PickupLocation
+
+    auction = Auction(title=title, created_by=created_by, date_start=date_start)
+    # Never inherited, whatever the source says. An auction is listed publicly by being promoted on
+    # purpose, and a copy of a promoted auction is not that decision being made a second time.
+    auction.promote_this_auction = False
+    for field in AUCTION_FIELDS_TO_CLONE:
+        setattr(auction, field, getattr(source, field))
+    run_duration = timezone.timedelta(days=7)
+    online_bidding_start_diff = timezone.timedelta(days=7)
+    online_bidding_end_diff = timezone.timedelta(minutes=0)
+    lot_submission_end_date_diff = timezone.timedelta(minutes=0)
+    if source.date_end:
+        run_duration = source.date_end - source.date_start
+    if source.date_online_bidding_starts:
+        online_bidding_start_diff = source.date_start - source.date_online_bidding_starts
+    if source.date_online_bidding_ends:
+        online_bidding_end_diff = source.date_start - source.date_online_bidding_ends
+    if source.lot_submission_end_date:
+        lot_submission_end_date_diff = source.date_start - source.lot_submission_end_date
+    # No ``cloned_from`` is written, because ``Auction`` has no such column -- the create view has
+    # been assigning one to a transient attribute for years and throwing it away on save. Where the
+    # copy came from is recorded where somebody can actually read it: the "Created auction by
+    # copying X" line ``finish_new_auction`` writes to the auction's own history.
+    if not auction.summernote_description:
+        auction.summernote_description = DEFAULT_AUCTION_DESCRIPTION
+    if auction.is_online:
+        auction.date_end = auction.date_start + run_duration
+        if not auction.lot_submission_end_date:
+            auction.lot_submission_end_date = auction.date_end
+        if not auction.lot_submission_start_date:
+            auction.lot_submission_start_date = auction.date_start
+    else:
+        auction.date_end = None
+        if not auction.lot_submission_end_date:
+            auction.lot_submission_end_date = auction.date_start - lot_submission_end_date_diff
+        if not auction.lot_submission_start_date:
+            auction.lot_submission_start_date = auction.date_start - run_duration
+        if not auction.date_online_bidding_starts:
+            auction.date_online_bidding_starts = auction.date_start - online_bidding_start_diff
+        if not auction.date_online_bidding_ends:
+            auction.date_online_bidding_ends = auction.date_start - online_bidding_end_diff
+    auction.save()
+
+    for location in PickupLocation.objects.filter(auction=source):
+        location.pk = None  # duplicate all fields
+        if location.name == str(source):
+            location.name = str(auction)
+        location.auction = auction
+        auction_time = source.date_end or source.date_start
+        if location.pickup_time:
+            first_time_diff = location.pickup_time - auction_time
+            location.pickup_time = (auction.date_end or auction.date_start) + first_time_diff
+        if location.second_pickup_time:
+            second_time_diff = location.second_pickup_time - auction_time
+            location.second_pickup_time = (auction.date_end or auction.date_start) + second_time_diff
+        location.save()
+
+    # A club-managed auction never copies its people, whatever the source says. In that mode the
+    # participants *are* the club's members: "all" creates a shadow row for every one of them, and
+    # "checkin" creates the row when somebody walks through the door -- which is the entire point of
+    # check-in mode, and pre-filling it from last year's list is exactly the thing that mode exists
+    # to stop. Copying would also drag across everybody who has since left the club, since the
+    # setting knows nothing about who is still a member.
+    if source.copy_users_when_copying_this_auction and not auction.is_club_managed:
+        for tos in AuctionTOS.objects.filter(auction=source):
+            # in tos.save(), bid permissions are reset if there's no pk
+            # to preserve them, we store them here, then resave again once the new instance is created
+            original_bid_permission = tos.bidding_allowed
+            tos.pk = None
+            tos.createdon = None
+            tos.auction = auction
+            tos.manually_added = True
+            for field, blank in PER_RUN_TOS_STATE.items():
+                setattr(tos, field, blank)
+            if tos.pickup_location.name == str(source):
+                new_location_name = str(auction)
+            else:
+                new_location_name = tos.pickup_location.name
+            new_location = PickupLocation.objects.filter(auction=auction, name=new_location_name).first()
+            if new_location:
+                tos.pickup_location = new_location
+                tos.save()
+                tos.bidding_allowed = original_bid_permission
+                tos.save()  # see comment above
+
+    for dropdown_option in AuctionDropdown.objects.filter(auction=source):
+        AuctionDropdown.objects.create(auction=auction, user=dropdown_option.user, value=dropdown_option.value)
+
+    finish_new_auction(auction, created_by, copied_from=source, note=note)
+    return auction
+
+
+def finish_new_auction(auction, created_by, *, copied_from=None, note=""):
+    """The bookkeeping every newly created auction gets, however it was created.
+
+    One history line saying where it came from, the creator's club if they have the run of it, the
+    "auction they last used" pointer, and the club's own admins as auction admins.  ``note`` is
+    :func:`auctions.palette_actions.via`, so a club reading its own history can tell an auction an
+    assistant copied from one somebody made on the site.
+    """
+    from .views import _add_club_admins_as_auction_tos, check_club_permission
+
+    action = "Created auction"
+    if copied_from:
+        action += f" by copying {copied_from}"
+    if note:
+        action += f" {note}"
+    auction.create_history(applies_to="RULES", action=action, user=created_by)
+    # Associate auction with the creator's club if they have admin or manage_auctions permission
+    if not auction.club:
+        creator_club = created_by.userdata.club
+        if creator_club and (
+            check_club_permission(created_by, creator_club, "permission_admin")
+            or check_club_permission(created_by, creator_club, "permission_manage_auctions")
+        ):
+            auction.club = creator_club
+            auction.save(update_fields=["club"])
+            auction.create_history(
+                applies_to="RULES",
+                action=f"Automatically associated with club '{creator_club}' based on auction creator's preferences.",
+                user=None,
+            )
+    created_by.userdata.last_auction_used = auction
+    created_by.userdata.save(update_fields=["last_auction_used"])
+    # Add club admin members as AuctionTOS admins (works for copied auctions with locations,
+    # and for new auctions once a pickup location exists — also called from PickupLocationsCreate)
+    _add_club_admins_as_auction_tos(auction, created_by)
+
+
+# --- breeder award points ----------------------------------------------------
+#
+# The club's BAP/HAP/CAP review desk: which lots are waiting for a decision, and what taking one
+# does. Both halves were methods on views -- ``ClubBapLotsView.get_queryset`` and
+# ``LotBapPointsView.post`` -- so the only way to ask "what am I approving?" or to answer it was
+# to be a browser holding a session cookie and a rendered table.
+
+
+def bap_review_lots(club):
+    """Every lot in this club's auctions that its points desk could have an opinion about.
+
+    The base queryset behind the Pending BAP page, extracted from ``ClubBapLotsView`` so the
+    ``points_queue`` skill lists exactly the rows the page lists. The status filtering on top of it
+    is ``filters.ClubBapLotFilter``'s, for the same reason: "pending" means one particular
+    combination of three columns and there must be only one place that says which.
+
+    ``Exists(matching_member)`` is the load-bearing clause -- a lot only reaches this table when its
+    seller is a member of *this* club, matched on the account or on the email, which is what stops a
+    club's review queue filling up with lots sold by strangers at a shared auction.
+    """
+    from django.db.models import Exists, OuterRef, Q
+
+    from .models import ClubMember, Lot
+
+    matching_member = ClubMember.objects.filter(
+        club=club,
+        is_deleted=False,
+    ).filter(
+        Q(user=OuterRef("auctiontos_seller__user"))
+        | Q(user=OuterRef("user"))
+        | Q(email__iexact=OuterRef("auctiontos_seller__email"))
+    )
+    lots = Lot.objects.filter(auction__club=club, is_deleted=False, active=False)
+    if club.only_sold_lots:
+        lots = lots.filter(auctiontos_winner__isnull=False, winning_price__isnull=False)
+    return (
+        lots.filter(Exists(matching_member))
+        .select_related("auctiontos_seller__user", "auction__club", "species_category", "species")
+        .prefetch_related("bap_award")
+        .order_by("-date_end")
+    )
+
+
+#: The three things a points desk can decide about one lot. ``undo`` is not a fourth decision so
+#: much as the absence of one: it puts the lot back in the pending queue it came out of.
+BAP_DECISIONS = ("approve", "deny", "undo")
+
+
+def review_lot_points(lot, club, *, acting_user, decision, bap=0, hap=0, cap=0):
+    """Approve, deny, or un-decide one lot's breeder award points. Returns the ``BapAward`` or ``None``.
+
+    Extracted from ``views.LotBapPointsView.post``, which rendered the row's buttons back to htmx
+    and so could not be called by anything that wasn't a browser. The three branches are that view's
+    own, unchanged in what they write, and the caller does the permission check
+    (``permission_manage_bap``) exactly as both callers already did.
+
+    The one thing that is new is that **undo writes a history line** -- except on a lot nobody has
+    decided, where it does nothing at all. Approve and deny always wrote one; undo silently rolled
+    either of them back, which was survivable while the only way to press it was to be looking at
+    the table, and is not survivable now that an assistant can press it -- "every write is in the
+    history with who did it" is most of what makes handing this to an agent reasonable, and a write
+    that leaves no trace is the exception that would prove it wrong.
+
+    Note what ``deny`` deliberately does *not* touch: ``bap_auto_reason`` stays as the system left
+    it. That column is the site's own verdict on eligibility and stays worth showing next to a
+    human's decision to overrule it.
+    """
+    from .models import BapAward
+
+    if decision not in BAP_DECISIONS:
+        message = f"{decision!r} is not one of {BAP_DECISIONS}"
+        raise ValueError(message)
+    seller = _bap_seller_name(lot)
+
+    if decision == "undo":
+        existing = BapAward.objects.filter(lot=lot).first()
+        if not existing and not lot.manually_approved:
+            # Nothing was ever decided, so there is nothing to take back and nothing worth a
+            # history line. A quiet no-op rather than a refusal, because ``review_points`` declares
+            # itself idempotent and a host retrying a dropped connection must not get an error for
+            # a call that already worked. The page cannot reach this at all: a pending row has no
+            # Undo button on it.
+            return None
+        if existing:
+            existing.delete()
+        lot.bap_points_awarded = 0
+        lot.manually_approved = False
+        lot.bap_auto_reason = lot.sold_lot_no_bap_reason or ""
+        lot.save(update_fields=["bap_points_awarded", "manually_approved", "bap_auto_reason"])
+        ClubHistory.objects.create(
+            club=club,
+            user=acting_user,
+            action=f"Undid the points decision for {seller}: {lot.lot_name}",
+            applies_to="BAP",
+        )
+        return None
+
+    if decision == "deny":
+        existing = BapAward.objects.filter(lot=lot).first()
+        if existing:
+            existing.delete()
+        lot.bap_points_awarded = 0
+        lot.manually_approved = True
+        lot.save(update_fields=["bap_points_awarded", "manually_approved"])
+        ClubHistory.objects.create(
+            club=club,
+            user=acting_user,
+            action=f"Rejected BAP points for {seller}: {lot.lot_name}",
+            applies_to="BAP",
+        )
+        return None
+
+    bap, hap, cap = (max(0, int(value or 0)) for value in (bap, hap, cap))
+    if not (bap or hap or cap):
+        return None
+    member = bap_member_for_lot(lot, club)
+    if not member:
+        return None
+    award, _created = BapAward.objects.update_or_create(
+        lot=lot,
+        defaults={
+            "club_member": member,
+            "date": lot.date_end.date() if lot.date_end else timezone.now().date(),
+            "points": bap,
+            "hap_points": hap,
+            "cap_points": cap,
+            "awarded_by": acting_user,
+        },
+    )
+    lot.bap_points_awarded = bap + hap + cap
+    lot.manually_approved = True
+    lot.bap_auto_reason = ""
+    lot.save(update_fields=["bap_points_awarded", "manually_approved", "bap_auto_reason"])
+    ClubHistory.objects.create(
+        club=club,
+        user=acting_user,
+        action=f"Awarded {lot.bap_points_awarded} BAP point(s) to {seller} for {lot.lot_name}",
+        applies_to="BAP",
+    )
+    return award
+
+
+def bap_member_for_lot(lot, club):
+    """The club member who would be credited for this lot: its seller, by account then by email.
+
+    The same two-step lookup ``Lot.unsold_lot_no_bap_reason``, ``LotBapPointsView`` and
+    ``BapAwardAdminView`` each wrote out for themselves. The email half is what makes points work
+    at all for somebody who has been in the club for years and never made an account here.
+    """
+    seller_user = lot.user or (lot.auctiontos_seller.user if lot.auctiontos_seller else None)
+    seller_email = (lot.auctiontos_seller.email if lot.auctiontos_seller else None) or (
+        seller_user.email if seller_user else None
+    )
+    member = None
+    if seller_user:
+        member = ClubMember.objects.filter(club=club, user=seller_user, is_deleted=False).first()
+    if not member and seller_email:
+        member = ClubMember.objects.filter(club=club, email__iexact=seller_email, is_deleted=False).first()
+    return member
+
+
+def _bap_seller_name(lot):
+    """Whoever brought the lot, for a history line. ``LotBapPointsView._seller_name``, verbatim."""
+    if lot.auctiontos_seller:
+        return lot.auctiontos_seller.name
+    if lot.user:
+        return f"{lot.user.first_name} {lot.user.last_name}".strip() or lot.user.username or f"user #{lot.user.pk}"
+    return f"lot #{lot.pk}"
+
+
+#: How far back a participant row counts as "current" when contact details change.
+#:
+#: The contact info page has always pushed a corrected name, phone or address into the auctions the
+#: person is *currently* in, and thirty days is what it means by that. Older rows are left alone
+#: deliberately: an ``AuctionTOS`` is a record of who stood at a desk on a particular Saturday, and
+#: rewriting last spring's address because somebody moved this week would falsify it.
+CONTACT_INFO_RECENT_DAYS = 30
+
+
+def recent_auctiontos_for(user):
+    """The participant rows a contact-info change should follow into.
+
+    ``manually_added`` rows are excluded because an auction admin typed those by hand for this
+    person, and an admin's correction outranks the account's own details.
+    """
+    from datetime import timedelta
+
+    cutoff = timezone.now() - timedelta(days=CONTACT_INFO_RECENT_DAYS)
+    return AuctionTOS.objects.filter(
+        user=user,
+        manually_added=False,
+        createdon__gte=cutoff,
+    ).select_related("auction")
+
+
+def propagate_contact_info(user, userdata, *, acting_user=None):
+    """Push a changed name, phone or address out to the auctions and clubs that hold a copy.
+
+    Extracted from ``views.UserLocationUpdate.form_valid`` so the assistant's ``update_contact_info``
+    does exactly what the contact info page does. The copies are the point of the design: an
+    ``AuctionTOS`` and a ``ClubMember`` each hold their own name and address so that a club's records
+    survive the account being deleted -- which means a person who moves has to be able to correct
+    all of them at once, and there is one function that knows where they all are.
+
+    Returns a list of sentences naming what it touched, so a caller with no page to put a message on
+    can say it instead.
+    """
+    from .models import AuctionHistory
+
+    acting_user = acting_user or user
+    new_name = f"{user.first_name} {user.last_name}".strip()
+    new_phone = userdata.phone_number
+    new_address = userdata.address
+    told: list[str] = []
+
+    for tos in recent_auctiontos_for(user):
+        changes = []
+        if tos.name != new_name:
+            changes.append(f"name from '{tos.name}' to '{new_name}'")
+            tos.name = new_name
+        if tos.phone_number != new_phone:
+            changes.append(f"phone from '{tos.phone_number}' to '{new_phone}'")
+            tos.phone_number = new_phone
+        if tos.address != new_address:
+            changes.append(f"address from '{tos.address}' to '{new_address}'")
+            tos.address = new_address
+        if changes:
+            tos.save()
+            AuctionHistory.objects.create(
+                auction=tos.auction,
+                user=acting_user,
+                action=f"Updated contact info for {new_name}: " + ", ".join(changes),
+                applies_to="USERS",
+            )
+            told.append(str(tos.auction))
+
+    for club_member in ClubMember.objects.filter(user=user, is_deleted=False).select_related("club"):
+        changes = []
+        if club_member.name != new_name:
+            changes.append(f"name to '{new_name}'")
+            club_member.name = new_name
+        if club_member.phone_number != new_phone:
+            changes.append(f"phone to '{new_phone}'")
+            club_member.phone_number = new_phone
+        if club_member.address != new_address:
+            changes.append(f"address to '{new_address}'")
+            club_member.address = new_address
+        if changes:
+            club_member.save()
+            ClubHistory.objects.create(
+                club=club_member.club,
+                user=acting_user,
+                action=f"Contact info updated for {user.get_full_name()}: " + ", ".join(changes),
+                applies_to="MEMBERS",
+            )
+            told.append(club_member.club.name)
+
+    return told

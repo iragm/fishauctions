@@ -1,0 +1,344 @@
+{% comment %}
+The one document behind every ui:// resource this server publishes: an MCP host fetches it with
+resources/read, mounts it in a sandboxed iframe, and pipes the tool's own result into it.
+
+It is one template rather than five because the five widgets differ only in which renderer runs —
+`view` is baked in by auctions.mcp.widgets at read time, and the JS switches on it. Five documents
+would be five copies of the palette, the theming and the 330 KB runtime, which is exactly the drift
+auctions/templates/auctions/embeds/base.html was written to prevent for the club embeds.
+
+The palette is that file's, deliberately: this is the site's second "HTML that has to look right
+somewhere that isn't our page", and having two of them differ would be a mistake we have already
+made once. What is new here is host theming — a club picks light or dark for its own website, but a
+Claude user's theme is theirs, so the host tells us and we follow.
+
+Nothing is fetched. Not the runtime (inlined below), not a font, not a stylesheet, not an image
+whose bytes we did not put in the payload — the iframe's CSP blocks all of it, and a widget that
+half-loads is worse than one that never tried. Outbound links go through app.openLink(); the
+sandbox drops window.open and target="_blank" on the floor.
+{% endcomment %}{% autoescape on %}<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>{{ widget_title }}</title>
+  <style>
+    :root {
+      --bg: transparent;
+      --text: var(--color-text-primary, #1f2937);
+      --muted: var(--color-text-secondary, #6b7280);
+      --border: var(--color-border-default, #e5e7eb);
+      --accent: #198754;
+      --link: var(--color-text-accent, #0d6efd);
+      --badge-bg: #eef2f7;
+      --badge-text: #374151;
+      --alert: #b02a37;
+      --radius: var(--border-radius-md, 8px);
+    }
+    :root.dark {
+      --text: var(--color-text-primary, #f3f4f6);
+      --muted: var(--color-text-secondary, #9ca3af);
+      --border: var(--color-border-default, #374151);
+      --accent: #22c55e;
+      --link: var(--color-text-accent, #6ea8fe);
+      --badge-bg: #374151;
+      --badge-text: #e5e7eb;
+      --alert: #ea868f;
+    }
+    * { box-sizing: border-box; }
+    html, body { background: var(--bg); color: var(--text); }
+    body {
+      margin: 0;
+      font-family: var(--font-family-base, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif);
+      font-size: 15px;
+      line-height: 1.4;
+    }
+    .ew { padding: 14px 16px; }
+    .ew-head { font-weight: 600; font-size: 1.05rem; margin: 0 0 2px; }
+    .ew-list { list-style: none; margin: 0; padding: 0; }
+    .ew-list li { padding: 8px 0; border-bottom: 1px solid var(--border); }
+    .ew-list li:last-child { border-bottom: 0; }
+    .ew-title { color: var(--link); font-weight: 600; text-decoration: none; cursor: pointer; }
+    .ew-title:hover { text-decoration: underline; }
+    .ew-line { display: block; color: var(--muted); font-size: 0.9rem; }
+    .ew-badge {
+      display: inline-block; margin-left: 6px; background: var(--badge-bg); color: var(--badge-text);
+      border-radius: 999px; padding: 1px 9px; font-size: 0.75rem; vertical-align: middle; white-space: nowrap;
+    }
+    .ew-badge-alert { background: var(--alert); color: #fff; }
+    .ew-badge-accent { background: var(--accent); color: #fff; }
+    .ew-empty { color: var(--muted); margin: 0; }
+    .ew-photo {
+      width: 100%; max-height: 260px; object-fit: contain; border-radius: var(--radius);
+      background: var(--badge-bg); margin-bottom: 10px;
+    }
+    .ew-rules { max-height: 340px; overflow-y: auto; white-space: pre-wrap; }
+    .ew-rows { width: 100%; border-collapse: collapse; }
+    .ew-rows th, .ew-rows td { text-align: left; padding: 5px 8px 5px 0; border-bottom: 1px solid var(--border); }
+    .ew-rows th { color: var(--muted); font-weight: 500; font-size: 0.8rem; text-transform: uppercase; }
+    .ew-num { text-align: right; font-variant-numeric: tabular-nums; }
+    .ew-total td { font-weight: 700; border-bottom: 0; }
+    /* The card's Renew button is the only control any of these draw. Nothing here is a form:
+       every widget shows a thing that already happened. */
+    .ew-btn {
+      font: inherit; font-weight: 600; padding: 7px 14px; border: 0; border-radius: var(--radius);
+      background: var(--accent); color: #fff; cursor: pointer;
+    }
+    .ew-card-number { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 1.6rem; margin: 6px 0; }
+    .ew-barcode { display: block; width: 100%; max-width: 320px; height: auto; margin: 0 0 10px; background: #fff; border-radius: var(--radius); padding: 6px; }
+    body.superseded { opacity: 0.45; pointer-events: none; }
+  </style>
+</head>
+<body>
+  <div class="ew" id="root"><p class="ew-empty">Loading…</p></div>
+  <script type="module">
+/*__EXT_APPS_BUNDLE__*/
+const VIEW = "{{ view }}";
+const { App, applyHostStyleVariables } = globalThis.ExtApps;
+
+(async () => {
+  const root = document.getElementById("root");
+  const app = new App({ name: "AuctionFish", version: "1.0.0" }, {}, { autoResize: true });
+
+  // Older instances of the same widget stay mounted in the transcript, so a click on last hour's
+  // lot could still send a message. Newest instance wins; the rest go inert.
+  let superseded = false;
+  const seq = Date.now() + Math.random();
+  try {
+    const channel = new BroadcastChannel("auction-fish-widget");
+    channel.onmessage = (event) => {
+      if (event.data && event.data.seq > seq) {
+        superseded = true;
+        document.body.classList.add("superseded");
+      }
+    };
+    channel.postMessage({ seq });
+  } catch (error) { /* no BroadcastChannel: one live widget, which is the common case anyway */ }
+
+  const applyHost = (context) => {
+    document.documentElement.classList.toggle("dark", context && context.theme === "dark");
+    if (context && context.styles && context.styles.variables) applyHostStyleVariables(context.styles.variables);
+  };
+
+  const el = (tag, className, text) => {
+    const node = document.createElement(tag);
+    if (className) node.className = className;
+    if (text !== undefined && text !== null) node.textContent = String(text);
+    return node;
+  };
+
+  // Every link is host-mediated: the sandbox drops window.open and target="_blank" silently.
+  const link = (text, url) => {
+    const node = el("a", "ew-title", text);
+    node.href = url || "#";
+    node.addEventListener("click", (event) => {
+      event.preventDefault();
+      if (url) app.openLink({ url });
+    });
+    return node;
+  };
+
+  const money = (value) => (value === null || value === undefined || value === "" ? null : "$" + value);
+
+  // structuredContent is the parsed answer; the text is the same document and is the fallback for
+  // a host on an older protocol version that drops the structure.
+  const payloadOf = (result) => {
+    if (result && result.structuredContent) return result.structuredContent;
+    const first = ((result && result.content) || [])[0];
+    try { return first && first.text ? JSON.parse(first.text) : null; } catch (error) { return null; }
+  };
+
+  // Long free text arrives fenced in guillemets — that mark is for the model, telling it the text
+  // inside was typed by a member of the public and is data. A person reading the same words in a
+  // rendered card does not need the warning, and it reads as a typo.
+  const unfence = (text) => String(text || "")
+    .replace(/^«[^:»]*:\s*/, "")
+    .replace(/^«/, "")
+    .replace(/»$/, "")
+    .trim();
+
+  const renderers = {
+    lot(data) {
+      const lot = data.lot || {};
+      if (lot.images && lot.images.length && lot.images[0].url) {
+        const photo = el("img", "ew-photo");
+        photo.src = lot.images[0].url;
+        photo.alt = lot.name || "Lot photo";
+        photo.referrerPolicy = "no-referrer";
+        root.append(photo);
+      }
+      root.append(link(`${lot.lot_number ? "Lot " + lot.lot_number + " — " : ""}${unfence(lot.name)}`, lot.url));
+      const facts = el("ul", "ew-list");
+      const row = (label, value) => {
+        if (value === null || value === undefined || value === "" || value === false) return;
+        const item = el("li");
+        item.append(el("span", "ew-line", label));
+        item.append(el("div", null, value));
+        facts.append(item);
+      };
+      row("Auction", lot.auction);
+      // The key names are describe_lot's own: _lot_live_state contributes current_price, bids and
+      // bidding_closes, and _lot_whereabouts contributes location_note.
+      row(lot.sold ? "Sold for" : "Current bid", money(lot.winning_price) || money(lot.current_price));
+      row("Bids", lot.bids);
+      row("Minimum bid", money(lot.reserve_price));
+      row("Buy now", money(lot.buy_now_price));
+      row("Quantity", lot.quantity > 1 ? lot.quantity : null);
+      row("Category", lot.category);
+      row("Bidding closes", lot.bidding_closes);
+      row("Bidding", lot.bidding);
+      row("Where it is", lot.location_note);
+      if (lot.description) row("Description", unfence(lot.description));
+      if (lot.you_are_the_high_bidder) root.append(el("span", "ew-badge ew-badge-accent", "You are winning"));
+      if (lot.someone_else_is_winning) root.append(el("span", "ew-badge ew-badge-alert", "Outbid"));
+      root.append(facts);
+      if (lot.donation) root.append(el("span", "ew-badge ew-badge-accent", "Donation"));
+      if (lot.breeder_points) root.append(el("span", "ew-badge", "Breeder points"));
+    },
+
+    rules(payload) {
+      const data = payload.auction || payload;
+      root.append(el("p", "ew-head", data.title || "Auction"));
+      const facts = el("ul", "ew-list");
+      const row = (label, value) => {
+        if (!value) return;
+        const item = el("li");
+        item.append(el("span", "ew-line", label));
+        item.append(el("div", null, value));
+        facts.append(item);
+      };
+      row("Starts", data.starts);
+      row("Ends", data.ends);
+      row("Lot submission", data.lot_submission_open_now ? "Open now" : data.lot_submission_opens);
+      row("Club", data.club);
+      root.append(facts);
+      if (data.rules) {
+        root.append(el("p", "ew-head", "Rules"));
+        root.append(el("div", "ew-rules", unfence(data.rules)));
+      }
+      if (data.url) root.append(link("Open the auction", data.url));
+    },
+
+    invoice(payload) {
+      // my_activity nests it under `activity`; set_invoice_status returns it at the top level.
+      const activity = payload.activity || payload;
+      const data = activity.invoice || {};
+      const who = payload.person || activity.person;
+      root.append(el("p", "ew-head", who ? `${unfence(who)}'s invoice` : "Your invoice"));
+      if (activity.auction) root.append(el("span", "ew-line", activity.auction));
+      const table = el("table", "ew-rows");
+      const body = el("tbody");
+      const row = (label, value, isTotal) => {
+        if (value === null || value === undefined || value === "") return;
+        const tr = el("tr", isTotal ? "ew-total" : null);
+        tr.append(el("td", null, label));
+        tr.append(el("td", "ew-num", value));
+        body.append(tr);
+      };
+      row("Lots submitted", activity.lots_submitted);
+      row("Lots sold", activity.lots_sold);
+      row("Lots bought", data.lots_bought !== undefined ? data.lots_bought : activity.lots_won);
+      row("Sold, gross", money(data.sold_gross));
+      // The lines that are not lots -- a raffle ticket, a membership at the door, a discount for
+      // whoever stacked the chairs. find_invoice sends the list; add_invoice_adjustment sends the
+      // one it just wrote, which is the whole reason that write draws this widget at all: a new
+      // line is only checkable against a new total.
+      const lines = activity.adjustments || (payload.adjustment ? [payload.adjustment] : []);
+      for (const line of lines) row(unfence(line.label) || "Adjustment", line.amount);
+      // The site's own reading of the sign, never our arithmetic on it: an invoice that says
+      // "owed $40" rendered as "owes $40" is the worst answer a checkout desk can be given.
+      row(data.the_club_owes_you ? "The club owes them" : "They owe the club", money(data.total), true);
+      table.append(body);
+      root.append(table);
+      if (data.status) root.append(el("span", "ew-badge", data.status));
+      if (data.url) root.append(link("Open the invoice", data.url));
+      if (!data.total && !activity.lots_submitted) {
+        root.append(el("p", "ew-empty", activity.note || "No invoice here yet."));
+      }
+    },
+
+    card(payload) {
+      // my_membership sends `membership` (and `memberships` when they belong to several);
+      // renew_membership and send_membership_card send the same object under `membership`.
+      const data = payload.membership || (payload.memberships || [])[0] || payload;
+      root.append(el("p", "ew-head", unfence(data.name) || "Membership"));
+      if (data.club) root.append(el("span", "ew-line", data.club));
+      if (data.membership_number) {
+        root.append(el("div", "ew-card-number", data.membership_number));
+        if (data.barcode_url) {
+          // This site's own SVG endpoint, named in the resource's csp.resourceDomains. It is the
+          // half of the card that has to be an image: a door scanner reads the barcode, not the
+          // digits, and the digits are already printed above it.
+          const barcode = el("img", "ew-barcode");
+          barcode.src = data.barcode_url;
+          barcode.alt = "Membership barcode " + data.membership_number;
+          barcode.referrerPolicy = "no-referrer";
+          root.append(barcode);
+        }
+      }
+      if (data.is_expired) {
+        root.append(el("span", "ew-badge ew-badge-alert", data.expires ? "Expired " + data.expires : "Expired"));
+      } else if (data.expires) {
+        root.append(el("span", data.expiring_soon ? "ew-badge ew-badge-alert" : "ew-badge", "Expires " + data.expires));
+      }
+      const facts = el("ul", "ew-list");
+      const row = (label, value) => {
+        if (value === null || value === undefined || value === "" || value === false) return;
+        const item = el("li");
+        item.append(el("span", "ew-line", label));
+        item.append(el("div", null, value));
+        facts.append(item);
+      };
+      const points = data.points || {};
+      const earned = [
+        points.bap ? points.bap + " BAP" : null,
+        points.hap ? points.hap + " HAP" : null,
+        points.culture ? points.culture + " culture" : null,
+      ].filter(Boolean).join(" · ");
+      row("Breeder points", earned || null);
+      row("Member since", data.member_since);
+      root.append(facts);
+      if (data.renew_url) {
+        // Opens the club's own payment page in the browser. Nothing is charged here and nothing
+        // could be: the iframe's CSP blocks PayPal's and Square's scripts outright.
+        const renew = el("button", "ew-btn", "Renew membership");
+        renew.addEventListener("click", () => { if (!superseded) app.openLink({ url: data.renew_url }); });
+        root.append(renew);
+      }
+      if (data.url) root.append(link("Open my membership card", data.url));
+      // Everything they belong to, when it is more than one — the card above is the first.
+      const others = (payload.memberships || []).slice(1);
+      if (others.length) {
+        root.append(el("p", "ew-head", "Your other memberships"));
+        const list = el("ul", "ew-list");
+        for (const other of others) {
+          const item = el("li");
+          item.append(link(other.club, other.url));
+          if (other.expires) item.append(el("span", "ew-line", (other.is_expired ? "Expired " : "Expires ") + other.expires));
+          list.append(item);
+        }
+        root.append(list);
+      }
+    },
+  };
+
+  const render = (data) => {
+    root.replaceChildren();
+    try {
+      (renderers[VIEW] || renderers.lot)(data || {});
+    } catch (error) {
+      root.replaceChildren(el("p", "ew-empty", "There was nothing to show here."));
+    }
+  };
+
+  app.onhostcontextchanged = applyHost;
+  app.ontoolresult = (result) => render(payloadOf(result));
+
+  await app.connect();
+  applyHost(app.getHostContext());
+})();
+  </script>
+</body>
+</html>
+{% endautoescape %}

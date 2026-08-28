@@ -20,6 +20,7 @@ in a message that already contains the whole message is a worse message.
 
 from __future__ import annotations
 
+import datetime
 import logging
 
 from django.contrib.sites.models import Site
@@ -320,6 +321,61 @@ def _send_pushes(announcement):
             continue
         sent += 1
     return sent
+
+
+def queue(announcement, *, acting_user=None):
+    """Save a just-built announcement, schedule its send, and say where it is going.
+
+    Extracted from ``views.ClubAnnouncementView.post`` so the assistant sends an announcement the
+    same way the page does -- through the grace window and the same Celery task, never straight
+    into ``deliver``. Returns ``(chose_a_time, where)``: whether the club picked a time, and the
+    channels in words, which is what both callers put in front of the person afterwards.
+
+    ``scheduled_for`` is filled in here when nobody chose one, and the value matters: half a minute
+    is the window in which Retract still means something, and the mistake clubs make is the wrong
+    date in the sentence, which they see the moment the page reloads.
+    """
+    from django.template.defaultfilters import pluralize
+    from django.utils import timezone
+
+    from auctions.models import ClubHistory
+
+    chose_a_time = bool(announcement.scheduled_for)
+    if not chose_a_time:
+        announcement.scheduled_for = timezone.now() + datetime.timedelta(seconds=GRACE_SECONDS)
+    if acting_user is not None and announcement.created_by_id is None:
+        announcement.created_by = acting_user
+    announcement.save()
+    # The beat is the backstop; this is what makes 30 seconds mean 30 seconds. A lost task costs a
+    # delay, never the announcement.
+    try:
+        from auctions.tasks import send_scheduled_announcements
+
+        send_scheduled_announcements.apply_async(
+            countdown=max(1, int((announcement.scheduled_for - timezone.now()).total_seconds()) + 2)
+        )
+    except Exception:
+        logger.warning("Could not queue the send for announcement %s; the beat will get it", announcement.pk)
+    going_to = []
+    if announcement.send_to_discord:
+        going_to.append("Discord")
+    if announcement.send_to_push:
+        reachable, _total = member_counts(announcement.club)
+        going_to.append(f"{reachable} phone{pluralize(reachable)}")
+    for name, ticked in (("Mailchimp", announcement.send_to_mailchimp), ("Brevo", announcement.send_to_brevo)):
+        if ticked:
+            going_to.append(name)
+    if announcement.show_on_website:
+        going_to.append("your website")
+    where = " and ".join(", ".join(going_to).rsplit(", ", 1)) if going_to else "nowhere"
+    if chose_a_time:
+        ClubHistory.objects.create(
+            club=announcement.club,
+            user=announcement.created_by,
+            action=f"Announcement scheduled: {announcement.short_text}",
+            applies_to="ANNOUNCEMENTS",
+        )
+    return chose_a_time, where
 
 
 def send_due(now=None):

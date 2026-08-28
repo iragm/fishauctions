@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+{% block title %}Assistant skill requests{% endblock %}
+{% block content %}
+<h2 class="mb-1">Assistant skill requests</h2>
+{% comment %}
+  Written by request_a_skill over MCP, so every word of skill/params/reason came out of a language
+  model acting for a member of this site. It is displayed and never run; Django's autoescaping is
+  what keeps it text.
+{% endcomment %}
+{% comment %}A help note, not an alert: this sentence is true every time the page loads, and standing text in an alert box is what teaches people to skip alert boxes. See style_reference.md.{% endcomment %}
+<div class="help-note">
+  <i class="bi bi-lightbulb-fill"></i>
+  <div>
+    What an assistant tried to do here and couldn't, in its own words. Every tool on
+    <a href="{% url 'user_api_keys' %}">the MCP endpoint</a> exists because somebody said out loud
+    that it was missing — this is that, collected on purpose. Ordered by how many
+    <strong>different people</strong> asked, because that is the number that decides what gets built.
+  </div>
+</div>
+
+<ul class="nav nav-pills mb-3">
+  {% for value, label, count in statuses %}
+    <li class="nav-item">
+      <a class="nav-link{% if status == value %} active{% endif %}" href="?status={{ value }}">
+        {{ label }} <span class="badge bg-secondary ms-1">{{ count }}</span>
+      </a>
+    </li>
+  {% endfor %}
+</ul>
+
+{% if not groups %}
+  <div class="alert alert-info mb-0">Nothing here. Either the catalogue covers what people ask for, or nobody has asked yet.</div>
+{% endif %}
+
+{% for group in groups %}
+<div class="card mb-3">
+  <div class="card-body">
+    <h5 class="card-title mb-1">
+      {{ group.skill }}
+      {% if group.people_count > 1 %}<span class="badge bg-danger ms-2">{{ group.people_count }} people</span>{% endif %}
+    </h5>
+    <ul class="list-unstyled mb-3">
+      {% for row in group.rows %}
+      <li class="border-top pt-2 mt-2">
+        <div>{{ row.reason }}</div>
+        {% if row.params %}<div class="text-muted small">Would need: {{ row.params }}</div>{% endif %}
+        <div class="text-muted small">
+          {% if row.user %}{{ row.user.username }}{% else %}deleted user{% endif %}
+          {% if row.surface %} · via {{ row.surface }}{% endif %}
+          · {{ row.createdon|date:"M j, Y" }}
+          {% if row.notes %} · <em>{{ row.notes }}</em>{% endif %}
+        </div>
+        <form method="post" class="d-flex flex-wrap gap-2 align-items-center mt-2">
+          {% csrf_token %}
+          <input type="hidden" name="pk" value="{{ row.pk }}">
+          {% comment %}Which tab to come back to. Not the referrer — see AssistantSkillRequestsView.back_to.{% endcomment %}
+          <input type="hidden" name="filter" value="{{ status }}">
+          <input type="text" name="notes" class="form-control form-control-sm" style="max-width: 24rem;"
+                 placeholder="Note (only you see this)" value="{{ row.notes }}">
+          {% for value, label, count in statuses %}
+            {% if value != row.status %}
+              <button type="submit" name="status" value="{{ value }}" class="btn btn-sm btn-primary">{{ label }}</button>
+            {% endif %}
+          {% endfor %}
+        </form>
+      </li>
+      {% endfor %}
+    </ul>
+  </div>
+</div>
+{% endfor %}
+{% endblock %}

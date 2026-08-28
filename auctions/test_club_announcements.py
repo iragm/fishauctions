@@ -226,7 +226,6 @@ class AnnouncementDeliveryTests(TestCase):
     def setUp(self):
         self.club = Club.objects.create(
             name="Delivery Club",
-            enable_club_page=True,
             discord_server_id="guild-1",
             announcement_channel_id="chan-1",
         )
@@ -360,7 +359,7 @@ class AnnouncementDeliveryTests(TestCase):
 class AnnouncementsEmbedTests(TestCase):
     def setUp(self):
         self.client = Client()
-        self.club = Club.objects.create(name="Embed News Club", enable_club_page=True)
+        self.club = Club.objects.create(name="Embed News Club")
         self.url = reverse("club_announcements_embed", kwargs={"slug": self.club.slug})
 
     def _announce(self, text, **kwargs):
@@ -422,11 +421,6 @@ class AnnouncementsEmbedTests(TestCase):
     def test_an_empty_club_says_so_rather_than_erroring(self):
         self.assertContains(self.client.get(self.url, {"format": "iframelight"}), "Nothing new")
 
-    def test_a_club_with_its_page_disabled_has_no_embed(self):
-        self.club.enable_club_page = False
-        self.club.save()
-        self.assertEqual(self.client.get(self.url).status_code, 404)
-
     def test_every_render_is_counted_whatever_the_format(self):
         """A render count, not a read count -- it answers "is my snippet showing this at all".
         JSON counts too: a club rendering the JSON itself has put it on a page just the same."""
@@ -449,7 +443,7 @@ class AnnouncementsEmbedTests(TestCase):
 class CurrentAuctionEmbedTests(TestCase):
     def setUp(self):
         self.client = Client()
-        self.club = Club.objects.create(name="Auction Embed Club", enable_club_page=True)
+        self.club = Club.objects.create(name="Auction Embed Club")
         self.url = reverse("club_auction_embed", kwargs={"slug": self.club.slug})
         self.start = timezone.now() + datetime.timedelta(days=7)
 
@@ -489,16 +483,11 @@ class CurrentAuctionEmbedTests(TestCase):
         self.assertIn('data-theme="dark"', body)
         self.assertIn("Themed", body)
 
-    def test_a_club_with_its_page_disabled_has_no_embed(self):
-        self.club.enable_club_page = False
-        self.club.save()
-        self.assertEqual(self.client.get(self.url).status_code, 404)
-
 
 class WebsiteIntegrationPageTests(TestCase):
     def setUp(self):
         self.client = Client()
-        self.club = Club.objects.create(name="Integration Club", enable_club_page=True)
+        self.club = Club.objects.create(name="Integration Club")
         self.admin = User.objects.create_user(username="wi_admin", password="pw", email="wa@example.com")
         ClubMember.objects.create(club=self.club, user=self.admin, permission_admin=True)
         self.url = reverse("club_website_integration", kwargs={"slug": self.club.slug})
@@ -529,7 +518,7 @@ class WebsiteIntegrationPageTests(TestCase):
 class AnnouncementSidebarTests(TestCase):
     def setUp(self):
         self.client = Client()
-        self.club = Club.objects.create(name="Sidebar Club", enable_club_page=True)
+        self.club = Club.objects.create(name="Sidebar Club")
         self.url = reverse("club_detail", kwargs={"slug": self.club.slug})
 
     def test_someone_with_the_announcements_permission_gets_the_link(self):
@@ -626,7 +615,7 @@ class AnnouncementEmailChannelTests(TestCase):
     """
 
     def setUp(self):
-        self.club = Club.objects.create(name="Email Club", enable_club_page=True)
+        self.club = Club.objects.create(name="Email Club")
         self.admin = User.objects.create_user(username="em_admin", password="pw", email="em@example.com")
         ClubMember.objects.create(club=self.club, user=self.admin, permission_admin=True)
         self.client = Client()
@@ -871,7 +860,6 @@ class AnnouncementRetractTests(TestCase):
     def setUp(self):
         self.club = Club.objects.create(
             name="Retract Club",
-            enable_club_page=True,
             discord_server_id="guild-9",
             announcement_channel_id="chan-9",
         )
@@ -1014,7 +1002,6 @@ class AnnouncementSchedulingTests(TestCase):
     def setUp(self):
         self.club = Club.objects.create(
             name="Later Club",
-            enable_club_page=True,
             discord_server_id="guild-2",
             announcement_channel_id="chan-2",
         )

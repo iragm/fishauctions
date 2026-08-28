@@ -260,3 +260,44 @@ def serialize_grammar(grammar):
         "auto_submit_on_sold": grammar.auto_submit_on_sold,
         "block_auto_submit_when_unsure": grammar.block_auto_submit_when_unsure,
     }
+
+
+def page_config(auction, grammar=None):
+    """Everything the set-winners *page* needs to understand a spoken command on its own.
+
+    The app is the one listening, and until now that was also the only thing that could *match*:
+    the page received ``command`` events and did as it was told. That works right up until the app
+    hears something and produces no command -- which is what "it says heard: lot one and then
+    nothing happens" is -- and at that point there is nothing on the page that can tell the
+    difference between a grammar that does not know the word and a matcher that never ran.
+
+    So the page gets the grammar and this auction's own vocabulary as well, and matches the
+    transcript itself when a command does not arrive. That is deliberately the same trick the app
+    uses and the reason it can be strict: it is not transcribing freely and repairing the text
+    afterwards, it is checking the words against the lot and bidder numbers that actually exist
+    here. A page-side fallback is also the shape a fix has to take in this feature -- the app is
+    shipped through two app stores and this file exists precisely so that "the auctioneer says
+    something we did not expect" is a server-side change.
+
+    ``grammar`` is passed in when the caller has already loaded the singleton; ``None`` means load
+    it, and no row at all means the defaults, which are what the app ships with.
+    """
+    from .mobile.services import voice as voice_service
+    from .models import VoiceGrammar
+
+    if grammar is None:
+        grammar = VoiceGrammar.load()
+    thresholds = (grammar.thresholds if grammar else None) or default_thresholds()
+    defaults = default_thresholds()
+    config = {
+        "enabled": grammar.enabled if grammar else True,
+        "confident": thresholds.get("confident", defaults["confident"]),
+        "unsure": thresholds.get("unsure", defaults["unsure"]),
+        "block_auto_submit_when_unsure": grammar.block_auto_submit_when_unsure if grammar else True,
+        "auto_submit_on_sold": grammar.auto_submit_on_sold if grammar else True,
+        "anchors": (grammar.anchors if grammar else None) or default_anchors(),
+        "number_words": (grammar.number_words if grammar else None) or default_number_words(),
+        "homophones": (grammar.homophones if grammar else None) or default_homophones(),
+    }
+    config.update(voice_service.build_vocabulary(auction))
+    return config

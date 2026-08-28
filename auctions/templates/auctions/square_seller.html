@@ -16,13 +16,15 @@
     shell's own WebView is what would fail: Google blocks its sign-in in embedded WebViews.
   {% endcomment %}
   {% if request.user.is_authenticated and not request.user.userdata.square_enabled %}
-    <div class="alert alert-info" role="alert">
-      Square is currently disabled for your account. A site administrator can re-enable it for you.  You can still connect your Square accout, but you won't be able to accept payments until it's enabled.
+    <div class="alert alert-warning text-dark" role="alert">
+      <i class="bi bi-exclamation-triangle"></i>
+      Square is currently disabled for your account. A site administrator can re-enable it for you. You can still
+      connect your Square account, but you won't be able to accept payments until it's enabled.
     </div>
   {% endif %}
 
   {% if seller and not seller.supports_tap_to_pay %}
-    <div class="alert alert-warning d-flex flex-column flex-sm-row align-items-sm-center gap-2" role="alert">
+    <div class="alert alert-warning text-dark d-flex flex-column flex-sm-row align-items-sm-center gap-2" role="alert">
       <div class="flex-grow-1">
         <strong>Reconnect required for Tap to Pay.</strong>
         This Square account was connected before in‑person (Tap to Pay) payments were supported.
@@ -32,9 +34,10 @@
     </div>
   {% endif %}
 
-  <p class="mb-2">
-    Connect your Square account to let users pay their invoices directly on this site.
-  </p>
+  <div class="help-note">
+    <i class="bi bi-lightbulb-fill"></i>
+    <div>Connect your Square account to let users pay their invoices directly on this site.</div>
+  </div>
 
   <ol class="mb-4">
     <li>{% if seller %}Connect your Square account{% else %}<a href="{% url 'square_connect' %}">Connect your Square account</a>{% endif %}</li>
@@ -105,9 +108,9 @@
     <li>There's no fine print here, no fees beyond the standard Square fees, and you can disable payments at any time.</li>
   </ul>
 
-  <h4>Ready to get started?</h4>
+  <h2 class="h5 mb-2">Ready to get started?</h2>
   <div class="d-flex align-items-center gap-2 mb-4">
-    <a class="btn btn-primary btn-sm" href="{% url 'square_connect' %}">Connect your Square account</a>
+    <a class="btn btn-success text-dark" href="{% url 'square_connect' %}">Connect your Square account</a>
     {% if auction %}
       <span class="small">and start accepting payments in {{ auction }} today!</span>
     {% endif %}

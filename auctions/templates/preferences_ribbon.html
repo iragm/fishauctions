@@ -33,6 +33,8 @@
           </a>
         </li>
         {% endif %}
+        {% comment %}Not gated: connecting an agent is open to everybody signed in, and this menu is the only route to the page that explains it. See UserAPIKeyView.{% endcomment %}
+        <li><a class="dropdown-item" href="{% url 'user_api_keys' %}"><i class="bi bi-robot"></i> AI agents</a></li>
         <li><a class="dropdown-item" href="{% url 'account' %}"><i class="bi bi-person-fill"></i> My account</a></li>
         <li><hr class="dropdown-divider"></li>
         {% comment %}

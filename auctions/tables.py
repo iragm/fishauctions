@@ -244,8 +244,8 @@ class AuctionHistoryHTMxTable(tables.Table):
             result = "<i class='bi bi-bag'></i>"
         elif record.applies_to == "LOTS":
             result = "<i class='bi bi-calendar'></i>"
-        elif record.applies_to == "LOT_WINNERS":
-            result = "<i class='bi bi-calendar-check'></i>"
+        elif record.applies_to == "STATS":
+            result = "<i class='bi bi-graph-up'></i>"
         else:
             result = ""
         result += f" {value}"

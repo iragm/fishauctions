@@ -25,6 +25,11 @@ frozen snapshot of events that have already happened.
 One Google button: the club's own calendar when it's shared, otherwise Google's add-by-URL screen
 pointed at our feed. Two would be the same events twice.
 
+There is deliberately no per-event "add this one" link any more. It wrote a dead copy of a single
+event into somebody's calendar -- Google's TEMPLATE screen, so nothing we later changed about the
+date ever reached them -- and it competed with the two buttons above for the same click. The point
+of this list is to get members onto the whole calendar once, and then keep them right.
+
 No "put these on your website" button either. The embed snippets moved to Website integration under
 Setup, with the auction, announcement and leaderboard ones beside them, and a signpost on the
 members' event list was an admin control on a page most of its readers can do nothing with.
@@ -79,7 +84,7 @@ members' event list was an admin control on a page most of its readers can do no
           {% if can_manage_auctions and event.is_automatic %}
           {# Visible label, not just a tooltip — the tooltip only adds detail (style_reference.md). #}
           <span class="badge bg-secondary rounded-pill ms-1" data-bs-toggle="tooltip"
-                title="{% if event.source == 'pickup' %}Added automatically from this auction's pickup time. Change the pickup time on the auction and this updates itself.{% else %}Added automatically because this auction is promoted. Edit the auction and this updates itself.{% endif %}">
+                title="{% if event.source == 'pickup' %}Added automatically from this auction's pickup time, and it follows that time whenever you change it.{% else %}Added automatically because this auction is promoted, and it follows the auction's dates.{% endif %} Its name and notes are yours — use Edit details.">
             <i class="bi bi-arrow-repeat"></i> Automatic
           </span>
           {% endif %}
@@ -101,16 +106,19 @@ members' event list was an admin control on a page most of its readers can do no
         {% endif %}
       </div>
       <div class="d-flex align-items-center gap-2">
-        <a href="{{ event.add_to_calendar_url }}" target="_blank" rel="noopener"
-           class="btn btn-sm btn-primary" title="Save this event to your own calendar">
-          <i class="bi bi-calendar-plus"></i>
-        </a>
         {% if can_manage_auctions and event.is_editable %}
         <a href="{% url 'club_event_edit' club.slug event.pk %}" class="btn btn-sm btn-info">Edit</a>
         {% endif %}
         {% if can_manage_auctions and event.is_automatic %}
+        {% comment %}Two buttons, because a generated event has two owners. The wording is the
+        club's -- the monthly meeting that happens at the auction, doors at 6:30 -- and everything
+        else is the auction's. Before this pair existed there was only "Edit auction", so the only
+        place left to type the meeting details was Google Calendar, where the next push wiped
+        them.{% endcomment %}
+        <a href="{% url 'club_event_edit' club.slug event.pk %}" class="btn btn-sm btn-info"
+           title="The name and the notes members see on their calendar">Edit details</a>
         <a href="{{ event.related_auction.get_edit_url }}" class="btn btn-sm btn-info"
-           title="These events are generated from the auction — edit it there">Edit auction</a>
+           title="When and where it is, and whether it's promoted at all">Edit auction</a>
         {% endif %}
         {% if can_manage_auctions and event.auction and event.auction.pk != current_auction_id and not event.is_over %}
         <form method="post" class="d-inline">

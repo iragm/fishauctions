@@ -36,15 +36,10 @@ class ClubEventModelTests(TestCase):
         )
         self.assertEqual(event.effective_end, self.start + datetime.timedelta(hours=2))
 
-    def test_add_to_calendar_url_has_utc_times_and_the_title(self):
-        event = ClubEvent.objects.create(club=self.club, title="Swap Meet", date_start=self.start)
-        url = event.add_to_calendar_url
-        self.assertIn("calendar.google.com", url)
-        self.assertIn("Swap+Meet", url)
-        self.assertIn(f"{self.start.astimezone(datetime.timezone.utc):%Y%m%dT%H%M%SZ}", url)
-
     def test_auction_events_are_not_editable_by_hand(self):
-        auction = Auction.objects.create(title="Auction", date_start=self.start, club=self.club)
+        auction = Auction.objects.create(
+            title="Auction", date_start=self.start, club=self.club, promote_this_auction=True
+        )
         event = ClubEvent.objects.filter(auction=auction).first()
         self.assertIsNotNone(event)
         self.assertFalse(event.is_editable)
@@ -59,6 +54,34 @@ class ClubEventModelTests(TestCase):
         self.club.google_calendar_is_public = True
         self.assertIn("abc%40group.calendar.google.com", self.club.google_calendar_public_url)
         self.assertIn("basic.ics", self.club.google_calendar_ical_url)
+
+    def test_the_subscribe_link_falls_back_to_our_own_feed(self):
+        """Every club has one of these, connected to Google or not — webcal:// so a click
+        subscribes instead of downloading a snapshot that never updates again.
+
+        Asserted as the whole address rather than as a prefix: ``startswith("https://example.com")``
+        is not a test that a URL points at that host, because ``https://example.com.evil.test/``
+        passes it too. That is a real bug in a sanitiser and a false alarm in a test, and the way to
+        settle both is to say which URL we expected.
+        """
+        path = reverse("club_events_ical", kwargs={"slug": self.club.slug})
+        self.assertEqual(self.club.calendar_subscribe_url("example.com"), f"webcal://example.com{path}")
+        self.assertEqual(self.club.calendar_feed_url("example.com"), f"https://example.com{path}")
+
+    def test_a_shared_google_calendar_wins_both_links(self):
+        self.club.google_calendar_refresh_token = "token"
+        self.club.google_calendar_id = "abc@group.calendar.google.com"
+        self.club.google_calendar_is_public = True
+        self.assertIn("calendar.google.com", self.club.calendar_subscribe_url("example.com"))
+        self.assertIn("basic.ics", self.club.calendar_feed_url("example.com"))
+
+    def test_a_private_google_calendar_is_not_offered_to_anyone(self):
+        """The whole reason the flag exists: these links 404 for members until it's shared."""
+        self.club.google_calendar_refresh_token = "token"
+        self.club.google_calendar_id = "abc@group.calendar.google.com"
+        self.club.google_calendar_is_public = False
+        self.assertTrue(self.club.calendar_subscribe_url("example.com").startswith("webcal://"))
+        self.assertNotIn("google.com", self.club.calendar_feed_url("example.com"))
 
 
 class AuctionMirroringTests(TestCase):
@@ -75,6 +98,10 @@ class AuctionMirroringTests(TestCase):
             "date_end": self.start + datetime.timedelta(days=2),
             "club": self.club,
             "is_online": True,
+            # Everything in this file is about what a *promoted* auction puts on a club's calendar,
+            # so the helper says so. The model default is False; tests about the unpromoted case
+            # pass promote_this_auction=False for themselves.
+            "promote_this_auction": True,
         }
         defaults.update(kwargs)
         return Auction.objects.create(**defaults)
@@ -97,6 +124,96 @@ class AuctionMirroringTests(TestCase):
         self.assertEqual(event.title, "Renamed Auction")
         self.assertEqual(event.date_start, self.start + datetime.timedelta(days=1))
         self.assertTrue(event.needs_google_sync)
+
+    def test_a_hand_typed_title_survives_the_auction_being_renamed(self):
+        """A club's monthly meeting often is the auction, and what members read on their phone is
+        the club's to write. Before this, every save of the auction wiped it."""
+        auction = self._auction()
+        event = ClubEvent.objects.get(auction=auction)
+        event.title = "Spring Auction — April meeting"
+        event.description = "Doors at 6:30. Bring a dish."
+        event.title_is_custom = True
+        event.description_is_custom = True
+        event.save()
+
+        auction.title = "Renamed Auction"
+        auction.date_start = self.start + datetime.timedelta(days=1)
+        auction.save()
+
+        event.refresh_from_db()
+        self.assertEqual(event.title, "Spring Auction — April meeting")
+        self.assertEqual(event.description, "Doors at 6:30. Bring a dish.")
+        # Everything the auction still owns moved with it.
+        self.assertEqual(event.date_start, self.start + datetime.timedelta(days=1))
+
+    def test_one_custom_field_does_not_freeze_the_other(self):
+        auction = self._auction()
+        event = ClubEvent.objects.get(auction=auction)
+        event.title = "April meeting"
+        event.title_is_custom = True
+        event.save()
+
+        auction.is_online = False
+        auction.save()
+
+        event.refresh_from_db()
+        self.assertEqual(event.title, "April meeting")
+        self.assertEqual(event.description, "In-person auction.")
+
+    def test_clearing_the_flag_lets_the_auction_take_it_back(self):
+        auction = self._auction()
+        event = ClubEvent.objects.get(auction=auction)
+        event.title = "April meeting"
+        event.title_is_custom = True
+        event.save()
+
+        event.title_is_custom = False
+        event.save()
+        auction.save()
+
+        event.refresh_from_db()
+        self.assertEqual(event.title, "Spring Auction")
+
+    def test_the_periodic_backstop_respects_it_too(self):
+        """The post_save signal is not the only writer — sync_auction_events runs over every
+        auction every 15 minutes, and would have undone the edit within the hour."""
+        auction = self._auction()
+        event = ClubEvent.objects.get(auction=auction)
+        event.title = "April meeting"
+        event.title_is_custom = True
+        event.save()
+
+        club_events.sync_auction_events(self.club)
+
+        event.refresh_from_db()
+        self.assertEqual(event.title, "April meeting")
+
+    def test_a_pickup_event_can_be_given_wording_of_its_own(self):
+        auction = self._auction()
+        PickupLocation.objects.create(auction=auction, name="Clubhouse", address="1 Fish Lane", pickup_time=self.start)
+        event = ClubEvent.objects.get(source=ClubEvent.SOURCE_PICKUP, pickup_location__auction=auction)
+        event.description = "Pick up your lots — swap table open too."
+        event.description_is_custom = True
+        event.save()
+
+        club_events.sync_pickup_events(auction)
+
+        event.refresh_from_db()
+        self.assertEqual(event.description, "Pick up your lots — swap table open too.")
+
+    def test_generated_wording_says_what_the_site_would_have_written(self):
+        auction = self._auction()
+        event = ClubEvent.objects.get(auction=auction)
+        event.title = "April meeting"
+        event.title_is_custom = True
+        event.save()
+        title, description = club_events.generated_wording(event)
+        self.assertEqual(title, "Spring Auction")
+        self.assertEqual(description, "Online auction with in-person pickup.")
+
+    def test_a_typed_in_event_has_no_generated_wording(self):
+        event = ClubEvent.objects.create(club=self.club, title="Meeting", date_start=self.start)
+        self.assertEqual(club_events.generated_wording(event), ("", ""))
 
     def test_unpromoting_an_auction_retires_its_event(self):
         auction = self._auction()
@@ -194,6 +311,9 @@ class PickupEventTests(TestCase):
             date_end=self.start + datetime.timedelta(days=2),
             club=self.club,
             is_online=True,
+            # Pickup events only exist for an auction the club is promoting -- see
+            # ``club_events.sync_pickup_events``. Said out loud because the model default is False.
+            promote_this_auction=True,
         )
 
     def _location(self, name, **kwargs):
@@ -394,7 +514,7 @@ class UpcomingEventsTests(TestCase):
 class ClubEventViewTests(TestCase):
     def setUp(self):
         self.client = Client()
-        self.club = Club.objects.create(name="View Club", enable_club_page=True)
+        self.club = Club.objects.create(name="View Club")
         self.admin = User.objects.create_user(username="ev_admin", password="pw", email="a@example.com")
         ClubMember.objects.create(club=self.club, user=self.admin, permission_admin=True)
         self.outsider = User.objects.create_user(username="ev_out", password="pw", email="o@example.com")
@@ -465,12 +585,89 @@ class ClubEventViewTests(TestCase):
         event.refresh_from_db()
         self.assertTrue(event.is_deleted)
 
-    def test_auction_events_cannot_be_edited_through_the_event_form(self):
+    def _auction_event(self):
+        auction = Auction.objects.create(
+            title="Auction", date_start=self.start, club=self.club, promote_this_auction=True
+        )
+        return auction, ClubEvent.objects.get(auction=auction)
+
+    def test_an_auction_events_wording_can_be_edited_but_nothing_else(self):
+        """The form narrows itself: the date, the place and whether the event exists belong to the
+        auction, and an event whose date disagrees with its auction is worse than no feature."""
         self.client.force_login(self.admin)
-        auction = Auction.objects.create(title="Auction", date_start=self.start, club=self.club)
-        event = ClubEvent.objects.get(auction=auction)
+        _auction, event = self._auction_event()
         response = self.client.get(reverse("club_event_edit", kwargs={"slug": self.club.slug, "pk": event.pk}))
+        self.assertEqual(response.status_code, 200)
+        form = response.context["form"]
+        self.assertEqual(sorted(form.fields), ["description", "reset_description", "reset_title", "title"])
+        self.assertContains(response, "Edit event details")
+        self.assertNotContains(response, "Delete event")
+
+    def test_editing_the_wording_marks_it_as_the_clubs(self):
+        self.client.force_login(self.admin)
+        auction, event = self._auction_event()
+        response = self.client.post(
+            reverse("club_event_edit", kwargs={"slug": self.club.slug, "pk": event.pk}),
+            {"title": "Auction — April meeting", "description": "Doors at 6:30."},
+        )
+        self.assertEqual(response.status_code, 302)
+        event.refresh_from_db()
+        self.assertEqual(event.title, "Auction — April meeting")
+        self.assertTrue(event.title_is_custom)
+        self.assertTrue(event.description_is_custom)
+
+        # And the whole point: the auction's next save leaves it alone.
+        auction.save()
+        event.refresh_from_db()
+        self.assertEqual(event.title, "Auction — April meeting")
+
+    def test_typing_the_auctions_own_words_back_in_is_not_a_custom_value(self):
+        """Nothing for the flag to protect, and a flag set here would quietly stop the event
+        following a later rename."""
+        self.client.force_login(self.admin)
+        _auction, event = self._auction_event()
+        title, description = club_events.generated_wording(event)
+        self.client.post(
+            reverse("club_event_edit", kwargs={"slug": self.club.slug, "pk": event.pk}),
+            {"title": title, "description": description},
+        )
+        event.refresh_from_db()
+        self.assertFalse(event.title_is_custom)
+        self.assertFalse(event.description_is_custom)
+
+    def test_the_reset_box_puts_the_auctions_wording_back(self):
+        self.client.force_login(self.admin)
+        _auction, event = self._auction_event()
+        url = reverse("club_event_edit", kwargs={"slug": self.club.slug, "pk": event.pk})
+        self.client.post(url, {"title": "April meeting", "description": "Doors at 6:30."})
+
+        # Ticked alongside a typed value, reset wins — it is the only way back.
+        self.client.post(url, {"title": "Something else", "description": "Doors at 6:30.", "reset_title": "on"})
+        event.refresh_from_db()
+        self.assertEqual(event.title, "Auction")
+        self.assertFalse(event.title_is_custom)
+        self.assertTrue(event.description_is_custom)
+
+    def test_a_generated_event_cannot_be_deleted_through_the_form(self):
+        """The auction is what put it here — deleting the row only means the next sync rebuilds
+        it. Unpromote the auction instead."""
+        self.client.force_login(self.admin)
+        _auction, event = self._auction_event()
+        response = self.client.post(
+            reverse("club_event_edit", kwargs={"slug": self.club.slug, "pk": event.pk}), {"action": "delete"}
+        )
         self.assertEqual(response.status_code, 404)
+        event.refresh_from_db()
+        self.assertFalse(event.is_deleted)
+
+    def test_the_club_page_offers_both_edit_buttons_on_a_generated_event(self):
+        self.client.force_login(self.admin)
+        auction, event = self._auction_event()
+        response = self.client.get(reverse("club_detail", kwargs={"slug": self.club.slug}))
+        self.assertContains(response, "Edit details")
+        self.assertContains(response, "Edit auction")
+        self.assertContains(response, reverse("club_event_edit", kwargs={"slug": self.club.slug, "pk": event.pk}))
+        self.assertContains(response, auction.get_edit_url())
 
     def test_an_event_from_another_club_is_not_reachable(self):
         self.client.force_login(self.admin)
@@ -498,7 +695,7 @@ class ClubPageCalendarButtonTests(TestCase):
 
     def setUp(self):
         self.client = Client()
-        self.club = Club.objects.create(name="Subscribe Club", enable_club_page=True)
+        self.club = Club.objects.create(name="Subscribe Club")
         self.start = timezone.now() + datetime.timedelta(days=3)
         ClubEvent.objects.create(club=self.club, title="Club Picnic", date_start=self.start)
 
@@ -534,7 +731,7 @@ class ClubEventsEmbedTests(TestCase):
 
     def setUp(self):
         self.client = Client()
-        self.club = Club.objects.create(name="Embed Club", enable_club_page=True)
+        self.club = Club.objects.create(name="Embed Club")
         self.admin = User.objects.create_user(username="em_admin", password="pw", email="ea@example.com")
         ClubMember.objects.create(club=self.club, user=self.admin, permission_admin=True)
         self.member = User.objects.create_user(username="em_member", password="pw", email="em@example.com")
@@ -597,6 +794,7 @@ class ClubEventsEmbedTests(TestCase):
             date_end=self.start + datetime.timedelta(days=2),
             club=self.club,
             is_online=True,
+            promote_this_auction=True,
         )
         PickupLocation.objects.create(
             auction=auction,
@@ -616,6 +814,7 @@ class ClubEventsEmbedTests(TestCase):
             date_end=self.start + datetime.timedelta(hours=2),
             club=self.club,
             is_online=True,
+            promote_this_auction=True,
         )
         PickupLocation.objects.create(
             auction=auction,
@@ -662,11 +861,6 @@ class ClubEventsEmbedTests(TestCase):
                 self.assertEqual(response["Access-Control-Allow-Origin"], "*")
                 self.assertNotIn("X-Frame-Options", response)
 
-    def test_a_club_with_its_page_disabled_has_no_embed(self):
-        self.club.enable_club_page = False
-        self.club.save()
-        self.assertEqual(self.client.get(self.url).status_code, 404)
-
     def test_the_embed_exposes_no_member_data(self):
         self._events(1)
         body = self.client.get(self.url).content.decode()
@@ -706,11 +900,323 @@ class ClubEventsEmbedTests(TestCase):
         self.assertIn("iframelight", body)
         self.assertIn("iframedark", body)
 
+    def test_the_calendar_links_are_offered_as_plain_addresses(self):
+        """Not an embed on purpose — a club's own site already has somewhere to put a link, and
+        an iframe is the wrong shape for "subscribe to our calendar"."""
+        self._events(1)
+        self.client.force_login(self.admin)
+        body = self.client.get(reverse("club_website_integration", kwargs={"slug": self.club.slug})).content.decode()
+        self.assertIn("Calendar links", body)
+        self.assertIn("webcal://", body)
+        self.assertIn("events.ics", body)
+
+    def test_a_shared_google_calendar_replaces_them(self):
+        self.club.google_calendar_refresh_token = "token"
+        self.club.google_calendar_id = "abc@group.calendar.google.com"
+        self.club.google_calendar_is_public = True
+        self.club.save()
+        self.client.force_login(self.admin)
+        body = self.client.get(reverse("club_website_integration", kwargs={"slug": self.club.slug})).content.decode()
+        self.assertIn("calendar.google.com", body)
+        self.assertNotIn("webcal://", body)
+
+
+class ClubPastEventsEmbedTests(TestCase):
+    """The backwards half of the events embed: what the club has actually been doing."""
+
+    def setUp(self):
+        self.client = Client()
+        self.club = Club.objects.create(name="History Club")
+        self.url = reverse("club_past_events_embed", kwargs={"slug": self.club.slug})
+        now = timezone.now()
+        for days, title in ((30, "Long ago"), (7, "Last week"), (2, "Two days ago")):
+            ClubEvent.objects.create(
+                club=self.club,
+                title=title,
+                date_start=now - datetime.timedelta(days=days),
+                date_end=now - datetime.timedelta(days=days) + datetime.timedelta(hours=2),
+                location="1 Main St",
+            )
+        ClubEvent.objects.create(club=self.club, title="Next month", date_start=now + datetime.timedelta(days=30))
+
+    def test_it_lists_what_has_already_happened_newest_first(self):
+        payload = self.client.get(self.url).json()
+        self.assertEqual(
+            [e["title"] for e in payload["past_events"]],
+            ["Two days ago", "Last week", "Long ago"],
+        )
+
+    def test_count_one_is_the_most_recent_event(self):
+        payload = self.client.get(self.url, {"count": 1}).json()
+        self.assertEqual([e["title"] for e in payload["past_events"]], ["Two days ago"])
+
+    def test_upcoming_events_are_never_in_it(self):
+        titles = [e["title"] for e in self.client.get(self.url).json()["past_events"]]
+        self.assertNotIn("Next month", titles)
+
+    def test_it_takes_the_same_count_and_format_parameters(self):
+        self.assertEqual(len(self.client.get(self.url, {"count": 99}).json()["past_events"]), 3)
+        self.assertEqual(len(self.client.get(self.url, {"count": 0}).json()["past_events"]), 1)
+        self.assertEqual(len(self.client.get(self.url, {"count": "lots"}).json()["past_events"]), 3)
+        for fmt, theme in (("iframelight", "light"), ("iframedark", "dark")):
+            with self.subTest(fmt=fmt):
+                body = self.client.get(self.url, {"format": fmt}).content.decode()
+                self.assertIn(f'data-theme="{theme}"', body)
+                self.assertIn("Two days ago", body)
+
+    def test_a_row_is_formatted_exactly_like_an_upcoming_one(self):
+        """One formatter, deliberately: two lists on one club website must not drift apart."""
+        upcoming = self.client.get(reverse("club_events_embed", kwargs={"slug": self.club.slug})).json()
+        past = self.client.get(self.url).json()
+        self.assertEqual(sorted(upcoming["events"][0]), sorted(past["past_events"][0]))
+
+    def test_an_empty_history_does_not_say_nothing_coming_up(self):
+        ClubEvent.objects.filter(club=self.club).delete()
+        body = self.client.get(self.url, {"format": "iframelight"}).content.decode()
+        self.assertIn("Nothing here yet", body)
+        self.assertNotIn("Nothing coming up", body)
+
+    def test_it_is_framable_and_fetchable_like_the_others(self):
+        response = self.client.get(self.url, {"format": "iframelight"})
+        self.assertEqual(response["Access-Control-Allow-Origin"], "*")
+        self.assertNotIn("X-Frame-Options", response)
+
+
+class EmbedSelfSizingTests(TestCase):
+    """An iframe cannot size itself, so the embed measures itself and the snippet listens."""
+
+    def setUp(self):
+        self.client = Client()
+        self.club = Club.objects.create(name="Sizing Club", enable_breeder_award_program=True)
+        self.admin = User.objects.create_user(username="sz_admin", password="pw", email="sz@example.com")
+        ClubMember.objects.create(club=self.club, user=self.admin, permission_admin=True)
+
+    def _embed(self, name):
+        return self.client.get(reverse(name, kwargs={"slug": self.club.slug}), {"format": "iframelight"})
+
+    def test_every_styled_embed_reports_its_height(self):
+        for name in (
+            "club_events_embed",
+            "club_past_events_embed",
+            "club_announcements_embed",
+            "club_auction_embed",
+            "bap_embed",
+        ):
+            with self.subTest(embed=name):
+                body = self._embed(name).content.decode()
+                self.assertIn("window.parent.postMessage", body)
+                self.assertIn('clubEmbed: "height"', body)
+
+    def test_it_stays_quiet_when_nothing_framed_it(self):
+        """Opening the embed URL directly must not post a message to itself."""
+        self.assertIn("if (window.parent === window) { return; }", self._embed("club_events_embed").content.decode())
+
+    def test_nothing_is_fetched_from_outside(self):
+        body = self._embed("club_events_embed").content.decode()
+        self.assertNotIn("<script src", body)
+        self.assertNotIn("://fonts.", body)
+
+    def test_the_snippet_hands_over_a_listener_with_the_iframe(self):
+        self.client.force_login(self.admin)
+        body = self.client.get(reverse("club_website_integration", kwargs={"slug": self.club.slug})).content.decode()
+        self.assertIn('&lt;script&gt;addEventListener("message"', body)
+        self.assertIn("testserver", body)
+
+    def test_the_listener_checks_where_the_message_came_from(self):
+        """A club page carrying somebody else's iframe must not be resizable by it."""
+        self.client.force_login(self.admin)
+        body = self.client.get(reverse("club_website_integration", kwargs={"slug": self.club.slug})).content.decode()
+        self.assertIn("contentWindow===e.source", body)
+        self.assertIn('f[i].src.indexOf(e.origin+"/")===0', body)
+
+    def test_the_listener_names_no_host_of_its_own(self):
+        """The origin it checks comes off the iframe, so copying the snippet between hosts works.
+
+        The first version pasted this site's origin into the script.  A snippet copied from one
+        host with the iframe pointed at another -- staging to production, a club changing
+        domains -- then listened for messages that never came and silently resized nothing.
+        """
+        self.client.force_login(self.admin)
+        body = self.client.get(reverse("club_website_integration", kwargs={"slug": self.club.slug})).content.decode()
+        listeners = [line for line in body.splitlines() if 'addEventListener("message"' in line]
+        self.assertGreaterEqual(len(listeners), 2)
+        for line in listeners:
+            self.assertNotIn("testserver", line)
+            self.assertNotIn("http", line)
+
+    def test_the_embed_repeats_a_height_it_has_already_sent(self):
+        """A listener registered late must not leave the iframe stuck at its pasted height."""
+        body = self._embed("club_announcements_embed").content.decode()
+        self.assertIn("function report(force)", body)
+        self.assertIn("height === last && !force", body)
+        self.assertIn('window.addEventListener("load", again)', body)
+        self.assertIn("setTimeout(again, 1000)", body)
+
+
+class EventsEmbedUsageTrackingTests(TestCase):
+    """Whether a club's own website is actually showing our calendar."""
+
+    def setUp(self):
+        self.client = Client()
+        self.club = Club.objects.create(name="Tracked Club")
+        self.admin = User.objects.create_user(username="tr_admin", password="pw", email="tr@example.com")
+        ClubMember.objects.create(club=self.club, user=self.admin, permission_admin=True)
+        self.member = User.objects.create_user(username="tr_member", password="pw", email="trm@example.com")
+        ClubMember.objects.create(club=self.club, user=self.member)
+        self.url = reverse("club_events_embed", kwargs={"slug": self.club.slug})
+
+    def _views(self):
+        self.club.refresh_from_db()
+        return self.club.events_website_views
+
+    def test_a_club_starts_with_nothing_recorded(self):
+        self.assertEqual(self._views(), 0)
+        self.assertFalse(self.club.embeds_events_on_website)
+
+    def test_every_format_counts(self):
+        for fmt in ("json", "iframelight", "iframedark", "unstyledhtml"):
+            self.client.get(self.url, {"format": fmt})
+        self.assertEqual(self._views(), 4)
+
+    def test_an_empty_calendar_still_counts(self):
+        """The snippet is installed either way, and that is the whole fact being collected."""
+        self.assertFalse(ClubEvent.objects.filter(club=self.club).exists())
+        self.client.get(self.url)
+        self.assertEqual(self._views(), 1)
+
+    def test_the_past_events_embed_counts_too(self):
+        self.client.get(reverse("club_past_events_embed", kwargs={"slug": self.club.slug}))
+        self.assertEqual(self._views(), 1)
+
+    def test_an_admin_checking_their_own_snippet_does_not_count(self):
+        self.client.force_login(self.admin)
+        self.client.get(self.url)
+        self.assertEqual(self._views(), 0)
+
+    def test_an_ordinary_member_counts(self):
+        """A member reading it on the club's website is exactly the thing worth counting."""
+        self.client.force_login(self.member)
+        self.client.get(self.url)
+        self.assertEqual(self._views(), 1)
+
+    def test_the_club_page_here_is_not_the_club_website(self):
+        self.client.get(reverse("club_detail", kwargs={"slug": self.club.slug}))
+        self.assertEqual(self._views(), 0)
+
+    def test_a_recent_render_means_the_embed_is_installed(self):
+        self.client.get(self.url)
+        self.club.refresh_from_db()
+        self.assertTrue(self.club.embeds_events_on_website)
+
+    def test_a_snippet_taken_down_long_ago_stops_counting_as_installed(self):
+        self.client.get(self.url)
+        self.club.refresh_from_db()
+        stale = timezone.now() - datetime.timedelta(days=Club.EVENTS_EMBED_ACTIVE_DAYS + 1)
+        Club.objects.filter(pk=self.club.pk).update(events_website_last_view=stale)
+        self.club.refresh_from_db()
+        self.assertFalse(self.club.embeds_events_on_website)
+
+
+class CustomizeEventPromptTests(TestCase):
+    """The auction-page nudge to write your own wording for the calendar entry members read."""
+
+    def setUp(self):
+        self.client = Client()
+        self.club = Club.objects.create(name="Prompt Club")
+        self.admin = User.objects.create_user(username="pr_admin", password="pw", email="pr@example.com")
+        ClubMember.objects.create(club=self.club, user=self.admin, permission_admin=True)
+        self.auction = Auction.objects.create(
+            title="Prompt Auction",
+            date_start=timezone.now() + datetime.timedelta(days=10),
+            club=self.club,
+            is_online=False,
+            promote_this_auction=True,
+            created_by=self.admin,
+        )
+        self.event = ClubEvent.objects.filter(auction=self.auction).first()
+        self._mark_embedded()
+
+    def _mark_embedded(self):
+        Club.objects.filter(pk=self.club.pk).update(events_website_views=5, events_website_last_view=timezone.now())
+        self.club.refresh_from_db()
+        self.auction.refresh_from_db()
+
+    def test_the_auction_has_a_generated_event_to_offer(self):
+        self.assertIsNotNone(self.event)
+        self.assertTrue(self.event.is_automatic)
+        self.assertEqual(self.auction.event_needing_custom_wording, self.event)
+
+    def test_no_prompt_when_the_club_does_not_embed_our_events(self):
+        Club.objects.filter(pk=self.club.pk).update(events_website_views=0, events_website_last_view=None)
+        self.auction.refresh_from_db()
+        self.assertIsNone(self.auction.event_needing_custom_wording)
+
+    def test_no_prompt_once_either_field_has_been_typed_by_hand(self):
+        for field in ("title_is_custom", "description_is_custom"):
+            with self.subTest(field=field):
+                fields = {"title_is_custom": False, "description_is_custom": False, field: True}
+                ClubEvent.objects.filter(pk=self.event.pk).update(**fields)
+                self.auction.refresh_from_db()
+                self.assertIsNone(self.auction.event_needing_custom_wording)
+
+    def test_no_prompt_for_an_auction_that_is_over(self):
+        long_ago = timezone.now() - datetime.timedelta(days=30)
+        Auction.objects.filter(pk=self.auction.pk).update(
+            date_start=long_ago,
+            date_end=long_ago,
+            date_online_bidding_ends=long_ago,
+            lot_submission_end_date=long_ago,
+        )
+        self.auction.refresh_from_db()
+        self.assertTrue(self.auction.pretty_much_over)
+        self.assertIsNone(self.auction.event_needing_custom_wording)
+
+    def test_no_prompt_for_an_auction_with_no_club(self):
+        Auction.objects.filter(pk=self.auction.pk).update(club=None)
+        self.auction.refresh_from_db()
+        self.assertIsNone(self.auction.event_needing_custom_wording)
+
+    def test_the_banner_is_on_the_auction_page_for_an_admin(self):
+        self.client.force_login(self.admin)
+        response = self.client.get(reverse("auction_main", kwargs={"slug": self.auction.slug}))
+        self.assertContains(response, "website is showing this auction")
+        self.assertContains(response, "Customize this event")
+        self.assertContains(response, reverse("club_event_edit", kwargs={"slug": self.club.slug, "pk": self.event.pk}))
+
+    def test_an_ordinary_user_never_sees_it(self):
+        other = User.objects.create_user(username="pr_other", password="pw", email="pro@example.com")
+        self.client.force_login(other)
+        response = self.client.get(reverse("auction_main", kwargs={"slug": self.auction.slug}))
+        self.assertNotContains(response, "website is showing this auction")
+
+    def test_dismissing_it_sticks(self):
+        self.client.force_login(self.admin)
+        url = reverse("auction_main", kwargs={"slug": self.auction.slug})
+        self.client.get(url, {"dismissed_customize_event_banner": "true"})
+        self.auction.refresh_from_db()
+        self.assertTrue(self.auction.dismissed_customize_event_banner)
+        self.assertIsNone(self.auction.event_needing_custom_wording)
+        self.assertNotContains(self.client.get(url), "website is showing this auction")
+
+    def test_the_customize_link_works_for_an_auction_admin_with_no_club_role(self):
+        """The banner is written for the auction's creator, who often holds no club permission."""
+        creator = User.objects.create_user(username="pr_creator", password="pw", email="prc@example.com")
+        Auction.objects.filter(pk=self.auction.pk).update(created_by=creator)
+        self.client.force_login(creator)
+        response = self.client.get(reverse("club_event_edit", kwargs={"slug": self.club.slug, "pk": self.event.pk}))
+        self.assertEqual(response.status_code, 200)
+
+    def test_an_unrelated_user_still_cannot_edit_the_event(self):
+        stranger = User.objects.create_user(username="pr_stranger", password="pw", email="prs@example.com")
+        self.client.force_login(stranger)
+        response = self.client.get(reverse("club_event_edit", kwargs={"slug": self.club.slug, "pk": self.event.pk}))
+        self.assertEqual(response.status_code, 403)
+
 
 class ClubEventICalTests(TestCase):
     def setUp(self):
         self.client = Client()
-        self.club = Club.objects.create(name="iCal Club", enable_club_page=True)
+        self.club = Club.objects.create(name="iCal Club")
         self.start = timezone.now() + datetime.timedelta(days=2)
 
     def test_the_feed_renders_events(self):
@@ -734,12 +1240,6 @@ class ClubEventICalTests(TestCase):
         ClubEvent.objects.create(club=self.club, title="Gone", date_start=self.start, is_deleted=True)
         body = self.client.get(reverse("club_events_ical", kwargs={"slug": self.club.slug})).content.decode()
         self.assertNotIn("Gone", body)
-
-    def test_a_club_with_its_page_disabled_has_no_feed(self):
-        self.club.enable_club_page = False
-        self.club.save()
-        response = self.client.get(reverse("club_events_ical", kwargs={"slug": self.club.slug}))
-        self.assertEqual(response.status_code, 404)
 
     def test_each_event_carries_a_sequence_so_edits_reach_subscribers(self):
         """Most clients keep the copy they already imported unless the sequence goes up."""
@@ -907,7 +1407,9 @@ class GoogleCalendarSyncTests(TestCase):
 
     def test_deleting_an_auction_event_in_google_puts_it_back(self):
         """The auction is still real, so the club page must keep showing it."""
-        auction = Auction.objects.create(title="Auction", date_start=self.start, club=self.club)
+        auction = Auction.objects.create(
+            title="Auction", date_start=self.start, club=self.club, promote_this_auction=True
+        )
         event = ClubEvent.objects.get(auction=auction)
         event.google_event_id = "g-300"
         event.save()
@@ -920,7 +1422,9 @@ class GoogleCalendarSyncTests(TestCase):
         self.assertEqual(event.google_event_id, "")
 
     def test_a_google_edit_never_overwrites_an_auction_event(self):
-        auction = Auction.objects.create(title="Real Title", date_start=self.start, club=self.club)
+        auction = Auction.objects.create(
+            title="Real Title", date_start=self.start, club=self.club, promote_this_auction=True
+        )
         event = ClubEvent.objects.get(auction=auction)
         event.google_event_id = "g-400"
         event.save()
@@ -985,6 +1489,7 @@ class GoogleCalendarSyncTests(TestCase):
             patch.object(gcal, "ensure_calendar", return_value="cal-1"),
             patch.object(gcal, "push_pending", return_value=(0, None)),
             patch.object(gcal, "pull_events", return_value=(0, 0, 0)),
+            patch.object(gcal, "refresh_public_flag"),
         ):
             self.assertTrue(gcal.sync_club(self.club))
         self.club.refresh_from_db()
@@ -1097,7 +1602,7 @@ class GoogleCalendarSyncTests(TestCase):
 class GoogleCalendarConfigViewTests(TestCase):
     def setUp(self):
         self.client = Client()
-        self.club = Club.objects.create(name="Config Club", enable_club_page=True)
+        self.club = Club.objects.create(name="Config Club")
         self.admin = User.objects.create_user(username="gc_admin", password="pw", email="gc@example.com")
         ClubMember.objects.create(club=self.club, user=self.admin, permission_edit_club=True)
         self.outsider = User.objects.create_user(username="gc_out", password="pw", email="gco@example.com")
@@ -1121,17 +1626,14 @@ class GoogleCalendarConfigViewTests(TestCase):
         self.assertTrue(self.club.add_auctions_to_calendar)
         # Unchecked boxes are off.
         self.assertFalse(self.club.create_discord_events_for_club_events)
-        self.assertFalse(self.club.google_calendar_is_public)
 
-    def test_toggling_public_makes_no_google_call(self):
-        """google_calendar_is_public is the admin telling us what they did in Google Calendar —
-        it's a display flag, not something we can act on."""
+    def test_the_settings_form_cannot_declare_the_calendar_public(self):
+        """Sharing is read from Google, never posted. A form that accepted it would be a way to
+        put the Google links on the club page for a calendar nobody outside the club can open."""
         self.client.force_login(self.admin)
-        with patch.object(gcal, "_request") as request:
-            self.client.post(self.url, {"google_calendar_is_public": "on"})
-        request.assert_not_called()
+        self.client.post(self.url, {"google_calendar_is_public": "on"})
         self.club.refresh_from_db()
-        self.assertTrue(self.club.google_calendar_is_public)
+        self.assertFalse(self.club.google_calendar_is_public)
 
     def test_connect_redirects_to_google(self):
         self.client.force_login(self.admin)
@@ -1217,7 +1719,7 @@ class DiscordClubEventTests(TestCase):
 
     def test_auction_events_are_skipped_so_they_are_never_doubled_up(self):
         """auction_emails owns Discord events for auctions; this path must stay out of the way."""
-        Auction.objects.create(title="Auction", date_start=self.start, club=self.club)
+        Auction.objects.create(title="Auction", date_start=self.start, club=self.club, promote_this_auction=True)
         with patch.object(discord_events, "create_scheduled_event", return_value="d-1") as create:
             self.assertEqual(discord_events.sync_club_events(self.club), 0)
         create.assert_not_called()
@@ -1225,7 +1727,9 @@ class DiscordClubEventTests(TestCase):
     def test_pickup_events_are_skipped_too(self):
         """Four pickup slots on one auction would otherwise be four more Discord events, for
         logistics that only concern people who already won a lot."""
-        auction = Auction.objects.create(title="Auction", date_start=self.start, club=self.club, is_online=True)
+        auction = Auction.objects.create(
+            title="Auction", date_start=self.start, club=self.club, is_online=True, promote_this_auction=True
+        )
         location = PickupLocation.objects.create(
             name="Shop", auction=auction, pickup_time=self.start, address="1 Main St"
         )
@@ -1432,6 +1936,7 @@ class NextEventInMemberEmailTests(TestCase):
             date_end=self.start + datetime.timedelta(days=2),
             club=self.club,
             is_online=True,
+            promote_this_auction=True,
         )
         text, _ = self._fragment()
         self.assertIn("Our next event is Spring Auction", text)
@@ -1456,6 +1961,7 @@ class NextEventInMemberEmailTests(TestCase):
             date_end=self.start + datetime.timedelta(days=12),
             club=self.club,
             is_online=True,
+            promote_this_auction=True,
         )
         PickupLocation.objects.create(auction=auction, name="Clubhouse", address="1 Fish Lane", pickup_time=self.start)
         text, _ = self._fragment()
@@ -1489,6 +1995,38 @@ class NextEventInMemberEmailTests(TestCase):
         ClubEvent.objects.create(club=self.club, title="Monthly Meeting", date_start=self.start)
         self.assertEqual(self._fragment(include_event=False), ("", ""))
 
+    def test_the_calendar_link_rides_on_the_event_line(self):
+        """A welcome email goes out once, so it is the only chance to get somebody subscribed —
+        but a club that switched the next event off is saying "don't advertise what we're doing",
+        and a subscribe link is that."""
+        ClubEvent.objects.create(club=self.club, title="Monthly Meeting", date_start=self.start)
+        text, html = self._fragment()
+        self.assertIn("Add our calendar", text)
+        self.assertIn(f"webcal://{self.site.domain}", text)
+        self.assertIn("Add our calendar", html)
+        off_text, off_html = self._fragment(include_event=False)
+        self.assertNotIn("Add our calendar", off_text)
+        self.assertNotIn("Add our calendar", off_html)
+
+    def test_a_shared_google_calendar_is_the_link_instead(self):
+        """Same rule as the club page's buttons: the club's own Google calendar when there is one,
+        because it holds whatever an admin typed straight into it."""
+        self.club.google_calendar_refresh_token = "token"
+        self.club.google_calendar_id = "abc@group.calendar.google.com"
+        self.club.google_calendar_is_public = True
+        self.club.save()
+        ClubEvent.objects.create(club=self.club, title="Monthly Meeting", date_start=self.start)
+        text, _ = self._fragment()
+        self.assertIn("calendar.google.com", text)
+        self.assertNotIn("webcal://", text)
+
+    def test_the_preview_has_no_working_calendar_link(self):
+        """as_links=False is the settings-page preview — nothing in it should be clickable."""
+        ClubEvent.objects.create(club=self.club, title="Monthly Meeting", date_start=self.start)
+        _, html = self._fragment(as_links=False)
+        self.assertIn("Add our calendar", html)
+        self.assertNotIn("<a href", html)
+
     def test_a_location_becomes_a_directions_link(self):
         ClubEvent.objects.create(club=self.club, title="Monthly Meeting", date_start=self.start, location="1 Fish Lane")
         text, html = self._fragment()
@@ -1503,6 +2041,7 @@ class NextEventInMemberEmailTests(TestCase):
             date_end=self.start + datetime.timedelta(days=2),
             club=self.club,
             is_online=True,
+            promote_this_auction=True,
         )
         PickupLocation.objects.create(
             auction=auction,
@@ -1524,6 +2063,7 @@ class NextEventInMemberEmailTests(TestCase):
             date_end=self.start + datetime.timedelta(days=2),
             club=self.club,
             is_online=True,
+            promote_this_auction=True,
         )
         PickupLocation.objects.create(
             auction=auction,
@@ -1552,6 +2092,7 @@ class NextEventInMemberEmailTests(TestCase):
             date_end=None,
             club=self.club,
             is_online=False,
+            promote_this_auction=True,
         )
         gather = (self.start + datetime.timedelta(days=1)).replace(hour=19, minute=30)
         PickupLocation.objects.create(auction=auction, name="Clubhouse", address="1 Fish Lane", pickup_time=gather)
@@ -1562,7 +2103,12 @@ class NextEventInMemberEmailTests(TestCase):
 
     def test_an_in_person_auction_with_several_locations_falls_back_to_its_own_time(self):
         auction = Auction.objects.create(
-            title="Fall Auction", date_start=self.start, date_end=None, club=self.club, is_online=False
+            title="Fall Auction",
+            date_start=self.start,
+            date_end=None,
+            club=self.club,
+            is_online=False,
+            promote_this_auction=True,
         )
         for name in ("North", "South"):
             PickupLocation.objects.create(
@@ -1580,6 +2126,7 @@ class NextEventInMemberEmailTests(TestCase):
             date_end=self.start + datetime.timedelta(days=2),
             club=self.club,
             is_online=True,
+            promote_this_auction=True,
         )
         auction.is_online = False
         auction.save()
@@ -1707,7 +2254,9 @@ class GoogleCalendarPullSafetyTests(TestCase):
     def test_a_pickup_event_deleted_in_google_comes_back(self):
         """It's generated from the auction's pickup time, so dropping it would leave the club
         page disagreeing with the auction — and the next sync would recreate it anyway."""
-        auction = Auction.objects.create(title="Spring Auction", date_start=self.start, club=self.club, is_online=True)
+        auction = Auction.objects.create(
+            title="Spring Auction", date_start=self.start, club=self.club, is_online=True, promote_this_auction=True
+        )
         PickupLocation.objects.create(name="Shop", auction=auction, pickup_time=self.start, address="1 Main St")
         event = ClubEvent.objects.get(source=ClubEvent.SOURCE_PICKUP)
         event.google_event_id = "g-1"
@@ -1722,7 +2271,9 @@ class GoogleCalendarPullSafetyTests(TestCase):
         self.assertTrue(event.needs_google_sync)
 
     def test_a_google_edit_never_overwrites_a_pickup_event(self):
-        auction = Auction.objects.create(title="Spring Auction", date_start=self.start, club=self.club, is_online=True)
+        auction = Auction.objects.create(
+            title="Spring Auction", date_start=self.start, club=self.club, is_online=True, promote_this_auction=True
+        )
         PickupLocation.objects.create(name="Shop", auction=auction, pickup_time=self.start, address="1 Main St")
         event = ClubEvent.objects.get(source=ClubEvent.SOURCE_PICKUP)
         event.google_event_id = "g-1"
@@ -1776,10 +2327,16 @@ class GoogleCalendarPullSafetyTests(TestCase):
         self.assertEqual(body["end"], {"date": "2026-08-02"})
 
     def test_last_sync_means_a_round_trip_that_worked(self):
-        with patch.object(gcal, "_request", return_value={"nextSyncToken": "t"}):
+        with (
+            patch.object(gcal, "_request", return_value={"nextSyncToken": "t"}),
+            patch.object(gcal, "refresh_public_flag") as public,
+        ):
             gcal.sync_club(self.club)
         self.club.refresh_from_db()
         self.assertIsNotNone(self.club.google_calendar_last_sync)
+        # Every round trip that worked also re-reads whether the calendar is shared — that is the
+        # only thing keeping the club page's Google links honest, and nothing else calls it.
+        public.assert_called_once_with(self.club)
 
     def test_an_expired_token_does_not_look_like_a_successful_sync(self):
         self.club.google_calendar_sync_token = "stale"
@@ -1861,7 +2418,7 @@ class RecurringEventPullTests(TestCase):
     """A repeating event is read in as one event with a rule, not as fifty-two copies."""
 
     def setUp(self):
-        self.club = Club.objects.create(name="Repeat Club", enable_club_page=True)
+        self.club = Club.objects.create(name="Repeat Club")
         self.club.google_calendar_refresh_token = "refresh"
         self.club.google_calendar_id = "cal-1"
         self.club.save()
@@ -2000,7 +2557,7 @@ class RecurringEventUpkeepTests(TestCase):
 
     def setUp(self):
         self.client = Client()
-        self.club = Club.objects.create(name="Upkeep Club", enable_club_page=True)
+        self.club = Club.objects.create(name="Upkeep Club")
         # Two weeks ago plus a few hours, so the next occurrence is unambiguously later today.
         self.anchor = (timezone.now() - datetime.timedelta(days=14) + datetime.timedelta(hours=5)).replace(
             microsecond=0
@@ -2072,8 +2629,11 @@ class RecurringEventUpkeepTests(TestCase):
 
 @override_settings(GOOGLE_CALENDAR_CLIENT_ID="cid", GOOGLE_CALENDAR_CLIENT_SECRET="secret")
 class GoogleCalendarPublicCheckTests(TestCase):
-    """'I shared it' is checked rather than believed — links that 404 for every member are
-    worse than no links."""
+    """Whether the calendar is shared is read from Google, not asked of the admin.
+
+    It used to be a checkbox they ticked after following the instructions, checked once at that
+    moment. Both halves failed: a club that shared the calendar and never came back never got its
+    links, and a club that later un-shared it kept advertising links that 404 for every member."""
 
     def setUp(self):
         self.client = Client()
@@ -2099,28 +2659,60 @@ class GoogleCalendarPublicCheckTests(TestCase):
         with patch.object(gcal.requests, "get", return_value=self._Response(404)):
             self.assertFalse(gcal.is_calendar_public(self.club))
 
-    def test_ticking_the_box_without_sharing_it_does_not_stick(self):
-        self.client.force_login(self.admin)
+    def test_sharing_it_in_google_is_noticed_without_being_told(self):
+        """The whole point: a club follows the steps in Google Calendar and nothing else is asked
+        of them. Before this they had to come back here and tick a box, and most never did."""
+        with patch.object(gcal.requests, "get", return_value=self._Response(200)):
+            self.assertTrue(gcal.refresh_public_flag(self.club))
+        self.club.refresh_from_db()
+        self.assertTrue(self.club.google_calendar_is_public)
+        self.assertIsNotNone(self.club.google_calendar_public_checked)
+
+    def test_un_sharing_it_takes_the_links_away_again(self):
+        """Nothing used to notice this, so a club that un-shared its calendar went on advertising
+        a link that 404s for every member."""
+        self.club.google_calendar_is_public = True
+        self.club.save()
         with patch.object(gcal.requests, "get", return_value=self._Response(404)):
-            self.client.post(self.url, {"google_calendar_is_public": "on"})
+            self.assertTrue(gcal.refresh_public_flag(self.club))
         self.club.refresh_from_db()
         self.assertFalse(self.club.google_calendar_is_public)
         self.assertEqual(self.club.google_calendar_public_url, "")
 
-    def test_ticking_it_after_sharing_it_works(self):
-        self.client.force_login(self.admin)
-        with patch.object(gcal.requests, "get", return_value=self._Response(200)):
-            self.client.post(self.url, {"google_calendar_is_public": "on"})
+    def test_being_unable_to_reach_google_changes_nothing(self):
+        """A timeout is not evidence the calendar was un-shared, and treating it as one would take
+        the links off the club page for an hour every time Google hiccups."""
+        self.club.google_calendar_is_public = True
+        self.club.save()
+        with patch.object(gcal, "is_calendar_public", side_effect=gcal.GoogleCalendarError("offline")):
+            self.assertFalse(gcal.refresh_public_flag(self.club))
+        self.club.refresh_from_db()
+        self.assertTrue(self.club.google_calendar_is_public)
+        self.assertIsNone(self.club.google_calendar_public_checked)
+
+    def test_the_check_is_rate_limited_but_sync_now_forces_it(self):
+        """One anonymous GET is cheap, but not every 15 minutes for every club for ever."""
+        self.club.google_calendar_public_checked = timezone.now()
+        self.club.save()
+        with patch.object(gcal.requests, "get", return_value=self._Response(200)) as get:
+            gcal.refresh_public_flag(self.club)
+        get.assert_not_called()
+        with patch.object(gcal.requests, "get", return_value=self._Response(200)) as get:
+            gcal.refresh_public_flag(self.club, force=True)
+        get.assert_called_once()
         self.club.refresh_from_db()
         self.assertTrue(self.club.google_calendar_is_public)
 
-    def test_we_take_their_word_for_it_when_google_is_unreachable(self):
-        """Being unable to check is not evidence they're wrong."""
-        self.client.force_login(self.admin)
-        with patch.object(gcal, "is_calendar_public", side_effect=gcal.GoogleCalendarError("offline")):
-            self.client.post(self.url, {"google_calendar_is_public": "on"})
+    def test_disconnecting_forgets_that_it_was_public(self):
+        """Reconnecting a different Google account gets a new, private calendar — a leftover flag
+        would advertise it in the window before the next probe."""
+        self.club.google_calendar_is_public = True
+        self.club.google_calendar_public_checked = timezone.now()
+        self.club.save()
+        gcal.disconnect(self.club)
         self.club.refresh_from_db()
-        self.assertTrue(self.club.google_calendar_is_public)
+        self.assertFalse(self.club.google_calendar_is_public)
+        self.assertIsNone(self.club.google_calendar_public_checked)
 
 
 @override_settings(DISCORD_BOT_TOKEN="bot-token")
@@ -2307,7 +2899,7 @@ class ClubEventTimezoneTests(TestCase):
 
     def setUp(self):
         self.client = Client()
-        self.club = Club.objects.create(name="TZ Club", enable_club_page=True)
+        self.club = Club.objects.create(name="TZ Club")
         self.admin = User.objects.create_user(username="tzadmin", password="x", email="tz@example.com")
         ClubMember.objects.create(
             club=self.club, user=self.admin, name="TZ Admin", email="tz@example.com", permission_admin=True
@@ -2351,7 +2943,7 @@ class ClubEventCancellationTests(TestCase):
 
     def setUp(self):
         self.client = Client()
-        self.club = Club.objects.create(name="Cancel Club", enable_club_page=True)
+        self.club = Club.objects.create(name="Cancel Club")
         self.admin = User.objects.create_user(username="canceladmin", password="x", email="c@example.com")
         ClubMember.objects.create(
             club=self.club, user=self.admin, name="Cancel Admin", email="c@example.com", permission_admin=True

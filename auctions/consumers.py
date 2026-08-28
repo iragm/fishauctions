@@ -63,6 +63,42 @@ def check_all_permissions(lot, user):
     return False
 
 
+def post_chat_message(lot, user, message):
+    """Say something on a lot's chat: persist it, then push it to everyone watching the page.
+
+    Extracted from :meth:`LotConsumer.receive` so the websocket and the assistant's
+    ``answer_question`` action post the same row and broadcast the same event. Both permission
+    checks are the caller's job (:func:`check_all_permissions` then
+    :func:`check_chat_permissions`), because the websocket has to answer a failure by pushing a
+    toast down one user's private channel and the action has to answer it as a tool error.
+
+    The broadcast is best-effort in the same way ``place_bid_and_broadcast`` is: the row is written
+    first, so a channel-layer outage loses the live update and never the message.
+    """
+    history = LotHistory.objects.create(
+        lot=lot,
+        user=user,
+        message=message,
+        changed_price=False,
+        current_price=lot.high_bid,
+    )
+    try:
+        async_to_sync(get_channel_layer().group_send)(
+            f"lot_{lot.pk}",
+            {
+                "type": "chat_message",
+                "info": "CHAT",
+                "message": message,
+                "pk": user.pk,
+                "username": str(user),
+                "timestamp": history.timestamp.isoformat(),
+            },
+        )
+    except Exception:
+        logger.exception("Could not broadcast a chat message on lot %s", lot.pk)
+    return history
+
+
 def broadcast_bid_result(lot, user, result):
     """Push the outcome of a bid to the connected lot-page websockets.
 
@@ -246,25 +282,7 @@ class LotConsumer(WebsocketConsumer):
                                 {"type": "error_message", "error": error},
                             )
                         else:
-                            if True:
-                                history = LotHistory.objects.create(
-                                    lot=self.lot,
-                                    user=self.user,
-                                    message=message,
-                                    changed_price=False,
-                                    current_price=self.lot.high_bid,
-                                )
-                            async_to_sync(self.channel_layer.group_send)(
-                                self.room_group_name,
-                                {
-                                    "type": "chat_message",
-                                    "info": "CHAT",
-                                    "message": message,
-                                    "pk": self.user.pk,
-                                    "username": str(self.user),
-                                    "timestamp": history.timestamp.isoformat(),
-                                },
-                            )
+                            post_chat_message(self.lot, self.user, message)
                     except (KeyError, ValueError):
                         pass
             except Exception as e:

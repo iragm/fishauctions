@@ -35,20 +35,11 @@
   {% csrf_token %}
   {% crispy form %}
 
-  {% if routing_enabled %}
+  {% if routing_enabled and donation_contact %}
   <div class="alert alert-info" role="alert">
     <i class="bi bi-info-circle me-1"></i>
-    <strong>Leave the donation contact blank.</strong>
-    Vendor replies are recorded against the vendor either way. If you also forward them to a
-    person, they'll be tempted to reply from their own inbox &mdash; and that reply never reaches
-    this site, so it won't show up in the vendor's history or move their status along. Set a
-    donation contact on the
-    <a href="{% url 'club_email_settings' club.slug %}">email settings page</a> only if someone
-    genuinely needs a copy in their inbox.
-    {% if donation_contact %}
-    <hr>
     Donation replies are currently also forwarded to <span class="text-warning">{{ donation_contact.routing_email }}</span>.
-    {% endif %}
+    Change this on the <a href="{% url 'club_email_settings' club.slug %}">email settings page</a>.
   </div>
   {% endif %}
 

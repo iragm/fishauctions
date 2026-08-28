@@ -52,10 +52,6 @@ regulars" from "put this on the front page". See auctions/announcements.py.{% en
 </div>
 {% endif %}
 
-{% if not club.enable_club_page and can_access_admin %}
-<p class="text-muted small"><i class="bi bi-eye-slash"></i> This page is only visible to admins. <a href="{% url 'club_edit' club.slug %}">Enable it in settings</a> to make it public.</p>
-{% endif %}
-
 {% if member %}
   <div class="card mb-3 d-none" id="membership-panel">
     <div class="card-body">

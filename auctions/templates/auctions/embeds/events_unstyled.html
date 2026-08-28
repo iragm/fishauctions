@@ -4,6 +4,6 @@
     <span class="club-event-when">{{ event.when }}</span>{% if event.location %}
     <span class="club-event-where">{{ event.location }}</span>{% endif %}
   </li>
-{% empty %}  <li class="club-events-empty">Nothing coming up right now.</li>
+{% empty %}  <li class="club-events-empty">{{ empty_message|default:"Nothing coming up right now." }}</li>
 {% endfor %}</ul>
 {% endautoescape %}

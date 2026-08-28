@@ -1,6 +1,6 @@
 # See https://pre-commit.com for more information
 # See https://pre-commit.com/hooks.html for more hooks
-exclude: ^auctions/static/(js/vendor|css/vendor|admin|autocomplete_light|bootstrap_datepicker_plus|django_extensions|django_htmx|django_tables2|el-pagination|summernote|location_field|markdownfield|webpush)/
+exclude: ^(auctions/static/(js/vendor|css/vendor|admin|autocomplete_light|bootstrap_datepicker_plus|django_extensions|django_htmx|django_tables2|el-pagination|summernote|location_field|markdownfield|webpush)/|auctions/mcp/vendor/)
 repos:
 -   repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v6.0.0
@@ -11,7 +11,7 @@ repos:
     -   id: check-added-large-files
 - repo: https://github.com/astral-sh/ruff-pre-commit
   # Ruff version. Keep in sync with `ruff` in requirements-test.txt.
-  rev: v0.15.11
+  rev: v0.16.2
   hooks:
     # Run the linter.
     - id: ruff

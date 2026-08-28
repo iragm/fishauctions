@@ -7,7 +7,13 @@ ignore = [
     "PT009",
     "PT027",
 ]
-extend-select = [
+# `select`, not `extend-select`. Ruff 0.16.0 changed what its *default* selection is, so
+# `extend-select` -- which adds to that default -- silently pulled in RUF, PL, SIM, TRY and the
+# rest and reported ~1470 findings across the repo the first time an image was rebuilt with a
+# current ruff. `select` states the whole rule set outright and means the same thing on every ruff
+# version. Nothing is lost by the change: `E` and `F` are in the list below, and they are what the
+# old default was.
+select = [
     "A",    # flake8-builtins
     # "ARG",  # flake8-unused-arguments
     # "B",    # flake8-bugbear
@@ -38,3 +44,10 @@ extend-select = [
     "UP",   # pyupgrade
     "W",    # pycodestyle warnings
 ]
+
+[format]
+# Ruff 0.16 started formatting Python code blocks inside Markdown, which quietly rewrites the
+# examples in SES.md, AR.md and CLAUDE.md to this file's 120-column line length. Documentation
+# was never in the formatter's scope here and a version bump is not the moment to put it there,
+# so it stays out. Linting is unaffected -- ruff never linted Markdown.
+exclude = ["*.md"]

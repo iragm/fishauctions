@@ -101,6 +101,7 @@ cryptography==50.0.0
     #   django-ses
     #   google-auth
     #   http-ece
+    #   jwcrypto
     #   py-vapid
     #   pyjwt
     #   pyopenssl
@@ -126,6 +127,7 @@ django==5.2.17
     #   django-filter
     #   django-htmx
     #   django-markdownfield
+    #   django-oauth-toolkit
     #   django-post-office
     #   django-qr-code
     #   django-recaptcha
@@ -168,6 +170,8 @@ django-htmx==1.29.0
 django-location-field==2.7.3
     # via -r requirements.in
 django-markdownfield==0.21.1
+    # via -r requirements.in
+django-oauth-toolkit==3.4.1
     # via -r requirements.in
 django-post-office==3.11.2
     # via -r requirements.in
@@ -277,6 +281,8 @@ jmespath==1.1.0
     # via
     #   boto3
     #   botocore
+jwcrypto==1.5.8
+    # via django-oauth-toolkit
 kombu==5.6.2
     # via celery
 linkify-it-py==2.1.0
@@ -314,6 +320,7 @@ numpy==2.4.6
 oauthlib==3.3.1
     # via
     #   -r requirements.in
+    #   django-oauth-toolkit
     #   requests-oauthlib
 packaging==26.3
     # via
@@ -423,6 +430,7 @@ requests==2.34.2
     # via
     #   -r requirements.in
     #   cachecontrol
+    #   django-oauth-toolkit
     #   django-ses
     #   google-api-core
     #   google-cloud-storage
@@ -469,6 +477,7 @@ typing-extensions==4.16.0
     #   beautifulsoup4
     #   django-bootstrap-datepicker-plus
     #   grpcio
+    #   jwcrypto
     #   pydantic
     #   pydantic-core
     #   pyopenssl
@@ -496,6 +505,7 @@ urllib3==2.7.0
     # via
     #   -r requirements.in
     #   botocore
+    #   django-oauth-toolkit
     #   mailchimp-marketing
     #   requests
 user-agents==2.2.0

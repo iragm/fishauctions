@@ -1,6 +1,6 @@
 {% extends "auctions/embeds/base.html" %}
-{% comment %}A club's next few events. Rows come from _club_events_embed_rows().{% endcomment %}
-{% block embed_title %}{{ club_name }} events{% endblock %}
+{% comment %}A club's next few events, or its most recent ones when `past` is set. Both come from _club_events_embed_rows(), formatted identically on purpose: a club with the two of them on one page must get two lists that look alike. `empty_message` is the one thing that differs, because the two are empty for opposite reasons.{% endcomment %}
+{% block embed_title %}{{ club_name }} {% if past %}past {% endif %}events{% endblock %}
 {% block embed_body %}
     {% if events %}
     <ul class="ew-list">
@@ -15,6 +15,6 @@
       {% endfor %}
     </ul>
     {% else %}
-    <p class="ew-empty">Nothing coming up right now.</p>
+    <p class="ew-empty">{{ empty_message|default:"Nothing coming up right now." }}</p>
     {% endif %}
 {% endblock %}

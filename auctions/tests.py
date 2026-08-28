@@ -7,6 +7,7 @@ import importlib.util
 import io
 import json
 import re
+import tempfile
 import unittest
 from decimal import Decimal
 from pathlib import Path
@@ -36,6 +37,7 @@ from .forms import (
     CreateLotForm,
     CustomResetPasswordForm,
     CustomSignupForm,
+    quick_add_lot_form_class,
 )
 from .models import (
     PRIVACY_POLICY_SLUG,
@@ -54,6 +56,7 @@ from .models import (
     ClubAPIKey,
     ClubAPIKeyFieldMap,
     ClubBapCategoryOverride,
+    ClubBapGenusOverride,
     ClubHistory,
     ClubMember,
     ClubMoney,
@@ -90,6 +93,31 @@ from .test_support import isolated_cache
 # when run in the daphne-free image, e.g. `docker exec django manage.py test`. CI runs
 # the full suite in the `test` image, which has daphne, so coverage is unchanged.
 CHANNELS_TESTING_AVAILABLE = importlib.util.find_spec("daphne") is not None
+
+
+class WritableMediaRoot:
+    """Write uploads to a throwaway directory instead of the container's mediafiles volume.
+
+    MEDIA_ROOT is a bind mount of the repo's `mediafiles/`, which is gitignored and untracked.
+    A clean checkout doesn't have it, so Docker creates the mount source root-owned and the
+    `app` user the tests run as can't write into it -- that is CI, every time, while a dev
+    machine that has ever run the site has a writable one and passes. Mix this in to any test
+    class that saves a real file (an upload, a generated easy-thumbnail, a photo from an
+    importer) so it never depends on the state of that directory.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls._media_tmp = tempfile.TemporaryDirectory()
+        cls._media_override = override_settings(MEDIA_ROOT=cls._media_tmp.name)
+        cls._media_override.enable()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls._media_override.disable()
+        cls._media_tmp.cleanup()
+        super().tearDownClass()
 
 
 class CsvImportTestMixin:
@@ -143,6 +171,11 @@ class StandardTestCase(CsvImportTestMixin, TestCase):
         self.user_who_does_not_join = User.objects.create_user(
             username="no_joins", password="testpassword", email="zxcgv@example.com"
         )
+        # ``promote_this_auction`` is spelled out on both fixture auctions because the model's
+        # default is False (an auction is not on the public list until somebody puts it there),
+        # and several things this fixture is used to test are scoped to promoted auctions --
+        # notably ``models.guess_category``, which excludes lots in unpromoted auctions. Leaving
+        # it to the default made those tests depend on a column default rather than on a fixture.
         self.online_auction = Auction.objects.create(
             created_by=self.user,
             title="This auction is online",
@@ -153,6 +186,7 @@ class StandardTestCase(CsvImportTestMixin, TestCase):
             lot_entry_fee=2,
             unsold_lot_fee=10,
             tax=25,
+            promote_this_auction=True,
         )
         self.in_person_auction = Auction.objects.create(
             created_by=self.user,
@@ -167,6 +201,7 @@ class StandardTestCase(CsvImportTestMixin, TestCase):
             buy_now="allow",
             reserve_price="allow",
             use_seller_dash_lot_numbering=True,
+            promote_this_auction=True,
         )
         self.location = PickupLocation.objects.create(
             name="location", auction=self.online_auction, pickup_time=the_future
@@ -6311,6 +6346,83 @@ class AuctionCustomFieldsViewTests(StandardTestCase):
         self.assertFalse(AuctionDropdown.objects.filter(auction=self.online_auction, value="River").exists())
 
 
+class AuctionCloneCustomFieldsTests(StandardTestCase):
+    """Copying an auction has to bring the custom fields with it.
+
+    A setting that is missing from ``AuctionCreateView.fields_to_clone`` is not copied, and because
+    the copy starts from a fresh ``Auction`` it silently takes the model default instead.  That is
+    invisible on the create form -- the club sees a new auction that looks right -- and only turns
+    up when the first seller adds a lot and the field they were told to fill in is not there.
+    """
+
+    def setUp(self):
+        super().setUp()
+        userdata = self.user.userdata
+        # ALLOW_USERS_TO_CREATE_AUCTIONS is read from the environment, and CI's differs from dev's.
+        userdata.can_create_club_auctions = True
+        userdata.save()
+        self.client.login(username="my_lot", password="testpassword")
+
+    def _copy(self, source):
+        """Copy ``source`` the way the Copy button does, and return the new auction."""
+        response = self.client.post(
+            reverse("create_auction") + f"?copy={source.slug}&clone",
+            {
+                "title": "Next year's auction",
+                "date_start": timezone.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "cloned_from": source.slug,
+            },
+        )
+        self.assertEqual(response.status_code, 302)
+        clone = Auction.objects.filter(title="Next year's auction").first()
+        self.assertIsNotNone(clone)
+        return clone
+
+    def test_copying_an_auction_keeps_the_custom_checkbox(self):
+        self.online_auction.use_custom_checkbox_field = True
+        self.online_auction.custom_checkbox_name = "CARES species"
+        self.online_auction.save()
+        clone = self._copy(self.online_auction)
+        self.assertTrue(clone.use_custom_checkbox_field)
+        self.assertEqual(clone.custom_checkbox_name, "CARES species")
+
+    def test_the_copy_shows_the_custom_checkbox_when_a_lot_is_added(self):
+        # The name alone is not enough: both halves are read together everywhere the field is
+        # shown, so a copy that kept the name and lost the switch shows the seller nothing.
+        self.online_auction.use_custom_checkbox_field = True
+        self.online_auction.custom_checkbox_name = "CARES species"
+        self.online_auction.save()
+        form_class = quick_add_lot_form_class()
+        form = form_class(auction=self._copy(self.online_auction), is_admin=True, tos=None)
+        self.assertNotIsInstance(form.fields["custom_checkbox"].widget, forms.HiddenInput)
+        self.assertEqual(form.fields["custom_checkbox"].label, "CARES species")
+
+    def test_copying_an_auction_keeps_switched_off_fields_switched_off(self):
+        # These two default to True, so leaving them out of the copy turns them back on -- the
+        # opposite failure, and just as unwanted by a club that stripped its lot form down.
+        self.online_auction.use_description = False
+        self.online_auction.use_reference_link = False
+        self.online_auction.save()
+        clone = self._copy(self.online_auction)
+        self.assertFalse(clone.use_description)
+        self.assertFalse(clone.use_reference_link)
+
+    def test_every_custom_field_setting_is_copied(self):
+        """The custom fields form is entirely settings, so all of it belongs in the copy."""
+        from .forms import AuctionCustomFieldsForm
+        from .views import AuctionCreateView
+
+        missing = [
+            field for field in AuctionCustomFieldsForm.Meta.fields if field not in AuctionCreateView.fields_to_clone
+        ]
+        self.assertEqual(
+            missing,
+            [],
+            f"{missing} are on the custom fields form but not in AuctionCreateView.fields_to_clone, "
+            "so copying an auction resets them to the model default.",
+        )
+
+
 class PayPalFormFieldVisibilityTests(StandardTestCase):
     """Test that PayPal payment field is only shown when user has PayPal connected"""
 
@@ -7302,7 +7414,6 @@ class ClubMembershipRenewalFlowTests(StandardTestCase):
             name="Renewal Club",
             membership_system="rolling",
             membership_annual_fee=Decimal("25.00"),
-            enable_club_page=True,
             send_membership_expiration_reminders=True,
         )
         self.payment_user = User.objects.create_user(
@@ -8084,7 +8195,6 @@ class ClubMoneyRenewalConsistencyTests(StandardTestCase):
             name="Money Club",
             membership_system="rolling",
             membership_annual_fee=Decimal("25.00"),
-            enable_club_page=True,
         )
         self.payment_user = User.objects.create_user(
             username="money_payment_user", password="testpass", email="money_payment_user@example.com"
@@ -8878,7 +8988,7 @@ class UserViewTests(StandardTestCase):
         assert response.status_code == 200
 
 
-class ImageViewTests(StandardTestCase):
+class ImageViewTests(WritableMediaRoot, StandardTestCase):
     """Test image create/update/delete views"""
 
     def _image_bytes(self, fmt="JPEG", size=(10, 10)):
@@ -8887,6 +8997,17 @@ class ImageViewTests(StandardTestCase):
 
         buffer = io.BytesIO()
         PILImage.new("RGB", size, "blue").save(buffer, format=fmt)
+        return buffer.getvalue()
+
+    def _animated_gif_bytes(self, size=(10, 10)):
+        """Raw bytes of a two-frame GIF -- the upload behind the `cannot write mode P as
+        JPEG` 500: easy_thumbnails hands an animated source back as a palette image, which
+        Pillow then refuses to write as the JPEG thumbnail it wants to make."""
+        from PIL import Image as PILImage
+
+        frames = [PILImage.new("RGB", size, color).convert("P") for color in ("red", "green")]
+        buffer = io.BytesIO()
+        frames[0].save(buffer, format="GIF", save_all=True, append_images=frames[1:])
         return buffer.getvalue()
 
     def _addable_lot(self):
@@ -8945,6 +9066,28 @@ class ImageViewTests(StandardTestCase):
         # Should not raise, and should leave the file ready to be re-read.
         validate_uploaded_image(upload)
         self.assertEqual(upload.tell(), 0)
+
+    def test_animated_gif_upload_is_converted_to_jpeg(self):
+        """An animated GIF is flattened on the way in so thumbnailing can write it"""
+        from .forms import CreateImageForm
+
+        upload = SimpleUploadedFile("fish.gif", self._animated_gif_bytes(), content_type="image/gif")
+        form = CreateImageForm(data={"image_source": "ACTUAL"}, files={"image": upload})
+        self.assertTrue(form.is_valid(), form.errors)
+        self.assertTrue(form.cleaned_data["image"].name.endswith(".jpg"))
+
+    def test_editing_an_image_with_an_animated_gif(self):
+        """The prod regression: POSTing an animated GIF to /images/<pk>/edit raised
+        `OSError: cannot write mode P as JPEG` out of easy_thumbnails and 500ed."""
+        lot = self._addable_lot()
+        image = LotImage.objects.create(lot_number=lot, image_source="ACTUAL")
+        self.client.login(username=self.user.username, password="testpassword")
+        url = reverse("edit_image", kwargs={"pk": image.pk})
+        upload = SimpleUploadedFile("fish.gif", self._animated_gif_bytes(), content_type="image/gif")
+        response = self.client.post(url, {"image": upload, "image_source": "ACTUAL"})
+        self.assertEqual(response.status_code, 302)
+        image.refresh_from_db()
+        self.assertTrue(image.image.name.endswith(".jpg"), image.image.name)
 
     def test_site_error_on_save_is_not_masked_as_corrupt(self):
         """A permission/disk error while saving must surface as a 500 (which emails the
@@ -9907,6 +10050,11 @@ class WebSocketConsumerTests(TransactionTestCase):
         self.user_who_does_not_join = User.objects.create_user(
             username="no_joins", password="testpassword", email="zxcgv@example.com"
         )
+        # ``promote_this_auction`` is spelled out on both fixture auctions because the model's
+        # default is False (an auction is not on the public list until somebody puts it there),
+        # and several things this fixture is used to test are scoped to promoted auctions --
+        # notably ``models.guess_category``, which excludes lots in unpromoted auctions. Leaving
+        # it to the default made those tests depend on a column default rather than on a fixture.
         self.online_auction = Auction.objects.create(
             created_by=self.user,
             title="This auction is online",
@@ -9917,6 +10065,7 @@ class WebSocketConsumerTests(TransactionTestCase):
             lot_entry_fee=2,
             unsold_lot_fee=10,
             tax=25,
+            promote_this_auction=True,
         )
         self.in_person_auction = Auction.objects.create(
             created_by=self.user,
@@ -9931,6 +10080,7 @@ class WebSocketConsumerTests(TransactionTestCase):
             buy_now="allow",
             reserve_price="allow",
             use_seller_dash_lot_numbering=True,
+            promote_this_auction=True,
         )
         self.location = PickupLocation.objects.create(
             name="location", auction=self.online_auction, pickup_time=theFuture
@@ -18140,17 +18290,8 @@ class ClubViewTests(TestCase):
             permission_admin=True,
         )
 
-    def test_club_detail_requires_login(self):
-        """Anonymous user gets 404 when enable_club_page is off"""
-        self.club.enable_club_page = False
-        self.club.save()
-        url = reverse("club_detail", kwargs={"slug": self.club.slug})
-        response = self.client.get(url)
-        self.assertEqual(response.status_code, 404)
-
     def test_club_detail_anonymous_can_view_when_enabled(self):
-        """Anonymous user can view club detail page when enable_club_page=True"""
-        self.club.enable_club_page = True
+        """Anonymous user can view a club detail page."""
         self.club.save()
         url = reverse("club_detail", kwargs={"slug": self.club.slug})
         response = self.client.get(url)
@@ -18180,7 +18321,6 @@ class ClubViewTests(TestCase):
 
     def test_viewing_club_page_does_not_record_for_non_member(self):
         """A non-member viewing a public club page does not get it recorded as their last club used."""
-        self.club.enable_club_page = True
         self.club.save()
         self.client.login(username="other2", password="testpass")
         self.client.get(reverse("club_detail", kwargs={"slug": self.club.slug}))
@@ -18188,7 +18328,6 @@ class ClubViewTests(TestCase):
         self.assertIsNone(self.other_user.userdata.last_club_used)
 
     def test_club_detail_tab_route_shows_requested_tab_chart_and_recent_auctions(self):
-        self.club.enable_club_page = True
         self.club.enable_breeder_award_program = True
         self.club.homepage = "https://example.com"
         self.club.facebook_page = "https://facebook.com/view-test-club"
@@ -18211,6 +18350,9 @@ class ClubViewTests(TestCase):
                 lot_entry_fee=0,
                 unsold_lot_fee=0,
                 tax=0,
+                # The club page's "recent auctions" list is the promoted ones; the model default is
+                # False, so an auction that is meant to appear there has to say so.
+                promote_this_auction=True,
             )
         self.client.login(username="club_owner2", password="testpass")
         response = self.client.get(reverse("club_detail_tab", kwargs={"slug": self.club.slug, "tab": "my-points"}))
@@ -18226,7 +18368,6 @@ class ClubViewTests(TestCase):
 
     def test_club_tabs_collapse_into_a_more_menu_when_there_are_too_many(self):
         """Events/BAP/HAP/Culture/My Points runs off the side of a phone; three tabs don't."""
-        self.club.enable_club_page = True
         self.club.enable_breeder_award_program = True
         self.club.save()
         self.client.login(username="club_owner2", password="testpass")
@@ -18250,7 +18391,6 @@ class ClubViewTests(TestCase):
         self.assertRegex(html, r'class="nav-link[^"]*" id="bap-tab-btn"')
 
     def test_club_detail_shows_join_button_for_non_member(self):
-        self.club.enable_club_page = True
         self.club.homepage = "https://example.com"
         self.club.facebook_page = "https://facebook.com/view-test-club"
         self.club.discord_invite_link = "https://discord.gg/viewclub"
@@ -18507,28 +18647,9 @@ class ClubViewTests(TestCase):
         self.assertEqual(response.status_code, 403)
 
     def test_club_detail_non_member_can_view(self):
-        """Non-member authenticated user can view club detail page when enable_club_page=True"""
-        self.club.enable_club_page = True
+        """Non-member authenticated user can view a club detail page."""
         self.club.save()
         self.client.login(username="other2", password="testpass")
-        url = reverse("club_detail", kwargs={"slug": self.club.slug})
-        response = self.client.get(url)
-        self.assertEqual(response.status_code, 200)
-
-    def test_club_detail_disabled_returns_404(self):
-        """Non-admin user gets 404 when enable_club_page is off"""
-        self.club.enable_club_page = False
-        self.club.save()
-        self.client.login(username="other2", password="testpass")
-        url = reverse("club_detail", kwargs={"slug": self.club.slug})
-        response = self.client.get(url)
-        self.assertEqual(response.status_code, 404)
-
-    def test_club_detail_disabled_admin_can_view(self):
-        """Club admin can always view the club page even when enable_club_page is off"""
-        self.club.enable_club_page = False
-        self.club.save()
-        self.client.login(username="club_owner2", password="testpass")
         url = reverse("club_detail", kwargs={"slug": self.club.slug})
         response = self.client.get(url)
         self.assertEqual(response.status_code, 200)
@@ -18566,7 +18687,6 @@ class ClubPermissionTests(CsvImportTestMixin, TestCase):
         self.club = Club.objects.create(
             name="Permission Test Club",
             allow_joining=True,
-            enable_club_page=True,
             enable_breeder_award_program=True,
         )
         self.non_member = User.objects.create_user(
@@ -19071,7 +19191,7 @@ class ClubMemberUpdateTests(CsvImportTestMixin, TestCase):
         self.other_user = User.objects.create_user(
             username="cu_other", password="testpass", email="cu_other@example.com"
         )
-        self.club = Club.objects.create(name="Update Test Club", allow_joining=True, enable_club_page=True)
+        self.club = Club.objects.create(name="Update Test Club", allow_joining=True)
         self.member = ClubMember.objects.create(
             club=self.club, user=self.member_user, name="Jane Doe", email="cu_member@example.com"
         )
@@ -19946,7 +20066,6 @@ class ClubAuctionIntegrationTests(TestCase):
         self.owner = User.objects.create_user(username="ca_owner", password="testpass", email="ca_owner@example.com")
         self.club = Club.objects.create(
             name="Auction Test Club",
-            enable_club_page=True,
         )
         # Set club on owner's userdata
         self.owner.userdata.club = self.club
@@ -20146,22 +20265,15 @@ class ClubAuctionIntegrationTests(TestCase):
         club.refresh_from_db()
         self.assertEqual(club.abbreviation, "PFC")
 
-    def test_club_detail_accessible_with_manage_auctions_role_when_page_disabled(self):
-        """Users with manage_auctions permission can view club page even when enable_club_page=False"""
-        club_no_page = Club.objects.create(name="Private Club", enable_club_page=False)
+    def test_club_detail_accessible_with_manage_auctions_role(self):
+        """An officer who only manages auctions can still open their club's page."""
+        club_no_page = Club.objects.create(name="Private Club")
         user_manage = User.objects.create_user(username="manage_user", password="testpass", email="manage@example.com")
         ClubMember.objects.create(club=club_no_page, user=user_manage, permission_manage_auctions=True)
         self.client.login(username="manage_user", password="testpass")
         url = reverse("club_detail", kwargs={"slug": club_no_page.slug})
         response = self.client.get(url)
         self.assertEqual(response.status_code, 200)
-
-    def test_club_detail_not_accessible_anon_when_page_disabled(self):
-        """Anonymous users cannot view a club detail page when enable_club_page=False"""
-        club_no_page = Club.objects.create(name="Private Club 2", enable_club_page=False)
-        url = reverse("club_detail", kwargs={"slug": club_no_page.slug})
-        response = self.client.get(url)
-        self.assertEqual(response.status_code, 404)
 
     def test_club_admins_added_as_tos_on_pickup_location_create(self):
         """When first pickup location is created for a club auction, club admin members get AuctionTOS"""
@@ -20368,7 +20480,6 @@ class ClubSettingsViewTests(TestCase):
                 "homepage": "https://example.com",
                 "facebook_page": "https://facebook.com/settingsclub",
                 "discord_invite_link": "https://discord.gg/settingsclub",
-                "enable_club_page": "on",
                 "allow_joining": "on",
                 "enable_breeder_award_program": "on",
                 "enable_membership": "on",
@@ -21608,6 +21719,57 @@ class ClubBapLotsViewTests(TestCase):
         self.assertEqual(self.pending_lot.species_category, self.other_category)
         self.assertContains(response, "bapLotListChanged")
 
+    # --- the three buttons on each row --------------------------------------
+    #
+    # These went through ``services.review_lot_points`` when ``review_points`` needed to press them
+    # without being a browser, and until then nothing tested them at all.
+
+    def _press(self, lot, action, **extra):
+        return self.client.post(reverse("lot_bap_points", kwargs={"pk": lot.pk}), {"action": action, **extra})
+
+    def test_approving_creates_the_award_and_a_history_line(self):
+        self.client.login(username="bap_lots_user", password="testpass")
+        response = self._press(self.pending_lot, "approve", bap_points=7)
+        self.assertEqual(response.status_code, 200)
+        award = BapAward.objects.get(lot=self.pending_lot)
+        self.assertEqual(award.points, 7)
+        self.assertEqual(award.club_member, self.seller_member)
+        self.pending_lot.refresh_from_db()
+        self.assertTrue(self.pending_lot.manually_approved)
+        self.assertTrue(ClubHistory.objects.filter(club=self.club, applies_to="BAP", action__startswith="Awarded"))
+
+    def test_rejecting_leaves_no_award(self):
+        self.client.login(username="bap_lots_user", password="testpass")
+        self._press(self.pending_lot, "reject")
+        self.assertFalse(BapAward.objects.filter(lot=self.pending_lot).exists())
+        self.pending_lot.refresh_from_db()
+        self.assertTrue(self.pending_lot.manually_approved)
+
+    def test_undo_puts_the_lot_back_and_says_so_in_the_history(self):
+        self.client.login(username="bap_lots_user", password="testpass")
+        self._press(self.approved_lot, "undo")
+        self.assertFalse(BapAward.objects.filter(lot=self.approved_lot).exists())
+        self.approved_lot.refresh_from_db()
+        self.assertFalse(self.approved_lot.manually_approved)
+        self.assertTrue(ClubHistory.objects.filter(club=self.club, applies_to="BAP", action__startswith="Undid"))
+
+    def test_a_plain_member_cannot_press_anything(self):
+        self.client.login(username="bap_lots_plain", password="testpass")
+        response = self._press(self.pending_lot, "approve", bap_points=7)
+        self.assertEqual(response.status_code, 403)
+        self.assertFalse(BapAward.objects.filter(lot=self.pending_lot).exists())
+
+    def test_the_default_the_button_offers_follows_the_genus_rule(self):
+        """It read the category override and not the genus one, so the row re-rendered with a
+        number the table had never shown."""
+        species = Species.objects.create(scientific_name="Tropheus moorii", genus="Tropheus", species="moorii")
+        self.pending_lot.species = species
+        self.pending_lot.save()
+        ClubBapGenusOverride.objects.create(club=self.club, genus="Tropheus", points=15)
+        self.client.login(username="bap_lots_user", password="testpass")
+        response = self._press(self.pending_lot, "undo")
+        self.assertContains(response, 'name="bap_points" value="15"')
+
 
 class ClubAPIKeyModelTests(TestCase):
     """Unit tests for ClubAPIKey.generate() and ClubAPIKey.verify()."""
@@ -22575,7 +22737,6 @@ class ClubMembershipInvoiceTests(TestCase):
 
         self.club = Club.objects.create(
             name="Pay Club",
-            enable_club_page=True,
             membership_annual_fee=Decimal("30.00"),
             membership_system="rolling",
         )
@@ -22934,7 +23095,6 @@ class NonOAuthPayPalTests(TestCase):
         self.money_user = User.objects.create_user(username="nonoauth_money", password="pw", email="money@example.com")
         self.club = Club.objects.create(
             name="BYO PayPal Club",
-            enable_club_page=True,
             enable_membership=True,
             membership_annual_fee=Decimal("30.00"),
             membership_system="rolling",
@@ -24353,7 +24513,6 @@ class ClubMembershipDuesReversalTests(TestCase):
         self.club = Club.objects.create(
             name="Dues Reversal Club",
             enable_membership=True,
-            enable_club_page=True,
             membership_system="rolling",
             membership_annual_fee=Decimal("40.00"),
         )
@@ -24564,9 +24723,7 @@ class BapTop10ChartTests(TestCase):
         self._chart = _club_top10_chart_data
         self._all_months = _last_n_month_starts(60)
         self._ytd_months = _ytd_month_starts()
-        self.club = Club.objects.create(
-            name="Chart Club", slug="chartclub", enable_breeder_award_program=True, enable_club_page=True
-        )
+        self.club = Club.objects.create(name="Chart Club", slug="chartclub", enable_breeder_award_program=True)
         self.this_year = timezone.now().year
         # Three members so we can see all three colors at once.
         self.first = self._member("First Place", user_name="firstplace")
@@ -24965,7 +25122,7 @@ class DiscordJoinButtonTests(TestCase):
     def setUp(self):
         from .views import DiscordInteractionsView
 
-        self.club = Club.objects.create(name="Button Club", discord_server_id="777000222", enable_club_page=True)
+        self.club = Club.objects.create(name="Button Club", discord_server_id="777000222")
         self.view = DiscordInteractionsView()
 
     def _interaction(self, discord_id="42", interaction_type=3, custom_id="join_button"):
@@ -25843,23 +26000,8 @@ class MembershipNumberModeTests(TestCase):
         self.assertEqual(targeted_pks, {self.unpaid.pk})
 
 
-class ClubIconWalletTests(TestCase):
+class ClubIconWalletTests(WritableMediaRoot, TestCase):
     """The uploaded Club.icon must flow into the Google Wallet class and Apple pkpass."""
-
-    @classmethod
-    def setUpClass(cls):
-        super().setUpClass()
-        import tempfile
-
-        cls._media_tmp = tempfile.TemporaryDirectory()
-        cls._media_override = override_settings(MEDIA_ROOT=cls._media_tmp.name)
-        cls._media_override.enable()
-
-    @classmethod
-    def tearDownClass(cls):
-        cls._media_override.disable()
-        cls._media_tmp.cleanup()
-        super().tearDownClass()
 
     def _png_bytes(self, size=(64, 64), color=(220, 30, 30)):
         import io as _io
@@ -28335,7 +28477,7 @@ class CommandPaletteTests(StandardTestCase):
     def _make_palette_club(self, user, **permissions):
         """Create a club, make ``user`` a member with the given permissions, and record it as the
         user's last club used so the palette's club shortcuts target it."""
-        club = Club.objects.create(name="Palette Club", enable_club_page=True)
+        club = Club.objects.create(name="Palette Club")
         ClubMember.objects.create(club=club, user=user, name="Member", **permissions)
         user.userdata.last_club_used = club
         user.userdata.save()
@@ -30070,26 +30212,8 @@ class LotListUXTests(StandardTestCase):
     CLOUDFLARE_IMAGES_ACCOUNT_HASH="test-hash",
     CLOUDFLARE_IMAGES_DOMAIN="",
 )
-class CloudflareImagesTests(StandardTestCase):
+class CloudflareImagesTests(WritableMediaRoot, StandardTestCase):
     """Cloudflare Images serving, fallback, and the migrate_to_cloudflare_images command"""
-
-    @classmethod
-    def setUpClass(cls):
-        super().setUpClass()
-        import tempfile
-
-        # These tests write real image files and generate local easy-thumbnails, so point
-        # MEDIA_ROOT at a writable temp dir rather than the container's mediafiles volume
-        # (which may not be writable by the test user -> PermissionError).
-        cls._media_tmp = tempfile.TemporaryDirectory()
-        cls._media_override = override_settings(MEDIA_ROOT=cls._media_tmp.name)
-        cls._media_override.enable()
-
-    @classmethod
-    def tearDownClass(cls):
-        cls._media_override.disable()
-        cls._media_tmp.cleanup()
-        super().tearDownClass()
 
     def _image_file(self, name="test.jpg"):
         from PIL import Image as PILImage
@@ -32930,3 +33054,66 @@ class LotOwnershipWithUnlinkedTosTests(StandardTestCase):
         self.orphaned_lot.refresh_from_db()
         assert self.unlinked_tos.user == self.seller
         assert self.orphaned_lot.user == self.seller
+
+
+class ParticipantDropdownMirrorsTheClubPageTests(StandardTestCase):
+    """Managing a member from the auction is supposed to be the same job as from /clubs/x/admin/.
+
+    It was not: the participant row's Actions menu offered Renew, Set expiration date and
+    Membership number, and stopped there -- so an admin working the users page for a club-managed
+    auction could not resend somebody's card or deactivate them without going to find the club.
+    """
+
+    def setUp(self):
+        super().setUp()
+        from .views import _upsert_clubmember_shadow_tos
+
+        self.club = Club.objects.create(name="Dropdown Club", active=True, show_member_barcode=True)
+        self.in_person_auction.club = self.club
+        self.in_person_auction.manage_users_through_club = "all"
+        self.in_person_auction.save()
+        self.member = ClubMember.objects.create(
+            club=self.club, name="Dropdown Dave", email="dave@example.com", bidder_number="81"
+        )
+        self.tos = _upsert_clubmember_shadow_tos(self.in_person_auction, self.member)
+
+    def test_the_card_can_be_resent_from_the_auction(self):
+        html = self.tos.actions_dropdown_html
+        self.assertIn(
+            reverse("club_member_confirm", kwargs={"pk": self.member.pk, "action": "resend_card"}),
+            html,
+        )
+        self.assertIn("Resend membership card", html)
+
+    def test_a_member_can_be_deactivated_from_the_auction(self):
+        html = self.tos.actions_dropdown_html
+        self.assertIn(reverse("club_member_confirm", kwargs={"pk": self.member.pk, "action": "delete"}), html)
+        self.assertIn("Deactivate club member", html)
+
+    def test_a_deactivated_member_is_offered_reactivation_instead(self):
+        self.member.is_deleted = True
+        self.member.save()
+        html = self.tos.actions_dropdown_html
+        self.assertIn(reverse("club_member_reactivate", kwargs={"pk": self.member.pk}), html)
+        self.assertNotIn("Deactivate club member", html)
+        # No card to resend for somebody who is not a member; the confirm view 404s on it too.
+        self.assertNotIn("Resend membership card", html)
+
+    def test_a_club_with_no_cards_is_offered_neither_card_action(self):
+        self.club.show_member_barcode = False
+        self.club.save()
+        self.tos.refresh_from_db()
+        html = self.tos.actions_dropdown_html
+        self.assertNotIn("Resend membership card", html)
+        self.assertNotIn("Membership number", html)
+        # Deactivate has nothing to do with cards and stays.
+        self.assertIn("Deactivate club member", html)
+
+    def test_an_auction_with_no_club_gets_none_of_it(self):
+        self.in_person_auction.manage_users_through_club = ""
+        self.in_person_auction.club = None
+        self.in_person_auction.save()
+        tos = AuctionTOS.objects.get(pk=self.tos.pk)
+        html = tos.actions_dropdown_html
+        self.assertNotIn("Resend membership card", html)
+        self.assertNotIn("Deactivate club member", html)

@@ -15,6 +15,7 @@ from .models import (
     AdCampaignGroup,
     AdCampaignResponse,
     AppleDeviceRegistration,
+    AssistantSkillRequest,
     Auction,
     AuctionCampaign,
     AuctionHistory,
@@ -56,6 +57,7 @@ from .models import (
     SpeciesNameRejection,
     SpeciesSearchCache,
     ThermalPrinterProfile,
+    UserAPIKey,
     UserBan,
     UserData,
     UserInterestCategory,
@@ -93,8 +95,8 @@ export_to_csv.short_description = "Export to CSV"
 
 class FaqAdmin(admin.ModelAdmin):
     model = FAQ
-    list_display = ("category_text", "question")
-    # list_filter = ("title",)
+    list_display = ("category_text", "question", "agent_only")
+    list_filter = ("agent_only",)
     search_fields = (
         "category_text",
         "question",
@@ -829,6 +831,22 @@ class ClubDiscordRoleInline(admin.TabularInline):
     readonly_fields = ("createdon",)
 
 
+class UserAPIKeyAdmin(admin.ModelAdmin):
+    """Keys that let an agent use the MCP endpoint as one person.
+
+    The secret half of a key is hashed and is not here, on purpose: this page can revoke a key
+    (``is_active``) and can say when it was last used, but it cannot show anybody what the key is.
+    Issuing one is a job for the account page, which shows it once.
+    """
+
+    model = UserAPIKey
+    list_display = ("name", "user", "prefix", "allow_writes", "is_active", "created_at", "last_used_at", "expires_at")
+    list_filter = ("is_active", "allow_writes")
+    search_fields = ("name", "prefix", "user__username", "user__email")
+    readonly_fields = ("prefix", "key_hash", "created_at", "last_used_at")
+    raw_id_fields = ("user",)
+
+
 class ClubAPIKeyInline(admin.TabularInline):
     model = ClubAPIKey
     extra = 0
@@ -1432,6 +1450,7 @@ admin.site.register(SearchHistory, SearchHistoryAdmin)
 admin.site.register(CommandPalettePage, CommandPalettePageAdmin)
 admin.site.register(CommandPaletteSearch, CommandPaletteSearchAdmin)
 admin.site.register(LLMUsage, LLMUsageAdmin)
+admin.site.register(UserAPIKey, UserAPIKeyAdmin)
 admin.site.register(FAQ, FaqAdmin)
 admin.site.register(LotAutoCategory, LotAutoCategoryAdmin)
 admin.site.register(AuctionTOS, AuctionTOSAdmin)
@@ -1593,3 +1612,19 @@ class SpeakerCommentAdmin(admin.ModelAdmin):
 admin.site.register(SpeakerTopic, SpeakerTopicAdmin)
 admin.site.register(Speaker, SpeakerAdmin)
 admin.site.register(SpeakerComment, SpeakerCommentAdmin)
+
+
+@admin.register(AssistantSkillRequest)
+class AssistantSkillRequestAdmin(admin.ModelAdmin):
+    """The Django-admin view of what agents asked for. The dashboard page is the one to use.
+
+    Here for the same reason ``VoiceCommandLog`` is: bulk edits, and a search across every status
+    at once. ``/admin-dashboard/assistant-requests/`` is where the decision gets made, because it
+    groups by skill and counts the people asking, which is the number that matters.
+    """
+
+    list_display = ("skill", "user", "status", "surface", "createdon")
+    list_filter = ("status", "surface")
+    search_fields = ("skill", "reason", "params", "user__username")
+    readonly_fields = ("createdon", "updatedon")
+    list_select_related = ("user",)
