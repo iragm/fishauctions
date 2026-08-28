@@ -455,7 +455,8 @@ Rules:
 
 - **There is no per-user gate**, and no requirement that a language model be configured site-wide.
   `is_active` is checked on every credential. `UserData.use_llm_search` is "AI command palette" only
-  (defaults from `ASSISTANT_ENABLED_FOR_USERS`; `manage.py change_assistant on|off`).
+  (on for everyone; defaults from `ASSISTANT_ENABLED_FOR_USERS`, and unchecking one user in the
+  Django admin — or `manage.py change_assistant off` for all of them — is how it is taken away).
 - **A credential we recognise and won't act on is a `403`, never a `401`** (`mcp.auth.Refusal`). The
   403 carries no `WWW-Authenticate`.
 - `allow_writes` (a key) and the `write` scope (a token) are a **ceiling, not a grant**. Read-only

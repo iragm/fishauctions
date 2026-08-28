@@ -266,11 +266,12 @@ def assist_enabled_for(user) -> bool:
     * the install has a model configured at all (:func:`auctions.llm.assist_enabled`), and
     * the user has opted in (``UserData.use_llm_search``).
 
-    The preference is off by default and is deliberately not on the preferences page yet -- it is
-    flipped per user in the admin while the feature is in beta. With either gate shut the palette
-    must behave exactly as it did before this feature existed: no mic, no assist calls, Enter falls
-    through to ordinary search. Everything user-facing asks *this* function rather than
-    ``assist_enabled()`` so the answer can't differ between the template and the endpoints.
+    The preference is on by default and is deliberately not on the preferences page -- it is a
+    lever for the site's admins, unchecked in the Django admin to take the palette away from one
+    user who abused it. With either gate shut the palette must behave exactly as it did before
+    this feature existed: no mic, no assist calls, Enter falls through to ordinary search.
+    Everything user-facing asks *this* function rather than ``assist_enabled()`` so the answer
+    can't differ between the template and the endpoints.
     """
     if not user or not getattr(user, "is_authenticated", False):
         return False
