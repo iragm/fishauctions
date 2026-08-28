@@ -163,8 +163,17 @@ def _unfenced_names(result):
     return [str(person.get("name", "")).strip("«»").strip() for person in result.get("people", [])]
 
 
+@isolated_cache("palette-assist")
 class PaletteAssistTestCase(StandardTestCase):
-    """Shared setup: a scripted provider, an open in-person auction, and no leftover throttles."""
+    """Shared setup: a scripted provider, an open in-person auction, and no leftover throttles.
+
+    The cache has to be this class's own. Every test below clears four users' cooldown keys in
+    ``setUp``, and those keys are named after a primary key -- which under ``--parallel`` is the
+    same small integer in every worker's database while the Redis holding them is shared. One
+    worker starting any palette test would delete the cooldown another worker had just set, and
+    ``test_rapid_second_assist_is_throttled`` would get a 200 where it wanted a 429. See
+    ``auctions.test_cache_hygiene`` for the general shape of this.
+    """
 
     def setUp(self):
         super().setUp()
@@ -309,6 +318,12 @@ class AuthAndThrottleTests(PaletteAssistTestCase):
         self.assertEqual(resp.status_code, 302)
         self.assertEqual(self.provider.call_count, 0, "an anonymous request must never reach the LLM")
 
+    # A real cooldown lasts one second, and the first request below has to finish inside it for
+    # the second to be throttled at all. That holds by a wide margin on a quiet machine and is not
+    # something to bet a CI run on, so the window is widened for the two tests that depend on it:
+    # what is under test is that a second request inside the cooldown is refused, not how long a
+    # cooldown lasts.
+    @patch.object(palette_assist, "COOLDOWN_SECONDS", 300)
     def test_rapid_second_assist_is_throttled(self):
         self._script({"error": "first"}, {"error": "second"})
         first = self._assist("add a lot of blue shrimp for someone")
@@ -320,6 +335,7 @@ class AuthAndThrottleTests(PaletteAssistTestCase):
         self.assertTrue(second.json()["message"])
         self.assertEqual(self.provider.call_count, calls_after_first, "a throttled request must not reach the provider")
 
+    @patch.object(palette_assist, "COOLDOWN_SECONDS", 300)
     def test_execute_is_throttled_too(self):
         self._execute("add_lot", {"name": "x"})
         self.client.force_login(self.user)

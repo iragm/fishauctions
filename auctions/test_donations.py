@@ -417,6 +417,57 @@ class DraftingTests(DonationTestMixin, TestCase):
         prompt = self.provider.calls[0]["messages"][0]["content"]
         self.assertIn("Their last message to the club", prompt)
 
+    def test_the_three_kinds_of_email_are_told_apart(self):
+        self.assertEqual(donations.draft_mode(), donations.DRAFT_MODE_FIRST)
+        self.assertEqual(donations.draft_mode("   "), donations.DRAFT_MODE_FIRST)
+        self.assertEqual(donations.draft_mode("ours", last_email_is_outgoing=True), donations.DRAFT_MODE_FOLLOWUP)
+        self.assertEqual(donations.draft_mode("theirs"), donations.DRAFT_MODE_REPLY)
+
+    def test_a_reply_is_not_briefed_as_a_donation_request(self):
+        """The bug this guards: one first-approach system prompt for all three emails.
+
+        A heading in the user turn asking for a reply loses to a system prompt that says "you write
+        donation request emails, say who the club is, make the ask, say what the business gets" --
+        so the answer to "sure, what's the next step?" came back reading like a fresh solicitation.
+        """
+        donations.draft_request(self.vendor, last_email="Sure, what's the next step?")
+        system = self.provider.calls[0]["system"]
+        self.assertIn("NOT a donation request", system)
+        self.assertIn("Answer what they actually asked", system)
+        self.assertNotIn("Make one clear, modest ask", system)
+        self.assertNotIn("what the business gets: their name in front of", system)
+
+    def test_a_first_approach_still_gets_the_pitch(self):
+        donations.draft_request(self.vendor)
+        system = self.provider.calls[0]["system"]
+        self.assertIn("Make one clear, modest ask", system)
+        self.assertIn("first approach", system)
+
+    def test_a_nudge_is_briefed_as_a_nudge(self):
+        donations.draft_request(self.vendor, last_email="Our first request", last_email_is_outgoing=True)
+        system = self.provider.calls[0]["system"]
+        self.assertIn("nudge, not a second pitch", system)
+        self.assertNotIn("Make one clear, modest ask", system)
+
+    def test_every_kind_keeps_the_rules_that_are_not_negotiable(self):
+        for mode in (donations.DRAFT_MODE_FIRST, donations.DRAFT_MODE_FOLLOWUP, donations.DRAFT_MODE_REPLY):
+            system = donations.draft_system_prompt(mode)
+            with self.subTest(mode=mode):
+                self.assertIn("tax deductible", system)
+                self.assertIn('"subject"', system)
+                self.assertIn("unsubscribe line in the body", system)
+
+    def test_a_reply_may_put_the_address_in_the_body_and_a_first_approach_may_not(self):
+        """A vendor asking what happens next is answered in the body, not in the fine print."""
+        donations.draft_request(self.vendor, last_email="Sure, what's the next step?")
+        reply_prompt = self.provider.calls[0]["messages"][0]["content"]
+        self.assertIn("Put it in the body", reply_prompt)
+        self.assertIn("1 Main St", reply_prompt)
+
+        donations.draft_request(self.vendor)
+        first_prompt = self.provider.calls[1]["messages"][0]["content"]
+        self.assertIn("Do not repeat it in the body", first_prompt)
+
 
 @isolated_cache("donations")
 @override_settings(**ROUTING_SETTINGS)

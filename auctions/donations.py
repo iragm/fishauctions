@@ -473,32 +473,87 @@ def record_incoming(vendor, *, sender, recipients, subject, body, message_id="",
 
 # --- drafting ----------------------------------------------------------------
 
-_DRAFT_SYSTEM_PROMPT = """You write short donation request emails on behalf of small, volunteer-run \
-hobbyist clubs (aquarium societies and similar) asking local businesses to donate an item to a \
-raffle or charity auction.
+#: Which of three quite different emails is being written. Derived from the conversation so far by
+#: :func:`draft_mode`, and read by both the system prompt and the user turn so the two cannot
+#: disagree about what the model is doing.
+DRAFT_MODE_FIRST = "first"
+DRAFT_MODE_FOLLOWUP = "followup"
+DRAFT_MODE_REPLY = "reply"
+
+
+def draft_mode(last_email="", last_email_is_outgoing=False):
+    """First approach, nudge, or reply -- decided by what came last in the conversation."""
+    if not (last_email or "").strip():
+        return DRAFT_MODE_FIRST
+    return DRAFT_MODE_FOLLOWUP if last_email_is_outgoing else DRAFT_MODE_REPLY
+
+
+_DRAFT_SYSTEM_BASE = """You write email for small, volunteer-run hobbyist clubs (aquarium societies \
+and similar) that ask local businesses to donate an item to a raffle or charity auction.
 
 Return a single JSON object with exactly these keys:
   "subject": a short, specific subject line. No "Re:", no exclamation marks.
   "body": the email body as plain text.
 
-Rules for the body:
-  - Open by addressing the contact by name if you were given one, otherwise greet the business.
-  - Say who the club is and what the event is, using only the facts you were given.
-  - Make one clear, modest ask. Do not suggest a dollar value.
-  - Say what the business gets: their name in front of local hobbyists who buy their products.
-  - Never put the club's mailing address in the body. It is added underneath the sign-off \
-automatically, so writing it out again only makes the email longer. The one exception is a vendor \
-who has asked where to send something: answer them.
-  - If a tax or nonprofit identifier was supplied, mention it plainly as part of the club's details.
+Rules that hold for every message:
+  - Use only the facts you were given. Never invent a signer's name, a phone number, a website, a \
+date, or a value.
   - Never state or imply that a donation is tax deductible, and never describe the club as a \
 registered charity or nonprofit, unless you were explicitly given a nonprofit or tax identifier. \
 Whether a gift is deductible depends on the donor's own circumstances, so do not promise it either \
 way.
-  - Keep it under 250 words. Warm and direct, not effusive. No emoji, no marketing cliches.
-  - End with a plain sign-off from the club. Do not invent a signer's name, phone number, website, \
-or any fact you were not given.
-  - Do not write a subject line, headers, or an unsubscribe line in the body. Those are added \
-separately."""
+  - Warm and direct, not effusive. No emoji, no marketing cliches.
+  - End with a plain sign-off from the club.
+  - Do not write a subject line, headers, or an unsubscribe line in the body; those are added \
+separately. Every message already carries the club's postal address in its footer."""
+
+#: One of these is appended to the base. Keeping them apart is the whole point: the first-approach
+#: rules -- introduce the club, state the event, make the ask, list what the business gets -- are
+#: exactly what makes a *reply* read as though nobody at the club opened the vendor's message. A
+#: heading in the user turn asking for a reply does not undo a system prompt that describes writing
+#: a solicitation, so the system prompt has to change too.
+_DRAFT_RULES = {
+    DRAFT_MODE_FIRST: """
+This is the first approach to this business. They have never heard from the club.
+  - Open by addressing the contact by name if you were given one, otherwise greet the business.
+  - Say who the club is and what the event is.
+  - Make one clear, modest ask. Do not suggest a dollar value.
+  - Say what the business gets: their name in front of local hobbyists who buy their products.
+  - If a tax or nonprofit identifier was supplied, mention it plainly as part of the club's details.
+  - Do not put the club's mailing address in the body. The footer already carries it, and \
+repeating it only makes the email longer.
+  - Under 250 words.""",
+    DRAFT_MODE_FOLLOWUP: """
+The club has already written to this business and has had no answer. This is a nudge, not a second \
+pitch.
+  - Refer back to the earlier email in the first sentence. Never greet them as though this were a \
+first approach, and never re-introduce the club.
+  - Do not repeat the pitch: no restating who the club is, what the event is, or what the business \
+gets out of it. They were told all of that already.
+  - Make it easy to say no, and say so plainly.
+  - Do not put the club's mailing address in the body. The footer already carries it.
+  - Shorter than the first email. Under 120 words.""",
+    DRAFT_MODE_REPLY: """
+The business has written back, and their message is below. You are writing the club's next message \
+inside a conversation they are already part of. This is NOT a donation request -- they have read \
+one already, and they answered it.
+  - Answer what they actually asked, in the first sentence. Everything else is secondary.
+  - Never re-introduce the club, restate the event, repeat the ask, or list what the business gets \
+out of it. Any of those reads as though nobody at the club read their message, which is the worst \
+thing this email can do.
+  - Thank them once, briefly.
+  - If they ask what happens next, how to get a donation to the club, where to send it, or when it \
+is needed, answer concretely. When the answer involves posting or dropping something off, put the \
+club's mailing address in the body where they will see it: the footer is fine print, and an answer \
+to a direct question belongs in the body.
+  - If they have said no, thank them, say the club will not write again about this, and stop there.
+  - Under 150 words, and usually far less. A three-sentence reply is a good reply.""",
+}
+
+
+def draft_system_prompt(mode):
+    """The system prompt for one kind of donation email. Public so tests can read it."""
+    return _DRAFT_SYSTEM_BASE + "\n" + _DRAFT_RULES[mode]
 
 
 def build_draft_prompt(vendor, *, context="", last_email="", last_email_is_outgoing=False):
@@ -510,6 +565,7 @@ def build_draft_prompt(vendor, *, context="", last_email="", last_email_is_outgo
     nobody at the club remembers sending the first one.
     """
     club = vendor.club
+    mode = draft_mode(last_email, last_email_is_outgoing)
     lines = [
         f"Club: {club.name}",
         f"Vendor: {vendor.name}",
@@ -520,28 +576,32 @@ def build_draft_prompt(vendor, *, context="", last_email="", last_email_is_outgo
         lines.append(f"About the club: {truncate_for_model(club.donation_context, CONTEXT_LIMIT)}")
     if club.donation_mailing_address.strip():
         # Handed over with the rule attached: every email already carries this address in its
-        # footer, so repeating it in the body is noise unless the vendor asked the question.
-        lines.append(
-            "Club mailing address, only to be used if they have asked where to send a donation:\n"
-            + club.donation_mailing_address.strip()
+        # footer, so repeating it in the body is noise -- until the vendor asks how to get the
+        # donation to the club, at which point the footer is the wrong place to answer from.
+        instruction = (
+            "Club mailing address. Put it in the body if their message asks where or how to send a "
+            "donation, or what happens next; it is in the footer either way:"
+            if mode == DRAFT_MODE_REPLY
+            else "Club mailing address, already in the footer of every email. Do not repeat it in the body:"
         )
+        lines.append(f"{instruction}\n{club.donation_mailing_address.strip()}")
     next_event = _next_event_line(club)
     if next_event:
         lines.append(f"Next event: {next_event}")
     if context.strip():
         lines.append(f"About this vendor: {truncate_for_model(context, CONTEXT_LIMIT)}")
-    if last_email.strip():
+    if mode == DRAFT_MODE_FIRST:
+        lines.append("There has been no previous contact with this vendor. Write a first approach.")
+    else:
         heading = (
             "The last email the club sent this vendor. They have not replied to it, so write a "
             "short follow-up: refer back to it, do not repeat the whole pitch, and make it easy "
             "for them to say no. Do not greet them as though this were a first approach:"
-            if last_email_is_outgoing
-            else "Their last message to the club. Write a reply that answers it and picks the "
-            "conversation up where they left it, rather than starting again:"
+            if mode == DRAFT_MODE_FOLLOWUP
+            else "Their last message to the club, which is what you are answering. Reply to what "
+            "it says. Do not write another donation request:"
         )
         lines.append(f"{heading}\n{truncate_for_model(strip_quoted_reply(last_email), LAST_EMAIL_LIMIT)}")
-    else:
-        lines.append("There has been no previous contact with this vendor. Write a first approach.")
     return "\n".join(lines)
 
 
@@ -587,9 +647,10 @@ def draft_request(vendor, *, context="", last_email="", last_email_is_outgoing=F
     prompt = build_draft_prompt(
         vendor, context=context, last_email=last_email, last_email_is_outgoing=last_email_is_outgoing
     )
+    system = draft_system_prompt(draft_mode(last_email, last_email_is_outgoing))
     result = None
     try:
-        result = provider.complete_json(_DRAFT_SYSTEM_PROMPT, [{"role": "user", "content": prompt}], max_tokens=3000)
+        result = provider.complete_json(system, [{"role": "user", "content": prompt}], max_tokens=3000)
     except LLMError:
         _record_usage(user, result, f"donation request to {vendor.name}", "donation_draft", success=False)
         raise
