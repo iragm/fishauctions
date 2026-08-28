@@ -11,6 +11,7 @@ from django.contrib.auth.models import User
 from django.test import Client, TestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
+from django.utils.html import escape
 
 from auctions import donations
 from auctions.email_routing import resolve_donation_alias, resolve_routing_info
@@ -975,6 +976,57 @@ class VendorListOrderTests(DonationTestMixin, TestCase):
         listed = self.listed()
         self.assertIn(self.soonest, listed[-2:])
         self.assertEqual(listed[0], self.vendor)
+
+
+class LatestReplyColumnTests(DonationTestMixin, TestCase):
+    """The vendor table's one-line summary of what each vendor last said.
+
+    The summary itself is written when the reply arrives (see :class:`IncomingStatusRulesTests`);
+    this is about getting it in front of somebody without opening every vendor in turn.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.url = reverse("club_donation_vendors", kwargs={"slug": self.club.slug})
+        self.client.force_login(self.admin)
+
+    def reply(self, summary, *, days_ago=0, direction=DonationEmail.DIRECTION_INCOMING):
+        return DonationEmail.objects.create(
+            vendor=self.vendor,
+            direction=direction,
+            subject="Re: Donation request",
+            body="...",
+            summary=summary,
+            date=timezone.now() - datetime.timedelta(days=days_ago),
+        )
+
+    def test_the_summary_of_the_latest_reply_is_in_the_table(self):
+        self.reply("They will donate a 20 gallon tank.")
+        self.assertContains(self.client.get(self.url), "They will donate a 20 gallon tank.")
+
+    def test_only_the_newest_reply_is_shown(self):
+        self.reply("An older answer.", days_ago=5)
+        self.reply("What they say now.")
+        response = self.client.get(self.url)
+        self.assertContains(response, "What they say now.")
+        self.assertNotContains(response, "An older answer.")
+
+    def test_our_own_message_is_not_mistaken_for_their_reply(self):
+        self.reply("Never written for outgoing mail.", direction=DonationEmail.DIRECTION_OUTGOING)
+        self.assertNotContains(self.client.get(self.url), "Never written for outgoing mail.")
+
+    def test_a_vendor_who_has_not_replied_shows_a_dash(self):
+        response = self.client.get(self.url)
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Latest reply")
+
+    def test_a_long_summary_is_trimmed_but_kept_in_full_on_hover(self):
+        summary = "They will donate " + ("a very large tank " * 20)
+        summary = summary[: DonationEmail._meta.get_field("summary").max_length].strip()
+        self.reply(summary)
+        content = self.client.get(self.url).content.decode()
+        self.assertIn("\u2026", content)
+        self.assertIn(escape(summary), content)
 
 
 @isolated_cache("donations")

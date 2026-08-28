@@ -20704,6 +20704,94 @@ class ClubEmailRoutingTests(TestCase):
         self.assertIsNone(resolve_routed_recipient("relay"))
 
 
+class RoutedSenderDisplayNameTests(TestCase):
+    """What the From line reads as once SES stops rewriting it.
+
+    Gmail shows the display name and hides the address, so a routed alias with no name on it reads
+    as a slug -- "spring-fling-2026" -- which tells a recipient less than "info" did.
+    """
+
+    routing = {"SES_ROUTE_EMAILS_ENABLED": True, "EMAIL_ROUTING_DOMAIN": "auction.fish"}
+
+    def setUp(self):
+        self.club = Club.objects.create(name="Burlington Fish Club")
+        self.user = User.objects.create_user("sender_name_user", "sender_name@example.com", "pw")
+        now = timezone.now()
+        self.auction = Auction.objects.create(
+            title="Spring Fling 2026",
+            created_by=self.user,
+            club=self.club,
+            date_start=now,
+            date_end=now + datetime.timedelta(days=1),
+        )
+
+    @override_settings(**routing)
+    def test_auction_mail_is_from_the_club_over_the_auctions_own_address(self):
+        self.assertEqual(
+            self.auction.sender_email_with_name,
+            f"Burlington Fish Club <{self.auction.slug}@auction.fish>",
+        )
+
+    @override_settings(**routing)
+    def test_an_auction_with_no_club_falls_back_to_the_site(self):
+        """Quoted because a dot is a special character in a display name; clients show it plain."""
+        self.auction.club = None
+        self.assertEqual(self.auction.sender_email_with_name, f'"auction.fish" <{self.auction.slug}@auction.fish>')
+
+    @override_settings(**routing)
+    def test_club_mail_is_from_the_club(self):
+        self.assertEqual(
+            self.club.contact_sender_email_with_name,
+            f"Burlington Fish Club <{self.club.slug}-contact@auction.fish>",
+        )
+
+    @override_settings(SES_ROUTE_EMAILS_ENABLED=False)
+    def test_no_routing_means_no_sender_at_all(self):
+        """post_office reads None as "use DEFAULT_FROM_EMAIL", which is what happened before."""
+        self.assertIsNone(self.auction.sender_email_with_name)
+        self.assertIsNone(self.club.contact_sender_email_with_name)
+
+    @override_settings(**routing)
+    def test_a_club_name_with_a_quote_in_it_stays_one_address(self):
+        """An f-string here would write a broken From and take the address down with it."""
+        from email.utils import parseaddr
+
+        self.club.name = 'Bob\'s "Fish" Club'
+        name, address = parseaddr(self.club.contact_sender_email_with_name)
+        self.assertEqual(name, 'Bob\'s "Fish" Club')
+        self.assertEqual(address, f"{self.club.slug}-contact@auction.fish")
+
+
+class SesSendsTheMessagesOwnFromAddressTests(TestCase):
+    """django-ses must not be told to override the From address of every message.
+
+    ``settings.AWS_SES_FROM_EMAIL`` is handed to the SES API as ``FromEmailAddress`` (``Source`` on
+    the v1 path), and that parameter wins over the From header of the message.  While it was set to
+    ``DEFAULT_FROM_EMAIL`` every email left the site as ``info@<domain>``, so the per-auction,
+    per-club and per-vendor aliases that :mod:`auctions.email_routing` exists to put on the From
+    line were built, queued, and then thrown away by SES -- replies went to the site admin instead
+    of the club, and the From line read "info".  Nothing else in the suite can see this: every test
+    above stops at what post_office stored, which was right all along.
+    """
+
+    def test_django_ses_sends_the_alias_the_caller_asked_for(self):
+        from django.core.mail import EmailMessage
+        from django_ses import SESBackend
+        from django_ses.conf import settings as ses_settings
+
+        alias = '"Test Aquarium Society" <test-aquarium-society-donations-1234567890@auction.fish>'
+        message = EmailMessage(
+            subject="Donation request",
+            body="Please donate",
+            from_email=alias,
+            to=["vendor@example.com"],
+        )
+        # The same two lines SESBackend.send_messages() runs for every outgoing message.
+        source = ses_settings.AWS_SES_FROM_EMAIL
+        params = SESBackend()._get_send_email_parameters(message, source, None)
+        self.assertEqual(params.get("FromEmailAddress") or params.get("Source"), alias)
+
+
 class InboundEmailRoutingAPITests(TestCase):
     """Tests for the InboundEmailRoutingView API endpoint."""
 

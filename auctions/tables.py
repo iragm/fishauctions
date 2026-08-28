@@ -1289,6 +1289,14 @@ class DonationVendorHTMxTable(tables.Table):
         attrs={"th": {"class": hide_string}, "cell": {"class": hide_string}},
     )
     status = tables.Column(accessor="status", verbose_name="Status")
+    latest_reply = tables.Column(
+        accessor="latest_reply_summary",
+        verbose_name="Latest reply",
+        default="—",
+        # Annotated by ClubDonationVendorsView, and there is nothing to sort a one-line summary by.
+        orderable=False,
+        attrs={"th": {"class": hide_string}, "cell": {"class": hide_string}},
+    )
     last_contact = tables.Column(accessor="last_contact", verbose_name="Last contact", default="—")
     followup_due = tables.Column(accessor="followup_due", verbose_name="Follow-up", default="—")
     contact = tables.Column(accessor="pk", verbose_name="Contact", orderable=False)
@@ -1325,6 +1333,22 @@ class DonationVendorHTMxTable(tables.Table):
             reverse("club_donation_vendor", kwargs={"pk": record.pk}),
             value,
         )
+
+    #: How much of a summary the table shows. The whole of it is a hover away, and all of it is in
+    #: the vendor panel next to the message it was written from.
+    SUMMARY_PREVIEW_LENGTH = 120
+
+    def render_latest_reply(self, value):
+        """What the vendor last said, in the model's words.
+
+        Only ever reached with something to show: django-tables2 uses ``default`` for a vendor who
+        has not replied, and for a reply that was stored without a summary.
+        """
+        summary = str(value).strip()
+        shown = summary
+        if len(shown) > self.SUMMARY_PREVIEW_LENGTH:
+            shown = shown[: self.SUMMARY_PREVIEW_LENGTH - 1].rstrip() + "…"
+        return format_html('<span class="text-muted" title="{}">{}</span>', summary, shown)
 
     def render_status(self, value, record):
         badge = self.STATUS_BADGES.get(record.status, "bg-secondary")

@@ -330,7 +330,7 @@ def send_club_member_email(member, subject, message_text, email_type="welcome", 
     def _send_membership_email():
         mail.send(
             member.email,
-            sender=member.club.contact_sender_email,
+            sender=member.club.contact_sender_email_with_name,
             subject=subject,
             message="\n".join(text_parts),
             html_message=html_message,
@@ -740,7 +740,7 @@ def send_invoice_notification(self, invoice_pk):
         # automatically (Lambda routes them). Skip the Reply-To header so users
         # reply to the routed address rather than the creator's personal inbox.
         send_kwargs = {
-            "sender": invoice.auction.sender_email,
+            "sender": invoice.auction.sender_email_with_name,
             "template": "invoice_ready",
             "context": {
                 "subject": subject,

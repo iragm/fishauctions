@@ -534,7 +534,15 @@ AWS_SES_REGION_NAME = os.environ.get("AWS_SES_REGION_NAME", "us-east-1")
 AWS_SES_REGION_ENDPOINT = os.environ.get("AWS_SES_REGION_ENDPOINT", "email.us-east-1.amazonaws.com")
 USE_SES_V2 = True
 AWS_SES_CONFIGURATION_SET = os.environ.get("AWS_SES_CONFIGURATION_SET", "")
-AWS_SES_FROM_EMAIL = DEFAULT_FROM_EMAIL
+# AWS_SES_FROM_EMAIL is deliberately NOT set. django-ses passes it as the API-level
+# FromEmailAddress on every send, and that parameter *overrides the From header of the message*.
+# Setting it to DEFAULT_FROM_EMAIL made every email the site sends leave as info@<domain> no matter
+# what the code asked for -- which silently defeated the whole point of auctions.email_routing:
+# the per-auction, per-club and per-vendor aliases were written into the message and then thrown
+# away by SES, so replies came back to the site admin (or nowhere) instead of to the club, and the
+# From line named "info" instead of the club. Leave it undefined: django-ses falls back to the
+# message's own from_email, and Django and post_office already fill that in with DEFAULT_FROM_EMAIL
+# whenever the caller doesn't name a sender.
 
 EMAIL_USE_TLS = parse_bool_env(os.environ.get("EMAIL_USE_TLS") or None, default=True)
 EMAIL_HOST = os.environ.get("EMAIL_HOST", "smtp.gmail.com")

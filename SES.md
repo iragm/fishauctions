@@ -106,6 +106,12 @@ FALLBACK_RECIPIENT = os.environ["FALLBACK_RECIPIENT"]
 # Leave unset (or empty) to send without a configuration set.
 RELAY_CONFIGURATION_SET = os.environ.get("RELAY_CONFIGURATION_SET", "").strip()
 
+# Sent on both calls to Django.  urllib's default ("Python-urllib/3.x") is one of the signatures
+# Cloudflare's Browser Integrity Check blocks outright -- and it blocks the POST while letting the
+# GET through, so resolution succeeds, the reply is never recorded, and nothing anywhere reports an
+# error.  Any honest identifier avoids it.  See "When a reply goes nowhere" below.
+USER_AGENT = "ses-inbound-router"
+
 # Refuse to parse messages larger than this before even touching the MIME tree.
 # SNS caps delivery at 150 KB, so anything larger means SNS truncated the body;
 # the hard cap here guards against pathological payloads.
@@ -204,7 +210,7 @@ def resolve_recipient(local_part):
     params = urllib.parse.urlencode({"address": local_part})
     req = urllib.request.Request(
         f"{DJANGO_API_URL}?{params}",
-        headers={"X-Routing-Secret": ROUTING_SECRET},
+        headers={"X-Routing-Secret": ROUTING_SECRET, "User-Agent": USER_AGENT},
     )
     try:
         with urllib.request.urlopen(req, timeout=5) as resp:
@@ -272,7 +278,11 @@ def post_donation_email(to_addr, msg):
     req = urllib.request.Request(
         DJANGO_DONATION_API_URL,
         data=payload,
-        headers={"X-Routing-Secret": ROUTING_SECRET, "Content-Type": "application/json"},
+        headers={
+            "X-Routing-Secret": ROUTING_SECRET,
+            "Content-Type": "application/json",
+            "User-Agent": USER_AGENT,
+        },
         method="POST",
     )
     try:
@@ -553,7 +563,9 @@ INBOUND_ROUTING_SECRET="<same value you put in Lambda>"
 
 Once `POST_OFFICE_EMAIL_BACKEND=django_ses.SESBackend` and `SITE_DOMAIN` are set, `SES_ROUTE_EMAILS_ENABLED` activates automatically and outbound mail sends from `info@yourdomain.com`.
 
-> **Note on `DEFAULT_FROM_EMAIL`:** When SES routing is enabled the app automatically uses `info@SITE_DOMAIN` as the default sender. Any `DEFAULT_FROM_EMAIL` value in your `.env` is intentionally ignored — the domain-based address ensures DKIM signing works correctly. If you were previously using a custom `DEFAULT_FROM_EMAIL`, verify that `info@yourdomain.com` is authorised in SES before deploying.
+> **Note on `DEFAULT_FROM_EMAIL`:** When SES routing is enabled the app automatically uses `info@SITE_DOMAIN` as the *default* sender — what a message goes out as when the code doesn't name one. Any `DEFAULT_FROM_EMAIL` value in your `.env` is intentionally ignored — the domain-based address ensures DKIM signing works correctly. If you were previously using a custom `DEFAULT_FROM_EMAIL`, verify that `info@yourdomain.com` is authorised in SES before deploying.
+
+> **Never set `AWS_SES_FROM_EMAIL`.** django-ses passes it to the SES API as `FromEmailAddress` (`Source` on the v1 path), and that parameter *overrides the From header of the message*. Setting it pins every email the site sends to one address, so the per-auction, per-club and per-vendor aliases below are written into the message and then discarded on the way out — the From line reads "info", and replies come back to the site admin instead of the club. There is a regression test (`auctions.tests.SesSendsTheMessagesOwnFromAddressTests`) and a comment in `settings.py`; both exist because this failure is invisible from inside Django — post_office stores the right From either way.
 
 ---
 
@@ -567,9 +579,73 @@ Once `POST_OFFICE_EMAIL_BACKEND=django_ses.SESBackend` and `SITE_DOMAIN` are set
 6. Stop Django (or point `DJANGO_API_URL` at a dead host) and send to an unknown club alias — confirm CloudWatch shows **one** delivery to `FALLBACK_RECIPIENT` followed by a `relay loop` drop, not a stream of them
 7. Check Lambda *Monitor* → *Logs* in CloudWatch for any errors
 
+### When a reply goes nowhere
+
+**Every drop is a successful invocation.** The handler prints why and returns normally, so Lambda's
+error count, the SES bounce rate and the SNS delivery metrics all stay at zero while mail quietly
+disappears. Open the log group (`/aws/lambda/ses-inbound-router`) and read the `[ses-router]` lines
+themselves — the metrics will not tell you anything.
+
+| Log line | What happened | Fix |
+|---|---|---|
+| *(nothing at all for that minute)* | SES never invoked the Lambda | Receipt rule disabled, rule set not *Active*, or the rule is in a different region from the one your MX names |
+| `dropping message with non-base64 content` | The SNS action is in UTF-8 mode | Set the receipt rule's SNS action **Encoding: Base64** |
+| `dropping message that failed spamVerdict` / `virusVerdict` | SES's own scan flagged it | Nothing to fix here; check the sender's SPF/DKIM/DMARC |
+| `dropping oversized message with no content` | Over the 150 KB SNS cap | Nothing to fix; ask the sender to reply without the attachment |
+| `dropping autoreply from …` | Out-of-office or a mailer marked `Precedence: bulk` | Working as intended |
+| `dropping relay loop from …` | `RELAY_SENDER`'s own mail, or 3 hops | Usually the tail of an earlier fallback loop; fix whatever made Django unreachable |
+| `dropping message to unrecognised alias` | Django answered **404** | The alias doesn't resolve — vendor deleted, donation tracking off, or a mistyped key. Check with the `curl` below |
+| `resolve_recipient HTTP error 401` | The secret doesn't match | `INBOUND_ROUTING_SECRET` in the Lambda ≠ the one in Django's `.env` |
+| `resolve_recipient failed …` | Django unreachable from Lambda | DNS, TLS, a WAF rule, or the site being down |
+| `could not post donation reply for …` | Resolution worked, **recording didn't** | Usually a CDN/WAF blocking the POST (see below), otherwise the same 401/unreachable causes as above on `DJANGO_DONATION_API_URL`. The reply is lost: this call is best-effort and never retried |
+| `donation reply recorded, no forwarding recipient` | Everything worked | The reply is on the vendor's row; nobody was emailed a copy, which is the recommended setup |
+
+Ask Django directly what it would have answered — this is the same call the Lambda makes:
+
+```bash
+curl -s -H "X-Routing-Secret: $INBOUND_ROUTING_SECRET" \
+  "https://yourdomain.com/api/v1/email-routing/resolve/?address=yourclub-donations-1234567890"
+# {"recipient": "", "display_name": "Your Club", "kind": "donation", "vendor_key": "1234567890"}
+```
+
+`401` means the secret is wrong, `404` means no live vendor owns those digits, and a `200` with no
+`"kind"` means the site is running a build from before donation tracking. A reply that Django did
+record leaves two marks a person can see without a log: the message on the vendor's panel, and a
+`Received a donation reply from …` line in the club's history.
+
+### If the site is behind Cloudflare
+
+Cloudflare's **Browser Integrity Check** blocks a `POST` carrying urllib's default user agent while
+letting the `GET` through — so the alias resolves, the forward goes out, and only the *recording*
+of the reply is dropped. It shows up in Cloudflare's Security Events as `"source": "bic"` with
+`"userAgent": "Python-urllib/3.x"`, and nowhere else. Reproduce it from any machine:
+
+```bash
+curl -s -o /dev/null -w '%{http_code}\n' -X POST -A 'Python-urllib/3.14' \
+  -H 'Content-Type: application/json' -d '{}' https://yourdomain.com/api/v1/email-routing/donation/
+# 403 = Cloudflare is eating it. 401 = it reached Django, which is what you want.
+```
+
+The `USER_AGENT` in the handler above is enough on its own. Belt and braces, exempt the two
+routing endpoints as well — they authenticate on a 40-character shared secret and answer `401` to
+everyone else, so there is nothing there for the WAF to protect:
+
+1. Cloudflare dashboard → your zone → **Security → WAF → Custom rules → Create rule**
+2. Name it `Allow SES inbound router`, and use the expression editor:
+   `starts_with(http.request.uri.path, "/api/v1/email-routing/")`
+   (add `and ip.src.asnum eq 16509` to narrow it to AWS, at the cost of breaking if you ever move the Lambda)
+3. Action: **Skip**, then tick **Browser Integrity Check** — plus *Super Bot Fight Mode* and
+   *Managed rules* if your plan shows them
+4. **Deploy**, and drag it above any custom rule that could block first — custom rules run in order
+
+*Configuration Rules* → **Browser Integrity Check: Off** on the same expression does the same job
+if you would rather not spend a custom rule. Note that Bot Fight Mode on the Free plan is neither
+skippable nor scopable — if that is what is blocking you, the user agent above is the only fix.
+
 > **Already running an older copy of the handler?** Re-paste it. The version above adds the
-> spam/virus verdict check and the `X-Club-Relay-Hops` loop guard; without them a Django outage
-> can put the relay into a self-sustaining mail loop.
+> spam/virus verdict check and the `X-Club-Relay-Hops` loop guard — without them a Django outage
+> can put the relay into a self-sustaining mail loop — and the `USER_AGENT` that keeps a WAF from
+> silently eating the donation POST.
 
 ---
 

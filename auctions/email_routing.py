@@ -1,4 +1,5 @@
 import re
+from email.utils import formataddr
 from urllib.parse import urlsplit
 
 from django.apps import apps
@@ -25,6 +26,25 @@ def build_routed_sender_address(local_part):
     if not domain or not local_part:
         return None
     return f"{local_part}@{domain}"
+
+
+def sender_with_display_name(display_name, address):
+    """``Some Club <club-slug-contact@example.com>`` -- the From line as a person reads it.
+
+    Gmail shows the display name and hides the address, so without one the From reads as a slug:
+    "spring-fling-2026", or "info". ``formataddr`` rather than an f-string because a club called
+    ``Bob's "Fish" Club`` written straight into a header is a malformed From, and a mail client
+    shown one of those loses the address behind it.
+
+    Returns None when there is no routed address, which is what ``build_routed_sender_address``
+    gives on a site with routing off -- post_office reads that as "use DEFAULT_FROM_EMAIL".
+    """
+    if not address:
+        return None
+    name = " ".join((display_name or "").split())
+    if not name:
+        return address
+    return formataddr((name, address))
 
 
 def admin_routing_email():
