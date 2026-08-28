@@ -35,7 +35,6 @@ from django.contrib.sites.models import Site
 from django.core.cache import cache
 from django.core.exceptions import ImproperlyConfigured, PermissionDenied, ValidationError
 from django.core.files.base import ContentFile
-from django.core.files.uploadedfile import UploadedFile
 from django.db import transaction
 from django.db.models import (
     Avg,
@@ -7934,25 +7933,8 @@ class ImageCreateView(LoginRequiredMixin, CreateView):
             image.is_primary = True
         if not image.image_source:
             image.image_source = "RANDOM"
-        uploaded_image = form.cleaned_data.get("image")
-
-        # Attempt to convert non-standard JPEG formats (like MPO) to standard JPEG. The
-        # upload was already validated in the form, so this is best-effort: if it fails we
-        # just fall through and let the normal save path try the original file.
-        if isinstance(uploaded_image, UploadedFile):
-            try:
-                with Image.open(uploaded_image) as img:
-                    if img.format != "JPEG":
-                        img = img.convert("RGB")  # Ensure it's in a JPEG-safe mode
-                        buffer = BytesIO()
-                        img.save(buffer, format="JPEG")
-                        buffer.seek(0)
-                        image.image.save(
-                            uploaded_image.name.replace(".jpeg", "") + ".jpg", ContentFile(buffer.read()), save=False
-                        )
-            except IMAGE_PROCESSING_EXCEPTIONS as e:
-                logger.info("Could not pre-convert uploaded image to JPEG: %s", e)
-
+        # Anything Pillow can't write as a JPEG (an animated GIF, an MPO from a phone's burst
+        # mode) was already converted by CreateImageForm.clean_image -- see forms.jpeg_safe_upload.
         try:
             image.save()
         except IMAGE_PROCESSING_EXCEPTIONS as e:
@@ -8024,7 +8006,19 @@ class ImageUpdateView(UpdateView):
             image.is_primary = True
         if not image.image_source:
             image.image_source = "RANDOM"
-        image.save()
+        try:
+            image.save()
+        except IMAGE_PROCESSING_EXCEPTIONS as e:
+            # Same split as ImageCreateView: an unusable file is the uploader's problem and
+            # gets a friendly inline error, while a disk or permission error is ours and is
+            # left to become a 500 so the admins hear about it.
+            logger.info("Rejected lot image during save: %s", e)
+            form.add_error(
+                "image",
+                "We couldn't process that image -- it may be corrupt or in an unsupported format. "
+                "Please try a different photo.",
+            )
+            return self.form_invalid(form)
         messages.success(self.request, "Image updated")
         return super().form_valid(form)
 

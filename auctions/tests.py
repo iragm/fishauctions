@@ -8973,6 +8973,17 @@ class ImageViewTests(StandardTestCase):
         PILImage.new("RGB", size, "blue").save(buffer, format=fmt)
         return buffer.getvalue()
 
+    def _animated_gif_bytes(self, size=(10, 10)):
+        """Raw bytes of a two-frame GIF -- the upload behind the `cannot write mode P as
+        JPEG` 500: easy_thumbnails hands an animated source back as a palette image, which
+        Pillow then refuses to write as the JPEG thumbnail it wants to make."""
+        from PIL import Image as PILImage
+
+        frames = [PILImage.new("RGB", size, color).convert("P") for color in ("red", "green")]
+        buffer = io.BytesIO()
+        frames[0].save(buffer, format="GIF", save_all=True, append_images=frames[1:])
+        return buffer.getvalue()
+
     def _addable_lot(self):
         """An unsold lot the standard `self.user` is allowed to add images to"""
         return Lot.objects.create(
@@ -9029,6 +9040,28 @@ class ImageViewTests(StandardTestCase):
         # Should not raise, and should leave the file ready to be re-read.
         validate_uploaded_image(upload)
         self.assertEqual(upload.tell(), 0)
+
+    def test_animated_gif_upload_is_converted_to_jpeg(self):
+        """An animated GIF is flattened on the way in so thumbnailing can write it"""
+        from .forms import CreateImageForm
+
+        upload = SimpleUploadedFile("fish.gif", self._animated_gif_bytes(), content_type="image/gif")
+        form = CreateImageForm(data={"image_source": "ACTUAL"}, files={"image": upload})
+        self.assertTrue(form.is_valid(), form.errors)
+        self.assertTrue(form.cleaned_data["image"].name.endswith(".jpg"))
+
+    def test_editing_an_image_with_an_animated_gif(self):
+        """The prod regression: POSTing an animated GIF to /images/<pk>/edit raised
+        `OSError: cannot write mode P as JPEG` out of easy_thumbnails and 500ed."""
+        lot = self._addable_lot()
+        image = LotImage.objects.create(lot_number=lot, image_source="ACTUAL")
+        self.client.login(username=self.user.username, password="testpassword")
+        url = reverse("edit_image", kwargs={"pk": image.pk})
+        upload = SimpleUploadedFile("fish.gif", self._animated_gif_bytes(), content_type="image/gif")
+        response = self.client.post(url, {"image": upload, "image_source": "ACTUAL"})
+        self.assertEqual(response.status_code, 302)
+        image.refresh_from_db()
+        self.assertTrue(image.image.name.endswith(".jpg"), image.image.name)
 
     def test_site_error_on_save_is_not_masked_as_corrupt(self):
         """A permission/disk error while saving must surface as a 500 (which emails the

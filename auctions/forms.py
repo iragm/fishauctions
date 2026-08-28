@@ -2,6 +2,8 @@ import datetime
 import logging
 import re
 from decimal import ROUND_HALF_UP, Decimal
+from io import BytesIO
+from pathlib import Path
 from urllib.parse import quote
 
 # from django.core.exceptions import ValidationError
@@ -18,6 +20,7 @@ from dal import autocomplete
 from django import forms
 from django.conf import settings
 from django.contrib.auth.models import User
+from django.core.files.base import ContentFile
 from django.core.files.uploadedfile import UploadedFile
 from django.db.models import Q
 from django.forms import (
@@ -33,7 +36,7 @@ from django_recaptcha.fields import ReCaptchaField
 from django_recaptcha.widgets import ReCaptchaV2Invisible
 from django_summernote.widgets import SummernoteWidget
 from easy_thumbnails.exceptions import EasyThumbnailsError
-from PIL import Image, ImageFile, UnidentifiedImageError
+from PIL import Image, ImageFile, ImageOps, UnidentifiedImageError
 
 from .helper_functions import get_currency_symbol
 from .models import (
@@ -475,6 +478,59 @@ def validate_uploaded_image(uploaded_image):
         except (AttributeError, OSError):
             pass
     return uploaded_image
+
+
+def jpeg_safe_upload(uploaded_image):
+    """Return `uploaded_image` re-encoded as a plain JPEG when Pillow couldn't write one from it.
+
+    Our image fields set `resize_source`, so easy_thumbnails resizes the file on every save and
+    writes the result as a JPEG unless the source is transparent.  Pillow refuses to write some
+    modes as JPEG, and one of them reaches us: an *animated* GIF.  easy_thumbnails' colorspace
+    processor converts each frame and then round-trips the lot back through GIF, which hands
+    back a palette ("P") image, and saving that blows up with `cannot write mode P as JPEG` --
+    a plain OSError, so it is a 500 rather than a field error.  Odd JPEG flavours (MPO, from a
+    phone's burst mode) are the other case.
+
+    Converting once, here on the way in, means every save of the model -- and every thumbnail
+    generated from the stored file later -- has something Pillow can actually write.  An
+    animated upload keeps its first frame, and transparency is flattened onto white rather than
+    the black a bare `convert("RGB")` gives.
+
+    Returns a `ContentFile` named `<original>.jpg` when a conversion happened, otherwise the
+    file unchanged -- including when it can't be read, since `validate_uploaded_image` and the
+    views' own error handling already cover an unusable upload.
+    """
+    if not isinstance(uploaded_image, UploadedFile):
+        return uploaded_image
+    previous_truncated_setting = ImageFile.LOAD_TRUNCATED_IMAGES
+    try:
+        # Same tolerance easy_thumbnails loads the source with, so a file it would have
+        # accepted doesn't fall through to it unconverted.
+        ImageFile.LOAD_TRUNCATED_IMAGES = True
+        uploaded_image.seek(0)
+        with Image.open(uploaded_image) as img:
+            if img.format == "JPEG" and img.mode in ("RGB", "L", "CMYK") and getattr(img, "n_frames", 1) == 1:
+                return uploaded_image
+            # Re-encoding drops the EXIF, so bake in the rotation easy_thumbnails would
+            # otherwise have applied from it (`source_generators.pil_image`).
+            img = ImageOps.exif_transpose(img)
+            if img.mode in ("P", "PA", "RGBA", "LA"):
+                img = img.convert("RGBA")
+                img = Image.alpha_composite(Image.new("RGBA", img.size, (255, 255, 255, 255)), img)
+            converted = BytesIO()
+            img.convert("RGB").save(converted, format="JPEG", quality=95)
+    except (*IMAGE_PROCESSING_EXCEPTIONS, ValueError, OSError) as e:
+        # Reading only, so this is the file being unusable rather than a disk problem.
+        logger.info("Could not convert uploaded image to JPEG: %s", e)
+        return uploaded_image
+    finally:
+        ImageFile.LOAD_TRUNCATED_IMAGES = previous_truncated_setting
+        try:
+            uploaded_image.seek(0)
+        except (AttributeError, OSError):
+            pass
+    name = f"{Path(uploaded_image.name or 'image').stem}.jpg"
+    return ContentFile(converted.getvalue(), name=name)
 
 
 def clean_summernote(html, max_length=16383):
@@ -2348,6 +2404,7 @@ class CreateImageForm(forms.ModelForm):
         # (on the edit view) alone.
         if isinstance(image, UploadedFile):
             validate_uploaded_image(image)
+            image = jpeg_safe_upload(image)
         return image
 
     def clean(self):
@@ -6580,6 +6637,7 @@ class SpeakerForm(forms.ModelForm):
         # Only a freshly uploaded file needs decoding; an unchanged stored image is fine.
         if isinstance(image, UploadedFile):
             validate_uploaded_image(image)
+            image = jpeg_safe_upload(image)
         return image
 
 

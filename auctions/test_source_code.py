@@ -57,8 +57,13 @@ def fake_get(url, **kwargs):
     return FakeResponse(content=_tarball())
 
 
+@isolated_cache("source-code-base")
 class SourceTestCase(SimpleTestCase):
-    """The archive is cached in two places -- Django's cache and a per-process memo. Clear both."""
+    """The archive is cached in two places -- Django's cache and a per-process memo. Clear both.
+
+    The cache is this class's own (`isolated_cache`, inherited by every subclass) because
+    `cache.clear()` on the shared Redis is a FLUSHDB every other --parallel worker feels.
+    """
 
     def setUp(self):
         cache.clear()
