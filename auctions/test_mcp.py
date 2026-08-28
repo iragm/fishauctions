@@ -123,7 +123,17 @@ class RegistryConformance(SimpleTestCase):
             action = palette_actions.ACTIONS[name]
             self.assertIsInstance(annotations["readOnlyHint"], bool)
             self.assertEqual(annotations["readOnlyHint"], action.danger != palette_actions.DANGER_CONFIRM)
-            self.assertFalse(annotations["openWorldHint"], f"{name} reaches outside this site?")
+            self.assertEqual(annotations["openWorldHint"], action.open_world, name)
+
+    def test_only_the_source_reader_reaches_outside_this_site(self):
+        """``openWorldHint`` is a claim about the internet, and one tool is allowed to make it.
+
+        Everything else answers out of this site's own database. ``read_source`` fetches the
+        published source code from the repository this site is deployed from, which is genuinely
+        the open world, and a host deciding what to allow should be told so.
+        """
+        reaching = {name for name, built in self.by_name.items() if built["annotations"]["openWorldHint"]}
+        self.assertEqual(reaching, {"read_source"})
 
     def test_a_write_says_whether_it_destroys_and_whether_it_repeats(self):
         for name, descriptor in self.by_name.items():
@@ -1362,11 +1372,12 @@ class ResourceLinkTests(StandardTestCase):
         self.assertIn("auction://spring", uris, "the auction it is in is the one worth having")
 
     def test_what_goes_in_place_of_a_dropped_self_link_is_what_sits_underneath(self):
-        """``describe_auction`` has answered the auction, so it offers its lots and its people."""
+        """``describe_auction`` has answered the auction, so it offers what is under it."""
         uris = [link["uri"] for link in resources.links_for("describe_auction", {"auction": "spring"})]
-        self.assertEqual(uris, ["auction://spring/lots", "auction://spring/people"])
+        self.assertEqual(uris, ["auction://spring/lots", "auction://spring/people", "auction://spring/history"])
         self.assertEqual(
-            [link["uri"] for link in resources.links_for("describe_club", {"club": "nec"})], ["club://nec/events"]
+            [link["uri"] for link in resources.links_for("describe_club", {"club": "nec"})],
+            ["club://nec/events", "club://nec/history"],
         )
 
     def test_a_tool_that_did_not_answer_the_top_level_thing_gets_only_that(self):
@@ -1424,10 +1435,17 @@ class ConfirmationTierTests(SimpleTestCase):
             self.assertTrue(tools.idempotent(action), f"{action.name} is not safe to repeat")
 
     def test_everything_else_still_asks(self):
+        """The list is short on purpose, and adding to it is meant to be a decision.
+
+        ``set_my_auction`` and ``set_my_club`` earn it the way ``watch_lot`` does: the card would
+        be most of the cost of the tool. They write a pointer that says which auction or club the
+        person means when they don't say -- nothing is created, saying it twice is saying it once,
+        and the way back is the same tool with the previous name, which the answer carries.
+        """
         skipping = {name for name, action in palette_actions.ACTIONS.items() if not action.asks_first}
         self.assertEqual(
             skipping,
-            {"check_in", "watch_lot", "review_points"},
+            {"check_in", "watch_lot", "review_points", "set_my_auction", "set_my_club"},
             "a new action opted out of the countdown",
         )
 

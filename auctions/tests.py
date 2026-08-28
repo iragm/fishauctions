@@ -7388,7 +7388,6 @@ class ClubMembershipRenewalFlowTests(StandardTestCase):
             name="Renewal Club",
             membership_system="rolling",
             membership_annual_fee=Decimal("25.00"),
-            enable_club_page=True,
             send_membership_expiration_reminders=True,
         )
         self.payment_user = User.objects.create_user(
@@ -8170,7 +8169,6 @@ class ClubMoneyRenewalConsistencyTests(StandardTestCase):
             name="Money Club",
             membership_system="rolling",
             membership_annual_fee=Decimal("25.00"),
-            enable_club_page=True,
         )
         self.payment_user = User.objects.create_user(
             username="money_payment_user", password="testpass", email="money_payment_user@example.com"
@@ -18233,17 +18231,8 @@ class ClubViewTests(TestCase):
             permission_admin=True,
         )
 
-    def test_club_detail_requires_login(self):
-        """Anonymous user gets 404 when enable_club_page is off"""
-        self.club.enable_club_page = False
-        self.club.save()
-        url = reverse("club_detail", kwargs={"slug": self.club.slug})
-        response = self.client.get(url)
-        self.assertEqual(response.status_code, 404)
-
     def test_club_detail_anonymous_can_view_when_enabled(self):
-        """Anonymous user can view club detail page when enable_club_page=True"""
-        self.club.enable_club_page = True
+        """Anonymous user can view a club detail page."""
         self.club.save()
         url = reverse("club_detail", kwargs={"slug": self.club.slug})
         response = self.client.get(url)
@@ -18273,7 +18262,6 @@ class ClubViewTests(TestCase):
 
     def test_viewing_club_page_does_not_record_for_non_member(self):
         """A non-member viewing a public club page does not get it recorded as their last club used."""
-        self.club.enable_club_page = True
         self.club.save()
         self.client.login(username="other2", password="testpass")
         self.client.get(reverse("club_detail", kwargs={"slug": self.club.slug}))
@@ -18281,7 +18269,6 @@ class ClubViewTests(TestCase):
         self.assertIsNone(self.other_user.userdata.last_club_used)
 
     def test_club_detail_tab_route_shows_requested_tab_chart_and_recent_auctions(self):
-        self.club.enable_club_page = True
         self.club.enable_breeder_award_program = True
         self.club.homepage = "https://example.com"
         self.club.facebook_page = "https://facebook.com/view-test-club"
@@ -18322,7 +18309,6 @@ class ClubViewTests(TestCase):
 
     def test_club_tabs_collapse_into_a_more_menu_when_there_are_too_many(self):
         """Events/BAP/HAP/Culture/My Points runs off the side of a phone; three tabs don't."""
-        self.club.enable_club_page = True
         self.club.enable_breeder_award_program = True
         self.club.save()
         self.client.login(username="club_owner2", password="testpass")
@@ -18346,7 +18332,6 @@ class ClubViewTests(TestCase):
         self.assertRegex(html, r'class="nav-link[^"]*" id="bap-tab-btn"')
 
     def test_club_detail_shows_join_button_for_non_member(self):
-        self.club.enable_club_page = True
         self.club.homepage = "https://example.com"
         self.club.facebook_page = "https://facebook.com/view-test-club"
         self.club.discord_invite_link = "https://discord.gg/viewclub"
@@ -18603,28 +18588,9 @@ class ClubViewTests(TestCase):
         self.assertEqual(response.status_code, 403)
 
     def test_club_detail_non_member_can_view(self):
-        """Non-member authenticated user can view club detail page when enable_club_page=True"""
-        self.club.enable_club_page = True
+        """Non-member authenticated user can view a club detail page."""
         self.club.save()
         self.client.login(username="other2", password="testpass")
-        url = reverse("club_detail", kwargs={"slug": self.club.slug})
-        response = self.client.get(url)
-        self.assertEqual(response.status_code, 200)
-
-    def test_club_detail_disabled_returns_404(self):
-        """Non-admin user gets 404 when enable_club_page is off"""
-        self.club.enable_club_page = False
-        self.club.save()
-        self.client.login(username="other2", password="testpass")
-        url = reverse("club_detail", kwargs={"slug": self.club.slug})
-        response = self.client.get(url)
-        self.assertEqual(response.status_code, 404)
-
-    def test_club_detail_disabled_admin_can_view(self):
-        """Club admin can always view the club page even when enable_club_page is off"""
-        self.club.enable_club_page = False
-        self.club.save()
-        self.client.login(username="club_owner2", password="testpass")
         url = reverse("club_detail", kwargs={"slug": self.club.slug})
         response = self.client.get(url)
         self.assertEqual(response.status_code, 200)
@@ -18662,7 +18628,6 @@ class ClubPermissionTests(CsvImportTestMixin, TestCase):
         self.club = Club.objects.create(
             name="Permission Test Club",
             allow_joining=True,
-            enable_club_page=True,
             enable_breeder_award_program=True,
         )
         self.non_member = User.objects.create_user(
@@ -19167,7 +19132,7 @@ class ClubMemberUpdateTests(CsvImportTestMixin, TestCase):
         self.other_user = User.objects.create_user(
             username="cu_other", password="testpass", email="cu_other@example.com"
         )
-        self.club = Club.objects.create(name="Update Test Club", allow_joining=True, enable_club_page=True)
+        self.club = Club.objects.create(name="Update Test Club", allow_joining=True)
         self.member = ClubMember.objects.create(
             club=self.club, user=self.member_user, name="Jane Doe", email="cu_member@example.com"
         )
@@ -20042,7 +20007,6 @@ class ClubAuctionIntegrationTests(TestCase):
         self.owner = User.objects.create_user(username="ca_owner", password="testpass", email="ca_owner@example.com")
         self.club = Club.objects.create(
             name="Auction Test Club",
-            enable_club_page=True,
         )
         # Set club on owner's userdata
         self.owner.userdata.club = self.club
@@ -20242,22 +20206,15 @@ class ClubAuctionIntegrationTests(TestCase):
         club.refresh_from_db()
         self.assertEqual(club.abbreviation, "PFC")
 
-    def test_club_detail_accessible_with_manage_auctions_role_when_page_disabled(self):
-        """Users with manage_auctions permission can view club page even when enable_club_page=False"""
-        club_no_page = Club.objects.create(name="Private Club", enable_club_page=False)
+    def test_club_detail_accessible_with_manage_auctions_role(self):
+        """An officer who only manages auctions can still open their club's page."""
+        club_no_page = Club.objects.create(name="Private Club")
         user_manage = User.objects.create_user(username="manage_user", password="testpass", email="manage@example.com")
         ClubMember.objects.create(club=club_no_page, user=user_manage, permission_manage_auctions=True)
         self.client.login(username="manage_user", password="testpass")
         url = reverse("club_detail", kwargs={"slug": club_no_page.slug})
         response = self.client.get(url)
         self.assertEqual(response.status_code, 200)
-
-    def test_club_detail_not_accessible_anon_when_page_disabled(self):
-        """Anonymous users cannot view a club detail page when enable_club_page=False"""
-        club_no_page = Club.objects.create(name="Private Club 2", enable_club_page=False)
-        url = reverse("club_detail", kwargs={"slug": club_no_page.slug})
-        response = self.client.get(url)
-        self.assertEqual(response.status_code, 404)
 
     def test_club_admins_added_as_tos_on_pickup_location_create(self):
         """When first pickup location is created for a club auction, club admin members get AuctionTOS"""
@@ -20464,7 +20421,6 @@ class ClubSettingsViewTests(TestCase):
                 "homepage": "https://example.com",
                 "facebook_page": "https://facebook.com/settingsclub",
                 "discord_invite_link": "https://discord.gg/settingsclub",
-                "enable_club_page": "on",
                 "allow_joining": "on",
                 "enable_breeder_award_program": "on",
                 "enable_membership": "on",
@@ -22722,7 +22678,6 @@ class ClubMembershipInvoiceTests(TestCase):
 
         self.club = Club.objects.create(
             name="Pay Club",
-            enable_club_page=True,
             membership_annual_fee=Decimal("30.00"),
             membership_system="rolling",
         )
@@ -23081,7 +23036,6 @@ class NonOAuthPayPalTests(TestCase):
         self.money_user = User.objects.create_user(username="nonoauth_money", password="pw", email="money@example.com")
         self.club = Club.objects.create(
             name="BYO PayPal Club",
-            enable_club_page=True,
             enable_membership=True,
             membership_annual_fee=Decimal("30.00"),
             membership_system="rolling",
@@ -24500,7 +24454,6 @@ class ClubMembershipDuesReversalTests(TestCase):
         self.club = Club.objects.create(
             name="Dues Reversal Club",
             enable_membership=True,
-            enable_club_page=True,
             membership_system="rolling",
             membership_annual_fee=Decimal("40.00"),
         )
@@ -24711,9 +24664,7 @@ class BapTop10ChartTests(TestCase):
         self._chart = _club_top10_chart_data
         self._all_months = _last_n_month_starts(60)
         self._ytd_months = _ytd_month_starts()
-        self.club = Club.objects.create(
-            name="Chart Club", slug="chartclub", enable_breeder_award_program=True, enable_club_page=True
-        )
+        self.club = Club.objects.create(name="Chart Club", slug="chartclub", enable_breeder_award_program=True)
         self.this_year = timezone.now().year
         # Three members so we can see all three colors at once.
         self.first = self._member("First Place", user_name="firstplace")
@@ -25112,7 +25063,7 @@ class DiscordJoinButtonTests(TestCase):
     def setUp(self):
         from .views import DiscordInteractionsView
 
-        self.club = Club.objects.create(name="Button Club", discord_server_id="777000222", enable_club_page=True)
+        self.club = Club.objects.create(name="Button Club", discord_server_id="777000222")
         self.view = DiscordInteractionsView()
 
     def _interaction(self, discord_id="42", interaction_type=3, custom_id="join_button"):
@@ -28482,7 +28433,7 @@ class CommandPaletteTests(StandardTestCase):
     def _make_palette_club(self, user, **permissions):
         """Create a club, make ``user`` a member with the given permissions, and record it as the
         user's last club used so the palette's club shortcuts target it."""
-        club = Club.objects.create(name="Palette Club", enable_club_page=True)
+        club = Club.objects.create(name="Palette Club")
         ClubMember.objects.create(club=club, user=user, name="Member", **permissions)
         user.userdata.last_club_used = club
         user.userdata.save()

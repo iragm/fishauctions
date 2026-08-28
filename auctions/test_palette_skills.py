@@ -21,8 +21,10 @@ from auctions import palette_actions
 from auctions.models import (
     AssistantSkillRequest,
     Auction,
+    AuctionHistory,
     AuctionTOS,
     Club,
+    ClubHistory,
     ClubMember,
     Invoice,
     Lot,
@@ -244,6 +246,79 @@ class ClubSkillTestCase(SkillTestCase):
         self.club_member = ClubMember.objects.create(club=self.club, name="Renewable Rita", email="rita@example.com")
 
 
+class HistoryVocabularyTests(SimpleTestCase):
+    """The ``about`` words, against the two tables they are supposed to name.
+
+    ``history_words`` drops a synonym whose value is not really on the table, which is what keeps a
+    club's word out of an auction's vocabulary -- and would also silently swallow a typo. This is
+    the test that turns the typo back into a build failure.
+    """
+
+    def test_every_auction_synonym_names_a_real_category(self):
+        stored = {value for value, _label in AuctionHistory._meta.get_field("applies_to").choices}
+        for word, value in palette_actions._AUCTION_HISTORY_WORDS.items():
+            self.assertIn(value, stored, f"{word} names {value}, which AuctionHistory does not have")
+
+    def test_every_club_synonym_names_a_real_category(self):
+        stored = {value for value, _label in ClubHistory._meta.get_field("applies_to").choices}
+        for word, value in palette_actions._CLUB_HISTORY_WORDS.items():
+            self.assertIn(value, stored, f"{word} names {value}, which ClubHistory does not have")
+
+    def test_the_canonical_words_come_off_the_model_itself(self):
+        words = palette_actions.history_words(ClubHistory, palette_actions._CLUB_HISTORY_WORDS)
+        for value, _label in ClubHistory._meta.get_field("applies_to").choices:
+            self.assertEqual(words.get(value.lower()), value)
+
+    def test_settings_means_a_different_thing_on_each_table(self):
+        """The reason the two synonym tables are written out separately rather than shared."""
+        auction = palette_actions.history_words(AuctionHistory, palette_actions._AUCTION_HISTORY_WORDS)
+        club = palette_actions.history_words(ClubHistory, palette_actions._CLUB_HISTORY_WORDS)
+        self.assertEqual(auction["settings"], "RULES")
+        self.assertEqual(club["settings"], "SETTINGS")
+
+
+class ClubHistoryTests(ClubSkillTestCase):
+    """The club-side half of the change log: what outlives every auction it was used at."""
+
+    def _line(self, action, applies_to="MEMBERSHIP", user=None):
+        return ClubHistory.objects.create(club=self.club, user=user, action=action, applies_to=applies_to)
+
+    def test_when_bob_last_paid_for_his_membership(self):
+        self._line("Bob Bobson renewed their membership, paid $20")
+        self._line("Jane Doe renewed their membership, paid $20")
+        result = self._run("club_history", {"club": self.club.slug, "search": "bob"}, user=self.admin_user)
+        self.assertEqual(result["count"], 1)
+        self.assertIn("Bob Bobson", result["changes"][0]["what"])
+        self.assertTrue(result["changes"][0]["when"])
+
+    def test_narrowing_by_the_word_a_person_would_use(self):
+        self._line("Bob Bobson renewed their membership", applies_to="MEMBERSHIP")
+        self._line("Changed the meeting night", applies_to="SETTINGS")
+        result = self._run("club_history", {"club": self.club.slug, "about": "dues"}, user=self.admin_user)
+        self.assertEqual(result["count"], 1)
+        self.assertEqual(result["changes"][0]["about"], "MEMBERSHIP")
+
+    def test_a_word_that_only_means_something_on_the_auction_side_is_refused(self):
+        """'invoices' is an auction category; accepting it here would answer nothing, quietly."""
+        result = self._run("club_history", {"club": self.club.slug, "about": "invoices"}, user=self.admin_user)
+        self.assertIn("error", result)
+
+    def test_settings_means_this_tables_own_settings_and_not_an_auctions_rules(self):
+        self._line("Changed the meeting night", applies_to="SETTINGS")
+        result = self._run("club_history", {"club": self.club.slug, "about": "settings"}, user=self.admin_user)
+        self.assertEqual(result["changes"][0]["about"], "SETTINGS")
+
+    def test_it_needs_the_permission_the_history_page_needs(self):
+        result = self._run("club_history", {"club": self.club.slug}, user=self.userB)
+        self.assertIn("error", result)
+
+    def test_an_assistants_own_club_writes_can_be_singled_out(self):
+        self._line(f"Edited member Bob {palette_actions.via(None)}", applies_to="MEMBERS")
+        self._line("Somebody did this by hand", applies_to="MEMBERS")
+        result = self._run("club_history", {"club": self.club.slug, "assistant": True}, user=self.admin_user)
+        self.assertEqual(result["count"], 1)
+
+
 class ClubMemberSkillTests(ClubSkillTestCase):
     """Adding, editing and renewing club members."""
 
@@ -381,14 +456,22 @@ class SkillPromptTests(StandardTestCase):
 
         The skills moved out of the system prompt and into tool definitions, generated by the same
         code that serves ``/mcp/`` — so this is now the same guarantee for both surfaces at once.
+
+        ``mcp_only`` actions are checked against the MCP catalogue rather than the palette's, which
+        is the point of that flag: they are offered, just not in a one-line answer box. Nothing may
+        be registered and offered to *nobody*.
         """
         from auctions import palette_assist
+        from auctions.mcp import tools as mcp_tools
 
         self.admin_user.is_superuser = True
         self.admin_user.save()
         offered = {tool["name"] for tool in palette_assist.tools_for(self.admin_user)}
-        for name in palette_actions.ACTIONS:
-            self.assertIn(name, offered)
+        over_mcp = {tool["name"] for tool in mcp_tools.tool_descriptors(self.admin_user)}
+        for name, action in palette_actions.ACTIONS.items():
+            self.assertIn(name, over_mcp)
+            if not action.mcp_only:
+                self.assertIn(name, offered)
 
     def test_the_tool_list_is_filtered_but_the_server_is_not(self):
         """A skill the tool list didn't mention is still accepted -- filtering is not a permission."""
@@ -841,7 +924,6 @@ class MembershipCardTests(ClubSkillTestCase):
 
     def _let_the_club_take_money(self):
         """The club has to be able to accept a payment before a Renew link means anything."""
-        self.club.enable_club_page = True
         self.club.allow_non_oauth_paypal = True
         self.club.paypal_client_id = "client"
         self.club.paypal_secret = "secret"

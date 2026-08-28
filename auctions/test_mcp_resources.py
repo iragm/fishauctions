@@ -124,14 +124,25 @@ class ResourceEndpointTests(StandardTestCase):
         for row in listed:
             self.assertTrue(row["description"])
 
-    def test_nothing_concrete_with_a_slug_is_ever_listed(self):
-        """A list of auction://spring-2027 is a list of which auctions exist."""
+    def test_nothing_that_names_somebody_is_ever_listed(self):
+        """A list of auction://spring-2027 is a list of which auctions exist.
+
+        The rule is not "nothing concrete" -- ``help://faq`` is concrete and is listed, because it
+        is the same document for every caller and names nobody. What may never appear is a URI
+        carrying a slug, which is a fact about who is on this site handed to whoever asked.
+        """
         listed = self.result(self.rpc("resources/list"))["resources"]
         for row in listed:
             self.assertTrue(
-                row["uri"].startswith(("ui://", "me://")),
+                row["uri"].startswith(("ui://", "me://", "help://")),
                 f"{row['uri']} names something concrete and would enumerate the site",
             )
+
+    def test_the_faq_is_listed_and_reads(self):
+        listed = {row["uri"] for row in self.result(self.rpc("resources/list"))["resources"]}
+        self.assertIn("help://faq", listed)
+        contents = self.result(self.rpc("resources/read", {"uri": "help://faq"}))["contents"][0]
+        self.assertIn("help", json.loads(contents["text"]))
 
     def test_reading_an_auction_answers_with_the_tools_own_json(self):
         uri = f"auction://{self.in_person_auction.slug}"

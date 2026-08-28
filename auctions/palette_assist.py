@@ -170,10 +170,21 @@ def tools_for(user) -> list[dict[str, Any]]:
     The catalogue is the same object ``/mcp/`` hands to Claude. That is the point of the whole
     arrangement -- there is one description of what this site can do, one dispatcher, and one set
     of permission checks, and the palette is simply another client of it.
+
+    ``Action.mcp_only`` is the one subtraction, and it names rather than breaks that rule: the two
+    surfaces differ in who reads the answer, not in what may be done or by whom. ``read_source``
+    hands back a page of Python, which is the right answer for an agent with a context window of
+    its own and the wrong thing to render in a one-line box on somebody's phone at this site's own
+    expense. Nothing else has ever qualified, and a second one should have to argue for itself.
     """
     from .mcp import tools as mcp_tools
 
-    return [*mcp_tools.tool_descriptors(user), *PALETTE_TOOLS]
+    shared = [
+        tool
+        for tool in mcp_tools.tool_descriptors(user)
+        if not getattr(palette_actions.get_action(tool["name"]), "mcp_only", False)
+    ]
+    return [*shared, *PALETTE_TOOLS]
 
 
 # A query this short that already has a good match is answered by search alone.
@@ -683,8 +694,10 @@ def read_reply(result, user=None) -> dict[str, Any]:
             reason = str(params.get("reason") or "").strip()
             return {"kind": "error", "message": (reason or "That isn't something this site does.")[:MAX_QUESTION_CHARS]}
         action = palette_actions.get_action(call.name)
-        if action is None:
-            # Only reachable behind an LLM_BASE_URL whose server doesn't enforce the tool list.
+        if action is None or action.mcp_only:
+            # Only reachable behind an LLM_BASE_URL whose server doesn't enforce the tool list --
+            # which is also the only way an ``mcp_only`` action could be named here, since
+            # ``tools_for`` never sends one. Same answer either way: this palette has no such tool.
             return {"kind": "invalid", "reason": f"unknown tool {call.name!r}"}
         if action.lookup:
             return {"kind": "lookup", "action": action, "params": params}

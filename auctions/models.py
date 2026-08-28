@@ -953,11 +953,6 @@ class Club(CloudflareImageMixin, models.Model):
         help_text="The auction whose admin links are surfaced in the club sidebar.",
     )
     description = models.TextField(verbose_name="About this club", default="", blank=True)
-    enable_club_page = models.BooleanField(
-        default=True,
-        verbose_name="Enable public club page",
-        help_text="Enables the public club detail page and membership self-service features (online renewal, expiration reminders). Required to use membership management.",
-    )
     enable_breeder_award_program = models.BooleanField(
         default=False,
         help_text="Track when users breed fish and show a leaderboard of top breeders.",
@@ -6727,7 +6722,7 @@ class Auction(models.Model):
         return before + [midpoint] + after
 
     def create_history(self, applies_to, action="Edited", user=None, form=None):
-        """Applies to can be RULES, USERS, INVOICES, LOTS, LOT_WINNERS, user should be the user making the change or None if it's a system change.
+        """Applies to can be RULES, USERS, INVOICES, LOTS, STATS, user should be the user making the change or None if it's a system change.
         Action is a string describing the change, form is a form instance that has changed data
         """
         # Don't create history if the auction hasn't been saved yet
@@ -13222,7 +13217,12 @@ class AuctionHistory(models.Model):
             ("USERS", "Users"),
             ("INVOICES", "Invoices"),
             ("LOTS", "Lots"),
-            ("LOT_WINNERS", "Set lot winners"),
+            # LOT_WINNERS was here and nothing ever wrote it -- a sale is recorded under LOTS by
+            # DynamicSetLotWinner.commit_winner ("Set lot 14 as sold"). A choice nobody writes is
+            # worse than absent: it is what an admin filtering for sales picks, and it answers
+            # nothing. STATS is the mirror image, written by tasks.update_auction_stats and never
+            # declared, so a row of it read back as a raw column value with no label.
+            ("STATS", "Stats"),
         ),
     )
 
@@ -13449,6 +13449,13 @@ class FAQ(models.Model):
     slug = AutoSlugField(populate_from="question", unique=True)
     createdon = models.DateTimeField(auto_now_add=True)
     include_in_auctiontos_confirm_email = models.BooleanField(default=False, blank=True)
+    agent_only = models.BooleanField(default=False, blank=True)
+    agent_only.help_text = (
+        "Keep this off the FAQ page, but let the site's assistant answer out of it. "
+        "For answers worth having written down that are not worth a heading on a public page: "
+        "an edge case, something only an auction admin ever hits, or a question people ask an "
+        "assistant and never a page. It is not private -- anyone can reach it by asking."
+    )
 
 
 class SearchHistory(models.Model):

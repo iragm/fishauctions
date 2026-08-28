@@ -95,8 +95,8 @@ export_to_csv.short_description = "Export to CSV"
 
 class FaqAdmin(admin.ModelAdmin):
     model = FAQ
-    list_display = ("category_text", "question")
-    # list_filter = ("title",)
+    list_display = ("category_text", "question", "agent_only")
+    list_filter = ("agent_only",)
     search_fields = (
         "category_text",
         "question",

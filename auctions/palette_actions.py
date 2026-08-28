@@ -76,6 +76,7 @@ from zoneinfo import ZoneInfo, available_timezones
 
 from django import forms
 from django.conf import settings
+from django.contrib.messages.storage.base import BaseStorage
 from django.core.cache import cache
 from django.core.exceptions import PermissionDenied
 from django.db import models
@@ -87,7 +88,7 @@ from django.utils.html import strip_tags
 from django.utils.http import urlencode
 from django.utils.text import Truncator
 
-from . import command_palette, palette_routes
+from . import command_palette, palette_routes, source_code
 from .models import AuctionTOS, ClubMember, Lot
 from .services import (
     apply_club_member_to_tos,
@@ -177,6 +178,23 @@ class Action:
     #: sets a value rather than appending one, so a host may safely retry it on a dropped
     #: connection. See :func:`auctions.mcp.tools.idempotent`.
     idempotent: bool | None = None
+    #: Whether this reaches anything outside this site. ``openWorldHint`` in MCP, and false for
+    #: every action but one: the catalogue exists to read and write this site's own database, and
+    #: "this tool talks to the internet" is the wrong thing for a host to assume about a tool that
+    #: does not. ``read_source`` is the exception -- it fetches this site's own published source
+    #: code from the repository it is deployed from -- and saying so is the honest annotation.
+    open_world: bool = False
+    #: Kept off the command palette's own tool list, and offered only over ``/mcp/``.
+    #:
+    #: The standing rule is that a skill cannot exist for one surface and not the other, because a
+    #: capability that is reachable one way and not the other is a permission checked twice and a
+    #: catalogue maintained twice. This flag does not break that rule so much as name the one place
+    #: it does not apply: the two surfaces differ in *who is reading the answer*. The palette's
+    #: answer is a sentence in a box on somebody's phone, paid for out of this site's own model
+    #: budget; an MCP client is an agent with a context window that brought its own. A tool whose
+    #: result is four hundred lines of Python is the right answer for the second and a wall of
+    #: unreadable text plus a bill for the first.
+    mcp_only: bool = False
 
     def accepts(self, key: str) -> bool:
         return key in self.params or key in self.aliases
@@ -907,6 +925,12 @@ def _create_one_lot(request, auction, tos, for_self, params: dict[str, Any]) -> 
         # Asked before the form gets a chance to, so the question names the club's own label for
         # the field rather than the database column the form would complain about.
         return _need(missing)
+    switched_off = _lot_field_switched_off(auction, params)
+    if switched_off:
+        return _error(switched_off)
+    reference_link, link_problem = _reference_link_or_problem(params)
+    if link_problem:
+        return link_problem
 
     # A previous listing of the same thing is the best source for everything the user didn't say:
     # its photos, its description, and — when they named it exactly — its capitalisation.
@@ -946,18 +970,27 @@ def _create_one_lot(request, auction, tos, for_self, params: dict[str, Any]) -> 
         data["reserve_price"] = auction.minimum_bid
     if buy_now is not None:
         data["buy_now_price"] = buy_now
-    for key in ("donation", "i_bred_this_fish"):
+    for key in ("donation", "i_bred_this_fish", "custom_checkbox"):
         if key in params:
             data[key] = bool(params.get(key))
     for key in ("custom_field_1", "custom_dropdown"):
         if params.get(key):
             data[key] = _str(params, key)
+    description, description_problem = _lot_description_or_problem(auction, params)
+    if description_problem:
+        return description_problem
+    if description is not None:
+        data["summernote_description"] = description
 
     form = quick_add_lot_form_class()(data, auction=auction, tos=tos, is_admin=is_admin)
     if not form.is_valid():
         return _form_problem(form)
 
     lot = form.save(commit=False)
+    if reference_link:
+        # Not a ``QuickAddLot`` field -- the bulk-add page has no room for it -- so it is set on the
+        # instance after the form has validated everything that is.
+        lot.reference_link = reference_link
     save_new_lot(lot, auction=auction, tos=tos, added_by=user)
     copied_images = copy_lot_images(previous, lot) if previous else []
     auction.create_history(
@@ -1016,6 +1049,16 @@ def add_lot(request, params: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
+#: How much lot description one call may write.
+#:
+#: The field itself is unbounded and the full lot form has a rich-text box for it, so this is not a
+#: limit the site imposes -- it is a limit on what an assistant should be putting there. A seller
+#: typing a description is spending their own effort on their own lot; a model writing one is
+#: spending tokens on prose nobody asked for, and it lands on a page bidders skim. Long enough for
+#: the three or four sentences that actually help ("F2 from a wild pair, eating frozen"), short
+#: enough that nothing writes an essay about guppies.
+MAX_SPOKEN_DESCRIPTION_CHARS = 600
+
 #: The most lots one spoken command may create. Past this it is a box being unpacked, and the bulk
 #: add page -- with a row per lot on screen -- is the right tool.
 MAX_LOTS_PER_BATCH = 12
@@ -1028,8 +1071,11 @@ _PER_LOT_KEYS = (
     "buy_now_price",
     "donation",
     "i_bred_this_fish",
+    "custom_checkbox",
     "custom_field_1",
     "custom_dropdown",
+    "reference_link",
+    "description",
 )
 
 
@@ -1933,6 +1979,13 @@ def lot_fields_in_use(auction) -> dict[str, Any]:
             "label": "Breeder points",
             "means": "the seller bred or grew this themselves",
         }
+    if auction.use_custom_checkbox_field and auction.custom_checkbox_name:
+        # A yes/no the club named itself -- "CARES species", "Native", "Difficult to keep". It has
+        # always been on the form and was the one of the four this catalogue could not set.
+        fields["custom_checkbox"] = {
+            "label": auction.custom_checkbox_name,
+            "means": "a yes/no asked about every lot",
+        }
     if auction.custom_field_1 != "disable":
         fields["custom_field_1"] = {
             "label": auction.custom_field_1_name or "Notes",
@@ -1952,7 +2005,69 @@ def lot_fields_in_use(auction) -> dict[str, Any]:
             "required": auction.use_custom_dropdown_field == "required",
             "options": options,
         }
+    if auction.use_reference_link:
+        # Short on purpose. This block is sent with every ``describe_auction``, which has a 5000
+        # character budget that the auction's own rules are at the tail of -- the first version of
+        # this sentence cost 168 characters and truncated them. The advice about what makes a good
+        # link ("a video of the fish beats an article about the species") lives in the parameter
+        # documentation instead, which a host pays for once a session rather than once a lookup.
+        fields["reference_link"] = {
+            "label": "Reference link",
+            "means": "a URL about this lot; a YouTube link is embedded and plays on the lot page",
+        }
     return fields
+
+
+def _lot_field_switched_off(auction, params: dict[str, Any]) -> str | None:
+    """A refusal when the command sets a per-lot field this auction has turned off.
+
+    ``QuickAddLot`` hides a disabled field rather than deleting it, so a value submitted for one
+    would be saved and then printed on a label for a field the club decided not to use. On the web
+    that cannot happen -- there is no input on screen to type it into.
+    """
+    in_use = lot_fields_in_use(auction)
+    for key, name in (
+        ("custom_checkbox", "a custom checkbox"),
+        ("custom_field_1", "a custom text field"),
+        ("custom_dropdown", "a custom dropdown"),
+        ("reference_link", "reference links"),
+    ):
+        if params.get(key) not in (None, "") and key not in in_use:
+            return f"{auction.title} doesn't use {name} on its lots, so there's nowhere to put that."
+    return None
+
+
+def _lot_description_or_problem(auction, params: dict[str, Any]):
+    """``(description, None)`` or ``(None, problem)``. ``(None, None)`` when none was given.
+
+    ``summernote_description`` is a real field on ``QuickAddLot`` and is shown on the lot page, so
+    there is nothing clever to do here beyond two checks: the auction has to be using descriptions
+    at all (``use_description``, which a club can switch off), and it has to be short enough that
+    writing one is a favour to the reader rather than to the word count.
+    """
+    raw = _str(params, "description") or _str(params, "summernote_description")
+    if not raw:
+        return None, None
+    if not auction.use_description:
+        return None, _error(f"{auction.title} doesn't use lot descriptions, so there's nowhere to put that.")
+    if len(raw) > MAX_SPOKEN_DESCRIPTION_CHARS:
+        return None, _error(
+            f"That description is {len(raw)} characters and I'll write up to "
+            f"{MAX_SPOKEN_DESCRIPTION_CHARS}. Say the short version, or write a long one on the "
+            "lot's own page."
+        )
+    return raw, None
+
+
+def _reference_link_or_problem(params: dict[str, Any], key: str = "reference_link"):
+    """``(url, None)`` or ``(None, problem)``. Validated the way the model's own URLField is."""
+    raw = _str(params, key)
+    if not raw:
+        return None, None
+    try:
+        return forms.URLField().clean(raw), None
+    except forms.ValidationError:
+        return None, _error(f"“{raw}” isn't a URL I can put on a lot. It needs to start with http:// or https://.")
 
 
 def _missing_required_lot_fields(auction, params: dict[str, Any]) -> str | None:
@@ -2182,9 +2297,27 @@ def print_labels(request, params: dict[str, Any]) -> dict[str, Any]:
         lot = Lot.objects.filter(pk=lot_id, is_deleted=False).first()
         if not lot:
             return _error("I couldn't find that lot any more.")
+        # ``SingleLotLabelView.dispatch``'s own rule, applied here rather than left to the page.
+        # A primary key is a guessable number, and until this check existed naming one came back
+        # with "Opening the label for <lot name>" for any lot on the site -- an answer that both
+        # said what somebody else's lot was called and sent the caller to a page that would then
+        # turn them away. Refusing here is the same answer the page gives, one round trip earlier.
+        seller = lot.auctiontos_seller
+        allowed = lot.is_owned_by(user) or (seller and _is_auction_admin(user, seller.auction))
+        if not seller and lot.user_id and lot.user_id != getattr(user, "pk", None):
+            allowed = False
+        if not allowed:
+            return _error("You can only print labels for your own lots, unless you run that auction.")
+        # ``url`` is the label page, because that is the whole answer a navigate-tier action gives
+        # and it is what the palette follows. The echo's own link to the lot rides alongside under
+        # ``lot_url`` -- ``mcp.tools`` makes any key ending in ``_url`` absolute, so it still works
+        # as a link for an agent handing it to somebody.
+        echo = _lot_echo(lot)
+        echo["lot_url"] = echo.pop("url")
         return _ok(
             f"Opening the label for {lot.lot_name}.",
             url=reverse("single_lot_label", kwargs={"pk": lot.pk}),
+            **echo,
         )
     auction, problem = _auction_or_problem(request, params)
     if problem:
@@ -2416,6 +2549,632 @@ def _preference_phrase(field, value) -> str:
     if isinstance(value, bool):
         return "on" if value else "off"
     return str(value)
+
+
+# --- the rest of the account: contact info, username, label printing ------------
+#
+# ``update_preferences`` covers the Preferences tab and nothing else, which left four of the pages
+# the preferences ribbon links to reachable only by being sent to them. Three of them are ordinary
+# settings and are below. The other four -- password, email address, social sign-in, and deleting
+# the account -- stay navigate-only on purpose: the first three are allauth's, with a verification
+# email in the middle of each, and the fourth destroys everything the person has.
+
+
+def _contact_form(userdata, data=None):
+    """A ``UserLocation``, built the way ``views.UserLocationUpdate`` builds one.
+
+    The form carries ``first_name`` and ``last_name`` as fields of its own even though they live on
+    ``User`` rather than ``UserData``, which is why the view has to copy them across by hand after
+    saving -- and why this does too, through the same shared helper.
+    """
+    from .forms import UserLocation
+
+    return UserLocation(data, instance=userdata)
+
+
+#: What somebody calls each contact-info field. ``location`` is the ship-to region and ``address``
+#: is where the post goes; they are different fields and people say "location" for both, so the
+#: aliases send the ambiguous words to the one that is nearly always meant.
+_CONTACT_ALIASES = {
+    "name": "name",
+    "full name": "name",
+    "first": "first_name",
+    "last": "last_name",
+    "surname": "last_name",
+    "phone": "phone_number",
+    "telephone": "phone_number",
+    "mobile": "phone_number",
+    "mailing address": "address",
+    "postal address": "address",
+    "where i live": "address",
+    "region": "location",
+    "country": "location",
+    "ship to": "location",
+    "shipping location": "location",
+    "map": "location_coordinates",
+    "coordinates": "location_coordinates",
+    "map marker": "location_coordinates",
+    "latitude": "location_coordinates",
+    "longitude": "location_coordinates",
+}
+
+#: The contact-info fields this action will write, and how each is said back.
+_CONTACT_FIELDS = ("first_name", "last_name", "phone_number", "address", "location", "location_coordinates")
+
+
+def _resolve_contact_field(hint: str) -> str | None:
+    wanted = (hint or "").strip().lower().replace("-", " ").replace("_", " ")
+    if not wanted:
+        return None
+    if wanted in _CONTACT_ALIASES:
+        return _CONTACT_ALIASES[wanted]
+    underscored = wanted.replace(" ", "_")
+    if underscored in _CONTACT_FIELDS or underscored == "name":
+        return underscored
+    for name in _CONTACT_FIELDS:
+        if wanted in name.replace("_", " "):
+            return name
+    return None
+
+
+def _shipping_region(raw: str):
+    """A :class:`auctions.models.Location` from what somebody called it, or ``None``."""
+    from .models import Location
+
+    wanted = (raw or "").strip().lower()
+    if not wanted:
+        return None
+    for location in Location.objects.all():
+        if wanted == location.name.lower():
+            return location
+    for location in Location.objects.all():
+        if wanted in location.name.lower() or location.name.lower() in wanted:
+            return location
+    return None
+
+
+def _coordinate_pair(raw: str) -> str | None:
+    """``"42.36,-71.06"`` from what was said, or ``None`` when it wasn't a pair of coordinates.
+
+    Deliberately strict: this parses a pair and never interprets an address. Turning an address
+    into a point is :func:`_marker_to_confirm`, which is a separate step because its answer has to
+    be agreed to before it is saved.
+    """
+    parts = [part.strip() for part in str(raw or "").replace(";", ",").split(",")]
+    if len(parts) != 2:
+        return None
+    try:
+        latitude, longitude = float(parts[0]), float(parts[1])
+    except (TypeError, ValueError):
+        return None
+    if not (-90 <= latitude <= 90) or not (-180 <= longitude <= 180):
+        return None
+    return f"{latitude},{longitude}"
+
+
+def _marker_to_confirm(address: str, what: str) -> dict[str, Any] | None:
+    """Geocode *address* and hand the answer back as a question, or ``None`` if there isn't one.
+
+    The web form geocodes in JavaScript and drops a marker the person can see and drag before they
+    press Save. An assistant has neither the map nor the drag, so the equivalent is this: find the
+    place, say which place was found, and let somebody agree with it. Saving Google's first guess
+    silently would be the same mistake as saving nothing -- a point in the wrong town is invisible
+    on every page it then appears on.
+
+    ``None`` means there is nothing to confirm (no key configured, nothing found), and the caller
+    falls back to asking for coordinates outright.
+    """
+    from . import geocoding
+
+    found = geocoding.geocode(address)
+    if not found:
+        return None
+    return _need(
+        f"I found {found['address']} — is that the right place for {what}? "
+        f"If it is, call me again with location_coordinates set to \u201c{found['coordinates']}\u201d.",
+        [
+            {"label": f"Yes, {found['address']}", "value": found["coordinates"]},
+            {"label": "No, somewhere else", "value": ""},
+        ],
+    )
+
+
+def update_contact_info(request, params: dict[str, Any]) -> dict[str, Any]:
+    """Change the caller's own name, phone, mailing address, ship-to region or map marker.
+
+    Saved through :class:`auctions.forms.UserLocation` -- the contact info page's own form -- and
+    followed by ``services.propagate_contact_info``, so this does the thing that page does rather
+    than a smaller version of it: the auctions this person has joined in the last thirty days and
+    every club they belong to hold their own copy of the name, phone and address, and all of them
+    are corrected together, each with its own history line.
+
+    The map marker is the edge case. ``UserData.location_coordinates`` is a map click on the web and
+    a ``pre_save`` signal splits it into latitude and longitude; nothing geocodes an address on this
+    site. So an address change deliberately leaves the marker where it was and the answer says so,
+    because a marker quietly following a guess at somebody's street would change which auctions they
+    hear about with nothing on screen to show it moved.
+    """
+    user = request.user
+    userdata = getattr(user, "userdata", None)
+    if userdata is None:
+        return _error("I couldn't find your contact info.")
+
+    changes: dict[str, Any] = {}
+    said: list[str] = []
+
+    # Either shape: a named setting and a value, or the fields spelled out as parameters.
+    hint = _str(params, "setting") or _str(params, "field")
+    if hint:
+        field_name = _resolve_contact_field(hint)
+        if not field_name:
+            return _need(
+                f"I'm not sure which part of your contact info “{hint}” is. "
+                "I can change your first name, last name, phone number, mailing address, "
+                "ship-to region or map marker."
+            )
+        raw = params.get("value")
+        if raw in (None, ""):
+            return _need(f"What should your {field_name.replace('_', ' ')} be?")
+        if field_name == "name":
+            params = {**params, "name": str(raw)}
+        else:
+            params = {**params, field_name: raw}
+
+    whole_name = _str(params, "name")
+    if whole_name:
+        pieces = whole_name.split()
+        changes["first_name"] = pieces[0]
+        changes["last_name"] = " ".join(pieces[1:])
+    for key in ("first_name", "last_name", "phone_number", "address"):
+        if _str(params, key):
+            changes[key] = _str(params, key)
+
+    region_said = _str(params, "location")
+    if region_said:
+        region = _shipping_region(region_said)
+        if not region:
+            from .models import Location
+
+            known = ", ".join(Location.objects.values_list("name", flat=True))
+            return _need(f"I don't know a ship-to region called “{region_said}”. The regions are: {known}.")
+        changes["location"] = region.pk
+        said.append(f"ship-to region to {region.name}")
+
+    marker_said = _str(params, "location_coordinates") or _str(params, "coordinates")
+    if marker_said:
+        marker = _coordinate_pair(marker_said)
+        if not marker:
+            return _need(
+                "Give the map marker as a latitude and longitude, like “42.36,-71.06”. "
+                "I won't work one out from an address — a marker in the wrong place changes which "
+                "auctions you're told about."
+            )
+        changes["location_coordinates"] = marker
+        said.append("map marker")
+
+    if not changes:
+        return _need(
+            "What should I change? I can set your first name, last name, phone number, "
+            "mailing address, ship-to region or map marker."
+        )
+
+    data = model_to_dict(userdata, fields=[field.name for field in userdata._meta.fields])
+    data = {key: ("" if value is None else value) for key, value in data.items()}
+    data["first_name"] = user.first_name
+    data["last_name"] = user.last_name
+    data.update(changes)
+
+    form = _contact_form(userdata, data)
+    if form.is_valid():
+        userdata = form.save(commit=False)
+        user.first_name = form.cleaned_data["first_name"]
+        user.last_name = form.cleaned_data["last_name"]
+        user.save(update_fields=["first_name", "last_name"])
+    else:
+        # The contact info page requires a name AND an address whatever else is being changed, so
+        # an account that has never filled it in cannot change its phone number on its own. That is
+        # a reasonable rule for a page with every box on screen and a poor one for a single spoken
+        # change, so a failure that is *only* about fields the caller never mentioned is not a
+        # refusal here: the named fields are cleaned individually, through the form's own field
+        # objects, and saved on their own. Anything wrong with what they actually asked for is
+        # still the form's answer.
+        if any(name in changes for name in form.errors):
+            return _form_problem(form)
+        problem = _save_named_contact_fields(user, userdata, changes, form)
+        if problem:
+            return problem
+    userdata.last_activity = timezone.now()
+    userdata.save()
+    userdata.refresh_from_db()
+
+    from .services import propagate_contact_info
+
+    also_updated = propagate_contact_info(user, userdata, acting_user=user)
+
+    for key in ("first_name", "last_name", "phone_number", "address"):
+        if key in changes:
+            said.append(f"{key.replace('_', ' ')} to “{changes[key]}”")
+    result = _ok(
+        "Updated your " + _and_list(said) + ".",
+        first_name=user.first_name,
+        last_name=user.last_name,
+        phone_number=userdata.phone_number,
+        address=userdata.address,
+        ship_to_region=str(userdata.location) if userdata.location_id else None,
+        followups=[{"label": "All my contact info", "url": reverse("contact_info")}],
+    )
+    if also_updated:
+        result["also_updated_in"] = sorted(set(also_updated))
+        result["why"] = (
+            "Auctions you have joined recently and clubs you belong to keep their own copy of your "
+            "contact details, so they were corrected too."
+        )
+    if "address" in changes and "location_coordinates" not in changes:
+        # Their address moved and their marker did not, which is the thing that decides which
+        # auctions they are told about and how far away each one is said to be. Saying so is the
+        # minimum; looking the new address up and offering the point is the useful version, and it
+        # is still their decision because nothing is written until they say the word.
+        from . import geocoding
+
+        found = geocoding.geocode(changes["address"])
+        result["note"] = "Your map marker hasn't moved — it is what decides which nearby auctions you hear about."
+        if found:
+            result["note"] += (
+                f" That address looks like {found['address']}. If that's right, say so and I'll set "
+                f"location_coordinates to \u201c{found['coordinates']}\u201d."
+            )
+            result["suggested_coordinates"] = found["coordinates"]
+            result["suggested_place"] = found["address"]
+        else:
+            result["note"] += " Set location_coordinates to a latitude and longitude if you've moved."
+    return result
+
+
+def _save_named_contact_fields(user, userdata, changes: dict[str, Any], form) -> dict[str, Any] | None:
+    """Set only the contact fields that were named, cleaning each through the form's own field.
+
+    The fallback for an account with an unfinished contact info page. It is deliberately not a
+    bypass of validation -- every value still goes through the same ``forms.Field`` the page binds
+    it to, so a bad phone number or a ship-to region that doesn't exist is refused exactly as it
+    would be. What it skips is the page's insistence that *everything else* be filled in first.
+    """
+    on_the_user = {"first_name", "last_name"}
+    for name, value in changes.items():
+        field = form.fields.get(name)
+        try:
+            cleaned = field.clean(value) if field else value
+        except forms.ValidationError as problem:
+            label = str(getattr(field, "label", "") or name.replace("_", " "))
+            return _error(f"{label}: {' '.join(problem.messages)}")
+        setattr(user if name in on_the_user else userdata, name, cleaned)
+    if changes.keys() & on_the_user:
+        user.save(update_fields=sorted(changes.keys() & on_the_user))
+    return None
+
+
+def _and_list(items: list[str]) -> str:
+    """``"a, b and c"``. Used where a sentence names what changed and there may be several."""
+    items = [item for item in items if item]
+    if not items:
+        return "contact info"
+    if len(items) == 1:
+        return items[0]
+    return ", ".join(items[:-1]) + " and " + items[-1]
+
+
+def update_username(request, params: dict[str, Any]) -> dict[str, Any]:
+    """Change the caller's own username.
+
+    Validation is :class:`auctions.forms.ChangeUsernameForm`, which is the page's own form and is
+    the only thing that should be deciding this: it is a ``ModelForm`` on ``User``, so it enforces
+    uniqueness, and its ``clean_username`` runs ``validate_username_no_at_symbol`` -- the same rule
+    ``settings.ACCOUNT_USERNAME_VALIDATORS`` applies to every allauth signup, because a username
+    containing an ``@`` is indistinguishable from an email address on a sign-in form.
+
+    A username is on this person's public page, in the URL of it, and is what other people know them
+    by, so this asks first like every other write and says what the old one was.
+    """
+    from .forms import ChangeUsernameForm
+
+    user = request.user
+    wanted = _str(params, "username") or _str(params, "name") or _str(params, "value")
+    if not wanted:
+        return _need("What should your username be?")
+    was = user.username
+    if wanted == was:
+        return _ok(f"Your username is already {was}.", username=was)
+    form = ChangeUsernameForm(instance=user, data={"username": wanted})
+    if not form.is_valid():
+        return _form_problem(form)
+    form.save()
+    return _ok(
+        f"Your username is now {wanted}.",
+        username=wanted,
+        previously=was,
+        followups=[{"label": "My page", "url": reverse("userpage", kwargs={"slug": wanted})}],
+        undo={
+            "action": "update_username",
+            "params": {"username": was},
+            "describes": f"the change from {was}",
+        },
+    )
+
+
+class _DiscardedMessages(BaseStorage):
+    """Somewhere for a flash message to go when there is no page for it to land on.
+
+    Django's own backends all want a session, and the cheapest one to reach for --
+    ``messages.storage.default_storage`` -- raises without session middleware. A request built by
+    an agent's tool call has neither, and the message being written is "Confirmation email sent",
+    which this action's own result says better. So it is thrown away rather than stored.
+    """
+
+    def _get(self, *args, **kwargs):
+        return [], True
+
+    def _store(self, messages, response, *args, **kwargs):
+        return []
+
+
+def change_email(request, params: dict[str, Any]) -> dict[str, Any]:
+    """Start changing the caller's own email address.
+
+    This turned out to be the same shape as ``update_username`` and was left out on a bad reason
+    ("allauth's, with a verification email in the middle"). The verification email is exactly why
+    it is safe: ``ACCOUNT_CHANGE_EMAIL`` is on, so allauth's own ``AddEmailForm`` records the new
+    address unverified and posts a link to it, and the swap happens when somebody opens that link
+    from that inbox. Nothing here can change where this account's mail goes; it can only ask the
+    new address to prove itself, which is precisely what the page does.
+
+    Everything that decides whether the address is allowed is the form's: the format, an address
+    already on this account, one already on somebody else's, and the site's own enumeration rules.
+    """
+    from allauth.account.forms import AddEmailForm
+
+    user = request.user
+    wanted = _str(params, "email") or _str(params, "value") or _str(params, "address")
+    if not wanted:
+        return _need("What email address should I change it to?")
+    if wanted.lower() == (user.email or "").lower():
+        return _ok(f"Your email address is already {user.email}.", email=user.email)
+    form = AddEmailForm(user=user, data={"email": wanted})
+    if not form.is_valid():
+        return _form_problem(form)
+    # allauth calls ``messages.add_message`` on its way out, which raises outright on a request that
+    # has no message storage. Every request that reaches here through a browser has some; a request
+    # built by an agent's tool call may not, and losing the whole action over a flash message
+    # nobody will ever see is the wrong trade. Give it somewhere to put one.
+    if not hasattr(request, "_messages"):
+        request._messages = _DiscardedMessages(request)
+    form.save(request)
+    return _ok(
+        f"I've sent a confirmation link to {wanted}. Your address changes when you open it — "
+        "until then your mail still goes to " + (user.email or "your old address") + ".",
+        email_pending_confirmation=wanted,
+        current_email=user.email,
+        nothing_was_changed_yet=True,
+        followups=[{"label": "Email addresses", "url": reverse("account_email")}],
+    )
+
+
+def _label_prefs_fields():
+    """The printing preferences this action may set, out of the page's own form.
+
+    Built against a real ``UserLabelPrefs`` because ``UserLabelPrefsForm`` deletes two of its fields
+    depending on what the person's phone can do; asking for both here keeps the vocabulary the same
+    for everybody and lets the resolver refuse ``print_method`` with a reason rather than with
+    "I don't know that setting".
+    """
+    from .forms import UserLabelPrefsForm
+
+    form = UserLabelPrefsForm(show_print_method=True, show_print_from_computer=True)
+    return form.fields
+
+
+def update_printing_preferences(request, params: dict[str, Any]) -> dict[str, Any]:
+    """Change one of the caller's own label printing preferences.
+
+    Validation is :class:`auctions.forms.UserLabelPrefsForm`, the label printing page's own form,
+    built with every field showing -- the page hides ``print_method`` and ``print_from_computer``
+    from a browser that has no phone behind it, and hiding a field there means "leave it alone",
+    which is not the same as "nobody may set it".
+    """
+    from .forms import UserLabelPrefsForm
+    from .models import UserLabelPrefs
+
+    user = request.user
+    prefs, _created = UserLabelPrefs.objects.get_or_create(user=user, defaults={})
+    fields = _label_prefs_fields()
+    hint = _str(params, "setting") or _str(params, "name") or _str(params, "preference")
+    field_name = _resolve_form_setting(fields, hint)
+    if not field_name:
+        known = ", ".join(sorted(fields))
+        return _need(
+            f"I don't know a printing preference called “{hint}”. I can change: {known}."
+            if hint
+            else f"Which printing preference should I change? I can change: {known}."
+        )
+    raw = params.get("value")
+    if raw is None:
+        return _need(f"What should {field_name.replace('_', ' ')} be?")
+    form_field = fields[field_name]
+    data = model_to_dict(prefs, fields=list(fields))
+    data = {key: ("" if value is None else value) for key, value in data.items()}
+    if isinstance(form_field, forms.BooleanField):
+        value = _preference_boolean(raw)
+        if value is None:
+            return _need(f"Should {field_name.replace('_', ' ')} be on or off?")
+        data[field_name] = value
+    else:
+        data[field_name] = raw
+    was = getattr(prefs, field_name)
+    form = UserLabelPrefsForm(data, instance=prefs, show_print_method=True, show_print_from_computer=True)
+    if not form.is_valid():
+        return _form_problem(form)
+    form.save()
+    prefs.refresh_from_db()
+    now = getattr(prefs, field_name)
+    label = str(form_field.label or field_name.replace("_", " "))
+    if was == now:
+        return _ok(f"“{label}” was already {_preference_phrase(form_field, now)}.")
+    return _ok(
+        f"Set “{label}” to {_preference_phrase(form_field, now)}.",
+        followups=[{"label": "Label printing", "url": reverse("printing")}],
+        undo={
+            "action": "update_printing_preferences",
+            "params": {"setting": field_name, "value": was},
+            "describes": f"the change to “{label}”",
+        },
+    )
+
+
+def _resolve_form_setting(fields, hint: str) -> str | None:
+    """One field name out of a form's own fields, from what somebody called it.
+
+    The same three-pass match ``_resolve_club_setting`` and ``_resolve_auction_setting`` do -- exact
+    on the name or the label, then a substring of either, then the help text -- written once because
+    there are now six forms reached this way.
+    """
+    wanted = (hint or "").strip().lower().replace("-", " ").replace("_", " ")
+    if not wanted:
+        return None
+    for name, form_field in fields.items():
+        if wanted in {name.lower(), name.lower().replace("_", " "), str(form_field.label or "").lower()}:
+            return name
+    for name, form_field in fields.items():
+        if wanted in f"{name.lower().replace('_', ' ')} {str(form_field.label or '').lower()}":
+            return name
+    for name, form_field in fields.items():
+        if wanted in str(form_field.help_text or "").lower():
+            return name
+    return None
+
+
+# --- what "my auction" and "my club" mean --------------------------------------
+#
+# ``UserData.last_auction_used`` and ``UserData.last_club_used`` are what a bare "add a lot" or
+# "renew my membership" resolves against when nothing else answers, and until now the only way to
+# write either of them was **to load a page**. On the web that is invisible and roughly right: you
+# are looking at the auction, so you meant the auction. An agent has no page, so the same two
+# columns were being read by ``resolve_auction`` and ``_club_or_problem`` and written by nobody in
+# the conversation -- which is how a check-in on spring setup morning ended up asking about last
+# autumn's auction.
+#
+# ``remember_auction`` closed half of that by writing the pointer whenever an action resolved an
+# auction. These two close the other half, which is the case where there is nothing to infer from:
+# somebody sitting down with an agent and *saying* which auction they are working on, before doing
+# anything with it. One sentence at the start of a session instead of the auction's name on the end
+# of every call after it.
+
+
+def set_my_auction(request, params: dict[str, Any]) -> dict[str, Any]:
+    """Make one auction the one the user means when they don't say. "Work on the spring auction."
+
+    The resolution is ``_auction_or_problem`` and nothing else, which is the whole point: this can
+    only ever point at an auction the person created, joined, or runs through a club, because that
+    is the set every other action resolves against. Setting it to an auction they are nothing to do
+    with would be a pointer that every subsequent action then refuses.
+
+    With no auction named it means "whatever is running" -- which is a real request ("we're on
+    tonight's auction now") and is exactly what ``resolve_auction`` answers with no hint. Several
+    running and no tie-break is a question, as everywhere else.
+    """
+    userdata = getattr(request.user, "userdata", None)
+    if userdata is None:
+        return _error("I couldn't find your account settings.")
+    was = command_palette._last_auction(request.user)
+    # The aliases this action accepts have to reach the resolver, or a caller that said ``name``
+    # would be answered with "whichever one is running" -- which is the no-hint path, and looks
+    # exactly like success.
+    named = dict(params)
+    named["auction"] = _str(params, "auction") or _str(params, "name") or _str(params, "slug") or _str(params, "query")
+    auction, problem = _auction_or_problem(request, named)
+    if problem:
+        return problem
+    if was and was.pk == auction.pk:
+        return _ok(
+            f"{auction.title} was already the auction I'll use when you don't say which one.",
+            auction=auction.title,
+            slug=auction.slug,
+            **_about(auction=auction),
+        )
+    return _ok(
+        f"{auction.title} is the auction I'll use from now on when you don't name one.",
+        auction=auction.title,
+        slug=auction.slug,
+        followups=[{"label": auction.title, "url": auction.get_absolute_url()}],
+        # Only offered when there was something to go back to: the parameter is an auction name, so
+        # "there wasn't one before" is a state this tool has no way to express.
+        undo=(
+            {
+                "action": "set_my_auction",
+                "params": {"auction": was.slug},
+                "describes": "which auction I use by default",
+            }
+            if was
+            else None
+        ),
+        **_about(auction=auction),
+    )
+
+
+def set_my_club(request, params: dict[str, Any]) -> dict[str, Any]:
+    """Make one club the one the user means when they don't say. "I'm working on the Betta Society."
+
+    Writes **two** columns, because "my club" means two things on this site and a person saying it
+    means both. ``last_club_used`` is the pointer the assistant reads; ``UserData.club`` is the
+    club affiliation on the account, which is what a new auction gets filed under
+    (``services.finish_new_auction``) and what lets a club claim the auctions its officers created
+    before it existed (the ``ClubMember`` signal in ``signals.py``). Setting one and not the other
+    is the state where the assistant says "your club is the Betta Society" and the next auction the
+    person creates belongs to somebody else.
+
+    Scoped by ``_club_or_problem``, so it can only ever name a club this person belongs to or helps
+    run -- which is what makes writing the affiliation safe rather than merely convenient. Neither
+    column grants anything: the affiliation is read *after* a permission check in both places that
+    read it.
+    """
+    userdata = getattr(request.user, "userdata", None)
+    if userdata is None:
+        return _error("I couldn't find your account settings.")
+    was = command_palette._last_club(request.user)
+    named = dict(params)
+    named["club"] = _str(params, "club") or _str(params, "name") or _str(params, "slug") or _str(params, "query")
+    club, problem = _club_or_problem(request, named)
+    if problem:
+        return problem
+    changed = []
+    if userdata.last_club_used_id != club.pk:
+        userdata.last_club_used = club
+        changed.append("last_club_used")
+    if userdata.club_id != club.pk:
+        userdata.club = club
+        changed.append("club")
+    if changed:
+        userdata.save(update_fields=changed)
+    if not changed:
+        summary = f"{club.name} was already your club."
+    elif "club" in changed:
+        summary = f"{club.name} is your club now, on your account as well as for anything you ask me."
+    else:
+        summary = f"{club.name} is the club I'll use from now on when you don't name one."
+    return _ok(
+        summary,
+        club=club.name,
+        slug=club.slug,
+        followups=[{"label": club.name, "url": reverse("club_detail", kwargs={"slug": club.slug})}],
+        undo=(
+            {
+                "action": "set_my_club",
+                "params": {"club": was.slug},
+                # Both columns, because undoing this runs the same tool, which writes both.
+                "describes": "which club I use by default, and your club affiliation",
+            }
+            if was and was.pk != club.pk
+            else None
+        ),
+        **_about(club=club),
+    )
 
 
 def join_auction(request, params: dict[str, Any]) -> dict[str, Any]:
@@ -3882,14 +4641,167 @@ def list_lots(request, params: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def recent_changes(request, params: dict[str, Any]) -> dict[str, Any]:
-    """What has been changed in this auction lately, newest first. Auction admins only.
+#: Extra spellings for one ``applies_to`` value on the **auction** history table, on top of the
+#: values the model itself declares. Only the words somebody actually says: nobody outside this
+#: codebase calls a participant a "user", and "what did we change in the settings" is a question
+#: about an auction's RULES.
+#:
+#: ``sales``, ``sold`` and ``winners`` all point at ``LOTS``, because that is where a sale lands:
+#: ``DynamicSetLotWinner.commit_winner`` writes "Set lot 14 as sold" under ``LOTS``. There used to
+#: be a ``LOT_WINNERS`` choice on the model that read like the obvious home for them and that
+#: nothing had ever written; it is gone, because a category nobody writes is the one an admin
+#: filtering for sales picks, and it answers with an empty list -- the one wrong answer worse than
+#: a refusal.
+_AUCTION_HISTORY_WORDS = {
+    "people": "USERS",
+    "participants": "USERS",
+    "bidders": "USERS",
+    "check_ins": "USERS",
+    "money": "INVOICES",
+    "payments": "INVOICES",
+    "billing": "INVOICES",
+    "settings": "RULES",
+    "sales": "LOTS",
+    "sold": "LOTS",
+    "winners": "LOTS",
+}
 
-    Every write an assistant performs appends a ``via()`` marker to an
-    ``auction.create_history`` entry, and until now nothing read any of it back. "What did you just
-    do?" and "who checked Bob in?" are the same question asked of the same table, and it is the list
-    an undo has to choose from.
+#: The same for a **club**. Written out separately rather than shared and filtered, because the two
+#: tables disagree about the commonest word of all: "settings" is a club's own SETTINGS and an
+#: auction's RULES, and a merged list would have to pick one of them and be wrong on the other side.
+_CLUB_HISTORY_WORDS = {
+    "people": "MEMBERS",
+    "dues": "MEMBERSHIP",
+    "renewals": "MEMBERSHIP",
+    "memberships": "MEMBERSHIP",
+    "payments": "MEMBERSHIP",
+    "points": "BAP",
+    "breeder_awards": "BAP",
+}
+
+
+def history_words(model, synonyms: dict[str, str]) -> dict[str, str]:
+    """Which words ``about`` accepts for one history table, and what each one stands for.
+
+    The canonical words are the model's **own** ``applies_to`` choices, so a category added to the
+    table is filterable the day it is added and there is no second list to keep in step. The
+    synonyms above are only the spellings a person uses, and each survives here only if the value
+    it stands for is really on this table -- which is what keeps a club's word out of an auction's
+    vocabulary without either list having to know the other exists.
     """
+    stored = {value for value, _label in model._meta.get_field("applies_to").choices}
+    words = {value.lower(): value for value in stored}
+    words.update({word: value for word, value in synonyms.items() if value in stored})
+    return words
+
+
+def _history_category(words: dict[str, str], hint: str):
+    """``"invoices"`` -> ``("INVOICES", None)``. ``(None, problem)`` for a word nobody publishes.
+
+    Refused rather than ignored, for the reason ``points_queue`` refuses an unknown status: a
+    filter that was silently dropped returns a real list of real changes, and nothing anywhere in
+    the answer says it is not the list that was asked for.
+    """
+    wanted = hint.strip().lower().replace(" ", "_").replace("-", "_")
+    value = words.get(wanted) or words.get(wanted.rstrip("s"))
+    if value:
+        return value, None
+    offered = ", ".join(sorted({name.lower() for name in words.values()}))
+    return None, _error(f"“{hint}” isn't a kind of change I know about. Try one of: {offered}.")
+
+
+def _narrow_history(request, params: dict[str, Any], history, filterset, words: dict[str, str]):
+    """Everything both history reads filter on. ``(queryset, problem, label)``.
+
+    The free-text search is the history page's **own** search box (``filters.AuctionHistoryFilter``
+    / ``ClubHistoryFilter``) rather than a second copy of it: it reads the acting person's name,
+    the line itself and its category, which is exactly what makes "joe" find the invoice email that
+    went to Joe and "lot 14" find the line that says it sold.
+
+    ``label`` is how the summary describes what was narrowed. It matters more than it looks: a
+    filtered read that comes back empty and a table that has nothing in it are different answers,
+    and only one of them means "no, that never happened".
+    """
+    user = request.user
+    said: list[str] = []
+    hint = _str(params, "about") or _str(params, "category")
+    if hint:
+        value, problem = _history_category(words, hint)
+        if problem:
+            return None, problem, ""
+        history = history.filter(applies_to=value)
+        said.append(f"about {value.replace('_', ' ').lower()}")
+    if params.get("mine"):
+        history = history.filter(user=user)
+        said.append("made by you")
+    if params.get("assistant"):
+        marker_filter = Q()
+        for marker in ASSISTANT_MARKERS:
+            marker_filter |= Q(action__icontains=marker)
+        history = history.filter(marker_filter)
+        said.append("made through an assistant")
+    if params.get("days") not in (None, ""):
+        # Read back out rather than trusted to ``_int``'s default: a word where a number should be
+        # would come back as ``None`` and quietly drop the filter, which is the same silent
+        # widening ``about`` refuses. A read that looked at more than it was asked to looks
+        # identical to one that did not.
+        days = _int(params, "days")
+        if days is None or days < 1:
+            return None, _error("“days” has to be a whole number of days to look back, at least 1."), ""
+        history = history.filter(timestamp__gte=timezone.now() - timezone.timedelta(days=days))
+        said.append("in the last day" if days == 1 else f"in the last {days} days")
+    search = plain_text(_str(params, "search") or _str(params, "query"), limit=80)
+    if search:
+        history = filterset({"query": search}, queryset=history).qs
+        said.append(f"matching “{search}”")
+    return history, None, " ".join(said)
+
+
+def _history_row(entry, when: str | None) -> dict[str, Any]:
+    """One line of either history table, said the same way on both.
+
+    ``who`` is the person's name and not their username, because "who marked this lot sold?" is a
+    question about a person and a username is not what anybody in the room calls them. Both halves
+    are fenced: a history line is half our own words and half a lot name or a person's name that
+    somebody else typed, and the name in ``who`` was typed by that person too.
+    """
+    actor = getattr(entry, "user", None)
+    name = ((actor.get_full_name() or "").strip() or actor.username) if actor else ""
+    return {
+        "what": untrusted_short(entry.action),
+        "who": untrusted_short(name) if name else "the system",
+        "when": when,
+        # Which drawer this line is in, so the caller can see what ``about`` would narrow to
+        # without having to guess the vocabulary from the tool description.
+        "about": entry.applies_to or None,
+        "by_the_assistant": any(marker in (entry.action or "") for marker in ASSISTANT_MARKERS),
+    }
+
+
+def _history_summary(subject: str, total: int, label: str, limit: int, offset: int) -> str:
+    """The sentence over a page of history rows, in the two cases that read differently."""
+    described = f" {label}" if label else ""
+    if not total:
+        if label:
+            return f"Nothing in {subject}'s history is{described}."
+        return f"Nothing has been changed in {subject} yet."
+    return f"{total} changes in {subject}{described}, newest first.{_showing(total, limit, offset)}"
+
+
+def recent_changes(request, params: dict[str, Any]) -> dict[str, Any]:
+    """What has been changed in this auction, newest first, filtered. Auction admins only.
+
+    Every write an assistant performs appends a ``via()`` marker to an ``auction.create_history``
+    entry, and for a while nothing read any of it back. "What did you just do?" and "who checked Bob
+    in?" are the same question asked of the same table, and it is the list an undo has to choose
+    from.
+
+    What it could not do was answer a question about **one thing** -- "did we send an invoice email
+    to Joe?", "who marked lot 14 sold?" -- because fifteen rows newest-first is the wrong shape for
+    a question whose answer is one line from three weeks ago. ``search``, ``about`` and ``days``
+    are that, and every one of them narrows a table this person can already read in full.
+    """
+    from .filters import AuctionHistoryFilter
     from .models import AuctionHistory
 
     user = request.user
@@ -3899,24 +4811,15 @@ def recent_changes(request, params: dict[str, Any]) -> dict[str, Any]:
     if not _is_auction_admin(user, auction):
         return _error(f"Only admins of {auction.title} can see its history.")
     history = AuctionHistory.objects.filter(auction=auction).select_related("user")
-    if params.get("mine"):
-        history = history.filter(user=user)
-    limit, offset = _slice(params)
-    if params.get("assistant"):
-        marker_filter = Q()
-        for marker in ASSISTANT_MARKERS:
-            marker_filter |= Q(action__icontains=marker)
-        history = history.filter(marker_filter)
+    history, problem, label = _narrow_history(
+        request, params, history, AuctionHistoryFilter, history_words(AuctionHistory, _AUCTION_HISTORY_WORDS)
+    )
+    if problem:
+        return problem
     total = history.count()
+    limit, offset = _slice(params)
     rows = [
-        {
-            # A history line is half our own words and half a lot name or a person's name that
-            # somebody else typed, so the whole line is fenced rather than picked apart.
-            "what": untrusted_short(entry.action),
-            "who": entry.user.username if entry.user else "the system",
-            "when": local_time(auction, entry.timestamp),
-            "by_the_assistant": any(marker in (entry.action or "") for marker in ASSISTANT_MARKERS),
-        }
+        _history_row(entry, local_time(auction, entry.timestamp))
         for entry in history.order_by("-timestamp")[offset : offset + limit]
     ]
     return {
@@ -3926,11 +4829,60 @@ def recent_changes(request, params: dict[str, Any]) -> dict[str, Any]:
         "count": total,
         "showing": len(rows),
         "offset": offset,
-        "summary": (
-            f"The last {len(rows)} changes in {auction.title}.{_showing(total, limit, offset)}"
-            if rows
-            else "Nothing has changed yet."
-        ),
+        "summary": _history_summary(auction.title, total, label, limit, offset),
+        **_about(auction=auction),
+    }
+
+
+def club_history(request, params: dict[str, Any]) -> dict[str, Any]:
+    """What has been changed in this club, newest first, filtered. Club staff only.
+
+    The auction half of this has been readable since ``recent_changes``; the club half is written
+    from two dozen call sites -- renewals, members added and merged, dues changed, points awarded,
+    announcements sent and retracted, a payment provider disconnected -- and was read by nothing but
+    the club's own history page. That is the half holding the answers people ask a club for, because
+    a membership outlives every auction it was ever used at: "when did Bob last pay?" is a question
+    about a person and a club, and no auction knows it.
+
+    Gated on ``permission_view``, which is exactly what :class:`auctions.views.ClubHistoryView`
+    requires -- the same page, the same rows, the same permission. Times go through
+    :func:`user_time` rather than :func:`local_time`: a club has no timezone of its own, so the
+    answer is the clock of the person asking.
+    """
+    from .filters import ClubHistoryFilter
+    from .models import ClubHistory
+
+    user = request.user
+    # No ``also="name"`` here, deliberately: on ``describe_club`` a bare ``name`` means the club,
+    # and on this one it is far likelier to be the member being asked about. Reading it as the club
+    # would refuse "when did Bob last pay?" with "there's no club called Bob".
+    club, problem = _club_or_problem(request, params)
+    if problem:
+        return problem
+    if not command_palette._perm(user, club, "permission_view"):
+        return _error(f"You don't have permission to see {club.name}'s history.")
+    history = ClubHistory.objects.filter(club=club).select_related("user")
+    history, problem, label = _narrow_history(
+        request, params, history, ClubHistoryFilter, history_words(ClubHistory, _CLUB_HISTORY_WORDS)
+    )
+    if problem:
+        return problem
+    total = history.count()
+    limit, offset = _slice(params)
+    rows = [
+        _history_row(entry, user_time(user, entry.timestamp))
+        for entry in history.order_by("-timestamp")[offset : offset + limit]
+    ]
+    return {
+        "found": bool(rows),
+        "club": club.name,
+        "changes": rows,
+        "count": total,
+        "showing": len(rows),
+        "offset": offset,
+        "summary": _history_summary(club.name, total, label, limit, offset),
+        "followups": [{"label": f"{club.name}'s history", "url": reverse("club_history", kwargs={"slug": club.slug})}],
+        **_about(club=club),
     }
 
 
@@ -4434,8 +5386,58 @@ def clubs_near_me(request, params: dict[str, Any]) -> dict[str, Any]:
     return {"found": True, "clubs": rows, "summary": f"{len(rows)} club(s) within {distance} miles of you."}
 
 
+#: How much of one FAQ answer or blog post is worth sending. Long enough to *be* the answer rather
+#: than a pointer to it, which is the whole point of grounding the reply in text somebody here wrote.
+HELP_ANSWER_CHARS = 600
+
+#: How many help articles one answer carries when nobody says. Small, because the commonest caller
+#: is the palette answering one question; a caller reading the FAQ as a document asks for more.
+HELP_LIMIT = 6
+
+#: What ``source`` accepts. The FAQ is a finite list of questions and answers somebody curated; the
+#: blog is a stream of posts. They are different shapes, which is why the FAQ can be read straight
+#: through with no query at all and the blog cannot.
+_HELP_SOURCES = {
+    "all": ("faq", "blog"),
+    "everything": ("faq", "blog"),
+    "faq": ("faq",),
+    "faqs": ("faq",),
+    "questions": ("faq",),
+    "questions_and_answers": ("faq",),
+    "answers": ("faq",),
+    "blog": ("blog",),
+    "blogs": ("blog",),
+    "posts": ("blog",),
+    "news": ("blog",),
+}
+
+#: The ``source`` words that mean "the FAQ, but only the half kept off the public page". Worth a
+#: word of its own for one job -- finding out what is in there -- which is a question no page can
+#: answer, because by definition none of it is on one.
+
+
+def _faq_row(entry) -> dict[str, Any]:
+    """One FAQ entry as an answer.
+
+    An **agent-only** entry carries no ``url``, and that is the whole of what the flag means on
+    this side: it is not on the FAQ page, so ``/faq#slug`` would send somebody to a page that does
+    not contain the thing they were promised. It is not private -- anybody who asks gets it, which
+    is exactly what it is for.
+    """
+    row: dict[str, Any] = {
+        "source": "FAQ",
+        "question": entry.question,
+        "answer": plain_text(entry.answer, limit=HELP_ANSWER_CHARS),
+    }
+    if entry.agent_only:
+        row["on_the_public_faq_page"] = False
+    else:
+        row["url"] = reverse("faq") + f"#{entry.slug}"
+    return row
+
+
 def search_help(request, params: dict[str, Any]) -> dict[str, Any]:
-    """Search the site's own written help -- the FAQ and the blog -- for a how-does-this-work question.
+    """Search the site's own written help -- the FAQ and the blog -- or read the FAQ straight through.
 
     "How does proxy bidding work?", "what's a donation lot?", "how do I print labels?" had no action,
     so they were answered from the model's own priors: plausible, confident, and about some other
@@ -4443,40 +5445,73 @@ def search_help(request, params: dict[str, Any]) -> dict[str, Any]:
 
     Both models store rendered HTML alongside the markdown source; the source is what gets searched
     and sent, because the rendered field is mostly tags.
+
+    Two things it can do that it could not. ``query`` is **optional**: with nothing to look for it
+    hands back the FAQ itself, in the order the page shows it, which is what makes ``help://faq`` an
+    attachable document rather than a search box somebody has to guess words for. And ``source``
+    narrows it to the questions and answers alone -- the FAQ is what a "how does this work" question
+    is nearly always answered out of, and a blog post about last spring's release notes is noise in
+    front of it.
+
+    It also serves the **agent-only** entries, which the FAQ page does not. That flag exists because
+    the answers worth writing down outnumber the ones worth a heading on a page people read top to
+    bottom; nothing about it is privacy, and every caller here gets them.
     """
     from .models import FAQ, BlogPost
 
     query = _str(params, "query") or _str(params, "question")
-    if not query:
-        return _error("What would you like me to look up?")
-    words = re.findall(r"[A-Za-z0-9']{3,}", query.lower())[:6]
-    if not words:
+    said = _str(params, "source") or "all"
+    wanted = said.lower().replace(" ", "_").replace("-", "_")
+    if wanted not in _HELP_SOURCES:
+        # Refused rather than defaulted to "all", for the reason ``points_queue`` refuses an
+        # unknown status: a narrowing that was quietly dropped comes back as a real list of real
+        # articles with nothing in it to say it is not the list that was asked for.
+        return _error(f"“{said}” isn't something I can search. Say faq, blog, or all.")
+    sources = _HELP_SOURCES[wanted]
+    words = re.findall(r"[A-Za-z0-9']{3,}", query.lower())[:6] if query else []
+    if query and not words:
         return {"found": False, "help": [], "summary": f"Nothing written down about “{query}”."}
-    faq_q = Q()
-    blog_q = Q()
-    for word in words:
-        faq_q |= Q(question__icontains=word) | Q(answer__icontains=word)
-        blog_q |= Q(title__icontains=word) | Q(body__icontains=word)
-    results = []
-    for entry in FAQ.objects.filter(faq_q)[:4]:
-        results.append(
-            {
-                "source": "FAQ",
-                "question": entry.question,
-                "answer": plain_text(entry.answer, limit=600),
-                "url": reverse("faq") + f"#{entry.slug}",
-            }
-        )
-    for post in BlogPost.objects.filter(blog_q).order_by("-date_posted")[:3]:
-        results.append(
-            {
-                "source": "Blog",
-                "question": post.title,
-                "answer": plain_text(post.body, limit=600),
-                "url": reverse("blog_post", kwargs={"slug": post.slug}),
-            }
-        )
-    if not results:
+    if not words and sources == ("blog",):
+        return _error("Give me something to look for — the blog is a stream of posts, not a list of answers.")
+
+    faq_entries = FAQ.objects.none()
+    posts = BlogPost.objects.none()
+    if "faq" in sources:
+        faq_q = Q()
+        for word in words:
+            faq_q |= Q(question__icontains=word) | Q(answer__icontains=word)
+        # The page's own ordering, so reading the FAQ through this and reading it on the site are
+        # the same document. ``pk`` breaks the tie inside a category, which MariaDB otherwise
+        # leaves free to change between two calls that are meant to be pages of one answer.
+        faq_entries = (FAQ.objects.filter(faq_q) if words else FAQ.objects.all()).order_by("category_text", "pk")
+    if "blog" in sources and words:
+        blog_q = Q()
+        for word in words:
+            blog_q |= Q(title__icontains=word) | Q(body__icontains=word)
+        posts = BlogPost.objects.filter(blog_q).order_by("-date_posted")
+
+    limit, offset = _slice(params, default=HELP_LIMIT)
+    faq_total = faq_entries.count()
+    blog_total = posts.count()
+    total = faq_total + blog_total
+    # One list, paged exactly: the FAQ occupies the first ``faq_total`` places and the blog the
+    # rest, so an offset past the end of the FAQ carries on into the posts rather than starting
+    # them over. Two queries, and neither of them loads what the page does not show.
+    results = [_faq_row(entry) for entry in faq_entries[offset : offset + limit]]
+    if len(results) < limit and offset + len(results) >= faq_total:
+        start = max(0, offset - faq_total)
+        for post in posts[start : start + (limit - len(results))]:
+            results.append(
+                {
+                    "source": "Blog",
+                    "question": post.title,
+                    "answer": plain_text(post.body, limit=HELP_ANSWER_CHARS),
+                    "url": reverse("blog_post", kwargs={"slug": post.slug}),
+                }
+            )
+    if not total:
+        if not query:
+            return {"found": False, "help": [], "summary": "Nothing has been written in this site's FAQ yet."}
         return {
             "found": False,
             "help": [],
@@ -4485,7 +5520,15 @@ def search_help(request, params: dict[str, Any]) -> dict[str, Any]:
                 "general knowledge — this site works differently from other auction sites."
             ),
         }
-    return {"found": True, "help": results, "summary": f"{len(results)} help article(s) about “{query}”."}
+    subject = f"about “{query}”" if query else "in this site's FAQ"
+    return {
+        "found": bool(results),
+        "help": results,
+        "count": total,
+        "showing": len(results),
+        "offset": offset,
+        "summary": f"{total} help article(s) {subject}.{_showing(total, limit, offset)}",
+    }
 
 
 def find_page(request, params: dict[str, Any]) -> dict[str, Any]:
@@ -4501,6 +5544,125 @@ def find_page(request, params: dict[str, Any]) -> dict[str, Any]:
         "pages": [{"page": route.key, "label": route.label, "section": route.section} for route in matches],
         "summary": f"{len(matches)} page(s) matching “{query}”.",
     }
+
+
+# --- read_source ---------------------------------------------------------------
+
+
+def read_source(request, params: dict[str, Any]) -> dict[str, Any]:
+    """Read this site's own published source code: search it, list a directory, read a file.
+
+    The one question the rest of the catalogue cannot answer. Everything else here answers out of
+    the database -- what a lot sold for, who has paid, when the meeting is -- and none of it can say
+    *why* a lot got no breeder points, what "pretty much over" means, or how lots get recommended to
+    somebody. Those answers are written down in one place, and it is a public repository, so
+    somebody who asks can be told what the code actually does rather than what an auction site
+    probably does.
+
+    ``search`` is the half that makes that true rather than merely available: "how does the lot
+    recommendation system work" is not a filename, so a tool that could only list and read would
+    have left an agent paging through ``views.py`` a hundred and twenty lines at a time.
+
+    Everything about how this is bounded lives in :mod:`auctions.source_code`, and the short version
+    is that the published repository is fetched whole, once an hour, and read in memory: the tool
+    can serve what is already on a public web page and nothing else, and it touches no filesystem
+    path at all -- which is the property that matters on a deployment where the source sits on disk
+    next to ``.env`` and a keyfile.
+
+    Not fenced in guillemets, unlike every other long string these tools return. The fences mark
+    text an outsider typed; this is our own committed source, and a page of Python wrapped in
+    quotation marks is a page of Python somebody then has to unwrap.
+    """
+    if not source_code.configured():
+        return _error("This site doesn't publish its source code, so there's nothing for me to read.")
+    home = source_code.home_url()
+    path = source_code.normalize(_str(params, "path") or _str(params, "file") or _str(params, "directory"))
+    search = _str(params, "search") or _str(params, "query") or _str(params, "q")
+    try:
+        if search:
+            # Both halves, because "search the source" means both and asking somebody to pick is
+            # asking them to know which one will work. The code is the half that answers "how does
+            # the lot recommendation system work" -- that is not a filename.
+            paths = source_code.find(search)
+            matches = source_code.grep(search)
+            files = sorted({match["path"] for match in matches})
+            return {
+                "found": bool(paths or matches),
+                "repository": home,
+                "searched_for": search,
+                "paths": paths,
+                "in_the_code": matches,
+                "files_containing_it": files,
+                "summary": (
+                    f"“{search}”: {len(matches)} line(s) in {len(files)} file(s), "
+                    f"{len(paths)} file name(s). Read any of them with path=..."
+                    if (paths or matches)
+                    else f"Nothing in the repository mentions “{search}”."
+                ),
+            }
+        if not path:
+            top = source_code.listing("")
+            return {
+                "found": True,
+                "repository": home,
+                "path": "",
+                "kind": "directory",
+                **top,
+                "start_here": [{"path": where, "what": what} for where, what in source_code.LANDMARKS],
+                "summary": (
+                    f"The top level of {home}. Pass a path to list a directory or read a file, "
+                    "or search to find a file by name."
+                ),
+            }
+        if source_code.exists(path):
+            page = source_code.read(
+                path,
+                start=max(1, _int(params, "start_line", 1) or 1),
+                count=_int(params, "lines", source_code.DEFAULT_LINES) or source_code.DEFAULT_LINES,
+            )
+            more = (
+                f" Lines {page['next_line']} onwards: call this again with start_line={page['next_line']}."
+                if page["more"]
+                else ""
+            )
+            return {
+                "found": True,
+                "repository": home,
+                "kind": "file",
+                **page,
+                "summary": f"{page['path']}, lines {page['showing']} of {page['lines']}.{more}",
+            }
+        inside = source_code.listing(path)
+        if inside["directories"] or inside["files"]:
+            return {
+                "found": True,
+                "repository": home,
+                "path": path,
+                "kind": "directory",
+                **inside,
+                "summary": (f"{path}: {len(inside['directories'])} director(ies) and {len(inside['files'])} file(s)."),
+            }
+        # Nothing by that name. A near miss is the commonest reason ("auctions/mcp/tool.py"), so the
+        # refusal carries what the search would have found rather than making somebody ask twice.
+        # The whole filename first, then the same thing without its extension -- which is what
+        # turns "tool.py" into "tools.py", and is why it is a fallback rather than the only try:
+        # stripping ".env" leaves nothing to search for.
+        name = path.rsplit("/", 1)[-1]
+        near = source_code.find(name) or source_code.find(name.rsplit(".", 1)[0])
+        return {
+            "found": False,
+            "repository": home,
+            "path": path,
+            "paths": near,
+            "summary": (
+                f"There's nothing at {path} in the repository."
+                + (f" Did you mean one of these? {', '.join(near[:5])}" if near else "")
+            ),
+        }
+    except source_code.SourceUnavailable as problem:
+        return _error(f"{problem} You can read it yourself at {home}.")
+    except ValueError as problem:
+        return _error(str(problem))
 
 
 # --- undo a sale -------------------------------------------------------------
@@ -4885,8 +6047,11 @@ _LOT_FIELDS = (
     ("buy_now_price", "buy now price"),
     ("donation", "donation"),
     ("i_bred_this_fish", "breeder points"),
+    ("summernote_description", "description"),
+    ("custom_checkbox", "checkbox"),
     ("custom_field_1", "extra field"),
     ("custom_dropdown", "category"),
+    ("reference_link", "reference link"),
 )
 
 
@@ -4937,14 +6102,27 @@ def edit_lot(request, params: dict[str, Any]) -> dict[str, Any]:
         value = _decimal(params, key)
         if value is not None:
             changes[target or key] = value
-    for key in ("donation", "i_bred_this_fish"):
+    for key in ("donation", "i_bred_this_fish", "custom_checkbox"):
         if key in params:
             changes[key] = bool(params.get(key))
     for key in ("custom_field_1", "custom_dropdown"):
         if params.get(key):
             changes[key] = _str(params, key)
-    if not changes:
-        return _need(f"What should I change about {lot.lot_name}? I can set its name, quantity or prices.")
+    switched_off = _lot_field_switched_off(auction, params)
+    if switched_off:
+        return _error(switched_off)
+    reference_link, link_problem = _reference_link_or_problem(params)
+    if link_problem:
+        return link_problem
+    description, description_problem = _lot_description_or_problem(auction, params)
+    if description_problem:
+        return description_problem
+    if description is not None:
+        changes["summernote_description"] = description
+    if not changes and not reference_link:
+        in_use = lot_fields_in_use(auction)
+        extras = "".join(f", its {spec['label']}" for spec in in_use.values())
+        return _need(f"What should I change about {lot.lot_name}? I can set its name, quantity, prices{extras}.")
 
     data = model_to_dict(lot, fields=QUICK_ADD_LOT_FIELDS)
     data = {key: ("" if value is None else value) for key, value in data.items()}
@@ -4956,6 +6134,12 @@ def edit_lot(request, params: dict[str, Any]) -> dict[str, Any]:
     if not form.is_valid():
         return _form_problem(form)
     lot = form.save()
+    if reference_link:
+        # Not a ``QuickAddLot`` field, so it is saved beside the form rather than through it.
+        previous["reference_link"] = lot.reference_link or ""
+        changes["reference_link"] = reference_link
+        lot.reference_link = reference_link
+        lot.save(update_fields=["reference_link"])
     if seller:
         # Prices and donation status are what the seller's fees are computed from, so an edit that
         # doesn't do this leaves an invoice that disagrees with the lot it's charging for.
@@ -6559,38 +7743,126 @@ def set_current_auction(request, params: dict[str, Any]) -> dict[str, Any]:
 
 #: Which club settings can be changed by name, and how a spoken value maps onto them. Read off
 #: ``ClubEditForm`` rather than listed here, so the two cannot disagree -- the form is the page.
-def _club_setting_fields():
-    from .forms import ClubEditForm
+#: A club's settings live on four pages, not one, and each page has its own permission.
+#:
+#: ``update_club_setting`` used to reach only ``ClubEditForm`` -- the club's name, its homepage,
+#: whether the breeder award program is switched on. That left thirty-three settings behind, and
+#: produced one bad asymmetry in particular: "turn our breeder award program on" worked, because
+#: that checkbox is on the first page, while "set our points per lot to 5" did not, because that one
+#: is on the BAP page. The second is the sentence a club actually says.
+#:
+#: The permission is per page and is written down here rather than inferred, because the four are
+#: genuinely different: the membership page is money as well as club administration, and the BAP
+#: page is the one an award chair holds without running the club at all. Widening any of them by
+#: accident is exactly the kind of thing ``test_mcp_permissions`` is a driver for.
+_CLUB_SETTING_PAGES = (
+    ("ClubEditForm", ("permission_edit_club",), "the club's details", "club_edit"),
+    (
+        "ClubMembershipSettingsForm",
+        ("permission_edit_club", "permission_money"),
+        "membership",
+        "club_membership_settings",
+    ),
+    ("ClubEmailSettingsForm", ("permission_edit_club",), "email", "club_email_settings"),
+    ("ClubBapSettingsForm", ("permission_manage_bap",), "the breeder award program", "club_bap_settings"),
+    ("ClubDonationSettingsForm", ("permission_edit_club",), "donation tracking", "club_donation_settings"),
+)
 
-    form = ClubEditForm()
-    # ``icon`` is a file and ``location_coordinates`` is a map click; neither is something anybody
-    # says out loud, and both would need a request body this has no way to carry.
-    return {name: field for name, field in form.fields.items() if name not in {"icon", "location_coordinates"}}
+#: The three integration switches that live on no form at all.
+#:
+#: ``ClubDiscordConfigView.post`` and ``ClubGoogleCalendarConfigView.post`` read them straight out
+#: of ``request.POST`` and assign them, so there is no ``ModelForm`` to route them through the way
+#: everything else here is routed. They are plain booleans on ``Club`` with nothing to validate, so
+#: a form is built for them rather than inventing a page-shaped abstraction: what matters is that
+#: they are *nameable*, because "stop putting our auctions on the calendar" is a sentence somebody
+#: says and there was no tool that could hear it.
+_CLUB_INTEGRATION_SWITCHES = {
+    "add_auctions_to_calendar": "Put this club's auctions on its Google Calendar",
+    "create_events_for_auctions": "Create a Discord event for each auction",
+    "create_discord_events_for_club_events": "Create a Discord event for each club event",
+}
+
+#: Club forms deliberately not reachable by ``update_club_setting``, and why. Checked by a test, so
+#: a new one is a decision rather than an oversight.
+_CLUB_FORMS_NOT_SPOKEN = {
+    "ClubPayPalCredentialsForm": (
+        "A PayPal client id and secret. Credentials are pasted from another company's dashboard "
+        "into a page that stores them encrypted, and reading one out to an assistant is the one "
+        "way to get it into a transcript."
+    ),
+}
+
+#: Fields on a club settings form that this cannot set, and why. Both are the same reason the club
+#: form has always skipped them: a file upload and a map click are not sentences.
+_CLUB_SETTINGS_NOT_SPOKEN = {"icon", "location_coordinates"}
+
+
+def _club_setting_pages():
+    """Each club settings form, built empty, with the permission its own page requires."""
+    from . import forms as site_forms
+
+    built = []
+    for form_name, permissions, label, url_name in _CLUB_SETTING_PAGES:
+        form_class = getattr(site_forms, form_name)
+        built.append((form_class, form_class(), permissions, label, url_name))
+    integration = _club_integration_form_class()
+    built.append((integration, integration(), ("permission_edit_club",), "integrations", "club_discord_config"))
+    return built
+
+
+def _club_integration_form_class():
+    """A ``ModelForm`` over the three switches that have no page-owned form of their own."""
+    from django.forms import modelform_factory
+
+    from .models import Club
+
+    form_class = modelform_factory(Club, fields=list(_CLUB_INTEGRATION_SWITCHES))
+    for name, label in _CLUB_INTEGRATION_SWITCHES.items():
+        form_class.base_fields[name].label = label
+        form_class.base_fields[name].required = False
+    return form_class
+
+
+def _club_setting_fields():
+    """Every club setting that can be named, mapped to the page it lives on.
+
+    Keyed by field name; the first page carrying a name wins, which matters not at all today (no
+    two club forms share a field) and keeps the answer stable if one ever does.
+    """
+    index: dict[str, Any] = {}
+    for form_class, form, permissions, label, url_name in _club_setting_pages():
+        for name, form_field in form.fields.items():
+            if name in _CLUB_SETTINGS_NOT_SPOKEN or name in index:
+                continue
+            index[name] = {
+                "field": form_field,
+                "form_class": form_class,
+                "permissions": permissions,
+                "page": label,
+                "url_name": url_name,
+            }
+    return index
 
 
 def _resolve_club_setting(hint: str) -> str | None:
-    """A setting's field name from what somebody called it. Matched on the form's own labels."""
-    wanted = (hint or "").strip().lower().replace("-", " ").replace("_", " ")
-    if not wanted:
-        return None
-    fields = _club_setting_fields()
-    for name, form_field in fields.items():
-        if wanted in {name.lower(), name.lower().replace("_", " "), str(form_field.label or "").lower()}:
-            return name
-    for name, form_field in fields.items():
-        haystack = f"{name} {form_field.label or ''} {form_field.help_text or ''}".lower()
-        if wanted in haystack:
-            return name
-    return None
+    """A setting's field name from what somebody called it. Matched on the forms' own labels."""
+    index = _club_setting_fields()
+    return _resolve_form_setting({name: spec["field"] for name, spec in index.items()}, hint)
 
 
 def update_club_setting(request, params: dict[str, Any]) -> dict[str, Any]:
-    """Change one of a club's settings by name. Validation is ``ClubEditForm``, the settings page.
+    """Change one of a club's settings by name, on whichever of its four settings pages it lives on.
 
-    One setting at a time and named out loud, rather than a form full of them: this is "turn the
-    breeder award program on", not "let me redo our club page".
+    Validation is that page's own form -- ``ClubEditForm``, ``ClubMembershipSettingsForm``,
+    ``ClubEmailSettingsForm`` or ``ClubBapSettingsForm`` -- and so is the permission. The BAP page
+    wants ``permission_manage_bap`` and the membership page takes ``permission_money`` as well as
+    ``permission_edit_club``; reading the permission off the page rather than asking for one
+    permission across all four is what stops this being a quiet widening of what a club officer can
+    do.
+
+    One setting at a time and named out loud, rather than a form full of them: this is "set our
+    points per lot to 5", not "let me redo our club page".
     """
-    from .forms import ClubEditForm
     from .models import ClubHistory
     from .views import check_club_permission
 
@@ -6598,19 +7870,24 @@ def update_club_setting(request, params: dict[str, Any]) -> dict[str, Any]:
     club, problem = _club_or_problem(request, params)
     if problem:
         return problem
-    if not check_club_permission(user, club, "permission_edit_club"):
-        return _error(f"You don't have permission to change {club.name}'s settings.")
     wanted = _str(params, "setting") or _str(params, "name")
+    index = _club_setting_fields()
     field_name = _resolve_club_setting(wanted)
     if not field_name:
-        known = ", ".join(sorted(_club_setting_fields()))
-        return _need(f"I don't know a club setting called “{wanted}”. I can change: {known}.")
+        known = ", ".join(sorted(index))
+        return _need(f"I don't know a club setting called \u201c{wanted}\u201d. I can change: {known}.")
+    spec = index[field_name]
+    if not any(check_club_permission(user, club, permission) for permission in spec["permissions"]):
+        return _error(f"You don't have permission to change {club.name}'s {spec['page']} settings.")
     raw = params.get("value")
     if raw is None:
         return _need(f"What should {field_name.replace('_', ' ')} be?")
-    data = model_to_dict(club, fields=list(_club_setting_fields()))
+
+    form_class = spec["form_class"]
+    page_fields = [name for name in form_class().fields if name not in _CLUB_SETTINGS_NOT_SPOKEN]
+    data = model_to_dict(club, fields=page_fields)
     data = {key: ("" if value is None else value) for key, value in data.items()}
-    form_field = _club_setting_fields()[field_name]
+    form_field = spec["field"]
     if isinstance(form_field, forms.BooleanField):
         value = _preference_boolean(raw)
         if value is None:
@@ -6618,20 +7895,26 @@ def update_club_setting(request, params: dict[str, Any]) -> dict[str, Any]:
         data[field_name] = value
     else:
         data[field_name] = str(raw)
-    form = ClubEditForm(data, instance=club)
+    form = form_class(data, instance=club)
     if not form.is_valid():
         return _form_problem(form)
     form.save()
     label = str(form_field.label or field_name.replace("_", " "))
     shown = data[field_name]
-    shown = ("on" if shown else "off") if isinstance(form_field, forms.BooleanField) else f"“{shown}”"
+    shown = ("on" if shown else "off") if isinstance(form_field, forms.BooleanField) else f"\u201c{shown}\u201d"
     ClubHistory.objects.create(
         club=club, user=user, action=f"Changed {label} to {shown} {via(request)}", applies_to="SETTINGS"
     )
     return _ok(
         f"{label} is now {shown} for {club.name}.",
         club=club.name,
-        followups=[{"label": f"{club.name}'s settings", "url": reverse("club_edit", kwargs={"slug": club.slug})}],
+        on_page=spec["page"],
+        followups=[
+            {
+                "label": f"{club.name}'s {spec['page']} settings",
+                "url": reverse(spec["url_name"], kwargs={"slug": club.slug}),
+            }
+        ],
     )
 
 
@@ -6731,6 +8014,19 @@ def update_auction_setting(request, params: dict[str, Any]) -> dict[str, Any]:
         return _set_one_auction_setting(request, auction, params)
 
 
+def _lot_field_settings_form(auction=None, data=None):
+    """An ``AuctionCustomFieldsForm``: which per-lot fields sellers are shown in this auction.
+
+    A second settings page for the same object, reached by the same tool. It takes no extra
+    permission -- ``AuctionCustomFieldsUpdate`` is behind ``AuctionViewMixin``, the ordinary auction
+    admin gate ``update_auction_setting`` already applies -- and it shares no field with the rules
+    form, so a name can only ever belong to one of the two.
+    """
+    from .forms import AuctionCustomFieldsForm
+
+    return AuctionCustomFieldsForm(data, instance=auction)
+
+
 def _set_one_auction_setting(request, auction, params: dict[str, Any]) -> dict[str, Any]:
     """The body of :func:`update_auction_setting`, inside the timezone the form wants."""
     user = request.user
@@ -6739,10 +8035,17 @@ def _set_one_auction_setting(request, auction, params: dict[str, Any]) -> dict[s
     wanted = _str(params, "setting") or _str(params, "name")
     field_name = _resolve_auction_setting(fields, wanted)
     if not field_name:
+        # The other settings page for the same auction: which fields sellers see when they add a
+        # lot. "turn on the quantity field" and "call the custom checkbox CARES species" are
+        # auction settings to everybody except the codebase, so they are answered by the same tool.
+        lot_fields_form = _lot_field_settings_form(auction)
+        lot_field_name = _resolve_form_setting(lot_fields_form.fields, wanted)
+        if lot_field_name:
+            return _set_one_lot_field_setting(request, auction, lot_field_name, params)
         spelled = wanted.lower().replace("-", "_").replace(" ", "_")
         if spelled in _AUCTION_SETTINGS_NOT_SPOKEN:
             return _error(f"{_AUCTION_SETTINGS_NOT_SPOKEN[spelled]} Open the auction's rules page to change it.")
-        known = ", ".join(sorted(fields))
+        known = ", ".join(sorted(set(fields) | set(lot_fields_form.fields)))
         return _need(
             f"I don't know an auction setting called “{wanted}”. I can change: {known}. "
             "Dates and the rules text are on the auction's own edit page."
@@ -6792,6 +8095,950 @@ def _set_one_auction_setting(request, auction, params: dict[str, Any]) -> dict[s
         auction=auction.slug,
         setting=field_name,
         followups=[{"label": f"{auction.title}'s rules", "url": auction.get_edit_url()}],
+    )
+
+
+def _set_one_lot_field_setting(request, auction, field_name: str, params: dict[str, Any]) -> dict[str, Any]:
+    """Set one field on the auction's "custom fields" page -- which fields a seller is shown.
+
+    Split out rather than folded into ``_set_one_auction_setting`` because the two forms want
+    different data: the rules form validates the whole auction and needs every one of its own
+    fields present, and this one is sixteen switches with no cross-field rules but its own.
+    """
+    user = request.user
+    blank = _lot_field_settings_form(auction)
+    form_field = blank.fields[field_name]
+    raw = params.get("value")
+    if raw is None:
+        return _need(f"What should {field_name.replace('_', ' ')} be for {auction.title}?")
+    data = model_to_dict(auction, fields=list(blank.fields))
+    data = {key: ("" if value is None else value) for key, value in data.items()}
+    if isinstance(form_field, forms.BooleanField):
+        value = _preference_boolean(raw)
+        if value is None:
+            return _need(f"Should {field_name.replace('_', ' ')} be on or off?")
+        data[field_name] = value
+    else:
+        data[field_name] = str(raw)
+    form = _lot_field_settings_form(auction, data)
+    if not form.is_valid():
+        return _form_problem(form)
+    auction = form.save()
+    auction.create_history(applies_to="RULES", user=user, action=f"Edited {via(request)}", form=form)
+    label = str(form_field.label or field_name.replace("_", " "))
+    shown = getattr(auction, field_name, data[field_name])
+    shown = ("on" if shown else "off") if isinstance(form_field, forms.BooleanField) else f"“{shown}”"
+    result = _ok(
+        f"{label} is now {shown} for {auction.title}.",
+        auction=auction.slug,
+        setting=field_name,
+        lot_fields_this_auction_uses=lot_fields_in_use(auction),
+        followups=[
+            {
+                "label": f"{auction.title}'s lot fields",
+                "url": reverse("edit_auction_custom_fields", kwargs={"slug": auction.slug}),
+            }
+        ],
+    )
+    if getattr(form, "custom_dropdown_auto_disabled", False):
+        # The page says this in a red banner; with no page the answer has to carry it, or the club
+        # is told their dropdown is on when the form has just switched it back off.
+        result["note"] = (
+            "The custom dropdown needs a name and at least two options, so it has been switched "
+            "off again. Give it a name and add options with add_dropdown_option, then turn it on."
+        )
+    elif str(getattr(auction, field_name, "")) != str(data[field_name]):
+        # ``AuctionCustomFieldsForm.clean`` blanks the name of a field whose switch is off, which is
+        # right and is invisible from here: naming a checkbox nobody is shown does nothing, and an
+        # answer of "done" would be a lie about the only thing the caller asked for.
+        result["note"] = (
+            f"{label} didn't stick, because the field it names is switched off. "
+            "Turn the field on first, then set its name."
+        )
+    return result
+
+
+# --- what this site can do for a club -------------------------------------------
+#
+# Every one of a club's features has a settings page, and a club officer who has never been told a
+# feature exists has no reason to open the page it is on. "Is there anything this site can do that
+# my club isn't using?" is the question that finds them, and until now nothing could answer it: the
+# tools could each change one setting, and none of them could say what the settings were *for*.
+#
+# The table is written out rather than derived from the model's boolean columns, because what makes
+# an entry worth reading is the sentence saying what the feature is for -- and that sentence exists
+# nowhere in the schema. ``on`` is a callable so a feature that is really "is an outside service
+# connected" (Discord, Google Calendar, Mailchimp) answers honestly rather than by a column that
+# only says somebody once pressed a button.
+
+#: One row per thing a club can switch on. ``on`` is read live.
+#:
+#: How to switch it on is **structured rather than prose**, because the first version of this said
+#: things like ``"update_club_setting: membership_system, then membership_annual_fee"`` and the test
+#: that checks those names are real had to parse English to do it. ``settings`` is the settings
+#: ``update_club_setting`` takes, ``tool`` is a registered action, and ``page`` is the sentence for
+#: the handful that genuinely cannot be done here at all -- every one of those is an OAuth sign-in
+#: with somebody else, which needs a browser. ``_club_feature_state`` composes them into one line
+#: for the answer, and a test walks every name.
+_CLUB_FEATURES: tuple[dict[str, Any], ...] = (
+    {
+        "key": "self_service_joining",
+        "name": "Members can join themselves",
+        "what": "People can join the club from its page instead of being added by an officer.",
+        "on": lambda club: club.allow_joining,
+        "settings": ("allow_joining",),
+    },
+    {
+        "key": "membership",
+        "name": "Membership records",
+        "what": "A roll of members with expiration dates, renewals and dues.",
+        # Deliberately not ``enable_membership``. That column is set by ``site_setup`` and by
+        # nothing else -- no form, no page, no gate reads it -- so a club has membership records
+        # when somebody has added one, which is what this asks.
+        "on": lambda club: club.members.filter(is_deleted=False).exists(),
+        "tool": "add_club_member",
+    },
+    {
+        "key": "dues",
+        "name": "Annual dues",
+        "what": "Members pay to renew, and the site tracks who has and who hasn't.",
+        "on": lambda club: bool(club.membership_system and club.membership_system != "none"),
+        "settings": ("membership_system", "membership_annual_fee"),
+    },
+    {
+        "key": "member_cards",
+        "name": "Membership cards with a barcode",
+        "what": "Members get a card on their phone that a door scanner reads.",
+        "on": lambda club: club.show_member_barcode,
+        "settings": ("show_member_barcode",),
+    },
+    {
+        "key": "breeder_award_program",
+        "name": "Breeder award program",
+        "what": "Points for lots a member bred themselves, with a leaderboard and a queue to approve.",
+        "on": lambda club: club.enable_breeder_award_program,
+        "settings": ("enable_breeder_award_program",),
+    },
+    {
+        "key": "separate_plant_program",
+        "name": "A separate plant or coral program",
+        "what": "Plants and corals earn points in their own columns (HAP and CAP) rather than with the fish.",
+        "on": lambda club: bool(club.separate_hap or club.separate_cap),
+        "settings": ("separate_hap", "separate_cap"),
+        "needs": "breeder_award_program",
+    },
+    {
+        "key": "welcome_emails",
+        "name": "Welcome and renewal emails",
+        "what": "New and renewing members are written to automatically, in your own words.",
+        "on": lambda club: bool(club.send_welcome_email_to_new_members),
+        "settings": ("send_welcome_email_to_new_members",),
+    },
+    {
+        "key": "expiration_reminders",
+        "name": "Membership expiry reminders",
+        "what": "Members are reminded before their membership runs out.",
+        "on": lambda club: bool(club.send_membership_expiration_reminders),
+        "settings": ("send_membership_expiration_reminders",),
+    },
+    {
+        "key": "announcements",
+        "name": "Announcements",
+        "what": "One message to your members at once — Discord, phones, email and your own website.",
+        "on": lambda club: club.announcements.filter(sent_at__isnull=False).exists(),
+        "tool": "send_club_announcement",
+    },
+    {
+        "key": "events",
+        "name": "An events calendar",
+        "what": "Meetings and auctions on a calendar members can subscribe to on their phones.",
+        "on": lambda club: club.events.exists(),
+        "tool": "add_club_event",
+    },
+    {
+        "key": "website_embeds",
+        "name": "Snippets for your own website",
+        "what": "Your events, your latest announcement and your leaderboard, embedded on your own site.",
+        "on": lambda club: club.embeds_events_on_website,
+        "tool": "club_website_snippets",
+    },
+    {
+        "key": "discord",
+        "name": "Discord",
+        "what": "Auctions and announcements posted to your Discord server, and roles for members.",
+        "on": lambda club: bool(club.discord_server_id),
+        "page": "the club's Discord settings page — connecting the bot is a Discord sign-in",
+    },
+    {
+        "key": "google_calendar",
+        "name": "Google Calendar",
+        "what": "Your events kept in step with a Google calendar, both ways.",
+        "on": lambda club: club.google_calendar_connected,
+        "tool": "sync_club_calendar",
+        "page": "connecting a calendar is a Google sign-in, on the calendar settings page",
+    },
+    {
+        "key": "email_campaigns",
+        "name": "Mailchimp or Brevo",
+        "what": "Members synced to your mailing list, so announcements can go out as a campaign.",
+        "on": lambda club: bool(club.mailchimp_connected or club.brevo_connected),
+        "page": "the club's email settings page — connecting Mailchimp or Brevo needs their own sign-in",
+    },
+    {
+        "key": "taking_payment",
+        "name": "Taking payment online",
+        "what": "Members pay dues, and buyers pay invoices, by card or PayPal.",
+        "on": lambda club: bool(club.can_accept_paypal or club.can_accept_square),
+        "page": "the club's payment settings page — linking PayPal or Square needs their own sign-in",
+    },
+    {
+        "key": "donation_tracking",
+        "name": "Donation tracking",
+        "what": "Donated lots recorded and the donor thanked, with a receipt.",
+        "on": lambda club: club.donation_tracking_enabled,
+        "settings": ("enable_donation_tracking",),
+    },
+    {
+        "key": "current_auction",
+        "name": "A current auction",
+        "what": "The auction your club page and your members' invitations point at.",
+        "on": lambda club: club.current_auction_id is not None,
+        "tool": "set_current_auction",
+    },
+)
+
+
+def _club_feature_state(club) -> list[dict[str, Any]]:
+    """Every feature in ``_CLUB_FEATURES``, said to be on or off for this club.
+
+    A feature whose ``on`` raises is reported as off rather than crashing the whole answer: this is
+    a survey, and one integration having a bad day must not make the other seventeen unanswerable.
+    """
+    rows = []
+    for feature in _CLUB_FEATURES:
+        try:
+            is_on = bool(feature["on"](club))
+        except Exception:  # noqa: BLE001 - a survey must not fail on one row
+            is_on = False
+        row = {
+            "feature": feature["name"],
+            "what_it_does": feature["what"],
+            "in_use": is_on,
+            "how_to_turn_it_on": _how_to_turn_it_on(feature),
+        }
+        if feature.get("needs"):
+            row["needs_first"] = feature["needs"]
+        rows.append(row)
+    return rows
+
+
+def _how_to_turn_it_on(feature: dict[str, Any]) -> str:
+    """One sentence from a feature's structured ``settings`` / ``tool`` / ``page``."""
+    parts = []
+    if feature.get("settings"):
+        parts.append("update_club_setting: " + ", ".join(feature["settings"]))
+    if feature.get("tool"):
+        parts.append(feature["tool"])
+    if feature.get("page"):
+        parts.append(feature["page"])
+    return "; ".join(parts)
+
+
+def sync_club_calendar(request, params: dict[str, Any]) -> dict[str, Any]:
+    """Push a club's events to its Google Calendar now, instead of waiting for the periodic task.
+
+    ``GoogleCalendarSyncNowView``'s own body: the sync, then a forced re-read of whether the
+    calendar is publicly shared. That second half is the reason the button exists at all -- somebody
+    presses it having just changed the sharing in Google, and ``PUBLIC_CHECK_INTERVAL`` would
+    otherwise leave this site saying "Private" for an hour. Whether the calendar is shared decides
+    which subscribe link members are given, so it is worth being right about promptly.
+    """
+    from . import club_events
+    from . import google_calendar as gcal
+    from .views import check_club_permission
+
+    user = request.user
+    club, problem = _club_or_problem(request, params)
+    if problem:
+        return problem
+    if not check_club_permission(user, club, "permission_edit_club"):
+        return _error(f"You don't have permission to change {club.name}'s calendar.")
+    if not club.google_calendar_connected:
+        return _error(
+            f"{club.name} hasn't connected a Google Calendar. Connecting one is an OAuth sign-in, "
+            "so it has to be done on the calendar settings page."
+        )
+    club_events.sync_club(club)
+    club.refresh_from_db()
+    if club.google_calendar_last_error:
+        return _error(f"The sync failed: {untrusted_short(club.google_calendar_last_error)}")
+    gcal.refresh_public_flag(club, force=True)
+    club.refresh_from_db()
+    return _ok(
+        f"Synced {club.name}'s calendar.",
+        club=club.name,
+        calendar_is_shared_publicly=club.google_calendar_is_public,
+        subscribe_url=club.calendar_subscribe_url,
+        note=(
+            None
+            if club.google_calendar_is_public
+            else (
+                "The calendar isn't shared publicly, so members get this site's own feed rather "
+                "than the club's Google one. Sharing has to be switched on in Google Calendar."
+            )
+        ),
+        followups=[
+            {"label": "Calendar settings", "url": reverse("club_google_calendar_config", kwargs={"slug": club.slug})}
+        ],
+    )
+
+
+def club_website_snippets(request, params: dict[str, Any]) -> dict[str, Any]:
+    """The code a club pastes into its own website, and the calendar links beside it.
+
+    ``ClubWebsiteIntegrationView`` is the page and it lists these whether or not the feature behind
+    each is switched on, on the reasoning that somebody choosing what to put on the club website is
+    exactly who should find out that turning BAP on would give them a leaderboard. The same applies
+    with more force here: an assistant asked "what can we put on our website" had nothing to answer
+    with, and the snippets are the answer.
+
+    The iframe HTML is not built here. ``website_snippet.html`` is one copy-paste that carries the
+    frame *and* the two-line listener that lets the embed size itself, and a second hand-written
+    copy of it in Python would drift from the one clubs are actually given. This hands over the
+    addresses and says which page to copy the code from.
+    """
+    from .views import check_club_permission
+
+    user = request.user
+    club, problem = _club_or_problem(request, params)
+    if problem:
+        return problem
+    if not any(
+        check_club_permission(user, club, permission)
+        for permission in ("permission_edit_club", "permission_manage_auctions")
+    ):
+        return _error(f"You don't have permission to see {club.name}'s website snippets.")
+    # Relative, like every other link a resolver returns: ``mcp.tools._absolute`` makes the ones
+    # going to an agent absolute, and the palette wants them relative because it is a page here.
+    embeds = [
+        ("events", "Upcoming events", "club_events_embed", True),
+        ("past_events", "What we've been doing", "club_past_events_embed", True),
+        ("auction", "The current auction", "club_auction_embed", club.current_auction_id is not None),
+        ("announcement", "Our latest announcement", "club_announcements_embed", True),
+        ("leaderboard", "Breeder award leaderboard", "bap_embed", club.enable_breeder_award_program),
+    ]
+    snippets = []
+    for key, title, url_name, live in embeds:
+        address = reverse(url_name, kwargs={"slug": club.slug})
+        snippets.append(
+            {
+                "snippet": key,
+                "title": title,
+                "url": address,
+                "unstyled_url": f"{address}?format=unstyled",
+                "would_show_something_now": bool(live),
+            }
+        )
+    return {
+        "found": True,
+        "club": club.name,
+        "embeds": snippets,
+        "calendar_subscribe_url": club.calendar_subscribe_url,
+        "calendar_feed_url": club.calendar_feed_url,
+        "copy_the_code_from_url": reverse("club_website_integration", kwargs={"slug": club.slug}),
+        "summary": (
+            f"{club.name} can embed {len(snippets)} things on its own website, and hand out a "
+            "calendar members can subscribe to. The page linked here has the exact code to paste — "
+            "it carries a listener that lets each embed size itself, so copy it from there rather "
+            "than writing an iframe by hand."
+        ),
+    }
+
+
+def club_setup(request, params: dict[str, Any]) -> dict[str, Any]:
+    """What this site can do to help run a club, and which of it this club is using.
+
+    Two questions, one answer: "what can this site do for my club" wants the whole list, and "is
+    there anything we're not using" wants the half that is off -- which is the more useful of the
+    two and the reason this exists, because a feature nobody has heard of is a feature nobody turns
+    on. Read-only, and gated on being able to see the club's settings at all.
+    """
+    from .views import check_club_permission
+
+    user = request.user
+    club, problem = _club_or_problem(request, params)
+    if problem:
+        if _str(params, "club") or _str(params, "name"):
+            # They named one and it wasn't theirs, or wasn't found. That is a real refusal.
+            return problem
+        # Nobody's club to report on, so answer the other half of the question. "What can this site
+        # do to help run a club" is a fair thing to ask before there is a club to ask it about --
+        # somebody thinking of starting one, or an officer whose club isn't on the site yet -- and
+        # the list says nothing about anybody, so there is nothing here to scope.
+        return {
+            "found": True,
+            "club": None,
+            "available": len(_CLUB_FEATURES),
+            "features": [
+                {
+                    "feature": feature["name"],
+                    "what_it_does": feature["what"],
+                    "how_to_turn_it_on": _how_to_turn_it_on(feature),
+                }
+                for feature in _CLUB_FEATURES
+            ],
+            "summary": (
+                f"This site does {len(_CLUB_FEATURES)} things for a club. You're not set up to "
+                "administer one here, so I can't say which of them you're already using."
+            ),
+        }
+    if not any(
+        check_club_permission(user, club, permission)
+        for permission in ("permission_edit_club", "permission_view", "permission_manage_bap", "permission_money")
+    ):
+        return _error(f"You don't have permission to see {club.name}'s settings.")
+
+    rows = _club_feature_state(club)
+    wanted = (_str(params, "show") or "all").strip().lower()
+    if wanted in {"unused", "off", "not_using", "missing", "available"}:
+        shown = [row for row in rows if not row["in_use"]]
+        summary = (
+            f"{club.name} isn't using {len(shown)} of the {len(rows)} things this site can do for a club."
+            if shown
+            else f"{club.name} is using everything this site offers a club."
+        )
+    elif wanted in {"in_use", "on", "using", "enabled"}:
+        shown = [row for row in rows if row["in_use"]]
+        summary = f"{club.name} is using {len(shown)} of the {len(rows)} things this site can do for a club."
+    else:
+        shown = rows
+        using = sum(1 for row in rows if row["in_use"])
+        summary = f"This site does {len(rows)} things for a club. {club.name} is using {using} of them."
+    return {
+        "found": True,
+        "club": club.name,
+        "using": sum(1 for row in rows if row["in_use"]),
+        "available": len(rows),
+        "features": shown,
+        "summary": summary,
+    }
+
+
+# --- the rest of an auction's setup ---------------------------------------------
+#
+# Four pages on the auction's admin ribbon had no skill at all, and each of them is a job somebody
+# does while setting an auction up rather than while running it: where lots are collected, what the
+# custom dropdown's options are, what goes on a printed label, and asking the room for help. All
+# four are auction-admin only, and every one of them goes through the page's own form.
+
+
+def _pickup_location_form(user, auction, *, instance=None, data=None):
+    """A ``PickupLocationForm`` built the way ``PickupLocationsCreate/Update`` build one.
+
+    ``is_edit_form`` decides whether the name and contact fields are shown, which for a single
+    location auction is the difference between a form that wants a name and one that doesn't.
+    """
+    from .forms import PickupLocationForm
+
+    return PickupLocationForm(
+        user,
+        auction,
+        data,
+        instance=instance,
+        is_edit_form=instance is not None,
+        pickup_location=instance,
+        user_timezone=_auction_timezone(user),
+    )
+
+
+def _resolve_pickup_location(auction, hint: str):
+    """One of this auction's pickup locations, by name. ``(location, problem)``."""
+    locations = list(auction.location_qs)
+    if not locations:
+        return None, _error(f"{auction.title} has no pickup locations yet. Add one first.")
+    wanted = (hint or "").strip().lower()
+    if not wanted:
+        if len(locations) == 1:
+            return locations[0], None
+        return None, _need(
+            "Which pickup location?",
+            [{"label": location.name or str(location), "value": location.name} for location in locations],
+        )
+    exact = [location for location in locations if (location.name or "").lower() == wanted]
+    if len(exact) == 1:
+        return exact[0], None
+    near = [location for location in locations if wanted in (location.name or "").lower()]
+    if len(near) == 1:
+        return near[0], None
+    if not near:
+        return None, _error(
+            f"{auction.title} has no pickup location called \u201c{hint}\u201d. "
+            "It has: " + ", ".join(location.name or "(unnamed)" for location in locations) + "."
+        )
+    return None, _need(
+        f"Which one did you mean by \u201c{hint}\u201d?",
+        [{"label": location.name, "value": location.name} for location in near],
+    )
+
+
+def _location_echo(location) -> dict[str, Any]:
+    return {
+        "pickup_location": location.name or "(unnamed)",
+        "address": location.address or None,
+        "pickup_time": local_time(location.auction, location.pickup_time) if location.pickup_time else None,
+        "by_mail": location.pickup_by_mail,
+    }
+
+
+def list_pickup_locations(request, params: dict[str, Any]) -> dict[str, Any]:
+    """Where an auction's lots are collected, and when.
+
+    A read of its own because ``update_pickup_location`` needs a name to aim at, and because "where
+    do I pick up my lots" is a bidder's question -- so this is not admin-only. It is the same list
+    the auction's own page prints for everybody who has joined.
+    """
+    auction, problem = _auction_or_problem(request, params)
+    if problem:
+        return problem
+    locations = list(auction.location_qs)
+    return {
+        "found": bool(locations),
+        "auction": auction.title,
+        "locations": [_location_echo(location) for location in locations],
+        "summary": (
+            f"{auction.title} has {len(locations)} pickup location{'s' if len(locations) != 1 else ''}."
+            if locations
+            else f"{auction.title} has no pickup locations yet."
+        ),
+    }
+
+
+def add_pickup_location(request, params: dict[str, Any]) -> dict[str, Any]:
+    """Add a place where lots are collected. Validation is ``PickupLocationForm``, the page's own.
+
+    A pickup location is the one piece of setup an auction cannot be promoted without -- it is one
+    of the four rules in ``AuctionEditForm.clean()`` -- so an auction with no location is an auction
+    that cannot be listed, and this is the way out of that without opening a page.
+    """
+    user = request.user
+    auction, problem = _auction_or_problem(request, params)
+    if problem:
+        return problem
+    if not _is_auction_admin(user, auction):
+        return _error(f"Only admins of {auction.title} can add a pickup location.")
+    name = _str(params, "name") or _str(params, "location")
+    if not name:
+        return _need("What should the pickup location be called? For example: Saturday at the club.")
+    when, when_error = _parse_when(user, _str(params, "pickup_time") or _str(params, "when"))
+    if when_error:
+        return _error(when_error)
+    by_mail = bool(params.get("by_mail"))
+    marker_said = _str(params, "location_coordinates") or _str(params, "coordinates")
+    marker = _coordinate_pair(marker_said) if marker_said else None
+    if marker_said and not marker:
+        return _need(
+            "Give the map marker as a latitude and longitude, like \u201c42.36,-71.06\u201d. "
+            "I won't work one out from a street address."
+        )
+    if not marker and not by_mail:
+        # ``PickupLocationForm.clean`` requires a marker on every non-mail location, and it is what
+        # every "how far away is this auction" answer is measured from -- so a location saved
+        # without one is the worst thing this tool could do, and it is not offered. The web form
+        # geocodes the address in JavaScript and shows a marker to drag; here the address is
+        # geocoded server-side and the place that came back is put to the user before anything is
+        # written. Only if that finds nothing does this fall back to asking outright.
+        address = _str(params, "address")
+        confirm = _marker_to_confirm(address, name) if address else None
+        if confirm:
+            return confirm
+        return _need(
+            f"A pickup location needs a point on the map — it's what {auction.title}'s distance "
+            "from everybody is measured from, so I won't save one without it. Give me "
+            "location_coordinates as \u201clatitude,longitude\u201d"
+            + (", or a fuller address I can look up" if address else " or a street address")
+            + " — or say it's by mail, which needs no map."
+        )
+    data = {
+        "name": name,
+        "auction": auction.pk,
+        "address": _str(params, "address"),
+        "description": _str(params, "description"),
+        "pickup_time": when,
+        "pickup_by_mail": by_mail,
+        "mail_or_not": "True" if by_mail else "False",
+        "location_coordinates": marker or "",
+        "users_must_coordinate_pickup": bool(params.get("users_must_coordinate_pickup")),
+        "allow_selling_by_default": True,
+        "allow_bidding_by_default": True,
+    }
+    form = _pickup_location_form(user, auction, data=data)
+    if not form.is_valid():
+        return _form_problem(form)
+    location = form.save(commit=False)
+    location.auction = auction
+    location.user = user
+    location.save()
+    auction.create_history(applies_to="RULES", action=f"Added {location} {via(request)}", user=user)
+    return _ok(
+        f"Added {location.name} as a pickup location for {auction.title}.",
+        auction=auction.slug,
+        **_location_echo(location),
+        followups=[{"label": f"{auction.title}", "url": auction.get_absolute_url()}],
+    )
+
+
+def update_pickup_location(request, params: dict[str, Any]) -> dict[str, Any]:
+    """Change one thing about a pickup location. Validation is ``PickupLocationForm``.
+
+    Deliberately one field at a time, like every other settings tool here, and deliberately not a
+    delete: people have already chosen this location on their way into the auction, which is what
+    the page warns about in a banner when it is opened.
+    """
+    user = request.user
+    auction, problem = _auction_or_problem(request, params)
+    if problem:
+        return problem
+    if not _is_auction_admin(user, auction):
+        return _error(f"Only admins of {auction.title} can change a pickup location.")
+    location, problem = _resolve_pickup_location(auction, _str(params, "location") or _str(params, "name"))
+    if problem:
+        return problem
+    blank = _pickup_location_form(user, auction, instance=location)
+    wanted = _str(params, "setting") or _str(params, "field")
+    field_name = _resolve_form_setting(blank.fields, wanted)
+    if not field_name or field_name in {"auction", "mail_or_not", "location_coordinates"}:
+        known = ", ".join(
+            sorted(name for name in blank.fields if name not in {"auction", "mail_or_not", "location_coordinates"})
+        )
+        return _need(
+            f"I don't know a pickup location setting called \u201c{wanted}\u201d. I can change: {known}."
+            if wanted
+            else f"What should I change about {location.name}? I can change: {known}."
+        )
+    raw = params.get("value")
+    if raw is None:
+        return _need(f"What should {field_name.replace('_', ' ')} be for {location.name}?")
+    form_field = blank.fields[field_name]
+    data = model_to_dict(location, fields=[name for name in blank.fields if name != "mail_or_not"])
+    data = {key: ("" if value is None else value) for key, value in data.items()}
+    data["auction"] = auction.pk
+    data["mail_or_not"] = "True" if location.pickup_by_mail else "False"
+    if field_name == "location_coordinates":
+        marker = _coordinate_pair(str(raw))
+        if not marker:
+            return _need(
+                "Give the map marker as a latitude and longitude, like \u201c42.36,-71.06\u201d. "
+                "I won't work one out from a street address."
+            )
+        data[field_name] = marker
+    elif isinstance(form_field, forms.DateTimeField):
+        when, when_error = _parse_when(user, str(raw))
+        if when_error:
+            return _error(when_error)
+        data[field_name] = when
+    elif isinstance(form_field, forms.BooleanField):
+        value = _preference_boolean(raw)
+        if value is None:
+            return _need(f"Should {field_name.replace('_', ' ')} be on or off?")
+        data[field_name] = value
+        if field_name == "pickup_by_mail":
+            data["mail_or_not"] = "True" if value else "False"
+    else:
+        data[field_name] = str(raw)
+    form = _pickup_location_form(user, auction, instance=location, data=data)
+    if not form.is_valid():
+        problem = _form_problem(form)
+        if "map" in str(problem.get("error", "")) and field_name != "location_coordinates":
+            # ``PickupLocationForm.clean`` demands a marker on every non-mail location, and says so
+            # in a sentence about a map that is not here. A location created before it had one
+            # cannot save any other field until it does, which is a confusing way to be refused a
+            # change of address -- so look the address up and offer the place that came back.
+            address = str(raw) if field_name == "address" else (location.address or "")
+            confirm = _marker_to_confirm(address, location.name) if address else None
+            if confirm:
+                return confirm
+            return _need(
+                f"{location.name} has no point on the map yet, and it can't be saved without one. "
+                "Set location_coordinates to a latitude and longitude first — that is what this "
+                "auction's distance from everybody is measured from."
+            )
+        return problem
+    location = form.save()
+    auction.create_history(applies_to="RULES", action=f"Edited location {location} {via(request)}", user=user)
+    label = str(form_field.label or field_name.replace("_", " "))
+    return _ok(
+        f"Changed {label} on {location.name}.",
+        auction=auction.slug,
+        **_location_echo(location),
+    )
+
+
+def add_dropdown_option(request, params: dict[str, Any]) -> dict[str, Any]:
+    """Add one option to this auction's custom dropdown.
+
+    The dropdown is switched off until it has a name and at least two options, so the options are
+    part of turning it on rather than a detail of it -- which is why they get a tool rather than
+    being left to the page. Same rules as ``AuctionDropdownOptionsAPI``: not blank, within the
+    length the label can print, and not one this auction already has.
+    """
+    from .models import CUSTOM_DROPDOWN_MAX_LENGTH, AuctionDropdown
+
+    user = request.user
+    auction, problem = _auction_or_problem(request, params)
+    if problem:
+        return problem
+    if not _is_auction_admin(user, auction):
+        return _error(f"Only admins of {auction.title} can change its dropdown options.")
+    value = _str(params, "option") or _str(params, "value") or _str(params, "name")
+    if not value:
+        return _need("What should the option be called?")
+    if len(value) > CUSTOM_DROPDOWN_MAX_LENGTH:
+        return _error(f"An option has to be {CUSTOM_DROPDOWN_MAX_LENGTH} characters or fewer — it goes on a label.")
+    if AuctionDropdown.objects.filter(auction=auction, value__iexact=value).exists():
+        return _ok(f"{auction.title} already has an option called “{value}”.", auction=auction.slug)
+    AuctionDropdown.objects.create(auction=auction, user=user, value=value)
+    options = list(
+        AuctionDropdown.objects.filter(auction=auction).order_by("createdon").values_list("value", flat=True)
+    )
+    result = _ok(
+        f"Added “{value}” to {auction.title}'s dropdown.",
+        auction=auction.slug,
+        options=options,
+        undo={
+            "action": "remove_dropdown_option",
+            "params": {"auction": auction.slug, "option": value},
+            "describes": f"“{value}”",
+        },
+    )
+    if auction.use_custom_dropdown_field == "disable":
+        result["note"] = (
+            "The dropdown is still switched off. It needs a name and at least two options; there "
+            f"{'is' if len(options) == 1 else 'are'} now {len(options)}. "
+            "update_auction_setting turns it on."
+        )
+    return result
+
+
+def remove_dropdown_option(request, params: dict[str, Any]) -> dict[str, Any]:
+    """Take one option off this auction's custom dropdown."""
+    from .models import AuctionDropdown
+
+    user = request.user
+    auction, problem = _auction_or_problem(request, params)
+    if problem:
+        return problem
+    if not _is_auction_admin(user, auction):
+        return _error(f"Only admins of {auction.title} can change its dropdown options.")
+    value = _str(params, "option") or _str(params, "value") or _str(params, "name")
+    if not value:
+        return _need("Which option should I remove?")
+    option = AuctionDropdown.objects.filter(auction=auction, value__iexact=value).first()
+    if not option:
+        have = list(AuctionDropdown.objects.filter(auction=auction).values_list("value", flat=True))
+        return _error(
+            f"{auction.title} has no dropdown option called “{value}”."
+            + (" It has: " + ", ".join(have) + "." if have else "")
+        )
+    option.delete()
+    options = list(
+        AuctionDropdown.objects.filter(auction=auction).order_by("createdon").values_list("value", flat=True)
+    )
+    return _ok(
+        f"Removed “{option.value}” from {auction.title}'s dropdown.",
+        auction=auction.slug,
+        options=options,
+        undo={
+            "action": "add_dropdown_option",
+            "params": {"auction": auction.slug, "option": option.value},
+            "describes": f"“{option.value}”",
+        },
+    )
+
+
+def _label_field_choices(auction):
+    """Every field that can go on this auction's printed labels, with the club's own names on it."""
+    from .forms import LabelPrintFieldsForm
+
+    form = LabelPrintFieldsForm(auction=auction)
+    return {field["value"]: field["description"] for field in form.available_fields}
+
+
+def update_label_fields(request, params: dict[str, Any]) -> dict[str, Any]:
+    """Turn one field on or off on this auction's printed lot labels.
+
+    Validation is ``LabelPrintFieldsForm``, which is where the list of printable fields lives and
+    which names each one the way this auction names it -- a custom text field called "CARES status"
+    is on the label as "CARES status", so that is what somebody asking for it will say.
+
+    With nothing named it reports what is currently printed, because "what's on our labels" is the
+    question that comes first and the one an agent cannot otherwise answer.
+    """
+    from .forms import LabelPrintFieldsForm
+
+    user = request.user
+    auction, problem = _auction_or_problem(request, params)
+    if problem:
+        return problem
+    if not _is_auction_admin(user, auction):
+        return _error(f"Only admins of {auction.title} can change its labels.")
+    choices = _label_field_choices(auction)
+    on_now = [name for name in (auction.label_print_fields or "").split(",") if name in choices]
+    wanted = _str(params, "field") or _str(params, "setting") or _str(params, "name")
+    if not wanted:
+        return _ok(
+            f"{auction.title}'s labels print: "
+            + (", ".join(choices[name] for name in on_now) or "only the lot number")
+            + ".",
+            auction=auction.slug,
+            printing_now=[choices[name] for name in on_now],
+            can_also_print=[label for name, label in choices.items() if name not in on_now],
+        )
+    field_name = None
+    lowered = wanted.strip().lower()
+    for name, label in choices.items():
+        if lowered in {name.lower(), name.lower().replace("_", " "), label.lower()}:
+            field_name = name
+            break
+    if field_name is None:
+        for name, label in choices.items():
+            if lowered in f"{name.lower().replace('_', ' ')} {label.lower()}":
+                field_name = name
+                break
+    if field_name is None:
+        return _need(
+            f"{auction.title}'s labels have nothing called “{wanted}”. They can print: "
+            + ", ".join(choices.values())
+            + "."
+        )
+    value = _preference_boolean(params.get("value"))
+    if value is None:
+        return _need(f"Should {choices[field_name]} be printed on {auction.title}'s labels, yes or no?")
+    if (field_name in on_now) == value:
+        return _ok(
+            f"{choices[field_name]} was already {'on' if value else 'off'} {auction.title}'s labels.",
+            auction=auction.slug,
+        )
+    data = dict.fromkeys(on_now, True)
+    if value:
+        data[field_name] = True
+    else:
+        data.pop(field_name, None)
+    form = LabelPrintFieldsForm(data, auction=auction)
+    if not form.is_valid():
+        return _form_problem(form)
+    form.save()
+    auction.refresh_from_db()
+    now_on = [name for name in (auction.label_print_fields or "").split(",") if name in choices]
+    return _ok(
+        f"{choices[field_name]} is now {'printed on' if value else 'off'} {auction.title}'s labels.",
+        auction=auction.slug,
+        printing_now=[choices[name] for name in now_on],
+        followups=[{"label": "Label setup", "url": reverse("auction_label_config", kwargs={"slug": auction.slug})}],
+        undo={
+            "action": "update_label_fields",
+            "params": {"auction": auction.slug, "field": field_name, "value": not value},
+            "describes": f"{choices[field_name]} on the labels",
+        },
+    )
+
+
+def request_volunteers(request, params: dict[str, Any]) -> dict[str, Any]:
+    """Ask the people at an in-person auction for help with a job, through the app.
+
+    Validation is ``VolunteerJobForm``, and the notification is ``notify_volunteers_of_job`` -- the
+    same two the page uses, so a request made here reaches the same phones. In-person auctions only,
+    which is the page's own rule: there is nobody in a room to ask at an online auction.
+    """
+    from .forms import VolunteerJobForm
+    from .views import notify_volunteers_of_job
+
+    user = request.user
+    auction, problem = _auction_or_problem(request, params)
+    if problem:
+        return problem
+    if not _is_auction_admin(user, auction):
+        return _error(f"Only admins of {auction.title} can ask for volunteers.")
+    if auction.is_online:
+        return _error(f"{auction.title} is an online auction, so there's no room full of people to ask.")
+    description = _str(params, "description") or _str(params, "job") or _str(params, "name")
+    if not description:
+        return _need("What's the job? For example: help carry tables at the end.")
+    data = {
+        "description": description,
+        "people_needed": _int(params, "people_needed", 1),
+        "bounty": _decimal(params, "bounty") or 0,
+    }
+    form = VolunteerJobForm(data)
+    if not form.is_valid():
+        return _form_problem(form)
+    job = form.save(commit=False)
+    job.auction = auction
+    job.created_by = user
+    job.save()
+    bounty_txt = f" (bounty ${job.bounty:.0f})" if job.bounty else ""
+    auction.create_history(
+        applies_to="USERS",
+        action=f"Asked for {job.people_needed} people: {job.description}{bounty_txt} {via(request)}",
+        user=user,
+    )
+    notify_volunteers_of_job(job)
+    return _ok(
+        f"Asked for {job.people_needed} "
+        + ("person" if job.people_needed == 1 else "people")
+        + f" to {job.description}.",
+        auction=auction.slug,
+        job=untrusted_short(job.description),
+        people_needed=job.people_needed,
+        bounty=str(job.bounty) if job.bounty else None,
+        followups=[{"label": "Volunteers", "url": reverse("auction_volunteers", kwargs={"slug": auction.slug})}],
+    )
+
+
+def cancel_volunteer_request(request, params: dict[str, Any]) -> dict[str, Any]:
+    """Cancel a request for help, and withdraw the notification that went out with it."""
+    from .views import withdraw_volunteer_notification
+
+    user = request.user
+    auction, problem = _auction_or_problem(request, params)
+    if problem:
+        return problem
+    if not _is_auction_admin(user, auction):
+        return _error(f"Only admins of {auction.title} can cancel a request for help.")
+    jobs = list(auction.volunteer_jobs.filter(canceled=False))
+    if not jobs:
+        return _error(f"{auction.title} has no requests for help outstanding.")
+    wanted = _str(params, "job") or _str(params, "description") or _str(params, "name")
+    if not wanted:
+        if len(jobs) > 1:
+            return _need(
+                "Which request should I cancel?",
+                [{"label": job.description, "value": job.description} for job in jobs],
+            )
+        job = jobs[0]
+    else:
+        matched = [job for job in jobs if wanted.lower() in job.description.lower()]
+        if not matched:
+            return _error(
+                f"{auction.title} has no outstanding request matching “{wanted}”. It has: "
+                + "; ".join(untrusted_short(job.description) for job in jobs)
+                + "."
+            )
+        if len(matched) > 1:
+            return _need(
+                f"Which one did you mean by “{wanted}”?",
+                [{"label": job.description, "value": job.description} for job in matched],
+            )
+        job = matched[0]
+    job.canceled = True
+    job.save(update_fields=["canceled"])
+    auction.create_history(
+        applies_to="USERS", action=f"Canceled volunteer job: {job.description} {via(request)}", user=user
+    )
+    withdraw_volunteer_notification(job)
+    return _ok(
+        f"Cancelled the request for help with {job.description}.",
+        auction=auction.slug,
+        job=untrusted_short(job.description),
     )
 
 
@@ -7756,6 +10003,10 @@ register(
                 "boolean, optional. True when the seller bred or grew this themselves — 'I bred "
                 "these', 'these are mine'. This is what earns breeder award points, so never drop it."
             ),
+            "custom_checkbox": (
+                "boolean, optional. Only for auctions that use a custom checkbox; its label is in "
+                "'lot_fields_this_auction_uses', which describe_auction returns."
+            ),
             "custom_field_1": (
                 "string, optional. Only for auctions that use a custom text field; its label is in "
                 "'lot_fields_this_auction_uses', which describe_auction returns."
@@ -7763,6 +10014,17 @@ register(
             "custom_dropdown": (
                 "string, optional. Only for auctions that use a custom dropdown; its label and "
                 "allowed values are in 'lot_fields_this_auction_uses', which describe_auction returns."
+            ),
+            "reference_link": (
+                "string, optional. A URL with more about this lot. A YouTube link is embedded and "
+                "plays on the lot page, so a video of the actual animal or plant is worth far more "
+                "than a link to an article about the species. Only for auctions that allow it — see "
+                "'lot_fields_this_auction_uses' from describe_auction."
+            ),
+            "description": (
+                "string, optional. A few sentences about the lot, shown on its page — what it is, "
+                "how big, what it eats. Only what the user actually told you; never invent detail "
+                "about somebody's livestock. Up to 600 characters."
             ),
         },
         danger=DANGER_CONFIRM,
@@ -7864,6 +10126,149 @@ register(
         aliases={"preference", "name"},
         confirm_template="Change a preference",
         examples=["stop emailing me about new auctions", "switch me to kilometres", "hide my email address"],
+    )
+)
+
+register(
+    Action(
+        name="update_contact_info",
+        description=(
+            "Change this user's own name, phone number, mailing address, ship-to region or map "
+            "marker — the contact info page. Their name and address are also held by every auction "
+            "they have joined in the last month and every club they belong to, and this corrects "
+            "all of them together. It will NOT work out a map marker from an address: pass "
+            "location_coordinates as 'latitude,longitude' only if the user gives coordinates or "
+            "confirms a place, because the marker decides which nearby auctions they are told about."
+        ),
+        params={
+            "name": "string, optional. Their full name, if they said it as one thing.",
+            "first_name": "string, optional. First name on its own.",
+            "last_name": "string, optional. Last name on its own.",
+            "phone_number": "string, optional. Their phone number.",
+            "address": "string, optional. Their complete mailing address — where a check would be posted.",
+            "location": "string, optional. Ship-to region, e.g. 'United States', 'Europe', 'Canada'.",
+            "location_coordinates": (
+                "string, optional. Map marker as 'latitude,longitude'. Never guess this from an address."
+            ),
+            "setting": "string, optional. Instead of the above: which one field to change.",
+            "value": "string, optional. What to set the field named by 'setting' to.",
+        },
+        danger=DANGER_CONFIRM,
+        idempotent=True,
+        resolver=update_contact_info,
+        aliases={"field", "coordinates", "full_name", "phone", "region"},
+        confirm_template="Change your contact info",
+        examples=["my new address is 12 Mill Lane", "change my phone number", "my last name is now Okafor"],
+    )
+)
+
+register(
+    Action(
+        name="update_username",
+        description=(
+            "Change this user's own username — the name on their public page and in its address. "
+            "Not their email address or their password, which are changed on their own pages "
+            "(go_to_page 'change email', 'change password'). A username cannot contain an @ symbol "
+            "and cannot be one somebody else already has."
+        ),
+        params={"username": "string, required. The username they want."},
+        danger=DANGER_CONFIRM,
+        idempotent=True,
+        resolver=update_username,
+        aliases={"name", "value", "new_username"},
+        confirm_template="Change your username",
+        examples=["change my username to riverbend", "I want a different username"],
+    )
+)
+
+register(
+    Action(
+        name="change_email",
+        description=(
+            "Change this user's own email address. It does NOT take effect straight away: a "
+            "confirmation link is sent to the new address and the change happens when they open "
+            "it, so tell them to go and click it. Their mail keeps going to the old address until "
+            "then. This is not their username, which is update_username."
+        ),
+        params={"email": "string, required. The address they want to move to."},
+        danger=DANGER_CONFIRM,
+        idempotent=True,
+        resolver=change_email,
+        aliases={"value", "address", "new_email"},
+        confirm_template="Send a confirmation to a new email address",
+        examples=["change my email to ada@example.com", "I've got a new email address"],
+    )
+)
+
+register(
+    Action(
+        name="update_printing_preferences",
+        description=(
+            "Change ONE of this user's own label printing preferences: which label sheet or "
+            "printer they use, how many labels to skip on a part-used sheet, and what goes on a "
+            "label. This is the user's own printing setup — to change what an AUCTION prints on "
+            "its labels, use update_label_fields instead. One setting per call."
+        ),
+        params={
+            "setting": "string, required. Which printing preference, in the user's words.",
+            "value": "string or boolean, required. What to set it to. On/off for a checkbox.",
+        },
+        danger=DANGER_CONFIRM,
+        idempotent=True,
+        resolver=update_printing_preferences,
+        aliases={"name", "preference"},
+        confirm_template="Change a printing preference",
+        examples=["I'm using Avery 5160 labels", "skip the first 3 labels on the sheet"],
+    )
+)
+
+register(
+    Action(
+        name="set_my_auction",
+        description=(
+            "Set which auction this user means when they don't name one, for everything after "
+            "this. 'we're working on the spring auction', 'switch to tonight's auction', 'make "
+            "this my current auction'. Only an auction they created, joined or run through a club. "
+            "With no auction named it picks whichever of theirs is running now. my_context lists "
+            "them and says which one is currently set."
+        ),
+        params={
+            "auction": (
+                "string, optional. Auction slug or title. Leave it out to use whichever of their auctions is running."
+            ),
+        },
+        danger=DANGER_CONFIRM,
+        idempotent=True,
+        # Nothing is destroyed, saying it twice is saying it once, and the way back is this same
+        # tool with the previous auction's name -- which the result carries. See ``asks_first``.
+        asks_first=False,
+        resolver=set_my_auction,
+        aliases={"name", "slug", "query"},
+        confirm_template="Change which auction I use by default",
+        examples=["work on the spring auction from now on", "make tonight's auction my current one"],
+    )
+)
+
+register(
+    Action(
+        name="set_my_club",
+        description=(
+            "Set which club this user means when they don't name one, for everything after this, "
+            "and record it as their club affiliation on their account. 'I'm with the Betta "
+            "Society', 'make this my club'. Only a club they belong to or help run. The "
+            "affiliation is what a new auction they create gets filed under, so this is two "
+            "changes and the answer says which ones it made."
+        ),
+        params={
+            "club": "string, optional. Club name, abbreviation or slug. Left out, it uses the obvious one.",
+        },
+        danger=DANGER_CONFIRM,
+        idempotent=True,
+        asks_first=False,
+        resolver=set_my_club,
+        aliases={"name", "slug", "query"},
+        confirm_template="Change which club I use by default",
+        examples=["I'm with the Betta Society", "make the koi club my club"],
     )
 )
 
@@ -8078,9 +10483,11 @@ register(
         name="edit_lot",
         description=(
             "Change a lot that has already been added: its name, quantity, minimum bid, buy now "
-            "price, or whether it's a donation. The seller or an auction admin only. This is what "
-            "'make lot 14 twenty dollars', 'change the shrimp to 3 of them' and 'that one's a "
-            "donation' mean. To find out about a lot instead of changing it, use describe_lot."
+            "price, whether it's a donation, its description, this auction's own custom fields, or "
+            "a reference link. The seller or an auction admin only. This is what 'make lot 14 "
+            "twenty dollars', 'change the shrimp to 3 of them' and 'that one's a donation' mean. "
+            "Photos are add_lot_image. To find out about a lot instead of changing it, use "
+            "describe_lot."
         ),
         params={
             "lot": "string, optional. Lot number or name. Required unless the user is on that lot's page.",
@@ -8090,6 +10497,10 @@ register(
             "buy_now_price": "number, optional.",
             "donation": "boolean, optional.",
             "i_bred_this_fish": "boolean, optional. Whether the seller bred this themselves (breeder award points).",
+            "custom_checkbox": (
+                "boolean, optional. Only for auctions using a custom checkbox; its label is in "
+                "'lot_fields_this_auction_uses', which describe_auction returns."
+            ),
             "custom_field_1": (
                 "string, optional. Only for auctions using a custom text field; its label is in "
                 "'lot_fields_this_auction_uses', which describe_auction returns."
@@ -8097,6 +10508,16 @@ register(
             "custom_dropdown": (
                 "string, optional. Only for auctions using a custom dropdown; its label and allowed "
                 "values are in 'lot_fields_this_auction_uses', which describe_auction returns."
+            ),
+            "reference_link": (
+                "string, optional. A URL with more about this lot. A YouTube link is embedded and "
+                "plays on the lot page, so a video of the actual animal or plant is worth far more "
+                "than a link to an article about the species."
+            ),
+            "description": (
+                "string, optional. A few sentences about the lot, shown on its page — what it is, "
+                "how big, what it eats. Only what the user actually told you; never invent detail "
+                "about somebody's livestock. Up to 600 characters."
             ),
         },
         danger=DANGER_CONFIRM,
@@ -8574,11 +10995,85 @@ register(
 
 register(
     Action(
+        name="sync_club_calendar",
+        description=(
+            "Push a club's events to its Google Calendar right now, instead of waiting for the "
+            "hourly sync. Also re-reads whether the calendar is shared publicly, which decides "
+            "which subscribe link members are given. Connecting a calendar in the first place is a "
+            "Google sign-in and has to happen on the settings page."
+        ),
+        params={"club": "string, optional. Club name. See my_context."},
+        danger=DANGER_CONFIRM,
+        idempotent=True,
+        resolver=sync_club_calendar,
+        aliases={"name"},
+        confirm_template="Sync the club calendar",
+        examples=["sync our calendar", "I just changed something in Google Calendar"],
+        needs=NEEDS_CLUB_ADMIN,
+    )
+)
+
+register(
+    Action(
+        name="club_website_snippets",
+        description=(
+            "What a club can put on its OWN website: embeds for its events, past events, current "
+            "auction, latest announcement and breeder award leaderboard, plus a calendar members "
+            "can subscribe to. Each says whether it would show anything right now. Read-only — the "
+            "exact code to paste is on the page this links to, because that snippet carries a "
+            "listener that lets the embed size itself and hand-writing an iframe loses it."
+        ),
+        params={"club": "string, optional. Club name. See my_context."},
+        danger=DANGER_SAFE,
+        lookup=True,
+        resolver=club_website_snippets,
+        aliases={"name"},
+        examples=["what can we put on our club website?", "how do I show our events on our own site?"],
+        needs=NEEDS_CLUB_ADMIN,
+    )
+)
+
+register(
+    Action(
+        name="club_setup",
+        description=(
+            "What this site can do to help run a club, and which of it this club is already using. "
+            "This is the answer to 'what can this site do for my club' and to 'is there anything "
+            "we're not using' — pass show='unused' for the second, which is the more useful of the "
+            "two. Each row says what the feature is for and how to switch it on. Read-only."
+        ),
+        params={
+            "show": (
+                "string, optional, default 'all'. 'unused' for what the club isn't using yet, "
+                "'in_use' for what it is, 'all' for both."
+            ),
+            "club": (
+                "string, optional. Club name. See my_context. With no club — and none to infer — "
+                "it still lists what the site offers, without saying what is in use."
+            ),
+        },
+        danger=DANGER_SAFE,
+        lookup=True,
+        resolver=club_setup,
+        aliases={"name", "filter"},
+        examples=[
+            "what can this site do to help run my club?",
+            "is there anything this site does that we're not using?",
+        ],
+    )
+)
+
+register(
+    Action(
         name="update_club_setting",
         description=(
-            "Change one of a club's settings by name — its description, its homepage, whether "
-            "members can join themselves, whether the breeder award program is on. Needs the "
-            "'edit club' permission. To read the settings instead, use describe_club."
+            "Change one of a club's settings by name. This reaches all four of a club's settings "
+            "pages: its details (name, homepage, description, whether members can join "
+            "themselves), membership (dues, renewal system, member barcodes), email (the welcome, "
+            "renewal and expiring-soon messages, and who club mail goes to) and the breeder award "
+            "program (points per lot, minimum quantity, which lots qualify). Each page has its own "
+            "permission and the user needs the right one. To read the settings instead, use "
+            "describe_club; to find out what a club could be using and isn't, use club_setup."
         ),
         params={
             "setting": "string, required. Which setting, by its name on the settings page.",
@@ -8592,6 +11087,184 @@ register(
         confirm_template="Change a club setting",
         examples=["turn on the breeder award program", "set our homepage to example.org"],
         needs=NEEDS_CLUB_ADMIN,
+    )
+)
+
+register(
+    Action(
+        name="list_pickup_locations",
+        description=(
+            "Where an auction's lots are collected, and when. Anyone who can see the auction — "
+            "'where do I pick up my lots' is a bidder's question, not an admin's."
+        ),
+        params={"auction": "string, optional. Auction slug or title. See my_context."},
+        danger=DANGER_SAFE,
+        lookup=True,
+        resolver=list_pickup_locations,
+        aliases={"name", "query"},
+        examples=["where do I pick up my lots?", "what are the pickup locations?"],
+    )
+)
+
+register(
+    Action(
+        name="add_pickup_location",
+        description=(
+            "Add a place where an auction's lots are collected. Auction admins only. An auction "
+            "cannot be listed publicly until it has one, so this is often the missing piece when "
+            "promoting an auction is refused."
+        ),
+        params={
+            "name": "string, required. What to call it, e.g. 'Saturday at the club'.",
+            "auction": "string, optional. Auction slug or title. See my_context.",
+            "address": "string, optional. The street address people should drive to.",
+            "description": "string, optional. Directions or notes shown to users.",
+            "pickup_time": "string, optional. ISO 8601, e.g. 2026-09-14T10:00. Online auctions need one.",
+            "location_coordinates": (
+                "string, optional. Where it is on the map, as 'latitude,longitude'. Required "
+                "unless by_mail is true — every 'how far away is this auction' answer is measured "
+                "from it. Never guess it from a street address; ask the user."
+            ),
+            "by_mail": "boolean, optional. True when lots are posted to the winner instead of collected.",
+            "users_must_coordinate_pickup": "boolean, optional. True when buyers arrange collection with the seller.",
+        },
+        danger=DANGER_CONFIRM,
+        resolver=add_pickup_location,
+        aliases={"location", "when", "coordinates"},
+        confirm_template="Add a pickup location",
+        examples=["add a pickup location at the club on Saturday", "we're mailing lots this year"],
+        needs=NEEDS_AUCTION_ADMIN,
+    )
+)
+
+register(
+    Action(
+        name="update_pickup_location",
+        description=(
+            "Change ONE thing about a pickup location — its address, its time, its directions. "
+            "Auction admins only. People have already chosen a location on their way into the "
+            "auction, so large changes are worth saying out loud before making."
+        ),
+        params={
+            "setting": "string, required. Which field, e.g. 'address', 'pickup time', 'description'.",
+            "value": "string or boolean, required. What to set it to.",
+            "location": "string, optional. Which pickup location, by name. Not needed if there is only one.",
+            "auction": "string, optional. Auction slug or title. See my_context.",
+        },
+        danger=DANGER_CONFIRM,
+        idempotent=True,
+        resolver=update_pickup_location,
+        aliases={"name", "field"},
+        confirm_template="Change a pickup location",
+        examples=["move pickup to 11am", "change the pickup address"],
+        needs=NEEDS_AUCTION_ADMIN,
+    )
+)
+
+register(
+    Action(
+        name="add_dropdown_option",
+        description=(
+            "Add one option to an auction's custom dropdown — the extra choice sellers pick from "
+            "when adding a lot. Auction admins only. The dropdown stays switched off until it has "
+            "a name and at least two options."
+        ),
+        params={
+            "option": "string, required. The option, short enough to print on a label.",
+            "auction": "string, optional. Auction slug or title. See my_context.",
+        },
+        danger=DANGER_CONFIRM,
+        resolver=add_dropdown_option,
+        aliases={"value", "name"},
+        confirm_template="Add a dropdown option",
+        examples=["add 'Cichlid' to the dropdown", "add a dropdown option for plants"],
+        needs=NEEDS_AUCTION_ADMIN,
+    )
+)
+
+register(
+    Action(
+        name="remove_dropdown_option",
+        description="Take one option off an auction's custom dropdown. Auction admins only.",
+        params={
+            "option": "string, required. Which option to remove.",
+            "auction": "string, optional. Auction slug or title. See my_context.",
+        },
+        danger=DANGER_CONFIRM,
+        destructive=True,
+        resolver=remove_dropdown_option,
+        aliases={"value", "name"},
+        confirm_template="Remove a dropdown option",
+        examples=["remove 'Cichlid' from the dropdown"],
+        needs=NEEDS_AUCTION_ADMIN,
+    )
+)
+
+register(
+    Action(
+        name="update_label_fields",
+        description=(
+            "Choose what gets printed on an auction's lot labels — the QR code, the lot name, the "
+            "minimum bid, the seller's name, a custom field. Auction admins only. Called with no "
+            "field named it reports what the labels print now, which is how to answer 'what's on "
+            "our labels'. This is the AUCTION's label layout; a user's own printer and label sheet "
+            "are update_printing_preferences."
+        ),
+        params={
+            "field": "string, optional. Which field, by the name the auction shows for it. Omit to read what is on now.",
+            "value": "boolean, optional. True to print it, false to leave it off.",
+            "auction": "string, optional. Auction slug or title. See my_context.",
+        },
+        danger=DANGER_CONFIRM,
+        idempotent=True,
+        resolver=update_label_fields,
+        aliases={"setting", "name"},
+        confirm_template="Change what the labels print",
+        examples=["what's on our labels?", "put the seller's name on the labels", "stop printing the QR code"],
+        needs=NEEDS_AUCTION_ADMIN,
+    )
+)
+
+register(
+    Action(
+        name="request_volunteers",
+        description=(
+            "Ask the people at an in-person auction for help with a job — it goes to the phones of "
+            "everyone in the auction with the app. Auction admins only, in-person auctions only. "
+            "A bounty is optional and is what the club will pay whoever helps."
+        ),
+        params={
+            "description": "string, required. What the job is, e.g. 'help carry tables at the end'.",
+            "people_needed": "integer, optional, default 1. How many helpers are wanted.",
+            "bounty": "number, optional. What the club will pay each helper.",
+            "auction": "string, optional. Auction slug or title. See my_context.",
+        },
+        danger=DANGER_CONFIRM,
+        resolver=request_volunteers,
+        aliases={"job", "name"},
+        confirm_template="Ask for volunteers",
+        examples=["ask for 2 people to help carry tables", "we need a runner, $10"],
+        needs=NEEDS_AUCTION_ADMIN,
+    )
+)
+
+register(
+    Action(
+        name="cancel_volunteer_request",
+        description=(
+            "Cancel a request for help and withdraw the notification that went out with it. Auction admins only."
+        ),
+        params={
+            "job": "string, optional. Which request, by what it said. Not needed if there is only one.",
+            "auction": "string, optional. Auction slug or title. See my_context.",
+        },
+        danger=DANGER_CONFIRM,
+        destructive=True,
+        resolver=cancel_volunteer_request,
+        aliases={"description", "name"},
+        confirm_template="Cancel a request for help",
+        examples=["we don't need the table carriers any more"],
+        needs=NEEDS_AUCTION_ADMIN,
     )
 )
 
@@ -8949,12 +11622,25 @@ register(
     Action(
         name="recent_changes",
         description=(
-            "Get the recent changes made in an auction — who did what and when, newest first. "
-            "Auction admins only. This is what answers 'what did you just do?', 'what's changed?' "
-            "and 'who checked Bob in?'."
+            "Read and search an auction's change log — who did what and when, newest first, and "
+            "searchable back through the whole of it. Auction admins only. It answers 'what did "
+            "you just do?' and 'what has changed today?', and with 'search' it answers questions "
+            "about one thing: 'did we send an invoice email to Joe?', 'who marked lot 14 sold?', "
+            "'who checked Bob in?', 'when did that bidder number change?'."
         ),
         params={
             "auction": "string, optional. Auction slug or title. See my_context.",
+            "search": (
+                "string, optional. Words to look for in the change itself, in the name of "
+                "whoever made it, or in the kind of change it was — 'joe' finds the invoice "
+                "email that went to Joe, 'lot 14' finds the line that says it sold."
+            ),
+            "about": (
+                "string, optional. Only one kind of change: rules (the auction's own settings), "
+                "users (people, check-ins, bidder numbers), invoices, lots — which is where "
+                "sales are recorded, so 'sold' and 'winners' mean lots here."
+            ),
+            "days": "integer, optional. Only changes from the last this many days.",
             "mine": "boolean, optional. True for only changes this user made.",
             "assistant": "boolean, optional. True for only changes made through an assistant.",
             **PAGING_PARAMS,
@@ -8962,7 +11648,45 @@ register(
         danger=DANGER_SAFE,
         resolver=recent_changes,
         lookup=True,
+        aliases={"query", "category"},
         needs=NEEDS_AUCTION_ADMIN,
+    )
+)
+
+register(
+    Action(
+        name="club_history",
+        description=(
+            "Read and search a club's change log — who did what to the club and when, newest "
+            "first, and searchable back through the whole of it. Club staff only. This is the "
+            "club-side half of recent_changes, and it holds what outlives any one auction: "
+            "renewals and dues, members added, edited and merged, settings changed, breeder "
+            "award points, announcements sent and retracted. It answers 'when did Bob last pay "
+            "for his membership?', 'who changed the meeting night?' and 'did that announcement "
+            "actually go out?'."
+        ),
+        params={
+            "club": "string, optional. Club name. See my_context.",
+            "search": (
+                "string, optional. Words to look for in the change itself, in the name of "
+                "whoever made it, or in the kind of change it was — a member's name finds "
+                "everything that has ever happened to their membership."
+            ),
+            "about": (
+                "string, optional. Only one kind of change: members, membership (dues and "
+                "renewals), settings, rules, bap (breeder award points), donations, "
+                "announcements."
+            ),
+            "days": "integer, optional. Only changes from the last this many days.",
+            "mine": "boolean, optional. True for only changes this user made.",
+            "assistant": "boolean, optional. True for only changes made through an assistant.",
+            **PAGING_PARAMS,
+        },
+        danger=DANGER_SAFE,
+        resolver=club_history,
+        lookup=True,
+        aliases={"query", "category"},
+        needs=NEEDS_CLUB_ADMIN,
     )
 )
 
@@ -9111,17 +11835,82 @@ register(
     Action(
         name="search_help",
         description=(
-            "Search this site's own FAQ and blog for how something works. Use this for ANY "
-            "platform question — 'how does proxy bidding work?', 'what's a donation lot?', 'how do "
-            "I print labels?', 'what does buy now mean?'. This site does not work the same way as "
-            "other auction sites, so answer from what this returns and never from general "
-            "knowledge. If it finds nothing, say so."
+            "Search this site's own FAQ and blog for how something works, or read the whole FAQ "
+            "with no query at all. Use this for ANY platform question — 'how does proxy bidding "
+            "work?', 'what's a donation lot?', 'how do I print labels?', 'what does buy now "
+            "mean?'. This site does not work the same way as other auction sites, so answer from "
+            "what this returns and not from general knowledge. If it finds nothing, say so. It "
+            "also carries the answers that are kept off the public FAQ page for assistants to "
+            "answer out of; those come back with no link, because there is no page to send "
+            "anybody to."
         ),
-        params={"query": "string, required. What they want to know, in their words."},
+        params={
+            "query": (
+                "string, optional. What they want to know, in their words. Leave it out to read "
+                "the FAQ straight through."
+            ),
+            "source": (
+                "string, optional, default all. 'faq' for the questions and answers alone, which "
+                "is where a how-does-this-work question is nearly always answered; 'blog' for the "
+                "posts; 'all' for both."
+            ),
+            "limit": f"integer, optional, default {HELP_LIMIT}. How many articles to return, up to {MAX_LIST_LIMIT}.",
+            "offset": PAGING_PARAMS["offset"],
+        },
         danger=DANGER_SAFE,
         resolver=search_help,
         aliases={"question", "q"},
         lookup=True,
+    )
+)
+
+register(
+    Action(
+        name="read_source",
+        description=(
+            "Read this website's own source code, which is published as a public repository. It "
+            "can search the code line by line, list a directory, read a numbered page of one file, "
+            "or find a file by name. For "
+            "when somebody asks how a feature is actually implemented, why the site behaved the "
+            "way it did, or to see the code — 'how does it decide which lots earn breeder "
+            "points?', 'show me the check-in code', 'why did my lot not get a species?'. Ordinary "
+            "questions about auctions, lots, clubs and invoices are answered by the other tools "
+            "and by search_help, which reads the help this site has written for people; this one "
+            "is the implementation, and reaches out to the repository to get it."
+        ),
+        params={
+            "path": (
+                "string, optional. A file or directory in the repository, as the repository spells "
+                "it — 'auctions/models.py', 'auctions/mcp'. Leave it out to list the top level."
+            ),
+            "search": (
+                "string, optional. Search the repository for this instead of reading one file: the "
+                "code itself, line by line, and file names too. Case-insensitive substring, not a "
+                "regular expression. This is how a question about how something works gets "
+                "answered when nobody knows which file it is in."
+            ),
+            "start_line": "integer, optional, default 1. The first line of the file to return.",
+            "lines": (
+                f"integer, optional, default {source_code.DEFAULT_LINES}. How many lines to return, "
+                f"up to {source_code.MAX_LINES}; the answer says how many lines the file has and "
+                "which line to ask for next."
+            ),
+        },
+        danger=DANGER_SAFE,
+        resolver=read_source,
+        aliases={"query", "file", "directory", "q"},
+        lookup=True,
+        # The one tool here that talks to anything but this site's own database.
+        open_world=True,
+        # ...and the one kept off the command palette. See ``Action.mcp_only``: the palette answers
+        # in a sentence, in a box, out of this site's own model budget, and a page of Python is the
+        # wrong thing to put in all three.
+        mcp_only=True,
+        examples=[
+            "how does the lot recommendation system work",
+            "how does the site decide which lots are eligible for breeder points",
+            "show me the code behind check-in mode",
+        ],
     )
 )
 
@@ -9321,6 +12110,25 @@ def actions_for(user=None) -> list[Action]:
 SKILLS: dict[str, str] = {
     "AuctionBulkPrinting": "print_labels",
     "AuctionCheckIn": "check_in",
+    # The rest of the preferences ribbon. ``update_preferences`` covered the Preferences tab and
+    # nothing else, so three of the pages beside it were reachable only by being sent to them.
+    # Password, email address and social sign-in are still navigate-only and still should be: all
+    # three are allauth's, with a verification email in the middle of each.
+    "UserLocationUpdate": "update_contact_info",
+    "UsernameUpdate": "update_username",
+    "UserLabelPrefsView": "update_printing_preferences",
+    # An auction's setup pages. Which fields a seller is shown lives on its own page but is an
+    # auction setting to everybody who is not reading the code, so it is the same tool.
+    "AuctionCustomFieldsUpdate": "update_auction_setting",
+    "AuctionLabelConfig": "update_label_fields",
+    "AuctionVolunteers": "request_volunteers",
+    "PickupLocationsCreate": "add_pickup_location",
+    "PickupLocationsUpdate": "update_pickup_location",
+    # A club's other three settings pages. One tool reaches all four, picking the form the named
+    # setting lives on and, with it, the permission that page requires.
+    "ClubBapSettingsView": "update_club_setting",
+    "ClubEmailSettingsView": "update_club_setting",
+    "ClubMembershipSettingsView": "update_club_setting",
     # Both of these sat in NOT_A_SKILL, and the reason given was a good one for the surface it was
     # written about: "half-filling a taxonomic form from one spoken line is how a wrong name ends
     # up on a printed label". What changed is the caller. A microphone mishears a binomial; an
@@ -9440,9 +12248,6 @@ NOT_A_SKILL: dict[str, str] = {
         "go_to_page opens it."
     ),
     "AdminUserFlow": _FORM_PAGE,
-    "AuctionCustomFieldsUpdate": _FORM_PAGE,
-    "AuctionLabelConfig": _FORM_PAGE,
-    "AuctionVolunteers": _FORM_PAGE,
     "AssistantSkillRequestsView": (
         "The POST is the four status buttons on the page, and the decision is the thing being read: "
         "how many different people asked for it, in whose words, and whether the site should build "
@@ -9478,10 +12283,7 @@ NOT_A_SKILL: dict[str, str] = {
         "That is a decision made by reading the pair, with a confirmation dialog, not by saying a "
         "binomial into a microphone that has to get both halves of it right."
     ),
-    "ClubBapSettingsView": _FORM_PAGE,
     "ClubDetailView": _FORM_PAGE,
-    "ClubEmailSettingsView": _FORM_PAGE,
-    "ClubMembershipSettingsView": _FORM_PAGE,
     "ClubMemberRenewPageView": (
         "Sets an expiration date by hand, overriding the club's renewal rules. renew_member is the "
         "skill for an ordinary renewal; overriding the date deliberately means seeing the page."
@@ -9491,11 +12293,6 @@ NOT_A_SKILL: dict[str, str] = {
     "LotQueueView": _FORM_PAGE,
     "MyAccount": _FORM_PAGE,
     "MyLastAuctionLots": _FORM_PAGE,
-    "PickupLocationsCreate": _FORM_PAGE,
-    "PickupLocationsUpdate": _FORM_PAGE,
-    "UserLabelPrefsView": _FORM_PAGE,
-    "UserLocationUpdate": _FORM_PAGE,
-    "UsernameUpdate": _FORM_PAGE,
     "VolunteerJobAccept": (
         "The page a volunteer notification opens. Signing up means reading what the job is and when "
         "it starts, which is what the page is for."

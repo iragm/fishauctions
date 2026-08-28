@@ -64,18 +64,35 @@ per tool. The raster favicons in `serverInfo` are the one place a host has a rea
 and they are the one place `sizes` is sent.
 
 **Resource templates** (`auctions/mcp/resources.py`). `auction://{auction}`,
-`auction://{auction}/lots`, `auction://{auction}/people`, `lot://{auction}/{lot}`,
-`club://{club}`, `club://{club}/events`, plus the fixed `me://context` and `me://activity`. Each
-one names a registered **read-only** action and is served by calling it with the caller's own
-request, so there is no second permission path — the audit in `test_mcp_resources` fails the build
-if a template ever names a write.
+`auction://{auction}/lots`, `auction://{auction}/people`, `auction://{auction}/history`,
+`lot://{auction}/{lot}`, `club://{club}`, `club://{club}/events`, `club://{club}/history`, plus the
+fixed `me://context` and `me://activity` and the public `help://faq`. Each one names a registered
+**read-only** action and is served by calling it with the caller's own request, so there is no
+second permission path — the audit in `test_mcp_resources` fails the build if a template ever names
+a write.
 
 Two things learned doing it. The token argument is narrower than it looks: attaching a resource
 does not shrink `tools/list`, it saves the *turn* — the model choosing a tool, guessing the auction
-slug, and being told it guessed wrong. And nothing concrete may ever appear in `resources/list`,
-because a list of `auction://spring-2027` is a list of which auctions exist handed to whoever
-asked; enumeration stays in the tools, behind a check that knows whose auctions they are. The same
-reasoning is why `completion/complete` answers `ref/prompt` and refuses `ref/resource`.
+slug, and being told it guessed wrong. And **nothing that names somebody** may appear in
+`resources/list`, because a list of `auction://spring-2027` is a list of which auctions exist handed
+to whoever asked; enumeration stays in the tools, behind a check that knows whose auctions they are.
+The rule is *no slugs*, not *nothing concrete* — which is what lets `help://faq` be listed, since it
+is the same document for every caller. The same reasoning is why `completion/complete` answers
+`ref/prompt` and refuses `ref/resource`.
+
+**The source code is a tool and deliberately not a resource.** `read_source` reads this site's own
+published repository (`SOURCE_CODE_URL`) — searching the code, listing directories, reading numbered
+pages of files — and a `source://{path}` template would save nothing: the value of a resource
+template is skipping the turn where the model guesses a slug, and here it has to find the path by
+searching anyway. It is also the only action with `open_world` set — it is the one thing on the
+catalogue that talks to anything but this site's own database — and the only one with `mcp_only`,
+which keeps a page of Python out of the command palette's one-line answer box.
+
+Worth recording because it will be re-proposed: **GitHub's code search API was not used.** It
+refuses anonymous callers, so every deployment and every fork would need a credential to answer
+"how does X work". Downloading the repository as one 4.5 MB archive needs none, is a second,
+supports exact substring matching that the token-based index does not, and answers listings and
+reads out of the same fetch.
 
 ---
 

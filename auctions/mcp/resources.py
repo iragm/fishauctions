@@ -87,6 +87,20 @@ TEMPLATES: tuple[Template, ...] = (
         {"limit": 100},
     ),
     Template(
+        "auction://{auction}/history",
+        "auction-history",
+        "An auction's change log",
+        "Who did what in one auction and when, newest first: check-ins, bidder numbers, sales, "
+        "invoices, rules. Auction admins only — for anybody else this reads as a refusal, "
+        "exactly as the tool does.",
+        "recent_changes",
+        ("auction",),
+        # 50 rather than the 100 the lot and people templates use: a history line is a whole
+        # sentence plus a long-form date, so a hundred of them lands within a rounding error of
+        # ``tools.MAX_RESULT_CHARS`` and a resource that refuses itself is worse than a short one.
+        {"limit": 50},
+    ),
+    Template(
         "lot://{auction}/{lot}",
         "lot",
         "One lot",
@@ -123,6 +137,20 @@ TEMPLATES: tuple[Template, ...] = (
         "list_club_events",
         ("club",),
     ),
+    Template(
+        "club://{club}/history",
+        "club-history",
+        "A club's change log",
+        "Who did what to one club and when, newest first: renewals and dues, members added and "
+        "edited, settings, points, announcements. Club staff only — for anybody else this reads "
+        "as a refusal, exactly as the tool does.",
+        "club_history",
+        ("club",),
+        # 50 rather than the 100 the lot and people templates use: a history line is a whole
+        # sentence plus a long-form date, so a hundred of them lands within a rounding error of
+        # ``tools.MAX_RESULT_CHARS`` and a resource that refuses itself is worse than a short one.
+        {"limit": 50},
+    ),
 )
 
 #: Fixed resources -- no placeholders, and the same URI for everybody. Both are about the caller,
@@ -148,7 +176,26 @@ FIXED: tuple[Template, ...] = (
     ),
 )
 
-ALL: tuple[Template, ...] = TEMPLATES + FIXED
+#: Concrete resources that are the same document for everybody and hold nobody's data. Listable
+#: for the same reason the ``me://`` pair is: knowing this URI exists tells you nothing about
+#: anybody. The FAQ is the site's own written help, most of it already on a page anyone can read
+#: without signing in, and there is nothing in it worth hiding from a host that wants to attach it.
+PUBLIC: tuple[Template, ...] = (
+    Template(
+        "help://faq",
+        "faq",
+        "This site's FAQ",
+        "Every question and answer this site has written down, including the ones kept off the "
+        "public FAQ page for assistants to answer out of. This site does not work the same way as "
+        "other auction sites, so this is where the real answers to how-does-this-work questions "
+        "are. Ask search_help for the rest if there are more than this carries.",
+        "search_help",
+        (),
+        {"source": "faq", "limit": 25},
+    ),
+)
+
+ALL: tuple[Template, ...] = TEMPLATES + FIXED + PUBLIC
 
 
 def _descriptor(template: Template, *, as_template: bool) -> dict[str, Any]:
@@ -171,8 +218,12 @@ def template_descriptors() -> list[dict[str, Any]]:
 
 
 def fixed_descriptors() -> list[dict[str, Any]]:
-    """The concrete data resources for ``resources/list``, alongside the widget documents."""
-    return [_descriptor(template, as_template=False) for template in FIXED]
+    """The concrete data resources for ``resources/list``, alongside the widget documents.
+
+    :data:`FIXED` is about the caller and :data:`PUBLIC` is about nobody, which is the whole test
+    for appearing here: a listed URI must say nothing about who exists on this site.
+    """
+    return [_descriptor(template, as_template=False) for template in FIXED + PUBLIC]
 
 
 def _scheme_and_parts(uri: str) -> tuple[str, list[str]]:

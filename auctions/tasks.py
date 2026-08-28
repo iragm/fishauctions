@@ -20,6 +20,8 @@ from django.core.management import call_command
 from django_celery_beat.models import ClockedSchedule, PeriodicTask
 from post_office import mail
 
+from auctions import geocoding
+
 # Constants for update_auction_stats scheduling
 STATS_UPDATE_LOCK_MINUTES = 5  # Minutes to lock auction before recalculation to prevent concurrent updates
 STATS_UPDATE_MAX_DELAY_SECONDS = 3600  # Maximum delay (1 hour) before checking for new auctions
@@ -1742,8 +1744,7 @@ def geocode_club_member(self, pk):
     """
     from auctions.models import AuctionTOS, ClubMember, UserData
 
-    api_key = getattr(settings, "GOOGLE_MAPS_SERVER_API_KEY", "")
-    if not api_key:
+    if not geocoding.configured():
         return
 
     member = ClubMember.objects.filter(pk=pk).first()
@@ -1751,16 +1752,9 @@ def geocode_club_member(self, pk):
         return
 
     if member.address:
-        response = requests.get(
-            "https://maps.googleapis.com/maps/api/geocode/json",
-            params={"address": member.address, "key": api_key},
-            timeout=10,
-        )
-        response.raise_for_status()
-        data = response.json()
-        if data.get("status") == "OK" and data.get("results"):
-            loc = data["results"][0]["geometry"]["location"]
-            ClubMember.objects.filter(pk=pk).update(lat=loc["lat"], lng=loc["lng"])
+        found = geocoding.geocode(member.address)
+        if found:
+            ClubMember.objects.filter(pk=pk).update(lat=found["latitude"], lng=found["longitude"])
     elif member.user_id and not (member.lat and member.lng):
         # No address — copy coords from UserData if the user has voluntarily joined an auction
         has_self_joined = AuctionTOS.objects.filter(user=member.user, manually_added=False).exists()
@@ -1869,21 +1863,13 @@ def geocode_speaker(self, pk):
     """
     from auctions.models import Speaker
 
-    api_key = getattr(settings, "GOOGLE_MAPS_SERVER_API_KEY", "")
-    if not api_key:
+    if not geocoding.configured():
         return
 
     speaker = Speaker.objects.filter(pk=pk).first()
     if not speaker or not speaker.location:
         return
 
-    response = requests.get(
-        "https://maps.googleapis.com/maps/api/geocode/json",
-        params={"address": speaker.location, "key": api_key},
-        timeout=10,
-    )
-    response.raise_for_status()
-    data = response.json()
-    if data.get("status") == "OK" and data.get("results"):
-        location = data["results"][0]["geometry"]["location"]
-        Speaker.objects.filter(pk=pk).update(latitude=location["lat"], longitude=location["lng"])
+    found = geocoding.geocode(speaker.location)
+    if found:
+        Speaker.objects.filter(pk=pk).update(latitude=found["latitude"], longitude=found["longitude"])

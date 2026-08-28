@@ -9641,6 +9641,16 @@ class FAQ(AdminEmailMixin, ListView):
     template_name = "faq.html"
     ordering = ["category_text"]
 
+    def get_queryset(self):
+        """Everything but the agent-only answers.
+
+        ``agent_only`` is not privacy -- anybody can reach one by asking the assistant, and
+        ``search_help`` serves them to every caller. It is about what deserves a heading on a page
+        somebody reads top to bottom: an edge case that is worth writing down and worth keeping out
+        of the twenty questions everybody else came here for.
+        """
+        return super().get_queryset().filter(agent_only=False)
+
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         current_site = Site.objects.get_current()
@@ -13034,8 +13044,6 @@ class ClubEventsICalView(View):
 
     def get(self, request, slug):
         club = get_object_or_404(Club, slug=slug)
-        if not club.enable_club_page:
-            raise Http404
         upcoming, past = club_events.upcoming_events(club, include_past=True, past_limit=25)
         domain = Site.objects.get_current().domain
         lines = [
@@ -13972,15 +13980,14 @@ class UserLocationUpdate(UpdateView, SuccessMessageMixin):
         return {"first_name": user.first_name, "last_name": user.last_name}
 
     def get_recent_auctiontos(self):
-        """Get AuctionTOS records created in the last 30 days that are not manually added"""
-        thirty_days_ago = timezone.now() - timedelta(days=30)
-        return AuctionTOS.objects.filter(
-            user=self.request.user,
-            manually_added=False,
-            createdon__gte=thirty_days_ago,
-        ).select_related("auction")
+        """The participant rows this page's changes will follow into. See services."""
+        from .services import recent_auctiontos_for
+
+        return recent_auctiontos_for(self.request.user)
 
     def form_valid(self, form):
+        from .services import propagate_contact_info
+
         userData = form.save(commit=False)
         user = User.objects.get(pk=self.get_object().user.pk)
         user.first_name = form.cleaned_data["first_name"]
@@ -13988,55 +13995,10 @@ class UserLocationUpdate(UpdateView, SuccessMessageMixin):
         user.save()
         userData.last_activity = timezone.now()
         userData.save()
-
-        # Update recent AuctionTOS records with new contact info
-        new_name = f"{user.first_name} {user.last_name}"
-        new_phone = userData.phone_number
-        new_address = userData.address
-
-        for tos in self.get_recent_auctiontos():
-            # Track what changed
-            changes = []
-            if tos.name != new_name:
-                changes.append(f"name from '{tos.name}' to '{new_name}'")
-                tos.name = new_name
-            if tos.phone_number != new_phone:
-                changes.append(f"phone from '{tos.phone_number}' to '{new_phone}'")
-                tos.phone_number = new_phone
-            if tos.address != new_address:
-                changes.append(f"address from '{tos.address}' to '{new_address}'")
-                tos.address = new_address
-
-            if changes:
-                tos.save()
-                # Create auction admin history
-                AuctionHistory.objects.create(
-                    auction=tos.auction,
-                    user=user,
-                    action=f"Updated contact info for {new_name}: " + ", ".join(changes),
-                    applies_to="USERS",
-                )
-
-        for club_member in ClubMember.objects.filter(user=user, is_deleted=False).select_related("club"):
-            changes = []
-            if club_member.name != new_name:
-                changes.append(f"name to '{new_name}'")
-                club_member.name = new_name
-            if club_member.phone_number != new_phone:
-                changes.append(f"phone to '{new_phone}'")
-                club_member.phone_number = new_phone
-            if club_member.address != new_address:
-                changes.append(f"address to '{new_address}'")
-                club_member.address = new_address
-            if changes:
-                club_member.save()
-                ClubHistory.objects.create(
-                    club=club_member.club,
-                    user=user,
-                    action=f"Contact info updated for {user.get_full_name()}: " + ", ".join(changes),
-                    applies_to="MEMBERS",
-                )
-
+        # The auctions and clubs holding their own copy of this person's details. Shared with the
+        # assistant's update_contact_info so both routes touch the same rows and write the same
+        # history lines.
+        propagate_contact_info(user, userData)
         return super().form_valid(form)
 
     def get_context_data(self, **kwargs):
@@ -18654,27 +18616,6 @@ class ClubDetailView(ClubViewMixin, TemplateView):
 
     def dispatch(self, request, *args, **kwargs):
         self.get_club(kwargs.get("slug", ""))
-        if not self.club.enable_club_page:
-            # Page is disabled — only users with any club permission may view it; everyone else gets 404
-            has_access = request.user.is_authenticated and (
-                request.user.is_superuser
-                or ClubMember.objects.filter(club=self.club, user=request.user, is_deleted=False)
-                .filter(
-                    Q(permission_admin=True)
-                    | Q(permission_view=True)
-                    | Q(permission_add_edit=True)
-                    | Q(permission_edit_club=True)
-                    | Q(permission_money=True)
-                    | Q(permission_manage_auctions=True)
-                    | Q(permission_export=True)
-                    | Q(permission_manage_bap=True)
-                    | Q(permission_manage_donations=True)
-                    | Q(permission_send_announcements=True)
-                )
-                .exists()
-            )
-            if not has_access:
-                raise Http404
         return super().dispatch(request, *args, **kwargs)
 
     def get_context_data(self, **kwargs):
@@ -18953,9 +18894,7 @@ def _membership_renewal_state(club, member):
     expiration = member.membership_expiration_date
     is_expired = bool(expiration and expiration < today) or (not expiration and not member.is_paid_member)
     expiring_soon = bool(expiration and not is_expired and (expiration - today).days <= 30)
-    can_pay = bool(
-        club.enable_club_page and club.membership_annual_fee and (club.can_accept_paypal or club.can_accept_square)
-    )
+    can_pay = bool(club.membership_annual_fee and (club.can_accept_paypal or club.can_accept_square))
     should_show_payment = can_pay and (is_expired or expiring_soon or not member.is_paid_member)
     return is_expired, expiring_soon, should_show_payment, can_pay
 
@@ -20380,7 +20319,7 @@ class ClubEventsEmbedView(View):
 
     def get(self, request, slug):
         club = Club.objects.filter(Q(slug=slug) | Q(abbreviation=slug)).order_by("pk").first()
-        if not club or not club.enable_club_page:
+        if not club:
             raise Http404
 
         try:
@@ -20467,7 +20406,7 @@ class ClubAnnouncementsEmbedView(View):
 
     def get(self, request, slug):
         club = Club.objects.filter(Q(slug=slug) | Q(abbreviation=slug)).order_by("pk").first()
-        if not club or not club.enable_club_page:
+        if not club:
             raise Http404
         try:
             count = int(request.GET.get("count") or 1)
@@ -20547,7 +20486,7 @@ class ClubAuctionEmbedView(View):
 
     def get(self, request, slug):
         club = Club.objects.filter(Q(slug=slug) | Q(abbreviation=slug)).order_by("pk").first()
-        if not club or not club.enable_club_page:
+        if not club:
             raise Http404
         row = _club_auction_embed_row(request, _club_current_auction(club))
         embed_mode = embed_mode_from_request(request)
@@ -20738,9 +20677,7 @@ class ClubWebsiteIntegrationView(LoginRequiredMixin, ClubViewMixin, TemplateView
                 "max_count": CLUB_EVENTS_EMBED_MAX,
                 "default_count": 1,
                 "heights": {1: 200, 10: 880},
-                "available": club.enable_club_page,
-                "unavailable_reason": "Your public club page is turned off, so this would show nothing.",
-                "settings_url": reverse("club_edit", kwargs={"slug": club.slug}),
+                "available": True,
             },
             {
                 "key": "past_events",
@@ -20756,9 +20693,7 @@ class ClubWebsiteIntegrationView(LoginRequiredMixin, ClubViewMixin, TemplateView
                 "max_count": CLUB_EVENTS_EMBED_MAX,
                 "default_count": 1,
                 "heights": {1: 200, 10: 880},
-                "available": club.enable_club_page,
-                "unavailable_reason": "Your public club page is turned off, so this would show nothing.",
-                "settings_url": reverse("club_edit", kwargs={"slug": club.slug}),
+                "available": True,
             },
             {
                 "key": "auction",
@@ -20772,9 +20707,7 @@ class ClubWebsiteIntegrationView(LoginRequiredMixin, ClubViewMixin, TemplateView
                 "url": base + reverse("club_auction_embed", kwargs={"slug": club.slug}),
                 "counts": False,
                 "heights": {1: 200},
-                "available": club.enable_club_page,
-                "unavailable_reason": "Your public club page is turned off, so this would show nothing.",
-                "settings_url": reverse("club_edit", kwargs={"slug": club.slug}),
+                "available": True,
             },
             {
                 "key": "announcements",
@@ -20789,9 +20722,7 @@ class ClubWebsiteIntegrationView(LoginRequiredMixin, ClubViewMixin, TemplateView
                 "max_count": CLUB_ANNOUNCEMENTS_EMBED_MAX,
                 "default_count": 1,
                 "heights": {1: 160, 3: 340},
-                "available": club.enable_club_page,
-                "unavailable_reason": "Your public club page is turned off, so this would show nothing.",
-                "settings_url": reverse("club_edit", kwargs={"slug": club.slug}),
+                "available": True,
             },
             {
                 "key": "bap",
@@ -20837,9 +20768,7 @@ class ClubWebsiteIntegrationView(LoginRequiredMixin, ClubViewMixin, TemplateView
                         "note": "For a website plugin or anything else that reads a calendar feed.",
                     },
                 ],
-                "available": club.enable_club_page,
-                "unavailable_reason": "Your public club page is turned off, so this feed is not being served.",
-                "settings_url": reverse("club_edit", kwargs={"slug": club.slug}),
+                "available": True,
             },
         ]
         return context
@@ -21261,11 +21190,7 @@ class ClubMembershipPaymentView(LoginRequiredMixin, ClubViewMixin, TemplateView)
 
     def dispatch(self, request, *args, **kwargs):
         self.get_club(kwargs.get("slug", ""))
-        if not (
-            self.club.enable_club_page
-            and self.club.membership_annual_fee
-            and (self.club.can_accept_paypal or self.club.can_accept_square)
-        ):
+        if not (self.club.membership_annual_fee and (self.club.can_accept_paypal or self.club.can_accept_square)):
             raise Http404
         # Members whose dues are current have nothing to pay — send them back to their
         # membership card rather than showing an empty/confusing payment page.
@@ -24885,8 +24810,7 @@ class DiscordInteractionsView(View):
             else:
                 lines.append(f"Status: ❌ Expired <t:{expiry_ts}:D> — please renew your membership")
 
-        if club.enable_club_page:
-            lines.append(f"\n[View your membership]({member.simple_membership_link})")
+        lines.append(f"\n[View your membership]({member.simple_membership_link})")
 
         return _discord_ephemeral("\n".join(lines))
 

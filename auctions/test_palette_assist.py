@@ -1214,6 +1214,11 @@ class RegistryTests(PaletteAssistTestCase):
     def test_the_tool_list_is_every_action_the_user_could_use(self):
         offered = self._tool_names(self.user)
         for action in palette_actions.actions_for(self.user):
+            if action.mcp_only:
+                # Offered over /mcp/ and nowhere else, on purpose. See ``Action.mcp_only`` -- and
+                # ``test_the_only_thing_the_palette_is_not_offered_is_the_source_reader``, which
+                # pins the list of them to one.
+                continue
             self.assertIn(action.name, offered)
 
     def test_an_auction_admin_is_offered_the_auction_skills(self):
@@ -2314,6 +2319,28 @@ class DriftTests(PaletteAssistTestCase):
         offered = {tool["name"] for tool in palette_assist.tools_for(self.user)}
         self.assertEqual(offered - shared, {palette_assist.ASK_THE_USER, palette_assist.CANNOT_DO_THIS})
 
+    def test_the_only_thing_the_palette_is_not_offered_is_the_source_reader(self):
+        """``Action.mcp_only`` is a named exception to one catalogue, not a hole in it.
+
+        A page of Python is the right answer for an agent and the wrong thing to render in a
+        one-line box at this site's own expense. Anything else going missing here is a bug.
+        """
+        from auctions.mcp import tools as mcp_tools
+
+        shared = {tool["name"] for tool in mcp_tools.tool_descriptors(self.user)}
+        offered = {tool["name"] for tool in palette_assist.tools_for(self.user)}
+        self.assertEqual(shared - offered, {"read_source"})
+        self.assertTrue(palette_actions.ACTIONS["read_source"].mcp_only)
+        self.assertEqual(
+            {name for name, action in palette_actions.ACTIONS.items() if action.mcp_only},
+            {"read_source"},
+        )
+
+    def test_the_palette_will_not_run_a_tool_it_never_offered(self):
+        """A provider that ignores the tool list still cannot reach an MCP-only action."""
+        reply = LLMResult(tool_calls=[ToolCall(id="1", name="read_source", arguments={"path": "auctions/models.py"})])
+        self.assertEqual(palette_assist.read_reply(reply)["kind"], "invalid")
+
     def test_update_person_sends_every_field_its_form_asks_for(self):
         """The data dict is read off the form, so a new field on the modal can't break the palette."""
         from auctions.forms import CreateEditAuctionTOS
@@ -2696,6 +2723,58 @@ class RecentChangesTests(RunActionTestCase):
         result = self._run("recent_changes", {}, user=self.member)
         self.assertIn("error", result)
 
+    def test_searching_finds_the_one_line_that_answers_the_question(self):
+        """ "Did we send an invoice email to Joe?" is one line from three weeks ago."""
+        self.in_person_auction.create_history(
+            applies_to="INVOICES", action="Invoice notification email sent to Joe Bloggs (joe@example.com)", user=None
+        )
+        self.in_person_auction.create_history(applies_to="LOTS", action="Set lot 14 as sold", user=self.user)
+        result = self._run("recent_changes", {"search": "joe"})
+        self.assertEqual(result["count"], 1)
+        self.assertIn("Joe Bloggs", result["changes"][0]["what"])
+
+    def test_the_person_who_did_it_is_named_rather_than_their_username(self):
+        self.in_person_auction.create_history(applies_to="LOTS", action="Set lot 14 as sold", user=self.user)
+        result = self._run("recent_changes", {"search": "lot 14"})
+        expected = self.user.get_full_name().strip() or self.user.username
+        self.assertIn(expected, result["changes"][0]["who"])
+
+    def test_narrowing_to_one_kind_of_change(self):
+        self.in_person_auction.create_history(applies_to="INVOICES", action="Marked an invoice paid", user=self.user)
+        self.in_person_auction.create_history(applies_to="LOTS", action="Set lot 14 as sold", user=self.user)
+        result = self._run("recent_changes", {"about": "invoices"})
+        self.assertTrue(result["changes"])
+        self.assertTrue(all(row["about"] == "INVOICES" for row in result["changes"]))
+
+    def test_sales_are_looked_for_where_they_are_really_written(self):
+        """A sale is written under LOTS, so "sold" has to mean LOTS or it answers nothing."""
+        self.in_person_auction.create_history(applies_to="LOTS", action="Set lot 99 as sold", user=self.user)
+        result = self._run("recent_changes", {"about": "sold", "search": "lot 99"})
+        self.assertEqual(result["count"], 1)
+
+    def test_a_kind_of_change_nobody_publishes_is_refused_rather_than_ignored(self):
+        result = self._run("recent_changes", {"about": "frogs"})
+        self.assertIn("error", result)
+        self.assertIn("invoices", result["error"])
+
+    def test_a_filter_that_matches_nothing_does_not_read_as_an_empty_table(self):
+        self.in_person_auction.create_history(applies_to="LOTS", action="Set lot 14 as sold", user=self.user)
+        result = self._run("recent_changes", {"search": "nothing at all like this"})
+        self.assertFalse(result["found"])
+        self.assertNotIn("Nothing has been changed", result["summary"])
+
+    def test_days_looks_back_only_that_far(self):
+        from auctions.models import AuctionHistory
+
+        self.in_person_auction.create_history(applies_to="LOTS", action="Something old", user=self.user)
+        AuctionHistory.objects.filter(auction=self.in_person_auction).update(
+            timestamp=timezone.now() - datetime.timedelta(days=30)
+        )
+        self.in_person_auction.create_history(applies_to="LOTS", action="Something new", user=self.user)
+        result = self._run("recent_changes", {"days": 7})
+        self.assertEqual(result["count"], 1)
+        self.assertIn("Something new", result["changes"][0]["what"])
+
 
 class DescribeLotLiveStateTests(RunActionTestCase):
     """The three questions most asked about a live lot."""
@@ -3019,6 +3098,106 @@ class SearchHelpTests(RunActionTestCase):
         result = self._run("search_help", {"query": "zzzqqq nonexistent topic"})
         self.assertFalse(result["found"])
         self.assertIn("general knowledge", result["summary"])
+
+    def test_an_agent_only_answer_is_searchable(self):
+        from auctions.models import FAQ
+
+        FAQ.objects.create(
+            category_text="Bidding",
+            question="What is a quibblewick lot?",
+            answer="A quibblewick lot is one only an admin ever sees.",
+            agent_only=True,
+        )
+        result = self._run("search_help", {"query": "quibblewick"})
+        self.assertTrue(result["found"])
+        self.assertIn("only an admin ever sees", result["help"][0]["answer"])
+
+    def test_an_agent_only_answer_carries_no_link_to_a_page_it_is_not_on(self):
+        from auctions.models import FAQ
+
+        FAQ.objects.create(category_text="Bidding", question="What is a quibblewick lot?", answer="x", agent_only=True)
+        row = self._run("search_help", {"query": "quibblewick"})["help"][0]
+        self.assertNotIn("url", row)
+        self.assertIs(row["on_the_public_faq_page"], False)
+
+    def test_an_ordinary_answer_still_links_to_the_faq_page(self):
+        from auctions.models import FAQ
+
+        entry = FAQ.objects.create(category_text="Bidding", question="What is a quibblewick lot?", answer="x")
+        row = self._run("search_help", {"query": "quibblewick"})["help"][0]
+        self.assertIn(entry.slug, row["url"])
+
+    def test_the_faq_reads_straight_through_with_no_query(self):
+        from auctions.models import FAQ
+
+        FAQ.objects.create(category_text="Bidding", question="What is a quibblewick lot?", answer="x")
+        result = self._run("search_help", {"source": "faq", "limit": 100})
+        self.assertTrue(result["found"])
+        self.assertEqual(result["count"], FAQ.objects.count())
+        self.assertTrue(all(row["source"] == "FAQ" for row in result["help"]))
+
+    def test_the_hidden_half_comes_back_with_the_rest_rather_than_behind_a_filter(self):
+        """There is deliberately no ``source="agent_only"``.
+
+        It was written and taken back out: the hidden rows are in the ordinary ``faq`` answer
+        anyway, each labelled so nothing mistakes one for a page it is on, so all a fourth source
+        value bought was a narrowing for a question only the people who write the FAQ ever ask.
+        """
+        from auctions.models import FAQ
+
+        FAQ.objects.create(category_text="Bidding", question="Public quibble?", answer="x")
+        FAQ.objects.create(category_text="Bidding", question="Hidden quibble?", answer="x", agent_only=True)
+        result = self._run("search_help", {"source": "faq", "limit": 100})
+        rows = {row["question"]: row for row in result["help"]}
+        self.assertIn("Hidden quibble?", rows)
+        self.assertIn("Public quibble?", rows)
+        self.assertFalse(rows["Hidden quibble?"]["on_the_public_faq_page"])
+        self.assertNotIn("on_the_public_faq_page", rows["Public quibble?"])
+        self.assertIn("error", self._run("search_help", {"source": "agent_only"}))
+
+    def test_the_blog_is_not_something_to_read_straight_through(self):
+        result = self._run("search_help", {"source": "blog"})
+        self.assertIn("error", result)
+
+    def test_a_source_nobody_publishes_is_refused_rather_than_defaulted(self):
+        result = self._run("search_help", {"query": "zorblatt", "source": "twitter"})
+        self.assertIn("error", result)
+
+    def test_narrowing_to_the_questions_and_answers_drops_the_posts(self):
+        from auctions.models import FAQ, BlogPost
+
+        FAQ.objects.create(category_text="Bidding", question="What is a zorblatt lot?", answer="A free one.")
+        BlogPost.objects.create(title="Zorblatt release notes", body="All about zorblatt lots.", slug="zorblatt-notes")
+        both = self._run("search_help", {"query": "zorblatt"})
+        self.assertTrue(any(row["source"] == "Blog" for row in both["help"]))
+        faq_only = self._run("search_help", {"query": "zorblatt", "source": "faq"})
+        self.assertTrue(faq_only["found"])
+        self.assertFalse(any(row["source"] == "Blog" for row in faq_only["help"]))
+
+    def test_paging_carries_on_into_the_posts_rather_than_starting_them_over(self):
+        from auctions.models import FAQ, BlogPost
+
+        FAQ.objects.create(category_text="A zorblatt", question="Zorblatt one?", answer="x")
+        FAQ.objects.create(category_text="B zorblatt", question="Zorblatt two?", answer="x")
+        BlogPost.objects.create(title="Zorblatt post", body="x", slug="zorblatt-post")
+        first = self._run("search_help", {"query": "zorblatt", "limit": 2, "offset": 0})
+        self.assertTrue(all(row["source"] == "FAQ" for row in first["help"]))
+        page = self._run("search_help", {"query": "zorblatt", "limit": 2, "offset": 2})
+        self.assertEqual(len(page["help"]), 1)
+        self.assertEqual(page["help"][0]["source"], "Blog")
+
+
+class AgentOnlyFaqPageTests(StandardTestCase):
+    """The half of the flag that is about the public page rather than the assistant."""
+
+    def test_an_agent_only_answer_is_not_on_the_faq_page(self):
+        from auctions.models import FAQ
+
+        FAQ.objects.create(category_text="Bidding", question="Public quibble question?", answer="x")
+        FAQ.objects.create(category_text="Bidding", question="Quibblewick question?", answer="x", agent_only=True)
+        response = self.client.get(reverse("faq"))
+        self.assertContains(response, "Public quibble question?")
+        self.assertNotContains(response, "Quibblewick question?")
 
 
 class UndoLastTests(RunActionTestCase):

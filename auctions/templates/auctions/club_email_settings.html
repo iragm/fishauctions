@@ -23,6 +23,17 @@
   <i class="bi bi-lightbulb-fill me-1"></i>
   If you already have a shared Gmail account you use for club communications, you should add it as a club member, grant that account auction and membership permissions, and then select that account for both options here.
 </div>
+
+{% if club.enable_donation_tracking %}
+<div class="alert alert-info mb-3" role="alert">
+  <i class="bi bi-info-circle me-1"></i>
+  <strong>Leave the donation contact blank.</strong>
+  Vendor replies are recorded against the vendor either way. If you also forward them to a
+  person, they'll be tempted to reply from their own inbox &mdash; and that reply never reaches
+  this site, so it won't show up in the vendor's history or move their status along. Set a
+  donation contact below only if someone genuinely needs a copy in their inbox.
+</div>
+{% endif %}
 {% endif %}
 
 {% if club.mailchimp_audience_id %}

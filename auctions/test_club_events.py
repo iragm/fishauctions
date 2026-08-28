@@ -514,7 +514,7 @@ class UpcomingEventsTests(TestCase):
 class ClubEventViewTests(TestCase):
     def setUp(self):
         self.client = Client()
-        self.club = Club.objects.create(name="View Club", enable_club_page=True)
+        self.club = Club.objects.create(name="View Club")
         self.admin = User.objects.create_user(username="ev_admin", password="pw", email="a@example.com")
         ClubMember.objects.create(club=self.club, user=self.admin, permission_admin=True)
         self.outsider = User.objects.create_user(username="ev_out", password="pw", email="o@example.com")
@@ -695,7 +695,7 @@ class ClubPageCalendarButtonTests(TestCase):
 
     def setUp(self):
         self.client = Client()
-        self.club = Club.objects.create(name="Subscribe Club", enable_club_page=True)
+        self.club = Club.objects.create(name="Subscribe Club")
         self.start = timezone.now() + datetime.timedelta(days=3)
         ClubEvent.objects.create(club=self.club, title="Club Picnic", date_start=self.start)
 
@@ -731,7 +731,7 @@ class ClubEventsEmbedTests(TestCase):
 
     def setUp(self):
         self.client = Client()
-        self.club = Club.objects.create(name="Embed Club", enable_club_page=True)
+        self.club = Club.objects.create(name="Embed Club")
         self.admin = User.objects.create_user(username="em_admin", password="pw", email="ea@example.com")
         ClubMember.objects.create(club=self.club, user=self.admin, permission_admin=True)
         self.member = User.objects.create_user(username="em_member", password="pw", email="em@example.com")
@@ -861,11 +861,6 @@ class ClubEventsEmbedTests(TestCase):
                 self.assertEqual(response["Access-Control-Allow-Origin"], "*")
                 self.assertNotIn("X-Frame-Options", response)
 
-    def test_a_club_with_its_page_disabled_has_no_embed(self):
-        self.club.enable_club_page = False
-        self.club.save()
-        self.assertEqual(self.client.get(self.url).status_code, 404)
-
     def test_the_embed_exposes_no_member_data(self):
         self._events(1)
         body = self.client.get(self.url).content.decode()
@@ -931,7 +926,7 @@ class ClubPastEventsEmbedTests(TestCase):
 
     def setUp(self):
         self.client = Client()
-        self.club = Club.objects.create(name="History Club", enable_club_page=True)
+        self.club = Club.objects.create(name="History Club")
         self.url = reverse("club_past_events_embed", kwargs={"slug": self.club.slug})
         now = timezone.now()
         for days, title in ((30, "Long ago"), (7, "Last week"), (2, "Two days ago")):
@@ -986,18 +981,13 @@ class ClubPastEventsEmbedTests(TestCase):
         self.assertEqual(response["Access-Control-Allow-Origin"], "*")
         self.assertNotIn("X-Frame-Options", response)
 
-    def test_a_club_with_its_page_disabled_has_no_embed(self):
-        self.club.enable_club_page = False
-        self.club.save()
-        self.assertEqual(self.client.get(self.url).status_code, 404)
-
 
 class EmbedSelfSizingTests(TestCase):
     """An iframe cannot size itself, so the embed measures itself and the snippet listens."""
 
     def setUp(self):
         self.client = Client()
-        self.club = Club.objects.create(name="Sizing Club", enable_club_page=True, enable_breeder_award_program=True)
+        self.club = Club.objects.create(name="Sizing Club", enable_breeder_award_program=True)
         self.admin = User.objects.create_user(username="sz_admin", password="pw", email="sz@example.com")
         ClubMember.objects.create(club=self.club, user=self.admin, permission_admin=True)
 
@@ -1068,7 +1058,7 @@ class EventsEmbedUsageTrackingTests(TestCase):
 
     def setUp(self):
         self.client = Client()
-        self.club = Club.objects.create(name="Tracked Club", enable_club_page=True)
+        self.club = Club.objects.create(name="Tracked Club")
         self.admin = User.objects.create_user(username="tr_admin", password="pw", email="tr@example.com")
         ClubMember.objects.create(club=self.club, user=self.admin, permission_admin=True)
         self.member = User.objects.create_user(username="tr_member", password="pw", email="trm@example.com")
@@ -1132,7 +1122,7 @@ class CustomizeEventPromptTests(TestCase):
 
     def setUp(self):
         self.client = Client()
-        self.club = Club.objects.create(name="Prompt Club", enable_club_page=True)
+        self.club = Club.objects.create(name="Prompt Club")
         self.admin = User.objects.create_user(username="pr_admin", password="pw", email="pr@example.com")
         ClubMember.objects.create(club=self.club, user=self.admin, permission_admin=True)
         self.auction = Auction.objects.create(
@@ -1226,7 +1216,7 @@ class CustomizeEventPromptTests(TestCase):
 class ClubEventICalTests(TestCase):
     def setUp(self):
         self.client = Client()
-        self.club = Club.objects.create(name="iCal Club", enable_club_page=True)
+        self.club = Club.objects.create(name="iCal Club")
         self.start = timezone.now() + datetime.timedelta(days=2)
 
     def test_the_feed_renders_events(self):
@@ -1250,12 +1240,6 @@ class ClubEventICalTests(TestCase):
         ClubEvent.objects.create(club=self.club, title="Gone", date_start=self.start, is_deleted=True)
         body = self.client.get(reverse("club_events_ical", kwargs={"slug": self.club.slug})).content.decode()
         self.assertNotIn("Gone", body)
-
-    def test_a_club_with_its_page_disabled_has_no_feed(self):
-        self.club.enable_club_page = False
-        self.club.save()
-        response = self.client.get(reverse("club_events_ical", kwargs={"slug": self.club.slug}))
-        self.assertEqual(response.status_code, 404)
 
     def test_each_event_carries_a_sequence_so_edits_reach_subscribers(self):
         """Most clients keep the copy they already imported unless the sequence goes up."""
@@ -1618,7 +1602,7 @@ class GoogleCalendarSyncTests(TestCase):
 class GoogleCalendarConfigViewTests(TestCase):
     def setUp(self):
         self.client = Client()
-        self.club = Club.objects.create(name="Config Club", enable_club_page=True)
+        self.club = Club.objects.create(name="Config Club")
         self.admin = User.objects.create_user(username="gc_admin", password="pw", email="gc@example.com")
         ClubMember.objects.create(club=self.club, user=self.admin, permission_edit_club=True)
         self.outsider = User.objects.create_user(username="gc_out", password="pw", email="gco@example.com")
@@ -2434,7 +2418,7 @@ class RecurringEventPullTests(TestCase):
     """A repeating event is read in as one event with a rule, not as fifty-two copies."""
 
     def setUp(self):
-        self.club = Club.objects.create(name="Repeat Club", enable_club_page=True)
+        self.club = Club.objects.create(name="Repeat Club")
         self.club.google_calendar_refresh_token = "refresh"
         self.club.google_calendar_id = "cal-1"
         self.club.save()
@@ -2573,7 +2557,7 @@ class RecurringEventUpkeepTests(TestCase):
 
     def setUp(self):
         self.client = Client()
-        self.club = Club.objects.create(name="Upkeep Club", enable_club_page=True)
+        self.club = Club.objects.create(name="Upkeep Club")
         # Two weeks ago plus a few hours, so the next occurrence is unambiguously later today.
         self.anchor = (timezone.now() - datetime.timedelta(days=14) + datetime.timedelta(hours=5)).replace(
             microsecond=0
@@ -2915,7 +2899,7 @@ class ClubEventTimezoneTests(TestCase):
 
     def setUp(self):
         self.client = Client()
-        self.club = Club.objects.create(name="TZ Club", enable_club_page=True)
+        self.club = Club.objects.create(name="TZ Club")
         self.admin = User.objects.create_user(username="tzadmin", password="x", email="tz@example.com")
         ClubMember.objects.create(
             club=self.club, user=self.admin, name="TZ Admin", email="tz@example.com", permission_admin=True
@@ -2959,7 +2943,7 @@ class ClubEventCancellationTests(TestCase):
 
     def setUp(self):
         self.client = Client()
-        self.club = Club.objects.create(name="Cancel Club", enable_club_page=True)
+        self.club = Club.objects.create(name="Cancel Club")
         self.admin = User.objects.create_user(username="canceladmin", password="x", email="c@example.com")
         ClubMember.objects.create(
             club=self.club, user=self.admin, name="Cancel Admin", email="c@example.com", permission_admin=True

@@ -193,14 +193,18 @@ def descriptor(action: palette_actions.Action) -> dict[str, Any]:
     a host old enough to read only the annotation falls back to ``name`` -- which for
     ``set_lot_winner`` differs from "Set lot winner" by two spaces and a capital letter.
 
-    ``openWorldHint: false`` stays even though it is a bare boolean, because the spec's default for
-    it is ``true`` and "this tool reaches out to the open internet" is the wrong thing for a host to
-    assume about a tool that only ever touches this site's own database.
+    ``openWorldHint`` stays even though it is usually the bare boolean ``false``, because the spec's
+    default for it is ``true`` and "this tool reaches out to the open internet" is the wrong thing
+    for a host to assume about a tool that only ever touches this site's own database. It is read
+    off the action rather than hard-coded, because exactly one of them -- ``read_source`` -- really
+    does reach out.
     """
     annotations: dict[str, Any] = {
         "readOnlyHint": read_only(action),
-        # Everything here reads and writes this site's own database. Nothing reaches out.
-        "openWorldHint": False,
+        # False for everything but ``read_source``: the catalogue reads and writes this site's own
+        # database and reaches nothing else. The one that does fetch this site's published source
+        # code from the repository it is deployed from says so here.
+        "openWorldHint": action.open_world,
     }
     if not read_only(action):
         annotations["destructiveHint"] = action.destructive

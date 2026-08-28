@@ -1002,3 +1002,93 @@ def _bap_seller_name(lot):
     if lot.user:
         return f"{lot.user.first_name} {lot.user.last_name}".strip() or lot.user.username or f"user #{lot.user.pk}"
     return f"lot #{lot.pk}"
+
+
+#: How far back a participant row counts as "current" when contact details change.
+#:
+#: The contact info page has always pushed a corrected name, phone or address into the auctions the
+#: person is *currently* in, and thirty days is what it means by that. Older rows are left alone
+#: deliberately: an ``AuctionTOS`` is a record of who stood at a desk on a particular Saturday, and
+#: rewriting last spring's address because somebody moved this week would falsify it.
+CONTACT_INFO_RECENT_DAYS = 30
+
+
+def recent_auctiontos_for(user):
+    """The participant rows a contact-info change should follow into.
+
+    ``manually_added`` rows are excluded because an auction admin typed those by hand for this
+    person, and an admin's correction outranks the account's own details.
+    """
+    from datetime import timedelta
+
+    cutoff = timezone.now() - timedelta(days=CONTACT_INFO_RECENT_DAYS)
+    return AuctionTOS.objects.filter(
+        user=user,
+        manually_added=False,
+        createdon__gte=cutoff,
+    ).select_related("auction")
+
+
+def propagate_contact_info(user, userdata, *, acting_user=None):
+    """Push a changed name, phone or address out to the auctions and clubs that hold a copy.
+
+    Extracted from ``views.UserLocationUpdate.form_valid`` so the assistant's ``update_contact_info``
+    does exactly what the contact info page does. The copies are the point of the design: an
+    ``AuctionTOS`` and a ``ClubMember`` each hold their own name and address so that a club's records
+    survive the account being deleted -- which means a person who moves has to be able to correct
+    all of them at once, and there is one function that knows where they all are.
+
+    Returns a list of sentences naming what it touched, so a caller with no page to put a message on
+    can say it instead.
+    """
+    from .models import AuctionHistory
+
+    acting_user = acting_user or user
+    new_name = f"{user.first_name} {user.last_name}".strip()
+    new_phone = userdata.phone_number
+    new_address = userdata.address
+    told: list[str] = []
+
+    for tos in recent_auctiontos_for(user):
+        changes = []
+        if tos.name != new_name:
+            changes.append(f"name from '{tos.name}' to '{new_name}'")
+            tos.name = new_name
+        if tos.phone_number != new_phone:
+            changes.append(f"phone from '{tos.phone_number}' to '{new_phone}'")
+            tos.phone_number = new_phone
+        if tos.address != new_address:
+            changes.append(f"address from '{tos.address}' to '{new_address}'")
+            tos.address = new_address
+        if changes:
+            tos.save()
+            AuctionHistory.objects.create(
+                auction=tos.auction,
+                user=acting_user,
+                action=f"Updated contact info for {new_name}: " + ", ".join(changes),
+                applies_to="USERS",
+            )
+            told.append(str(tos.auction))
+
+    for club_member in ClubMember.objects.filter(user=user, is_deleted=False).select_related("club"):
+        changes = []
+        if club_member.name != new_name:
+            changes.append(f"name to '{new_name}'")
+            club_member.name = new_name
+        if club_member.phone_number != new_phone:
+            changes.append(f"phone to '{new_phone}'")
+            club_member.phone_number = new_phone
+        if club_member.address != new_address:
+            changes.append(f"address to '{new_address}'")
+            club_member.address = new_address
+        if changes:
+            club_member.save()
+            ClubHistory.objects.create(
+                club=club_member.club,
+                user=acting_user,
+                action=f"Contact info updated for {user.get_full_name()}: " + ", ".join(changes),
+                applies_to="MEMBERS",
+            )
+            told.append(club_member.club.name)
+
+    return told

@@ -183,14 +183,14 @@ class ResourceEndpointTests(StandardTestCase):
     def test_listing_the_widgets(self):
         """Every widget is listed, and the data resources share the list without displacing them.
 
-        ``resources/list`` carries the ui:// documents *and* the two fixed me:// reads from
-        ``auctions.mcp.resources``; ``test_mcp_resources`` owns the rule about what may be in
-        there at all, which is that nothing concrete with a slug in it ever is.
+        ``resources/list`` carries the ui:// documents *and* the fixed me:// reads and the public
+        help:// one from ``auctions.mcp.resources``; ``test_mcp_resources`` owns the rule about
+        what may be in there at all, which is that nothing carrying a slug ever is.
         """
         payload = json.loads(self.rpc("resources/list").content)
         listed = {resource["uri"] for resource in payload["result"]["resources"]}
         self.assertTrue(set(widgets.WIDGETS) <= listed, set(widgets.WIDGETS) - listed)
-        self.assertTrue(all(uri.startswith(("ui://", "me://")) for uri in listed), listed)
+        self.assertTrue(all(uri.startswith(("ui://", "me://", "help://")) for uri in listed), listed)
 
     def test_reading_one(self):
         payload = json.loads(self.rpc("resources/read", {"uri": "ui://auction.fish/lot"}).content)

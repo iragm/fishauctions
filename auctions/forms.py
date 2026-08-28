@@ -5358,11 +5358,13 @@ class ClubEmailSettingsForm(forms.ModelForm):
             )
             donation_enabled = bool(club and club.pk and club.enable_donation_tracking)
             if donation_enabled:
+                # Short on purpose: the page carries the whole explanation in a note above this
+                # field (see club_email_settings.html), shown under exactly the same condition.
+                # Saying it twice on one screen made the recommendation easier to skim past, not
+                # harder.
                 donation_help = (
-                    "Vendor replies are always recorded against the vendor. Leave this blank "
-                    "(recommended) so they are recorded and nothing else — forwarding them to a "
-                    "person invites a reply from that person's own inbox, which this site never "
-                    "sees and can't track. Set it only if someone needs a copy in their inbox."
+                    "Leave blank (recommended) — see the note above. Set it only if someone needs "
+                    "a copy of vendor replies in their own inbox."
                 )
             else:
                 donation_help = "Turn on donation tracking in Setup to route donation replies."

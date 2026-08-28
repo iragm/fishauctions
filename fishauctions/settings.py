@@ -818,6 +818,17 @@ LLM_BASE_URL = os.environ.get("LLM_BASE_URL", "")
 # leave the parameter off. Defaults to minimal -- see llm.DEFAULT_REASONING_EFFORT for why.
 LLM_REASONING_EFFORT = os.environ.get("LLM_REASONING_EFFORT", "minimal")
 
+# Where this site's own source code lives, for the ``read_source`` tool on /mcp/ (see
+# auctions/source_code.py).  An agent that has been asked how a feature works reads the repository
+# through it rather than guessing from the behaviour it can see.
+#
+# It only ever serves what is already public at this address: a path is resolved against the
+# repository's own file list before anything is fetched, so nothing on this server's disk -- .env,
+# a keyfile, a log -- is reachable through it even though all three sit next to the source.  Blank
+# turns the tool off entirely, which is what a fork with a private repository wants.
+SOURCE_CODE_URL = os.environ.get("SOURCE_CODE_URL", "https://github.com/iragm/fishauctions")
+SOURCE_CODE_BRANCH = os.environ.get("SOURCE_CODE_BRANCH", "master")
+
 # the following words are very common and should not be used when generating recommended lots or assigning categories
 IGNORE_WORDS = [
     "albino",

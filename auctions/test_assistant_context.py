@@ -185,6 +185,106 @@ class WhichClubTests(NoPageTestCase):
         self.assertEqual(result["club"], "Alpha Aquarists")
 
 
+class SayingWhichOneTests(NoPageTestCase):
+    """The other half of the no-page problem: being *told* which auction and club, up front.
+
+    ``remember_auction`` writes the pointer whenever an action resolved an auction, which covers
+    everything after the first call. These two cover the first one -- somebody sitting down and
+    saying what they are working on before doing anything with it.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.club_a = Club.objects.create(name="Alpha Aquarists", abbreviation="AA")
+        self.club_b = Club.objects.create(name="Beta Bettas", abbreviation="BB")
+        for club in (self.club_a, self.club_b):
+            ClubMember.objects.create(club=club, user=self.user, name="Member", permission_admin=True)
+        self.user.userdata.last_club_used = None
+        self.user.userdata.club = None
+        self.user.userdata.save()
+
+    def test_naming_an_auction_makes_it_the_default(self):
+        other = self._make_auction("Named Auction")
+        self._join(other)
+        result = self._run("set_my_auction", {"auction": other.slug})
+        self.assertTrue(result["ok"])
+        self.user.userdata.refresh_from_db()
+        self.assertEqual(self.user.userdata.last_auction_used_id, other.pk)
+
+    def test_the_next_command_means_that_auction(self):
+        """The point of the tool: one sentence instead of the auction's name on every call.
+
+        The pointer is ``resolve_auction``'s tie-break *between live auctions*, so this is the
+        shape that shows it doing anything: two of them running, which with nothing set is a
+        question, and saying which one is what turns it into an answer.
+        """
+        second = self._make_auction("Second Live One", days_ahead=-1)
+        self._join(second)
+        self.user.userdata.last_auction_used = None
+        self.user.userdata.save()
+        self.assertIsNotNone(palette_actions.resolve_auction(self.user, "", {})[1])
+        self._run("set_my_auction", {"auction": second.slug})
+        auction, problem = palette_actions.resolve_auction(self.user, "", {})
+        self.assertIsNone(problem)
+        self.assertEqual(auction.pk, second.pk)
+
+    def test_an_auction_they_are_nothing_to_do_with_is_refused(self):
+        theirs = self._make_auction("Someone Elses", creator=self.user_who_does_not_join)
+        result = self._run("set_my_auction", {"auction": theirs.slug})
+        self.assertIn("error", result)
+        self.user.userdata.refresh_from_db()
+        self.assertNotEqual(self.user.userdata.last_auction_used_id, theirs.pk)
+
+    def test_setting_it_twice_says_so_rather_than_pretending_to_change(self):
+        other = self._make_auction("Named Auction")
+        self._join(other)
+        self._run("set_my_auction", {"auction": other.slug})
+        again = self._run("set_my_auction", {"auction": other.slug})
+        self.assertIn("already", again["summary"])
+
+    def test_it_offers_the_way_back(self):
+        first = self._make_auction("First One")
+        second = self._make_auction("Second One")
+        self._join(first)
+        self._join(second)
+        self._run("set_my_auction", {"auction": first.slug})
+        result = self._run("set_my_auction", {"auction": second.slug})
+        self.assertEqual(result["undo"]["params"]["auction"], first.slug)
+
+    def test_the_first_time_there_is_nothing_to_undo_to(self):
+        self.user.userdata.last_auction_used = None
+        self.user.userdata.save()
+        other = self._make_auction("Named Auction")
+        self._join(other)
+        result = self._run("set_my_auction", {"auction": other.slug})
+        self.assertIsNone(result["undo"])
+
+    def test_my_club_sets_both_columns(self):
+        """ "My club" means two things here, and somebody saying it means both."""
+        result = self._run("set_my_club", {"club": "Beta Bettas"})
+        self.assertTrue(result["ok"])
+        self.user.userdata.refresh_from_db()
+        self.assertEqual(self.user.userdata.last_club_used_id, self.club_b.pk)
+        self.assertEqual(self.user.userdata.club_id, self.club_b.pk)
+
+    def test_the_next_club_command_means_that_club(self):
+        self._run("set_my_club", {"club": "Beta Bettas"})
+        result = self._run("club_numbers", {})
+        self.assertEqual(result["club_numbers"]["club"], "Beta Bettas")
+
+    def test_a_club_they_are_not_in_is_refused(self):
+        outside = Club.objects.create(name="Gamma Guppies", abbreviation="GG")
+        result = self._run("set_my_club", {"club": "Gamma Guppies"})
+        self.assertIn("error", result)
+        self.user.userdata.refresh_from_db()
+        self.assertNotEqual(self.user.userdata.club_id, outside.pk)
+
+    def test_the_club_can_be_named_as_name(self):
+        """On this tool ``name`` is the club, the way it is on describe_club."""
+        result = self._run("set_my_club", {"name": "Alpha Aquarists"})
+        self.assertEqual(result["club"], "Alpha Aquarists")
+
+
 class PagingTests(NoPageTestCase):
     """Fifteen of forty-three, read out as the whole answer."""
 
