@@ -55,10 +55,24 @@ MAX_RESULT_CHARS = 20000
 #: How much of a too-big result's own summary line to echo back with the refusal.
 SUMMARY_CHARS = 500
 
-#: Result keys that are ours and not the caller's. ``undo`` is the instruction for reversing the
-#: action, which :func:`palette_actions.remember_undo` consumes on the way past; handing it to the
-#: caller would invite them to replay it themselves, bypassing ``undo_last``'s window and stack.
-_INTERNAL_RESULT_KEYS = ("undo", *palette_actions.INTERNAL_RESULT_KEYS)
+#: Result keys that are ours and not the caller's, stripped at **any depth**. ``undo`` is the
+#: instruction for reversing the action, which :func:`palette_actions.remember_undo` consumes on the
+#: way past; handing it to the caller would invite them to replay it themselves, bypassing
+#: ``undo_last``'s window and stack.
+#:
+#: ``lot_id`` is a database primary key, and no primary key belongs on this wire. A lot has a
+#: perfectly good public identifier -- ``lot_number_display``, the number printed on its label and
+#: in its URL -- and every result that carries a lot already carries it, through
+#: :func:`palette_actions._lot_echo`. Sending the pk alongside offered a second name for the same
+#: thing: one an agent could not have got from anywhere but us, that means nothing to the person
+#: reading the answer, that addresses a lot in *any* auction rather than a lot in this one, and that
+#: silently disagrees with the number on the label whenever an auction numbers its lots by hand.
+#: The resolvers still accept it (it is in their ``aliases``, and the palette reads it off the page
+#: context), so nothing that had one breaks -- but nothing is handed one any more.
+#:
+#: Nested, because the leak was mostly in rows: ``find_lot`` and ``points_queue`` put a ``lot_id``
+#: on every line of a list. ``test_mcp.NoPrimaryKeysTests`` is what keeps this honest.
+_INTERNAL_RESULT_KEYS = ("undo", "lot_id", *palette_actions.INTERNAL_RESULT_KEYS)
 
 #: The words the registry uses for a parameter's type, mapped onto JSON Schema's.
 _JSON_TYPES = {
@@ -321,9 +335,13 @@ def tool_descriptors(user=None, *, writes: bool = True, areas: set[str] | None =
     ]
 
 
-def _payload(result: dict[str, Any]) -> dict[str, Any]:
-    """A resolver's result with our own bookkeeping taken out of it."""
-    return {key: value for key, value in result.items() if key not in _INTERNAL_RESULT_KEYS}
+def _payload(result: Any) -> Any:
+    """A resolver's result with our own bookkeeping taken out of it, however deeply it is nested."""
+    if isinstance(result, dict):
+        return {key: _payload(value) for key, value in result.items() if key not in _INTERNAL_RESULT_KEYS}
+    if isinstance(result, list):
+        return [_payload(item) for item in result]
+    return result
 
 
 #: Which keys in a result hold a link. ``url`` is the common one; the suffix catches the rest.

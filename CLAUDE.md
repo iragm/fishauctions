@@ -37,6 +37,14 @@ Ruff config: `ruff.toml` (line-length: 120). Replicate CI locally: `./.github/sc
 background it, and never run two at once -- both runs share one `test_auctions` database and
 corrupt each other into hundreds of unrelated errors.
 
+A parallel run (`--parallel`, which is what CI uses) needs **`tblib`** installed, or the *first*
+failing test kills the whole run: Django cannot pickle a traceback back from a worker process, so
+it prints a bare `<test> ... failed:` stub with no traceback, re-raises, and destroys the test
+databases while the other workers are still running -- which buries the real failure under
+`Table 'test_auctions_N.auth_user' doesn't exist` from tests that were never broken. When reading a
+parallel log, the **first** `failed:` block is the real failure; anything after the
+`Destroying test database for alias 'default'...` lines is collateral.
+
 ## Django Commands
 
 Always run inside the container:

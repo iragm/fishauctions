@@ -82,3 +82,12 @@ numpy
 scipy
 pyarrow
 pygeomag
+# Makes tracebacks picklable, which the PARALLEL test runner needs to send a failure
+# from a worker process back to the main one (`manage.py test --parallel`, what CI runs).
+# Without it the first failing test aborts the entire run: Django prints a one-line
+# `SomeError(...)` stub with no traceback, re-raises, and tears the test databases down
+# while the other workers are still going -- so the real failure ends up buried under
+# "Table 'test_auctions_N.auth_user' doesn't exist" noise from the stragglers. Test-only,
+# but it belongs here rather than in requirements-test.in: both CI and the documented
+# `docker exec django python3 manage.py test` run the suite from this image.
+tblib

@@ -464,6 +464,8 @@ sqlparse==0.5.5
     #   django-debug-toolbar
 squareup==45.0.1.20260715
     # via -r requirements.in
+tblib==3.2.2
+    # via -r requirements.in
 tinycss2==1.5.1
     # via
     #   cssselect2

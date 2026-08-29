@@ -20924,12 +20924,20 @@ class AuctionSlugSanitizationTests(TestCase):
 class AuctionEmailSenderTests(StandardTestCase):
     @override_settings(SES_ROUTE_EMAILS_ENABLED=True, EMAIL_ROUTING_DOMAIN="auction.fish")
     def test_send_tos_notification_uses_auction_slug_sender(self):
+        from email.utils import parseaddr
+
         from auctions.management.commands.auctiontos_notifications import send_tos_notification
 
         with patch("auctions.management.commands.auctiontos_notifications.mail.send") as mock_send:
             send_tos_notification("online_auction_welcome", self.online_tos)
 
-        self.assertEqual(mock_send.call_args.kwargs["sender"], f"{self.online_auction.slug}@auction.fish")
+        # The From line carries a display name as well now -- which one is
+        # RoutedSenderDisplayNameTests' business, and it depends on whether this auction ended up
+        # with a club, which SINGLE_CLUB_MODE decides. What this test is about is the address
+        # behind the name: the auction's own routed alias.
+        name, address = parseaddr(mock_send.call_args.kwargs["sender"])
+        self.assertEqual(address, f"{self.online_auction.slug}@auction.fish")
+        self.assertTrue(name)
 
 
 class ClubEmailSettingsFormTests(TestCase):
