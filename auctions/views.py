@@ -12380,12 +12380,14 @@ class SquareCallbackView(LoginRequiredMixin, View):
 
     @staticmethod
     def _done(request, web_url, seller):
-        """End a successful connect: back to the app if that's where it started, else ``web_url``.
+        """End a successful connect: a confirmation page if the app started it, else ``web_url``.
 
         Apple's Tap to Pay review guide wants onboarding completed inside the app (requirement 2.2),
         and the app routes this OAuth through an in-app browser view. That view has no idea the
         merchant is finished, so without this page they'd sit on a web page and have to work out
-        that the Done button is what comes next. The deep link closes it for them.
+        that the Done button is what comes next. The page tells them; it cannot close the browser
+        view for them, since nothing in the app receives a ``fishauctions://`` URL from outside its
+        own WebView (see Part TTP-7).
         """
         if not session_opened_by_app(request):
             return redirect(web_url)

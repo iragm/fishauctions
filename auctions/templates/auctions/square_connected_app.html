@@ -2,10 +2,15 @@
 {% block title %}Square connected{% endblock %}
 {% comment %}
   Shown instead of the usual redirect when the Square OAuth round trip started inside the app (see
-  SquareCallbackView._done). The app opens this flow in an in-app browser view, which has no way to
-  know the merchant is finished, so we close it for them with a deep link the app already handles.
-  The web link below is the page the browser would otherwise have been redirected to -- it keeps
-  this page from being a dead end if the deep link doesn't fire.
+  SquareCallbackView._done). The app opens this flow in an in-app browser view -- Safari's
+  SFSafariViewController or a Chrome Custom Tab, a different process the shell's WebView never sees
+  the navigations of -- so there is no deep link that can end it: nothing in the app receives a
+  fishauctions:// URL from outside its own WebView, and the scheme is deliberately not registered
+  with the OS (see Part TTP-7). The only way back is the browser view's own close control, so we
+  say so. Copy has to be platform-neutral: request.is_ios_app / is_android_app are both false here,
+  since that browser sends Safari's (or Chrome's) User-Agent -- which is why _done keys off
+  session_opened_by_app instead. The web link below keeps the page from being a dead end for
+  anyone who carries on in a browser instead.
 {% endcomment %}
 {% block content %}
 <div class="container py-4">
@@ -14,7 +19,9 @@
     {% if seller.payer_email %}<strong>{{ seller.payer_email }}</strong> is{% else %}Your Square account is{% endif %}
     now linked. You can take payments on this device.
   </p>
-  <a href="fishauctions://square-connected" class="btn btn-primary btn-lg w-100 my-2">Return to the app</a>
+  <p class="mt-3">
+    Close this window to go back to the app &mdash; the button at the top of the screen.
+  </p>
   <p class="mt-3 mb-0"><a href="{{ web_url }}">Or keep going here on the website</a></p>
 </div>
 {% endblock %}

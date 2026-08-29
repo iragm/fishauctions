@@ -204,7 +204,7 @@ class SquareOnboardingInAppTests(StandardTestCase):
 
 
 class SquareCallbackReturnToAppTests(StandardTestCase):
-    """TTP-1 nice-to-have — end the OAuth round trip with a way back into the app."""
+    """TTP-1/TTP-7 — end the OAuth round trip with a confirmation page, not a dead deep link."""
 
     def setUp(self):
         super().setUp()
@@ -233,11 +233,11 @@ class SquareCallbackReturnToAppTests(StandardTestCase):
         response = self._callback_ok()
         self.assertEqual(response.status_code, 302)
 
-    def test_app_flow_offers_a_deep_link_back(self):
+    def test_app_flow_gets_the_confirmation_page(self):
         self._connect(return_to_app="1")
         response = self._callback_ok()
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "fishauctions://square-connected")
+        self.assertTemplateUsed(response, "auctions/square_connected_app.html")
 
     def test_a_session_the_app_opened_is_enough(self):
         """The in-app browser view sends Safari's User-Agent, so the session is the only signal."""
@@ -247,7 +247,15 @@ class SquareCallbackReturnToAppTests(StandardTestCase):
         mark_session_opened_by_app(session)
         session.save()
         self._connect()
-        self.assertContains(self._callback_ok(), "fishauctions://square-connected")
+        response = self._callback_ok()
+        self.assertEqual(response.status_code, 200)
+        self.assertTemplateUsed(response, "auctions/square_connected_app.html")
+
+    def test_no_dead_deep_link_back(self):
+        """Nothing receives fishauctions:// outside the shell's WebView, and this page renders in
+        an in-app browser view -- a different process the shell never sees.  See Part TTP-7."""
+        self._connect(return_to_app="1")
+        self.assertNotContains(self._callback_ok(), "fishauctions://")
 
 
 class PaymentAuthorizationEndpointTests(StandardTestCase):
