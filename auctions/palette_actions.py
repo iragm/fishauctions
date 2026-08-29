@@ -11094,18 +11094,21 @@ def set_invoice_renewal(request, params: dict[str, Any]) -> dict[str, Any]:
     auction, problem = _auction_or_problem(request, params)
     if problem:
         return problem
+    if not _is_auction_admin(user, auction):
+        return _error(f"Only admins of {auction.title} can change invoices in {auction.title}.")
     tos, problem = resolve_person(user, auction, _str(params, "person") or _str(params, "bidder"))
     if problem:
         return problem
-    invoice = _invoice_for(tos, auction, create=True)
-    if invoice.auction_id:
-        allowed = bool(invoice.auction.permission_check(user))
-    elif invoice.club_id:
-        allowed = bool(check_club_permission(user, invoice.club, "permission_add_edit"))
-    else:
-        allowed = False
-    if not allowed:
-        return _error(f"You don't have permission to change {untrusted_short(tos.name)}'s invoice.")
+    # Asked before anything is created. ``_invoice_for(create=True)`` writes a row, and writing one
+    # in order to find out whether the caller was allowed to touch it would leave an empty invoice
+    # behind every refusal.
+    existing = _invoice_for(tos, auction, create=False)
+    if existing is not None and not existing.auction_id and existing.club_id:
+        # A club invoice that happens to hang off this participant. The view asks the *club*, and
+        # administering one of a club's auctions is not administering the club.
+        if not check_club_permission(user, existing.club, "permission_add_edit"):
+            return _error(f"{untrusted_short(tos.name)}'s invoice belongs to {existing.club.name}, not to you.")
+    invoice = existing if existing is not None else _invoice_for(tos, auction, create=True)
     if invoice.renewal_processed:
         return _error(
             f"{untrusted_short(tos.name)}'s renewal has already been processed on this invoice, so it "

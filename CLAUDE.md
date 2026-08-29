@@ -368,10 +368,18 @@ guards the form). `docs/club_event_details.md` has the whole design.
 The site is a Model Context Protocol server at **`/mcp/`**. There is **one** catalogue behind it and
 the command palette: every capability is an `Action` in `auctions/palette_actions.py`,
 `auctions/mcp/tools.py` turns the registry into MCP tool descriptors, and
-`palette_actions.run_action` is the single dispatcher. A skill cannot exist for one surface and not
-the other (one exception: `read_source`, which is `mcp_only`), and a permission cannot be checked
-differently depending on who asked — resolvers call the same form, view or service the web page
-calls.
+`palette_actions.run_action` is the single dispatcher. A permission cannot be checked differently
+depending on who asked — resolvers call the same form, view or service the web page calls.
+
+A skill cannot exist for one surface and not the other, with one **named** subtraction:
+`Action.mcp_only` keeps a skill off the *palette's tool list* while `palette_routes` still guarantees
+`go_to_page` reaches its page. Two things qualify, both about the client and neither about the
+capability. **Who reads the answer** — `read_source` returns a page of Python, right for an agent and
+wrong for a one-line box paid for out of this site's model budget. **Who does the acting** — a class
+of writes excused in `NOT_A_SKILL` by arguments about *speech* ("identifying it out loud is harder
+than clicking it"), which is true of somebody dictating and empty against a caller sending a lot
+number it read out of `list_lots`. Sixteen actions in all; `test_palette_assist.DriftTests.MCP_ONLY`
+is the written-out list, and every one of them still covers a view in `SKILLS`.
 
 ```
 auctions/mcp/tools.py      tool_descriptors(user, writes=) / call_tool(request, name, args)
@@ -535,6 +543,11 @@ nothing *crashes* instead of refusing.
 - `_lot_echo(lot)` is the shared echo on every write that names a lot (`lot_number`, `lot_name`,
   `auction` slug, `auction_title`, `url`). The number a person reads is `lot_number_display` and the
   address is `lot_link` (`/auctions/<auction>/lots/<number>/`), not the primary key.
+- **No lot travels as a primary key.** `mcp.tools._INTERNAL_RESULT_KEYS` strips `lot_id` at **any**
+  depth (the leak was mostly in rows — `find_lot` and `points_queue` put one on every line), and no
+  tool advertises one; it stays in the resolvers' `aliases` so the palette's page context still
+  works. `image_id` is the deliberate exception — a photo has no number on a label — and is why the
+  tests name `lot_id` rather than every key ending in `_id`.
 - `mcp.tools._absolute` makes any key ending in `_url` absolute — a relative href handed to
   `app.openLink` inside a sandboxed iframe resolves against nothing.
 - **Every write says how it arrived**: `palette_actions.via(request)`; MCP sets
@@ -582,8 +595,8 @@ nothing *crashes* instead of refusing.
 
 Which form, view or service each tool goes through — the auction-side skills, the club-side ones
 (the breeder award program and membership cards included), the account pages, the two history logs,
-`search_help` / `read_source`, and the three species tools — is catalogued in
-`docs/mcp_skills.md`. Everything in this section binds all of them.
+`search_help` / `read_source`, the fifteen `mcp_only` page-only writes, and the three species tools
+— is catalogued in `docs/mcp_skills.md`. Everything in this section binds all of them.
 
 ### Confirmation tier
 
@@ -598,6 +611,12 @@ budget. `undo_check_in` still asks.
 - **Adding a URL costs you two entries.** A new named URL or POST view must be catalogued or the
   build fails. `/mcp/` and `oauth2_provider:*` are in `palette_routes.EXCLUDED`; `UserAPIKeyView` is
   in `palette_actions.NOT_A_SKILL`; `user_api_keys` is a real `Route`.
+- **A `NOT_A_SKILL` reason has to be about the capability, not about the palette.** The tables are a
+  partition (no view in both), no excused view may be reimplemented by a resolver whose docstring
+  says it is that view's body — which is how `GoogleCalendarSyncNowView` sat excused for months
+  while `sync_club_calendar` was registered — and an excuse whose whole argument is that something
+  is hard to say out loud is not a reason. `test_palette_skills.PageOnlyWriteRegistryTests` fails the
+  build on all three.
 - One hole in that guarantee: `palette_actions.postable_views()` requires `hasattr(view, "post")`,
   so `CreateUserIgnoreCategory` and `DeleteUserIgnoreCategory` — which write in `get()` and have no
   URL name — are in none of `postable_views()`, `NOT_A_SKILL` or `palette_routes.EXCLUDED`. They are

@@ -12,6 +12,7 @@ how to add a club member. This is the other half.
 
 import datetime
 import json
+import re
 
 from django.contrib.auth.models import User
 from django.test import SimpleTestCase, override_settings
@@ -1880,6 +1881,34 @@ class MembershipCardPrivacyTests(ClubSkillTestCase):
         self.club_member.membership_number = 4100
         self.club_member.save()
 
+    def _numbers_in(self, result):
+        """Every membership number named anywhere in one result, however deeply nested.
+
+        Structure rather than ``assertNotIn("4100", json.dumps(result))``, which is what these
+        assertions used to be and which fails at random: a result carries a member URL with a UUID
+        in it, and ``c2766dc0-be8b-4100-b497-608b6d4b6d44`` contains the digits of somebody else's
+        membership number. That is a green invariant reported as a leak, roughly once every few
+        thousand runs, and the noise is worse than the check. The real question -- "is another
+        member's number in this answer" -- is exact and cannot collide.
+        """
+        found: list[int] = []
+
+        def walk(node):
+            if isinstance(node, dict):
+                for key, value in node.items():
+                    if key == "membership_number" and value is not None:
+                        found.append(int(value))
+                    elif key == "barcode_url" and value:
+                        found.extend(int(digits) for digits in re.findall(r"/barcode/(\d+)/", str(value)))
+                    else:
+                        walk(value)
+            elif isinstance(node, list):
+                for item in node:
+                    walk(item)
+
+        walk(result)
+        return found
+
     def _cards_in(self, result):
         """Every membership card object anywhere in one result."""
         found = []
@@ -1900,7 +1929,7 @@ class MembershipCardPrivacyTests(ClubSkillTestCase):
         )
         self.assertTrue(result.get("ok"), result)
         self.assertEqual(self._cards_in(result), [], "an admin was handed another member's barcode")
-        self.assertNotIn("4100", json.dumps(result), "an admin was handed another member's number")
+        self.assertNotIn(4100, self._numbers_in(result), "an admin was handed another member's number")
 
     def test_sending_your_own_card_still_shows_it_to_you(self):
         result = self._run("send_membership_card", {"club": self.club.name}, user=self.admin_user)
@@ -1916,12 +1945,12 @@ class MembershipCardPrivacyTests(ClubSkillTestCase):
         """``_my_memberships`` matches on ``ClubMember.user``; the club filter cannot reach past it."""
         result = self._run("my_membership", {"club": self.club.name}, user=self.admin_user)
         self.assertEqual(result["membership"]["membership_number"], 4001)
-        self.assertNotIn("4100", json.dumps(result))
+        self.assertNotIn(4100, self._numbers_in(result))
 
     def test_a_non_member_of_the_club_gets_nothing_at_all(self):
         result = self._run("my_membership", {"club": self.club.name}, user=self.user_with_no_lots)
         self.assertIn("error", result)
-        self.assertNotIn("4100", json.dumps(result))
+        self.assertNotIn(4100, self._numbers_in(result))
 
     def test_no_other_read_hands_out_a_barcode(self):
         """The club-side reads an admin has: neither carries the scannable half."""

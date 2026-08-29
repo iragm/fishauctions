@@ -250,7 +250,8 @@ way.
 
 ## The page-only writes (`mcp_only`)
 
-Fifteen skills exist over `/mcp/` and not in the command palette. The palette still reaches every
+Fifteen **writes** exist over `/mcp/` and not in the command palette (`read_source` is the
+sixteenth `mcp_only` action and is a read; see the end of this file). The palette still reaches every
 one of the pages behind them — `palette_routes` guarantees `go_to_page` does — so this is a
 subtraction from one client's *tool list*, not a second catalogue. `Action.mcp_only` has the long
 version of why; the short one is that the excuses these views were sitting behind in `NOT_A_SKILL`
