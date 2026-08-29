@@ -14,6 +14,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from django import forms
+from django.contrib.auth.hashers import get_hashers
 from django.contrib.auth.models import User
 from django.core.cache import cache
 from django.core.exceptions import ImproperlyConfigured, ValidationError
@@ -109,10 +110,18 @@ class WritableMediaRoot:
 
     @classmethod
     def setUpClass(cls):
-        super().setUpClass()
+        # Enabled before super(), because super() is what runs setUpTestData -- a class fixture
+        # that saves a file has to land in the throwaway directory too. tearDownClass never runs
+        # if setUpClass raises, hence the unwinding here.
         cls._media_tmp = tempfile.TemporaryDirectory()
         cls._media_override = override_settings(MEDIA_ROOT=cls._media_tmp.name)
         cls._media_override.enable()
+        try:
+            super().setUpClass()
+        except Exception:
+            cls._media_override.disable()
+            cls._media_tmp.cleanup()
+            raise
 
     @classmethod
     def tearDownClass(cls):
@@ -166,9 +175,11 @@ class StandardTestCase(CsvImportTestMixin, TestCase):
         primary keys -- and anything cached under one of them (a per-user model budget, a
         throttle, a recommendation) would carry from one test into the next, which is how
         test_rate_limit_stops_asking came to fail on a limit two of its siblings had already
-        spent. The cache here is this class's own local-memory one (`isolated_cache` above), so
-        clearing it is a scoped delete and not the FLUSHDB every other --parallel worker would
-        feel; see auctions/test_support.py.
+        spent. `isolated_cache` above makes that a local-memory cache belonging to this process
+        rather than the Redis every --parallel worker shares, so clearing it is a scoped delete
+        and not a FLUSHDB other workers feel; see auctions/test_support.py. One LOCATION covers
+        every subclass that does not name its own, which is why this clears in setUpTestData as
+        well -- otherwise the last test of one class would be seeding the next class's fixture.
         """
         super().setUp()
         cache.clear()
@@ -186,6 +197,7 @@ class StandardTestCase(CsvImportTestMixin, TestCase):
         TestCase's no-op, which is what they want.
         """
         super().setUpTestData()
+        cache.clear()
         time = timezone.now() - datetime.timedelta(days=2)
         timeStart = timezone.now() - datetime.timedelta(days=3)
         the_future = timezone.now() + datetime.timedelta(days=3)
@@ -352,6 +364,35 @@ class StandardTestCase(CsvImportTestMixin, TestCase):
         # an in-person auction that hasn't started yet
         # an online auction that's ended
         # an online auction with multiple pickup locations
+
+
+class SuiteStaysFastTests(StandardTestCase):
+    """The two things that hold the suite at ~5 minutes instead of ~55.
+
+    Both fail silently: undo either and every test still passes, ten times slower, which nobody
+    notices until CI is slow again and somebody has to find out why.
+    """
+
+    def test_passwords_are_hashed_with_the_cheap_hasher(self):
+        """fishauctions.test_runner. PBKDF2 here costs ~200ms a call, ~17,000 times a run."""
+        self.assertEqual(get_hashers()[0].algorithm, "md5")
+
+    def test_the_shared_fixture_is_built_once_per_class(self):
+        """setUpTestData, not setUp: ~2,700 tests inherit these rows."""
+        self.assertIn("setUpTestData", StandardTestCase.__dict__)
+        # An attribute assigned in setUp would exist on the instance only; reading it off the
+        # class is what proves it was built once, for the class.
+        self.assertEqual(type(self).online_auction.pk, self.online_auction.pk)
+
+    def test_the_cache_this_clears_every_test_is_not_the_shared_one(self):
+        """The clear in setUp and the isolated_cache decorator are one thing, not two.
+
+        Without the decorator that clear is a Redis FLUSHDB, run ~2,700 times, emptying the
+        cache out from under every other --parallel worker mid-assertion.
+        """
+        from django.conf import settings
+
+        self.assertIn("LocMemCache", settings.CACHES["default"]["BACKEND"])
 
 
 class ViewLotTest(TestCase):
@@ -27629,6 +27670,10 @@ class ManageUsersThroughClubTests(TestCase):
             user=self.joiner,
             name="Joiner",
             bidder_number="",
+            # A phone number, so check-in seeds the bidder number it does assign from its last
+            # three digits instead of randint(1, 999) -- which lands on the 456 this test says
+            # must not be used about one run in a thousand.
+            phone_number="555-555-0123",
         )
         self.client.force_login(self.creator)
         response = self.client.post(

@@ -45,10 +45,15 @@ Two things keep it there, and both are easy to undo by accident:
   `TEST_RUNNER` rather than a settings module so there is no flag to forget and no path by which
   production can load it.
 * `StandardTestCase` builds its 26-row fixture in **`setUpTestData`**, once per class rather than
-  once per test (79ms -> 2.8ms per test). Its `setUp` stays for one job: emptying the class's own
-  local-memory cache, since class-level fixtures mean every test in a class shares primary keys and
-  anything cached under one would otherwise carry into the next test. A subclass adding per-test
-  setup keeps calling `super().setUp()`; one adding *fixture rows* should extend `setUpTestData`.
+  once per test (79ms -> 2.8ms per test). Its `setUp` stays for one job: emptying the cache, since
+  class-level fixtures mean every test in a class shares primary keys and anything cached under one
+  would otherwise carry into the next test. `isolated_cache` makes that a local-memory cache this
+  process owns -- one LOCATION shared by every subclass that doesn't name its own -- so clearing it
+  is not the Redis FLUSHDB the other `--parallel` workers would feel. A subclass adding per-test
+  setup keeps calling `super().setUp()`; one adding *fixture rows* should extend `setUpTestData`,
+  and if those rows save a **file** it needs `WritableMediaRoot` too -- shared primary keys mean
+  two tests saving an image for the same lot now collide on a filename where each used to get a
+  fresh one.
 
 A parallel run (`--parallel`, which is what CI uses) needs **`tblib`** installed, or the *first*
 failing test kills the whole run: Django cannot pickle a traceback back from a worker process, so
@@ -80,7 +85,7 @@ Never edit `requirements.txt` directly. Edit `requirements.in` or `requirements-
 ## Architecture
 
 ```
-auctions/            # Main app: models, views, forms, templates, static, migrations (180+)
+auctions/            # Main app: models, views, forms, templates, static, migrations (290)
   management/commands/  # Cron jobs: endauctions, sendnotifications, email_invoice, etc.
   tests.py             # Extend StandardTestCase for test setup (users, auctions, lots)
 fishauctions/        # Project settings (reads .env), ASGI, URLs, Celery config
