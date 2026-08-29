@@ -44,6 +44,9 @@
     <tr><th>Update club members</th><td>{% if api_key.can_update_club_members %}<span class="badge bg-success">Enabled</span>{% else %}<span class="badge bg-secondary">Disabled</span>{% endif %}</td></tr>
     <tr><th>BAP points and lots<div class="fw-normal small text-muted">Add points to members, and read the lots from this club's auctions</div></th><td>{% if api_key.can_add_bap_points %}<span class="badge bg-success">Enabled</span>{% else %}<span class="badge bg-secondary">Disabled</span>{% endif %}</td></tr>
     <tr><th>Renew memberships</th><td>{% if api_key.can_renew_memberships %}<span class="badge bg-success">Enabled</span>{% else %}<span class="badge bg-secondary">Disabled</span>{% endif %}</td></tr>
+    <tr><th>Read auction info<div class="fw-normal small text-muted">Dates, rules, fees, pickup locations and lot field settings</div></th><td>{% if api_key.can_read_auction_info %}<span class="badge bg-success">Enabled</span>{% else %}<span class="badge bg-secondary">Disabled</span>{% endif %}</td></tr>
+    <tr><th>Read public lot info<div class="fw-normal small text-muted">Every lot in an auction, with nothing that names a person</div></th><td>{% if api_key.can_read_public_lots %}<span class="badge bg-success">Enabled</span>{% else %}<span class="badge bg-secondary">Disabled</span>{% endif %}</td></tr>
+    <tr><th>Read private lot info<div class="fw-normal small text-muted">Adds the <code>private</code> object: buyer and seller names and emails. Don't use this key on a public page.</div></th><td>{% if api_key.can_read_private_lots %}<span class="badge bg-success">Enabled</span>{% else %}<span class="badge bg-secondary">Disabled</span>{% endif %}</td></tr>
     <tr><th>Species<div class="fw-normal small text-muted">Match a typed name to a species, add new species, and name existing ones</div></th><td>{% if api_key.can_look_up_species %}<span class="badge bg-success">Enabled</span>{% else %}<span class="badge bg-secondary">Disabled</span>{% endif %}</td></tr>
   </tbody>
 </table>
@@ -257,6 +260,88 @@
   -H "Content-Type: application/json" \
   -d '{"name":"yellow lab"}'</code></pre>
 <pre class="bg-light border rounded p-2 text-dark" style="overflow-x:auto"><code>{"created": true, "id": 91413, "name": "yellow lab", "approved": false, "species": {"id": 4821, ...}}</code></pre>
+    </div>
+  </div>
+  {% endif %}
+  {% if api_key.can_read_auction_info or api_key.can_read_public_lots %}
+  <div class="mb-3">
+    <div><strong>Read auctions and lots</strong></div>
+    <div class="ms-3">
+      <ul class="text-muted mb-2">
+        {% if api_key.can_read_auction_info %}
+        <li><code>GET /api/v1/clubs/{{ club.slug }}/auctions/</code> &mdash; this club's auctions, newest first. The response names the <code>current</code> and <code>latest</code> slugs.</li>
+        <li><code>GET /api/v1/clubs/{{ club.slug }}/auctions/&lt;auction&gt;/</code> &mdash; dates, rules, fees, pickup locations and which lot fields the auction uses.</li>
+        {% endif %}
+        {% if api_key.can_read_public_lots %}
+        <li><code>GET /api/v1/clubs/{{ club.slug }}/auctions/&lt;auction&gt;/lots/</code> &mdash; <code>?limit=</code> (default {{ lot_page_size }}, max {{ max_lot_page_size }}) and <code>?offset=</code>.</li>
+        <li><code>GET /api/v1/clubs/{{ club.slug }}/auctions/&lt;auction&gt;/lots/&lt;lot number&gt;/</code></li>
+        <li><code>?filter=</code> is one search box: lot name, description, custom text field, custom dropdown, scientific name, common name, category. A number on its own is a lot number. It never looks at a buyer or seller.</li>
+        <li>Or filter one column at a time: <code>?lot_name=</code>, <code>?description=</code>, <code>?custom_field_1=</code>, <code>?custom_dropdown=</code> (the whole value), <code>?lot_number=</code>, <code>?category=</code> or <code>?category_id=</code>, <code>?species_id=</code>, <code>?sold=</code>, <code>?donation=</code>, <code>?i_bred_this_fish=</code>, <code>?custom_checkbox=</code>. <code>count</code> is the filtered total.</li>
+        <li><code>?seller=</code> and <code>?winner=</code> take a name, bidder number or email{% if api_key.can_read_private_lots %}.{% else %} &mdash; they need <em>Read private lot info</em>, and say so rather than matching nothing.{% endif %}</li>
+        <li><code>?ordering=</code> {% for name in lot_ordering %}<code>{{ name }}</code>{% if not forloop.last %}, {% endif %}{% endfor %} &mdash; prefix with <code>-</code> to reverse.</li>
+        <li><code>?fields=lot_number,lot_name,url,thumbnail</code> returns only those keys, on the list and on one lot.</li>
+        {% endif %}
+        <li>&lt;auction&gt; is an auction slug, or the word <code>current</code> or <code>latest</code>{% if example_auction %} &mdash; e.g. <code>{{ example_auction.slug }}</code>{% endif %}. <code>current</code> is the pinned current auction, otherwise the soonest one that hasn't finished; <code>latest</code> is the last one created, promoted or not.</li>
+        <li>Every reference carries both halves: <code>{"id": 7, "name": "Cichlids"}</code>.</li>
+        {% if api_key.can_read_public_lots %}
+        <li>Each lot's <code>url</code> ends in <code>?src={{ api_key.name|urlencode }}</code>, so traffic your page sends shows up in the auction's stats.</li>
+        <li><code>thumbnail</code> is one link for a lot tile; <code>images</code> is every picture, full size and thumbnail.</li>
+        {% endif %}
+        <li>{% if api_key.can_read_private_lots %}This key reads private info: every lot carries a <code>private</code> object with the buyer and seller. Don't put it on a public page.{% else %}Nothing here names a person. Tick <em>Read private lot info</em> to add a <code>private</code> object with the buyer and seller.{% endif %}</li>
+      </ul>
+{% if api_key.can_read_public_lots %}
+<pre class="bg-light border rounded p-2 text-dark" style="overflow-x:auto"><code>curl "https://{{ site_domain }}/api/v1/clubs/{{ club.slug }}/auctions/current/lots/" \
+  -H "X-API-Key: {{ api_key.prefix }}.YOUR_SECRET"</code></pre>
+<pre class="bg-light border rounded p-2 text-dark" style="overflow-x:auto"><code>{
+  "auction": "{% if example_auction %}{{ example_auction.slug }}{% else %}spring-auction{% endif %}",
+  "count": 214,
+  "results": [
+    {
+      "lot_id": 84213,
+      "lot_number": "12",
+      "lot_name": "6 Corydoras panda fry",
+      "url": "https://{{ site_domain }}/auctions/{% if example_auction %}{{ example_auction.slug }}{% else %}spring-auction{% endif %}/lots/12/?src={{ api_key.name|urlencode }}",
+      "quantity": 6,
+      "description": "&lt;p&gt;Home bred, about 1 inch&lt;/p&gt;",
+      "category": {"id": 7, "name": "Catfish"},
+      "species": {"id": 4821, "scientific_name": "Corydoras panda", "common_name": "Panda cory"},
+      "common_name": "Panda cory",
+      "custom_checkbox": false,
+      "custom_field_1": "",
+      "custom_dropdown": "",
+      "i_bred_this_fish": true,
+      "donation": false,
+      "reference_link": null,
+      "min_bid": "5.00",
+      "buy_now_price": null,
+      "active": false,
+      "sold": true,
+      "winning_price": "22.00",
+      "date_posted": "{{ example_bap_lot_timestamp }}",
+      "date_end": "{{ example_bap_range_end }}",
+      "thumbnail": "https://{{ site_domain }}/media/images/cory.jpg",
+      "images": [
+        {"id": 5512, "url": "https://{{ site_domain }}/media/images/cory.jpg", "thumbnail": "https://{{ site_domain }}/media/images/cory.jpg", "caption": "", "is_primary": true, "image_source": "ACTUAL", "image_source_display": "This picture is of the exact item"}
+      ]{% if api_key.can_read_private_lots %},
+      "private": {
+        "seller_name": "Mike Smith",
+        "seller_email": "mike@example.com",
+        "seller_number": "601",
+        "winner_name": "Dana Lee",
+        "winner_email": "dana@example.com",
+        "winner_number": "602",
+        "removed": false,
+        "ban_reason": "",
+        "refunded": false,
+        "partial_refund_percent": 0,
+        "label_printed": true,
+        "seller_feedback": "",
+        "winner_feedback": ""
+      }{% endif %}
+    }
+  ]
+}</code></pre>
+{% endif %}
     </div>
   </div>
   {% endif %}

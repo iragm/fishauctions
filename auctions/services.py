@@ -582,7 +582,6 @@ AUCTION_FIELDS_TO_CLONE = [
     "bump_cost",
     "is_chat_allowed",
     "lot_promotion_cost",
-    "code_to_add_lots",
     "online_bidding",
     "pre_register_lot_discount_percent",
     "only_approved_sellers",

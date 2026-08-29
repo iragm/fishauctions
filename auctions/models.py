@@ -3352,6 +3352,21 @@ class ClubAPIKey(HashedAPIKey):
             "visible to your club."
         ),
     )
+    can_read_auction_info = models.BooleanField(
+        default=False,
+        help_text="Read this club's auctions: dates, rules, fees, pickup locations and settings.",
+    )
+    can_read_public_lots = models.BooleanField(
+        default=False,
+        help_text="Read the lots in this club's auctions, without anything that names a person.",
+    )
+    #: The one privacy flag.  Everything that names somebody travels in a ``private`` object that
+    #: is simply absent without this, so a key handed to a public web page cannot leak a name by
+    #: being asked the wrong question.
+    can_read_private_lots = models.BooleanField(
+        default=False,
+        help_text="Include the buyer and seller of each lot.  Don't use a key with this on a public page.",
+    )
     created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     last_used_at = models.DateTimeField(null=True, blank=True)
@@ -4246,10 +4261,6 @@ class Auction(models.Model):
     # )
     # notes.help_text = "To add a link: [Link text](https://www.google.com)"
     # notes_rendered = RenderedMarkdownField(blank=True, null=True)
-    code_to_add_lots = models.CharField(max_length=255, blank=True, null=True)
-    code_to_add_lots.help_text = (
-        "This is like a password: People in your club will enter this code to put their lots in this auction"
-    )
     lot_promotion_cost = models.PositiveIntegerField(default=1, validators=[MinValueValidator(1)])
     first_bid_payout = models.PositiveIntegerField(default=0, validators=[MinValueValidator(0)])
     first_bid_payout.help_text = "This is a feature to encourage bidding.  Give each bidder this amount, for free.  <a href='/blog/encouraging-participation/' target='_blank'>More information</a>"

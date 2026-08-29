@@ -49,6 +49,23 @@
       <div class="form-text">Renews a membership from an external system, adding the member if they're new.</div>
     </div>
     <div class="form-check">
+      <input type="hidden" name="can_read_auction_info_present" value="1">
+      <input class="form-check-input" type="checkbox" id="id_can_read_auction_info" name="can_read_auction_info" {% if form_values.can_read_auction_info %}checked{% endif %}>
+      <label class="form-check-label" for="id_can_read_auction_info">Read auction info</label>
+    </div>
+    <div class="form-check">
+      <input type="hidden" name="can_read_public_lots_present" value="1">
+      <input class="form-check-input" type="checkbox" id="id_can_read_public_lots" name="can_read_public_lots" {% if form_values.can_read_public_lots %}checked{% endif %}>
+      <label class="form-check-label" for="id_can_read_public_lots">Read public lot info</label>
+      <div class="form-text">Use this to create a public page showing lots in your auction.</div>
+    </div>
+    <div class="form-check">
+      <input type="hidden" name="can_read_private_lots_present" value="1">
+      <input class="form-check-input" type="checkbox" id="id_can_read_private_lots" name="can_read_private_lots" {% if form_values.can_read_private_lots %}checked{% endif %}>
+      <label class="form-check-label" for="id_can_read_private_lots">Read private lot info</label>
+      <div class="form-text">Check to include buyer and seller's real names, don't use this key on a public page.</div>
+    </div>
+    <div class="form-check">
       <input type="hidden" name="can_look_up_species_present" value="1">
       <input class="form-check-input" type="checkbox" id="id_can_look_up_species" name="can_look_up_species" {% if form_values.can_look_up_species %}checked{% endif %}>
       <label class="form-check-label" for="id_can_look_up_species">Can use species</label>
