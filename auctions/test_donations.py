@@ -417,6 +417,58 @@ class DraftingTests(DonationTestMixin, TestCase):
         prompt = self.provider.calls[0]["messages"][0]["content"]
         self.assertIn("Their last message to the club", prompt)
 
+    def test_the_three_kinds_of_email_are_told_apart(self):
+        self.assertEqual(donations.draft_mode(), donations.DRAFT_MODE_FIRST)
+        self.assertEqual(donations.draft_mode("   "), donations.DRAFT_MODE_FIRST)
+        self.assertEqual(donations.draft_mode("ours", last_email_is_outgoing=True), donations.DRAFT_MODE_FOLLOWUP)
+        self.assertEqual(donations.draft_mode("theirs"), donations.DRAFT_MODE_REPLY)
+
+    def test_a_reply_is_not_briefed_as_a_donation_request(self):
+        """The bug this guards: one first-approach system prompt for all three emails.
+
+        A heading in the user turn asking for a reply loses to a system prompt that says "you write
+        donation request emails, say who the club is, make the ask, say what the business gets" --
+        so the answer to "sure, what's the next step?" came back reading like a fresh solicitation.
+        """
+        donations.draft_request(self.vendor, last_email="Sure, what's the next step?")
+        system = self.provider.calls[0]["system"]
+        self.assertIn("NOT a donation request", system)
+        self.assertIn("Answer what they actually asked", system)
+        self.assertNotIn("Make one clear, modest ask", system)
+        self.assertNotIn("what the business gets: their name in front of", system)
+
+    def test_a_first_approach_still_gets_the_pitch(self):
+        donations.draft_request(self.vendor)
+        system = self.provider.calls[0]["system"]
+        self.assertIn("Make one clear, modest ask", system)
+        self.assertIn("first approach", system)
+
+    def test_a_nudge_is_briefed_as_a_nudge(self):
+        donations.draft_request(self.vendor, last_email="Our first request", last_email_is_outgoing=True)
+        system = self.provider.calls[0]["system"]
+        self.assertIn("nudge, not a second pitch", system)
+        self.assertNotIn("Make one clear, modest ask", system)
+
+    def test_every_kind_keeps_the_contract_and_the_footer_rule(self):
+        """The shared base, checked per mode: the tax rule has a test of its own in SendingTests."""
+        for mode in (donations.DRAFT_MODE_FIRST, donations.DRAFT_MODE_FOLLOWUP, donations.DRAFT_MODE_REPLY):
+            system = donations.draft_system_prompt(mode)
+            with self.subTest(mode=mode):
+                self.assertIn('"subject"', system)
+                self.assertIn('"body"', system)
+                self.assertIn("unsubscribe line in the body", system)
+
+    def test_a_reply_may_put_the_address_in_the_body_and_a_first_approach_may_not(self):
+        """A vendor asking what happens next is answered in the body, not in the fine print."""
+        donations.draft_request(self.vendor, last_email="Sure, what's the next step?")
+        reply_prompt = self.provider.calls[0]["messages"][0]["content"]
+        self.assertIn("Put it in the body", reply_prompt)
+        self.assertIn("1 Main St", reply_prompt)
+
+        donations.draft_request(self.vendor)
+        first_prompt = self.provider.calls[1]["messages"][0]["content"]
+        self.assertIn("Do not repeat it in the body", first_prompt)
+
 
 @isolated_cache("donations")
 @override_settings(**ROUTING_SETTINGS)
@@ -533,10 +585,16 @@ class SendingTests(DonationTestMixin, TestCase):
         self.assertIn("Test Aquarium Society\n1 Main St", footer)
 
     def test_the_draft_prompt_keeps_the_address_out_of_the_body(self):
-        """It is in the footer of every email already; repeating it is what made them long."""
-        self.assertIn("Never put the club's mailing address in the body", donations._DRAFT_SYSTEM_PROMPT)
+        """It is in the footer of every email already; repeating it is what made them long.
+
+        Only while nobody has asked. A vendor who writes back wanting to know what happens next is
+        answered in the body -- see ``DraftingTests`` for that half.
+        """
+        for mode in (donations.DRAFT_MODE_FIRST, donations.DRAFT_MODE_FOLLOWUP):
+            with self.subTest(mode=mode):
+                self.assertIn("Do not put the club's mailing address in the body", donations.draft_system_prompt(mode))
         prompt = donations.build_draft_prompt(self.vendor)
-        self.assertIn("only to be used if they have asked where to send a donation", prompt)
+        self.assertIn("Do not repeat it in the body", prompt)
 
     def test_a_copied_request_still_carries_the_address_and_opt_out(self):
         """Copy/paste mode has no postal-address gate, but the text it hands over still has both."""
@@ -546,7 +604,10 @@ class SendingTests(DonationTestMixin, TestCase):
         self.assertIn(self.vendor.unsubscribe_url, email.body)
 
     def test_the_draft_prompt_forbids_claiming_tax_deductibility(self):
-        self.assertIn("tax deductible", donations._DRAFT_SYSTEM_PROMPT)
+        """In all three briefs: a rule that only covers the first email is not a rule."""
+        for mode in (donations.DRAFT_MODE_FIRST, donations.DRAFT_MODE_FOLLOWUP, donations.DRAFT_MODE_REPLY):
+            with self.subTest(mode=mode):
+                self.assertIn("tax deductible", donations.draft_system_prompt(mode))
 
     def test_sending_is_written_to_club_history(self):
         donations.send_request(self.vendor, subject="Hi", body="Please donate", user=self.admin)

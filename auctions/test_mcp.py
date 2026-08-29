@@ -173,6 +173,30 @@ class RegistryConformance(SimpleTestCase):
                     f"got {description[:60]!r}. Without it the parameter has no JSON Schema type.",
                 )
 
+    def test_no_tool_advertises_a_lots_primary_key(self):
+        """A lot is named by the number on its label, and by nothing else.
+
+        ``lot_number_display`` is the identifier a lot genuinely has: it is printed on the label, it
+        is in the URL, it is what somebody in the room says, and it is what every result carries
+        through ``_lot_echo``. The primary key is a second name for the same thing that an agent
+        could only ever have got from us, that means nothing to whoever reads the answer, that
+        addresses a lot in *any* auction rather than a lot in this one, and that disagrees with the
+        label whenever an auction numbers its lots by hand.
+
+        ``lot_id`` stays in the resolvers' ``aliases`` -- the palette reads one off the page context
+        and nothing that had one breaks -- but no tool asks for one and (see
+        ``mcp.tools._INTERNAL_RESULT_KEYS``) no result hands one out.
+
+        ``image_id`` is the deliberate exception and the reason this test names ``lot_id`` rather
+        than every key ending in ``_id``: a photo has no number on a label. It is a handle an agent
+        can only get from ``describe_lot`` in the same conversation, which is the closest thing a
+        picture has to a public name.
+        """
+        for name, action in palette_actions.ACTIONS.items():
+            self.assertNotIn("lot_id", action.params, f"{name} advertises a lot's primary key; take the lot number")
+            for param in action.params:
+                self.assertNotIn(param, {"pk", "id"}, f"{name}.{param} is a raw primary key")
+
     def test_parameter_types_are_real_json_schema_types(self):
         for descriptor in self.descriptors:
             for param, schema in descriptor["inputSchema"]["properties"].items():
@@ -288,6 +312,29 @@ class CallToolTests(StandardTestCase):
         result = tools.call_tool(self._request_for(self.user), "go_to_page", {})
         self.assertTrue(result["isError"])
         self.assertTrue(self._text(result).strip())
+
+    def test_no_result_hands_out_a_lots_primary_key(self):
+        """Stripped at any depth, because the leak was mostly in rows.
+
+        ``find_lot`` and ``points_queue`` put a ``lot_id`` on every line of a list, and
+        ``watch_lot`` and its neighbours put one at the top of a write's answer. A top-level-only
+        strip would have caught the second and quietly left the first.
+        """
+        for tool, arguments in (
+            ("find_lot", {"query": self.lot.lot_name}),
+            ("describe_lot", {"lot": self.lot.lot_name}),
+            ("watch_lot", {"lot": self.lot.lot_name}),
+        ):
+            result = tools.call_tool(self._request_for(self.user), tool, arguments)
+            body = self._text(result)
+            self.assertNotIn("lot_id", body, f"{tool} handed out a lot's primary key")
+            self.assertNotIn(str(self.lot.pk), json.dumps(result.get("structuredContent") or {}))
+
+    def test_a_lot_is_still_named_by_the_number_on_its_label(self):
+        """Taking the pk away is only safe because the public identifier is already in every answer."""
+        result = tools.call_tool(self._request_for(self.user), "find_lot", {"query": self.lot.lot_name})
+        payload = json.loads(self._text(result))
+        self.assertEqual(payload["lots"][0]["lot_number"], self.lot.lot_number_display)
 
     def test_a_read_only_credential_cannot_reach_a_write_tool(self):
         result = tools.call_tool(self._request_for(self.user), "add_lot", {"name": "guppies"}, writes=False)

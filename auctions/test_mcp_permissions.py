@@ -311,6 +311,30 @@ class CrossTenantTestCase(TestCase):
             "pickup_location": "Northside hall",
             "quantity": 1,
             "lots": "one audit lot",
+            # The pricing and refund tools. ``item`` is the probe for price_history, so the leak
+            # audit really drives it; ``percent``/``paid_by`` take refund_lot past its own argument
+            # parsing and up to the permission check, which is the line being tested.
+            "item": SENTINEL,
+            "years": 3,
+            # The page-only writes (``mcp_only``). Each of these takes its action past argument
+            # parsing and up to the permission check, which is the line this audit tests -- an
+            # action that bails on a missing argument proves nothing about whether it leaks.
+            "restore": False,
+            "permanently": False,
+            "active": False,
+            "renewing": True,
+            "hide": True,
+            "rating": "positive",
+            "as": "buyer",
+            "angle": 90,
+            "primary": False,
+            "genus": "Poecilia",
+            "category": "Cichlids",
+            "date": timezone.now().strftime("%Y-%m-%d"),
+            "count": 2,
+            "all_lots": True,
+            "percent": 50,
+            "paid_by": "club",
             "page": "auction_main",
             # The auction and account setup tools. Each of these is what a real call would carry, so
             # a missing gate shows up as a row that moved rather than as a question coming back.

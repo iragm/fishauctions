@@ -163,8 +163,17 @@ def _unfenced_names(result):
     return [str(person.get("name", "")).strip("«»").strip() for person in result.get("people", [])]
 
 
+@isolated_cache("palette-assist")
 class PaletteAssistTestCase(StandardTestCase):
-    """Shared setup: a scripted provider, an open in-person auction, and no leftover throttles."""
+    """Shared setup: a scripted provider, an open in-person auction, and no leftover throttles.
+
+    The cache has to be this class's own. Every test below clears four users' cooldown keys in
+    ``setUp``, and those keys are named after a primary key -- which under ``--parallel`` is the
+    same small integer in every worker's database while the Redis holding them is shared. One
+    worker starting any palette test would delete the cooldown another worker had just set, and
+    ``test_rapid_second_assist_is_throttled`` would get a 200 where it wanted a 429. See
+    ``auctions.test_cache_hygiene`` for the general shape of this.
+    """
 
     def setUp(self):
         super().setUp()
@@ -309,6 +318,12 @@ class AuthAndThrottleTests(PaletteAssistTestCase):
         self.assertEqual(resp.status_code, 302)
         self.assertEqual(self.provider.call_count, 0, "an anonymous request must never reach the LLM")
 
+    # A real cooldown lasts one second, and the first request below has to finish inside it for
+    # the second to be throttled at all. That holds by a wide margin on a quiet machine and is not
+    # something to bet a CI run on, so the window is widened for the two tests that depend on it:
+    # what is under test is that a second request inside the cooldown is refused, not how long a
+    # cooldown lasts.
+    @patch.object(palette_assist, "COOLDOWN_SECONDS", 300)
     def test_rapid_second_assist_is_throttled(self):
         self._script({"error": "first"}, {"error": "second"})
         first = self._assist("add a lot of blue shrimp for someone")
@@ -320,6 +335,7 @@ class AuthAndThrottleTests(PaletteAssistTestCase):
         self.assertTrue(second.json()["message"])
         self.assertEqual(self.provider.call_count, calls_after_first, "a throttled request must not reach the provider")
 
+    @patch.object(palette_assist, "COOLDOWN_SECONDS", 300)
     def test_execute_is_throttled_too(self):
         self._execute("add_lot", {"name": "x"})
         self.client.force_login(self.user)
@@ -2319,26 +2335,79 @@ class DriftTests(PaletteAssistTestCase):
         offered = {tool["name"] for tool in palette_assist.tools_for(self.user)}
         self.assertEqual(offered - shared, {palette_assist.ASK_THE_USER, palette_assist.CANNOT_DO_THIS})
 
-    def test_the_only_thing_the_palette_is_not_offered_is_the_source_reader(self):
+    #: Every ``mcp_only`` action, and why it is one. Written out rather than derived, so adding the
+    #: flag to something new is a deliberate edit to this list and not a silent subtraction from the
+    #: palette. See ``Action.mcp_only`` for the two reasons that qualify.
+    MCP_ONLY = {
+        # Reason one: who reads the answer. A page of Python is right for an agent and wrong for a
+        # one-line box on somebody's phone at this site's own expense.
+        "read_source",
+        # Reason two: who does the acting. Each of these was excused in ``NOT_A_SKILL`` by an
+        # argument about *speech* -- "identifying it out loud is harder than clicking it", "more
+        # than one spoken sentence can carry" -- which is true of somebody dictating and empty
+        # against a caller sending a lot number it read out of ``list_lots``. The palette still
+        # reaches every one of these pages through ``go_to_page``.
+        "remove_lot",
+        "queue_lot",
+        "unqueue_lot",
+        "remove_bid",
+        "remove_award",
+        "set_member_active",
+        "remove_person",
+        "remove_invoice_adjustment",
+        "set_point_rule",
+        "set_invoice_renewal",
+        "resend_member_card",
+        "leave_feedback",
+        "hide_chat_message",
+        "record_club_money",
+        "rotate_lot_image",
+    }
+
+    def test_the_palette_is_offered_everything_except_the_named_exceptions(self):
         """``Action.mcp_only`` is a named exception to one catalogue, not a hole in it.
 
-        A page of Python is the right answer for an agent and the wrong thing to render in a
-        one-line box at this site's own expense. Anything else going missing here is a bug.
+        Anything going missing here that isn't on the list above is a bug: the two surfaces share
+        one catalogue, one dispatcher and one set of permission checks, and a capability that
+        quietly exists on one of them is a permission checked twice.
         """
         from auctions.mcp import tools as mcp_tools
 
         shared = {tool["name"] for tool in mcp_tools.tool_descriptors(self.user)}
         offered = {tool["name"] for tool in palette_assist.tools_for(self.user)}
-        self.assertEqual(shared - offered, {"read_source"})
-        self.assertTrue(palette_actions.ACTIONS["read_source"].mcp_only)
+        # ``self.user`` is not offered every mcp_only action (some need club administration), so the
+        # comparison is against the ones they can see.
+        self.assertEqual(shared - offered, shared & self.MCP_ONLY)
         self.assertEqual(
             {name for name, action in palette_actions.ACTIONS.items() if action.mcp_only},
-            {"read_source"},
+            self.MCP_ONLY,
         )
+
+    def test_every_mcp_only_write_is_still_reachable_as_a_page(self):
+        """The palette loses the tool and keeps the page. That is what makes this not a hole.
+
+        Every ``mcp_only`` write covers a view, and ``palette_routes`` is the promise that the
+        palette can be sent to it. If a capability were reachable over ``/mcp/`` and nowhere else,
+        that would be a second catalogue rather than a named exception.
+        """
+        named = {skill for skill in palette_actions.SKILLS.values() if palette_actions.ACTIONS[skill].mcp_only}
+        # read_source has no view -- it reads the repository, not this database.
+        writes = self.MCP_ONLY - {"read_source"}
+        # ``SKILLS`` maps a view to *one* skill, so a page whose POST two tools split between them
+        # can only name one of the pair. The other is written down here rather than derived.
+        shares_a_view_with_its_twin = {"unqueue_lot": "queue_lot"}
+        for absent, twin in shares_a_view_with_its_twin.items():
+            self.assertIn(twin, named, f"{absent} is excused because {twin} covers the page, and it doesn't")
+        self.assertEqual(named, writes - set(shares_a_view_with_its_twin))
 
     def test_the_palette_will_not_run_a_tool_it_never_offered(self):
         """A provider that ignores the tool list still cannot reach an MCP-only action."""
         reply = LLMResult(tool_calls=[ToolCall(id="1", name="read_source", arguments={"path": "auctions/models.py"})])
+        self.assertEqual(palette_assist.read_reply(reply)["kind"], "invalid")
+        # ...and the same for a write, which is the case that matters now that most of them are
+        # writes: the refusal is in ``read_reply``, so an LLM_BASE_URL that ignores the tool list
+        # cannot talk the palette into deleting a lot.
+        reply = LLMResult(tool_calls=[ToolCall(id="2", name="remove_lot", arguments={"lot": "1"})])
         self.assertEqual(palette_assist.read_reply(reply)["kind"], "invalid")
 
     def test_update_person_sends_every_field_its_form_asks_for(self):
@@ -2890,12 +2959,17 @@ class AddLotsTests(RunActionTestCase):
         self.assertEqual(Lot.objects.filter(auction=self.in_person_auction, lot_name="Java Fern").count(), 1)
 
     def test_a_whole_box_is_refused_and_sent_to_the_bulk_page(self):
+        # Off the constant rather than a number typed here: the cap moved once, when an agent
+        # reading a photographed intake sheet became a caller, and this is the test that says
+        # where it is now rather than where it was.
+        too_many = palette_actions.MAX_LOTS_PER_BATCH + 1
         result = self._run(
             "add_lots",
-            {"lots": [f"lot {n}" for n in range(30)], "auction": self.in_person_auction.slug},
+            {"lots": [f"lot {n}" for n in range(too_many)], "auction": self.in_person_auction.slug},
         )
         self.assertIn("error", result)
         self.assertIn("bulk add", result["error"])
+        self.assertEqual(Lot.objects.filter(auction=self.in_person_auction, lot_name__startswith="Lot ").count(), 0)
 
 
 class LotCategoryTests(RunActionTestCase):

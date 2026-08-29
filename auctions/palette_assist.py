@@ -172,10 +172,16 @@ def tools_for(user) -> list[dict[str, Any]]:
     of permission checks, and the palette is simply another client of it.
 
     ``Action.mcp_only`` is the one subtraction, and it names rather than breaks that rule: the two
-    surfaces differ in who reads the answer, not in what may be done or by whom. ``read_source``
-    hands back a page of Python, which is the right answer for an agent with a context window of
-    its own and the wrong thing to render in a one-line box on somebody's phone at this site's own
-    expense. Nothing else has ever qualified, and a second one should have to argue for itself.
+    surfaces differ in who reads the answer and in who is doing the asking, not in what may be done
+    or by whom. Nothing subtracted here is unreachable from the palette -- ``palette_routes``
+    guarantees ``go_to_page`` opens the page for every one of them, which is exactly what the
+    palette did before any of them were tools.
+
+    Two things qualify, and ``Action.mcp_only`` has the long version. ``read_source`` hands back a
+    page of Python, which is right for an agent and wrong for a one-line box at this site's own
+    expense. The rest are writes whose only objection was ever the risk of *mishearing* the row
+    being named -- a real risk for somebody dictating, and not a risk that exists for a caller
+    sending a lot number it read out of ``list_lots``.
     """
     from .mcp import tools as mcp_tools
 
@@ -266,11 +272,12 @@ def assist_enabled_for(user) -> bool:
     * the install has a model configured at all (:func:`auctions.llm.assist_enabled`), and
     * the user has opted in (``UserData.use_llm_search``).
 
-    The preference is off by default and is deliberately not on the preferences page yet -- it is
-    flipped per user in the admin while the feature is in beta. With either gate shut the palette
-    must behave exactly as it did before this feature existed: no mic, no assist calls, Enter falls
-    through to ordinary search. Everything user-facing asks *this* function rather than
-    ``assist_enabled()`` so the answer can't differ between the template and the endpoints.
+    The preference is on by default and is deliberately not on the preferences page -- it is a
+    lever for the site's admins, unchecked in the Django admin to take the palette away from one
+    user who abused it. With either gate shut the palette must behave exactly as it did before
+    this feature existed: no mic, no assist calls, Enter falls through to ordinary search.
+    Everything user-facing asks *this* function rather than ``assist_enabled()`` so the answer
+    can't differ between the template and the endpoints.
     """
     if not user or not getattr(user, "is_authenticated", False):
         return False

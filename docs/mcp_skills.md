@@ -54,12 +54,63 @@ break those.
   `add_invoice_adjustment` validates through `InvoiceAdjustmentForm` (whole dollars, 150-character
   note); the **sign of `amount` picks the direction**; a settled invoice refuses. There is
   deliberately no `remove_invoice_adjustment`.
+- **`refund_lot` is two different refunds behind one `paid_by`.** `seller` (the default) is
+  `views.LotRefundDialog`'s path exactly — `Lot.refund` (which sends the Square card refund itself
+  where the sale went through Square), then `Invoice.recalculate` on each side — and it is a
+  **split**: `models.add_price_info` reduces `your_cut` by the same percentage it reduces the
+  buyer's charge, so the club's commission shrinks with it. `percent: 0` takes an existing refund
+  back off, which is also what the `undo` block sends.
+  `club` is the goodwill refund and has **no column of its own on purpose**:
+  `partial_refund_percent` is a split by construction, and a second refund field would have to be
+  understood by every invoice, every payout, the treasurer's report and the CSV export. It is what
+  a treasurer does by hand — a `DISCOUNT` line on the **buyer's** invoice through
+  `InvoiceAdjustmentForm`, the lot and the seller untouched — so the seller keeps the full payout
+  and the club absorbs it. Consequences: whole currency units only (`InvoiceAdjustment.amount` is a
+  `PositiveIntegerField`), so a refund with cents in it refuses and names the figure; a settled
+  buyer invoice refuses, as it does for `add_invoice_adjustment`; there is no Square refund; and
+  because the lot keeps no mark, a `LotHistory` row says what happened where somebody reading the
+  lot will find it. A **settled invoice does not stop the `seller` refund** — the dialog does not
+  stop it either, because a club that has already handed the money over still has to record the
+  refund — it is reported per side in `settled_invoices` instead. Removing (banning) a lot is still
+  the other half of that dialog and still a page.
+- **What things go for.** `price_history` ("what does daphnia go for?") and
+  `suggest_starting_prices` ("what should I start these at?") are the same query — `_comparable_sales`
+  — scoped exactly like `find_lot`, to `command_palette._joined_auctions`. That is the club's own
+  price history and deliberately not the site's: a wider sample would also be a price oracle over
+  every other club. A lot number resolves to a lot and the search is then done on its **species**
+  where it has one, which is what catches "Water fleas" and "Daphnia magna" as one thing; a name
+  matching exactly one lot goes the same way, and anything else is matched against lot names, which
+  is what the older half of any club's history has. Prices are `winning_price` on non-banned,
+  non-deleted lots; donations count (a donated lot still went for what somebody paid) and the lot
+  being asked about is excluded from its own evidence. `PRICE_HISTORY_YEARS` is 3 by default and
+  `years: 0` reads the whole history. The median, not the mean, for `Auction.median_lot_price`'s
+  reason.
+- `suggest_starting_prices` defaults to the lots **nobody priced** — `reserve_price` at or under
+  `Auction.minimum_bid`, because the column is never actually null (the add-lot form and `add_lot`
+  both submit the auction's minimum) — and `all_lots` widens it. The number is the **lower quarter**
+  of the past prices, rounded **down**, floored at the auction's own minimum: an opening bid is
+  meant to be cleared, so every rounding decision is made in the direction of the lot selling.
+  Under `MIN_SALES_TO_SUGGEST` (2) past sales it returns **no number** and says why — one sale is
+  the fish two people in the room both wanted, which is exactly the sale not to open the next one
+  at. It is read-only and there is no bulk write behind it: `edit_lot` sets a minimum bid, one lot
+  at a time, which is also why it pages (one comparables query per row).
+- `list_lots` takes a **`query`** alongside its status, matched against the lot name *and* the
+  species' common and scientific names, so "the unsold daphnia" is one call. `query` had been an
+  accepted alias that the resolver dropped, which answered with every unsold lot in the auction.
 - `lot_queue` is deliberately **not** admin-only, unlike `/auctions/<slug>/queue/`
   (`LotQueueMixin`). Position is worked out over the whole queue before filtering or slicing.
 - `add_lot_image` / `remove_lot_image` set `LotImage.url` (`forms.validate_image_url` checks a
   scheme and an extension and nothing else); `image_source` defaults to `RANDOM`; removing promotes
   another picture to thumbnail. `list_lots` has `without_images` and every row a `has_picture`.
   `Lot.image_permission_check` calls `Auction.permission_check`.
+- `add_lots` takes a **`count`**, on the batch or on one entry, and it is the distinction
+  `quantity` could not carry: `quantity` is how many fish are in one bag under one lot number, and
+  `count` is how many bags there are. `add_lot` accepts it as an alias and hands the whole call to
+  `add_lots` rather than spending a correction round. `MAX_LOTS_PER_BATCH` is **40**, over the
+  expanded list: it was 12, sized for what somebody says in one sentence, and an agent reading a
+  photographed intake sheet is a caller that did not exist then. Nothing else changed — each lot
+  still goes one at a time through `QuickAddLot`, one bad lot still does not lose the others, and
+  what bounds a runaway agent is `mcp.auth.within_write_budget`, not this number.
 - Lot fields reachable from `add_lot` / `edit_lot`: `custom_checkbox`, `reference_link` (validated
   with a `URLField` and set on the instance beside the form; a YouTube link is embedded and plays on
   the lot page), and `summernote_description` capped at `MAX_SPOKEN_DESCRIPTION_CHARS` (600) with
@@ -196,3 +247,94 @@ says — the commonest case), `add_species` (genuinely not there).
 pick. Whether the answer is taught to the rest of the site follows `LotAdmin`'s rule: an auction
 admin's choice writes `SpeciesSearchCache`, a seller's does not. `record_choice` is reported either
 way.
+
+## The page-only writes (`mcp_only`)
+
+Fifteen **writes** exist over `/mcp/` and not in the command palette (`read_source` is the
+sixteenth `mcp_only` action and is a read; see the end of this file). The palette still reaches every
+one of the pages behind them — `palette_routes` guarantees `go_to_page` does — so this is a
+subtraction from one client's *tool list*, not a second catalogue. `Action.mcp_only` has the long
+version of why; the short one is that the excuses these views were sitting behind in `NOT_A_SKILL`
+were arguments about **speech** ("identifying it out loud is harder than clicking it", "more than
+one spoken sentence can carry"), which is true of somebody dictating and empty against a caller
+sending a lot number it read out of `list_lots` a moment earlier.
+
+Nothing else about them is different. Each is one row, each re-asks the page's own permission on the
+page's own object, and all fifteen are `confirm`-tier and `asks_first`.
+
+- **`remove_lot`** — `LotDelete` and `LotDeactivate`, which are two buttons because there are two
+  kinds of lot. A lot **in an auction** is deleted and only while `Lot.can_be_deleted` allows it
+  (that property is the whole guard). A **standalone** lot is deactivated, its bids removed, and
+  `restore` puts it back; `permanently` deletes one instead.
+- **`queue_lot` / `unqueue_lot`** — `LotQueueMixin.add_lot` and the queue page's Remove button, side
+  effects included (`Lot.added_to_queue` set once and never unset, `process_queue_notifications`
+  run). Keyed on the lot, not on the queue row. **Reordering is deliberately absent**: it writes
+  every row in the queue at once.
+- **`remove_bid`** — `BidDelete`, and the counterpart `place_bid` never had. Two different gates:
+  `Lot.bids_can_be_removed` is about the lot, `Auction.allow_deleting_bids` only decides whether an
+  ordinary bidder may take back their own. One `Bid` row per user per lot, so this is one row.
+- **`remove_award`** — `BapAwardDeleteView`, keyed on the **lot** and only on the lot; an award for
+  a talk has no handle anybody can say and stays on the page. Resets the lot's award fields so it
+  goes back on the pending list rather than sitting there decided.
+- **`set_member_active`** — `ClubMemberDeleteView` / `ClubMemberReactivateView`. One boolean, each
+  its own undo, so one **idempotent** tool. The hard delete and the merge stay pages.
+- **`remove_person`** — `AuctionTOSDelete`'s delete path, and only the one-row half of it. Somebody
+  with an invoice, lots to sell or lots they won is **refused with the reason** and sent to the
+  merge form; deleting a participant cascades their invoice, adjustments and payments away.
+- **`remove_invoice_adjustment`** — the delete half of the invoice page's formset, and the undo
+  `add_invoice_adjustment` shipped without. The line is named by **what it says**; several matches
+  is a question. Refuses on a settled invoice, exactly as adding does.
+- **`set_point_rule`** — the two BAP override save views. A club **rule**, not a table row:
+  `ClubBapGenusOverrideForm` refuses a genus no species belongs to, and the answer says which of the
+  two kinds it wrote, because a genus rule outranks a category rule.
+- **`set_invoice_renewal`** — `InvoiceRenewalNeededToggleView`. Also applies the member discount and
+  the alternate split, so the answer carries the new total. **The permission is the invoice's own**:
+  an auction invoice asks the auction, a club invoice asks the club.
+- **`resend_member_card`** — `ClubMemberResendCardView`. The admin twin of `send_membership_card`,
+  which only ever sends the caller their own. No email on file and do-not-contact are answers.
+- **`leave_feedback`** — `Feedback`, the only one here that is not administration. Which side the
+  caller is on is read off the lot, not asked; buyer feedback lands in `Lot.feedback_*` and seller
+  feedback in `Lot.winner_feedback_*`.
+- **`hide_chat_message`** — `AuctionChatDeleteUndelete`, a toggle and so its own undo. The message is
+  named by a phrase out of it, and both the question and the answer keep the guillemets.
+- **`record_club_money`** — `ClubMoneyCreateView`. **No money moves**; this is a bookkeeping row
+  behind `permission_money`. The invoice-reconciled categories and the balance adjustment are
+  refused, because a hand-entered one is undone at the next reconcile.
+- **`rotate_lot_image`** — `ImagesRotate` and `ImagesPrimary`. Filed under "needs a file" and it
+  takes an angle. The genuinely new thing is the caller: a client that can see the picture can be
+  handed its address and say it is sideways.
+
+`GoogleCalendarSyncNowView` moved into `SKILLS` at the same time and is **not** a new skill — it was
+a filing error. `sync_club_calendar`'s docstring has always said it is that view's body, and the
+view sat in `NOT_A_SKILL` as outside-service setup because the audit only asked whether a view was
+in one table *or* the other. `test_palette_skills` now asks the third question too, and a second one
+besides: no excused view may be reimplemented by a resolver that says so in its own docstring.
+
+Deliberately **not** done in this pass: **banning and unbanning**. The ban is wanted and is
+reversible by its twin, but `CreateUserBan` also deletes that user's live bids across every auction
+the admin runs, which is more than one row. The `_BAN` reason in `NOT_A_SKILL` is the record of that
+decision rather than an omission.
+
+## No lot ever travels as a primary key
+
+A lot's public identifier is `lot_number_display` — printed on its label, in its URL
+(`/auctions/<auction>/lots/<number>/`), and what somebody in the room says. Every result that names
+a lot already carries it, through `palette_actions._lot_echo`.
+
+The pk was a second name for the same thing: one an agent could only ever have got from us, that
+means nothing to whoever reads the answer, that addresses a lot in *any* auction rather than a lot
+in this one, and that disagrees with the label whenever an auction numbers its lots by hand. So:
+
+- `mcp.tools._INTERNAL_RESULT_KEYS` strips `lot_id` **at any depth**, alongside `undo`. The depth
+  matters: the leak was mostly in rows — `find_lot` and `points_queue` put one on every line.
+- No tool advertises it. `review_points` and `print_labels` each documented a `lot_id`; both now
+  document the lot number. It stays in their `aliases`, so the palette's page context still works
+  and nothing that already had one breaks.
+- The one `more_info_needed` that answered with a pk (`_bap_lot_or_problem`) answers with the lot
+  number, which the same resolver already accepts.
+- `test_mcp.RegistryConformance.test_no_tool_advertises_a_lots_primary_key` and
+  `CallToolTests.test_no_result_hands_out_a_lots_primary_key` keep it that way.
+
+`image_id` is the deliberate exception, and the reason the tests name `lot_id` rather than every key
+ending in `_id`: **a photo has no number on a label**. It is a handle an agent can only get from
+`describe_lot` in the same conversation, which is the closest thing a picture has to a public name.

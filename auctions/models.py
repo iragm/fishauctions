@@ -11710,8 +11710,8 @@ def get_default_paypal_enabled():
 
 
 def get_default_use_llm_search():
-    """Whether new users get the assistant. Off until a site turns it on -- see ASSISTANT_ENABLED_FOR_USERS."""
-    return getattr(settings, "ASSISTANT_ENABLED_FOR_USERS", False)
+    """Whether new users get the assistant. On unless a site turns it off -- see ASSISTANT_ENABLED_FOR_USERS."""
+    return getattr(settings, "ASSISTANT_ENABLED_FOR_USERS", True)
 
 
 def get_default_square_enabled():
@@ -11840,11 +11840,12 @@ class UserData(models.Model):
     )
     use_llm_search.help_text = (
         "Let this user talk to the site in plain English by typing or speaking into the command "
-        "palette.  Off for everyone by default; turn it on site-wide with "
-        "`manage.py change_assistant on`.  Also needs an LLM configured site-wide "
-        "(auctions.llm.assist_enabled), because every command spends this site's own budget.  "
-        "This does NOT gate connecting Claude or another assistant over MCP (/ai/), "
-        "which is open to everyone: an agent brings its own model and costs this site nothing."
+        "palette.  On for everyone by default; uncheck it to take the palette away from this one "
+        "user (they abused it, say), or turn it off site-wide with `manage.py change_assistant "
+        "off`.  Also needs an LLM configured site-wide (auctions.llm.assist_enabled), because "
+        "every command spends this site's own budget.  This does NOT gate connecting Claude or "
+        "another assistant over MCP (/ai/), which is open to everyone: an agent brings its own "
+        "model and costs this site nothing."
     )
     credit = models.DecimalField(max_digits=6, decimal_places=2, default=0)
     credit.help_text = "The total balance in your account"

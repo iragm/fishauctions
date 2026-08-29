@@ -799,10 +799,11 @@ I_BRED_THIS_FISH_LABEL = os.environ.get("I_BRED_THIS_FISH_LABEL", "I bred this f
 ALLOW_USERS_TO_CREATE_AUCTIONS = parse_bool_env(os.environ.get("ALLOW_USERS_TO_CREATE_AUCTIONS") or None, default=True)
 ALLOW_USERS_TO_CREATE_LOTS = parse_bool_env(os.environ.get("ALLOW_USERS_TO_CREATE_LOTS") or None, default=True)
 PAYPAL_ENABLED_FOR_USERS = parse_bool_env(os.environ.get("PAYPAL_ENABLED_FOR_USERS") or None, default=False)
-# Whether a newly created user gets the AI assistant (natural-language command palette and the
-# /mcp/ endpoint).  Off by default: this is a beta, and `manage.py change_assistant on` is what
-# turns it on for everybody who already exists.  See UserData.use_llm_search.
-ASSISTANT_ENABLED_FOR_USERS = parse_bool_env(os.environ.get("ASSISTANT_ENABLED_FOR_USERS") or None, default=False)
+# Whether a newly created user gets the AI assistant (the natural-language command palette).  On
+# by default; a single user is switched off in the admin (UserData.use_llm_search) and everybody
+# at once with `manage.py change_assistant off`.  It still does nothing unless the site has a
+# model configured -- see auctions.llm.assist_enabled.
+ASSISTANT_ENABLED_FOR_USERS = parse_bool_env(os.environ.get("ASSISTANT_ENABLED_FOR_USERS") or None, default=True)
 SQUARE_ENABLED_FOR_USERS = parse_bool_env(os.environ.get("SQUARE_ENABLED_FOR_USERS") or None, default=False)
 USERS_ARE_TRUSTED_BY_DEFAULT = parse_bool_env(os.environ.get("USERS_ARE_TRUSTED_BY_DEFAULT") or None, default=True)
 UNTRUSTED_MESSAGE = os.environ.get(

@@ -70,7 +70,7 @@ import re
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from decimal import Decimal, InvalidOperation
+from decimal import ROUND_DOWN, Decimal, InvalidOperation
 from typing import Any
 from zoneinfo import ZoneInfo, available_timezones
 
@@ -188,12 +188,29 @@ class Action:
     #:
     #: The standing rule is that a skill cannot exist for one surface and not the other, because a
     #: capability that is reachable one way and not the other is a permission checked twice and a
-    #: catalogue maintained twice. This flag does not break that rule so much as name the one place
-    #: it does not apply: the two surfaces differ in *who is reading the answer*. The palette's
-    #: answer is a sentence in a box on somebody's phone, paid for out of this site's own model
-    #: budget; an MCP client is an agent with a context window that brought its own. A tool whose
-    #: result is four hundred lines of Python is the right answer for the second and a wall of
-    #: unreadable text plus a bill for the first.
+    #: catalogue maintained twice. This flag does not break that rule so much as name the two places
+    #: it does not apply, and both of them are about the *client* rather than about the capability.
+    #: A permission is never checked differently, and nothing here is reachable one way and
+    #: unreachable the other: the palette still gets to the page, because ``palette_routes``
+    #: guarantees ``go_to_page`` reaches every one of them.
+    #:
+    #: **Who reads the answer.** The palette's answer is a sentence in a box on somebody's phone,
+    #: paid for out of this site's own model budget; an MCP client is an agent with a context window
+    #: that brought its own. A tool whose result is four hundred lines of Python is the right answer
+    #: for the second and a wall of unreadable text plus a bill for the first. ``read_source`` is
+    #: the only one of these.
+    #:
+    #: **Who does the acting.** The palette's caller is a person *speaking*, and a whole class of
+    #: excuses in :data:`NOT_A_SKILL` were arguments about speech -- "identifying it out loud is
+    #: harder than clicking it", "more than one spoken sentence can carry". Those were correct, and
+    #: they were correct about a microphone. An agent sends a structured call naming a lot number it
+    #: read out of ``list_lots`` a moment earlier; the failure the excuse was written about cannot
+    #: happen to it. So a capability whose only objection was the risk of mishearing it belongs to
+    #: the surface that does not hear anything. Everything from ``remove_lot`` down is one of these.
+    #:
+    #: What this flag has never been and must not become: a way to give an agent something a person
+    #: may not do. Every resolver here re-asks the page's own permission on the page's own object,
+    #: and every one of them writes one row.
     mcp_only: bool = False
 
     def accepts(self, key: str) -> bool:
@@ -1039,6 +1056,14 @@ def add_lot(request, params: dict[str, Any]) -> dict[str, Any]:
     Validation and permissions are entirely ``QuickAddLot`` + ``services.lot_add_block`` -- the
     same form and the same gate the bulk-add page uses, with the same kwargs.
     """
+    # "Twelve lots called fish" is a batch however it was addressed, and a model that reached for
+    # the singular tool with a count on it has said something perfectly clear. Refusing it would
+    # cost a correction round to learn what is already in the call. ``count`` is an alias here
+    # rather than a documented parameter: ``add_lots`` is where it is advertised and where the
+    # answer names every lot it made.
+    if (_int(params, "count") or 1) > 1:
+        one = {key: value for key, value in params.items() if key in _PER_LOT_KEYS}
+        return add_lots(request, {**params, "lots": [one]})
     auction, tos, for_self, problem = _resolve_lot_seller(request, params)
     if problem:
         return problem
@@ -1059,9 +1084,50 @@ def add_lot(request, params: dict[str, Any]) -> dict[str, Any]:
 #: enough that nothing writes an essay about guppies.
 MAX_SPOKEN_DESCRIPTION_CHARS = 600
 
-#: The most lots one spoken command may create. Past this it is a box being unpacked, and the bulk
-#: add page -- with a row per lot on screen -- is the right tool.
-MAX_LOTS_PER_BATCH = 12
+#: The most lots one command may create.
+#:
+#: It was 12, and the reason was a good one for the only caller there was: twelve is about as many
+#: things as somebody says in one sentence at a drop-off table, and past that it is a box being
+#: unpacked, which the bulk add page -- a row per lot, on screen -- does better.
+#:
+#: An agent handed a photo of a handwritten intake sheet is not that caller. It has thirty names and
+#: no bulk add page to fall back on, and thirty refusals is not a smaller write than thirty lots --
+#: it is the same thirty lots, typed in by a person, later. Each one still goes one at a time
+#: through ``QuickAddLot``, and what actually bounds a runaway agent is the write budget
+#: (``mcp.auth.within_write_budget``), not a number here.
+MAX_LOTS_PER_BATCH = 40
+
+
+def _expand_copies(raw: list[Any], params: dict[str, Any]):
+    """``["fish"]`` with ``count=12`` -> twelve entries. Returns ``(entries, problem)``.
+
+    "Add twelve lots called fish" is one of the two commonest things said at an in-person intake
+    table, and the registry had no way to say it: ``quantity`` is how many fish are *in* one lot,
+    which is a different fact and the one an agent reached for instead -- twelve guppies in one bag
+    with one lot number, when what was wanted was twelve bags, twelve numbers and twelve labels. The
+    only other route was repeating the same string twelve times in the ``lots`` array, which works
+    and costs a dozen copies of it in the request.
+
+    ``count`` may be set on the batch (every entry that doesn't override it) or on one entry. The
+    cap is :data:`MAX_LOTS_PER_BATCH` over the *expanded* list, because it is a limit on lots
+    created, not on how they were asked for.
+    """
+    default_count = _int(params, "count") or 1
+    entries: list[Any] = []
+    for item in raw:
+        copies = default_count
+        if isinstance(item, dict) and item.get("count") is not None:
+            copies = _int(item, "count") or 1
+            item = {key: value for key, value in item.items() if key != "count"}
+        copies = max(1, copies)
+        if len(entries) + copies > MAX_LOTS_PER_BATCH:
+            return [], _error(
+                f"That's more than {MAX_LOTS_PER_BATCH} lots in one go, which is where I stop. "
+                "Add them in batches, or use the bulk add page for a whole box."
+            )
+        entries.extend([item] * copies)
+    return entries, None
+
 
 #: Keys that describe ONE lot, and so may appear per item in an ``add_lots`` list.
 _PER_LOT_KEYS = (
@@ -1103,11 +1169,9 @@ def add_lots(request, params: dict[str, Any]) -> dict[str, Any]:
         raw = [part.strip() for part in raw.split(",") if part.strip()]
     if not isinstance(raw, list) or not raw:
         return _need("What lots should I add? Give me a list.")
-    if len(raw) > MAX_LOTS_PER_BATCH:
-        return _error(
-            f"That's {len(raw)} lots at once — I'll do up to {MAX_LOTS_PER_BATCH}. "
-            "Use the bulk add page for a whole box."
-        )
+    raw, problem = _expand_copies(raw, params)
+    if problem:
+        return problem
 
     auction, tos, for_self, problem = _resolve_lot_seller(request, params)
     if problem:
@@ -4610,6 +4674,23 @@ def list_lots(request, params: dict[str, Any]) -> dict[str, Any]:
         # listing it here would be handing an agent a job it is about to be refused.
         lots = lots.filter(lotimage__isnull=True, use_images_from__isnull=True)
         label += " and have no picture"
+    query = _str(params, "query") or _str(params, "filter") or _str(params, "name")
+    if query:
+        # "Which daphnia is left?" is one question, and answering it took two tools and a join done
+        # by hand: ``list_lots`` had the status filter and no idea what the lots were, and
+        # ``search_lots`` knew what they were and could only open a page. ``query`` was accepted as
+        # an alias the whole time and quietly dropped, which is the worse half of both -- the reply
+        # was every unsold lot in the auction with the word the user asked about nowhere in it.
+        #
+        # The species columns are here because the lot name is what somebody typed and the species
+        # is what it is: a lot called "Water fleas" is a daphnia lot, and a search that misses it
+        # has told an admin they have none left. Both are plain FK columns, so no row is doubled.
+        lots = lots.filter(
+            Q(lot_name__icontains=query)
+            | Q(species__common_name__icontains=query)
+            | Q(species__scientific_name__icontains=query)
+        )
+        label += f" and match “{query}”"
     # No further scoping by role: a participant can already browse every lot in an auction they
     # joined, so nothing here is hidden from them. The seller's name is another matter, and it is
     # added per row below only for admins.
@@ -4637,6 +4718,324 @@ def list_lots(request, params: dict[str, Any]) -> dict[str, Any]:
         "showing": len(rows),
         "offset": offset,
         "summary": f"{total} lots in {auction.title} {label}.{_showing(total, limit, offset)}",
+        **_about(auction=auction),
+    }
+
+
+# --- what things go for ------------------------------------------------------
+#
+# Two questions every auction admin asks and the site could only answer with a spreadsheet: "what
+# has this sold for before?" and "what should I start it at?". They are the same query -- the past
+# sales of this thing, in the auctions this person is part of -- so both go through
+# ``_comparable_sales`` and differ only in what they do with the answer.
+#
+# **Scoped like every other lot read.** ``command_palette._joined_auctions`` is what ``find_lot``
+# and ``search_lots`` use: auctions the caller created, joined, or whose club they help run. A
+# promoted auction they have nothing to do with is deliberately not in it. The site-wide history
+# would be a much bigger sample and it would also be a price oracle over every other club's
+# auctions, which is not a thing one club's admin should get for free.
+#
+# **A price is never invented.** Every number in both answers is a ``winning_price`` some lot
+# really went for, and a thing with no history behind it comes back saying so rather than carrying
+# a guess. A made-up opening bid is read out loud to a room.
+
+#: How far back a price is worth quoting, in years. Fish prices move, clubs change their fees and
+#: their crowd, and a sale from six years ago is evidence about a different auction. Overridable
+#: per call; this is only where the answer starts.
+PRICE_HISTORY_YEARS = 3
+
+#: The most individual past sales one answer itemises. The statistics are computed over all of
+#: them -- only the list of sales is cut, newest first.
+PRICE_HISTORY_ROWS = 10
+
+#: The most past sales one set of statistics is worked out over, newest first.
+#:
+#: A bound on the work rather than on the answer. A club with fifteen years of lots called "shrimp"
+#: could match thousands of them, and ``suggest_starting_prices`` runs this query once per lot on
+#: the page -- so without a cap one call could pull a hundred thousand prices into memory to
+#: produce a hundred numbers. Newest first, because if only some of the history is being read the
+#: recent half is the half worth reading.
+PRICE_SAMPLE_CAP = 500
+
+#: The fewest past sales before ``suggest_starting_prices`` will put a number on a lot. One sale is
+#: an anecdote: the fish that went for $45 because two people in the room wanted it is exactly the
+#: sale that stands out in the data and exactly the one not to open the next one at.
+MIN_SALES_TO_SUGGEST = 2
+
+
+def _sample_prices(sales) -> list[Decimal]:
+    """The prices to work statistics out over: the newest :data:`PRICE_SAMPLE_CAP` of them."""
+    return [price for price in sales.values_list("winning_price", flat=True)[:PRICE_SAMPLE_CAP] if price is not None]
+
+
+def _comparable_sales(user, *, text: str = "", species=None, exclude_lot=None, years: int = PRICE_HISTORY_YEARS):
+    """Past sales of one thing, in the auctions this user is part of. Newest first.
+
+    ``banned`` lots are left out because a removed lot's price is not a sale. Donations are kept:
+    a donated lot still went for whatever somebody was willing to pay for it, which is the number
+    being asked about -- where the money went afterwards is a different question.
+
+    Matching is by ``species`` when the caller has one, and by name otherwise. The species is much
+    the better key when it is there -- it catches every spelling and every common name at once --
+    and it is set on a minority of older lots, which is why the name is not merely a fallback but
+    the usual path.
+    """
+    sales = (
+        Lot.objects.filter(is_deleted=False, banned=False, winning_price__isnull=False, auction__isnull=False)
+        .exclude(auction__is_deleted=True)
+        .exclude(winning_price__lte=0)
+    )
+    if not user.is_superuser:
+        sales = sales.filter(auction__in=command_palette._joined_auctions(user))
+    if species is not None:
+        sales = sales.filter(species=species)
+    elif text:
+        sales = sales.filter(
+            Q(lot_name__icontains=text)
+            | Q(species__common_name__iexact=text)
+            | Q(species__scientific_name__iexact=text)
+        )
+    else:
+        return sales.none()
+    if years:
+        sales = sales.filter(date_posted__gte=timezone.now() - timezone.timedelta(days=365 * years))
+    if exclude_lot is not None:
+        # The lot being asked about is not evidence about itself.
+        sales = sales.exclude(pk=exclude_lot.pk)
+    return sales.select_related("auction", "auctiontos_seller").order_by("-date_posted")
+
+
+def _money(value: Decimal) -> Decimal:
+    """A price, at the two decimal places every other number on an invoice is written to."""
+    return Decimal(value).quantize(Decimal("0.01"))
+
+
+def _price_stats(prices: list[Decimal]) -> dict[str, Any]:
+    """Low, median and high over a list of prices. ``{}`` for an empty one.
+
+    The median rather than the mean, for the same reason ``Auction.median_lot_price`` uses it: one
+    lot that went for $200 in a room of $5 lots moves a mean and says nothing about the next lot.
+    """
+    if not prices:
+        return {}
+    ordered = sorted(prices)
+    middle = len(ordered) // 2
+    median = ordered[middle] if len(ordered) % 2 else (ordered[middle - 1] + ordered[middle]) / 2
+    return {
+        "sales": len(ordered),
+        "low": str(_money(ordered[0])),
+        "median": str(_money(median)),
+        "high": str(_money(ordered[-1])),
+    }
+
+
+def _suggested_opening(prices: list[Decimal], minimum: Decimal | None) -> Decimal | None:
+    """An opening bid worked out from what this has gone for, or ``None`` with nothing to go on.
+
+    The **lower quarter** of the past prices, rounded down to a whole unit, floored at the auction's
+    own minimum bid. An opening bid is meant to be cleared -- it is where the bidding starts, not
+    where it should finish -- so the middle of the range is the wrong end of it to take, and the
+    typical price is reported alongside so the auctioneer can see both.
+
+    Rounded down rather than to nearest, deliberately. Every rounding decision here is made in the
+    direction of the lot selling.
+    """
+    if len(prices) < MIN_SALES_TO_SUGGEST:
+        return None
+    ordered = sorted(prices)
+    # Nearest-rank, floored: 4 sales -> the lowest, 5 -> the second, 9 -> the third.
+    start = ordered[max(0, (len(ordered) - 1) // 4)].to_integral_value(rounding=ROUND_DOWN)
+    if minimum is not None and start < minimum:
+        start = Decimal(minimum)
+    return _money(start)
+
+
+def _sale_row(lot) -> dict[str, Any]:
+    """One past sale, as a row in a price history."""
+    return {
+        "lot_number": lot.lot_number_display,
+        "name": untrusted_short(lot.lot_name),
+        "price": str(lot.winning_price),
+        "quantity": lot.quantity,
+        "donation": bool(lot.donation),
+        "auction": lot.auction.title if lot.auction else None,
+        "when": local_time(lot.auction, lot.date_posted) if lot.auction else None,
+        "url": lot.lot_link,
+    }
+
+
+def price_history(request, params: dict[str, Any]) -> dict[str, Any]:
+    """What one thing has sold for before, out of the auctions this user is part of.
+
+    The question a seller asks before pricing a lot and an admin asks before calling one, and the
+    only answers the site had were a chart of the whole auction's medians and the lot pages
+    themselves, one at a time. ``describe_lot`` says what *this* lot went for; nothing said what
+    *this kind of thing* goes for.
+
+    A lot number resolves to the lot in front of them and then the search is done on its **species**
+    where it has one, which is the whole reason the species field is worth filling in: it catches
+    "Water fleas", "daphnia magna" and "Daphnia" as one thing. A name that matches exactly one lot
+    is treated the same way. Anything else is matched as text against lot names, which is what the
+    older half of any club's history has.
+    """
+    user = request.user
+    item = _str(params, "item") or _str(params, "lot") or _str(params, "name") or _str(params, "query")
+    if not item:
+        return _need("What should I look up the past prices of? A lot number, or what the thing is called.")
+    years = _int(params, "years")
+    if years is None:
+        years = PRICE_HISTORY_YEARS
+    years = max(0, min(years, 20))
+
+    hint = _str(params, "auction")
+    lookup = {"lot": item}
+    if hint:
+        lookup["auction"] = hint
+    found = find_lot(request, lookup)
+    if "error" in found:
+        return found
+    matched = found.get("lots") or []
+    lot = None
+    if len(matched) == 1:
+        lot = Lot.objects.filter(pk=matched[0]["lot_id"], is_deleted=False).select_related("auction", "species").first()
+    species = lot.species if lot and lot.species_id else None
+    subject = lot.lot_name if lot else item
+    sales = _comparable_sales(
+        user,
+        text="" if species else subject,
+        species=species,
+        exclude_lot=lot,
+        years=years,
+    )
+
+    limit, offset = _slice(params, default=PRICE_HISTORY_ROWS)
+    prices = _sample_prices(sales)
+    stats = _price_stats(prices)
+    # The real total, not the size of the sample: it is what pages the rows, and answering "10 of
+    # 500" about seven hundred sales would be a number this tool made up.
+    total = sales.count()
+    page = list(sales[offset : offset + limit])
+    rows = [_sale_row(sale) for sale in page]
+    matched_on = f"the species {species.full_scientific_name}" if species else f"lot names containing “{subject}”"
+    window = f" in the last {years} years" if years else ""
+    if not prices:
+        return {
+            "found": False,
+            "item": untrusted_short(subject),
+            "matched_on": matched_on,
+            "recent_sales": [],
+            "summary": (
+                f"Nothing matching {matched_on} has sold{window} in the auctions you're part of, so "
+                f"there's no price history to go on."
+            ),
+            **_about(lot=lot),
+        }
+    # Off a real sale rather than off settings: a club running in CAD should not be read a row of
+    # dollar signs. ``page`` is empty only when the caller paged past the end, and the lot they
+    # asked about is then the next best source for it.
+    symbol = page[0].currency_symbol if page else (lot.currency_symbol if lot else "$")
+    capped = {"worked_out_over": f"the most recent {stats['sales']} of them"} if stats["sales"] < total else {}
+    return {
+        "found": True,
+        "item": untrusted_short(subject),
+        "matched_on": matched_on,
+        "years": years,
+        **stats,
+        "sales": total,
+        **capped,
+        "recent_sales": rows,
+        "showing": len(rows),
+        "offset": offset,
+        "summary": (
+            f"{total} sale(s) matching {matched_on}{window}: {symbol}{stats['low']} to "
+            f"{symbol}{stats['high']}, usually {symbol}{stats['median']}."
+            f"{_showing(total, limit, offset)}"
+        ),
+        **_about(lot=lot),
+    }
+
+
+def suggest_starting_prices(request, params: dict[str, Any]) -> dict[str, Any]:
+    """An opening bid for the lots in an auction nobody has priced. Auction admins only.
+
+    At an in-person auction most lots arrive with the minimum bid the add-lot form pre-filled and
+    nothing else -- the seller never touched the field -- so the auctioneer is choosing an opening
+    number for every one of them, out loud, in front of the room, from memory. This is that memory,
+    read out of what the club's own past auctions did.
+
+    Read-only on purpose. It answers with a number per lot and does not write one: what a lot should
+    open at is a judgement about the room as well as the data, and ``edit_lot`` is one call away for
+    the ones the auctioneer agrees with. There is no bulk write here and there is not meant to be.
+
+    One comparables query per lot, which is why it is paged like every other list -- fifteen lots a
+    call by default, a hundred at most.
+    """
+    user = request.user
+    auction, problem = _auction_or_problem(request, params)
+    if problem:
+        return problem
+    if not _is_auction_admin(user, auction):
+        return _error(f"Only admins of {auction.title} can see the pricing for {auction.title}.")
+
+    lots = Lot.objects.filter(auction=auction, is_deleted=False, banned=False, winning_price__isnull=True)
+    named = _str(params, "lot")
+    if named:
+        lots = lots.filter(Q(custom_lot_number__iexact=named) | Q(lot_name__icontains=named))
+    unpriced = not _preference_boolean(params.get("all_lots"))
+    if unpriced:
+        # "Blank" is what a person calls it; the column is never actually null, because the add-lot
+        # form submits the auction's own minimum from a hidden input and ``add_lot`` does the same.
+        # So the lots nobody has priced are the ones sitting at or under that minimum.
+        lots = lots.filter(Q(reserve_price__isnull=True) | Q(reserve_price__lte=auction.minimum_bid))
+    lots = lots.select_related("species").order_by("lot_number_int", "custom_lot_number")
+
+    total = lots.count()
+    limit, offset = _slice(params)
+    rows: list[dict[str, Any]] = []
+    priced = 0
+    for lot in lots[offset : offset + limit]:
+        species = lot.species if lot.species_id else None
+        sales = _comparable_sales(user, text="" if species else lot.lot_name, species=species, exclude_lot=lot)
+        prices = _sample_prices(sales)
+        stats = _price_stats(prices)
+        suggestion = _suggested_opening(prices, auction.minimum_bid)
+        if suggestion is not None:
+            priced += 1
+        symbol = auction.currency_symbol
+        row: dict[str, Any] = {
+            "lot_number": lot.lot_number_display,
+            "name": untrusted_short(lot.lot_name),
+            "minimum_bid_now": str(lot.reserve_price) if lot.reserve_price is not None else None,
+            "suggested_start": str(suggestion) if suggestion is not None else None,
+            "url": lot.lot_link,
+            **stats,
+        }
+        row["based_on"] = (
+            f"{stats['sales']} past sale(s) of this, {symbol}{stats['low']} to {symbol}{stats['high']}, "
+            f"usually {symbol}{stats['median']}"
+            if stats
+            else "nothing like it has sold in your auctions before"
+        )
+        rows.append(row)
+    scope = "with no minimum bid set" if unpriced else "still unsold"
+    return {
+        "found": bool(total),
+        "auction": auction.title,
+        "lots": rows,
+        "count": total,
+        "showing": len(rows),
+        "offset": offset,
+        "how_the_number_is_worked_out": (
+            "The lower quarter of what the same thing has sold for in your past auctions, rounded "
+            f"down, never below this auction's own minimum bid of {auction.currency_symbol}"
+            f"{auction.minimum_bid}. A lot with fewer than {MIN_SALES_TO_SUGGEST} past sales behind "
+            f"it gets no suggestion. Worked out over the most recent {PRICE_SAMPLE_CAP} sales of "
+            "each thing at most."
+        ),
+        "summary": (
+            f"{total} lot(s) in {auction.title} {scope}; {priced} of the {len(rows)} shown have "
+            f"enough history for an opening price.{_showing(total, limit, offset)}"
+        ),
         **_about(auction=auction),
     }
 
@@ -6359,6 +6758,247 @@ def add_invoice_adjustment(request, params: dict[str, Any]) -> dict[str, Any]:
     )
 
 
+# --- refunds -----------------------------------------------------------------
+#
+# There are two different things a club means by "refund this lot", and the site only had a field
+# for one of them.
+#
+# ``Lot.partial_refund_percent`` is a **split**. It is baked into ``models.add_price_info``: the
+# buyer is charged the reduced price, ``your_cut`` shrinks by the same percentage, and ``club_cut``
+# is what is left over -- so the seller and the club give back their shares of the sale in the
+# proportion they took them. That is the right answer when the fish were wrong, and it is what the
+# Remove/refund button on a lot does.
+#
+# The other one is a goodwill refund: the buyer is made whole, the seller is not asked to give
+# anything back, and the club eats it out of its commission. There is no column for that and this
+# does not add one -- ``partial_refund_percent`` is a split by construction, and a second refund
+# field would have to be understood by every invoice, every payout, the treasurer's report and the
+# CSV export. What it is instead is what the treasurer does by hand: a discount line on the buyer's
+# invoice, with the lot and the seller untouched. That is exact rather than approximate, it is
+# already visible everywhere an invoice is, and the one thing it cannot do is cents --
+# ``InvoiceAdjustment.amount`` is a ``PositiveIntegerField``.
+
+#: What ``paid_by`` accepts, and which of the two refunds each word means. The words are the ones
+#: people say; "commission" and "house" both mean the club's own cut.
+_REFUND_PAID_BY = {
+    "seller": "seller",
+    "split": "seller",
+    "shared": "seller",
+    "both": "seller",
+    "club": "club",
+    "commission": "club",
+    "house": "club",
+}
+
+
+def _club_funded_refund(request, lot, percent: int, label: str) -> dict[str, Any]:
+    """Refund the buyer out of the club's cut, leaving the seller's payout alone.
+
+    A ``DISCOUNT`` row on the buyer's invoice, through ``InvoiceAdjustmentForm`` -- the invoice
+    page's own form, so the whole-dollar rule and the 150-character note are the page's rules and
+    not a second set. The lot is not touched at all, which is the point: everything that reads
+    ``partial_refund_percent`` (the seller's payout, the club's cut, the treasurer's report) goes on
+    saying what the sale really was, and the refund shows up where the money actually moved.
+    """
+    from .forms import InvoiceAdjustmentForm
+
+    user = request.user
+    auction = lot.auction
+    tax = Decimal(auction.tax or 0)
+    gross = _money(Decimal(lot.winning_price) * Decimal(percent) / 100 * (100 + tax) / 100)
+    if gross <= 0:
+        return _error("That works out to nothing to give back.")
+    if gross != gross.to_integral_value():
+        return _error(
+            f"A refund out of the club's cut goes on the buyer's invoice as an adjustment, and those "
+            f"are whole {auction.currency_symbol} only — this one comes to {auction.currency_symbol}{gross}. "
+            f"Use a percentage that lands on a whole number, or put the line on the invoice page by hand."
+        )
+    invoice = lot.winner_invoice
+    if invoice is None and lot.auctiontos_winner:
+        invoice = _invoice_for(lot.auctiontos_winner, auction, create=True)
+    if invoice is None:
+        return _error(
+            f"Lot {lot.lot_number_display} sold, but I can't find an invoice for whoever bought it, "
+            f"so there's nothing to put the refund on."
+        )
+    if invoice.status != "DRAFT":
+        return _error(
+            f"The buyer's invoice is {invoice.get_status_display().lower()}, not open, so a refund "
+            f"can't be added to it. Reopen it first, or hand the money back and leave the paperwork "
+            f"as it is."
+        )
+    form = InvoiceAdjustmentForm(
+        {"adjustment_type": "DISCOUNT", "amount": int(gross), "notes": label[:150]},
+        invoice=invoice,
+    )
+    if not form.is_valid():
+        problems = "; ".join(f"{field}: {' '.join(errors)}" for field, errors in form.errors.items())
+        return _error(f"That refund wasn't accepted: {problems}")
+    adjustment = form.save(commit=False)
+    adjustment.invoice = invoice
+    adjustment.user = user
+    adjustment.save()
+    invoice.refresh_from_db()
+    # On the lot as well as on the invoice. The lot's own history is where somebody looking at the
+    # lot next month will go, and this refund leaves no mark on the lot itself by design.
+    from .models import LotHistory
+
+    LotHistory.objects.create(
+        lot=lot,
+        user=user,
+        message=(
+            f"{user} refunded {auction.currency_symbol}{gross} to the buyer out of the club's cut. "
+            f"The seller's payout is unchanged."
+        ),
+        changed_price=True,
+    )
+    auction.create_history(
+        applies_to="LOTS",
+        action=f"Refunded lot {lot.lot_number_display} from the club's cut ({percent}%) {via(request)}",
+        user=user,
+    )
+    buyer = invoice.auctiontos_user
+    auction.create_history(
+        applies_to="INVOICES",
+        action=(
+            f"Adjusted invoice for {buyer.name if buyer else 'the buyer'}: {adjustment.display} {label} {via(request)}"
+        ),
+        user=user,
+    )
+    seller = lot.auctiontos_seller
+    return _ok(
+        f"Took {auction.currency_symbol}{gross} off the buyer's invoice for lot "
+        f"{lot.lot_number_display}, “{lot.lot_name}”. It came out of the club's cut — "
+        f"{seller.name if seller else 'the seller'} keeps the full payout and the lot still reads as "
+        f"sold for {auction.currency_symbol}{lot.winning_price}. It {invoice.invoice_summary_short}.",
+        lot_id=lot.pk,
+        paid_by="club",
+        percent=percent,
+        refunded=str(gross),
+        seller_payout_changed=False,
+        invoice=_invoice_block(invoice),
+        **_lot_echo(lot),
+        followups=[
+            {"label": "The buyer's invoice", "url": invoice.get_absolute_url()},
+            {"label": "View this lot", "url": lot.lot_link},
+        ],
+    )
+
+
+def refund_lot(request, params: dict[str, Any]) -> dict[str, Any]:
+    """Refund a sold lot, either the ordinary way or out of the club's own cut. Admins only.
+
+    ``paid_by="seller"`` is ``views.LotRefundDialog``'s path and nothing else: the same
+    ``Lot.refund`` call (Square card refund included, where the sale went through Square), the same
+    ``Invoice.recalculate`` on both sides, the same ``LOTS`` history line. ``paid_by="club"`` is
+    :func:`_club_funded_refund`.
+
+    A **settled invoice does not refuse** the ordinary refund, and that is deliberate rather than an
+    oversight: the dialog does the same thing and tells the admin to collect the difference in cash,
+    because a club that has already handed over the money still has to record the refund. What it
+    does instead is say so in the answer, per side, so nobody finds out from a spreadsheet in a
+    fortnight. The club-funded refund is different -- it *is* a line on the invoice -- and it
+    refuses a settled one exactly as ``add_invoice_adjustment`` does.
+    """
+    user = request.user
+    lot, problem = _resolve_lot(request, params)
+    if problem:
+        return problem
+    auction = lot.auction
+    if not auction:
+        return _error(f"“{lot.lot_name}” isn't in an auction, so there's no invoice to refund it on.")
+    remember_auction(request, auction)
+    if not _is_auction_admin(user, auction):
+        return _error(f"Only admins of {auction.title} can refund lots in {auction.title}.")
+    if not lot.winning_price:
+        return _error(
+            f"Lot {lot.lot_number_display}, “{lot.lot_name}”, hasn't sold, so there's nothing to "
+            f"refund. Removing an unsold lot is a different thing and lives on the lot's own page."
+        )
+
+    wanted = (_str(params, "paid_by") or "seller").lower()
+    paid_by = _REFUND_PAID_BY.get(wanted)
+    if not paid_by:
+        return _need(
+            f"I don't know what “{wanted}” means here. Who's paying for the refund — the seller "
+            f"(the ordinary split, where the club's cut shrinks too), or the club, out of its "
+            f"commission?"
+        )
+    percent = _int(params, "percent")
+    if percent is None:
+        percent = 100
+    if not 0 <= percent <= 100:
+        return _error("A refund is a percentage of what the lot sold for, between 0 and 100.")
+
+    label = (
+        _str(params, "reason")
+        or _str(params, "note")
+        or _str(params, "label")
+        or f"Refund: lot {lot.lot_number_display} {lot.lot_name}"
+    )
+    if paid_by == "club":
+        if not percent:
+            return _error(
+                "A club-funded refund is a line on the buyer's invoice, so there's no zero version "
+                "of it — delete the line on the invoice page to take one back."
+            )
+        return _club_funded_refund(request, lot, percent, label)
+
+    if lot.partial_refund_percent == percent:
+        return _ok(
+            f"Lot {lot.lot_number_display} already has a {percent}% refund on it; nothing changed.",
+            lot_id=lot.pk,
+            paid_by="seller",
+            percent=percent,
+            **_lot_echo(lot),
+        )
+    was = lot.partial_refund_percent or 0
+    # Read before the write: ``Lot.refund`` sends the card refund itself, and afterwards there is
+    # nothing left to tell us whether it did.
+    card_refund = bool(lot.square_refund_possible and not lot.no_more_refunds_possible)
+    auction.create_history(
+        applies_to="LOTS",
+        action=f"Removed/refunded lot {lot.lot_number_display} ({percent}%) {via(request)}",
+        user=user,
+    )
+    lot.refund(percent, user)
+    settled = []
+    for invoice, role in ((lot.sellers_invoice, "seller"), (lot.winner_invoice, "buyer")):
+        if invoice is None:
+            continue
+        if invoice.status == "DRAFT":
+            invoice.recalculate()
+        else:
+            settled.append(f"the {role}'s invoice is {invoice.get_status_display().lower()}")
+    summary = (
+        f"Refunded {percent}% on lot {lot.lot_number_display}, “{lot.lot_name}”. It comes off the "
+        f"buyer's invoice and off the seller's payout together, so the club's cut drops by the same "
+        f"share."
+    )
+    if lot.donation:
+        summary += " This is a donation, so the seller was never being paid for it — the whole refund is the club's."
+    if card_refund:
+        summary += " The card payment was refunded through Square automatically."
+    if settled:
+        summary += (
+            f" {' and '.join(settled).capitalize()} — already settled, so nothing was recalculated "
+            f"there and the money has to change hands in the room."
+        )
+    return _ok(
+        summary,
+        lot_id=lot.pk,
+        paid_by="seller",
+        percent=percent,
+        was=was,
+        seller_payout_changed=True,
+        settled_invoices=settled,
+        **_lot_echo(lot),
+        followups=[{"label": "View this lot", "url": lot.lot_link}],
+        undo={"action": "refund_lot", "params": {"lot_id": lot.pk, "percent": was, "paid_by": "seller"}},
+    )
+
+
 def set_invoice_status(request, params: dict[str, Any]) -> dict[str, Any]:
     """Mark one person's invoice paid, ready, or open again. Auction admins only.
 
@@ -6487,12 +7127,19 @@ def _can_edit_members(user, club) -> bool:
     return bool(check_club_permission(user, club, "permission_add_edit"))
 
 
-def _resolve_member(club, hint: str):
-    """Find one club member by name, email, bidder number or membership number. ``(member, problem)``."""
+def _resolve_member(club, hint: str, *, include_inactive: bool = False):
+    """Find one club member by name, email, bidder number or membership number. ``(member, problem)``.
+
+    ``include_inactive`` is for ``set_member_active`` and nothing else: every other caller is doing
+    something *to* a member of the club, and a deactivated row is not one. Bringing somebody back
+    is the one question whose answer is always a row this would otherwise refuse to find.
+    """
     hint = (hint or "").strip()
     if not hint:
         return None, _need("Which member? Give me a name or a membership number.")
-    members = ClubMember.objects.filter(club=club, is_deleted=False)
+    members = ClubMember.objects.filter(club=club)
+    if not include_inactive:
+        members = members.filter(is_deleted=False)
     exact = members.filter(Q(bidder_number__iexact=hint) | Q(email__iexact=hint)).first()
     if exact:
         return exact, None
@@ -7049,8 +7696,11 @@ def _bap_lot_or_problem(request, params: dict[str, Any]):
                 f"There's more than one lot matching “{hint}”. Which one?",
                 [
                     {
-                        "label": f"{lot.lot_name} (lot {lot.lot_number_display}, {lot.auction.title if lot.auction else ''})",
-                        "value": lot.pk,
+                        # The number on the label, never the pk. ``_bap_lot_or_problem`` resolves a
+                        # bare number through ``lot_number_int``, so the answer to this question is
+                        # a value the caller could also have read off the lot itself.
+                        "label": f"{untrusted_short(lot.lot_name)} (lot {lot.lot_number_display}, {lot.auction.title if lot.auction else ''})",
+                        "value": lot.lot_number_display,
                     }
                     for lot in matches[:AMBIGUOUS_LIMIT]
                 ],
@@ -9772,6 +10422,1134 @@ def create_auction(request, params: dict[str, Any]) -> dict[str, Any]:
     )
 
 
+# --- the writes that were only ever a page --------------------------------------------------
+#
+# Everything in this section is ``mcp_only``, and it is the first time that flag has been used for
+# a reason other than the size of the answer.
+#
+# The excuses these actions were sitting behind in :data:`NOT_A_SKILL` -- ``_NEEDS_THE_ROW``
+# ("identifying it out loud is harder than clicking it"), ``_FORM_PAGE`` ("more than one spoken
+# sentence can carry") -- are arguments about *speech*. They were written when the only client was
+# the command palette, and they are still completely correct about it: somebody dictating into a
+# box on a phone cannot say which of forty chat messages they meant, and mishearing the one they
+# did say is how the wrong message gets hidden. An agent is not speaking. It sends a structured
+# call naming a lot number it read out of ``list_lots`` a moment earlier, and the failure mode the
+# excuse was written about does not exist for it.
+#
+# So the palette keeps the page -- ``palette_routes`` guarantees ``go_to_page`` reaches every one of
+# them, which is exactly what it did before -- and ``/mcp/`` gets the tool. That is a deliberate
+# widening of ``Action.mcp_only`` from "the answer is the wrong shape for that surface" to "the
+# *caller* is the wrong shape for that surface", and it is written down there too.
+#
+# What does not change, because none of it is about the surface:
+#
+#   * every one of these is **one row**, which is the second prompt-injection bound;
+#   * every one re-asks the permission the page asks, on the object the page asks it about;
+#   * a club permission and an auction permission stay separate. An auction admin does not get a
+#     club's points desk by administering one of its auctions, and a club officer does not get an
+#     auction's chat by being in the club. Each resolver names which one it wants.
+
+
+def remove_lot(request, params: dict[str, Any]) -> dict[str, Any]:
+    """Delete a lot, or take a standalone one off sale. The seller's own lots only.
+
+    ``LotDelete`` and ``LotDeactivate``, which are two buttons on the same lot because the site has
+    two kinds of lot. A lot **in an auction** can only be deleted, and only while
+    ``Lot.can_be_deleted`` says so -- that property is the whole guard, and it is what stops
+    somebody pulling a lot nobody bid on at five to midnight. A **standalone** lot is deactivated
+    instead: it comes off the list, its bids are removed, and it can be put back.
+
+    This exists because ``add_lot`` and ``add_lots`` did and nothing undid them. A batch of forty
+    read off a photographed intake sheet is the likeliest way this server is used and a wrong row
+    in it is the likeliest mistake it makes, and until now the repair was "open a browser".
+    """
+    from .models import Bid
+
+    user = request.user
+    lot, problem = _resolve_lot(request, params)
+    if problem:
+        return problem
+    if not (user.is_superuser or lot.is_owned_by(user)):
+        return _error(f"Lot {lot.lot_number_display} isn't yours. Only the person selling a lot can remove it.")
+    restore = _preference_boolean(params.get("restore"))
+    permanently = bool(_preference_boolean(params.get("permanently")))
+    echo = _lot_echo(lot)
+
+    if restore:
+        if lot.auction_id:
+            return _error(
+                f"Lot {lot.lot_number_display} is in {lot.auction.title}, and lots in an auction are "
+                "never deactivated, so there is nothing to put back."
+            )
+        if not lot.deactivated:
+            return _error(f"Lot {lot.lot_number_display} is already on sale.")
+        lot.deactivated = False
+        lot.save(update_fields=["deactivated"])
+        return _ok(f"Put lot {lot.lot_number_display}, {lot.lot_name}, back on sale.", **echo)
+
+    # An auction lot has no deactivated state, so "remove it" can only mean delete -- and the
+    # auction's own rules decide whether that is allowed at all.
+    if lot.auction_id or permanently:
+        if not lot.can_be_deleted:
+            reason = lot.cannot_be_deleted_reason or "This lot can't be deleted."
+            return _error(f"Lot {lot.lot_number_display} can't be deleted. {reason}")
+        auction = lot.auction
+        if auction:
+            # The same history line ``LotDelete.form_valid`` writes, so a lot an agent removed and a
+            # lot a person removed read identically in the auction's log.
+            auction.create_history(
+                applies_to="LOTS",
+                action=f"Deleted lot {lot.lot_number_display} {via(request)}",
+                user=user,
+            )
+        lot.delete()
+        return _ok(
+            f"Deleted lot {lot.lot_number_display}, {lot.lot_name}" + (f", from {auction.title}." if auction else "."),
+            **echo,
+            deleted=True,
+        )
+
+    if lot.deactivated:
+        return _error(f"Lot {lot.lot_number_display} is already off sale. Say “restore” to put it back.")
+    # ``LotDeactivate``'s own body: the bids go, because leaving a bid on a lot nobody can buy is a
+    # promise to somebody that the lot will come back.
+    removed = 0
+    for bid in Bid.objects.exclude(is_deleted=True).filter(lot_number=lot):
+        bid.delete()
+        removed += 1
+    lot.deactivated = True
+    lot.save(update_fields=["deactivated"])
+    summary = f"Took lot {lot.lot_number_display}, {lot.lot_name}, off sale. It can be put back."
+    if removed:
+        summary += f" {removed} bid{'s' if removed != 1 else ''} on it {'were' if removed != 1 else 'was'} removed."
+    return _ok(summary, **echo, deactivated=True, bids_removed=removed)
+
+
+# --- the lot queue -----------------------------------------------------------
+#
+# ``lot_queue`` reads the running order and has since the beginning; nothing wrote it, so an
+# assistant could follow an in-person auction and could not run one. Adding and removing are one
+# row each, which is why they are here and reordering is not: a reorder is a write to every row in
+# the queue at once, and that is the one thing no tool on this site does.
+
+
+def _queue_auction_or_problem(request, params: dict[str, Any]):
+    """The auction whose queue is being changed, gated the way ``LotQueueMixin`` gates it."""
+    auction, problem = _auction_or_problem(request, params)
+    if problem:
+        return None, problem
+    if not _is_auction_admin(request.user, auction):
+        return None, _error(f"Only admins of {auction.title} can change its lot queue.")
+    if auction.is_online:
+        return None, _error(
+            f"{auction.title} is an online auction. The lot queue is the running order for an "
+            "auctioneer selling lots in a room, so online auctions don't have one."
+        )
+    return auction, None
+
+
+def _queued_lot_or_problem(request, auction, params: dict[str, Any]):
+    """One lot in this auction, by the number an auctioneer says. ``(lot, problem)``.
+
+    ``LotQueueMixin.resolve_lot_from_value``'s rule rather than ``find_lot``'s: in a room the
+    handle is the number printed on the label, which is ``custom_lot_number`` in a seller-dash
+    auction and ``lot_number_int`` everywhere else.
+    """
+    hint = _str(params, "lot") or _str(params, "query") or _str(params, "name")
+    if not hint:
+        return None, _need("Which lot? Give me its lot number.")
+    lots = auction.lots_qs.select_related("auction")
+    match = Q(custom_lot_number__iexact=hint) | Q(lot_name__icontains=hint)
+    if hint.isdigit():
+        match = match | Q(lot_number_int=int(hint))
+    matches = list(lots.filter(match)[: AMBIGUOUS_LIMIT + 1])
+    if not matches:
+        return None, _error(f"There's no lot “{hint}” in {auction.title}.")
+    if len(matches) > 1:
+        return None, _need(
+            f"More than one lot in {auction.title} matches “{hint}”. Which one?",
+            [
+                {
+                    "label": f"{untrusted_short(lot.lot_name)} (lot {lot.lot_number_display})",
+                    "value": lot.lot_number_display,
+                }
+                for lot in matches[:AMBIGUOUS_LIMIT]
+            ],
+        )
+    return matches[0], None
+
+
+def _queue_position(auction, lot) -> int | None:
+    from .models import LotQueueEntry
+
+    entry = LotQueueEntry.objects.filter(auction=auction, lot=lot).first()
+    if not entry:
+        return None
+    return LotQueueEntry.objects.filter(auction=auction, order__lte=entry.order).count()
+
+
+def queue_lot(request, params: dict[str, Any]) -> dict[str, Any]:
+    """Put one lot on the end of an in-person auction's running order. Auction admins only.
+
+    ``LotQueueMixin.add_lot``, refusals and side effects included: a sold lot and a lot already in
+    the queue are both refused by name, ``Lot.added_to_queue`` is set once and never unset, and
+    ``process_queue_notifications`` runs so the people watching that lot hear it is coming up.
+    """
+    from .models import LotQueueEntry
+    from .views import process_queue_notifications
+
+    auction, problem = _queue_auction_or_problem(request, params)
+    if problem:
+        return problem
+    lot, problem = _queued_lot_or_problem(request, auction, params)
+    if problem:
+        return problem
+    if lot.sold:
+        return _error(f"Lot {lot.lot_number_display} has already been sold, so it can't be queued.")
+    if LotQueueEntry.objects.filter(auction=auction, lot=lot).exists():
+        return _error(
+            f"Lot {lot.lot_number_display} is already in the queue, at number {_queue_position(auction, lot)}."
+        )
+    highest = LotQueueEntry.objects.filter(auction=auction).aggregate(top=models.Max("order"))["top"] or 0
+    LotQueueEntry.objects.create(auction=auction, lot=lot, order=highest + 1, added_by=request.user)
+    if not lot.added_to_queue:
+        lot.added_to_queue = True
+        lot.save(update_fields=["added_to_queue"])
+    process_queue_notifications(auction)
+    position = _queue_position(auction, lot)
+    return _ok(
+        f"Queued lot {lot.lot_number_display}, {lot.lot_name}. It's number {position} in the running order.",
+        **_lot_echo(lot),
+        position=position,
+        queue_length=LotQueueEntry.objects.filter(auction=auction).count(),
+        followups=[{"label": "Lot queue", "url": reverse("auction_lot_queue", kwargs={"slug": auction.slug})}],
+    )
+
+
+def unqueue_lot(request, params: dict[str, Any]) -> dict[str, Any]:
+    """Take one lot back off an in-person auction's running order. Auction admins only.
+
+    The queue page's Remove button. Keyed on the lot rather than on the queue row, because the lot
+    number is what somebody has in their hand when the seller pulls it.
+    """
+    from .models import LotQueueEntry
+    from .views import process_queue_notifications
+
+    auction, problem = _queue_auction_or_problem(request, params)
+    if problem:
+        return problem
+    lot, problem = _queued_lot_or_problem(request, auction, params)
+    if problem:
+        return problem
+    entries = LotQueueEntry.objects.filter(auction=auction, lot=lot)
+    if not entries.exists():
+        return _error(f"Lot {lot.lot_number_display} isn't in {auction.title}'s queue.")
+    entries.delete()
+    process_queue_notifications(auction)
+    remaining = LotQueueEntry.objects.filter(auction=auction).count()
+    return _ok(
+        f"Took lot {lot.lot_number_display}, {lot.lot_name}, out of the queue. "
+        f"{remaining} lot{'s' if remaining != 1 else ''} still queued.",
+        **_lot_echo(lot),
+        queue_length=remaining,
+        followups=[{"label": "Lot queue", "url": reverse("auction_lot_queue", kwargs={"slug": auction.slug})}],
+    )
+
+
+def remove_bid(request, params: dict[str, Any]) -> dict[str, Any]:
+    """Remove a bid from a lot. Auction admins, or a bidder taking back their own where allowed.
+
+    ``BidDelete``, and the counterpart ``place_bid`` never had. ``place_bid`` is registered
+    ``destructive`` on the stated grounds that a bid is a commitment the site has never had a way
+    to withdraw -- which was true of the *catalogue* and was never true of the site, because this
+    button has always been on the lot page.
+
+    Both of the view's gates are re-asked here, and they are different questions.
+    ``Lot.bids_can_be_removed`` is about the *lot*: once it has ended and its auction is closed,
+    nothing moves. ``Auction.allow_deleting_bids`` is about the *auction*, and only decides whether
+    an ordinary bidder may take back their own; an admin of the auction never needed it.
+    """
+    from .models import Bid, LotHistory
+
+    user = request.user
+    lot, problem = _resolve_lot(request, params)
+    if problem:
+        return problem
+    auction = lot.auction
+    if not auction:
+        return _error(
+            f"Lot {lot.lot_number_display} isn't in an auction, so bids on it are between you and the seller."
+        )
+    is_admin = _is_auction_admin(user, auction)
+    whose = _str(params, "person") or _str(params, "bidder") or _str(params, "name")
+    if whose and not is_admin:
+        return _error(f"Only admins of {auction.title} can remove somebody else's bid.")
+    if not lot.bids_can_be_removed:
+        return _error(
+            f"Bids can't be removed from lot {lot.lot_number_display} any more — it has ended and "
+            f"{auction.title} is closed."
+        )
+    bids = Bid.objects.exclude(is_deleted=True).filter(lot_number=lot)
+    if whose:
+        tos, problem = resolve_person(user, auction, whose)
+        if problem:
+            return problem
+        if not tos.user_id:
+            return _error(
+                f"{tos.name} has no account on this site, so they have never placed a bid — only a "
+                "winner set by an admin."
+            )
+        bids = bids.filter(user=tos.user_id)
+        described = untrusted_short(tos.name)
+    else:
+        if not (is_admin or auction.allow_deleting_bids):
+            return _error(
+                f"{auction.title} doesn't let bidders take back their own bids. An admin of the auction can remove one."
+            )
+        bids = bids.filter(user=user)
+        described = "your"
+    bid = bids.order_by("-amount").first()
+    if not bid:
+        who = "You have" if described == "your" else f"{described} has"
+        return _error(f"{who} no bid on lot {lot.lot_number_display}.")
+    amount = bid.amount
+    # ``Bid.delete`` is a soft delete, which is what the page does too -- the row stays for the
+    # audit trail and stops counting.
+    bid.delete()
+    LotHistory.objects.create(
+        lot=lot,
+        user=user,
+        message=f"{user.username} removed a bid of {lot.currency_symbol}{amount} {via(request)}",
+        changed_price=True,
+        notification_sent=True,
+        seen=True,
+        bid_amount=0,
+    )
+    auction.create_history(
+        applies_to="LOTS",
+        action=f"Removed a bid of {lot.currency_symbol}{amount} on lot {lot.lot_number_display} {via(request)}",
+        user=user,
+    )
+    lot.refresh_from_db()
+    possessive = "your" if described == "your" else f"{described}'s"
+    return _ok(
+        f"Removed {possessive} bid of {lot.currency_symbol}{amount} from lot {lot.lot_number_display}, "
+        f"{lot.lot_name}. It's now at {lot.currency_symbol}{lot.high_bid}.",
+        **_lot_echo(lot),
+        removed_bid=str(amount),
+        price_now=str(lot.high_bid),
+    )
+
+
+def remove_award(request, params: dict[str, Any]) -> dict[str, Any]:
+    """Take back the breeder award points given for one lot. Club points admins only.
+
+    ``BapAwardDeleteView``, which is the one hole in an otherwise complete area: ``award_points``
+    writes, ``review_points`` decides, ``points_queue`` and ``my_points`` read, and a wrong call in
+    a review session was a trip to the browser.
+
+    Keyed on the **lot**, deliberately, and this is the only shape it takes. An award that is not
+    about a lot -- a club giving somebody points for a talk -- has no handle anybody can say, so it
+    stays on the page. The lot's award fields are reset the way the view resets them, so the lot
+    goes back on the pending list rather than sitting there decided and unpaid.
+    """
+    from .models import ClubHistory
+
+    user = request.user
+    lot, club, problem = _bap_lot_or_problem(request, params)
+    if problem:
+        return problem
+    award = getattr(lot, "bap_award", None)
+    if not award:
+        return _error(
+            f"Lot {lot.lot_number_display} has no breeder award points on it, so there's nothing to take back."
+        )
+    if award.club_member.club_id != club.pk:
+        # Belt and braces: ``_bap_lot_or_problem`` already gated on the lot's own club, and this
+        # says so out loud rather than letting one club's officer delete another club's award.
+        return _error(f"Those points weren't awarded by {club.name}.")
+    member_name = str(award.club_member)
+    points = award.points
+    award.delete()
+    lot.bap_points_awarded = 0
+    lot.manually_approved = False
+    lot.bap_auto_reason = lot.sold_lot_no_bap_reason or ""
+    lot.save(update_fields=["bap_points_awarded", "manually_approved", "bap_auto_reason"])
+    ClubHistory.objects.create(
+        club=club,
+        user=user,
+        action=f"Deleted BAP award for {member_name} {via(request)}",
+        applies_to="BAP",
+    )
+    # ``_lot_echo`` already carries an ``_about`` naming the lot and its auction; this result is
+    # also about the club that took the points back, so the block is rebuilt rather than added to.
+    echo = _lot_echo(lot)
+    echo.update(_about(club=club, lot=lot))
+    return _ok(
+        f"Took back {untrusted_short(member_name)}'s {points} points for lot {lot.lot_number_display}, "
+        f"{lot.lot_name}. It's back on the pending list.",
+        **echo,
+        club=club.name,
+        person=untrusted_short(member_name),
+        points_removed=points,
+        followups=[
+            {"label": f"Pending points for {club.name}", "url": reverse("club_bap_lots", kwargs={"slug": club.slug})}
+        ],
+    )
+
+
+def set_member_active(request, params: dict[str, Any]) -> dict[str, Any]:
+    """Deactivate a club member, or bring a deactivated one back. Club admins only.
+
+    ``ClubMemberDeleteView`` and ``ClubMemberReactivateView``, which are one boolean and each
+    other's undo -- so this is one **idempotent** tool rather than two destructive ones. The pair
+    sat outside the catalogue while ``add_club_member``, ``update_club_member``, ``renew_member``
+    and ``list_club_members`` were all in it: an assistant could sign somebody up and could not
+    retire them.
+
+    Deactivating is a soft delete and nothing else. The **permanent** delete and the merge stay on
+    the page, where the row being destroyed is named on screen first.
+    """
+    from .models import ClubHistory
+
+    user = request.user
+    club, problem = _club_or_problem(request, params)
+    if problem:
+        return problem
+    if not _can_edit_members(user, club):
+        return _error(f"You don't have permission to change members of {club.name}.")
+    active = _preference_boolean(params.get("active"))
+    if active is None:
+        word = _str(params, "status").lower()
+        if word in {"active", "reactivate", "restore", "on"}:
+            active = True
+        elif word in {"inactive", "deactivate", "deactivated", "off", "retired"}:
+            active = False
+    if active is None:
+        return _need(
+            f"Should they be active in {club.name} or not? Say “deactivate” to retire them, "
+            "“reactivate” to bring them back."
+        )
+    member, problem = _resolve_member(club, _str(params, "person") or _str(params, "name"), include_inactive=True)
+    if problem:
+        return problem
+    if bool(member.is_deleted) is not active:
+        state = "already active" if active else "already deactivated"
+        return _ok(f"{member.name} is {state} in {club.name}.", person=member.name, club=club.name, active=active)
+    member.is_deleted = not active
+    member.save(update_fields=["is_deleted"])
+    ClubHistory.objects.create(
+        club=club,
+        user=user,
+        action=(f"Reactivated member {member}" if active else f"Deactivated member {member}") + f" {via(request)}",
+        applies_to="MEMBERS",
+    )
+    summary = (
+        f"Brought {member.name} back as a member of {club.name}."
+        if active
+        else f"Deactivated {member.name} in {club.name}. Nothing was deleted — they can be brought back."
+    )
+    return _ok(
+        summary,
+        followups=_member_followups(club, member),
+        person=member.name,
+        club=club.name,
+        active=active,
+        **_about(club=club),
+    )
+
+
+def remove_person(request, params: dict[str, Any]) -> dict[str, Any]:
+    """Take somebody out of an auction they were added to by mistake. Auction admins only.
+
+    ``AuctionTOSDelete``'s delete path, and only the half of it that touches one row. The view will
+    also delete every lot a person sold, or merge them into somebody else; neither is here. A
+    participant with lots, with a won lot or with an invoice is **refused with the reason**, and
+    the merge form is the followup -- deleting a participant cascades their invoice, its
+    adjustments and its payments away, which is why the page refuses it too.
+
+    So this is exactly the case it is named for: a duplicate bidder typed in twice at the door,
+    caught before anything happened.
+    """
+    from .models import Invoice
+    from .views import user_can_add_edit_people
+
+    user = request.user
+    auction, problem = _auction_or_problem(request, params)
+    if problem:
+        return problem
+    if not (_is_auction_admin(user, auction) or user_can_add_edit_people(user, auction)):
+        return _error(f"You don't have permission to change who is in {auction.title}.")
+    tos, problem = resolve_person(
+        user, auction, _str(params, "person") or _str(params, "bidder") or _str(params, "name")
+    )
+    if problem:
+        return problem
+    name = untrusted_short(tos.name)
+    if Invoice.objects.filter(auctiontos_user=tos).exists():
+        return _error(
+            f"{name} has an invoice in {auction.title}, so removing them would erase their payment "
+            "history. Merge them into the other record instead, on the auction's user list."
+        )
+    selling = Lot.objects.exclude(is_deleted=True).filter(auctiontos_seller=tos).count()
+    winning = Lot.objects.exclude(is_deleted=True).filter(auctiontos_winner=tos).count()
+    if selling or winning:
+        held = []
+        if selling:
+            held.append(f"{selling} lot{'s' if selling != 1 else ''} to sell")
+        if winning:
+            held.append(f"{winning} won lot{'s' if winning != 1 else ''}")
+        return _error(
+            f"{name} has {' and '.join(held)} in {auction.title}. Removing them would change those "
+            "lots too, so this needs the merge form on the auction's user list."
+        )
+    bidder_number = tos.bidder_number
+    auction.create_history(
+        applies_to="USERS",
+        action=f"Deleted {tos.name} {via(request)}",
+        user=user,
+    )
+    tos.delete()
+    return _ok(
+        f"Removed {name}" + (f" (bidder {bidder_number})" if bidder_number else "") + f" from {auction.title}.",
+        person=name,
+        bidder_number=bidder_number,
+        auction=auction.slug,
+        followups=[
+            {"label": f"People in {auction.title}", "url": reverse("auction_tos_list", kwargs={"slug": auction.slug})}
+        ],
+        **_about(auction=auction),
+    )
+
+
+def remove_invoice_adjustment(request, params: dict[str, Any]) -> dict[str, Any]:
+    """Take one line back off somebody's invoice. Auction admins only.
+
+    The delete half of the invoice page's adjustment formset, and the undo ``add_invoice_adjustment``
+    shipped without. That tool can put any line at all on anybody's invoice, and its own docstring
+    said the way to take a mistyped one off was the page -- which is a fine answer for somebody
+    sitting at a laptop and no answer at all over ``/mcp/``.
+
+    The line is named by **what it says**, not by a row id: a person says "take the raffle line off
+    Jane's invoice". More than one match is a question listing them, never a guess. The invoice has
+    to still be open, for the same reason adding to a settled one is refused -- changing what
+    somebody owes after they have paid is a dispute, not an adjustment.
+    """
+    user = request.user
+    auction, problem = _auction_or_problem(request, params)
+    if problem:
+        return problem
+    if not _is_auction_admin(user, auction):
+        return _error(f"Only admins of {auction.title} can change invoices in {auction.title}.")
+    tos, problem = resolve_person(user, auction, _str(params, "person") or _str(params, "bidder"))
+    if problem:
+        return problem
+    invoice = _invoice_for(tos, auction, create=False)
+    if not invoice:
+        return _error(f"{untrusted_short(tos.name)} has no invoice in {auction.title} yet.")
+    if invoice.status != "DRAFT":
+        return _error(
+            f"{tos.name}'s invoice is {invoice.get_status_display().lower()}, not open, so lines can't "
+            "be taken off it. Reopen it first if this is meant to change what they owe."
+        )
+    lines = list(invoice.invoiceadjustment_set.all())
+    if not lines:
+        return _error(f"There are no adjustments on {untrusted_short(tos.name)}'s invoice to remove.")
+    label = _str(params, "label") or _str(params, "note") or _str(params, "reason")
+    if not label:
+        return _need(
+            f"Which line? {untrusted_short(tos.name)}'s invoice has "
+            + ", ".join(f"“{untrusted_short(line.notes)}” ({line.display})" for line in lines[:AMBIGUOUS_LIMIT]),
+            [{"label": f"{line.notes} ({line.display})", "value": line.notes} for line in lines[:AMBIGUOUS_LIMIT]],
+        )
+    matches = [line for line in lines if label.lower() in (line.notes or "").lower()]
+    if not matches:
+        return _error(
+            f"Nothing on {untrusted_short(tos.name)}'s invoice says “{label}”. The lines on it are "
+            + ", ".join(f"“{untrusted_short(line.notes)}”" for line in lines[:AMBIGUOUS_LIMIT])
+            + "."
+        )
+    if len(matches) > 1:
+        return _need(
+            f"{untrusted_short(tos.name)} has more than one line matching “{label}”. Which one?",
+            [{"label": f"{line.notes} ({line.display})", "value": line.notes} for line in matches[:AMBIGUOUS_LIMIT]],
+        )
+    line = matches[0]
+    was_label = line.notes
+    was_amount = line.display
+    line.delete()
+    invoice.refresh_from_db()
+    auction.create_history(
+        applies_to="INVOICES",
+        action=f"Removed invoice line for {tos.name}: {was_amount} {was_label} {via(request)}",
+        user=user,
+    )
+    return _ok(
+        f"Took “{untrusted_short(was_label)}” ({was_amount}) off {untrusted_short(tos.name)}'s invoice. "
+        f"It {invoice.invoice_summary_short}.",
+        person=untrusted_short(tos.name),
+        bidder_number=tos.bidder_number,
+        auction=auction.slug,
+        removed={"label": untrusted_short(was_label), "amount": was_amount},
+        invoice=_invoice_block(invoice),
+        followups=[{"label": f"{tos.name}'s invoice", "url": invoice.get_absolute_url()}],
+        **_about(auction=auction, person=tos),
+    )
+
+
+def set_point_rule(request, params: dict[str, Any]) -> dict[str, Any]:
+    """Set what a genus or a category is worth in a club's breeder award program. BAP admins only.
+
+    ``ClubBapGenusOverrideSaveView`` and ``ClubBapCategoryOverrideSaveView``. These were excused as
+    "one row of a table you're already looking at", which is the one reason on that list they were
+    never a good fit for: this is not a row, it is a **rule**, and it is said in one sentence --
+    "Corydoras are worth 15 points here".
+
+    A genus rule outranks a category rule when a lot's species falls under both
+    (``Lot.bap_points_for_club``), so the answer says which of the two it wrote. Validation is the
+    page's own form, which means a genus no species belongs to is refused rather than becoming a
+    rule that silently never fires.
+    """
+    from .forms import ClubBapCategoryOverrideForm, ClubBapGenusOverrideForm
+    from .models import Category, ClubBapCategoryOverride, ClubBapGenusOverride, ClubHistory
+
+    user = request.user
+    club, problem = _bap_club_or_problem(request, params)
+    if problem:
+        return problem
+    points = _int(params, "points")
+    if points is None:
+        return _need("How many points? A number, and it replaces whatever that rule was worth before.")
+    genus = _str(params, "genus")
+    category_name = _str(params, "category")
+    if genus and category_name:
+        return _error(
+            "A rule is about a genus or about a category, not both. A genus rule outranks a "
+            "category rule, so set them one at a time."
+        )
+    if not genus and not category_name:
+        return _need("What is the rule about? Give me a genus, like Tropheus, or a category, like Cichlids.")
+
+    if genus:
+        form = ClubBapGenusOverrideForm({"genus": genus, "points": points})
+        if not form.is_valid():
+            return _form_problem(form)
+        genus = form.cleaned_data["genus"]
+        _rule, created = ClubBapGenusOverride.objects.update_or_create(
+            club=club, genus=genus, defaults={"points": form.cleaned_data["points"]}
+        )
+        subject, kind = genus, "genus"
+    else:
+        category = Category.objects.filter(name__iexact=category_name).first()
+        if not category:
+            category = Category.objects.filter(name__icontains=category_name).first()
+        if not category:
+            return _error(f"There's no category called “{category_name}” on this site.")
+        form = ClubBapCategoryOverrideForm({"category": category.pk, "points": points})
+        if not form.is_valid():
+            return _form_problem(form)
+        _rule, created = ClubBapCategoryOverride.objects.update_or_create(
+            club=club, category=category, defaults={"points": form.cleaned_data["points"]}
+        )
+        subject, kind = category.name, "category"
+    ClubHistory.objects.create(
+        club=club,
+        user=user,
+        action=f"Set BAP point override for {'the genus ' if kind == 'genus' else ''}{subject}: {points} pts {via(request)}",
+        applies_to="BAP",
+    )
+    note = (
+        "A genus rule beats a category rule wherever both apply."
+        if kind == "genus"
+        else "A genus rule would beat this wherever both apply."
+    )
+    return _ok(
+        f"{'Added' if created else 'Updated'} {club.name}'s rule: {subject} is worth {points} points. {note}",
+        club=club.name,
+        rule={"about": kind, "subject": subject, "points": points},
+        followups=[
+            {"label": f"{club.name}'s points settings", "url": reverse("club_bap_settings", kwargs={"slug": club.slug})}
+        ],
+        **_about(club=club),
+    )
+
+
+def set_invoice_renewal(request, params: dict[str, Any]) -> dict[str, Any]:
+    """Say whether somebody's invoice includes their membership renewal. Admins only.
+
+    ``InvoiceRenewalNeededToggleView`` -- one checkbox, and one of the most-said sentences at a
+    check-in table: "Jane's renewing this year, put it on her invoice." Ticking it is not just a
+    flag: it makes the person a club member *for this invoice*, which applies the member discount
+    and, in club-member-discount-split mode, the alternate split. So the answer echoes the new
+    total rather than saying "done".
+
+    **The permission is the invoice's own, and the two are not interchangeable.** An invoice
+    belonging to an auction asks the auction's admin check; one belonging to a club asks that
+    club's ``permission_add_edit``. An auction admin does not get a club's invoices by
+    administering one of its auctions.
+    """
+    from .views import _sync_tos_alternate_split, check_club_permission
+
+    user = request.user
+    auction, problem = _auction_or_problem(request, params)
+    if problem:
+        return problem
+    if not _is_auction_admin(user, auction):
+        return _error(f"Only admins of {auction.title} can change invoices in {auction.title}.")
+    tos, problem = resolve_person(user, auction, _str(params, "person") or _str(params, "bidder"))
+    if problem:
+        return problem
+    # Asked before anything is created. ``_invoice_for(create=True)`` writes a row, and writing one
+    # in order to find out whether the caller was allowed to touch it would leave an empty invoice
+    # behind every refusal.
+    existing = _invoice_for(tos, auction, create=False)
+    if existing is not None and not existing.auction_id and existing.club_id:
+        # A club invoice that happens to hang off this participant. The view asks the *club*, and
+        # administering one of a club's auctions is not administering the club.
+        if not check_club_permission(user, existing.club, "permission_add_edit"):
+            return _error(f"{untrusted_short(tos.name)}'s invoice belongs to {existing.club.name}, not to you.")
+    invoice = existing if existing is not None else _invoice_for(tos, auction, create=True)
+    if invoice.renewal_processed:
+        return _error(
+            f"{untrusted_short(tos.name)}'s renewal has already been processed on this invoice, so it "
+            "can't be changed here."
+        )
+    wanted = _preference_boolean(params.get("renewing"))
+    if wanted is None:
+        wanted = _preference_boolean(params.get("value"))
+    if wanted is None:
+        wanted = True
+    invoice.renewal_needed = wanted
+    invoice.renewal_manually_set = True
+    invoice.save(update_fields=["renewal_needed", "renewal_manually_set"])
+    _sync_tos_alternate_split(invoice.auctiontos_user, invoice)
+    invoice.recalculate()
+    invoice.refresh_from_db()
+    auction.create_history(
+        applies_to="INVOICES",
+        action=(f"{'Added' if wanted else 'Removed'} the membership renewal on {tos.name}'s invoice {via(request)}"),
+        user=user,
+    )
+    verb = "now includes" if wanted else "no longer includes"
+    return _ok(
+        f"{untrusted_short(tos.name)}'s invoice {verb} their membership renewal. It {invoice.invoice_summary_short}.",
+        person=untrusted_short(tos.name),
+        bidder_number=tos.bidder_number,
+        auction=auction.slug,
+        renewal_on_this_invoice=wanted,
+        invoice=_invoice_block(invoice),
+        followups=[{"label": f"{tos.name}'s invoice", "url": invoice.get_absolute_url()}],
+        **_about(auction=auction, person=tos),
+    )
+
+
+def resend_member_card(request, params: dict[str, Any]) -> dict[str, Any]:
+    """Email a club member a fresh link to their membership card. Club admins only.
+
+    ``ClubMemberResendCardView``. Not to be confused with ``send_membership_card``, which resolves
+    through ``_my_memberships`` and so only ever sends the caller **their own** card -- this is the
+    admin twin, and it is the one somebody at a meeting actually asks for.
+
+    The two cases worth reporting are the view's own, and both are answers rather than failures: a
+    member with no email address on file, and one marked do-not-contact.
+    """
+    from .models import ClubHistory
+    from .tasks import send_membership_card_email
+
+    user = request.user
+    club, problem = _club_or_problem(request, params, also="person")
+    if problem:
+        return problem
+    if not _can_edit_members(user, club):
+        return _error(f"You don't have permission to send cards to members of {club.name}.")
+    if not club.show_member_barcode:
+        return _error(f"{club.name} doesn't issue membership cards, so there's nothing to send.")
+    member, problem = _resolve_member(club, _str(params, "person") or _str(params, "name"))
+    if problem:
+        return problem
+    if not member.email:
+        return _error(f"{member.display_name} has no email address on file, so there's nowhere to send it.")
+    if member.contact_status == "do_not_contact":
+        return _error(f"{member.display_name} is marked do-not-contact, so no email was sent.")
+    send_membership_card_email(member)
+    ClubHistory.objects.create(
+        club=club,
+        user=user,
+        action=f"Sent membership card to {member} {via(request)}",
+        applies_to="MEMBERS",
+    )
+    return _ok(
+        f"Emailed {member.display_name}'s membership card to {member.email}.",
+        person=member.display_name,
+        club=club.name,
+        followups=_member_followups(club, member),
+        **_about(club=club),
+    )
+
+
+def leave_feedback(request, params: dict[str, Any]) -> dict[str, Any]:
+    """Leave feedback on a lot, as its buyer or as its seller.
+
+    ``Feedback``, and the only thing in this section that is not administration. The catalogue
+    leans hard towards people who run auctions; this is a capability every member has had on every
+    lot page for years and could not reach any other way.
+
+    Which side you are is **read off the lot, not asked**: the site knows whether this account won
+    it or sold it, and a person who is neither is refused exactly as the view refuses them. Buyer
+    feedback is about the seller and lands in ``Lot.feedback_*``; seller feedback is about the
+    buyer and lands in ``Lot.winner_feedback_*``.
+    """
+    from .views import FEEDBACK_TEXT_MAX_LENGTH
+
+    user = request.user
+    lot, problem = _resolve_lot(request, params)
+    if problem:
+        return problem
+    won_it = bool(
+        (lot.winner_id and lot.winner_id == user.pk)
+        or (
+            lot.auctiontos_winner
+            and lot.auctiontos_winner.user_id
+            and (lot.auctiontos_winner.user_id == user.pk or lot.auctiontos_winner.email == user.email)
+        )
+    )
+    sold_it = bool(lot.is_owned_by(user))
+    named = _str(params, "as").lower() or _str(params, "role").lower()
+    if named in {"buyer", "winner"} and not won_it:
+        return _error(f"You didn't win lot {lot.lot_number_display}, so you can't leave buyer feedback on it.")
+    if named == "seller" and not sold_it:
+        return _error(f"You didn't sell lot {lot.lot_number_display}, so you can't leave seller feedback on it.")
+    if won_it and (not sold_it or named in {"buyer", "winner"}):
+        as_buyer = True
+    elif sold_it:
+        as_buyer = False
+    else:
+        return _error(
+            f"Only the buyer or the seller of lot {lot.lot_number_display} can leave feedback on it, "
+            "and you're neither."
+        )
+    rating = _feedback_rating(params)
+    text = _str(params, "text") or _str(params, "comment") or _str(params, "feedback")
+    if rating is None and not text:
+        return _need(
+            "Was it good, bad or neither, and is there anything you want to say about it? "
+            "I can record a rating, a comment, or both."
+        )
+    fields = []
+    if as_buyer:
+        if rating is not None:
+            lot.feedback_rating = rating
+            fields.append("feedback_rating")
+        if text:
+            lot.feedback_text = text[:FEEDBACK_TEXT_MAX_LENGTH]
+            fields.append("feedback_text")
+        about = "the seller"
+    else:
+        if rating is not None:
+            lot.winner_feedback_rating = rating
+            fields.append("winner_feedback_rating")
+        if text:
+            lot.winner_feedback_text = text[:FEEDBACK_TEXT_MAX_LENGTH]
+            fields.append("winner_feedback_text")
+        about = "the buyer"
+    lot.save(update_fields=fields)
+    words = {1: "positive", 0: "neutral", -1: "negative"}
+    said = f"{words[rating]} feedback" if rating is not None else "a comment"
+    return _ok(
+        f"Left {said} about {about} on lot {lot.lot_number_display}, {lot.lot_name}.",
+        **_lot_echo(lot),
+        left_as="buyer" if as_buyer else "seller",
+        rating=rating,
+    )
+
+
+#: What a rating sounds like when somebody says it. -1/0/1 is what the column stores
+#: (``MinValueValidator(-1)``/``MaxValueValidator(1)``), and nobody says "minus one".
+_FEEDBACK_WORDS = {
+    "positive": 1,
+    "good": 1,
+    "great": 1,
+    "happy": 1,
+    "up": 1,
+    "neutral": 0,
+    "ok": 0,
+    "okay": 0,
+    "fine": 0,
+    "negative": -1,
+    "bad": -1,
+    "poor": -1,
+    "unhappy": -1,
+    "down": -1,
+}
+
+
+def _feedback_rating(params: dict[str, Any]) -> int | None:
+    """A feedback rating as -1, 0 or 1, or ``None`` when none was given."""
+    raw = params.get("rating")
+    if raw in (None, ""):
+        return None
+    word = str(raw).strip().lower()
+    if word in _FEEDBACK_WORDS:
+        return _FEEDBACK_WORDS[word]
+    value = _int(params, "rating")
+    if value is None or value not in (-1, 0, 1):
+        return None
+    return value
+
+
+def hide_chat_message(request, params: dict[str, Any]) -> dict[str, Any]:
+    """Hide a chat message on a lot, or put a hidden one back. Auction admins only.
+
+    ``AuctionChatDeleteUndelete``, which is a toggle and therefore its own undo. The assistant has
+    always been able to *read* what people posted on a lot -- fenced in guillemets, because it is
+    untrusted text -- and could do nothing whatever about an abusive one. Fencing a message and
+    being able to hide it are the same feature seen from two ends.
+
+    The message is named by **what it says**: a phrase out of it, matched against that lot's chat.
+    More than one match is a question listing them, never a guess -- and both the question and the
+    answer keep the fencing, because quoting somebody's message back is still quoting somebody.
+    """
+    from .models import LotHistory
+
+    user = request.user
+    lot, problem = _resolve_lot(request, params)
+    if problem:
+        return problem
+    auction = lot.auction
+    if not auction:
+        return _error(f"Lot {lot.lot_number_display} isn't in an auction, so there is no auction admin to moderate it.")
+    if not _is_auction_admin(user, auction):
+        return _error(f"Only admins of {auction.title} can hide chat messages on its lots.")
+    hide = _preference_boolean(params.get("hide"))
+    if hide is None:
+        hide = not _preference_boolean(params.get("restore"))
+    # ``changed_price`` is what tells a chat message from a bid record; the admin chat page uses
+    # the same test.
+    messages_qs = LotHistory.objects.filter(lot=lot, changed_price=False, removed=not hide).order_by("-timestamp")
+    phrase = _str(params, "message") or _str(params, "text") or _str(params, "query")
+    if not phrase:
+        recent = list(messages_qs[:AMBIGUOUS_LIMIT])
+        if not recent:
+            return _error(
+                f"There are no {'visible' if hide else 'hidden'} chat messages on lot {lot.lot_number_display}."
+            )
+        return _need(
+            f"Which message on lot {lot.lot_number_display}? Give me a few words out of it.",
+            [{"label": untrusted_short(entry.message or ""), "value": (entry.message or "")[:60]} for entry in recent],
+        )
+    matches = list(messages_qs.filter(message__icontains=phrase)[: AMBIGUOUS_LIMIT + 1])
+    if not matches:
+        return _error(
+            f"No {'visible' if hide else 'hidden'} message on lot {lot.lot_number_display} contains “{phrase}”."
+        )
+    if len(matches) > 1:
+        return _need(
+            f"More than one message on lot {lot.lot_number_display} contains “{phrase}”. Which one?",
+            [
+                {"label": untrusted_short(entry.message or ""), "value": (entry.message or "")[:60]}
+                for entry in matches[:AMBIGUOUS_LIMIT]
+            ],
+        )
+    entry = matches[0]
+    entry.removed = hide
+    entry.save(update_fields=["removed"])
+    if hide:
+        # Only hiding is logged, which is what the view does: putting one back is undoing a
+        # moderation decision, not taking one.
+        auction.create_history(applies_to="USERS", action=f"Deleted chat message {via(request)}", user=user)
+    return _ok(
+        (
+            f"Hid a chat message on lot {lot.lot_number_display}: {untrusted_short(entry.message or '')}"
+            if hide
+            else f"Put a chat message back on lot {lot.lot_number_display}: {untrusted_short(entry.message or '')}"
+        ),
+        **_lot_echo(lot),
+        hidden=hide,
+    )
+
+
+def record_club_money(request, params: dict[str, Any]) -> dict[str, Any]:
+    """Write one line in a club's own books: money in, or money out. Club treasurers only.
+
+    ``ClubMoneyCreateView``. This sat under "money changes hands here", and no money changes hands
+    -- nothing is charged, refunded or paid out. It is a bookkeeping row: "put $40 in for the
+    raffle prizes we bought", "record the speaker's travel".
+
+    The dangerous half is the view's own and is kept: the categories that are **reconciled from
+    invoices** cannot be entered by hand, because the next reconcile would silently undo them, and
+    neither can the balance adjustment, which is what the Set balance box on the page is for. Ask
+    for one of those and the answer names the ones that are allowed.
+    """
+    from .forms import ClubMoneyForm
+    from .models import ClubHistory, ClubMoney
+    from .views import check_club_permission
+
+    user = request.user
+    club, problem = _club_or_problem(request, params)
+    if problem:
+        return problem
+    if not (
+        check_club_permission(user, club, "permission_money")
+        or check_club_permission(user, club, "permission_edit_club")
+    ):
+        return _error(f"You don't have permission to keep {club.name}'s books.")
+    blocked = set(ClubMoney.AUTO_CATEGORIES) | {ClubMoney.CATEGORY_ADJUSTMENT}
+    allowed = [choice for choice in ClubMoney.CATEGORY_CHOICES if choice[0] not in blocked]
+    amount = _decimal(params, "amount")
+    if amount is None:
+        return _need(
+            "How much? A negative number is money going out of the club's account, a positive one is money coming in."
+        )
+    if amount == 0:
+        return _error("A line for nothing would be a row in the books saying nothing.")
+    description = _str(params, "description") or _str(params, "note") or _str(params, "label")
+    if not description:
+        return _need("What was it for? It goes in the club's books, so it needs saying — “raffle prizes”, “hall hire”.")
+    wanted = (_str(params, "category") or "").strip().lower().replace(" ", "_")
+    category = ""
+    for value, label in allowed:
+        if wanted in {value, label.lower(), label.lower().replace(" ", "_")}:
+            category = value
+            break
+    if not category:
+        names = ", ".join(label for _value, label in allowed)
+        if not wanted:
+            return _need(f"Which category? {club.name} can record: {names}.")
+        return _error(
+            f"“{_str(params, 'category')}” isn't a category a person can enter. The ones that are: {names}. "
+            "The rest are worked out from invoices, so writing one by hand would be undone at the next reconcile."
+        )
+    when = _str(params, "date") or timezone.localdate().isoformat()
+    form = ClubMoneyForm(
+        {
+            "date": when,
+            "amount": amount,
+            "description": description[: ClubMoney.DESCRIPTION_MAX_LENGTH],
+            "category": category,
+        },
+        category_choices=allowed,
+    )
+    if not form.is_valid():
+        return _form_problem(form)
+    entry = form.save(commit=False)
+    entry.club = club
+    entry.created_by = user
+    entry.save()
+    ClubHistory.objects.create(
+        club=club,
+        user=user,
+        action=f"Added {entry.get_category_display()} record: {entry.description} ({entry.amount}) {via(request)}",
+        applies_to="SETTINGS",
+    )
+    balance = ClubMoney.objects.filter(club=club).aggregate(total=models.Sum("amount"))["total"] or Decimal("0.00")
+    direction = "out of" if entry.amount < 0 else "into"
+    return _ok(
+        f"Recorded {entry.amount} {direction} {club.name}'s books as {entry.get_category_display().lower()} "
+        f"— “{entry.description}”. The balance is now {balance}.",
+        club=club.name,
+        entry={
+            "date": str(entry.date),
+            "amount": str(entry.amount),
+            "description": entry.description,
+            "category": entry.get_category_display(),
+        },
+        balance=str(balance),
+        followups=[
+            {"label": f"{club.name}'s money", "url": reverse("club_treasurer_report", kwargs={"slug": club.slug})}
+        ],
+        **_about(club=club),
+    )
+
+
+def rotate_lot_image(request, params: dict[str, Any]) -> dict[str, Any]:
+    """Turn a lot's photo the right way up, and pick which one is the thumbnail.
+
+    ``ImagesRotate`` and ``ImagesPrimary``. The first of those was excused as needing a file, and
+    it takes no file at all -- it takes an angle. What is genuinely new is the **caller**: a client
+    that can see the picture can be handed the image's address, look at it, and say that it is
+    ninety degrees out. That is the one thing in this section the command palette could never have
+    done, rather than something it merely did badly.
+
+    Permission is ``Lot.image_permission_check``, the same test ``add_lot_image`` and
+    ``remove_lot_image`` use -- which also refuses once a lot has sold, and refuses on a lot that
+    borrows another lot's pictures.
+    """
+    from .models import LotImage
+
+    user = request.user
+    lot, problem = _resolve_lot(request, params)
+    if problem:
+        return problem
+    if not lot.image_permission_check(user):
+        return _error(f"You can't change the pictures on lot {lot.lot_number_display}.")
+    images = list(LotImage.objects.filter(lot_number=lot).order_by("-is_primary", "pk"))
+    if not images:
+        return _error(f"Lot {lot.lot_number_display} has no pictures yet. add_lot_image puts one on.")
+    image_id = _int(params, "image_id")
+    if image_id:
+        image = next((candidate for candidate in images if candidate.pk == image_id), None)
+        if not image:
+            return _error(f"Lot {lot.lot_number_display} has no picture with that id. describe_lot lists them.")
+    elif len(images) > 1:
+        return _need(
+            f"Lot {lot.lot_number_display} has {len(images)} pictures. Which one? describe_lot lists "
+            "them with their ids.",
+            [
+                {"label": untrusted_short(candidate.caption or f"picture {index + 1}"), "value": candidate.pk}
+                for index, candidate in enumerate(images[:AMBIGUOUS_LIMIT])
+            ],
+        )
+    else:
+        image = images[0]
+
+    angle = _int(params, "angle")
+    make_primary = _preference_boolean(params.get("primary"))
+    if angle is None and not make_primary:
+        return _need(
+            "What should I do with it? Give me an angle in degrees to turn it — 90, 180 or 270 — "
+            "or say to make it the thumbnail."
+        )
+    did = []
+    if angle is not None:
+        if angle % 90 or not (0 < angle % 360 < 360):
+            return _error("Turn it by 90, 180 or 270 degrees. Anything else re-encodes the photo for nothing.")
+        rotated = _rotate_image_file(image, angle % 360)
+        if rotated is not None:
+            return rotated
+        did.append(f"turned it {angle % 360}°")
+    if make_primary:
+        LotImage.objects.filter(lot_number=lot).exclude(pk=image.pk).update(is_primary=False)
+        image.is_primary = True
+        image.save(update_fields=["is_primary"])
+        did.append("made it the thumbnail")
+    image.refresh_from_db()
+    return _ok(
+        f"On lot {lot.lot_number_display}, {' and '.join(did)}.",
+        **_lot_echo(lot),
+        image=_image_echo(image),
+    )
+
+
+def _rotate_image_file(image, angle: int):
+    """Rotate one ``LotImage`` in place, as ``ImagesRotate`` does. A problem dict, or ``None``."""
+    from io import BytesIO
+
+    from django.core.files.base import ContentFile
+    from PIL import Image
+
+    if not image.image:
+        return _error("That picture has no file behind it, so there is nothing to turn.")
+    opened = Image.open(BytesIO(image.image.read()))
+    opened = opened.rotate(angle, expand=True)
+    if opened.mode in ("RGBA", "P"):
+        opened = opened.convert("RGB")
+    output = BytesIO()
+    opened.save(output, format="JPEG", quality=85)
+    output.seek(0)
+    image.image.save(image.image.name.replace("images/", ""), ContentFile(output.read()), save=True)
+    return None
+
+
 # --- registry ----------------------------------------------------------------
 
 register(
@@ -9994,7 +11772,10 @@ register(
         params={
             "name": "string, required. What the item is, e.g. 'blue shrimp'. Never a person's name.",
             "auction": "string, optional. Auction slug or title. See my_context.",
-            "quantity": "integer, optional, default 1.",
+            "quantity": (
+                "integer, optional, default 1. How many fish, plants or bags are in this ONE lot — "
+                "one lot number, one label. Several separate lots of the same thing is add_lots."
+            ),
             "bidder": "string, optional, ADMINS ONLY. Bidder number or name to add the lot for.",
             "reserve_price": "number, optional. The minimum bid; omit for the auction's minimum.",
             "buy_now_price": "number, optional.",
@@ -10029,7 +11810,7 @@ register(
         },
         danger=DANGER_CONFIRM,
         resolver=add_lot,
-        aliases={"seller", "lot_name", "price"},
+        aliases={"seller", "lot_name", "price", "count"},
         confirm_template="Add a lot",
         examples=["add a lot of blue shrimp", "add 3 guppies for bidder 14"],
     )
@@ -10040,15 +11821,25 @@ register(
         name="add_lots",
         description=(
             "Add SEVERAL lots to one auction at once. Use this whenever the user names more than "
-            "one thing in a single sentence — 'add a java fern, a heater and three guppies'. Each "
-            "entry in 'lots' may be a plain name, or an object with a name plus any of the "
-            "per-lot fields add_lot takes. Anything set at the top level (bidder, donation, "
-            "i_bred_this_fish) applies to every lot that doesn't set it itself."
+            "one thing in a single sentence — 'add a java fern, a heater and three guppies' — and "
+            "for several lots of the SAME thing, which is what 'count' is for: 'add 12 lots called "
+            "fish for bidder 14' is one name with a count of 12, and comes out as 12 lots with 12 "
+            "lot numbers and 12 labels. Each entry in 'lots' may be a plain name, or an object with "
+            "a name plus any of the per-lot fields add_lot takes, plus its own 'count'. Anything "
+            "set at the top level (bidder, donation, i_bred_this_fish, count) applies to every lot "
+            "that doesn't set it itself. This is also the tool for a list somebody has read off a "
+            "photograph or a sheet of paper: one call, one name per entry."
         ),
         params={
             "lots": (
                 "array of string or object, required. The things to add, e.g. ['java fern', 'heater'] or "
                 "[{'name': 'guppies', 'quantity': 3}]."
+            ),
+            "count": (
+                "integer, optional, default 1. How many SEPARATE lots to make of each entry — each "
+                "one gets its own lot number and its own label. Not the same as add_lot's "
+                f"'quantity', which is how many fish are in one lot. Up to {MAX_LOTS_PER_BATCH} lots "
+                "in one call, counting the copies."
             ),
             "auction": "string, optional. Auction slug or title. See my_context.",
             "bidder": "string, optional, ADMINS ONLY. Bidder number or name to add the lots for.",
@@ -10059,7 +11850,11 @@ register(
         resolver=add_lots,
         aliases={"seller", "items", "names"},
         confirm_template="Add several lots",
-        examples=["add a java fern, a heater and three guppies", "add 3 lots of shrimp for bidder 14"],
+        examples=[
+            "add a java fern, a heater and three guppies",
+            "add 12 lots called fish for bidder 14",
+            "add 5 donation lots under the club's bidder number",
+        ],
     )
 )
 
@@ -10610,6 +12405,56 @@ register(
 
 register(
     Action(
+        name="refund_lot",
+        description=(
+            "Refund a lot that has sold, in an auction this user administers. There are two ways to "
+            "pay for it and 'paid_by' picks which. The default, 'seller', is this site's ordinary "
+            "refund: a percentage comes off the buyer's invoice and off the seller's payout "
+            "together, so the club's commission drops by the same share — the Remove/refund button "
+            "on the lot, and it sends the money back to the card where the sale went through "
+            "Square. 'club' is the goodwill refund a club gives when it doesn't want the seller out "
+            "of pocket: the buyer is made whole, the seller's payout is untouched, and the whole "
+            "refund comes out of the club's cut as a discount line on the buyer's invoice, in whole "
+            "dollars. Both leave the lot sold and neither deletes anything; a lot that should not "
+            "have sold at all is undo_sale."
+        ),
+        params={
+            "lot": "string, optional. Lot number or name. Required unless the user is on that lot's page.",
+            "paid_by": (
+                "string, optional, default 'seller'. 'seller' splits the refund the way the sale "
+                "was split, so the club's cut shrinks with it. 'club' pays the whole refund out of "
+                "the club's commission and leaves the seller's payout alone."
+            ),
+            "percent": (
+                "integer, optional, default 100. How much of the sale price to give back. 0 takes "
+                "an existing refund back off a lot, which only means anything when the seller is "
+                "paying."
+            ),
+            "reason": (
+                "string, optional. What the line on the buyer's invoice says, for a club-funded "
+                "refund. They read it, so it has to make sense to them — 'refund, dead on arrival'."
+            ),
+            "auction": "string, optional. Auction slug or title. See my_context.",
+        },
+        danger=DANGER_CONFIRM,
+        # Money, and it rewrites what two people owe. The ordinary refund can be set back with
+        # ``percent: 0``; the club-funded one is a row on an invoice, which is deleted on the
+        # invoice page, the same as every other adjustment.
+        destructive=True,
+        resolver=refund_lot,
+        aliases={"lot_id", "name", "query", "note", "label"},
+        confirm_template="Refund a lot",
+        needs=NEEDS_AUCTION_ADMIN,
+        examples=[
+            "refund lot 14",
+            "refund this one out of the club's cut, not the seller's",
+            "give bidder 12 half their money back on lot 8",
+        ],
+    )
+)
+
+register(
+    Action(
         name="place_bid",
         description=(
             "Bid on a lot as the signed-in user, through the same code the bid box on the lot page "
@@ -10805,8 +12650,7 @@ register(
             "the lots, and award_points for points that aren't about a lot at all."
         ),
         params={
-            "lot": "string, optional. The lot number, or its name. Not needed if lot_id is given.",
-            "lot_id": "integer, optional. The lot's id, as points_queue returns it.",
+            "lot": "string, required. The lot number, or its name, as points_queue returns it.",
             "decision": "string, optional, default approve. One of approve, deny, undo.",
             "points": "integer, optional. BAP points, overriding what the club's rules would give.",
             "hap_points": "integer, optional. Only if the club runs a separate HAP.",
@@ -10822,7 +12666,9 @@ register(
         # ``test_mcp.ConfirmationTierTests``.
         asks_first=False,
         resolver=review_points,
-        aliases={"name", "query", "action"},
+        # ``lot_id`` stays accepted and stops being advertised: it is a primary key, and
+        # ``points_queue`` no longer hands one out over MCP. See ``mcp.tools._INTERNAL_RESULT_KEYS``.
+        aliases={"name", "query", "action", "lot_id"},
         confirm_template="Decide a lot's points",
         examples=["approve the points for lot 14", "award 20 points for lot 3", "deny points for lot 9"],
         needs=NEEDS_CLUB_ADMIN,
@@ -11432,12 +13278,12 @@ register(
                 "string, optional, ADMINS ONLY. A bidder number or name to print that one person's "
                 "labels — 'print bidder 14's labels'. Combine with scope 'unprinted' for only their new ones."
             ),
-            "lot_id": "integer, optional. A specific lot to print the label for.",
+            "lot": "string, optional. One lot number, to print just that label.",
             "auction": "string, optional. Auction slug or title. See my_context.",
         },
         danger=DANGER_NAVIGATE,
         resolver=print_labels,
-        aliases={"bidder_number", "person"},
+        aliases={"bidder_number", "person", "lot_id", "name", "query"},
         examples=["print my labels", "print that label", "print bidder 14's labels"],
     )
 )
@@ -11598,12 +13444,17 @@ register(
         name="list_lots",
         description=(
             "List the lots in an auction matching one status: 'unsold' (no winner yet), 'sold', "
-            "'mine' (the user's own lots), 'donations', or 'all'. This answers 'which lots haven't "
-            "sold?', 'did my lots sell?' and 'what's left?'. If they want to SEE and browse lots "
+            "'mine' (the user's own lots), 'donations', or 'all', optionally narrowed to a search "
+            "term. This answers 'which lots haven't sold?', 'did my lots sell?', 'what's left?' and "
+            "— with 'query' — 'show me the unsold daphnia'. If they want to SEE and browse lots "
             "matching a search term, use search_lots instead."
         ),
         params={
             "status": "string, required. One of: 'unsold', 'sold', 'mine', 'donations', 'all'.",
+            "query": (
+                "string, optional. Only lots whose name, or whose species, contains this. Combine "
+                "it with status 'unsold' for 'what daphnia is still unsold?'."
+            ),
             "auction": "string, optional. Auction slug or title. See my_context.",
             "without_images": (
                 "boolean, optional. True for only the lots with no picture on them yet — combine "
@@ -11613,8 +13464,84 @@ register(
         },
         danger=DANGER_SAFE,
         resolver=list_lots,
-        aliases={"query", "filter"},
+        aliases={"filter", "name"},
         lookup=True,
+        examples=["which lots haven't sold?", "show me the remaining daphnia", "what's left?"],
+    )
+)
+
+register(
+    Action(
+        name="price_history",
+        description=(
+            "What one thing has sold for before, out of the auctions this user is part of. This is "
+            "'what does daphnia usually go for?', 'list the sale prices of this in past auctions' "
+            "and 'what did these go for last time?'. The answer is the individual sales — price, "
+            "quantity, which auction, when — with the low, the median and the high over all of "
+            "them. A lot number is read as the lot in front of them, and the search is then done on "
+            "that lot's species where it has one, so a lot called 'Water fleas' still matches every "
+            "Daphnia sold before. Prices come only from auctions this user created, joined or helps "
+            "run: it is their own club's price history, not the site's."
+        ),
+        params={
+            "item": (
+                "string, required. What the thing is, or a lot number. 'daphnia', 'blue dream shrimp', 'L134', '42'."
+            ),
+            "auction": (
+                "string, optional. Which auction to read a lot NUMBER against. The sales themselves "
+                "come from every auction this user is part of either way."
+            ),
+            "years": (
+                f"integer, optional, default {PRICE_HISTORY_YEARS}. How far back to look. 0 for the "
+                f"whole history, up to 20 years."
+            ),
+            **PAGING_PARAMS,
+        },
+        danger=DANGER_SAFE,
+        resolver=price_history,
+        aliases={"lot", "name", "query", "lot_id"},
+        lookup=True,
+        examples=[
+            "what does daphnia usually go for?",
+            "list the sale prices of this in past auctions",
+            "what did blue dream shrimp sell for last year?",
+        ],
+    )
+)
+
+register(
+    Action(
+        name="suggest_starting_prices",
+        description=(
+            "Suggest an opening bid for the lots in an auction that nobody has priced — the ones "
+            "still sitting at the auction's own minimum bid, which is what the add-lot form fills "
+            "in when the seller doesn't touch the field. For auction admins, and it is what an "
+            "auctioneer means by 'what should I start these at?'. Each row carries the lot, the "
+            "minimum bid on it now, what the same thing has gone for in this club's past auctions, "
+            "and a suggested opening price worked out from those sales: the lower quarter of what "
+            "it has sold for, rounded down, and not below the auction's minimum. A lot with "
+            "nothing comparable behind it gets no number and says so instead of a guess. Nothing is "
+            "changed — edit_lot is what sets a minimum bid."
+        ),
+        params={
+            "auction": "string, optional. Auction slug or title. See my_context.",
+            "lot": "string, optional. One lot number or name, for a price on just that one.",
+            "all_lots": (
+                "boolean, optional. True to include every unsold lot, including the ones whose "
+                "seller set a minimum bid of their own."
+            ),
+            **PAGING_PARAMS,
+        },
+        danger=DANGER_SAFE,
+        resolver=suggest_starting_prices,
+        aliases={"query", "name"},
+        lookup=True,
+        needs=NEEDS_AUCTION_ADMIN,
+        examples=[
+            "what should I start these at?",
+            "suggest opening prices for the lots nobody priced",
+            "what should lot 14 open at?",
+        ],
     )
 )
 
@@ -11941,6 +13868,414 @@ register(
 )
 
 
+# --- the writes that were only ever a page -----------------------------------
+#
+# Every action below is ``mcp_only``. See the section of the same name above the resolvers for why,
+# and ``Action.mcp_only`` for what the flag now means.
+
+register(
+    Action(
+        name="remove_lot",
+        description=(
+            "Delete a lot, or take a standalone lot off sale so it can be put back later. Only the "
+            "person selling it. This is the undo for add_lot and add_lots: 'delete lot 19', "
+            "'take my java fern lot down', 'that lot was a mistake'. A lot in an auction is deleted "
+            "outright, and the auction's own rules decide whether that is still allowed; a lot not "
+            "in any auction is deactivated instead, which removes its bids and is reversible with "
+            "restore."
+        ),
+        params={
+            "lot": "string, required. The lot number, or its name.",
+            "auction": "string, optional. Auction slug or title. See my_context.",
+            "restore": (
+                "boolean, optional, default false. Put a deactivated standalone lot back on sale "
+                "instead of removing it."
+            ),
+            "permanently": (
+                "boolean, optional, default false. Delete a standalone lot rather than deactivating "
+                "it. Lots in an auction are always deleted, so this changes nothing for them."
+            ),
+        },
+        danger=DANGER_CONFIRM,
+        destructive=True,
+        resolver=remove_lot,
+        aliases={"name", "query", "lot_id", "deactivate"},
+        confirm_template="Remove a lot",
+        mcp_only=True,
+        examples=["delete lot 19", "take my shrimp lot off sale", "put lot 4 back on sale"],
+    )
+)
+
+register(
+    Action(
+        name="queue_lot",
+        description=(
+            "Put one lot on the end of an in-person auction's running order, so the auctioneer gets "
+            "to it next. Auction admins only. 'queue up lot 40', 'add 12 to the queue'. Use "
+            "lot_queue to read the running order and unqueue_lot to take one back off. There is no "
+            "way to reorder the queue from here — that is the queue page."
+        ),
+        params={
+            "lot": "string, required. The lot number, as printed on the label.",
+            "auction": "string, optional. Auction slug or title. See my_context.",
+        },
+        danger=DANGER_CONFIRM,
+        resolver=queue_lot,
+        aliases={"name", "query", "lot_id"},
+        idempotent=True,
+        confirm_template="Queue a lot",
+        needs=NEEDS_AUCTION_ADMIN,
+        mcp_only=True,
+        examples=["queue up lot 40", "add lot 12 to the queue"],
+    )
+)
+
+register(
+    Action(
+        name="unqueue_lot",
+        description=(
+            "Take one lot back out of an in-person auction's running order. Auction admins only. "
+            "'drop lot 42, the seller pulled it', 'take 7 out of the queue'. The lot itself is "
+            "untouched — it is still in the auction and can be queued again."
+        ),
+        params={
+            "lot": "string, required. The lot number, as printed on the label.",
+            "auction": "string, optional. Auction slug or title. See my_context.",
+        },
+        danger=DANGER_CONFIRM,
+        resolver=unqueue_lot,
+        aliases={"name", "query", "lot_id"},
+        idempotent=True,
+        confirm_template="Take a lot out of the queue",
+        needs=NEEDS_AUCTION_ADMIN,
+        mcp_only=True,
+        examples=["drop lot 42 from the queue", "take 7 out of the running order"],
+    )
+)
+
+register(
+    Action(
+        name="remove_bid",
+        description=(
+            "Remove a bid from a lot: an admin can remove anybody's, and a bidder can take back "
+            "their own where the auction allows it. This is the undo for place_bid. 'remove that "
+            "bid', 'take bidder 14's bid off lot 9'. The lot's price goes back to whatever the next "
+            "bid was."
+        ),
+        params={
+            "lot": "string, required. The lot number, or its name.",
+            "person": (
+                "string, optional, ADMINS ONLY. Bidder number or name whose bid to remove. Left out, "
+                "it means the caller's own bid."
+            ),
+            "auction": "string, optional. Auction slug or title. See my_context.",
+        },
+        danger=DANGER_CONFIRM,
+        destructive=True,
+        resolver=remove_bid,
+        aliases={"name", "query", "lot_id", "bidder", "bidder_number"},
+        confirm_template="Remove a bid",
+        mcp_only=True,
+        examples=["remove my bid on lot 9", "take bidder 14's bid off lot 22"],
+    )
+)
+
+register(
+    Action(
+        name="remove_award",
+        description=(
+            "Take back the breeder award points given for one lot, putting it back on the pending "
+            "list with no decision on it. Club points admins only. This is the undo for "
+            "review_points and the way a wrong call in a review session is fixed. Points that are "
+            "not about a lot at all are removed on the club's points page."
+        ),
+        params={
+            "lot": "string, required. The lot number, or its name.",
+            "club": "string, optional. Club name. See my_context.",
+            "auction": "string, optional. Auction slug or title, to narrow which lot is meant.",
+        },
+        danger=DANGER_CONFIRM,
+        destructive=True,
+        resolver=remove_award,
+        aliases={"name", "query", "lot_id"},
+        confirm_template="Take back breeder points",
+        needs=NEEDS_CLUB_ADMIN,
+        mcp_only=True,
+        examples=["undo the points on lot 14", "take back the award for lot 3"],
+    )
+)
+
+register(
+    Action(
+        name="set_member_active",
+        description=(
+            "Deactivate a club member, or bring a deactivated one back. Club admins only. "
+            "Deactivating is a soft delete — nothing is destroyed and it can be undone by calling "
+            "this again. 'retire Jane from the club', 'reactivate Sam'. Permanently deleting a "
+            "member, and merging two of them, are still done on the club's member page."
+        ),
+        params={
+            "person": "string, required. The member's name, email or membership number.",
+            "active": ("boolean, required. False deactivates them, true brings a deactivated member back."),
+            "club": "string, optional. Club name. See my_context.",
+        },
+        danger=DANGER_CONFIRM,
+        idempotent=True,
+        resolver=set_member_active,
+        aliases={"name", "status", "deactivate", "reactivate"},
+        confirm_template="Change a member's status",
+        needs=NEEDS_CLUB_ADMIN,
+        mcp_only=True,
+        examples=["deactivate Jane in the club", "bring Sam back as a member"],
+    )
+)
+
+register(
+    Action(
+        name="remove_person",
+        description=(
+            "Take somebody out of an auction they were added to by mistake. Auction admins only. "
+            "This is the undo for add_person, and it is deliberately narrow: a participant who has "
+            "an invoice, lots to sell or lots they won is refused, because removing them would "
+            "change those too. Merging a duplicate into the real record is done on the auction's "
+            "user list."
+        ),
+        params={
+            "person": "string, required. Bidder number or name.",
+            "auction": "string, optional. Auction slug or title. See my_context.",
+        },
+        danger=DANGER_CONFIRM,
+        destructive=True,
+        resolver=remove_person,
+        aliases={"name", "bidder", "bidder_number"},
+        confirm_template="Remove somebody from an auction",
+        needs=NEEDS_AUCTION_ADMIN,
+        mcp_only=True,
+        examples=["remove bidder 51, I added them twice", "take Jane out of the auction"],
+    )
+)
+
+register(
+    Action(
+        name="remove_invoice_adjustment",
+        description=(
+            "Take one extra line back off somebody's invoice — a charge or a discount that was put "
+            "on it by mistake. Auction admins only. This is the undo for add_invoice_adjustment. "
+            "The line is named by what it says, so 'take the raffle line off Jane's invoice'; more "
+            "than one match comes back as a question. The invoice has to still be open."
+        ),
+        params={
+            "person": "string, required. Bidder number or name whose invoice it is.",
+            "label": (
+                "string, optional. Words out of the line to remove, matched against what it says. "
+                "Left out, the answer lists the lines on that invoice."
+            ),
+            "auction": "string, optional. Auction slug or title. See my_context.",
+        },
+        danger=DANGER_CONFIRM,
+        destructive=True,
+        resolver=remove_invoice_adjustment,
+        aliases={"name", "bidder", "bidder_number", "note", "reason"},
+        confirm_template="Take a line off an invoice",
+        needs=NEEDS_AUCTION_ADMIN,
+        mcp_only=True,
+        examples=["take the raffle line off Jane's invoice", "remove the $5 discount from bidder 14"],
+    )
+)
+
+register(
+    Action(
+        name="set_point_rule",
+        description=(
+            "Set what a genus or a category is worth in a club's breeder award program. Club points "
+            "admins only. 'Corydoras are worth 15 points', 'make cichlids 10'. Calling it again "
+            "with a different number replaces the rule. A genus rule outranks a category rule "
+            "wherever both apply, and the answer says which one was written."
+        ),
+        params={
+            "points": "integer, required. What a lot matching this rule is worth.",
+            "genus": (
+                "string, optional. A genus, like Tropheus. It has to be one some species on this "
+                "site belongs to, or a rule would be written that never fires."
+            ),
+            "category": "string, optional. A category name, like Cichlids. Give a genus or a category, not both.",
+            "club": "string, optional. Club name. See my_context.",
+        },
+        danger=DANGER_CONFIRM,
+        idempotent=True,
+        resolver=set_point_rule,
+        confirm_template="Set a breeder points rule",
+        needs=NEEDS_CLUB_ADMIN,
+        mcp_only=True,
+        examples=["Corydoras are worth 15 points at our club", "make cichlids 10 points"],
+    )
+)
+
+register(
+    Action(
+        name="set_invoice_renewal",
+        description=(
+            "Say whether somebody's invoice includes their club membership renewal. Admins only. "
+            "'Jane's renewing this year, put it on her invoice.' Turning it on also applies the "
+            "club member discount and, where the club uses one, the alternate split — so the "
+            "answer gives the new total."
+        ),
+        params={
+            "person": "string, required. Bidder number or name whose invoice it is.",
+            "renewing": "boolean, optional, default true. False takes the renewal back off the invoice.",
+            "auction": "string, optional. Auction slug or title. See my_context.",
+        },
+        danger=DANGER_CONFIRM,
+        idempotent=True,
+        resolver=set_invoice_renewal,
+        aliases={"name", "bidder", "bidder_number", "value"},
+        confirm_template="Change a membership renewal on an invoice",
+        needs=NEEDS_AUCTION_ADMIN,
+        mcp_only=True,
+        examples=["Jane's renewing, put it on her invoice", "take the renewal off bidder 14's invoice"],
+    )
+)
+
+register(
+    Action(
+        name="resend_member_card",
+        description=(
+            "Email a club member a fresh link to their membership card. Club admins only. This is "
+            "the admin version of send_membership_card, which only ever sends the caller their own. "
+            "A member with no email address, or one marked do-not-contact, is reported rather than "
+            "emailed."
+        ),
+        params={
+            "person": "string, required. The member's name, email or membership number.",
+            "club": "string, optional. Club name. See my_context.",
+        },
+        danger=DANGER_CONFIRM,
+        idempotent=True,
+        resolver=resend_member_card,
+        aliases={"name"},
+        confirm_template="Email a membership card",
+        needs=NEEDS_CLUB_ADMIN,
+        mcp_only=True,
+        examples=["send Jane her membership card again", "resend Sam's card"],
+    )
+)
+
+register(
+    Action(
+        name="leave_feedback",
+        description=(
+            "Leave feedback on a lot, as the person who bought it or the person who sold it. "
+            "Anybody, on their own lots. 'the guppies were great', 'leave positive feedback on lot "
+            "9'. Which side the caller is on is read off the lot rather than asked; somebody who "
+            "neither bought nor sold it is refused."
+        ),
+        params={
+            "lot": "string, required. The lot number, or its name.",
+            "rating": ("string, optional. positive, neutral or negative. Give a rating, a comment, or both."),
+            "text": "string, optional. What to say about the other person, up to 500 characters.",
+            "as": (
+                "string, optional. buyer or seller, for a lot the caller both bought and sold. "
+                "Worked out from the lot when it is left out."
+            ),
+            "auction": "string, optional. Auction slug or title. See my_context.",
+        },
+        danger=DANGER_CONFIRM,
+        idempotent=True,
+        resolver=leave_feedback,
+        aliases={"name", "query", "lot_id", "comment", "feedback", "role"},
+        confirm_template="Leave feedback",
+        mcp_only=True,
+        examples=["leave positive feedback on lot 9", "the fish arrived dead, negative feedback on lot 12"],
+    )
+)
+
+register(
+    Action(
+        name="hide_chat_message",
+        description=(
+            "Hide a chat message somebody posted on a lot, or put a hidden one back. Auction admins "
+            "only. The message is named by a few words out of it; more than one match comes back as "
+            "a question. Use describe_lot to read what is on a lot."
+        ),
+        params={
+            "lot": "string, required. The lot number, or its name.",
+            "message": (
+                "string, optional. A few words out of the message. Left out, the answer lists the "
+                "recent ones to choose from."
+            ),
+            "hide": "boolean, optional, default true. False puts a hidden message back.",
+            "auction": "string, optional. Auction slug or title. See my_context.",
+        },
+        danger=DANGER_CONFIRM,
+        idempotent=True,
+        resolver=hide_chat_message,
+        aliases={"name", "query", "lot_id", "text", "restore"},
+        confirm_template="Hide a chat message",
+        needs=NEEDS_AUCTION_ADMIN,
+        mcp_only=True,
+        examples=["hide that message on lot 14", "put the hidden message on lot 3 back"],
+    )
+)
+
+register(
+    Action(
+        name="record_club_money",
+        description=(
+            "Write one line in a club's own books: money in or money out. Club treasurers only. "
+            "'put $40 in for the raffle prizes', 'record the speaker's travel'. Nothing is charged "
+            "or paid — this is bookkeeping. The categories that are worked out from invoices cannot "
+            "be entered by hand, and the answer names the ones that can."
+        ),
+        params={
+            "amount": (
+                "number, required. Positive for money coming in, negative for money going out of the club's account."
+            ),
+            "description": "string, required. What it was for. It goes in the books, so it needs saying.",
+            "category": (
+                "string, optional. One of the categories a person may enter: Membership dues, "
+                "Registration fee, Donation, Speaker costs, Meeting location cost, Refund. The "
+                "answer lists them if this is left out."
+            ),
+            "date": "string, optional, default today. The date of the entry, as YYYY-MM-DD.",
+            "club": "string, optional. Club name. See my_context.",
+        },
+        danger=DANGER_CONFIRM,
+        resolver=record_club_money,
+        aliases={"note", "label"},
+        confirm_template="Record a line in the club's books",
+        needs=NEEDS_CLUB_ADMIN,
+        mcp_only=True,
+        examples=["put $40 in the books for raffle prizes", "record -120 for hall hire"],
+    )
+)
+
+register(
+    Action(
+        name="rotate_lot_image",
+        description=(
+            "Turn a lot's photo the right way up, and pick which picture is its thumbnail. Only the "
+            "person selling it. Useful for a client that can see the picture: describe_lot gives "
+            "the address of each one, and this turns the sideways one. Adding and removing pictures "
+            "are add_lot_image and remove_lot_image."
+        ),
+        params={
+            "lot": "string, required. The lot number, or its name.",
+            "angle": "integer, optional. Degrees to turn it: 90, 180 or 270.",
+            "primary": "boolean, optional, default false. Make this picture the lot's thumbnail.",
+            "image_id": ("integer, optional. Which picture, from describe_lot. Not needed when the lot has one."),
+            "auction": "string, optional. Auction slug or title. See my_context.",
+        },
+        danger=DANGER_CONFIRM,
+        idempotent=True,
+        resolver=rotate_lot_image,
+        aliases={"name", "query", "lot_id", "image"},
+        confirm_template="Change a lot's picture",
+        mcp_only=True,
+        examples=["turn the photo on lot 14 the right way up", "make the second picture on lot 3 the thumbnail"],
+    )
+)
+
+
 #: Parameters worth naming in a countdown summary, best-identifying first.
 _SUBJECT_PARAMS = ("name", "person", "lot", "lot_name", "bidder", "winner", "page", "query")
 
@@ -12166,6 +14501,14 @@ SKILLS: dict[str, str] = {
     # timezone -- and the rules text, which is paragraphs people read before they agree to them.
     "AuctionUpdate": "update_auction_setting",
     "AuctionUnsellLot": "undo_sale",
+    # The refund half of the Remove/refund dialog. It sat in NOT_A_SKILL under the blanket "money
+    # changes hands here", which had already stopped being the whole truth once
+    # ``add_invoice_adjustment`` landed -- an assistant could put any line at all on somebody's
+    # invoice and could not record the one thing a club actually needs to record about a bad lot.
+    # ``refund_lot`` covers the refund percentage and both ways of paying for it. The *other* half
+    # of the dialog -- ticking "removed", which bans an unsold lot -- is still a page, and
+    # ``refund_lot`` says so when it is asked about a lot that never sold.
+    "LotRefundDialog": "refund_lot",
     "BapAwardAdminView": "award_points",
     # The three buttons on the Pending BAP page. It sat in NOT_A_SKILL as "acts on one row of
     # a table you're already looking at" -- true of the palette, and the reason an assistant
@@ -12188,34 +14531,118 @@ SKILLS: dict[str, str] = {
     "AuctionDoorPrizes": "draw_door_prize",
     "UserPreferencesUpdate": "update_preferences",
     "UpdateLotPushNotificationsView": "watch_lot",
+    # --- the writes that were only ever a page ---------------------------------------------
+    #
+    # Everything below is covered by an ``mcp_only`` action: the tool exists over ``/mcp/`` and the
+    # palette still goes to the page. Each of these sat in ``NOT_A_SKILL`` behind ``_NEEDS_THE_ROW``,
+    # ``_FORM_PAGE``, ``_DESTRUCTIVE`` or ``_MONEY``, and in every case the sentence was an argument
+    # about somebody *speaking* -- which is exactly true of the surface it was written about and has
+    # nothing to say about an agent sending a lot number it read a moment ago. See the section of
+    # the same name in this file, and ``Action.mcp_only``.
+    #
+    # The undo halves. Each of these is the reverse of a tool that was already registered, which is
+    # the strongest argument any of them has: a catalogue that can add forty lots off a photograph
+    # and cannot delete the one it got wrong is not a safer catalogue.
+    "LotDelete": "remove_lot",
+    "LotDeactivate": "remove_lot",
+    "BidDelete": "remove_bid",
+    "BapAwardDeleteView": "remove_award",
+    "AuctionTOSDelete": "remove_person",
+    "ClubMemberDeleteView": "set_member_active",
+    "ClubMemberReactivateView": "set_member_active",
+    # Both halves of the invoice page's adjustment formset. ``add_invoice_adjustment`` was the add;
+    # this is the delete, which its own docstring used to send people to this page for.
+    "InvoiceView": "remove_invoice_adjustment",
+    # ``queue_lot`` and ``unqueue_lot``, which are the add and remove halves of this page's POST.
+    # Reordering is deliberately not covered: it writes every row in the queue at once.
+    "LotQueueView": "queue_lot",
+    "ClubBapGenusOverrideSaveView": "set_point_rule",
+    "ClubBapCategoryOverrideSaveView": "set_point_rule",
+    "InvoiceRenewalNeededToggleView": "set_invoice_renewal",
+    "ClubMemberResendCardView": "resend_member_card",
+    "Feedback": "leave_feedback",
+    "AuctionChatDeleteUndelete": "hide_chat_message",
+    "ClubMoneyCreateView": "record_club_money",
+    "ImagesRotate": "rotate_lot_image",
+    "ImagesPrimary": "rotate_lot_image",
+    # Not a new skill -- a filing error. ``sync_club_calendar``'s own docstring says it is this
+    # view's body, and the view was sitting in ``NOT_A_SKILL`` as outside-service setup the whole
+    # time. The audit could not see it because it only asks that a view be in one table *or* the
+    # other; ``test_palette_skills`` now asks the third question too.
+    "GoogleCalendarSyncNowView": "sync_club_calendar",
 }
 
 # The reasons. Shared constants, because most of these are the same handful of decisions and a
 # reason worth writing once is worth reusing.
 _FORM_PAGE = (
-    "A page with a form on it. go_to_page opens the form; the fields on it are more than one "
-    "spoken sentence can carry, and the user gets to see what they're setting."
+    "A page with a form on it, and the point of the form is that somebody reads it: the fields are "
+    "the explanation of what is being set. go_to_page opens it. (This used to say 'more than one "
+    "spoken sentence can carry', which was an argument about the palette and said nothing about an "
+    "agent -- a twelve-field form is the cheap case for a structured call. What survives is the "
+    "second half.)"
 )
 _SETUP = (
     "One-off setup for an outside service (keys, OAuth, channel and list pickers). Done once, from "
     "the settings page, by somebody looking at the other service's screen at the same time."
 )
-_MONEY = "Money changes hands here. Navigate-only by design, like every other money path in the palette."
+_MONEY = (
+    "Money actually moves here, or a payment credential does: a card is charged, a payout account "
+    "is linked, a checkout link is minted. Navigate-only, and the one money reason left. It used to "
+    "read 'like every other money path', which stopped being true the day add_invoice_adjustment "
+    "landed and is now false three times over -- set_invoice_status, refund_lot and "
+    "remove_invoice_adjustment all write to invoices. Bookkeeping is not this; see record_club_money."
+)
 _DESTRUCTIVE = (
     "Destructive and not undoable. The palette takes the user to the page, where the thing being "
     "destroyed is named on screen before they confirm it."
 )
 _BULK = (
-    "Acts on every row matching the current filter. Which rows those are is the whole question, and "
-    "it is answered by looking at the page, not by a summary sentence."
+    "Acts on every row matching the current filter. No tool on this site changes more than one row, "
+    "with no exceptions -- it is the second of the three prompt-injection bounds, not an ergonomic "
+    "judgement -- so this stays a page whoever is asking. Nearly all of these have a per-row skill "
+    "beside them: set_invoice_status, set_lot_winner and add_club_member each do one."
 )
 _NEEDS_A_FILE = "Needs a file — a CSV, a spreadsheet, a photo — that a typed or spoken command can't hand over."
-_NEEDS_THE_ROW = (
-    "Acts on one row of a table you're already looking at, and identifying it out loud is harder than clicking it."
+#: Retired, and left here as a definition of the thing not to write again.
+#:
+#: It read: "Acts on one row of a table you're already looking at, and identifying it out loud is
+#: harder than clicking it." That excused fourteen views, and every word of it was an argument about
+#: *speech* -- true of a person dictating into a box on a phone, and empty against an agent holding
+#: a lot number it read out of ``list_lots`` a moment earlier. Eight of the fourteen are now skills.
+#: The six that stayed each say why in their own words below, because what they had in common was a
+#: UI pattern and not a reason.
+_RETIRED_NEEDS_THE_ROW = "Do not use. See the note above -- write the actual reason instead."
+
+#: The two buttons on the remote-print waiting page. Not "a row on a page" -- *the* job that page is
+#: watching, which is the only thing either button can mean.
+#: Banning and unbanning. Kept out on purpose, and this is the record of the decision rather than
+#: an omission: banning is genuinely wanted and is reversible by its twin, but ``CreateUserBan``
+#: also deletes that user's live bids across *every* auction the admin runs. That cascade lives in
+#: the model rather than in the tool, which is arguably fine -- and "arguably fine" is not the bar
+#: for the one bound that has no exceptions. The unban is one row and clean, and is held with it so
+#: the pair is decided together rather than half-shipped.
+_BAN = (
+    "Bans a person, or lifts a ban. Banning deletes their live bids across every auction the admin "
+    "runs, which is more than one row; the unban is held with it so the pair stays one decision."
+)
+
+_REDIRECT = (
+    "Not a capability at all: a redirect that inherits ``post`` from Django and lands in the audit "
+    "because of it. go_to_page covers going somewhere."
+)
+
+_THIS_JOB = (
+    "Acts on the one print job the page is watching and has no meaning apart from it: 'try again' "
+    "means these labels, and cancelling any other would be cancelling a print somebody is standing "
+    "next to."
 )
 _MACHINE = "Called by the browser, a scanner or another program. Nobody asks for this by name."
 _WEBHOOK = "Webhook or callback. Reached by another server, never by a person."
-_TOKEN = "Reached from an emailed link carrying a token nobody can be asked to say out loud."
+_TOKEN = (
+    "Reached only from a link emailed to one person, and the token in it *is* the credential -- "
+    "there is no sign-in, so holding the URL is being that person. A tool that took one would be a "
+    "tool for acting as somebody else."
+)
 _EXTERNAL_API = "REST API for a club's own website or software. Authenticated by an API key, not by a person."
 _PALETTE = "The palette's own endpoint. It is the thing running the skills."
 
@@ -12233,13 +14660,17 @@ NOT_A_SKILL: dict[str, str] = {
         "The comment is a paragraph about how a talk went. Dictating one into a command box is "
         "worse than typing it into the box on the speaker's page, which the palette can reach."
     ),
-    "SpeakerCommentDeleteView": _NEEDS_THE_ROW,
+    "SpeakerCommentDeleteView": (
+        "Deletes something a named person wrote about how a talk went. The judgement is whether "
+        "that note should stop existing, which is made by reading it next to the others on the "
+        "speaker's page."
+    ),
     # The two buttons on the remote-print waiting page (LotLabelView renders it in place of the PDF
     # when the labels are going to the phone's Bluetooth printer). Both act on the job that page is
     # already watching and have no meaning apart from it: "try again" means *these* labels, and
     # cancelling anything else would be cancelling a print somebody is standing next to.
-    "RemotePrintJobRetryView": _NEEDS_THE_ROW,
-    "RemotePrintJobCancelView": _NEEDS_THE_ROW,
+    "RemotePrintJobRetryView": _THIS_JOB,
+    "RemotePrintJobCancelView": _THIS_JOB,
     # Pages with forms on them
     "AccountDeleteView": _DESTRUCTIVE,
     "UserAPIKeyView": (
@@ -12288,11 +14719,12 @@ NOT_A_SKILL: dict[str, str] = {
         "Sets an expiration date by hand, overriding the club's renewal rules. renew_member is the "
         "skill for an ordinary renewal; overriding the date deliberately means seeing the page."
     ),
-    "InvoiceView": _MONEY,
-    "LotQRView": _FORM_PAGE,
-    "LotQueueView": _FORM_PAGE,
     "MyAccount": _FORM_PAGE,
-    "MyLastAuctionLots": _FORM_PAGE,
+    # Neither of these is a form. They are ``RedirectView``s, which inherit a ``post`` from Django
+    # and so get swept into the audit by ``postable_views``'s ``hasattr(view, "post")``. They are
+    # navigation, and ``palette_routes`` is the half of this promise that covers navigation.
+    "LotQRView": _REDIRECT,
+    "MyLastAuctionLots": _REDIRECT,
     "VolunteerJobAccept": (
         "The page a volunteer notification opens. Signing up means reading what the job is and when "
         "it starts, which is what the page is for."
@@ -12301,18 +14733,12 @@ NOT_A_SKILL: dict[str, str] = {
     "AuctionDelete": _DESTRUCTIVE,
     "AuctionLotMapClear": _DESTRUCTIVE,
     "AuctionNoShowAction": _DESTRUCTIVE,
-    "AuctionTOSDelete": _DESTRUCTIVE,
-    "BapAwardDeleteView": _DESTRUCTIVE,
-    "BidDelete": _DESTRUCTIVE,
     "ClubBapCategoryOverrideDeleteView": _DESTRUCTIVE,
     "ClubBapGenusOverrideDeleteView": _DESTRUCTIVE,
-    "ClubMemberDeleteView": _DESTRUCTIVE,
     "ClubMemberMergeView": _DESTRUCTIVE,
     "ClubMemberPermanentDeleteView": _DESTRUCTIVE,
-    "CreateUserBan": _DESTRUCTIVE,
-    "UserUnban": _NEEDS_THE_ROW,
-    "LotDelete": _DESTRUCTIVE,
-    "LotDeactivate": _DESTRUCTIVE,
+    "CreateUserBan": _BAN,
+    "UserUnban": _BAN,
     "ClubAPIKeyRevokeView": _DESTRUCTIVE,
     "ClubAPIKeyFieldMapDeleteView": _DESTRUCTIVE,
     "PayPalSellerDeleteView": _DESTRUCTIVE,
@@ -12326,12 +14752,14 @@ NOT_A_SKILL: dict[str, str] = {
     "MarkInvoicesReady": _BULK,
     # Money
     "ClubLinkPaymentAccountView": _MONEY,
-    "ClubMoneyBalanceView": _MONEY,
-    "ClubMoneyCreateView": _MONEY,
+    "ClubMoneyBalanceView": (
+        "Sets the club's books to match the bank statement, by writing whatever adjustment closes "
+        "the gap. The number that matters is the one on the statement in front of the treasurer, "
+        "and the entry it writes is the one category record_club_money deliberately refuses."
+    ),
     "ClubPayPalCredentialsView": _MONEY,
     "CreatePayPalOrderView": _MONEY,
     "CreateSquarePaymentLinkView": _MONEY,
-    "LotRefundDialog": _MONEY,
     # Files and photos
     "BapAwardCSVImportView": _NEEDS_A_FILE,
     "ClubMemberCSVImportView": _NEEDS_A_FILE,
@@ -12340,25 +14768,27 @@ NOT_A_SKILL: dict[str, str] = {
         "it is on screen while you edit it, and the field that matters most is the file. Adding one "
         "and taking one off are the two halves an assistant can do without seeing it."
     ),
-    "ImagesPrimary": (
-        "One click on a picture that is on screen — 'use this one'. Naming it out loud means naming "
-        "a row nobody can see, and add_lot_image sets the thumbnail on the way in."
-    ),
-    "ImagesRotate": _NEEDS_A_FILE,
     "ImportFromGoogleDrive": _NEEDS_A_FILE,
     "ImportLotsFromCSV": _NEEDS_A_FILE,
     "QuickBulkAddImages": _NEEDS_A_FILE,
     # One row of a table you're already looking at
-    "AuctionChatDeleteUndelete": _NEEDS_THE_ROW,
-    "ClubBapCategoryOverrideSaveView": _NEEDS_THE_ROW,
-    "ClubBapGenusOverrideSaveView": _NEEDS_THE_ROW,
-    "ClubBapLotCategoryView": _NEEDS_THE_ROW,
-    "ClubMemberReactivateView": _NEEDS_THE_ROW,
-    "ClubMembershipNumberView": _NEEDS_THE_ROW,
-    "ClubMemberResendCardView": _NEEDS_THE_ROW,
-    "InvoiceRenewalNeededToggleView": _NEEDS_THE_ROW,
-    "Feedback": _NEEDS_THE_ROW,
-    "IgnoreAuction": _NEEDS_THE_ROW,
+    "ClubBapLotCategoryView": (
+        "Overrides which breeder-award track one lot counts in, against what its species says. "
+        "set_lot_species is the skill that moves a lot between tracks, and it does it by fixing the "
+        "thing the track is derived from; this is the escape hatch for when the derivation is wrong, "
+        "and it is worth a person seeing what they are overruling."
+    ),
+    "ClubMembershipNumberView": (
+        "Issues a member a new barcode number, which stops the card in their wallet from scanning. "
+        "The modal shows the current number while you decide, and the decision is almost always "
+        "'is this the number on the card they are holding' -- a question about a physical object in "
+        "the room."
+    ),
+    "IgnoreAuction": (
+        "Hides an auction from the caller's own lists. A preference about what they see, expressed "
+        "by clicking it away on the page where they saw it; there is nothing an agent could do with "
+        "it that browsing does not already do better."
+    ),
     "ClubMemberPermissionsView": (
         "Grants club administration rights. A permission change is exactly the thing that should "
         "take a deliberate click on a page naming the person, not a sentence that might be misheard."
@@ -12378,7 +14808,6 @@ NOT_A_SKILL: dict[str, str] = {
     "ClubGoogleCalendarConfigView": _SETUP,
     "ClubMemberDiscordAdminView": _SETUP,
     "GoogleCalendarDisconnectView": _SETUP,
-    "GoogleCalendarSyncNowView": _SETUP,
     "MailchimpAudienceSelectView": _SETUP,
     "MailchimpDisconnectView": _SETUP,
     "MailchimpSyncNowView": _SETUP,
