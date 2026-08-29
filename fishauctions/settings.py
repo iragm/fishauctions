@@ -372,6 +372,10 @@ AUTH_PASSWORD_VALIDATORS = [
     },
 ]
 
+# Swaps the hashers above for MD5 for the duration of a test run -- see the module
+# docstring. Nothing else about the runner is customized.
+TEST_RUNNER = "fishauctions.test_runner.FastTestRunner"
+
 SITE_ID = 1
 SITE_DOMAIN = os.environ.get("SITE_DOMAIN", "127.0.0.1")
 SETUP_COMPLETE = parse_bool_env(os.environ.get("SETUP_COMPLETE") or None, default=False)

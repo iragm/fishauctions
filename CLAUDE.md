@@ -33,9 +33,22 @@ docker exec -it django python3 manage.py test # Run Django tests (requires compo
 
 Ruff config: `ruff.toml` (line-length: 120). Replicate CI locally: `./.github/scripts/prepare-ci.sh && docker compose run --rm test --ci --verbose` -- note `prepare-ci.sh` overwrites `.env`.
 
-`--ci` does not run the tests: run `manage.py test` separately. The full suite is ~55 minutes, so
-background it, and never run two at once -- both runs share one `test_auctions` database and
-corrupt each other into hundreds of unrelated errors.
+`--ci` does not run the tests: run `manage.py test` separately. The full suite is ~6 minutes, or
+~2.5 with `--parallel` -- where about half of what is left is building the test database from ~290
+migrations, not running tests. Background it, and never run two at once -- both runs share one
+`test_auctions` database and corrupt each other into hundreds of unrelated errors.
+
+Two things keep it there, and both are easy to undo by accident:
+
+* `fishauctions/test_runner.py` swaps PBKDF2 for MD5 for the duration of a run. PBKDF2 is ~200ms a
+  call and fixtures hash ~17,000 passwords and API keys, which *was* the 55-minute suite. It is a
+  `TEST_RUNNER` rather than a settings module so there is no flag to forget and no path by which
+  production can load it.
+* `StandardTestCase` builds its 26-row fixture in **`setUpTestData`**, once per class rather than
+  once per test (79ms -> 2.8ms per test). Its `setUp` stays for one job: emptying the class's own
+  local-memory cache, since class-level fixtures mean every test in a class shares primary keys and
+  anything cached under one would otherwise carry into the next test. A subclass adding per-test
+  setup keeps calling `super().setUp()`; one adding *fixture rows* should extend `setUpTestData`.
 
 A parallel run (`--parallel`, which is what CI uses) needs **`tblib`** installed, or the *first*
 failing test kills the whole run: Django cannot pickle a traceback back from a worker process, so

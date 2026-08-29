@@ -15,6 +15,7 @@ from unittest.mock import MagicMock, patch
 
 from django import forms
 from django.contrib.auth.models import User
+from django.core.cache import cache
 from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.core.management import call_command
@@ -143,6 +144,7 @@ class CsvImportTestMixin:
         return self.client.post(url, data, follow=follow)
 
 
+@isolated_cache("standard")
 class StandardTestCase(CsvImportTestMixin, TestCase):
     """This is a base class that sets up some common stuff so other tests can be run without needing to write a lot of boilplate code
     Give this class along with your view/model/etc., to ChatGPT and it can write the test subclass
@@ -158,17 +160,43 @@ class StandardTestCase(CsvImportTestMixin, TestCase):
         self.online_auction.save()
 
     def setUp(self):
+        """Empty the cache between tests.
+
+        The fixture below is built once per class now, so every test in a class sees the same
+        primary keys -- and anything cached under one of them (a per-user model budget, a
+        throttle, a recommendation) would carry from one test into the next, which is how
+        test_rate_limit_stops_asking came to fail on a limit two of its siblings had already
+        spent. The cache here is this class's own local-memory one (`isolated_cache` above), so
+        clearing it is a scoped delete and not the FLUSHDB every other --parallel worker would
+        feel; see auctions/test_support.py.
+        """
+        super().setUp()
+        cache.clear()
+
+    @classmethod
+    def setUpTestData(cls):
+        """Built once per class, not once per test.
+
+        This fixture is 26 rows deep and ~2,700 test methods inherit it, so building it in setUp
+        cost 79ms of every one of them -- about 200 seconds a run, the largest single cost left in
+        the suite. setUpTestData creates it once inside the class-level atomic block instead;
+        Django hands each test a deepcopy of every attribute and rolls the database back between
+        tests, so a test that edits or saves a fixture row still cannot reach the next one.
+        Subclasses keep their own setUp for per-test work -- ``super().setUp()`` now resolves to
+        TestCase's no-op, which is what they want.
+        """
+        super().setUpTestData()
         time = timezone.now() - datetime.timedelta(days=2)
         timeStart = timezone.now() - datetime.timedelta(days=3)
         the_future = timezone.now() + datetime.timedelta(days=3)
-        self.admin_user = User.objects.create_user(
+        cls.admin_user = User.objects.create_user(
             username="admin_user", password="testpassword", email="test@example.com"
         )
-        self.user = User.objects.create_user(username="my_lot", password="testpassword", email="test@example.com")
-        self.user_with_no_lots = User.objects.create_user(
+        cls.user = User.objects.create_user(username="my_lot", password="testpassword", email="test@example.com")
+        cls.user_with_no_lots = User.objects.create_user(
             username="no_lots", password="testpassword", email="asdf@example.com"
         )
-        self.user_who_does_not_join = User.objects.create_user(
+        cls.user_who_does_not_join = User.objects.create_user(
             username="no_joins", password="testpassword", email="zxcgv@example.com"
         )
         # ``promote_this_auction`` is spelled out on both fixture auctions because the model's
@@ -176,8 +204,8 @@ class StandardTestCase(CsvImportTestMixin, TestCase):
         # and several things this fixture is used to test are scoped to promoted auctions --
         # notably ``models.guess_category``, which excludes lots in unpromoted auctions. Leaving
         # it to the default made those tests depend on a column default rather than on a fixture.
-        self.online_auction = Auction.objects.create(
-            created_by=self.user,
+        cls.online_auction = Auction.objects.create(
+            created_by=cls.user,
             title="This auction is online",
             is_online=True,
             date_end=time,
@@ -188,8 +216,8 @@ class StandardTestCase(CsvImportTestMixin, TestCase):
             tax=25,
             promote_this_auction=True,
         )
-        self.in_person_auction = Auction.objects.create(
-            created_by=self.user,
+        cls.in_person_auction = Auction.objects.create(
+            created_by=cls.user,
             title="This auction is in-person",
             is_online=False,
             date_end=time,
@@ -203,118 +231,118 @@ class StandardTestCase(CsvImportTestMixin, TestCase):
             use_seller_dash_lot_numbering=True,
             promote_this_auction=True,
         )
-        self.location = PickupLocation.objects.create(
-            name="location", auction=self.online_auction, pickup_time=the_future
+        cls.location = PickupLocation.objects.create(
+            name="location", auction=cls.online_auction, pickup_time=the_future
         )
-        self.in_person_location = PickupLocation.objects.create(
-            name="location", auction=self.in_person_auction, pickup_time=the_future
+        cls.in_person_location = PickupLocation.objects.create(
+            name="location", auction=cls.in_person_auction, pickup_time=the_future
         )
         # Every fixture participant gets an explicit bidder number. AuctionTOS.save() auto-assigns
         # with randint(1, 999) when the number is left blank, so a fixture row that generates its own
         # can land on a number a test hard-codes ("88", "70", ...) and fail that test roughly one run
         # in 500: the auction already holds that number under a different name. These are kept out of
         # the range tests pick their own numbers from.
-        self.in_person_buyer = AuctionTOS.objects.create(
-            user=self.user_with_no_lots,
-            auction=self.in_person_auction,
-            pickup_location=self.in_person_location,
+        cls.in_person_buyer = AuctionTOS.objects.create(
+            user=cls.user_with_no_lots,
+            auction=cls.in_person_auction,
+            pickup_location=cls.in_person_location,
             bidder_number="555",
         )
-        self.userB = User.objects.create_user(username="no_tos", password="testpassword")
-        self.admin_online_tos = AuctionTOS.objects.create(
-            user=self.admin_user,
-            auction=self.online_auction,
-            pickup_location=self.location,
+        cls.userB = User.objects.create_user(username="no_tos", password="testpassword")
+        cls.admin_online_tos = AuctionTOS.objects.create(
+            user=cls.admin_user,
+            auction=cls.online_auction,
+            pickup_location=cls.location,
             is_admin=True,
             bidder_number="501",
         )
-        self.admin_in_person_tos = AuctionTOS.objects.create(
-            user=self.admin_user,
-            auction=self.in_person_auction,
-            pickup_location=self.in_person_location,
+        cls.admin_in_person_tos = AuctionTOS.objects.create(
+            user=cls.admin_user,
+            auction=cls.in_person_auction,
+            pickup_location=cls.in_person_location,
             is_admin=True,
             bidder_number="502",
         )
-        self.online_tos = AuctionTOS.objects.create(
-            user=self.user, auction=self.online_auction, pickup_location=self.location, bidder_number="503"
+        cls.online_tos = AuctionTOS.objects.create(
+            user=cls.user, auction=cls.online_auction, pickup_location=cls.location, bidder_number="503"
         )
-        self.in_person_tos = AuctionTOS.objects.create(
-            user=self.user, auction=self.in_person_auction, pickup_location=self.location, bidder_number="504"
+        cls.in_person_tos = AuctionTOS.objects.create(
+            user=cls.user, auction=cls.in_person_auction, pickup_location=cls.location, bidder_number="504"
         )
-        self.tosB = AuctionTOS.objects.create(
-            user=self.userB, auction=self.online_auction, pickup_location=self.location, bidder_number="505"
+        cls.tosB = AuctionTOS.objects.create(
+            user=cls.userB, auction=cls.online_auction, pickup_location=cls.location, bidder_number="505"
         )
-        self.tosC = AuctionTOS.objects.create(
-            user=self.user_with_no_lots, auction=self.online_auction, pickup_location=self.location, bidder_number="506"
+        cls.tosC = AuctionTOS.objects.create(
+            user=cls.user_with_no_lots, auction=cls.online_auction, pickup_location=cls.location, bidder_number="506"
         )
-        self.lot = Lot.objects.create(
+        cls.lot = Lot.objects.create(
             lot_name="A test lot",
-            auction=self.online_auction,
-            auctiontos_seller=self.online_tos,
+            auction=cls.online_auction,
+            auctiontos_seller=cls.online_tos,
             quantity=1,
             winning_price=10,
-            auctiontos_winner=self.tosB,
+            auctiontos_winner=cls.tosB,
             active=False,
         )
         # no permission to save images by default, so this is a no-go
         # png_bytes = base64.b64decode(
         #     b"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNgYGD4DwABBAEAH0KzMgAAAABJRU5ErkJggg=="
         # )
-        # self.lot_image = LotImage.objects.create(
-        #     lot_number=self.lot,
+        # cls.lot_image = LotImage.objects.create(
+        #     lot_number=cls.lot,
         #     image=SimpleUploadedFile("test.png", png_bytes, content_type="image/png"),
         #     is_primary=True,
         # )
-        self.lotB = Lot.objects.create(
+        cls.lotB = Lot.objects.create(
             lot_name="B test lot",
-            auction=self.online_auction,
-            auctiontos_seller=self.online_tos,
+            auction=cls.online_auction,
+            auctiontos_seller=cls.online_tos,
             quantity=1,
             winning_price=10,
-            auctiontos_winner=self.tosB,
+            auctiontos_winner=cls.tosB,
             active=False,
         )
-        self.lotC = Lot.objects.create(
+        cls.lotC = Lot.objects.create(
             lot_name="C test lot",
-            auction=self.online_auction,
-            auctiontos_seller=self.online_tos,
+            auction=cls.online_auction,
+            auctiontos_seller=cls.online_tos,
             quantity=1,
             winning_price=10,
-            auctiontos_winner=self.tosB,
+            auctiontos_winner=cls.tosB,
             active=False,
         )
-        self.unsoldLot = Lot.objects.create(
+        cls.unsoldLot = Lot.objects.create(
             lot_name="Unsold lot",
             reserve_price=10,
-            auction=self.online_auction,
+            auction=cls.online_auction,
             quantity=1,
-            auctiontos_seller=self.online_tos,
+            auctiontos_seller=cls.online_tos,
             active=False,
         )
-        self.invoice, c = Invoice.objects.get_or_create(auctiontos_user=self.online_tos)
-        self.invoiceB, c = Invoice.objects.get_or_create(auctiontos_user=self.tosB)
-        self.adjustment_add = InvoiceAdjustment.objects.create(
-            adjustment_type="ADD", amount=10, notes="test", invoice=self.invoiceB
+        cls.invoice, c = Invoice.objects.get_or_create(auctiontos_user=cls.online_tos)
+        cls.invoiceB, c = Invoice.objects.get_or_create(auctiontos_user=cls.tosB)
+        cls.adjustment_add = InvoiceAdjustment.objects.create(
+            adjustment_type="ADD", amount=10, notes="test", invoice=cls.invoiceB
         )
-        self.adjustment_discount = InvoiceAdjustment.objects.create(
-            adjustment_type="DISCOUNT", amount=10, notes="test", invoice=self.invoiceB
+        cls.adjustment_discount = InvoiceAdjustment.objects.create(
+            adjustment_type="DISCOUNT", amount=10, notes="test", invoice=cls.invoiceB
         )
-        self.adjustment_add_percent = InvoiceAdjustment.objects.create(
+        cls.adjustment_add_percent = InvoiceAdjustment.objects.create(
             adjustment_type="ADD_PERCENT",
             amount=10,
             notes="test",
-            invoice=self.invoiceB,
+            invoice=cls.invoiceB,
         )
-        self.adjustment_discount_percent = InvoiceAdjustment.objects.create(
+        cls.adjustment_discount_percent = InvoiceAdjustment.objects.create(
             adjustment_type="DISCOUNT_PERCENT",
             amount=10,
             notes="test",
-            invoice=self.invoiceB,
+            invoice=cls.invoiceB,
         )
-        self.in_person_lot = Lot.objects.create(
+        cls.in_person_lot = Lot.objects.create(
             lot_name="another test lot",
-            auction=self.in_person_auction,
-            auctiontos_seller=self.admin_in_person_tos,
+            auction=cls.in_person_auction,
+            auctiontos_seller=cls.admin_in_person_tos,
             quantity=1,
             custom_lot_number="101-1",
         )
