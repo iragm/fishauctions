@@ -20,8 +20,9 @@ Two facts frame the whole list, because between them they decide most of it:
 
 ## Built since this was written
 
-**Prompts, with argument completion** (`auctions/mcp/prompts.py`). Four recipes — `run_check_in`,
-`chase_unpaid`, `set_up_next_year`, `write_announcement` — plus `completion/complete` for their
+**Prompts, with argument completion** (`auctions/mcp/prompts.py`). Five recipes — `run_check_in`,
+`chase_unpaid`, `set_up_next_year`, `write_announcement`, `build_an_integration` — plus
+`completion/complete` for their
 `auction` and `club` arguments, scoped to what the caller is actually in. The reason to want
 prompts turned out to be the one predicted here and it is worth restating: a tool is chosen by a
 model reading a description, a prompt is chosen by a **person** picking it off a menu, and that is

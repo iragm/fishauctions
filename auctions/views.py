@@ -22457,6 +22457,65 @@ def _as_api_timestamp(value):
     return value.astimezone(date_tz.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
+def club_api_documentation_context(club, api_key):
+    """Everything ``_club_api_endpoints.html`` needs, for the page and for the assistant.
+
+    This page *is* the club API's documentation -- every endpoint is written up in that template,
+    behind the ``{% if %}`` for the permission it needs, and nowhere else. That sentence stayed
+    true when an agent became the second reader: ``palette_actions.club_api`` renders the same
+    include as plain text for somebody writing an integration, so building the context here
+    rather than inside ``get_context_data`` is what makes that a second reader rather than a
+    second copy that drifts.
+
+    Every example is filled in from this club, so what it shows is a request its admin can paste
+    and run, and the numbers are read off the code that enforces them.
+    """
+    today = timezone.now().date()
+    now = timezone.now()
+    return {
+        "site_domain": Site.objects.get_current().domain,
+        "example_member_id": (
+            club.members.filter(is_deleted=False).order_by("-pk").values_list("pk", flat=True).first()
+        ),
+        # Dates in the renew example, so it shows what this club's renewal actually returns.
+        "example_last_paid": today,
+        "example_new_expiration": _compute_member_renewal_expiration(
+            club, ClubMember(club=club, membership_expiration_date=None), today
+        ),
+        # The BAP lot example shows the real default window, formatted the way the API returns it.
+        "bap_lot_default_days": BAP_LOT_DEFAULT_DAYS,
+        "example_bap_range_end": _as_api_timestamp(now),
+        "example_bap_range_start": _as_api_timestamp(now - timedelta(days=BAP_LOT_DEFAULT_DAYS)),
+        "example_bap_lot_timestamp": _as_api_timestamp(now - timedelta(days=2)),
+        "example_bap_award_date": (now - timedelta(days=2)).date(),
+        # Field mappings rename incoming *club member* fields, so they mean nothing to a key that
+        # only reads lots or looks up species -- and a settings box that does nothing is worse
+        # than no box.
+        "key_writes_club_members": any(
+            (
+                api_key.can_add_club_members,
+                api_key.can_read_club_member_list,
+                api_key.can_update_club_members,
+                api_key.can_renew_memberships,
+            )
+        ),
+        # Species lookup: the documented numbers come from the matcher itself, so the page can't
+        # drift away from what the endpoint actually does.
+        "species_lookup_max_results": MAX_SUGGESTIONS,
+        "species_lookup_llm_calls_per_day": SPECIES_LOOKUP_LLM_CALLS_PER_CLUB_PER_DAY,
+        "species_lookup_llm_available": assist_enabled(),
+        # What is left of it right now, so the page a club admin reads and the header their
+        # software reads are the same number.
+        "species_lookup_llm_remaining": LLMBudget.for_club(club, SPECIES_LOOKUP_LLM_CALLS_PER_CLUB_PER_DAY).remaining,
+        "example_category": Category.objects.order_by("name").first(),
+        "lot_page_size": LOT_PAGE_SIZE,
+        "max_lot_page_size": MAX_LOT_PAGE_SIZE,
+        "lot_ordering": sorted(LOT_ORDERING),
+        # A real slug from this club, so the example URLs are ones an admin can paste and run.
+        "example_auction": club_api_current_auction(club) or club_api_latest_auction(club),
+    }
+
+
 class ClubAPIKeyDetailView(LoginRequiredMixin, ClubViewMixin, TemplateView):
     """Manage a single ClubAPIKey and its field mappings."""
 
@@ -22478,50 +22537,7 @@ class ClubAPIKeyDetailView(LoginRequiredMixin, ClubViewMixin, TemplateView):
         ctx["field_mappings"] = api_key.field_mappings.order_by("external_field")
         ctx["new_raw_key"] = new_raw_key
         ctx["available_fields"] = sorted(CLUB_MEMBER_API_KEY_MAPPING_FIELDS)
-        ctx["site_domain"] = Site.objects.get_current().domain
-        ctx["example_member_id"] = (
-            self.club.members.filter(is_deleted=False).order_by("-pk").values_list("pk", flat=True).first()
-        )
-        # Dates in the renew example, so it shows what this club's renewal actually returns.
-        today = timezone.now().date()
-        ctx["example_last_paid"] = today
-        ctx["example_new_expiration"] = _compute_member_renewal_expiration(
-            self.club, ClubMember(club=self.club, membership_expiration_date=None), today
-        )
-        # The BAP lot example shows the real default window, formatted the way the API returns it.
-        now = timezone.now()
-        ctx["bap_lot_default_days"] = BAP_LOT_DEFAULT_DAYS
-        ctx["example_bap_range_end"] = _as_api_timestamp(now)
-        ctx["example_bap_range_start"] = _as_api_timestamp(now - timedelta(days=BAP_LOT_DEFAULT_DAYS))
-        ctx["example_bap_lot_timestamp"] = _as_api_timestamp(now - timedelta(days=2))
-        ctx["example_bap_award_date"] = (now - timedelta(days=2)).date()
-        # Species lookup: the documented numbers come from the matcher itself, so the page can't
-        # drift away from what the endpoint actually does.
-        # Field mappings rename incoming *club member* fields, so they mean nothing to a key that
-        # only reads lots or looks up species -- and a settings box that does nothing is worse
-        # than no box.
-        ctx["key_writes_club_members"] = any(
-            (
-                api_key.can_add_club_members,
-                api_key.can_read_club_member_list,
-                api_key.can_update_club_members,
-                api_key.can_renew_memberships,
-            )
-        )
-        ctx["species_lookup_max_results"] = MAX_SUGGESTIONS
-        ctx["species_lookup_llm_calls_per_day"] = SPECIES_LOOKUP_LLM_CALLS_PER_CLUB_PER_DAY
-        ctx["species_lookup_llm_available"] = assist_enabled()
-        # What is left of it right now, so the page a club admin reads and the header their
-        # software reads are the same number.
-        ctx["species_lookup_llm_remaining"] = LLMBudget.for_club(
-            self.club, SPECIES_LOOKUP_LLM_CALLS_PER_CLUB_PER_DAY
-        ).remaining
-        ctx["example_category"] = Category.objects.order_by("name").first()
-        ctx["lot_page_size"] = LOT_PAGE_SIZE
-        ctx["max_lot_page_size"] = MAX_LOT_PAGE_SIZE
-        ctx["lot_ordering"] = sorted(LOT_ORDERING)
-        # A real slug from this club, so the example URLs are ones an admin can paste and run.
-        ctx["example_auction"] = club_api_current_auction(self.club) or club_api_latest_auction(self.club)
+        ctx.update(club_api_documentation_context(self.club, api_key))
         return ctx
 
 

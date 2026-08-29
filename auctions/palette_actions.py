@@ -8913,6 +8913,13 @@ _CLUB_FEATURES: tuple[dict[str, Any], ...] = (
         "tool": "club_website_snippets",
     },
     {
+        "key": "club_api",
+        "name": "An API for your own software",
+        "what": "Your members, points, species and auction lots, readable and writable by the club's own website.",
+        "on": lambda club: club.api_keys.filter(is_active=True).exists(),
+        "tool": "club_api",
+    },
+    {
         "key": "discord",
         "name": "Discord",
         "what": "Auctions and announcements posted to your Discord server, and roles for members.",
@@ -9102,6 +9109,245 @@ def club_website_snippets(request, params: dict[str, Any]) -> dict[str, Any]:
             "it carries a listener that lets each embed size itself, so copy it from there rather "
             "than writing an iframe by hand."
         ),
+    }
+
+
+#: Every permission a club API key carries, in the order the create page lists them: the flag on
+#: :class:`~auctions.models.ClubAPIKey`, the words on the tick box, and which slice of the
+#: documentation it unlocks. The wording is that page's own, because an admin ticking a box is
+#: looking at that page while an agent reads them the name of the box.
+#: ``test_palette_account.ClubAPIToolTests`` fails the build if a flag here stops naming a field on
+#: the model, or a label stops appearing on that page.
+_API_PERMISSIONS: tuple[tuple[str, str, str], ...] = (
+    ("can_add_club_members", "Can add club members", "members"),
+    ("can_read_club_member_list", "Can read club member list", "members"),
+    ("can_update_club_members", "Can update club members", "members"),
+    ("can_renew_memberships", "Can renew memberships", "members"),
+    ("can_add_bap_points", "Can use BAP points and lots", "points"),
+    ("can_look_up_species", "Can use species", "species"),
+    ("can_read_auction_info", "Read auction info", "auctions"),
+    ("can_read_public_lots", "Read public lot info", "auctions"),
+    ("can_read_private_lots", "Read private lot info", "auctions"),
+)
+
+#: The documentation, cut into pieces that fit in one answer. Whole, it is about fifteen thousand
+#: characters of endpoints and worked examples -- over ``mcp.tools.MAX_RESULT_CHARS`` once it is
+#: JSON, and most of it about something nobody asked. A topic is rendered by turning on exactly its
+#: own permissions, which is the same switch the ``{% if %}``s in that template already answer to.
+_API_TOPICS: tuple[str, ...] = tuple(dict.fromkeys(topic for _, _, topic in _API_PERMISSIONS))
+
+#: A ``<pre>`` block, kept verbatim by :func:`_as_text` while the prose around it is collapsed.
+_PRE_BLOCK = re.compile(r"<pre\b[^>]*>(.*?)</pre>", re.IGNORECASE | re.DOTALL)
+
+#: Where a line ends when a page is read rather than drawn.
+_LINE_END = re.compile(r"</(?:p|div|ul|ol|li|tr|table|h[1-6])>|<br\s*/?>", re.IGNORECASE)
+
+
+def _as_text(markup: str) -> str:
+    """One rendered template as something worth putting in a tool result.
+
+    :func:`plain_text` is the wrong tool for this and it is worth saying why: it collapses every
+    run of whitespace, which is right for a paragraph of auction rules and wrong for a page whose
+    most useful half is curl commands and JSON laid out in ``<pre>`` blocks. Those are kept exactly
+    as they are written and everything around them is collapsed to one line per thing said.
+    """
+    chunks: list[tuple[bool, str]] = []
+    position = 0
+    for block in _PRE_BLOCK.finditer(markup):
+        chunks.append((False, markup[position : block.start()]))
+        chunks.append((True, block.group(1)))
+        position = block.end()
+    chunks.append((False, markup[position:]))
+    lines: list[str] = []
+    for verbatim, chunk in chunks:
+        if verbatim:
+            lines.append("")
+            lines.append(html.unescape(strip_tags(chunk)).strip("\n"))
+            lines.append("")
+            continue
+        chunk = re.sub(r"<li\b[^>]*>", "\n- ", chunk, flags=re.IGNORECASE)
+        chunk = _LINE_END.sub("\n", chunk)
+        for line in html.unescape(strip_tags(chunk)).split("\n"):
+            line = " ".join(line.split())
+            if line:
+                lines.append(line)
+    return "\n".join(lines).strip()
+
+
+def _api_documentation(club, flags, *, name: str, prefix: str) -> str:
+    """The club API's own documentation for one topic, as text.
+
+    Rendered from ``_club_api_endpoints.html`` -- the same include the key's page draws -- with an
+    unsaved key holding exactly the permissions being documented. That template is where every
+    endpoint on this site is written up, each behind the ``{% if %}`` for the permission it needs,
+    and a second copy of it written in Python for agents would be wrong within a release. Nothing
+    is saved and nothing is granted: this key exists for the length of one ``render_to_string``.
+    """
+    from django.template.loader import render_to_string
+
+    from .models import ClubAPIKey
+    from .views import club_api_documentation_context
+
+    key = ClubAPIKey(club=club, name=name, prefix=prefix)
+    for flag, _, _ in _API_PERMISSIONS:
+        setattr(key, flag, flag in flags)
+    markup = render_to_string(
+        "auctions/_club_api_endpoints.html",
+        {"club": club, "api_key": key, **club_api_documentation_context(club, key)},
+    )
+    return _as_text(markup)
+
+
+def _one_api_key(keys, named: str):
+    """Which key they meant, by its name or by its prefix. Several is a question, never a pick.
+
+    A whole key -- ``ck_abc123.the-secret``, straight out of somebody's config file -- is matched on
+    the half in front of the dot, and the half behind it is dropped rather than compared or echoed.
+    Both halves of that matter: matching on it would make a refusal a test of whether a secret is
+    right, and echoing it would put the secret in a refusal, a transcript and a log.
+    """
+    wanted = named.lower().split(".", 1)[0].strip()
+    matches = [key for key in keys if key.name.lower() == wanted or key.prefix.lower() == wanted]
+    if not matches:
+        matches = [key for key in keys if wanted in key.name.lower() or wanted in key.prefix.lower()]
+    if not matches:
+        return None, _error(
+            f"There's no API key called “{wanted}” on this club. The keys it has: "
+            + (", ".join(f"“{key.name}”" for key in keys) if keys else "none at all.")
+        )
+    if len(matches) > 1:
+        return None, _need(
+            f"Which key did you mean? {len(matches)} of them match “{named}”.",
+            [{"label": key.name, "value": key.name} for key in matches],
+        )
+    return matches[0], None
+
+
+def club_api(request, params: dict[str, Any]) -> dict[str, Any]:
+    """The club's own REST API: which keys exist, what each may do, and how to call it.
+
+    "Write us something that puts our lots on the club website" is a job an agent could nearly do
+    here and could not start. The API is real and it is documented, but the documentation is a page
+    behind a club admin's login and the keys -- which exist, what each is allowed to do, whether
+    the one in the WordPress plugin can even read lots -- were facts you could only get by asking
+    somebody to read their screen out loud. So the agent guessed at the endpoints, or asked.
+
+    Two things it deliberately does not do, and both are the point rather than a gap.
+
+    It **does not create a key**. A credential that reaches a club's member list is a decision
+    somebody takes on a page with the tick boxes in front of them, and the tick boxes cannot be
+    changed afterwards -- so an agent that could create one would be choosing, on somebody's
+    behalf, how much of their club a program gets to see. What this does instead is name the exact
+    boxes and link to the page, which is the useful half of that.
+
+    It **cannot read a secret**, because nothing can: a key is stored as a salted hash and shown
+    once. Saying so in the answer is worth the characters, because the alternative is an agent
+    hunting for it through three more tools before it tells anybody.
+
+    The documentation comes out of the page itself, one topic at a time. See
+    :func:`_api_documentation` for why that is a rendering rather than a copy.
+    """
+    from .models import ClubAPIKey
+    from .views import check_club_permission
+
+    user = request.user
+    club, problem = _club_or_problem(request, params)
+    if problem:
+        return problem
+    if not check_club_permission(user, club, "permission_edit_club"):
+        return _error(f"You don't have permission to see {club.name}'s API keys.")
+    keys = list(club.api_keys.order_by("-is_active", "-created_at").prefetch_related("field_mappings"))
+    named = _unfenced(_str(params, "key") or _str(params, "api_key"))
+    chosen = None
+    if named:
+        chosen, problem = _one_api_key(keys, named)
+        if problem:
+            return problem
+    topic = (_str(params, "topic") or _str(params, "section")).lower().replace(" ", "_")
+    if topic and topic not in _API_TOPICS:
+        # Refused rather than defaulted to everything, for ``search_help``'s reason: a narrowing
+        # that was quietly dropped comes back as a real answer with no sign that it is the wrong one.
+        return _error(f"“{topic}” isn't part of this API. Ask for {_and_list(list(_API_TOPICS))}.")
+
+    documentation = ""
+    if topic:
+        flags = [flag for flag, _, name in _API_PERMISSIONS if name == topic]
+        if chosen:
+            unheld = [label for flag, label, name in _API_PERMISSIONS if name == topic and not getattr(chosen, flag)]
+            flags = [flag for flag in flags if getattr(chosen, flag)]
+            if not flags:
+                return _error(
+                    f"“{chosen.name}” can't call the {topic} endpoints — it would need "
+                    f"{_and_list(unheld)}. A key's permissions are fixed when it's made, so "
+                    "that means a new key rather than an edit."
+                )
+        documentation = _api_documentation(
+            club,
+            flags,
+            name=chosen.name if chosen else "Your integration",
+            prefix=chosen.prefix if chosen else "ck_yourkey",
+        )
+
+    rows = [
+        {
+            # Fenced like every other name a person typed. The documentation below is not: that is
+            # this site's own page, with this club's own values filled into it.
+            "name": untrusted_short(key.name),
+            "prefix": key.prefix,
+            "active": key.is_active,
+            "can": [label for flag, label, _ in _API_PERMISSIONS if getattr(key, flag)],
+            "created": user_time(user, key.created_at),
+            "last_used": user_time(user, key.last_used_at),
+            "field_mappings": {mapping.external_field: mapping.internal_field for mapping in key.field_mappings.all()},
+            "url": reverse("club_api_key_detail", kwargs={"slug": club.slug, "pk": key.pk}),
+        }
+        for key in keys
+    ]
+    capabilities = []
+    for flag, label, name in _API_PERMISSIONS:
+        capability = {
+            "tick_box": label,
+            "documentation_topic": name,
+            "keys_with_it": [untrusted_short(key.name) for key in keys if key.is_active and getattr(key, flag)],
+        }
+        explanation = str(ClubAPIKey._meta.get_field(flag).help_text or "")
+        if explanation:
+            capability["what_it_does"] = explanation
+        capabilities.append(capability)
+
+    topic_choices = " or ".join(_API_TOPICS)
+    live = sum(1 for key in keys if key.is_active)
+    if documentation:
+        summary = f"The {topic} half of {club.name}'s API"
+        summary += f", as “{chosen.name}” may call it." if chosen else ", and what a key needs to call it."
+    elif keys:
+        summary = (
+            f"{club.name} has {live} active API key(s) of {len(keys)}. Ask again with "
+            f"topic={topic_choices} for the endpoints and worked examples."
+        )
+    else:
+        summary = (
+            f"{club.name} hasn't got an API key yet. I can't make one — it's ticking boxes on a "
+            "page, and the link is here. Ask for a topic and I can tell you which boxes."
+        )
+    return {
+        "found": True,
+        "club": club.name,
+        "keys": rows,
+        "count": len(keys),
+        "capabilities": capabilities,
+        "documentation_topics": list(_API_TOPICS),
+        "documented": topic or None,
+        "documentation": documentation or None,
+        "secrets": (
+            "A key's secret is shown once, when it's created, and stored only as a salted hash. "
+            "Nothing can read one back — a lost secret means a new key."
+        ),
+        "authenticate_with": "X-API-Key: <prefix>.<secret>",
+        "create_a_key_url": reverse("club_api_key_create", kwargs={"slug": club.slug}),
+        "keys_url": reverse("club_api_keys", kwargs={"slug": club.slug}),
+        "summary": summary,
+        **_about(club=club),
     }
 
 
@@ -11556,13 +11802,14 @@ register(
     Action(
         name="request_a_skill",
         description=(
-            "Write down a tool this site should have and doesn't. Call it when the user asked for "
-            "something and nothing here can do it — after you have said so, not instead of saying "
-            "so. It changes nothing and does not do the thing they wanted; it puts the request in "
-            "front of the person who builds these. Say what the tool would be called, what it "
-            "would need to be told, and what the user was actually trying to do. Do not call it "
-            "for something a tool here already does, and do not call it twice for the same thing "
-            "in one conversation."
+            "Write down something this site should be able to do and can't — a tool here, or an "
+            "endpoint on the club API an integration needed and didn't find. Call it when the "
+            "user asked for something and nothing here can do it — after you have said so, not "
+            "instead of saying so. It changes nothing and does not do the thing they wanted; it "
+            "puts the request in front of the person who builds these. Say what it would be "
+            "called, what it would need to be told, and what the user was actually trying to do. "
+            "Do not call it for something a tool here already does, and do not call it twice for "
+            "the same thing in one conversation."
         ),
         params={
             "skill": "string, required. Short name for the tool, e.g. 'refund an invoice'.",
@@ -12875,6 +13122,54 @@ register(
         resolver=club_website_snippets,
         aliases={"name"},
         examples=["what can we put on our club website?", "how do I show our events on our own site?"],
+        needs=NEEDS_CLUB_ADMIN,
+    )
+)
+
+register(
+    Action(
+        name="club_api",
+        description=(
+            "This club's own REST API, for writing an integration against it: which API keys "
+            "exist, what each one is allowed to do, and the endpoint documentation with worked "
+            "examples. Pass topic=members, points, species or auctions for the endpoints of that "
+            "half — the whole thing does not fit in one answer. Read-only, and it cannot read a "
+            "key's secret, which is shown once when the key is made and stored only as a hash. "
+            "Nor can it create a key: it names the tick boxes and links to the page where a "
+            "person makes one. Call it before writing any code against this site. If what the "
+            "club wants is its events, its auction or its leaderboard on its own website, look at "
+            "club_website_snippets first — those are embeds and need no key at all."
+        ),
+        params={
+            "club": "string, optional. Club name. See my_context.",
+            "key": (
+                "string, optional. One key, by the name it was given or by its prefix. With a "
+                "topic, the documentation is narrowed to what this key may actually call."
+            ),
+            "topic": (
+                "string, optional. Which part of the API to document: members (add, read, update "
+                "and renew club members), points (breeder award points, and reading a club's lots "
+                "for them), species (match a typed name, add a species, name one), auctions "
+                "(auctions, lots, filtering and images). Left out, the answer is the keys and the "
+                "permissions without the endpoints."
+            ),
+        },
+        danger=DANGER_SAFE,
+        lookup=True,
+        resolver=club_api,
+        aliases={"api_key", "section"},
+        # Kept off the palette for ``read_source``'s reason rather than a new one: a topic of this
+        # documentation is five thousand characters of endpoints, curl commands and JSON, which is
+        # over ``palette_assist.MAX_LOOKUP_RESULT_CHARS`` on its own -- so the palette would pay
+        # this site's own model budget to be handed a truncated reference. Somebody typing into a
+        # one-line box is sent to the API keys page, which is where the same text is drawn.
+        mcp_only=True,
+        examples=[
+            "what API keys do we have?",
+            "write me something that posts our lots to our website",
+            "how do I add BAP points from our Google form?",
+            "can our WordPress plugin read the member list?",
+        ],
         needs=NEEDS_CLUB_ADMIN,
     )
 )

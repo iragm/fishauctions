@@ -2340,8 +2340,11 @@ class DriftTests(PaletteAssistTestCase):
     #: palette. See ``Action.mcp_only`` for the two reasons that qualify.
     MCP_ONLY = {
         # Reason one: who reads the answer. A page of Python is right for an agent and wrong for a
-        # one-line box on somebody's phone at this site's own expense.
+        # one-line box on somebody's phone at this site's own expense. ``club_api`` is the same
+        # argument about a different document: one topic of the club API's endpoint documentation is
+        # longer than ``palette_assist.MAX_LOOKUP_RESULT_CHARS`` by itself.
         "read_source",
+        "club_api",
         # Reason two: who does the acting. Each of these was excused in ``NOT_A_SKILL`` by an
         # argument about *speech* -- "identifying it out loud is harder than clicking it", "more
         # than one spoken sentence can carry" -- which is true of somebody dictating and empty
@@ -2391,8 +2394,10 @@ class DriftTests(PaletteAssistTestCase):
         that would be a second catalogue rather than a named exception.
         """
         named = {skill for skill in palette_actions.SKILLS.values() if palette_actions.ACTIONS[skill].mcp_only}
-        # read_source has no view -- it reads the repository, not this database.
-        writes = self.MCP_ONLY - {"read_source"}
+        # The two reads are not writes and cover no POST view, which is all ``SKILLS`` maps:
+        # read_source reads the repository rather than this database, and club_api reads the API
+        # keys pages, which are ``TemplateView``s. The palette reaches both pages all the same.
+        writes = self.MCP_ONLY - {"read_source", "club_api"}
         # ``SKILLS`` maps a view to *one* skill, so a page whose POST two tools split between them
         # can only name one of the pair. The other is written down here rather than derived.
         shares_a_view_with_its_twin = {"unqueue_lot": "queue_lot"}

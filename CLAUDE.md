@@ -369,7 +369,11 @@ guards the form). `docs/club_event_details.md` has the whole design.
 signed-in club admin. One checkbox per capability on the key; `ClubAPIViewMixin.require_club_permission`
 takes the key flag *and* the equivalent `ClubMember` permission, so both callers go through one gate.
 `/clubs/<slug>/api-keys/<pk>/` is the documentation — every endpoint is written up there, behind the
-`{% if %}` for its own permission, and nowhere else.
+`{% if %}` for its own permission, and nowhere else. It has **two readers and one copy**: the page
+draws `auctions/templates/auctions/_club_api_endpoints.html`, and the `club_api` MCP tool renders
+that same include as text for an agent writing an integration, with an unsaved key holding exactly
+the permissions being documented. Both fill it in from `views.club_api_documentation_context`, so a
+number in an example is the number the code enforces.
 
 Members, BAP points/lots and species lookup came first. The read-only auction and lot feed is three
 more checkboxes:
@@ -436,12 +440,14 @@ depending on who asked — resolvers call the same form, view or service the web
 A skill cannot exist for one surface and not the other, with one **named** subtraction:
 `Action.mcp_only` keeps a skill off the *palette's tool list* while `palette_routes` still guarantees
 `go_to_page` reaches its page. Two things qualify, both about the client and neither about the
-capability. **Who reads the answer** — `read_source` returns a page of Python, right for an agent and
-wrong for a one-line box paid for out of this site's model budget. **Who does the acting** — a class
+capability. **Who reads the answer** — `read_source` returns a page of Python and `club_api` a page
+of API documentation, right for an agent and wrong for a one-line box paid for out of this site's
+model budget (one `club_api` topic is over `palette_assist.MAX_LOOKUP_RESULT_CHARS` by itself).
+**Who does the acting** — a class
 of writes excused in `NOT_A_SKILL` by arguments about *speech* ("identifying it out loud is harder
 than clicking it"), which is true of somebody dictating and empty against a caller sending a lot
-number it read out of `list_lots`. Sixteen actions in all; `test_palette_assist.DriftTests.MCP_ONLY`
-is the written-out list, and every one of them still covers a view in `SKILLS`.
+number it read out of `list_lots`. Seventeen actions in all; `test_palette_assist.DriftTests.MCP_ONLY`
+is the written-out list, and every one of the fifteen writes still covers a view in `SKILLS`.
 
 ```
 auctions/mcp/tools.py      tool_descriptors(user, writes=) / call_tool(request, name, args)
@@ -638,8 +644,8 @@ nothing *crashes* instead of refusing.
   (`set_invoice_status`, `add_invoice_adjustment`). Both draw the thing they did, never the thing
   they are about to do.
 - **Prompts**: `auctions/mcp/prompts.py` holds `run_check_in`, `chase_unpaid`, `set_up_next_year`,
-  `write_announcement`. A prompt is the only safe place for a multi-step recipe, because a person
-  picks it off a menu. **Nothing in a prompt body is interpolated except its own arguments** —
+  `write_announcement`, `build_an_integration`. A prompt is the only safe place for a multi-step
+  recipe, because a person picks it off a menu. **Nothing in a prompt body is interpolated except its own arguments** —
   `test_mcp_resources` fails the build otherwise. `completion/complete` answers `ref/prompt` out of
   `_my_auctions` and deliberately refuses `ref/resource`.
 - **Resources**: `auctions/mcp/resources.py` publishes `auction://{auction}`,
