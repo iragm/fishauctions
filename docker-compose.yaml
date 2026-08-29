@@ -18,6 +18,11 @@ x-app-build: &app-build
     PUID: ${PUID-1000}
     PGID: ${PGID-1000}
 
+# web, celery_worker and celery_beat are one image built once and tagged by name, rather than
+# three per-service images compose names after the project directory. CI pre-builds this tag with
+# a layer cache and then never builds again (.github/workflows/test.yml); APP_IMAGE is how it says
+# which tag it built.
+
 # NOTE on container_name: the fixed names (django, db, redis, ...) are intentional.
 # The entire ops workflow -- CLAUDE.md, update-packages.sh, cron/docs -- runs
 # `docker exec django ...` / `docker exec redis ...` against them. Fixed names do
@@ -26,6 +31,7 @@ x-app-build: &app-build
 services:
   web:
     build: *app-build
+    image: ${APP_IMAGE-fishauctions-app}
     container_name: django
     logging: *default-logging
     volumes:
@@ -75,6 +81,7 @@ services:
 
   celery_worker:
     build: *app-build
+    image: ${APP_IMAGE-fishauctions-app}
     container_name: celery_worker
     logging: *default-logging
     entrypoint: ["sh", "./celery_worker_entrypoint.sh"]
@@ -93,6 +100,7 @@ services:
 
   celery_beat:
     build: *app-build
+    image: ${APP_IMAGE-fishauctions-app}
     container_name: celery_beat
     logging: *default-logging
     entrypoint: ["sh", "./celery_beat_entrypoint.sh"]

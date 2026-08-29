@@ -1089,6 +1089,29 @@ def record_choice(text, species, *, first_save=False, changed=False):
         row.retire()
 
 
+def _is_somebody_elses_name(normalized, species, user=None, club=None):
+    """True when a cached answer is really one club's private word for that fish.
+
+    A :class:`SpeciesSearchCache` row is served to every club, which is right for what the table
+    mostly holds: the model working out that "blue dream shrimp" is a *Neocaridina* strain is a
+    fact about the hobby, not about whoever paid for the call.  It is wrong when the text is a
+    **name** somebody added here and it was scoped -- "yellow lab" belongs to the club that taught
+    it until a superuser approves it, and :func:`visible_common_names` is careful about exactly
+    that.  One cached row must not be the way round it: the cache is read before the token search
+    and answers on its own, so a leak here is a leak everywhere, forever, for everybody.
+
+    Two indexed lookups, and only when a row would otherwise answer.  The first one ends it for
+    the common case: nothing in ``SpeciesCommonName`` claims the text at all, because the row is
+    an inference rather than a name, and an inference is nobody's property.
+    """
+    if species is None:
+        return False
+    claimed = SpeciesCommonName.objects.filter(name_normalized=normalized, species=species)
+    if not claimed.exists():
+        return False
+    return not visible_common_names(user, club).filter(name_normalized=normalized, species=species).exists()
+
+
 def suggest_species(text, user=None, use_llm=True, category=None, club=None, budget=None):
     """The one call the views make: a handful of species for a typed lot name.
 
@@ -1136,6 +1159,11 @@ def suggest_species(text, user=None, use_llm=True, category=None, club=None, bud
         seen = cached.species is None or cached.species.approved
         if not seen:
             seen = visible_species(user, club).filter(pk=cached.species_id).exists()
+        # ...and the *name* has to be one they may see, not just the species.  See
+        # _is_somebody_elses_name: without this, one cached row hands a club-scoped common name
+        # to every club, which is the one thing the name table itself refuses to do.
+        if seen and _is_somebody_elses_name(normalized, cached.species, user=user, club=club):
+            seen = False
         if seen:
             return ([cached.species] if cached.species else []), "cache"
 

@@ -1,0 +1,27 @@
+# The build context, which is sent to the daemon on every `docker compose build`. The Dockerfile
+# COPYs nothing but requirements*.txt -- app code is bind-mounted, see docker-compose.yaml -- so
+# everything here is transfer nobody reads. .git alone is ~220 MB of it.
+.git
+.github
+.pytest_cache
+**/__pycache__
+**/*.pyc
+.ruff_cache
+.venv
+venv
+node_modules
+
+# Runtime state, and never in an image: mediafiles is uploads, logs are logs, staticfiles is
+# collectstatic output, .env holds live secrets.
+.env
+.env.bak.*
+mediafiles
+logs
+staticfiles
+*.sqlite3
+
+# Docs and editor droppings
+docs
+*.md
+.vscode
+.idea

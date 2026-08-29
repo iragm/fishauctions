@@ -253,7 +253,11 @@ a hint that matched something unexpected.
 
 Written by exactly three places: the bulk add-lot page on a row's first save (bounded to the ≤5
 suggestions), the auction admin's lot editor (unbounded), and the language model.
-`SpeciesSearchCache.created_by` records who; every row is served to every club.
+`SpeciesSearchCache.created_by` records who; every row is served to every club **except** one
+whose text is a common name somebody added here and scoped —
+`species_matching._is_somebody_elses_name`. The cache is read before the token search and answers
+on its own, so without that check getting the model asked once was all it took to hand one club's
+word for a fish to the whole site, permanently, past a name table that refuses to.
 
 - `species_matching.record_choice`: a lot saved with the answer left alone counts an **accept**,
   once, on the save that created the lot; one cleared or changed counts a **reject**. Both count
