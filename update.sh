@@ -356,10 +356,20 @@ backup_certs
 # redis, nginx/swag) and the python base in our Dockerfile's FROM would be frozen
 # at whatever was first pulled. `pull` refreshes the pre-built service images;
 # `build --pull` re-pulls the base image referenced by FROM before building ours.
+#
+# --ignore-buildable is REQUIRED. web/celery_worker/celery_beat carry an explicit
+# `image: ${APP_IMAGE-fishauctions-app}` so CI can build that one tag once and have
+# all three find it. That tag is built HERE and pushed to no registry, so a plain
+# `docker compose pull` tries to fetch it from Docker Hub and the whole deploy dies
+# on "pull access denied for fishauctions-app" -- after git has already advanced.
+# The flag skips every service with a build section, leaving this step doing the job
+# it exists for (mariadb, redis, nginx/swag) and still failing loudly on a real
+# registry error, which --ignore-pull-failures would have swallowed.
+#
 # From here on git has already advanced, so on any failure say so explicitly:
 # the old containers are still running the previous build, and re-running
 # ./update.sh after fixing the error is the recovery path.
-if ! docker compose pull; then
+if ! docker compose pull --ignore-buildable; then
     echo "Update failed during 'docker compose pull' (registry error or bad image tag in .env)."
     echo "Code was already updated by git, but containers were NOT restarted -- the site is"
     echo "still running the previous build. Fix the error above and re-run ./update.sh."
