@@ -33,9 +33,27 @@ docker exec -it django python3 manage.py test # Run Django tests (requires compo
 
 Ruff config: `ruff.toml` (line-length: 120). Replicate CI locally: `./.github/scripts/prepare-ci.sh && docker compose run --rm test --ci --verbose` -- note `prepare-ci.sh` overwrites `.env`.
 
-`--ci` does not run the tests: run `manage.py test` separately. The full suite is ~55 minutes, so
-background it, and never run two at once -- both runs share one `test_auctions` database and
-corrupt each other into hundreds of unrelated errors.
+`--ci` does not run the tests: run `manage.py test` separately. The full suite is ~6 minutes, or
+~2.5 with `--parallel` -- where about half of what is left is building the test database from ~290
+migrations, not running tests. Background it, and never run two at once -- both runs share one
+`test_auctions` database and corrupt each other into hundreds of unrelated errors.
+
+Two things keep it there, and both are easy to undo by accident:
+
+* `fishauctions/test_runner.py` swaps PBKDF2 for MD5 for the duration of a run. PBKDF2 is ~200ms a
+  call and fixtures hash ~17,000 passwords and API keys, which *was* the 55-minute suite. It is a
+  `TEST_RUNNER` rather than a settings module so there is no flag to forget and no path by which
+  production can load it.
+* `StandardTestCase` builds its 26-row fixture in **`setUpTestData`**, once per class rather than
+  once per test (79ms -> 2.8ms per test). Its `setUp` stays for one job: emptying the cache, since
+  class-level fixtures mean every test in a class shares primary keys and anything cached under one
+  would otherwise carry into the next test. `isolated_cache` makes that a local-memory cache this
+  process owns -- one LOCATION shared by every subclass that doesn't name its own -- so clearing it
+  is not the Redis FLUSHDB the other `--parallel` workers would feel. A subclass adding per-test
+  setup keeps calling `super().setUp()`; one adding *fixture rows* should extend `setUpTestData`,
+  and if those rows save a **file** it needs `WritableMediaRoot` too -- shared primary keys mean
+  two tests saving an image for the same lot now collide on a filename where each used to get a
+  fresh one.
 
 A parallel run (`--parallel`, which is what CI uses) needs **`tblib`** installed, or the *first*
 failing test kills the whole run: Django cannot pickle a traceback back from a worker process, so
@@ -67,7 +85,7 @@ Never edit `requirements.txt` directly. Edit `requirements.in` or `requirements-
 ## Architecture
 
 ```
-auctions/            # Main app: models, views, forms, templates, static, migrations (180+)
+auctions/            # Main app: models, views, forms, templates, static, migrations (290)
   management/commands/  # Cron jobs: endauctions, sendnotifications, email_invoice, etc.
   tests.py             # Extend StandardTestCase for test setup (users, auctions, lots)
 fishauctions/        # Project settings (reads .env), ASGI, URLs, Celery config
@@ -235,7 +253,11 @@ a hint that matched something unexpected.
 
 Written by exactly three places: the bulk add-lot page on a row's first save (bounded to the ≤5
 suggestions), the auction admin's lot editor (unbounded), and the language model.
-`SpeciesSearchCache.created_by` records who; every row is served to every club.
+`SpeciesSearchCache.created_by` records who; every row is served to every club **except** one
+whose text is a common name somebody added here and scoped —
+`species_matching._is_somebody_elses_name`. The cache is read before the token search and answers
+on its own, so without that check getting the model asked once was all it took to hand one club's
+word for a fish to the whole site, permanently, past a name table that refuses to.
 
 - `species_matching.record_choice`: a lot saved with the answer left alone counts an **accept**,
   once, on the save that created the lot; one cleared or changed counts a **reject**. Both count
@@ -363,6 +385,72 @@ guards the form). `docs/club_event_details.md` has the whole design.
 - There is deliberately **no per-event "add this to my calendar" link** on the club page's event
   list. The pickup-time buttons on the auction page are a different thing and stay.
 
+## The club API
+
+`/api/v1/clubs/<slug>/…`, authenticated with a `ClubAPIKey` (`X-API-Key`, prefix `ck_`) or by a
+signed-in club admin. One checkbox per capability on the key; `ClubAPIViewMixin.require_club_permission`
+takes the key flag *and* the equivalent `ClubMember` permission, so both callers go through one gate.
+`/clubs/<slug>/api-keys/<pk>/` is the documentation — every endpoint is written up there, behind the
+`{% if %}` for its own permission, and nowhere else. It has **two readers and one copy**: the page
+draws `auctions/templates/auctions/_club_api_endpoints.html`, and the `club_api` MCP tool renders
+that same include as text for an agent writing an integration, with an unsaved key holding exactly
+the permissions being documented. Both fill it in from `views.club_api_documentation_context`, so a
+number in an example is the number the code enforces.
+
+Members, BAP points/lots and species lookup came first. The read-only auction and lot feed is three
+more checkboxes:
+
+- `can_read_auction_info` → `auctions/` (list, with the `current` and `latest` slugs named in it)
+  and `auctions/<identifier>/`.
+- `can_read_public_lots` → `auctions/<identifier>/lots/` and `.../lots/<lot number>/`.
+- `can_read_private_lots` → **the one privacy flag.**
+
+`<identifier>` is an auction slug or the word `current` or `latest`; a real slug wins, so the words
+are only ever a fallback. `current` is the pinned `Club.current_auction` if it hasn't wound down,
+else the soonest one that hasn't — deliberately looser than `views._club_current_auction`, which
+serves the public website embed and will only offer a *promoted* auction. `latest` is the last one
+created, promoted or not.
+
+- **Everything that names somebody is in a `private` object that is absent, not null, without the
+  flag** (`serializers.PrivateBlockMixin`): buyer and seller names, emails and bidder numbers.
+  Removed lots are in the same bargain — excluded entirely from a public key's answer, returned
+  with `private.removed` to a key that can read private info. Deleted lots never come back at all.
+- **`google_drive_link` is on no tier.** That sheet is shared "anyone with the link can view", so
+  the link *is* the credential, and no checkbox on a key should hand out the club's spreadsheet.
+- Every reference carries both halves: `{"id": 7, "name": "Cichlids"}`.
+- Lot filtering has one rule: **a parameter named after a column matches that column, and
+  `?filter=` is the one that looks everywhere.** The narrow ones are `lot_name`, `description`,
+  `custom_field_1`, `custom_dropdown` (the whole value — it is a controlled vocabulary the auction
+  publishes as `lot_fields.custom_dropdown_options`), `lot_number` (both spellings), `category` /
+  `category_id` (through the same `views._resolve_category` the species lookup uses), `species_id`,
+  `sold`, `donation`, `i_bred_this_fish`, `custom_checkbox`. `count` is the filtered total. `sold`
+  is spelled out as winner-**and**-price because `Lot.sold` is a property. A value it cannot parse
+  is a 400, never a shrug — a filter that silently does nothing shows up as a club's front page
+  listing the whole auction.
+- **A `?filter=` that is all digits is a lot number**, and skips the text columns entirely —
+  otherwise `1` matches `10 gallon` and half the descriptions in the auction, and buries the one
+  lot the person was after. `?description=1` is still there for digits in the prose.
+- **`?filter=` searches public columns only, for every caller** (`views.LOT_GENERIC_FILTER_COLUMNS`).
+  `filters.LotAdminFilter` — the admin page's version of the same box — also searches seller name,
+  username and bidder number, and copying that list would let a public key confirm a name one
+  character at a time. `?seller=` / `?winner=` (name, bidder number or email) carry that instead and
+  **refuse** a key without the privacy flag rather than matching nothing, so one `?filter=` means
+  one thing whoever sends it.
+- **`?ordering=` is an allowlist** (`views.LOT_ORDERING`), not a pass-through to `order_by`: a
+  caller who can name any column can order by `auctiontos_winner__email` and binary-search the
+  auction's email list out of the sort order without ever holding the private permission.
+- `?fields=` narrows each lot (`serializers.SparseFieldsMixin`, applied in `__init__` so an omitted
+  field costs no queries). It cannot conjure `private` — the mixin pops that afterwards.
+- Each lot's `url` ends in `?src=<key name>`, which is the parameter `PageView` tracking already
+  reads — a club that publishes this feed sees its own website in the auction's stats.
+- `thumbnail` is one link for a lot tile; `images` is every picture with a full-size and a thumbnail
+  URL. Both are absolute (`serializers._absolute`) — Cloudflare hands back absolute URLs and local
+  media does not. `views._lot_images_by_owner` and `_auto_images_by_lot_name` are `Lot.images` and
+  `Lot.auto_image` batched for a whole page; the second is `models.find_image`'s rule minus its
+  per-user preference, and it needs an `AuctionTOS` admin row, not just `created_by`.
+- Money is always a string. `serializers.DecimalField` renders one; a raw `Decimal` in a hand-built
+  dict comes out of DRF's encoder as a float, which is why `fees.minimum_bid` is formatted by hand.
+
 ## MCP endpoint and the command palette's skills
 
 The site is a Model Context Protocol server at **`/mcp/`**. There is **one** catalogue behind it and
@@ -374,12 +462,14 @@ depending on who asked — resolvers call the same form, view or service the web
 A skill cannot exist for one surface and not the other, with one **named** subtraction:
 `Action.mcp_only` keeps a skill off the *palette's tool list* while `palette_routes` still guarantees
 `go_to_page` reaches its page. Two things qualify, both about the client and neither about the
-capability. **Who reads the answer** — `read_source` returns a page of Python, right for an agent and
-wrong for a one-line box paid for out of this site's model budget. **Who does the acting** — a class
+capability. **Who reads the answer** — `read_source` returns a page of Python and `club_api` a page
+of API documentation, right for an agent and wrong for a one-line box paid for out of this site's
+model budget (one `club_api` topic is over `palette_assist.MAX_LOOKUP_RESULT_CHARS` by itself).
+**Who does the acting** — a class
 of writes excused in `NOT_A_SKILL` by arguments about *speech* ("identifying it out loud is harder
 than clicking it"), which is true of somebody dictating and empty against a caller sending a lot
-number it read out of `list_lots`. Sixteen actions in all; `test_palette_assist.DriftTests.MCP_ONLY`
-is the written-out list, and every one of them still covers a view in `SKILLS`.
+number it read out of `list_lots`. Seventeen actions in all; `test_palette_assist.DriftTests.MCP_ONLY`
+is the written-out list, and every one of the fifteen writes still covers a view in `SKILLS`.
 
 ```
 auctions/mcp/tools.py      tool_descriptors(user, writes=) / call_tool(request, name, args)
@@ -576,8 +666,8 @@ nothing *crashes* instead of refusing.
   (`set_invoice_status`, `add_invoice_adjustment`). Both draw the thing they did, never the thing
   they are about to do.
 - **Prompts**: `auctions/mcp/prompts.py` holds `run_check_in`, `chase_unpaid`, `set_up_next_year`,
-  `write_announcement`. A prompt is the only safe place for a multi-step recipe, because a person
-  picks it off a menu. **Nothing in a prompt body is interpolated except its own arguments** —
+  `write_announcement`, `build_an_integration`. A prompt is the only safe place for a multi-step
+  recipe, because a person picks it off a menu. **Nothing in a prompt body is interpolated except its own arguments** —
   `test_mcp_resources` fails the build otherwise. `completion/complete` answers `ref/prompt` out of
   `_my_auctions` and deliberately refuses `ref/resource`.
 - **Resources**: `auctions/mcp/resources.py` publishes `auction://{auction}`,
@@ -670,4 +760,5 @@ expected 'sold'" is an admin edit rather than an app release.
 | Migration permission error | Use `docker exec -u root -it django ...` |
 | Static files missing | `docker exec -it django python3 manage.py collectstatic --no-input` |
 | DB out of sync | `docker exec -it django python3 manage.py migrate` |
+| `IntegrityError (1364, "Field 'x' doesn't have a default value")` | A `NOT NULL` column left behind by a branch that was migrated against this database and then abandoned. It is in no model and no migration, so every insert on that table 500s. `migrate` — `0418_drop_orphan_columns` drops any auctions column no model describes that is `NOT NULL` with no default, and leaves inert ones alone. Test databases are built from migrations, so the suite can never catch this. |
 | Build fails | `docker compose down && docker system prune -a -f && docker compose --profile "*" build --no-cache` |

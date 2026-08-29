@@ -10,10 +10,15 @@ details are copied into every auction and club that holds them, and a map marker
 guessed from an address.
 """
 
+import json
+from pathlib import Path
+
+from django.conf import settings
 from django.test import RequestFactory
 
 from auctions import palette_actions
-from auctions.models import AuctionTOS, Club, ClubMember, Location, UserLabelPrefs
+from auctions.mcp import tools as mcp_tools
+from auctions.models import AuctionTOS, Club, ClubAPIKey, ClubMember, Location, UserLabelPrefs
 from auctions.test_palette_assist import PaletteAssistTestCase
 
 
@@ -681,6 +686,140 @@ class ClubIntegrationTests(AccountTestCase):
     def test_somebody_with_no_part_in_the_club_gets_no_snippets(self):
         result = self._run("club_website_snippets", {"club": self.club.name}, user=self.userB)
         self.assertNotIn("found", result)
+
+
+class ClubAPIToolTests(AccountTestCase):
+    """``club_api``: what a club's own API can do, read by whoever is about to write against it.
+
+    The tool exists so an agent asked for "an integration that puts our lots on our website" can
+    find out what is already there instead of guessing at endpoints. So the tests are mostly about
+    the two halves of that: what it says about the keys, and that the documentation it hands over
+    is the page's own and still fits in one answer.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.club = Club.objects.create(name="API Club")
+        ClubMember.objects.create(
+            club=self.club, user=self.user, name="Ada Officer", email=self.user.email, permission_edit_club=True
+        )
+        raw, prefix, key_hash = ClubAPIKey.generate()
+        self.raw_key = raw
+        self.key = ClubAPIKey.objects.create(
+            club=self.club,
+            name="WordPress",
+            prefix=prefix,
+            key_hash=key_hash,
+            can_add_club_members=False,
+            can_read_auction_info=True,
+            can_read_public_lots=True,
+        )
+
+    def test_the_keys_are_listed_with_what_each_one_may_do(self):
+        result = self._run("club_api", {"club": self.club.name})
+        self.assertTrue(result.get("found"), result)
+        row = result["keys"][0]
+        self.assertIn("WordPress", row["name"])
+        self.assertEqual(row["prefix"], self.key.prefix)
+        self.assertIn("Read public lot info", row["can"])
+        self.assertNotIn("Can add club members", row["can"])
+
+    def test_the_secret_is_not_in_the_answer_because_nothing_can_read_it(self):
+        """The half of the key that is a credential was never stored, and the answer says so."""
+        result = self._run("club_api", {"club": self.club.name, "topic": "auctions"})
+        body = json.dumps(result)
+        self.assertNotIn(self.raw_key, body)
+        self.assertNotIn(self.raw_key.split(".", 1)[-1], body)
+        self.assertIn("shown once", result["secrets"])
+
+    def test_it_says_which_tick_box_a_capability_needs_and_who_has_it(self):
+        result = self._run("club_api", {"club": self.club.name})
+        by_box = {row["tick_box"]: row for row in result["capabilities"]}
+        self.assertTrue(any("WordPress" in name for name in by_box["Read public lot info"]["keys_with_it"]))
+        self.assertEqual(by_box["Can add club members"]["keys_with_it"], [])
+        self.assertIn(self.club.slug, result["create_a_key_url"])
+
+    def test_a_topic_hands_over_the_documentation_the_page_shows(self):
+        result = self._run("club_api", {"club": self.club.name, "topic": "auctions"})
+        documentation = result["documentation"]
+        self.assertIn(f"/api/v1/clubs/{self.club.slug}/auctions/", documentation)
+        self.assertIn("X-API-Key", documentation)
+        # One topic, not the whole page: the species endpoints are a different call.
+        self.assertNotIn("species-lookup", documentation)
+
+    def test_every_topic_still_fits_in_one_mcp_result(self):
+        """The reason the documentation is cut into topics at all. Whole, it does not fit."""
+        for topic in palette_actions._API_TOPICS:
+            result = self._run("club_api", {"club": self.club.name, "topic": topic})
+            self.assertTrue(result["documentation"], f"{topic} documented nothing")
+            self.assertLess(len(json.dumps(result, default=str)), mcp_tools.MAX_RESULT_CHARS, topic)
+
+    def test_a_topic_this_api_has_not_got_is_refused_rather_than_ignored(self):
+        result = self._run("club_api", {"club": self.club.name, "topic": "invoices"})
+        self.assertIn("error", result)
+        self.assertIn("members", result["error"])
+
+    def test_a_named_key_documents_what_that_key_may_actually_call(self):
+        result = self._run("club_api", {"club": self.club.name, "key": "WordPress", "topic": "auctions"})
+        self.assertIn("Tick", result["documentation"])
+        self.assertIn(self.key.prefix, result["documentation"])
+
+    def test_a_key_that_cannot_reach_a_topic_is_told_which_box_it_would_need(self):
+        result = self._run("club_api", {"club": self.club.name, "key": "WordPress", "topic": "species"})
+        self.assertIn("error", result)
+        self.assertIn("Can use species", result["error"])
+
+    def test_a_whole_key_pasted_in_matches_on_its_prefix_and_the_secret_goes_nowhere(self):
+        """The commonest way an agent will name a key is by copying one out of a config file."""
+        result = self._run("club_api", {"club": self.club.name, "key": self.raw_key})
+        self.assertTrue(result.get("found"), result)
+        self.assertNotIn(self.raw_key.split(".", 1)[-1], json.dumps(result))
+
+    def test_a_key_nobody_has_is_a_refusal_naming_the_ones_that_exist(self):
+        result = self._run("club_api", {"club": self.club.name, "key": "Squarespace"})
+        self.assertIn("error", result)
+        self.assertIn("WordPress", result["error"])
+
+    def test_a_club_with_no_keys_is_pointed_at_the_page_that_makes_one(self):
+        """It cannot make one, on purpose: the tick boxes are fixed for the life of the key."""
+        self.key.delete()
+        result = self._run("club_api", {"club": self.club.name})
+        self.assertEqual(result["keys"], [])
+        self.assertIn(self.club.slug, result["create_a_key_url"])
+        self.assertEqual(ClubAPIKey.objects.filter(club=self.club).count(), 0)
+
+    def test_somebody_who_cannot_edit_the_club_cannot_read_its_keys(self):
+        """The page needs permission_edit_club, and so does this. An ordinary member is not enough."""
+        ClubMember.objects.create(club=self.club, user=self.userB, name="Bob Member", email=self.userB.email)
+        result = self._run("club_api", {"club": self.club.name}, user=self.userB)
+        self.assertNotIn("found", result)
+        self.assertIn("error", result)
+
+    def test_a_stranger_gets_nothing(self):
+        result = self._run("club_api", {"club": self.club.name}, user=self.userB)
+        self.assertNotIn("found", result)
+
+    def test_the_permission_table_still_matches_the_model(self):
+        """A flag added to ClubAPIKey and not to the table would be a capability nobody is told about."""
+        named = {flag for flag, _, _ in palette_actions._API_PERMISSIONS}
+        on_the_model = {
+            field.name
+            for field in ClubAPIKey._meta.get_fields()
+            if field.name.startswith("can_") and getattr(field, "get_internal_type", lambda: "")() == "BooleanField"
+        }
+        self.assertEqual(named, on_the_model)
+
+    def test_every_tick_box_is_spelled_the_way_the_page_spells_it(self):
+        """The labels are read out to somebody looking at that page, so they have to match it."""
+        page = (Path(settings.BASE_DIR) / "auctions/templates/auctions/club_api_key_create.html").read_text()
+        for _, label, _ in palette_actions._API_PERMISSIONS:
+            self.assertIn(label, page, f"“{label}” is not what the create page calls it any more")
+
+    def test_the_tool_is_read_only(self):
+        """It reads credentials' permissions. Nothing here may be offered to a write-shaped caller."""
+        action = palette_actions.ACTIONS["club_api"]
+        self.assertEqual(action.danger, palette_actions.DANGER_SAFE)
+        self.assertTrue(mcp_tools.read_only(action))
 
 
 class EmailChangeTests(AccountTestCase):

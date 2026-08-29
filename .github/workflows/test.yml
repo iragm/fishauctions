@@ -4,6 +4,11 @@ on:
   pull_request:
     branches: [master]
 
+# One tag for the app image, built once per job with a layer cache and then used by compose
+# without building again -- docker-compose.yaml reads it as APP_IMAGE.
+env:
+  APP_IMAGE: fishauctions-app:ci
+
 jobs:
   lint:
     name: Lint (ruff via pre-commit)
@@ -19,7 +24,23 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: ./.github/scripts/prepare-ci.sh --force
-      - run: docker compose build
+      - uses: docker/setup-buildx-action@v3
+      - name: Build the app image
+        # The layer cache is the point: mysqlclient and pyheif publish no wheels, so a cold build
+        # compiles them (and pip-wheels 160-odd other packages) every run. cache-from/to keep that
+        # work in the Actions cache, keyed on the layers -- a run that doesn't touch
+        # requirements.txt or the Dockerfile reuses all of it. scope is shared by both test jobs
+        # deliberately: they build the same image, so the second one is a cache hit.
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: ${{ env.APP_IMAGE }}
+          build-args: |
+            PUID=1000
+            PGID=1000
+          cache-from: type=gha,scope=app-image
+          cache-to: type=gha,mode=max,scope=app-image
 
       - name: Start database first and wait for health
         run: |
@@ -63,9 +84,24 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: ./.github/scripts/prepare-ci.sh --force
-      - name: Build containers
-        run: |
-          docker compose --profile selenium build
+      - uses: docker/setup-buildx-action@v3
+      - name: Build the app image
+        # The layer cache is the point: mysqlclient and pyheif publish no wheels, so a cold build
+        # compiles them (and pip-wheels 160-odd other packages) every run. cache-from/to keep that
+        # work in the Actions cache, keyed on the layers -- a run that doesn't touch
+        # requirements.txt or the Dockerfile reuses all of it. scope is shared by both test jobs
+        # deliberately: they build the same image, so the second one is a cache hit.
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: ${{ env.APP_IMAGE }}
+          build-args: |
+            PUID=1000
+            PGID=1000
+          # Read-only: the django-tests job, building the same image at the same time, is the
+          # one that writes it. Two uploaders of one key is a race whose winner is a coin toss.
+          cache-from: type=gha,scope=app-image
       - name: Start database first and wait for health
         run: |
           echo "Starting database container..."

@@ -272,6 +272,9 @@ from .notifications import CATEGORY_LOT_SELLING, push_configured, user_has_app_p
 from .serializers import (
     CLUB_MEMBER_API_KEY_MAPPING_FIELDS,
     BapAwardAPIKeyCreateSerializer,
+    ClubApiAuctionSerializer,
+    ClubApiAuctionSummarySerializer,
+    ClubApiLotSerializer,
     ClubBapLotSerializer,
     ClubMemberAPIKeySerializer,
     ClubMemberSerializer,
@@ -22390,6 +22393,9 @@ class ClubAPIKeyCreateView(LoginRequiredMixin, ClubViewMixin, View):
                     "can_add_bap_points": False,
                     "can_renew_memberships": False,
                     "can_look_up_species": False,
+                    "can_read_auction_info": False,
+                    "can_read_public_lots": False,
+                    "can_read_private_lots": False,
                 },
             },
         )
@@ -22409,6 +22415,9 @@ class ClubAPIKeyCreateView(LoginRequiredMixin, ClubViewMixin, View):
             "can_add_bap_points": checkbox_value("can_add_bap_points"),
             "can_renew_memberships": checkbox_value("can_renew_memberships"),
             "can_look_up_species": checkbox_value("can_look_up_species"),
+            "can_read_auction_info": checkbox_value("can_read_auction_info"),
+            "can_read_public_lots": checkbox_value("can_read_public_lots"),
+            "can_read_private_lots": checkbox_value("can_read_private_lots"),
         }
         if not name:
             return render(
@@ -22429,6 +22438,9 @@ class ClubAPIKeyCreateView(LoginRequiredMixin, ClubViewMixin, View):
             can_add_bap_points=form_values["can_add_bap_points"],
             can_renew_memberships=form_values["can_renew_memberships"],
             can_look_up_species=form_values["can_look_up_species"],
+            can_read_auction_info=form_values["can_read_auction_info"],
+            can_read_public_lots=form_values["can_read_public_lots"],
+            can_read_private_lots=form_values["can_read_private_lots"],
         )
         ClubHistory.objects.create(
             club=self.club,
@@ -22443,6 +22455,65 @@ class ClubAPIKeyCreateView(LoginRequiredMixin, ClubViewMixin, View):
 def _as_api_timestamp(value):
     """Format a datetime the way DRF renders one, so doc examples match real responses."""
     return value.astimezone(date_tz.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def club_api_documentation_context(club, api_key):
+    """Everything ``_club_api_endpoints.html`` needs, for the page and for the assistant.
+
+    This page *is* the club API's documentation -- every endpoint is written up in that template,
+    behind the ``{% if %}`` for the permission it needs, and nowhere else. That sentence stayed
+    true when an agent became the second reader: ``palette_actions.club_api`` renders the same
+    include as plain text for somebody writing an integration, so building the context here
+    rather than inside ``get_context_data`` is what makes that a second reader rather than a
+    second copy that drifts.
+
+    Every example is filled in from this club, so what it shows is a request its admin can paste
+    and run, and the numbers are read off the code that enforces them.
+    """
+    today = timezone.now().date()
+    now = timezone.now()
+    return {
+        "site_domain": Site.objects.get_current().domain,
+        "example_member_id": (
+            club.members.filter(is_deleted=False).order_by("-pk").values_list("pk", flat=True).first()
+        ),
+        # Dates in the renew example, so it shows what this club's renewal actually returns.
+        "example_last_paid": today,
+        "example_new_expiration": _compute_member_renewal_expiration(
+            club, ClubMember(club=club, membership_expiration_date=None), today
+        ),
+        # The BAP lot example shows the real default window, formatted the way the API returns it.
+        "bap_lot_default_days": BAP_LOT_DEFAULT_DAYS,
+        "example_bap_range_end": _as_api_timestamp(now),
+        "example_bap_range_start": _as_api_timestamp(now - timedelta(days=BAP_LOT_DEFAULT_DAYS)),
+        "example_bap_lot_timestamp": _as_api_timestamp(now - timedelta(days=2)),
+        "example_bap_award_date": (now - timedelta(days=2)).date(),
+        # Field mappings rename incoming *club member* fields, so they mean nothing to a key that
+        # only reads lots or looks up species -- and a settings box that does nothing is worse
+        # than no box.
+        "key_writes_club_members": any(
+            (
+                api_key.can_add_club_members,
+                api_key.can_read_club_member_list,
+                api_key.can_update_club_members,
+                api_key.can_renew_memberships,
+            )
+        ),
+        # Species lookup: the documented numbers come from the matcher itself, so the page can't
+        # drift away from what the endpoint actually does.
+        "species_lookup_max_results": MAX_SUGGESTIONS,
+        "species_lookup_llm_calls_per_day": SPECIES_LOOKUP_LLM_CALLS_PER_CLUB_PER_DAY,
+        "species_lookup_llm_available": assist_enabled(),
+        # What is left of it right now, so the page a club admin reads and the header their
+        # software reads are the same number.
+        "species_lookup_llm_remaining": LLMBudget.for_club(club, SPECIES_LOOKUP_LLM_CALLS_PER_CLUB_PER_DAY).remaining,
+        "example_category": Category.objects.order_by("name").first(),
+        "lot_page_size": LOT_PAGE_SIZE,
+        "max_lot_page_size": MAX_LOT_PAGE_SIZE,
+        "lot_ordering": sorted(LOT_ORDERING),
+        # A real slug from this club, so the example URLs are ones an admin can paste and run.
+        "example_auction": club_api_current_auction(club) or club_api_latest_auction(club),
+    }
 
 
 class ClubAPIKeyDetailView(LoginRequiredMixin, ClubViewMixin, TemplateView):
@@ -22466,45 +22537,7 @@ class ClubAPIKeyDetailView(LoginRequiredMixin, ClubViewMixin, TemplateView):
         ctx["field_mappings"] = api_key.field_mappings.order_by("external_field")
         ctx["new_raw_key"] = new_raw_key
         ctx["available_fields"] = sorted(CLUB_MEMBER_API_KEY_MAPPING_FIELDS)
-        ctx["site_domain"] = Site.objects.get_current().domain
-        ctx["example_member_id"] = (
-            self.club.members.filter(is_deleted=False).order_by("-pk").values_list("pk", flat=True).first()
-        )
-        # Dates in the renew example, so it shows what this club's renewal actually returns.
-        today = timezone.now().date()
-        ctx["example_last_paid"] = today
-        ctx["example_new_expiration"] = _compute_member_renewal_expiration(
-            self.club, ClubMember(club=self.club, membership_expiration_date=None), today
-        )
-        # The BAP lot example shows the real default window, formatted the way the API returns it.
-        now = timezone.now()
-        ctx["bap_lot_default_days"] = BAP_LOT_DEFAULT_DAYS
-        ctx["example_bap_range_end"] = _as_api_timestamp(now)
-        ctx["example_bap_range_start"] = _as_api_timestamp(now - timedelta(days=BAP_LOT_DEFAULT_DAYS))
-        ctx["example_bap_lot_timestamp"] = _as_api_timestamp(now - timedelta(days=2))
-        ctx["example_bap_award_date"] = (now - timedelta(days=2)).date()
-        # Species lookup: the documented numbers come from the matcher itself, so the page can't
-        # drift away from what the endpoint actually does.
-        # Field mappings rename incoming *club member* fields, so they mean nothing to a key that
-        # only reads lots or looks up species -- and a settings box that does nothing is worse
-        # than no box.
-        ctx["key_writes_club_members"] = any(
-            (
-                api_key.can_add_club_members,
-                api_key.can_read_club_member_list,
-                api_key.can_update_club_members,
-                api_key.can_renew_memberships,
-            )
-        )
-        ctx["species_lookup_max_results"] = MAX_SUGGESTIONS
-        ctx["species_lookup_llm_calls_per_day"] = SPECIES_LOOKUP_LLM_CALLS_PER_CLUB_PER_DAY
-        ctx["species_lookup_llm_available"] = assist_enabled()
-        # What is left of it right now, so the page a club admin reads and the header their
-        # software reads are the same number.
-        ctx["species_lookup_llm_remaining"] = LLMBudget.for_club(
-            self.club, SPECIES_LOOKUP_LLM_CALLS_PER_CLUB_PER_DAY
-        ).remaining
-        ctx["example_category"] = Category.objects.order_by("name").first()
+        ctx.update(club_api_documentation_context(self.club, api_key))
         return ctx
 
 
@@ -23835,6 +23868,490 @@ class ClubBapLotListAPIView(ClubAPIViewMixin, APIView):
                 "results": serializer.data,
             }
         )
+
+
+#: How far back to look for the auction a club would call its "current" one.  An auction that
+#: started before this and still isn't wound down is not what anybody means by the question.
+CURRENT_AUCTION_WINDOW_DAYS = 90
+
+#: Default and ceiling for ``?limit=`` on the lot list.  A club auction of 400 lots is ordinary, so
+#: the default is big enough that most callers never page at all.
+LOT_PAGE_SIZE = 100
+MAX_LOT_PAGE_SIZE = 500
+
+#: What ``?ordering=`` accepts on the lot list, and the columns each name sorts on.  An allowlist
+#: rather than a pass-through to ``order_by``: a caller that can name any column can order by
+#: ``auctiontos_winner__email`` and read the auction's email list off the sort order, one binary
+#: search at a time, without ever holding the private permission.
+LOT_ORDERING = {
+    "lot_number": ("lot_number_int", "lot_number"),
+    "lot_name": ("lot_name", "lot_number_int"),
+    "price": ("winning_price", "lot_number_int"),
+    "min_bid": ("reserve_price", "lot_number_int"),
+    "date_posted": ("date_posted", "lot_number_int"),
+    "date_end": ("date_end", "lot_number_int"),
+    "category": ("species_category__name", "lot_number_int"),
+}
+DEFAULT_LOT_ORDERING = "lot_number"
+
+#: ``?lot_name=``, ``?description=`` and friends: one parameter, one column, substring match.  A
+#: parameter named after a column matches that column and nothing else; ``?filter=`` is the one
+#: that looks everywhere.
+LOT_TEXT_FILTERS = {
+    "lot_name": "lot_name__icontains",
+    "description": "summernote_description__icontains",
+    "custom_field_1": "custom_field_1__icontains",
+    # The whole value rather than part of one: a dropdown is a controlled vocabulary, and the
+    # auction publishes it as ``lot_fields.custom_dropdown_options``.
+    "custom_dropdown": "custom_dropdown__iexact",
+}
+
+#: ``?donation=true``.  Every one of these is a plain column on Lot; ``sold`` is not, which is why
+#: it is handled on its own.
+LOT_BOOLEAN_FILTERS = {
+    "donation": "donation",
+    "i_bred_this_fish": "i_bred_this_fish",
+    "custom_checkbox": "custom_checkbox",
+}
+
+#: Where ``?filter=`` looks.  **Public columns only, for every caller.**
+#:
+#: The admin's own lot filter (:class:`~auctions.filters.LotAdminFilter`) searches seller name,
+#: username and bidder number too, and copying that list here would hand a public key a way to
+#: confirm a name one character at a time without ever holding the private permission.  Seller and
+#: winner get their own parameters instead (:data:`LOT_PERSON_FILTERS`), which *refuse* a key that
+#: cannot read private information rather than quietly matching nothing -- so the same ``?filter=``
+#: means the same thing whoever sends it.
+LOT_GENERIC_FILTER_COLUMNS = (
+    "lot_name__icontains",
+    "summernote_description__icontains",
+    "custom_field_1__icontains",
+    "custom_dropdown__icontains",
+    "custom_lot_number__iexact",
+    "species__scientific_name__icontains",
+    "species__common_name__icontains",
+    "species_category__name__icontains",
+)
+
+#: ``?seller=`` / ``?winner=``: a name, a bidder number or an email address.  Behind the privacy
+#: flag, because each one is a way of asking "is this person in this auction".
+LOT_PERSON_FILTERS = {"seller": "auctiontos_seller", "winner": "auctiontos_winner"}
+
+
+def _api_bool(value, name):
+    """``?sold=true``.  Returns ``(True/False/None, error)``; None means the caller didn't ask.
+
+    Spellings rather than Python truthiness, because ``bool("false")`` is True and a filter that
+    reads "false" as "yes" is a bug nobody reports -- they just quietly get the wrong lots.
+    """
+    if value is None or str(value).strip() == "":
+        return None, None
+    text = str(value).strip().lower()
+    if text in ("true", "1", "yes"):
+        return True, None
+    if text in ("false", "0", "no"):
+        return False, None
+    return None, f"{name} must be true or false."
+
+
+def _lot_fields_param(value):
+    """``?fields=lot_number,lot_name,thumbnail``.  Returns ``(set or None, error)``.
+
+    None means every field.  A name we don't have is an error rather than an omission: a typo that
+    silently drops a column produces a page with a blank space in it and no clue why.
+    """
+    if not value:
+        return None, None
+    wanted = [name.strip() for name in str(value).split(",") if name.strip()]
+    if not wanted:
+        return None, None
+    known = set(ClubApiLotSerializer.Meta.fields)
+    unknown = [name for name in wanted if name not in known]
+    if unknown:
+        return None, f"No such field on a lot: {', '.join(unknown)}. Available: {', '.join(sorted(known))}."
+    return set(wanted), None
+
+
+def _club_api_auctions(club):
+    """Every auction filed under this club, promoted or not.
+
+    Not filtered by ``promote_this_auction``: that flag says "this one is ready for strangers", and
+    a key issued by the club's own admins is not a stranger.
+    """
+    return Auction.objects.filter(club=club, is_deleted=False)
+
+
+def club_api_current_auction(club):
+    """The auction this club is running or about to run, or ``None``.
+
+    The pinned ``current_auction`` first, because an admin chose it on purpose; otherwise the
+    soonest one that hasn't wound down.  Deliberately looser than
+    :func:`_club_current_auction`, which the public website embed uses and which will only ever
+    offer a *promoted* auction: this answers the club's own software, which has to be able to build
+    a page for an auction before it is announced.
+    """
+    pinned = club.current_auction
+    if pinned and pinned.club_id == club.pk and not pinned.is_deleted and not pinned.pretty_much_over:
+        return pinned
+    window = timezone.now() - timedelta(days=CURRENT_AUCTION_WINDOW_DAYS)
+    candidates = _club_api_auctions(club).filter(date_start__gte=window).order_by("date_start")[:20]
+    return next((auction for auction in candidates if not auction.pretty_much_over), None)
+
+
+def club_api_latest_auction(club):
+    """The last auction this club created, whatever state it is in."""
+    return _club_api_auctions(club).order_by("-date_posted", "-pk").first()
+
+
+def _resolve_club_api_auction(club, identifier):
+    """An auction slug, or one of the two words ``current`` and ``latest``.
+
+    A real slug wins, so a club that manages to call an auction "Latest" can still reach it; the
+    two words are only ever a fallback.
+    """
+    identifier = (identifier or "").strip()
+    auction = _club_api_auctions(club).filter(slug=identifier).first()
+    if auction:
+        return auction
+    if identifier == "current":
+        return club_api_current_auction(club)
+    if identifier == "latest":
+        return club_api_latest_auction(club)
+    return None
+
+
+def _lot_images_by_owner(lots):
+    """Every image belonging to a page of lots, in one query, keyed on the lot that owns it.
+
+    Keyed on the owner rather than the lot because of ``use_images_from``: a lot can borrow another
+    lot's pictures, and both then read the same list.
+    """
+    owners = {lot.use_images_from_id or lot.pk for lot in lots}
+    images = {}
+    if not owners:
+        return images
+    for image in LotImage.objects.filter(lot_number__in=owners).order_by("-is_primary", "createdon"):
+        images.setdefault(image.lot_number_id, []).append(image)
+    return images
+
+
+def _auto_images_by_lot_name(auction, lots, images_by_owner):
+    """The pictures this site would auto-add, for the lots on this page that have none of their own.
+
+    :attr:`~auctions.models.Lot.auto_image` does this one lot at a time and costs several queries
+    each; a lot list cannot afford that, so this is the same rule -- the newest primary image on a
+    lot of the same name in an auction run by this auction's admins, from a seller who shares -- run
+    once for the whole page.
+    """
+    if not auction or not auction.auto_add_images:
+        return {}
+    names = set()
+    for lot in lots:
+        if any(image.is_primary for image in images_by_owner.get(lot.use_images_from_id or lot.pk, [])):
+            continue
+        # The seller's own "don't put other people's pictures on my lots" setting.
+        if lot.user and not lot.user.userdata.auto_add_images:
+            continue
+        names.add(lot.lot_name)
+    if not names:
+        return {}
+    found = {}
+    candidates = (
+        LotImage.objects.filter(
+            (Q(lot_number__user__userdata__share_lot_images=True) | Q(lot_number__user__isnull=True)),
+            lot_number__lot_name__in=names,
+            lot_number__is_deleted=False,
+            lot_number__banned=False,
+            is_primary=True,
+            lot_number__auction__created_by__pk__in=auction.auction_admins_pks,
+        )
+        .select_related("lot_number")
+        .order_by("-lot_number__date_posted")
+    )
+    for image in candidates:
+        found.setdefault(image.lot_number.lot_name, image)
+    return found
+
+
+class ClubAuctionReadMixin(ClubAPIViewMixin):
+    """Shared permission and context plumbing for the read-only auction and lot endpoints.
+
+    Three separate permissions, because they are three different decisions: reading the auction's
+    dates and rules, reading the lots in it, and reading who bought and sold them.  The third is
+    the privacy flag -- without it the ``private`` object is not in the response at all, so a key
+    handed to a public web page has nothing to leak.
+    """
+
+    def auction_info_club(self):
+        return self.require_club_permission(
+            "permission_manage_auctions",
+            "can_read_auction_info",
+            "You do not have permission to read this club's auctions.",
+        )
+
+    def lot_info_club(self):
+        return self.require_club_permission(
+            "permission_manage_auctions",
+            "can_read_public_lots",
+            "You do not have permission to read the lots in this club's auctions.",
+        )
+
+    def may_read_private(self):
+        if self.is_api_key_request():
+            return self.request.api_key.can_read_private_lots
+        return check_club_permission(self.request.user, self.get_club(), "permission_manage_auctions")
+
+    def serializer_context(self, **extra):
+        return {
+            "request": self.request,
+            "private": self.may_read_private(),
+            # The name of the key doing the reading rides on every lot link as ?src=, which is the
+            # parameter this site's own page-view tracking reads: a club that publishes this feed
+            # then sees the traffic its website sent in its auction stats.
+            "src": self.request.api_key.name if self.is_api_key_request() else "",
+            **extra,
+        }
+
+    def get_auction_or_404(self, identifier):
+        auction = _resolve_club_api_auction(self.get_club(), identifier)
+        if not auction:
+            raise Http404
+        return auction
+
+
+class ClubAuctionListAPIView(ClubAuctionReadMixin, APIView):
+    """This club's auctions, newest first.
+
+    ``GET /api/v1/clubs/<slug>/auctions/``
+        ``?limit=`` / ``?offset=``
+
+    ``current`` and ``latest`` name the two auctions worth asking for by name, and are the words
+    the detail and lot endpoints take in place of a slug.
+    """
+
+    def get(self, request, slug):
+        club = self.auction_info_club()
+        try:
+            limit = min(max(int(request.query_params.get("limit", 25)), 1), 100)
+            offset = max(int(request.query_params.get("offset", 0)), 0)
+        except (TypeError, ValueError):
+            return Response({"error": "limit and offset must be whole numbers."}, status=400)
+        auctions = _club_api_auctions(club).order_by("-date_posted", "-pk")
+        total = auctions.count()
+        page = auctions[offset : offset + limit]
+        current = club_api_current_auction(club)
+        latest = club_api_latest_auction(club)
+        serializer = ClubApiAuctionSummarySerializer(page, many=True, context=self.serializer_context())
+        return Response(
+            {
+                "count": total,
+                "current": current.slug if current else None,
+                "latest": latest.slug if latest else None,
+                "results": serializer.data,
+            }
+        )
+
+
+class ClubAuctionDetailAPIView(ClubAuctionReadMixin, APIView):
+    """One auction: dates, rules, fees, pickup locations and which lot fields it uses.
+
+    ``GET /api/v1/clubs/<slug>/auctions/<auction slug, or current, or latest>/``
+    """
+
+    def get(self, request, slug, identifier):
+        self.auction_info_club()
+        auction = self.get_auction_or_404(identifier)
+        return Response(ClubApiAuctionSerializer(auction, context=self.serializer_context()).data)
+
+
+class ClubAuctionLotListAPIView(ClubAuctionReadMixin, APIView):
+    """The lots in one auction, in lot number order.
+
+    ``GET /api/v1/clubs/<slug>/auctions/<auction slug, or current, or latest>/lots/``
+        ``?limit=`` / ``?offset=``
+        ``?filter=`` -- one box that searches every public column
+        ``?lot_name=`` / ``?description=`` / ``?custom_field_1=`` / ``?custom_dropdown=``
+        ``?lot_number=`` / ``?category=`` / ``?category_id=`` / ``?species_id=``
+        ``?sold=`` / ``?donation=`` / ``?i_bred_this_fish=`` / ``?custom_checkbox=``
+        ``?seller=`` / ``?winner=`` -- needs the privacy flag
+        ``?ordering=`` -- see :data:`LOT_ORDERING`, ``-`` for descending
+        ``?fields=`` -- only these keys on each lot
+
+    Removed lots are left out, unless the key can read private information -- a club republishing
+    this feed is publishing the lot list, and a lot an admin pulled is not on it.
+    """
+
+    def lot_queryset(self, auction):
+        lots = Lot.objects.filter(auction=auction, is_deleted=False)
+        if not self.may_read_private():
+            lots = lots.exclude(banned=True)
+        return lots.select_related(
+            "species",
+            "species__parent",
+            "species_category",
+            "auction",
+            "auctiontos_seller",
+            "auctiontos_winner",
+            "user__userdata",
+            "winner",
+        ).order_by(*LOT_ORDERING[DEFAULT_LOT_ORDERING])
+
+    def filtered_lots(self, auction, params):
+        """The queryset with ``?filter=`` and friends applied.  Returns ``(lots, error)``.
+
+        A parameter we don't recognise the *value* of is an error rather than a shrug: a filter
+        that silently does nothing shows up as a page that quietly lists every lot in the auction,
+        which is exactly the mistake nobody notices until it is on the club's front page.
+        """
+        lots = self.lot_queryset(auction)
+        for name, column in LOT_TEXT_FILTERS.items():
+            value = (params.get(name) or "").strip()
+            if value:
+                lots = lots.filter(**{column: value})
+        generic = (params.get("filter") or "").strip()
+        if generic:
+            if generic.isdigit():
+                # A number typed into a search box is a lot number.  Running it through the text
+                # columns as well is what makes a generic search useless: "1" appears in "10
+                # gallon" and in half the descriptions in the auction, so the one lot the person
+                # was looking for arrives buried in sixty others.  ?description=1 is still there
+                # for somebody who really does want digits in the prose.
+                match = Q(lot_number_int=int(generic)) | Q(custom_lot_number__iexact=generic)
+            else:
+                match = Q()
+                for column in LOT_GENERIC_FILTER_COLUMNS:
+                    match |= Q(**{column: generic})
+            lots = lots.filter(match)
+        lot_number = (params.get("lot_number") or "").strip()
+        if lot_number:
+            # Both spellings, like the single-lot endpoint: lot_number_int is what almost every
+            # auction numbers with, custom_lot_number is what seller-dash numbering writes.
+            match = Q(custom_lot_number__iexact=lot_number)
+            if lot_number.isdigit():
+                match |= Q(lot_number_int=int(lot_number))
+            lots = lots.filter(match)
+        category, error = _resolve_category(params.get("category"), params.get("category_id"))
+        if error:
+            return None, error
+        if category:
+            lots = lots.filter(species_category=category)
+        species_id = (params.get("species_id") or "").strip()
+        if species_id:
+            if not species_id.isdigit():
+                return None, "species_id must be a whole number: the id of a species on this site."
+            lots = lots.filter(species_id=int(species_id))
+        for name, field in LOT_BOOLEAN_FILTERS.items():
+            value, error = _api_bool(params.get(name), name)
+            if error:
+                return None, error
+            if value is not None:
+                lots = lots.filter(**{field: value})
+        sold, error = _api_bool(params.get("sold"), "sold")
+        if error:
+            return None, error
+        if sold is not None:
+            # Lot.sold is a property (a winner *and* a price), so it is spelled out here rather
+            # than filtered on one column -- a lot with a winner and no price is not sold.
+            has_winner = Q(winning_price__isnull=False) & (Q(auctiontos_winner__isnull=False) | Q(winner__isnull=False))
+            lots = lots.filter(has_winner) if sold else lots.exclude(has_winner)
+        lots, error = self._filter_by_person(lots, params)
+        if error:
+            return None, error
+        return self._ordered(lots, params.get("ordering"))
+
+    def _filter_by_person(self, lots, params):
+        """``?seller=`` / ``?winner=`` -- a name, a bidder number or an email address.
+
+        Refused outright without the privacy flag rather than quietly matching nothing: "no lots"
+        and "you may not ask" are different answers, and a caller that cannot tell them apart will
+        read the first as the second.
+        """
+        for name, relation in LOT_PERSON_FILTERS.items():
+            value = (params.get(name) or "").strip()
+            if not value:
+                continue
+            if not self.may_read_private():
+                return None, f"{name} needs a key that can read private lot information."
+            lots = lots.filter(
+                Q(**{f"{relation}__name__icontains": value})
+                | Q(**{f"{relation}__bidder_number__iexact": value})
+                | Q(**{f"{relation}__email__iexact": value})
+            )
+        return lots, None
+
+    def _ordered(self, lots, ordering):
+        """``?ordering=lot_name`` / ``-lot_name``.  Returns ``(lots, error)``."""
+        ordering = (ordering or DEFAULT_LOT_ORDERING).strip()
+        descending = ordering.startswith("-")
+        key = ordering.lstrip("-")
+        if key not in LOT_ORDERING:
+            return None, f"ordering must be one of: {', '.join(sorted(LOT_ORDERING))} (prefix with - to reverse)."
+        columns = LOT_ORDERING[key]
+        if descending:
+            columns = tuple(column[1:] if column.startswith("-") else f"-{column}" for column in columns)
+        return lots.order_by(*columns), None
+
+    def page_params(self, params):
+        """``(limit, offset, fields, error)``.  ``fields`` is None for "all of them"."""
+        try:
+            limit = min(max(int(params.get("limit", LOT_PAGE_SIZE)), 1), MAX_LOT_PAGE_SIZE)
+            offset = max(int(params.get("offset", 0)), 0)
+        except (TypeError, ValueError):
+            return None, None, None, "limit and offset must be whole numbers."
+        fields, error = _lot_fields_param(params.get("fields"))
+        return limit, offset, fields, error
+
+    def lot_context(self, auction, page, fields):
+        images = _lot_images_by_owner(page)
+        return self.serializer_context(
+            images_by_lot=images,
+            auto_images=_auto_images_by_lot_name(auction, page, images),
+            fields=fields,
+        )
+
+    def get(self, request, slug, identifier):
+        self.lot_info_club()
+        auction = self.get_auction_or_404(identifier)
+        limit, offset, fields, error = self.page_params(request.query_params)
+        if error:
+            return Response({"error": error}, status=400)
+        lots, error = self.filtered_lots(auction, request.query_params)
+        if error:
+            return Response({"error": error}, status=400)
+        total = lots.count()
+        page = list(lots[offset : offset + limit])
+        context = self.lot_context(auction, page, fields)
+        return Response(
+            {
+                "auction": auction.slug,
+                "count": total,
+                "results": ClubApiLotSerializer(page, many=True, context=context).data,
+            }
+        )
+
+
+class ClubAuctionLotDetailAPIView(ClubAuctionLotListAPIView):
+    """One lot, by the number people read off its label.
+
+    ``GET /api/v1/clubs/<slug>/auctions/<auction slug, or current, or latest>/lots/<lot number>/``
+    """
+
+    def get(self, request, slug, identifier, lot_number):
+        self.lot_info_club()
+        auction = self.get_auction_or_404(identifier)
+        fields, error = _lot_fields_param(request.query_params.get("fields"))
+        if error:
+            return Response({"error": error}, status=400)
+        lots = self.lot_queryset(auction)
+        # Both spellings of the number: lot_number_int is the one almost every auction uses, and
+        # custom_lot_number is what seller-dash numbering ("101-1") writes instead.
+        lot = lots.filter(custom_lot_number=lot_number).first()
+        if not lot and str(lot_number).isdigit():
+            lot = lots.filter(lot_number_int=int(lot_number)).first()
+        if not lot:
+            raise Http404
+        context = self.lot_context(auction, [lot], fields)
+        return Response(ClubApiLotSerializer(lot, context=context).data)
 
 
 #: Daily ceiling on species lookups from one club that are allowed to reach the language model.

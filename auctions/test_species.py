@@ -821,6 +821,57 @@ class SpeciesSearchCacheTests(StandardTestCase):
         self.assertEqual(source, "exact")
         self.assertEqual(matches, [self.guppy])
 
+    def test_a_cached_row_does_not_hand_one_clubs_name_to_another(self):
+        """The cache is served to every club; a club-scoped *name* is not.
+
+        A name added on the site is scoped until somebody approves it -- and the matcher reads
+        names before anything else, so `visible_common_names` is strict about it.  A cached row
+        naming the same fish by the same word has to be just as strict, or teaching one club's
+        vocabulary to the whole site is a matter of getting the model asked once.
+        """
+        club = Club.objects.create(name="Cichlid Keepers")
+        lab = make_species("Labidochromis", "caeruleus", "Blue streak hap")
+        SpeciesCommonName.objects.create(species=lab, name="Yellow lab", club=club, approved=False, source="admin")
+        SpeciesSearchCache.objects.create(search_text="yellow lab", species=lab, source="llm")
+
+        matches, source = suggest_species("yellow lab", use_llm=False)
+        self.assertEqual(matches, [])
+        self.assertEqual(source, "none")
+
+        theirs, _source = suggest_species("yellow lab", use_llm=False, club=Club.objects.create(name="Some Other"))
+        self.assertEqual(theirs, [])
+
+    def test_the_club_that_taught_the_name_is_still_answered_with_it(self):
+        """Scoping it away from everybody else is not the same as taking it off the club."""
+        club = Club.objects.create(name="Cichlid Keepers")
+        lab = make_species("Labidochromis", "caeruleus", "Blue streak hap")
+        SpeciesCommonName.objects.create(species=lab, name="Yellow lab", club=club, approved=False, source="admin")
+        SpeciesSearchCache.objects.create(search_text="yellow lab", species=lab, source="llm")
+        matches, source = suggest_species("yellow lab", use_llm=False, club=club)
+        # The name table answers first, which is the point: the cache is only ever the fallback.
+        self.assertEqual(matches, [lab])
+        self.assertEqual(source, "exact")
+
+    def test_approving_the_name_makes_the_cached_row_everybodys_again(self):
+        club = Club.objects.create(name="Cichlid Keepers")
+        lab = make_species("Labidochromis", "caeruleus", "Blue streak hap")
+        name = SpeciesCommonName.objects.create(
+            species=lab, name="Yellow lab", club=club, approved=False, source="admin"
+        )
+        SpeciesSearchCache.objects.create(search_text="yellow lab", species=lab, source="llm")
+        SpeciesCommonName.objects.filter(pk=name.pk).update(approved=True)
+        matches, source = suggest_species("yellow lab", use_llm=False)
+        self.assertEqual(matches, [lab])
+        self.assertEqual(source, "exact")
+
+    def test_a_row_no_name_claims_is_still_served_to_everybody(self):
+        """What the table is *for*: an inference nobody owns, paid for once for the whole site."""
+        shrimp = make_species("Neocaridina", "davidi", "Cherry shrimp", source="aquarium")
+        SpeciesSearchCache.objects.create(search_text="blue dream shrimp", species=shrimp, source="llm")
+        matches, source = suggest_species("blue dream shrimp", use_llm=False)
+        self.assertEqual(matches, [shrimp])
+        self.assertEqual(source, "cache")
+
 
 class SpeciesVarietyTests(StandardTestCase):
     """Cultivars: a strain is a name for a fish, not a taxon, and the model says so."""
@@ -4040,6 +4091,37 @@ class ClubSpeciesCommonNameAPITests(StandardTestCase):
     def test_another_club_is_not_answered_with_it(self):
         """The whole point of scoping: one club's word for a fish is not the site's word for it."""
         self.post({"name": "Yellow lab"})
+        other_raw_key, other_prefix, other_key_hash = ClubAPIKey.generate()
+        ClubAPIKey.objects.create(
+            club=self.other_club,
+            name="Someone else's website",
+            prefix=other_prefix,
+            key_hash=other_key_hash,
+            can_look_up_species=True,
+        )
+        theirs = self.client.get(
+            reverse("api_club_species_lookup", kwargs={"slug": self.other_club.slug}),
+            {"q": "yellow lab"},
+            HTTP_X_API_KEY=other_raw_key,
+        ).json()
+        self.assertEqual(theirs["results"], [])
+        mine = self.client.get(
+            reverse("api_club_species_lookup", kwargs={"slug": self.club.slug}),
+            {"q": "yellow lab"},
+            HTTP_X_API_KEY=self.raw_key,
+        ).json()
+        self.assertEqual(mine["results"][0]["id"], self.lab.pk)
+
+    def test_a_remembered_answer_does_not_hand_it_to_another_club_either(self):
+        """The route that made test_another_club_is_not_answered_with_it flake.
+
+        A SpeciesSearchCache row is read before the token search and answers on its own, and
+        every row is served to every club -- so once anything wrote one for this name, the other
+        club was being answered with it whatever the name table said.  Written here by hand
+        because in a full run it was a leaked model call that wrote it, once in a few hundred.
+        """
+        self.post({"name": "Yellow lab"})
+        SpeciesSearchCache.objects.create(search_text="yellow lab", species=self.lab, source="llm")
         other_raw_key, other_prefix, other_key_hash = ClubAPIKey.generate()
         ClubAPIKey.objects.create(
             club=self.other_club,

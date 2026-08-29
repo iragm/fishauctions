@@ -1165,6 +1165,28 @@ urlpatterns = [
         name="api_club_bap_lots",
     ),
     path(
+        "api/v1/clubs/<slug:slug>/auctions/",
+        views.ClubAuctionListAPIView.as_view(),
+        name="api_club_auctions",
+    ),
+    # <identifier> is an auction slug, or the word "current" or "latest" -- so a club's website can
+    # be pointed at one URL that never has to be edited when next year's auction is created.
+    path(
+        "api/v1/clubs/<slug:slug>/auctions/<str:identifier>/",
+        views.ClubAuctionDetailAPIView.as_view(),
+        name="api_club_auction_detail",
+    ),
+    path(
+        "api/v1/clubs/<slug:slug>/auctions/<str:identifier>/lots/",
+        views.ClubAuctionLotListAPIView.as_view(),
+        name="api_club_auction_lots",
+    ),
+    path(
+        "api/v1/clubs/<slug:slug>/auctions/<str:identifier>/lots/<str:lot_number>/",
+        views.ClubAuctionLotDetailAPIView.as_view(),
+        name="api_club_auction_lot_detail",
+    ),
+    path(
         "api/v1/clubs/<slug:slug>/species-lookup/",
         views.ClubSpeciesLookupAPIView.as_view(),
         name="api_club_species_lookup",

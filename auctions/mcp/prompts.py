@@ -11,7 +11,7 @@ So the recipes that were prose in ``INSTRUCTIONS`` and in the resolver docstring
 they cost nothing until somebody asks for one -- which is also the token argument: none of this is
 in the system prompt, and ``prompts/list`` is a few hundred bytes.
 
-Four of them, and every one is a job that is several tool calls in a particular order with a
+Five of them, and every one is a job that is several tool calls in a particular order with a
 particular thing to be careful about. Anything that is one call is a tool and does not belong here.
 
 Nothing in a prompt is filled in from a tool result. The arguments come from the person (a host
@@ -108,6 +108,41 @@ PROMPTS: tuple[Prompt, ...] = (
         "is update_auction_setting and it is a decision to make on purpose, not part of copying.\n"
         "\n"
         "Do not change the fees. If they are wrong I will tell you which one.",
+    ),
+    Prompt(
+        "build_an_integration",
+        "Build an integration",
+        "Work out what this site's API can already do, which key it needs, and what to write against it.",
+        (_CLUB, Argument("goal", "What the integration should do, e.g. 'put our lots on our WordPress site'.", False)),
+        "I want to build an integration for {club}: {goal}.\n"
+        "\n"
+        "Work out what this site already does before you write a line of it.\n"
+        "\n"
+        "1. my_context, then describe_club. Tell me which club you have landed on and what is "
+        "already connected to it.\n"
+        "2. club_website_snippets. If what I asked for is our events, our current auction, our "
+        "latest announcement or our breeder award leaderboard on our own website, that is an "
+        "embed — no key, no code, no integration. Say so and stop.\n"
+        "3. club_api, for the keys we already have and what each one may do. Then call it again "
+        "with the topic that covers what I asked for, and read the endpoints properly: the "
+        "request shapes, the filters and the error codes are all written down there.\n"
+        "4. read_source, only if the documentation leaves something out and the behaviour "
+        "matters. That is this site's own published code, so it is the real answer.\n"
+        "\n"
+        "Then, before any code, tell me three things: which endpoints you will call, which key it "
+        "will use, and — if no key of ours has the right permissions — the exact tick boxes I "
+        "need and the page to tick them on. You cannot make a key and you cannot read the secret "
+        "of one; I paste that in myself, and it is only ever shown once.\n"
+        "\n"
+        "Two rules for the code. The key comes out of the environment, never out of a literal in "
+        "the file. And a key that reads private lot information never goes on a public page — if "
+        "the page is public, ask for one without it.\n"
+        "\n"
+        "One more thing worth saying out loud: if this is a job somebody does by hand a few times "
+        "a year, the tools you already have here do it, and the honest answer is that there is "
+        "nothing to build. If it is the opposite — this site genuinely cannot do it — say so "
+        "plainly and then request_a_skill, once, with what I was trying to do. Do not invent an "
+        "endpoint that is not in the documentation.",
     ),
     Prompt(
         "write_announcement",

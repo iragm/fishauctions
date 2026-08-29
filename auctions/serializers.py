@@ -1,9 +1,22 @@
 import re
 from datetime import timezone as date_tz
+from urllib.parse import quote_plus
 
+from django.conf import settings
 from rest_framework import serializers
 
-from .models import BapAward, ClubMember, Lot, Species, SpeciesCommonName, normalize_species_name
+from .models import (
+    Auction,
+    AuctionDropdown,
+    AuctionTOS,
+    BapAward,
+    ClubMember,
+    Lot,
+    LotImage,
+    Species,
+    SpeciesCommonName,
+    normalize_species_name,
+)
 
 CLUB_MEMBER_API_KEY_EXCLUDED_FIELDS = frozenset(
     {
@@ -537,3 +550,418 @@ class BapAwardAPIKeyCreateSerializer(serializers.Serializer):
         if data.get("notes"):
             data["notes"] = data["notes"].strip()
         return data
+
+
+def _absolute(request, url):
+    """Make a site-relative URL absolute, leaving one that is already absolute alone.
+
+    Everything this API returns is meant to be pasted into somebody else's web page, and a media
+    path or a lot link that starts with ``/`` resolves against *their* domain there.  Cloudflare
+    already hands back absolute image URLs, so the two cases have to live side by side.
+    """
+    if not url:
+        return None
+    if url.startswith(("http://", "https://", "//")):
+        return url
+    return request.build_absolute_uri(url) if request else url
+
+
+def _auction_status(auction):
+    """Where an auction is in its life, as four flags rather than one word.
+
+    Four, because they are not a sequence: an in-person auction is ``started`` and never
+    ``closed``, and ``over`` waits a day past the last pickup where ``closed`` fires the moment
+    bidding ends.
+    """
+    return {
+        "started": auction.started,
+        "closed": auction.closed,
+        "over": auction.pretty_much_over,
+        "lot_submission_open": auction.can_submit_lots,
+    }
+
+
+def _named(obj, name_attr="name"):
+    """``{"id": …, "name": …}`` for a foreign key, or ``None``.
+
+    Every reference in this API carries both halves: the id is what a caller stores and matches on,
+    the name is what it prints.  A caller that only got one of them ends up doing a second lookup
+    or displaying a number.
+    """
+    if obj is None:
+        return None
+    return {"id": obj.pk, "name": getattr(obj, name_attr)}
+
+
+class PrivateBlockMixin:
+    """Drops the ``private`` key entirely unless the caller is allowed to read it.
+
+    Absent rather than ``null``: a page built against a public key never has the shape of a
+    response that could have carried a name, so there is nothing to accidentally render.
+    """
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        if not self.context.get("private"):
+            data.pop("private", None)
+        return data
+
+
+class SparseFieldsMixin:
+    """``context["fields"]`` narrows the response to the keys a caller actually wants.
+
+    A club's lot grid needs a number, a name, a link and a picture; sending it the description and
+    every image of four hundred lots is most of the payload and none of the page.  Dropped here
+    rather than after rendering so the work is never done: a field left out costs no queries.
+    """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        wanted = self.context.get("fields")
+        if wanted:
+            for name in set(self.fields) - set(wanted):
+                self.fields.pop(name)
+
+
+class ClubApiLotImageSerializer(serializers.ModelSerializer):
+    """One picture of a lot: the full-size URL and the same small crop the lot list uses."""
+
+    url = serializers.SerializerMethodField()
+    thumbnail = serializers.SerializerMethodField()
+    caption = serializers.SerializerMethodField()
+    image_source_display = serializers.SerializerMethodField()
+
+    def get_url(self, obj):
+        return _absolute(self.context.get("request"), obj.display_url)
+
+    def get_thumbnail(self, obj):
+        return _absolute(self.context.get("request"), obj.thumbnail_url)
+
+    def get_caption(self, obj):
+        return obj.caption or ""
+
+    def get_image_source_display(self, obj):
+        return dict(obj.PIC_CATEGORIES).get(obj.image_source, "")
+
+    class Meta:
+        model = LotImage
+        fields = ["id", "url", "thumbnail", "caption", "is_primary", "image_source", "image_source_display"]
+
+
+class ClubApiLotSerializer(SparseFieldsMixin, PrivateBlockMixin, serializers.ModelSerializer):
+    """One lot, as a club's own software reads it.
+
+    Two audiences in one shape.  Everything at the top level is what a club would put on its own
+    public "here are the lots in our next auction" page, and nothing there names a person.  The
+    ``private`` object holds the buyer and the seller, and is simply missing unless the key was
+    ticked for it -- see :attr:`~auctions.models.ClubAPIKey.can_read_private_lots`.
+
+    ``lot_id`` is this site's permanent id and is never reused, so overlapping pulls can key on it.
+    ``lot_number`` is the number people read off the label and is unique only within the auction.
+    """
+
+    lot_id = serializers.IntegerField(source="pk", read_only=True)
+    # Always a string: lot_number_display is an int under plain numbering and something like
+    # "101-1" under seller-dash numbering, and a caller shouldn't have to handle both types.
+    lot_number = serializers.SerializerMethodField()
+    url = serializers.SerializerMethodField()
+    description = serializers.CharField(source="summernote_description", read_only=True)
+    category = serializers.SerializerMethodField()
+    species = serializers.SerializerMethodField()
+    common_name = serializers.SerializerMethodField()
+    min_bid = serializers.DecimalField(source="reserve_price", max_digits=10, decimal_places=2, read_only=True)
+    sold = serializers.ReadOnlyField()
+    thumbnail = serializers.SerializerMethodField()
+    images = serializers.SerializerMethodField()
+    date_posted = serializers.DateTimeField(read_only=True, default_timezone=date_tz.utc)
+    date_end = serializers.DateTimeField(read_only=True, default_timezone=date_tz.utc)
+    private = serializers.SerializerMethodField()
+
+    def get_lot_number(self, obj):
+        return str(obj.lot_number_display)
+
+    def get_url(self, obj):
+        """The lot's page here, tagged with the name of the key that pulled it.
+
+        ``?src=`` is the same parameter the site's own page-view tracking reads, so a club that
+        publishes this feed can see in its auction stats how much traffic its own website sent.
+        """
+        link = obj.lot_link
+        source = self.context.get("src")
+        if source:
+            link = f"{link}?src={quote_plus(source)}"
+        return _absolute(self.context.get("request"), link)
+
+    def get_category(self, obj):
+        return _named(obj.species_category)
+
+    def get_species(self, obj):
+        """The species, or ``None`` where there isn't one to show.
+
+        ``Lot.scientific_name`` is the one rule for that: it is blank for a lot with no species --
+        hardware, mixed bags -- and blank for every lot in an auction whose admins turned the
+        scientific name field off, which is that club saying it doesn't want them.
+        """
+        name = obj.scientific_name
+        if not name:
+            return None
+        return {"id": obj.species_id, "scientific_name": name, "common_name": obj.species.common_name or ""}
+
+    def get_common_name(self, obj):
+        """The hobby name to print under the lot name, when the lot name is the scientific one."""
+        return obj.common_name_line
+
+    def _lot_images(self, obj):
+        """The lot's images, from the map the view prefetched, falling back to a query.
+
+        The map is keyed on whichever lot actually owns the pictures, which is ``use_images_from``
+        when one lot is borrowing another's.
+        """
+        images = self.context.get("images_by_lot")
+        if images is None:
+            return list(obj.images)
+        return images.get(obj.use_images_from_id or obj.pk, [])
+
+    def get_images(self, obj):
+        return ClubApiLotImageSerializer(self._lot_images(obj), many=True, context=self.context).data
+
+    def get_thumbnail(self, obj):
+        """The small crop for a lot tile, ready to drop straight into an ``<img>``.
+
+        The lot's own primary picture, or the one this site would auto-add to it (a picture from an
+        older lot of the same name in one of this club's auctions) -- the same image the lot list
+        on this site shows, so a club's own page doesn't come out full of blanks.
+        """
+        for image in self._lot_images(obj):
+            if image.is_primary:
+                return _absolute(self.context.get("request"), image.thumbnail_url)
+        auto = (self.context.get("auto_images") or {}).get(obj.lot_name)
+        if auto:
+            return _absolute(self.context.get("request"), auto.thumbnail_url)
+        return None
+
+    def get_private(self, obj):
+        """Everything that names somebody, plus the admin-side state of the lot."""
+        seller, winner = obj.auctiontos_seller, obj.auctiontos_winner
+        return {
+            "seller_name": obj.seller_name if obj.seller_name != "Unknown" else "",
+            "seller_email": obj.seller_email if obj.seller_email != "Unknown" else "",
+            "seller_number": seller.bidder_number if seller else "",
+            "winner_name": obj.winner_name,
+            "winner_email": obj.winner_email,
+            "winner_number": winner.bidder_number if winner else "",
+            "removed": obj.banned,
+            "ban_reason": obj.ban_reason or "",
+            "refunded": obj.refunded,
+            "partial_refund_percent": obj.partial_refund_percent,
+            "label_printed": obj.label_printed,
+            "seller_feedback": obj.feedback_text or "",
+            "winner_feedback": obj.winner_feedback_text or "",
+        }
+
+    class Meta:
+        model = Lot
+        fields = [
+            "lot_id",
+            "lot_number",
+            "lot_name",
+            "url",
+            "quantity",
+            "description",
+            "category",
+            "species",
+            "common_name",
+            "custom_checkbox",
+            "custom_field_1",
+            "custom_dropdown",
+            "i_bred_this_fish",
+            "donation",
+            "reference_link",
+            "min_bid",
+            "buy_now_price",
+            "active",
+            "sold",
+            "winning_price",
+            "date_posted",
+            "date_end",
+            "thumbnail",
+            "images",
+            "private",
+        ]
+
+
+class ClubApiAuctionSerializer(PrivateBlockMixin, serializers.ModelSerializer):
+    """One auction: when it runs, what it charges, what its rules say and how lots are described.
+
+    ``rules`` is the HTML an admin wrote on the auction's rules page.  ``lot_fields`` says which of
+    the optional per-lot fields this auction uses and what it calls them, so a caller rendering a
+    lot knows whether ``custom_dropdown`` means anything and what heading to put over it.
+    """
+
+    url = serializers.SerializerMethodField()
+    club = serializers.SerializerMethodField()
+    rules = serializers.CharField(source="summernote_description", read_only=True)
+    status = serializers.SerializerMethodField()
+    date_posted = serializers.DateTimeField(read_only=True, default_timezone=date_tz.utc)
+    date_start = serializers.DateTimeField(read_only=True, default_timezone=date_tz.utc)
+    date_end = serializers.DateTimeField(read_only=True, default_timezone=date_tz.utc)
+    lot_submission_start_date = serializers.DateTimeField(read_only=True, default_timezone=date_tz.utc)
+    lot_submission_end_date = serializers.DateTimeField(read_only=True, default_timezone=date_tz.utc)
+    date_online_bidding_starts = serializers.DateTimeField(read_only=True, default_timezone=date_tz.utc)
+    date_online_bidding_ends = serializers.DateTimeField(read_only=True, default_timezone=date_tz.utc)
+    lot_count = serializers.SerializerMethodField()
+    pickup_locations = serializers.SerializerMethodField()
+    fees = serializers.SerializerMethodField()
+    lot_fields = serializers.SerializerMethodField()
+    private = serializers.SerializerMethodField()
+
+    def get_url(self, obj):
+        return _absolute(self.context.get("request"), obj.get_absolute_url())
+
+    def get_club(self, obj):
+        return _named(obj.club)
+
+    def get_status(self, obj):
+        return _auction_status(obj)
+
+    def get_lot_count(self, obj):
+        return obj.lots_qs.exclude(banned=True).count()
+
+    def get_pickup_locations(self, obj):
+        return [
+            {
+                "id": location.pk,
+                "name": location.name or "",
+                "description": location.description or "",
+                "address": location.address or "",
+                "pickup_time": location.pickup_time,
+                "second_pickup_time": location.second_pickup_time,
+                "pickup_by_mail": location.pickup_by_mail,
+                "users_must_coordinate_pickup": location.users_must_coordinate_pickup,
+            }
+            for location in obj.location_qs
+        ]
+
+    def get_fees(self, obj):
+        return {
+            "currency": obj.currency,
+            # A string, like every other price in this API: JSON has no decimal type, and rounding
+            # money through a float is the kind of bug that shows up on one invoice in a thousand.
+            "minimum_bid": f"{obj.minimum_bid:.2f}",
+            "lot_entry_fee": obj.lot_entry_fee,
+            "unsold_lot_fee": obj.unsold_lot_fee,
+            "registration_fee": obj.registration_fee,
+            "winning_bid_percent_to_club": obj.winning_bid_percent_to_club,
+            "tax": obj.tax,
+            "only_whole_dollar_bids": obj.only_whole_dollar_bids,
+        }
+
+    def get_lot_fields(self, obj):
+        """Which optional lot fields this auction uses, and what it calls the custom ones.
+
+        The three custom fields are the reason this is here: ``custom_checkbox``,
+        ``custom_field_1`` and ``custom_dropdown`` arrive on every lot with no hint of what the
+        club meant by them, and the heading lives here.
+        """
+        return {
+            "use_quantity_field": obj.use_quantity_field,
+            "use_description": obj.use_description,
+            "use_reference_link": obj.use_reference_link,
+            "use_categories": obj.use_categories,
+            "use_scientific_name": obj.use_scientific_name,
+            "use_donation_field": obj.use_donation_field,
+            "use_i_bred_this_fish_field": obj.use_i_bred_this_fish_field,
+            "i_bred_this_fish_label": settings.I_BRED_THIS_FISH_LABEL,
+            "use_custom_checkbox_field": obj.use_custom_checkbox_field,
+            "custom_checkbox_name": obj.custom_checkbox_name or "",
+            "custom_field_1": obj.custom_field_1,
+            "custom_field_1_name": obj.custom_field_1_name or "",
+            "use_custom_dropdown_field": obj.use_custom_dropdown_field,
+            "custom_dropdown_name": obj.custom_dropdown_name or "",
+            "custom_dropdown_options": list(
+                AuctionDropdown.objects.filter(auction=obj).order_by("createdon").values_list("value", flat=True)
+            ),
+        }
+
+    def get_private(self, obj):
+        """The auction's own numbers that are nobody else's business.
+
+        Deliberately not here: ``google_drive_link``.  That sheet is shared "anyone with the link
+        can view", so the link *is* the credential -- handing it out through an API would let
+        everyone who can read an auction read the club's spreadsheet, and no checkbox on a key
+        should be able to do that.
+        """
+        return {
+            "created_by": obj.created_by.username if obj.created_by else "",
+            "invoiced": obj.invoiced,
+            "participant_count": AuctionTOS.objects.filter(auction=obj).count(),
+            "removed_lot_count": obj.lots_qs.filter(banned=True).count(),
+        }
+
+    class Meta:
+        model = Auction
+        fields = [
+            "id",
+            "slug",
+            "title",
+            "url",
+            "club",
+            "status",
+            "is_online",
+            "sealed_bid",
+            "online_bidding",
+            "buy_now",
+            "reserve_price",
+            "promote_this_auction",
+            "location",
+            "rules",
+            "date_posted",
+            "date_start",
+            "date_end",
+            "lot_submission_start_date",
+            "lot_submission_end_date",
+            "date_online_bidding_starts",
+            "date_online_bidding_ends",
+            "max_lots_per_user",
+            "lot_count",
+            "fees",
+            "lot_fields",
+            "pickup_locations",
+            "private",
+        ]
+
+
+class ClubApiAuctionSummarySerializer(serializers.ModelSerializer):
+    """One row of the auction list: enough to pick which auction you want, and nothing else.
+
+    Deliberately thin.  The list is a picker -- the fees, the rules and the pickup locations are
+    one more request away, and putting them on every row would make a club with sixty auctions
+    behind it an expensive thing to ask a simple question of.
+    """
+
+    url = serializers.SerializerMethodField()
+    date_posted = serializers.DateTimeField(read_only=True, default_timezone=date_tz.utc)
+    date_start = serializers.DateTimeField(read_only=True, default_timezone=date_tz.utc)
+    date_end = serializers.DateTimeField(read_only=True, default_timezone=date_tz.utc)
+    status = serializers.SerializerMethodField()
+
+    def get_url(self, obj):
+        return _absolute(self.context.get("request"), obj.get_absolute_url())
+
+    def get_status(self, obj):
+        return _auction_status(obj)
+
+    class Meta:
+        model = Auction
+        fields = [
+            "id",
+            "slug",
+            "title",
+            "url",
+            "is_online",
+            "promote_this_auction",
+            "date_posted",
+            "date_start",
+            "date_end",
+            "status",
+        ]

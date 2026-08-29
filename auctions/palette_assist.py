@@ -178,10 +178,11 @@ def tools_for(user) -> list[dict[str, Any]]:
     palette did before any of them were tools.
 
     Two things qualify, and ``Action.mcp_only`` has the long version. ``read_source`` hands back a
-    page of Python, which is right for an agent and wrong for a one-line box at this site's own
-    expense. The rest are writes whose only objection was ever the risk of *mishearing* the row
-    being named -- a real risk for somebody dictating, and not a risk that exists for a caller
-    sending a lot number it read out of ``list_lots``.
+    page of Python and ``club_api`` a page of API documentation, which are right for an agent and
+    wrong for a one-line box at this site's own expense -- one topic of that documentation is over
+    :data:`MAX_LOOKUP_RESULT_CHARS` on its own. The rest are writes whose only objection was ever
+    the risk of *mishearing* the row being named -- a real risk for somebody dictating, and not a
+    risk that exists for a caller sending a lot number it read out of ``list_lots``.
     """
     from .mcp import tools as mcp_tools
 

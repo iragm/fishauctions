@@ -140,6 +140,16 @@ break those.
   `list_club_members`, `sync_club_calendar` (`GoogleCalendarSyncNowView`'s body, including the
   forced re-read of whether the calendar is publicly shared), `club_website_snippets` (hands over
   addresses and points at the page; it deliberately does **not** rebuild the iframe HTML).
+- `club_api` is the club's own REST API described to whoever is about to write against it: the keys
+  it has, what each one is allowed to do, and — one `topic=` at a time — the endpoint documentation
+  itself. It **renders** `_club_api_endpoints.html`, the include the key's own page draws, with an
+  unsaved `ClubAPIKey` holding exactly the permissions being documented, so `/clubs/<slug>/api-keys/<pk>/`
+  is still the only place every endpoint is written up. Four topics — `members`, `points`, `species`,
+  `auctions` — because the page whole is about fifteen thousand characters, over `MAX_RESULT_CHARS`
+  once it is JSON. It creates nothing: a key's tick boxes are fixed for its life, so the answer names
+  the boxes and links to the page. It cannot read a secret, because nothing can, and it says so.
+  `_API_PERMISSIONS` is the flag → tick box → topic table, and `test_palette_account.ClubAPIToolTests`
+  fails the build when a flag stops naming a model field or a label stops matching the create page.
 - Times go through `palette_actions.user_time`, which reads `UserData.timezone`. Auction dates use
   `local_time` and the auction's own timezone.
 - `_CLUB_SETTING_PAGES` is the settings table and the **permission is written down per page**:
@@ -233,8 +243,8 @@ navigate-only.
   from it, so `.env`, a keyfile and `../../etc/passwd` are all simply not paths. Grep results are
   ranked (definitions, then path matches, then application Python, then design notes, then the rest,
   tests/migrations/vendored last) and capped by `MAX_GREP_PER_FILE` / `MAX_GREP_MATCHES`. It is the
-  one tool with `openWorldHint: true` and the one `mcp_only` action: `palette_assist.tools_for`
-  drops it and `read_reply` refuses it by name.
+  one tool with `openWorldHint: true`, and one of the two `mcp_only` **reads** (`club_api` is the
+  other): `palette_assist.tools_for` drops it, and `read_reply` refuses any `mcp_only` action.
 
 ## Species over MCP
 
@@ -250,8 +260,8 @@ way.
 
 ## The page-only writes (`mcp_only`)
 
-Fifteen **writes** exist over `/mcp/` and not in the command palette (`read_source` is the
-sixteenth `mcp_only` action and is a read; see the end of this file). The palette still reaches every
+Fifteen **writes** exist over `/mcp/` and not in the command palette (`read_source` and `club_api`
+are the other two `mcp_only` actions and are both reads; see the end of this file). The palette still reaches every
 one of the pages behind them — `palette_routes` guarantees `go_to_page` does — so this is a
 subtraction from one client's *tool list*, not a second catalogue. `Action.mcp_only` has the long
 version of why; the short one is that the excuses these views were sitting behind in `NOT_A_SKILL`

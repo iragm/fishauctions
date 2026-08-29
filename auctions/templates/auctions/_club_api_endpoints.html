@@ -1,0 +1,295 @@
+{% comment %}The club API's endpoint documentation, gated per permission on the key it is rendered for. Included by club_api_key_detail.html, and rendered as text by palette_actions.club_api_keys so an agent writing an integration reads this and not a second copy of it. Context comes from views.club_api_documentation_context.{% endcomment %}
+<h5>Example endpoints</h5>
+<div class="mb-3 small text-muted">
+  Authenticate with <code>X-API-Key: {{ api_key.prefix }}.YOUR_SECRET</code>, or
+  <code>Authorization: Api-Key &lt;key&gt;</code>. Write requests take a JSON body with
+  <code>Content-Type: application/json</code>.
+</div>
+<div class="small mb-4">
+  {% if api_key.can_add_club_members %}
+  <div class="mb-3">
+    <div><strong>Add a club member</strong> &mdash; <code>POST https://{{ site_domain }}/api/v1/clubs/{{ club.slug }}/members/</code></div>
+    <div class="ms-3 text-muted">Body: <code>{"name":"Mike","email":"mike@example.com"}</code></div>
+  </div>
+  {% endif %}
+  {% if api_key.can_read_club_member_list %}
+  <div class="mb-3">
+    <div><strong>Read the member list</strong> &mdash; <code>GET https://{{ site_domain }}/api/v1/clubs/{{ club.slug }}/members/</code></div>
+    <div class="ms-3 text-muted">
+      <code>?name=mike</code>, or <code>?filter=</code> with the same text the admin member list takes:
+      <code>discord</code>, <code>current</code>, <code>expired</code>, <code>expiring</code>,
+      <code>never paid</code>, or any name or email.
+    </div>
+  </div>
+  {% endif %}
+  {% if api_key.can_update_club_members %}
+  <div class="mb-3">
+    <div><strong>Update a club member</strong> &mdash; <code>PATCH https://{{ site_domain }}/api/v1/clubs/{{ club.slug }}/members/{{ example_member_id|default:"123" }}/</code></div>
+    <div class="ms-3 text-muted">Body: <code>{"email":"mike@example.com"}</code> &mdash; only the fields you send are changed.</div>
+  </div>
+  {% endif %}
+  {% if api_key.can_add_bap_points %}
+  <div class="mb-3">
+    <div><strong>Add BAP points</strong> &mdash; <code>POST https://{{ site_domain }}/api/v1/clubs/{{ club.slug }}/members/{{ example_member_id|default:"123" }}/bap-awards/</code></div>
+    <div class="ms-3 text-muted">Body: <code>{"points":5,"notes":"Bred angelfish","email":"mike@example.com"}</code></div>
+  </div>
+  <div class="mb-3">
+    <div><strong>Read lots from this club's auctions</strong> &mdash; <code>GET https://{{ site_domain }}/api/v1/clubs/{{ club.slug }}/bap-lots/</code></div>
+    <div class="ms-3">
+      <ul class="text-muted mb-2">
+        <li>Every lot that ended in the range, sold or not, with seller, winner and points eligibility.</li>
+        <li><code>?days=90</code> (default {{ bap_lot_default_days }}), or <code>?start=2026-01-01&amp;end=2026-03-31</code> &mdash; inclusive, site local time. The response echoes the range in UTC.</li>
+        <li>Key on <code>lot_id</code>: permanent and never reused, so overlapping pulls are safe.</li>
+      </ul>
+<pre class="bg-light border rounded p-2 text-dark" style="overflow-x:auto"><code>curl "https://{{ site_domain }}/api/v1/clubs/{{ club.slug }}/bap-lots/?days={{ bap_lot_default_days }}" \
+  -H "X-API-Key: {{ api_key.prefix }}.YOUR_SECRET"</code></pre>
+<pre class="bg-light border rounded p-2 text-dark" style="overflow-x:auto"><code>{
+  "start": "{{ example_bap_range_start }}",
+  "end": "{{ example_bap_range_end }}",
+  "count": 1,
+  "results": [
+    {
+      "lot_id": 84213,
+      "lot_number_display": "12",
+      "lot_name": "6 Corydoras panda fry",
+      "quantity": 6,
+      "seller_name": "Mike Smith",
+      "seller_email": "mike@example.com",
+      "winner_name": "Dana Lee",
+      "winner_email": "dana@example.com",
+      "timestamp": "{{ example_bap_lot_timestamp }}",
+      "sold": true,
+      "category": "Catfish",
+      "program": "BAP",
+      "i_bred_this_fish": true,
+      "donation": false,
+      "custom_checkbox": false,
+      "custom_checkbox_name": "",
+      "bap_eligible": true,
+      "bap_ineligible_reason": "",
+      "bap_ineligible_reason_display": "",
+      "bap_auto_reason": "",
+      "bap_points_awarded": 5,
+      "manually_approved": false,
+      "bap_award": {
+        "id": 991,
+        "date": "{{ example_bap_award_date|date:"Y-m-d" }}",
+        "points": 5,
+        "hap_points": 0,
+        "cap_points": 0,
+        "notes": "",
+        "auto_awarded": true
+      }
+    }
+  ]
+}</code></pre>
+      <div class="text-muted mb-1">An unsold lot has <code>"sold": false</code>, blank winner fields and <code>"bap_award": null</code>.</div>
+      <div class="mt-2 mb-1"><strong>Fields</strong></div>
+      {% include "auctions/partials/bap_lot_api_fields.html" %}
+    </div>
+  </div>
+  {% endif %}
+  {% if api_key.can_renew_memberships %}
+  <div class="mb-3">
+    <div><strong>Renew a membership</strong> &mdash; <code>POST https://{{ site_domain }}/api/v1/clubs/{{ club.slug }}/members/renew/</code></div>
+    <div class="ms-3">
+      <ul class="text-muted mb-2">
+        <li>Matched on <code>email</code> (required); the member is added if they're new.</li>
+        <li>{% if club.membership_system == "january_first" %}The expiration moves to the next January 1st{% else %}The expiration moves a year forward, from the current expiration if it hasn't passed{% endif %}, and the renewal confirmation email goes out{% if not club.send_membership_renewal_confirmation %} (currently off in this club's email settings){% endif %}.</li>
+        <li>Other fields this key may write can ride along; blank values are ignored.</li>
+        <li><code>200</code> for an existing member, <code>201</code> when one was created.</li>
+      </ul>
+<pre class="bg-light border rounded p-2 text-dark" style="overflow-x:auto"><code>curl -X POST https://{{ site_domain }}/api/v1/clubs/{{ club.slug }}/members/renew/ \
+  -H "X-API-Key: {{ api_key.prefix }}.YOUR_SECRET" \
+  -H "Content-Type: application/json" \
+  -d '{"email":"mike@example.com","first_name":"Mike","last_name":"Smith","phone_number":"555-0143"}'</code></pre>
+<pre class="bg-light border rounded p-2 text-dark" style="overflow-x:auto"><code>{
+  "created": false,
+  "id": {{ example_member_id|default:"123" }},
+  "name": "Mike Smith",
+  "email": "mike@example.com",
+  "membership_number": 1234567890,
+  "membership_last_paid": "{{ example_last_paid|date:"Y-m-d" }}",
+  "membership_expiration_date": "{{ example_new_expiration|date:"Y-m-d" }}",
+  "wallet_link": "https://{{ site_domain }}/clubs/{{ club.slug }}/member/&lt;uuid&gt;/",
+  ...
+}</code></pre>
+    </div>
+  </div>
+  {% endif %}
+  {% if api_key.can_look_up_species %}
+  <div class="mb-3">
+    <div><strong>Look up a species</strong> &mdash; <code>GET https://{{ site_domain }}/api/v1/clubs/{{ club.slug }}/species-lookup/?q=yellow+lab</code></div>
+    <div class="ms-3">
+      <ul class="text-muted mb-2">
+        <li>Matches typed text against this site's species list, the same way the add lot form does. Answers are always species that exist here.</li>
+        <li>No match is <code>200</code> with an empty <code>results</code>. A missing <code>q</code> is the one <code>400</code>.</li>
+        <li><code>unambiguous</code> is true only for exactly one match &mdash; that's the signal to act on. Up to {{ species_lookup_max_results }} results; <code>total_matches</code> is how many were found.</li>
+        <li><code>?category=cichlids</code> or <code>?category_id={% if example_category %}{{ example_category.pk }}{% else %}7{% endif %}</code> (not both) re-orders candidates; it never filters. A category this site doesn't have is a <code>400</code>.</li>
+        <li>Anything the database can't answer goes to a language model: {{ species_lookup_llm_calls_per_day }} a day for this club, shared by all its keys ({{ species_lookup_llm_remaining }} left today).{% if not species_lookup_llm_available %} No model is configured on this site right now.{% endif %} Every response carries <code>X-Species-LLM-Limit</code>, <code>X-Species-LLM-Remaining</code> and <code>X-Species-LLM-Reset</code>; a lookup that needed the model with none left is a <code>429</code>.</li>
+      </ul>
+<pre class="bg-light border rounded p-2 text-dark" style="overflow-x:auto"><code>curl "https://{{ site_domain }}/api/v1/clubs/{{ club.slug }}/species-lookup/?q=yellow+lab" \
+  -H "X-API-Key: {{ api_key.prefix }}.YOUR_SECRET"</code></pre>
+<pre class="bg-light border rounded p-2 text-dark" style="overflow-x:auto"><code>{
+  "query": "yellow lab",
+  "source": "exact",
+  "unambiguous": true,
+  "total_matches": 1,
+  "count": 1,
+  "llm": false,
+  "results": [
+    {
+      "id": 4821,
+      "scientific_name": "Labidochromis caeruleus",
+      "full_scientific_name": "Labidochromis caeruleus",
+      "common_name": "Yellow lab",
+      "common_names": [{"id": 88412, "name": "Yellow lab", "source": "admin"}],
+      "label": "Labidochromis caeruleus (Yellow lab)",
+      "genus": "Labidochromis",
+      "species_epithet": "caeruleus",
+      "variety": "",
+      "parent": null,
+      "family": "Cichlidae",
+      "order": "Cichliformes",
+      "category": {"id": 7, "name": "Cichlids"},
+      "trade_rank": 0,
+      "source": "fishbase",
+      "approved": true
+    }
+  ]
+}</code></pre>
+      <ul class="text-muted mb-1">
+        <li><code>full_scientific_name</code> &mdash; the name to show a person. On a strain it includes the strain ("Neocaridina davidi 'Blue Dream'"); <code>scientific_name</code> is the plain species and is the same for every strain of it.</li>
+        <li><code>label</code> &mdash; what a picker shows a person: the full scientific name, strain included. The common name is <code>common_name</code>; it is deliberately not repeated here.</li>
+        <li><code>variety</code> / <code>parent</code> &mdash; the strain, and the species it's a strain of. Both empty on an ordinary species.</li>
+        <li><code>is_hybrid</code> &mdash; a cross with no accepted scientific name, e.g. a tibee shrimp. The only case where <code>scientific_name</code>, <code>genus</code> and <code>species_epithet</code> are all empty; <code>variety</code> holds the name the trade uses and <code>full_scientific_name</code> reads "Hybrid 'Tibee'". Post one with <code>{"is_hybrid": true, "variety": "Tibee"}</code> and no scientific name.</li>
+        <li><code>category</code> &mdash; the category a lot of this species gets here, or <code>null</code>.</li>
+        <li><code>trade_rank</code> &mdash; 0 = kept in the hobby, 1 = its genus is, 2 = neither. Results are ordered by it.</li>
+        <li><code>approved</code> &mdash; <code>false</code> means it is yours: visible to this club only, until a site admin approves it.</li>
+        <li><code>source</code> &mdash; <code>fishbase</code>, <code>aquarium</code> (curated trade list), <code>admin</code> or <code>manual</code>.</li>
+        <li><code>source</code> at the top level &mdash; how it was matched: <code>exact</code>, <code>cache</code>, <code>search</code>, <code>llm</code> or <code>none</code>.</li>
+      </ul>
+    </div>
+  </div>
+  <div class="mb-3">
+    <div><strong>Add a species</strong> &mdash; <code>POST https://{{ site_domain }}/api/v1/clubs/{{ club.slug }}/species-lookup/</code></div>
+    <div class="ms-3">
+      <ul class="text-muted mb-2">
+        <li><code>scientific_name</code> is "Genus species" in one string, and is required unless you're adding a strain. A genus on its own is fine.</li>
+        <li>Optional: <code>common_name</code>, <code>other_names</code> (a list, or one comma-separated string), <code>category</code> or <code>category_id</code>, <code>freshwater</code> (default true), <code>brackish</code>, <code>saltwater</code>, <code>breeder_points</code> (default true).</li>
+        <li>A strain is <code>variety</code> plus <code>parent</code>, the id of the species it's a strain of. Neither works without the other.</li>
+        <li>What you add is visible to this club only, until a site admin approves it for everyone.</li>
+        <li><code>409</code> if the species is already here, or if a name you sent already belongs to another species &mdash; the response carries that species, so use its id.</li>
+      </ul>
+<pre class="bg-light border rounded p-2 text-dark" style="overflow-x:auto"><code>curl -X POST https://{{ site_domain }}/api/v1/clubs/{{ club.slug }}/species-lookup/ \
+  -H "X-API-Key: {{ api_key.prefix }}.YOUR_SECRET" \
+  -H "Content-Type: application/json" \
+  -d '{"scientific_name":"Ancistrus sp. L183","common_name":"Starlight bristlenose","other_names":["L183"]}'</code></pre>
+      <div class="text-muted mb-1">A strain of a species that's already here:</div>
+<pre class="bg-light border rounded p-2 text-dark" style="overflow-x:auto"><code>curl -X POST https://{{ site_domain }}/api/v1/clubs/{{ club.slug }}/species-lookup/ \
+  -H "X-API-Key: {{ api_key.prefix }}.YOUR_SECRET" \
+  -H "Content-Type: application/json" \
+  -d '{"variety":"Blue Dream","parent":39098,"common_name":"Blue dream shrimp"}'</code></pre>
+      <div class="text-muted">Returns <code>201</code> and the species record, in the same shape the lookup returns.</div>
+    </div>
+  </div>
+  <div class="mb-3">
+    <div><strong>Add a common name to an existing species</strong> &mdash; <code>POST https://{{ site_domain }}/api/v1/clubs/{{ club.slug }}/species-lookup/&lt;id or scientific name&gt;/common-names/</code></div>
+    <div class="ms-3">
+      <ul class="text-muted mb-2">
+        <li>Body: <code>{"name":"yellow lab"}</code>. The matcher finds the species by that name from then on.</li>
+        <li>Address the species by id, or by scientific name so you don't have to look the id up. A strain needs its full name, e.g. <code>Neocaridina davidi 'Blue Dream'</code>.</li>
+        <li>The name is visible to this club only, until a site admin approves it.</li>
+        <li>A name the species already has returns <code>200</code> with the existing one, so re-running an import is safe. A name that already belongs to a different species is a <code>409</code>.</li>
+      </ul>
+<pre class="bg-light border rounded p-2 text-dark" style="overflow-x:auto"><code>curl -X POST "https://{{ site_domain }}/api/v1/clubs/{{ club.slug }}/species-lookup/Labidochromis%20caeruleus/common-names/" \
+  -H "X-API-Key: {{ api_key.prefix }}.YOUR_SECRET" \
+  -H "Content-Type: application/json" \
+  -d '{"name":"yellow lab"}'</code></pre>
+<pre class="bg-light border rounded p-2 text-dark" style="overflow-x:auto"><code>{"created": true, "id": 91413, "name": "yellow lab", "approved": false, "species": {"id": 4821, ...}}</code></pre>
+    </div>
+  </div>
+  {% endif %}
+  {% if api_key.can_read_auction_info or api_key.can_read_public_lots %}
+  <div class="mb-3">
+    <div><strong>Read auctions and lots</strong></div>
+    <div class="ms-3">
+      <ul class="text-muted mb-2">
+        {% if api_key.can_read_auction_info %}
+        <li><code>GET /api/v1/clubs/{{ club.slug }}/auctions/</code> &mdash; this club's auctions, newest first. The response names the <code>current</code> and <code>latest</code> slugs.</li>
+        <li><code>GET /api/v1/clubs/{{ club.slug }}/auctions/&lt;auction&gt;/</code> &mdash; dates, rules, fees, pickup locations and which lot fields the auction uses.</li>
+        {% endif %}
+        {% if api_key.can_read_public_lots %}
+        <li><code>GET /api/v1/clubs/{{ club.slug }}/auctions/&lt;auction&gt;/lots/</code> &mdash; <code>?limit=</code> (default {{ lot_page_size }}, max {{ max_lot_page_size }}) and <code>?offset=</code>.</li>
+        <li><code>GET /api/v1/clubs/{{ club.slug }}/auctions/&lt;auction&gt;/lots/&lt;lot number&gt;/</code></li>
+        <li><code>?filter=</code> is one search box: lot name, description, custom text field, custom dropdown, scientific name, common name, category. A number on its own is a lot number. It never looks at a buyer or seller.</li>
+        <li>Or filter one column at a time: <code>?lot_name=</code>, <code>?description=</code>, <code>?custom_field_1=</code>, <code>?custom_dropdown=</code> (the whole value), <code>?lot_number=</code>, <code>?category=</code> or <code>?category_id=</code>, <code>?species_id=</code>, <code>?sold=</code>, <code>?donation=</code>, <code>?i_bred_this_fish=</code>, <code>?custom_checkbox=</code>. <code>count</code> is the filtered total.</li>
+        <li><code>?seller=</code> and <code>?winner=</code> take a name, bidder number or email{% if api_key.can_read_private_lots %}.{% else %} &mdash; they need <em>Read private lot info</em>, and say so rather than matching nothing.{% endif %}</li>
+        <li><code>?ordering=</code> {% for name in lot_ordering %}<code>{{ name }}</code>{% if not forloop.last %}, {% endif %}{% endfor %} &mdash; prefix with <code>-</code> to reverse.</li>
+        <li><code>?fields=lot_number,lot_name,url,thumbnail</code> returns only those keys, on the list and on one lot.</li>
+        {% endif %}
+        <li>&lt;auction&gt; is an auction slug, or the word <code>current</code> or <code>latest</code>{% if example_auction %} &mdash; e.g. <code>{{ example_auction.slug }}</code>{% endif %}. <code>current</code> is the pinned current auction, otherwise the soonest one that hasn't finished; <code>latest</code> is the last one created, promoted or not.</li>
+        <li>Every reference carries both halves: <code>{"id": 7, "name": "Cichlids"}</code>.</li>
+        {% if api_key.can_read_public_lots %}
+        <li>Each lot's <code>url</code> ends in <code>?src={{ api_key.name|urlencode }}</code>, so traffic your page sends shows up in the auction's stats.</li>
+        <li><code>thumbnail</code> is one link for a lot tile; <code>images</code> is every picture, full size and thumbnail.</li>
+        {% endif %}
+        <li>{% if api_key.can_read_private_lots %}This key reads private info: every lot carries a <code>private</code> object with the buyer and seller. Don't put it on a public page.{% else %}Nothing here names a person. Tick <em>Read private lot info</em> to add a <code>private</code> object with the buyer and seller.{% endif %}</li>
+      </ul>
+{% if api_key.can_read_public_lots %}
+<pre class="bg-light border rounded p-2 text-dark" style="overflow-x:auto"><code>curl "https://{{ site_domain }}/api/v1/clubs/{{ club.slug }}/auctions/current/lots/" \
+  -H "X-API-Key: {{ api_key.prefix }}.YOUR_SECRET"</code></pre>
+<pre class="bg-light border rounded p-2 text-dark" style="overflow-x:auto"><code>{
+  "auction": "{% if example_auction %}{{ example_auction.slug }}{% else %}spring-auction{% endif %}",
+  "count": 214,
+  "results": [
+    {
+      "lot_id": 84213,
+      "lot_number": "12",
+      "lot_name": "6 Corydoras panda fry",
+      "url": "https://{{ site_domain }}/auctions/{% if example_auction %}{{ example_auction.slug }}{% else %}spring-auction{% endif %}/lots/12/?src={{ api_key.name|urlencode }}",
+      "quantity": 6,
+      "description": "&lt;p&gt;Home bred, about 1 inch&lt;/p&gt;",
+      "category": {"id": 7, "name": "Catfish"},
+      "species": {"id": 4821, "scientific_name": "Corydoras panda", "common_name": "Panda cory"},
+      "common_name": "Panda cory",
+      "custom_checkbox": false,
+      "custom_field_1": "",
+      "custom_dropdown": "",
+      "i_bred_this_fish": true,
+      "donation": false,
+      "reference_link": null,
+      "min_bid": "5.00",
+      "buy_now_price": null,
+      "active": false,
+      "sold": true,
+      "winning_price": "22.00",
+      "date_posted": "{{ example_bap_lot_timestamp }}",
+      "date_end": "{{ example_bap_range_end }}",
+      "thumbnail": "https://{{ site_domain }}/media/images/cory.jpg",
+      "images": [
+        {"id": 5512, "url": "https://{{ site_domain }}/media/images/cory.jpg", "thumbnail": "https://{{ site_domain }}/media/images/cory.jpg", "caption": "", "is_primary": true, "image_source": "ACTUAL", "image_source_display": "This picture is of the exact item"}
+      ]{% if api_key.can_read_private_lots %},
+      "private": {
+        "seller_name": "Mike Smith",
+        "seller_email": "mike@example.com",
+        "seller_number": "601",
+        "winner_name": "Dana Lee",
+        "winner_email": "dana@example.com",
+        "winner_number": "602",
+        "removed": false,
+        "ban_reason": "",
+        "refunded": false,
+        "partial_refund_percent": 0,
+        "label_printed": true,
+        "seller_feedback": "",
+        "winner_feedback": ""
+      }{% endif %}
+    }
+  ]
+}</code></pre>
+{% endif %}
+    </div>
+  </div>
+  {% endif %}
+</div>

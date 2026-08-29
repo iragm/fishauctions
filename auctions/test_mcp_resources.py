@@ -245,6 +245,23 @@ class PromptEndpointTests(StandardTestCase):
         self.assertIn("run_check_in", by_name)
         self.assertEqual(by_name["run_check_in"]["arguments"][0]["name"], "auction")
 
+    def test_the_integration_recipe_takes_a_club_and_what_it_should_do(self):
+        """The one prompt whose second argument is free text: nobody can complete "what I want"."""
+        listed = self.result(self.rpc("prompts/list"))["prompts"]
+        by_name = {row["name"]: row for row in listed}
+        self.assertIn("build_an_integration", by_name)
+        self.assertEqual(
+            [argument["name"] for argument in by_name["build_an_integration"]["arguments"]], ["club", "goal"]
+        )
+        rendered = self.result(
+            self.rpc("prompts/get", {"name": "build_an_integration", "arguments": {"goal": "post our lots"}})
+        )
+        text = rendered["messages"][0]["content"]["text"]
+        self.assertIn("post our lots", text)
+        # The three tools the recipe is built out of, named in it rather than left to be guessed.
+        for tool in ("club_api", "club_website_snippets", "request_a_skill"):
+            self.assertIn(tool, text)
+
     def test_getting_one_returns_a_user_message(self):
         result = self.result(self.rpc("prompts/get", {"name": "chase_unpaid", "arguments": {"auction": "Spring"}}))
         message = result["messages"][0]

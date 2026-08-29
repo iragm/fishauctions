@@ -1196,6 +1196,10 @@ EXCLUDED: dict[str, str] = {
     "api_club_member_renew": _API,
     "api_club_member_bap_awards": _API,
     "api_club_bap_lots": _API,
+    "api_club_auctions": _API,
+    "api_club_auction_detail": _API,
+    "api_club_auction_lots": _API,
+    "api_club_auction_lot_detail": _API,
     "inbound_email_routing": _API,
     # Donation tracking. The two real pages are in the catalog; these are the modals opened from
     # them, all of which need a vendor or a stored email the user can't be asked to name.
