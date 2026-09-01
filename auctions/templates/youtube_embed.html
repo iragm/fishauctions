@@ -1,5 +1,11 @@
+{% comment %}
+  One tutorial video plus its chapter list. The size is CSS, not JavaScript: the player used to be
+  built at a fixed 583px on anything narrower than a tablet, which is wider than a phone and made
+  every page that embedded one scroll sideways. `.video-container` in auction_site.css caps it at
+  100% of whatever it is put in and holds the 16:9 box; the iframe just fills that.
+{% endcomment %}
 <div class="video-container">
-  <div id="player_{{videoId}}" class="embed-responsive"></div>
+  <div id="player_{{videoId}}"></div>
 </div>
 
 <script>
@@ -15,8 +21,10 @@
     videoElements.forEach(function(el) {
       var videoId = el.id.replace('player_', '');
       players[videoId] = new YT.Player(el.id, {
-        height: getPlayerHeight(),
-        width: getPlayerWidth(),
+        // The container sizes the player; asking for percentages here keeps YouTube from writing
+        // pixel width and height attributes onto the iframe that the CSS then has to fight.
+        height: '100%',
+        width: '100%',
         videoId: videoId,
         playerVars: {
           'playsinline': 1
@@ -31,30 +39,6 @@
       players[videoId].playVideo();
     }
   }
-
-  // Helper functions to get responsive width and height
-  function getPlayerWidth() {
-    if (window.innerWidth >= 1024) {
-      return 875; // Larger width for tablets and desktops
-    } else {
-      return 583; // Default width for smaller screens (phones)
-    }
-  }
-
-  function getPlayerHeight() {
-    if (window.innerWidth >= 1024) {
-      return 531; // Corresponding height for the larger width
-    } else {
-      return 354; // Default height for smaller screens
-    }
-  }
-
-  // Recalculate the player sizes on window resize
-  window.addEventListener('resize', function() {
-    Object.keys(players).forEach(function(videoId) {
-      players[videoId].setSize(getPlayerWidth(), getPlayerHeight());
-    });
-  });
 </script>
 
 {% if chapters %}

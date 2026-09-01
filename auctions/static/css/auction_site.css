@@ -800,3 +800,36 @@ body:has(.tos-banner) {
 .table {
     --bs-table-bg: transparent;
 }
+
+/* Embedded tutorial videos -------------------------------------------------
+   `youtube_embed.html` used to size the player in JavaScript: 875x531 on
+   anything 1024px and wider, 583x354 below that. 583px is wider than every
+   phone in use, so every page carrying a tutorial -- the promo page, the
+   auction help page, /support/ -- scrolled sideways on a phone, and the whole
+   page came with it: the iframe is out of flow's reach, so nothing else could
+   shrink to compensate.
+
+   Sized here instead. The container caps at the desktop width and at 100% of
+   whatever it is put in, whichever is smaller, and holds the 16:9 box that
+   YouTube wants; the player fills it. The placeholder div is styled too,
+   because the YouTube API replaces it with the iframe in place and the box has
+   to be the right shape before the API has loaded -- and still be the right
+   shape inside a `collapse` that was `display:none` when the player was
+   built. */
+.video-container {
+    position: relative;
+    width: 100%;
+    max-width: 875px;
+    aspect-ratio: 16 / 9;
+    margin-bottom: 1rem;
+}
+
+.video-container > div,
+.video-container iframe {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    max-width: 100%;
+    border: 0;
+}

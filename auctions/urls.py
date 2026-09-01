@@ -1,7 +1,7 @@
 from allauth.socialaccount import views as socialaccount_views
 from django.contrib.auth.decorators import login_required
 from django.urls import include, path, re_path
-from django.views.generic.base import TemplateView
+from django.views.generic.base import RedirectView, TemplateView
 from django_ses.views import SESEventWebhookView
 
 from . import app_links, apple_notifications, donation_views, passkit_views, views
@@ -652,7 +652,11 @@ urlpatterns = [
         name="remote_print_job_cancel",
     ),
     path("faq/", views.FAQ.as_view(), name="faq"),
-    path("contact/", views.ContactView.as_view(), name="contact"),
+    path("support/", views.SupportView.as_view(), name="support"),
+    # /contact/ was this page's address, and it is what the App Store Support URL and every older
+    # link still point at. Unnamed on purpose: it is not a destination, and a name would put it in
+    # front of the palette route audit as a page to describe.
+    path("contact/", RedirectView.as_view(pattern_name="support", permanent=True)),
     path(
         "auctions/<slug:slug>/locations/",
         views.PickupLocations.as_view(),

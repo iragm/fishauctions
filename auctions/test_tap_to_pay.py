@@ -373,6 +373,15 @@ class SquareAccessGateDisclosureTests(StandardTestCase):
             reverse("club_membership_settings", kwargs={"slug": club.slug}), HTTP_USER_AGENT=IOS_UA
         ).content.decode()
 
+    # Every test that renders this page names the site-level Square credentials, because this page
+    # asks a second question square_seller.html never asks -- whether the *site* has a Square app
+    # at all -- and that check sits ahead of the per-account gate in the template, deliberately:
+    # "nobody here can connect Square" is a different answer from "your account is in the queue",
+    # and sending a club admin to a request-access mailto on a site with no Square app would be
+    # asking them to queue for something nobody can be given. The dev .env carries sandbox
+    # credentials and .env.example -- which is the whole of CI's .env -- carries none, so a test
+    # that leaves them unpinned is really a test of whichever .env it ran under.
+    @override_settings(SQUARE_APPLICATION_ID="sq0idp-x", SQUARE_CLIENT_SECRET="sq0csp-x")
     def test_the_clubs_payment_settings_do_not_show_a_bare_square_heading(self):
         """The fourth surface, and the worst-looking one.
 
@@ -387,11 +396,19 @@ class SquareAccessGateDisclosureTests(StandardTestCase):
         self.assertIn("reviewed before they're switched on", html)
         self.assertIn("Contact us and request access", html)
 
+    @override_settings(SQUARE_APPLICATION_ID="sq0idp-x", SQUARE_CLIENT_SECRET="sq0csp-x")
     def test_the_clubs_payment_settings_still_connect_once_enabled(self):
         self.user.userdata.square_enabled = True
         self.user.userdata.save()
         html = self._club_settings_html()
         self.assertIn("Connect a Square account for this club", html)
+        self.assertNotIn("Contact us and request access", html)
+
+    @override_settings(SQUARE_APPLICATION_ID="", SQUARE_CLIENT_SECRET="")
+    def test_a_site_with_no_square_app_says_that_instead_of_offering_the_queue(self):
+        """The other half of the pin above, and the reason the gate disclosure sits under it."""
+        html = self._club_settings_html()
+        self.assertIn("Square isn't configured on this site", html)
         self.assertNotIn("Contact us and request access", html)
 
     def test_the_mailto_covers_a_club_as_well_as_an_auction(self):

@@ -15,8 +15,8 @@ FAQ
           </div>
           <br><br>
         {% endfor %}
-        {% comment %}The address stays hidden from anonymous visitors (scrapers), but "(Sign in to see email)" is not a contact method -- and this page is the App Store Support URL, which App Review opens with no session. /contact/ emails the same address without publishing it.{% endcomment %}
-        Still got questions? {% if request.user.is_authenticated %}Email me: {{admin_email|urlize}}{% else %}<a href="{% url 'contact' %}">Send us a message</a>{% endif %}<br>
+        {% comment %}Nobody gets the address here any more, signed in or not: it was published to every account on the site, which is a scraper away from being published outright, and /support/ reaches the same inbox without printing it. The rest of that page -- an agent, the videos -- answers more questions than an email does anyway. This page is also the App Store Support URL, opened by App Review with no session, so the link has to work signed out.{% endcomment %}
+        Still got questions? <a href="{% url 'support' %}">Get help</a><br>
 {% endblock %}
 {% block extra_js %}
 <script type='text/javascript'>pageView();</script>

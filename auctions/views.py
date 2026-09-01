@@ -352,15 +352,6 @@ logger = logging.getLogger(__name__)
 UNASSIGNED_BIDDER_NUMBER_LABEL = "not assigned"
 
 
-class AdminEmailMixin:
-    """Add an admin_email value from settings to the context of a request"""
-
-    def get_context_data(self, **kwargs):
-        context = super().get_context_data(**kwargs)
-        context["admin_email"] = settings.ADMINS[0][1]
-        return context
-
-
 class HTMxTableView(SingleTableMixin, FilterView):
     """Shared behavior for list views that render a full page plus an HTMX table partial."""
 
@@ -4105,7 +4096,7 @@ class AuctionLots(LoginRequiredMixin, AuctionViewMixin, HTMxTableView):
         return kwargs
 
 
-class AuctionHelp(LoginRequiredMixin, AdminEmailMixin, AuctionViewMixin, TemplateView):
+class AuctionHelp(LoginRequiredMixin, AuctionViewMixin, TemplateView):
     template_name = "auction_help.html"
 
     def dispatch(self, request, *args, **kwargs):
@@ -9632,7 +9623,7 @@ class AuctionInfo(FormMixin, DetailView, AuctionViewMixin):
             return self.form_invalid(form)
 
 
-class FAQ(AdminEmailMixin, ListView):
+class FAQ(ListView):
     """Show all questions"""
 
     model = FAQ
@@ -9657,13 +9648,19 @@ class FAQ(AdminEmailMixin, ListView):
         return context
 
 
-class ContactView(FormView):
-    """A way to reach a human that does not need an account.
+class SupportView(FormView):
+    """Every way to get help, on one page, ending in a way to reach a human with no account.
 
-    The App Store's Support URL is opened by App Review in a plain browser with no session, and the
-    only page that could serve as one was /faq/, which ended with the site owner's address for
-    signed-in users and the words "(Sign in to see email)" for everybody else. That is a Guideline
-    1.5 metadata rejection waiting to happen, and a metadata rejection costs a review round trip.
+    The page leads with connecting an AI agent (``/ai/``), because that answers a question about
+    somebody's own auction in seconds where an email answers it in days. Then the FAQ, then the two
+    tutorial videos -- collapsed, because they are half an hour of video and the people who want
+    them know they want them -- and last the message form.
+
+    The form is the part with a rule attached. The App Store's Support URL is opened by App Review
+    in a plain browser with no session, and the only page that could serve as one was /faq/, which
+    ended with the site owner's address for signed-in users and the words "(Sign in to see email)"
+    for everybody else. That is a Guideline 1.5 metadata rejection waiting to happen, and a metadata
+    rejection costs a review round trip.
 
     Hiding the address from anonymous visitors is a real measure against scrapers and stays exactly
     as it was: this page never renders it. The message is emailed to ``settings.ADMINS[0][1]`` with
@@ -9671,10 +9668,26 @@ class ContactView(FormView):
 
     Deliberately open to everybody, signed in or not -- a support page that needs an account is not
     a support page. reCAPTCHA (the same invisible v2 as signup) is what stands in for the login.
+    Everything above the form is on the same page rather than behind a link, so the no-session
+    reader gets the whole of it; the one link that needs an account is the agent one, and an agent
+    connected to nothing is no use to somebody who has not signed up yet anyway.
+
+    Lives at /support/; /contact/ is a permanent redirect, since that is the address the App Store
+    metadata and older links carry.
     """
 
-    template_name = "contact.html"
+    template_name = "support.html"
     form_class = ContactForm
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        # The same two videos the promo page shows, and the same chapter lists -- one auction runs
+        # online and one in person, and which one somebody needs is the first thing they know.
+        context["online_tutorial"] = settings.ONLINE_TUTORIAL_YOUTUBE_ID
+        context["online_tutorial_chapters"] = settings.ONLINE_TUTORIAL_CHAPTERS
+        context["in_person_tutorial"] = settings.IN_PERSON_TUTORIAL_YOUTUBE_ID
+        context["in_person_tutorial_chapters"] = settings.IN_PERSON_TUTORIAL_CHAPTERS
+        return context
 
     #: Messages one address can send in an hour. reCAPTCHA is the front door and this is the floor
     #: under it: a site with no keys configured has no captcha at all, and a solved captcha is not
@@ -9701,7 +9714,7 @@ class ContactView(FormView):
         return kwargs
 
     def get_success_url(self):
-        return reverse("contact")
+        return reverse("support")
 
     def form_valid(self, form):
         from post_office import mail
@@ -9716,8 +9729,10 @@ class ContactView(FormView):
             )
             return super().form_valid(form)
 
-        name = form.cleaned_data["name"]
-        email = form.cleaned_data["email"]
+        # Off the account when they are signed in, off the form when they are not -- the form
+        # doesn't even render the two fields to somebody it already knows. See ContactForm.
+        name = form.sender_name
+        email = form.sender_email
         signed_in = self.request.user.username if self.request.user.is_authenticated else "not signed in"
         mail.send(
             settings.ADMINS[0][1],
@@ -9733,7 +9748,7 @@ class ContactView(FormView):
         )
         messages.success(
             self.request,
-            "Thanks - your message is on its way. We'll reply to the email address you gave us.",
+            f"Thanks - your message is on its way. We'll reply to {email}.",
         )
         return super().form_valid(form)
 
@@ -15821,7 +15836,7 @@ class AdminUserFlow(AdminOnlyViewMixin, TemplateView):
         return context
 
 
-class ClubMap(AdminEmailMixin, TemplateView):
+class ClubMap(TemplateView):
     template_name = "clubs.html"
 
     def dispatch(self, request, *args, **kwargs):

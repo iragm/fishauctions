@@ -25,8 +25,9 @@
   </div>
   <div>
     <h5>Still need help?</h5>
-    Contact me at {{ admin_email | urlize }}<br>
-    <small><span class='text-muted'>Please, watch the video and read the FAQ <span class='text-warning'>before</span> emailing.  This is a volunteer-run project and help is provided on a limited basis.</span></small>
+    {% comment %}The address itself is not printed anywhere public any more -- /support/ reaches the same inbox, and leads with connecting an agent, which answers a question about this auction faster than any email will.{% endcomment %}
+    <a href="{% url 'support' %}">Get help</a><br>
+    <small><span class='text-muted'>Please, watch the video and read the FAQ <span class='text-warning'>before</span> writing in.  This is a volunteer-run project and help is provided on a limited basis.</span></small>
   </div>
 
 

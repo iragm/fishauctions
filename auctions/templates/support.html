@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% load crispy_forms_tags %}
+{% block title %}Help{% endblock %}
+{% comment %}
+  The App Store Support URL lands here (and /faq/ links here for anyone not signed in). Everything
+  that answers a question is on this page rather than behind a link, so a reader with no session
+  gets all of it, and the message form at the bottom never renders an email address -- hiding that
+  from anonymous visitors is what the form exists to replace, not something to undo here. The one
+  link that asks for an account is the agent one, which is the point of it.
+{% endcomment %}
+{% block content %}
+<div class="container py-4">
+  <h1 class="h4 mb-3">Need help?</h1>
+  <div class="help-note">
+    <i class="bi bi-lightbulb-fill"></i>
+    <div>
+      By far the quickest way to get help is to <a href="{% url 'user_api_keys' %}">connect an AI agent</a>
+      and ask it questions - it can answer questions about and troubleshoot any aspect of your auction
+      in seconds.
+    </div>
+  </div>
+
+  <h2 class="h5 mt-4">Frequently asked questions</h2>
+  <p><a href="{% url 'faq' %}">The FAQ</a> answers most questions about bidding, invoices and running an auction.</p>
+
+  <h2 class="h5 mt-4">Video tutorials</h2>
+  <p class="mb-2">Each one walks through running an auction from start to finish.</p>
+  <p class="mb-3">
+    <button class="btn btn-primary btn-sm" type="button" data-bs-toggle="collapse" data-bs-target="#tutorial-videos" aria-expanded="false" aria-controls="tutorial-videos">
+      <i class="bi bi-play-btn"></i> Watch the tutorial videos
+    </button>
+  </p>
+  {% comment %}Collapsed by default: half an hour of video is not what somebody who came here to send a message needs to scroll past, and the chapter list under each video is longer than the rest of this page.{% endcomment %}
+  <div class="collapse" id="tutorial-videos">
+    <h3 class="h6">Running an online auction</h3>
+    {% include 'youtube_embed.html' with videoId=online_tutorial chapters=online_tutorial_chapters %}
+    <h3 class="h6 mt-4">Running an in-person auction</h3>
+    {% include 'youtube_embed.html' with videoId=in_person_tutorial chapters=in_person_tutorial_chapters %}
+  </div>
+
+  {% comment %}Not a second help-note: one note per page is the rule in style_reference.md, and the one at the top is the sentence somebody would get wrong if it were missing. This is the lead-in to the form under it.{% endcomment %}
+  <h2 class="h5 mt-4">Still got questions?</h2>
+  <p>Reach out, always happy to chat{% if not form.sender_is_known %} - we'll get back to you by email{% endif %}.</p>
+  <div class="row">
+    <div class="col-12 col-lg-6">
+      {% crispy form form.helper %}
+    </div>
+  </div>
+</div>
+{% endblock %}
+{% block extra_js %}
+<script type='text/javascript'>pageView();</script>
+{% endblock %}
