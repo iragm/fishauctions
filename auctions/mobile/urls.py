@@ -25,6 +25,7 @@ from .views import (
     MobileNotificationPrefsView,
     MobileOfflineSnapshotView,
     MobileOfflineSyncView,
+    MobilePaymentAttemptCloseView,
     MobilePaymentAuthorizationView,
     MobilePaymentConfirmView,
     MobilePaymentCreateView,
@@ -109,6 +110,11 @@ urlpatterns = [
     path("payments/authorization/", MobilePaymentAuthorizationView.as_view(), name="mobile-payment-authorization"),
     path("payments/create/", MobilePaymentCreateView.as_view(), name="mobile-payment-create"),
     path("payments/confirm/", MobilePaymentConfirmView.as_view(), name="mobile-payment-confirm"),
+    path(
+        "payments/attempt/close/",
+        MobilePaymentAttemptCloseView.as_view(),
+        name="mobile-payment-attempt-close",
+    ),
     # Command palette
     path("command-palette/", MobileCommandPaletteView.as_view(), name="mobile-command-palette"),
     path("command-palette/log/", MobileCommandPaletteLogView.as_view(), name="mobile-command-palette-log"),

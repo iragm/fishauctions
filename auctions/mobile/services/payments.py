@@ -1,9 +1,12 @@
 import logging
+import uuid
+from datetime import timedelta
 from decimal import Decimal
 
 from django.conf import settings
 from django.db import transaction
 from django.db.models import Q
+from django.utils import timezone
 
 logger = logging.getLogger(__name__)
 
@@ -19,14 +22,16 @@ class PaymentVerificationError(ValueError):
 
 
 class PaymentAlreadyChargedError(PaymentVerificationError):
-    """The stable per-invoice idempotency key made Square return an EARLIER completed charge.
+    """``confirm`` was handed a Square payment that is already recorded on this invoice.
 
-    The create idempotency key is stable per invoice, so if the balance changed after an earlier Tap
-    to Pay charge, re-tapping makes the on-device SDK reuse that key and Square returns the original
-    (already-recorded) payment instead of charging the new amount. No new money moves, so re-tapping
-    is futile. Raised with a cashier-facing message naming the prior charge and what is still due, so
-    the operator collects the remainder another way rather than tapping again. Subclasses
-    ``PaymentVerificationError`` (hence ``ValueError``) so existing handlers still catch it.
+    Originally the other face of the stable-idempotency-key mistake: the key was fixed per invoice,
+    so after a balance change a re-tap made Square return the ORIGINAL completed charge instead of
+    charging the new amount. The key is per-create now (see ``create_mobile_payment``), so that
+    particular route is closed -- but a client can still report a payment id this invoice has
+    already applied, and the answer is the same one: no new money moved, re-tapping is futile.
+    Raised with a cashier-facing message naming the prior charge and what is still due, so the
+    operator collects the remainder another way. Subclasses ``PaymentVerificationError`` (hence
+    ``ValueError``) so existing handlers still catch it.
     """
 
     def __init__(self, user_message):
@@ -34,6 +39,27 @@ class PaymentAlreadyChargedError(PaymentVerificationError):
         # carries no stack trace or system internals, so the view surfaces it to the cashier verbatim.
         # Exposing it via an explicit attribute — instead of str(exc) at the boundary — keeps that
         # intent in code and keeps the exception's stringification out of the HTTP response.
+        super().__init__(user_message)
+        self.user_message = user_message
+
+
+class TapToPayAttemptOpen(ValueError):
+    """A charge attempt on this invoice was started and never finished, so ``create`` refuses.
+
+    The card may already have been charged on the device with no ``confirm`` reaching us, which is
+    the one double-charge window left once the idempotency key became per-create. The message is
+    written for somebody standing at a checkout desk with a queue behind them, names the time the
+    attempt started, and says the single useful thing: check Square before charging again.
+
+    Ages out (``PaymentService.OPEN_ATTEMPT_TIMEOUT``) so a wedged row cannot strand an invoice --
+    and the app closes attempts itself on every path where the SDK returned without capturing, so
+    an ordinary decline never lands here. Subclasses ``ValueError`` so existing handlers catch it,
+    but the create view maps it to a 409 *before* the generic handler so the wording survives.
+    """
+
+    def __init__(self, user_message):
+        # Cashier-facing and free of internals, like PaymentAlreadyChargedError: the app renders it
+        # verbatim through its existing error path, so the wording stays ours and needs no release.
         super().__init__(user_message)
         self.user_message = user_message
 
@@ -63,6 +89,11 @@ class PaymentService:
        idempotency_key, user)``; this service re-fetches the payment from Square
        (GetPayment), **verifies** it (status/amount/currency/location/reference),
        and records the result on the invoice.
+    4. Every path that ends without a capture -- cancel, decline, timeout, any SDK
+       error -- is reported by the app to ``close_attempt``. Step 1 records an open
+       :class:`~auctions.models.TapToPayAttempt` and refuses while one is open, which
+       is the whole of the double-charge protection: see that model for why the old
+       stable idempotency key was not it.
 
     Square Mobile Payments SDK (Tap to Pay) integration lives entirely in the
     Flutter app.  This service only handles server-side payment context creation
@@ -215,7 +246,7 @@ class PaymentService:
         ``eligible: true`` with no token, which the app handles by showing the setup UI and skipping
         the warm-up. Nothing here charges anything or has side effects.
         """
-        if not PaymentService._user_can_take_payments(user):
+        if not PaymentService.user_can_take_payments(user):
             return {
                 "eligible": False,
                 "can_accept_terms": False,
@@ -263,7 +294,7 @@ class PaymentService:
         return str(seller)
 
     @staticmethod
-    def _user_can_take_payments(user) -> bool:
+    def user_can_take_payments(user) -> bool:
         """True when this user administers any auction or club that could take a payment.
 
         Mirrors ``_check_admin_access`` (which needs an invoice) at the level the warm-up endpoint
@@ -288,6 +319,115 @@ class PaymentService:
             .exists()
         )
 
+    #: How long an attempt stays open before it stops blocking a new one. A tap takes seconds; this
+    #: is the allowance for a cashier who started one, got distracted, and came back. Long enough
+    #: that a captured-but-unconfirmed charge is still being warned about when the retry comes,
+    #: short enough that an app killed mid-tap cannot hold the desk up for a shift.
+    OPEN_ATTEMPT_TIMEOUT = timedelta(minutes=5)
+
+    @staticmethod
+    def _expire_stale_attempts(invoice):
+        """Close attempts older than the timeout, so a wedged row can't strand an invoice."""
+        from auctions.models import TapToPayAttempt
+
+        cutoff = timezone.now() - PaymentService.OPEN_ATTEMPT_TIMEOUT
+        TapToPayAttempt.objects.filter(invoice=invoice, outcome="", createdon__lt=cutoff).update(
+            outcome=TapToPayAttempt.OUTCOME_EXPIRED, closed_at=timezone.now()
+        )
+
+    @staticmethod
+    def _open_attempt(invoice):
+        """The attempt currently blocking a new charge on this invoice, or None."""
+        from auctions.models import TapToPayAttempt
+
+        PaymentService._expire_stale_attempts(invoice)
+        return TapToPayAttempt.objects.filter(invoice=invoice, outcome="").order_by("-createdon").first()
+
+    @staticmethod
+    def _attempt_in_progress_message(attempt) -> str:
+        """What the cashier reads. Written for a desk, not for a log.
+
+        The time is rendered in the site's active timezone -- the one the rest of the site prints
+        times in -- because the person reading it is standing next to the till, comparing it with
+        the clock on the wall and with the Square app in their other hand.
+        """
+        started = timezone.localtime(attempt.createdon).strftime("%I:%M %p").lstrip("0").lower()
+        return (
+            f"This invoice may already have been charged - a payment was started at {started} and "
+            "never finished. Check it in Square before charging again."
+        )
+
+    @staticmethod
+    def _open_new_attempt(invoice, user):
+        """Record an open attempt and return the id the device charges with.
+
+        Invoice-derived so a charge is still traceable from the Square dashboard back to an
+        invoice, plus a nonce so it names *this* attempt: the SDK's ``paymentAttemptId`` is not
+        Square's server-side ``idempotency_key``, and reusing one is an error rather than a dedup
+        (``payment_attempt_id_reused``, which is what a declined card's retry used to hit). Square
+        caps both at 45 characters, and this stays well inside it.
+        """
+        from auctions.models import TapToPayAttempt
+
+        attempt_id = f"taptopay-inv-{invoice.pk}-{uuid.uuid4().hex[:8]}"
+        return TapToPayAttempt.objects.create(invoice=invoice, created_by=user, attempt_id=attempt_id)
+
+    @staticmethod
+    def close_attempt(attempt_id: str, outcome: str, user) -> dict:
+        """Close an open attempt the SDK returned from without capturing. Best-effort, by design.
+
+        Without this the feature backfires: declines are routine, a declined card would leave the
+        attempt open, ``create`` would refuse the retry, and the cashier would be blocked from the
+        one action that is definitely correct. The app calls it on cancel, decline, timeout,
+        authorize failure and any SDK error, and never shows the cashier a bookkeeping error -- so
+        a 404 here (an older attempt already aged out, or a deployment without this endpoint) has
+        to be harmless.
+
+        Raises
+        ------
+        PermissionError  -- the caller does not administer the attempt's invoice.
+        LookupError      -- no such attempt.
+        ValueError       -- an outcome this endpoint does not accept.
+        """
+        from auctions.models import TapToPayAttempt
+
+        if outcome not in (TapToPayAttempt.OUTCOME_CANCELED, TapToPayAttempt.OUTCOME_FAILED):
+            msg = f"Unknown attempt outcome {outcome!r}"
+            raise ValueError(msg)
+        attempt = (
+            TapToPayAttempt.objects.select_related("invoice", "invoice__auction", "invoice__club")
+            .filter(attempt_id=attempt_id)
+            .first()
+        )
+        if not attempt:
+            msg = f"Tap to Pay attempt {attempt_id} not found"
+            raise LookupError(msg)
+        # Same gate as create/confirm: closing an attempt is a statement about somebody's money.
+        if not PaymentService._check_admin_access(attempt.invoice, user):
+            msg = "You do not have permission to take payment for this invoice"
+            raise PermissionError(msg)
+        if not attempt.outcome:
+            attempt.outcome = outcome
+            attempt.closed_at = timezone.now()
+            attempt.save(update_fields=["outcome", "closed_at"])
+        # Already closed is a success: the app retries best-effort and confirm may have won the race.
+        return {"attempt_id": attempt.attempt_id, "outcome": attempt.outcome}
+
+    @staticmethod
+    def _capture_attempts(invoice, payment_id: str):
+        """Close every open attempt on this invoice as captured. Never blocks recording a payment."""
+        from auctions.models import TapToPayAttempt
+
+        try:
+            TapToPayAttempt.objects.filter(invoice=invoice, outcome="").update(
+                outcome=TapToPayAttempt.OUTCOME_CAPTURED,
+                closed_at=timezone.now(),
+                payment_id=payment_id[:255],
+            )
+        except Exception:
+            # Bookkeeping must never undo a verified charge that is already on the invoice.
+            logger.exception("Failed to close Tap to Pay attempts for invoice %s", invoice.pk)
+
     @staticmethod
     def create_mobile_payment(invoice_pk: int, user, request=None) -> dict:
         """Validate an invoice and return payment context for the mobile SDK.
@@ -299,10 +439,13 @@ class PaymentService:
 
         Raises
         ------
-        PermissionError  — user is not an admin of the invoice's auction/club.
-        ValueError       — invoice already paid, Square not configured,
-                           amount is zero/negative.
-        LookupError      — invoice not found.
+        PermissionError     — user is not an admin of the invoice's auction/club.
+        TapToPayAttemptOpen — a charge attempt on this invoice was started and never finished; the
+                              card may already have been charged. Carries the cashier-facing
+                              message. Subclasses ValueError, so catch it first.
+        ValueError          — invoice already paid, Square not configured,
+                              amount is zero/negative.
+        LookupError         — invoice not found.
         """
         from auctions.models import Invoice
 
@@ -351,6 +494,22 @@ class PaymentService:
             msg = "No amount is due on this invoice"
             raise ValueError(msg)
 
+        # An attempt already open means a charge was started on this invoice and never finished --
+        # possibly captured on-device with the confirm lost. Refuse rather than hand out another
+        # token, and say why in words a cashier can act on. Checked after the cheap validation so a
+        # paid or misconfigured invoice still gets its own (more useful) answer, and after the token
+        # fetch so the invoice row is never locked across a call to Square's refresh endpoint.
+        #
+        # Locked, because two desks running quick checkout on the same person is exactly the shape
+        # of double charge this exists to stop: without it both creates read "nothing open" and both
+        # get a token.
+        with transaction.atomic():
+            locked_invoice = Invoice.objects.select_for_update().get(pk=invoice.pk)
+            open_attempt = PaymentService._open_attempt(locked_invoice)
+            if open_attempt:
+                raise TapToPayAttemptOpen(PaymentService._attempt_in_progress_message(open_attempt))
+            attempt = PaymentService._open_new_attempt(locked_invoice, user)
+
         # Nothing below here can fail, so this records exactly the calls that hand out a token.
         PaymentService._record_token_handout(invoice, user, request)
 
@@ -366,11 +525,20 @@ class PaymentService:
             # so this ships the seller's OAuth access token to the device by design — the SDK
             # requires it. Prefer the shortest-lived token the seller's Square OAuth allows.
             "access_token": access_token,
-            # Stable, invoice-derived idempotency key — NOT random. The Mobile Payments SDK keys the
-            # on-device charge with this, so if create -> tap is retried for the same (still-unpaid)
-            # invoice the duplicate collapses to a single Square charge instead of double-charging.
-            # Deterministic so it is identical across retries; Square caps idempotency_key at 45 chars.
-            "idempotency_key": f"taptopay-inv-{invoice_pk}",
+            # One value per create, recorded as an open attempt against this invoice. The app passes
+            # it to the Mobile Payments SDK as ``paymentAttemptId``, which names *one attempt*: a
+            # repeat is an error (``payment_attempt_id_reused``), not a dedup. This used to be a
+            # stable per-invoice key, described in a comment about the Payments API's server-side
+            # ``idempotency_key`` -- a different concept with the opposite behaviour. Nothing ever
+            # deduplicated; what actually happened is that the retry after a declined card failed,
+            # which is Tap to Pay failing exactly when it is needed. Double-charge safety lives in
+            # the attempt row instead (see TapToPayAttempt), which can tell "already charged" from
+            # "the last card was declined". Invoice-derived so a charge is still traceable in the
+            # Square dashboard; Square caps both fields at 45 characters.
+            "attempt_id": attempt.attempt_id,
+            # The same value under the old name. An app build that predates ``attempt_id`` reads
+            # this one and derives its own attempt id from it, so both are per-create either way.
+            "idempotency_key": attempt.attempt_id,
             "square_environment": settings.SQUARE_ENVIRONMENT,
         }
 
@@ -391,10 +559,9 @@ class PaymentService:
         Raises
         ------
         PermissionError           — user is not an admin of the invoice's auction/club.
-        PaymentAlreadyChargedError— the stable idempotency key made Square return an earlier charge
-                                    already recorded on this invoice; no new money moved and the
-                                    message names the prior charge + remaining balance. Subclasses
-                                    PaymentVerificationError (so catch it first).
+        PaymentAlreadyChargedError— the fetched payment is already recorded on this invoice; no new
+                                    money moved and the message names the prior charge + remaining
+                                    balance. Subclasses PaymentVerificationError (catch it first).
         PaymentVerificationError  — the card may have been charged but the fetched payment failed a
                                     verification check (status/amount/currency/location/reference)
                                     or could not be fetched from Square. Subclasses ValueError.
@@ -494,12 +661,12 @@ class PaymentService:
             msg = f"Square payment {payment_id} is not completed (status={payment_status})"
             raise PaymentVerificationError(msg)
         if sq_amount != amount_cents or sq_currency != invoice.currency:
-            # Footgun guard: the create idempotency key is stable per invoice, so if the balance
-            # changed after an earlier Tap to Pay charge, re-tapping makes the SDK reuse that key and
-            # Square returns the ORIGINAL completed charge (already recorded here) instead of charging
-            # the new amount. That looks like an amount mismatch even though no new money moved — so
-            # when the fetched payment is one we have already applied to this invoice, raise a
-            # specific, actionable error (prior amount + what is still due) instead of the generic one.
+            # Footgun guard: the fetched payment can be one this invoice has already applied --
+            # historically because the create idempotency key was stable per invoice and Square
+            # returned the ORIGINAL charge after a balance change; now, only if a client reports an
+            # id we have already recorded. Either way it looks like an amount mismatch even though
+            # no new money moved, so raise a specific, actionable error (prior amount + what is
+            # still due) instead of the generic one.
             already_recorded = (
                 sq_reference_id == expected_reference_id
                 and InvoicePayment.objects.filter(
@@ -564,6 +731,10 @@ class PaymentService:
                 _process_invoice_membership_renewal(invoice, payment_method="Square", external_id=payment_id)
             except Exception:
                 logger.exception("Failed to process membership renewal for invoice %s (mobile Square)", invoice_pk)
+
+        # The charge is verified and recorded, so whatever attempt was open on this invoice ended
+        # in a capture. Closing it is what lets the next legitimate charge on this invoice through.
+        PaymentService._capture_attempts(invoice, payment_id)
 
         logger.info("Mobile Square payment confirmed for invoice %s: %s (new=%s)", invoice_pk, payment_id, created)
         return {

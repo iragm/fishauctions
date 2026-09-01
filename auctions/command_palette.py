@@ -1118,7 +1118,7 @@ def _can_take_payments(user):
     """
     from auctions.mobile.services.payments import PaymentService
 
-    return PaymentService._user_can_take_payments(user)
+    return PaymentService.user_can_take_payments(user)
 
 
 def _app_deep_link_items(request, ql=""):

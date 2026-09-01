@@ -30421,15 +30421,21 @@ class MobilePaymentConfirmTests(StandardTestCase):
                 "location_id",
                 "reference_id",
                 "access_token",
+                "attempt_id",
                 "idempotency_key",
                 "square_environment",
             },
         )
 
-    def test_create_idempotency_key_is_stable_and_invoice_derived(self):
-        # The on-device SDK keys the Tap to Pay charge with idempotency_key, so it must be stable
-        # across retries (not a fresh uuid per call) and differ between invoices — otherwise a retried
-        # create -> tap double-charges, or two invoices collide on Square's dedup.
+    def test_create_issues_a_fresh_attempt_id_every_time(self):
+        """The value the app hands the SDK as ``paymentAttemptId`` names ONE attempt.
+
+        It used to be a stable per-invoice string, with a comment describing the Payments API's
+        server-side ``idempotency_key`` — a different concept with the opposite behaviour. Nothing
+        ever deduplicated; what actually happened, on hardware, is that the retry after a declined
+        card was refused by Square with ``payment_attempt_id_reused``, which is Tap to Pay failing
+        exactly when it is needed. Double-charge safety is the attempt record now, not this string.
+        """
         from auctions.mobile.services.payments import PaymentService
 
         other_tos = AuctionTOS.objects.create(
@@ -30443,15 +30449,18 @@ class MobilePaymentConfirmTests(StandardTestCase):
 
         with patch.object(PaymentService, "_get_seller_for_invoice", return_value=self._mock_seller()[0]):
             first = PaymentService.create_mobile_payment(invoice_pk=self.pay_invoice.pk, user=self.admin_user)
+            # The attempt has to be closed the way a decline closes it, or create refuses the retry.
+            PaymentService.close_attempt(attempt_id=first["attempt_id"], outcome="failed", user=self.admin_user)
             again = PaymentService.create_mobile_payment(invoice_pk=self.pay_invoice.pk, user=self.admin_user)
             other = PaymentService.create_mobile_payment(invoice_pk=other_invoice.pk, user=self.admin_user)
 
-        # Deterministic: two creates for the same invoice yield the identical key (a uuid would not).
-        self.assertEqual(first["idempotency_key"], again["idempotency_key"])
-        self.assertIn(str(self.pay_invoice.pk), first["idempotency_key"])  # derived from the invoice pk
-        # Distinct invoices must not share an idempotency key.
-        self.assertNotEqual(first["idempotency_key"], other["idempotency_key"])
-        self.assertLessEqual(len(first["idempotency_key"]), 45)  # Square's idempotency_key length cap
+        self.assertNotEqual(first["attempt_id"], again["attempt_id"])
+        self.assertNotEqual(first["attempt_id"], other["attempt_id"])
+        # Still invoice-derived, so a charge is traceable from the Square dashboard to an invoice.
+        self.assertIn(str(self.pay_invoice.pk), first["attempt_id"])
+        self.assertLessEqual(len(first["attempt_id"]), 45)  # Square caps both fields at 45 chars
+        # The old field name carries the same value, for app builds that predate attempt_id.
+        self.assertEqual(first["idempotency_key"], first["attempt_id"])
 
     def test_create_blocks_seller_without_tap_to_pay_scope(self):
         # A legacy Square account (token lacks PAYMENTS_WRITE_IN_PERSON) is blocked before the device

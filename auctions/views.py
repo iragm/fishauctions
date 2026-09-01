@@ -167,6 +167,7 @@ from .forms import (
     ClubMoneyForm,
     ClubPayPalCredentialsForm,
     ClubTreasurerReportForm,
+    ContactForm,
     CreateAuctionForm,
     CreateEditAuctionTOS,
     CreateImageForm,
@@ -9656,6 +9657,87 @@ class FAQ(AdminEmailMixin, ListView):
         return context
 
 
+class ContactView(FormView):
+    """A way to reach a human that does not need an account.
+
+    The App Store's Support URL is opened by App Review in a plain browser with no session, and the
+    only page that could serve as one was /faq/, which ended with the site owner's address for
+    signed-in users and the words "(Sign in to see email)" for everybody else. That is a Guideline
+    1.5 metadata rejection waiting to happen, and a metadata rejection costs a review round trip.
+
+    Hiding the address from anonymous visitors is a real measure against scrapers and stays exactly
+    as it was: this page never renders it. The message is emailed to ``settings.ADMINS[0][1]`` with
+    the sender's address as ``Reply-To``, so answering is one click and nothing is published.
+
+    Deliberately open to everybody, signed in or not -- a support page that needs an account is not
+    a support page. reCAPTCHA (the same invisible v2 as signup) is what stands in for the login.
+    """
+
+    template_name = "contact.html"
+    form_class = ContactForm
+
+    #: Messages one address can send in an hour. reCAPTCHA is the front door and this is the floor
+    #: under it: a site with no keys configured has no captcha at all, and a solved captcha is not
+    #: a promise that the next thousand messages are worth reading. Deliberately generous -- a
+    #: person with a real problem writes two or three, not six.
+    MESSAGES_PER_HOUR = 5
+
+    def _over_the_limit(self, request) -> bool:
+        from auctions.mobile.services.ar import _client_ip
+
+        key = f"contact-form:{_client_ip(request) or 'unknown'}"
+        count = cache.get_or_set(key, 0, timeout=3600)
+        if count >= self.MESSAGES_PER_HOUR:
+            return True
+        try:
+            cache.incr(key)
+        except ValueError:  # the window expired between the read and the increment
+            cache.set(key, 1, timeout=3600)
+        return False
+
+    def get_form_kwargs(self):
+        kwargs = super().get_form_kwargs()
+        kwargs["user"] = self.request.user
+        return kwargs
+
+    def get_success_url(self):
+        return reverse("contact")
+
+    def form_valid(self, form):
+        from post_office import mail
+
+        if self._over_the_limit(self.request):
+            # Say so rather than pretending it was sent: somebody who has genuinely written five
+            # messages in an hour needs to know the sixth is not on its way.
+            messages.error(
+                self.request,
+                "That's a lot of messages in a short time - please give us a little while to reply "
+                "to the ones you've already sent.",
+            )
+            return super().form_valid(form)
+
+        name = form.cleaned_data["name"]
+        email = form.cleaned_data["email"]
+        signed_in = self.request.user.username if self.request.user.is_authenticated else "not signed in"
+        mail.send(
+            settings.ADMINS[0][1],
+            subject=f"Contact form: {name}",
+            message=(
+                f"{name} <{email}> wrote from {Site.objects.get_current().domain}"
+                f" ({signed_in}):\n\n{form.cleaned_data['message']}"
+            ),
+            # Reply-To rather than From: the From address is the site's own routed sender (and on
+            # SES it is rewritten anyway), so putting a visitor's address there would fail SPF and
+            # land the one email that matters in spam.
+            headers={"Reply-To": email},
+        )
+        messages.success(
+            self.request,
+            "Thanks - your message is on its way. We'll reply to the email address you gave us.",
+        )
+        return super().form_valid(form)
+
+
 class PromoSite(TemplateView):
     template_name = "promo.html"
 
@@ -12195,15 +12277,24 @@ class SquareConnectView(LoginRequiredMixin, View):
     """Start the Square OAuth process for a seller"""
 
     def get(self, request):
-        # Square must be enabled for this user before they can onboard a seller account.
-        # The connect button is hidden in the UI when it isn't, but guard the endpoint too.
+        # Square must be enabled for this user before they can onboard a seller account: an open
+        # OAuth flow that collects money from strangers is a real fraud control, and this is the one
+        # place that enforces it. Land them on square_seller rather than the home page, because
+        # that page is where the gate is explained and where the request-access button lives --
+        # bouncing somebody home with a terse error is the dead end Part TTP-9 is about, and the
+        # entry points that used to render nothing now send people here on purpose.
         if not request.user.userdata.square_enabled:
-            messages.error(request, "Square isn't enabled for your account.")
-            return redirect(reverse("home"))
-        # Remember, for the callback, that this round trip started inside the app, so it can end
-        # with a "Return to the app" button rather than leaving the merchant on a web page they
-        # have to dismiss themselves. ``?return_to_app=1`` is the app's explicit way to say so when
-        # it opens this URL in an in-app browser view that carries no session of ours.
+            messages.error(
+                request,
+                "We review each account by hand before enabling card payments - ask us and we'll "
+                "usually have you set up the same day.",
+            )
+            return redirect(reverse("square_seller"))
+        # Remember, for the callback, that this round trip started inside the app, so it can end by
+        # redirecting to the auth session's callback scheme (and telling them to tap Done if that
+        # doesn't land) rather than leaving the merchant on a web page with nothing to do next.
+        # ``?return_to_app=1`` is the app's explicit way to say so when it opens this URL in a
+        # browser view that carries no session of ours.
         if session_opened_by_app(request) or request.GET.get("return_to_app"):
             mark_session_opened_by_app(request.session)
         _stash_club_for_payment_oauth(request)
@@ -12383,11 +12474,19 @@ class SquareCallbackView(LoginRequiredMixin, View):
         """End a successful connect: a confirmation page if the app started it, else ``web_url``.
 
         Apple's Tap to Pay review guide wants onboarding completed inside the app (requirement 2.2),
-        and the app routes this OAuth through an in-app browser view. That view has no idea the
-        merchant is finished, so without this page they'd sit on a web page and have to work out
-        that the Done button is what comes next. The page tells them; it cannot close the browser
-        view for them, since nothing in the app receives a ``fishauctions://`` URL from outside its
-        own WebView (see Part TTP-7).
+        and Square OAuth is a server-side flow -- the code is exchanged here, with our secret -- so
+        the merchant necessarily ends up looking at a web page in a browser view the app opened.
+        That view has no idea they are finished. Recording the onboarding video for the entitlement
+        review is what showed how bad that is: on camera it reads as the app handing you off to a
+        website and abandoning you, in the middle of the step 2.2 is about.
+
+        The page ends the step instead. It redirects to ``fishauctions-oauth://square-connected``,
+        which the app's ASWebAuthenticationSession (Chrome Auth Tab on Android) is watching for and
+        closes itself on, and it says "tap Done" underneath for anyone whose session doesn't
+        complete -- an older build, or a plain browser view. That scheme is deliberately NOT the
+        app's own ``fishauctions://``: nothing registers that one with the OS, the shell only ever
+        sees it inside its own WebView, and only a pending auth session can act on the OAuth one.
+        See ``auctions/templates/auctions/square_connected_app.html``.
         """
         if not session_opened_by_app(request):
             return redirect(web_url)

@@ -537,9 +537,38 @@ POST /api/mobile/payments/create/
           "location_id": "LXXXXXXXXXXXXXXXX",
           "reference_id": "123",
           "access_token": "EAAA...",
-          "idempotency_key": "taptopay-inv-123",
+          "attempt_id": "taptopay-inv-123-9f2c81aa",
+          "idempotency_key": "taptopay-inv-123-9f2c81aa",
           "square_environment": "sandbox"
         }
+
+    ``attempt_id`` is a NEW value per call and is what the app passes to the Mobile Payments SDK as
+    ``paymentAttemptId``. That names one attempt: a repeat is an error (``payment_attempt_id_reused``,
+    which is what a retry after a declined card used to hit), not Square's server-side dedup.
+    ``idempotency_key`` carries the same value for builds that predate ``attempt_id``.
+
+    Response 409 ``{"code": "attempt_in_progress"}``: an attempt on this invoice was started and
+    never finished, so the card may already have been charged with the confirm lost. ``detail`` is
+    written for a cashier and is shown verbatim. Attempts age out after a few minutes
+    (``PaymentService.OPEN_ATTEMPT_TIMEOUT``), so a wedged record cannot strand an invoice.
+
+POST /api/mobile/payments/attempt/close/
+    Report an attempt that ended without capturing: cancel, decline, timeout, authorize failure,
+    any SDK error. Without it a declined card would leave the attempt open and ``create`` would
+    refuse the retry — blocking the cashier from the one action that is definitely correct — so the
+    app calls it on every such path and treats it as best-effort. A capture is closed by ``confirm``,
+    not here.
+
+    Request::
+
+        { "attempt_id": "taptopay-inv-123-9f2c81aa", "outcome": "canceled" }   // or "failed"
+
+    Response 200::
+
+        { "attempt_id": "taptopay-inv-123-9f2c81aa", "outcome": "canceled" }
+
+    Closing an already-closed attempt is a success (confirm may have won the race). 404 means the
+    attempt is unknown — including on a deployment without this endpoint — which the app ignores.
 
 POST /api/mobile/payments/confirm/
     Verify the on-device Tap to Pay charge (by payment_id) and record it on the invoice.
@@ -563,13 +592,16 @@ POST /api/mobile/payments/confirm/
           "receipt_url": "https://squareup.com/receipt/preview/GQTFp1ZlXdpoW4o6eGiZhbjosiDFf"
         }
 
+    A successful confirm also closes the invoice's open attempt as captured, which is what lets a
+    later legitimate charge on the same invoice through.
+
     Response 409: the charge could not be verified against Square (status/amount/currency/location/
     reference mismatch, or Square was unreachable). The card may already have been charged — the
     Square webhook reconciles the same payment by reference_id, so the client should refresh the
     invoice before charging again rather than retrying blindly. A ``"code": "already_charged"`` body
-    means the stable idempotency key returned an earlier charge already on the invoice (no new money
-    moved); ``detail`` names the prior charge and remaining balance, which the client should show as-is
-    so the cashier collects the rest another way instead of re-tapping.
+    means the fetched payment is already recorded on this invoice (no new money moved); ``detail``
+    names the prior charge and remaining balance, which the client should show as-is so the cashier
+    collects the rest another way instead of re-tapping.
 
 Command palette
 ---------------
@@ -677,6 +709,7 @@ from .serializers import (
     MobileLabelsPrintedSerializer,
     MobileLoginSerializer,
     MobileNotificationPrefsSerializer,
+    MobilePaymentAttemptCloseSerializer,
     MobilePaymentConfirmSerializer,
     MobilePaymentCreateSerializer,
     MobileRemotePrintProgressSerializer,
@@ -701,6 +734,7 @@ from .services.payments import (
     PaymentService,
     PaymentVerificationError,
     SquareReconnectRequired,
+    TapToPayAttemptOpen,
 )
 from .services.social_auth import (
     PENDING_TOKEN_SESSION_KEY,
@@ -1791,6 +1825,16 @@ class MobilePaymentCreateView(APIView):
             return Response(
                 {"detail": "You do not have permission to perform this action."}, status=status.HTTP_403_FORBIDDEN
             )
+        except TapToPayAttemptOpen as exc:
+            # A charge on this invoice was started and never finished, so the card may already have
+            # been charged with the confirm lost. 409 with the cashier-facing text, which the app
+            # shows verbatim -- the one thing worth saying at a checkout desk is "check Square
+            # before charging again", and it needs no app release to reword.
+            logger.info("Mobile payment create blocked: an attempt is still open.", exc_info=exc)
+            return Response(
+                {"detail": exc.user_message, "code": "attempt_in_progress"},
+                status=status.HTTP_409_CONFLICT,
+            )
         except SquareReconnectRequired as exc:
             # Surface a distinguishable signal (not a generic 400) so the app can show a
             # "Reconnect Square" prompt instead of a flat error.
@@ -1824,6 +1868,49 @@ class MobilePaymentAuthorizationView(APIView):
 
     def get(self, request):
         return Response(PaymentService.get_payment_authorization(request.user), status=status.HTTP_200_OK)
+
+
+class MobilePaymentAttemptCloseView(APIView):
+    """POST /api/mobile/payments/attempt/close/ — the SDK returned without capturing.
+
+    Load-bearing rather than bookkeeping. ``create`` refuses while an attempt is open, and declines
+    are routine: without this endpoint a declined card would leave the attempt open, the retry
+    would be refused, and the cashier would be blocked from the one action that is definitely
+    correct — which is the same failure the attempt record exists to remove, moved one step later.
+
+    The app calls it on every path where the SDK returned without a capture (cancel, decline,
+    timeout, authorize failure, any SDK error) and treats it as best-effort, never showing a
+    cashier a bookkeeping error. So a 404 from an older deployment is harmless by design, and an
+    already-closed attempt is a success rather than a conflict.
+    """
+
+    permission_classes = [IsMobileAuthenticated]
+    throttle_scope = "mobile_api"
+    throttle_classes = [ScopedRateThrottle]
+
+    def post(self, request):
+        serializer = MobilePaymentAttemptCloseSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        data = serializer.validated_data
+        try:
+            result = PaymentService.close_attempt(
+                attempt_id=data["attempt_id"], outcome=data["outcome"], user=request.user
+            )
+        except LookupError as exc:
+            logger.info("Mobile payment attempt close: unknown attempt.", exc_info=exc)
+            return Response({"detail": "Resource not found."}, status=status.HTTP_404_NOT_FOUND)
+        except PermissionError as exc:
+            logger.warning("Mobile payment attempt close failed: permission denied.", exc_info=exc)
+            return Response(
+                {"detail": "You do not have permission to perform this action."}, status=status.HTTP_403_FORBIDDEN
+            )
+        except ValueError as exc:
+            logger.warning("Mobile payment attempt close failed: invalid request data.", exc_info=exc)
+            return Response({"detail": "Invalid request."}, status=status.HTTP_400_BAD_REQUEST)
+
+        return Response(result, status=status.HTTP_200_OK)
 
 
 class MobilePaymentConfirmView(APIView):

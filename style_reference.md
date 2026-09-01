@@ -256,6 +256,13 @@ dead rather than merely unavailable. Judge it by the page:
   "Find this lot", `auction.html`'s "Scan lots", the lot-list scanning button in
   `lot_tile_page.html` / `lot_list_page.html`, Bluetooth label printing, and the
   command palette's "Lot scanning" / "Tap to Pay" rows in `command_palette.py`).
+- The Tap to Pay buttons in `quick_checkout_htmx.html` and `invoice.html` gate on
+  the same flag, and the invoice page is the one that needs the reasoning written
+  down, because people plainly do use it on desktop: what the admin gets there is
+  the *web* Square and PayPal buttons, which work. Tap to Pay is not an action
+  missing from the desktop page — it is the app's replacement for the buttons the
+  app has to hide, so a "this lives in the app" toast beside working payment
+  buttons would be noise on every invoice on the site.
 
 Reference implementation: the "Payment not available" button in
 `auctions/templates/invoice.html` — a plain `btn btn-primary` (no `disabled`)

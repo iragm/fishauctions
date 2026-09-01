@@ -102,3 +102,41 @@ class ScannerTemplateTests(SimpleTestCase):
         source = (REPO_ROOT / "auctions" / "templates" / "auctions" / "quick_check_in_users.html").read_text()
         self.assertIn("cameraScannerDiagnostics", source)
         self.assertIn("Camera not working?", source)
+
+
+class QuickCheckoutCameraStartsOffTests(SimpleTestCase):
+    """The checkout camera opens only when somebody asks for it, and stays as they left it.
+
+    It used to come up live on every load. That is right if scanning bidder cards is what you were
+    doing a moment ago, and wrong for every auction that doesn't print barcodes -- there the
+    cashier got a camera pointed at the room on each checkout, in front of the person they were
+    serving, with no way to put it away. Source-level like the rest of this file: the behaviour
+    needs a camera and a permission prompt, neither of which the suite has.
+    """
+
+    def setUp(self):
+        self.source = (REPO_ROOT / "auctions" / "templates" / "auctions" / "quick_checkout.html").read_text()
+
+    def test_the_camera_is_gated_on_an_explicit_preference(self):
+        # Not just the screen size: cameraEnabled() has to ask whether it was wanted as well.
+        self.assertIn("smallScreen.matches && cameraWanted()", self.source)
+
+    def test_the_default_is_off(self):
+        # Anything but the stored "on" -- never set, unreadable, or explicitly off -- means off.
+        self.assertIn("getItem(CAMERA_PREFERENCE_KEY) === 'on'", self.source)
+
+    def test_storage_failures_leave_it_off_rather_than_breaking_the_page(self):
+        """A private window (or blocked site data) throws on localStorage rather than returning
+        null, and an uncaught throw here would take the whole checkout script with it."""
+        wanted = self.source.split("function cameraWanted()")[1].split("function rememberCameraPreference")[0]
+        self.assertIn("catch", wanted)
+        self.assertIn("return false", wanted)
+
+    def test_there_is_a_button_to_turn_it_on(self):
+        self.assertIn('id="checkout-camera-toggle"', self.source)
+        self.assertIn("rememberCameraPreference", self.source)
+
+    def test_the_choice_is_remembered_across_the_tap_to_pay_round_trip(self):
+        # Scan a card, tap to pay, come back and scan the next one: the camera has to be where it
+        # was left. That is the whole reason the preference is stored rather than per page load.
+        self.assertIn("setItem(CAMERA_PREFERENCE_KEY", self.source)

@@ -2,16 +2,29 @@
 {% block title %}Square connected{% endblock %}
 {% comment %}
   Shown instead of the usual redirect when the Square OAuth round trip started inside the app (see
-  SquareCallbackView._done). The app opens this flow in an in-app browser view -- Safari's
-  SFSafariViewController or a Chrome Custom Tab, a different process the shell's WebView never sees
-  the navigations of -- so there is no deep link that can end it: nothing in the app receives a
-  fishauctions:// URL from outside its own WebView, and the scheme is deliberately not registered
-  with the OS (see Part TTP-7). The only way back is the browser view's own close control, so we
-  say so. Copy has to be platform-neutral: request.is_ios_app / is_android_app are both false here,
-  since that browser sends Safari's (or Chrome's) User-Agent -- which is why _done keys off
+  SquareCallbackView._done). Square OAuth is a server-side flow -- the code is exchanged here, with
+  our secret -- so the merchant necessarily ends up looking at a web page in a browser view the app
+  opened. Two things get them back out of it, in that order:
+
+  * The meta refresh below. The app runs seller onboarding in ASWebAuthenticationSession (Chrome
+    Auth Tab on Android), which is watching for its callback scheme and closes itself the moment it
+    sees one. That is what an OAuth flow is supposed to do, and without it the merchant sits on a
+    website in the middle of the step Apple's requirement 2.2 is about.
+  * The instruction underneath, for anyone whose session doesn't complete: an older build of the
+    app, or a browser view opened some other way. It names the control the system actually draws
+    (Done), because "close this window" is not what the button says.
+
+  The scheme is deliberately ``fishauctions-oauth://`` and NOT the app's own ``fishauctions://``.
+  Nothing registers ``fishauctions://`` with the OS -- the shell only ever sees it inside its own
+  WebView, via shouldOverrideUrlLoading -- and that decision stands. Only a pending auth session
+  can act on ``fishauctions-oauth://``, which is exactly the lifetime this page needs.
+
+  Copy has to be platform-neutral: request.is_ios_app / is_android_app are both false here, since
+  that browser sends Safari's (or Chrome's) User-Agent -- which is why _done keys off
   session_opened_by_app instead. The web link below keeps the page from being a dead end for
   anyone who carries on in a browser instead.
 {% endcomment %}
+{% block extra_head %}<meta http-equiv="refresh" content="0;url=fishauctions-oauth://square-connected">{% endblock %}
 {% block content %}
 <div class="container py-4">
   <h1 class="h4 mb-3">Square account connected</h1>
@@ -20,7 +33,7 @@
     now linked. You can take payments on this device.
   </p>
   <p class="mt-3">
-    Close this window to go back to the app &mdash; the button at the top of the screen.
+    You're finished here &mdash; tap <strong>Done</strong> at the top of the screen to go back to the app.
   </p>
   <p class="mt-3 mb-0"><a href="{{ web_url }}">Or keep going here on the website</a></p>
 </div>

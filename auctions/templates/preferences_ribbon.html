@@ -26,7 +26,15 @@
           </a>
         </li>
         {% endif %}
-        {% if request.user.userdata.square_enabled or request.user.squareseller %}
+        {% comment %}
+          Shown to anybody who runs an auction or a club, not only to somebody Square is already
+          switched on for. square_enabled is off by default and used to hide this entry, so an
+          organizer who wanted to take card payments found no button, no explanation and no way to
+          ask -- which from inside the app is indistinguishable from "this site can't do card
+          payments". The page itself now says the accounts are reviewed first and carries the
+          request-access button; the gate is still real, and SquareConnectView still enforces it.
+        {% endcomment %}
+        {% if request.user.userdata.square_enabled or request.user.squareseller or request.user.userdata.can_take_card_payments %}
         <li>
           <a class="dropdown-item" href="{% url 'square_seller' %}">
             <i class="bi bi-square"></i> Square account

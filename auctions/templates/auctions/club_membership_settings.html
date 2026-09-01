@@ -99,6 +99,24 @@
     <p class="small text-muted mt-1">
       You'll be sent to Square to authorize, and then back here.
     </p>
+  {% else %}
+    {% comment %}
+      The disclosed state for a club admin whose account card payments aren't switched on yet.
+      Without it this whole section was a bare "Square" heading with nothing under it -- no button,
+      no explanation and no way to ask, which reads as "this site can't take card payments" rather
+      than "your account is in a queue". Everyone who reaches this page is a club admin with
+      permission_edit_club or permission_money, so there is no question of whether they would have
+      a use for it. Same sentence and same request-access mailto as square_seller.html and the
+      auction ribbon; the gate itself stays, and SquareConnectView is what enforces it.
+    {% endcomment %}
+    <p class="small text-muted mb-2">
+      Card payments are reviewed before they're switched on &mdash; taking cards means collecting
+      money from other people, so we look at each account by hand first. Ask and we'll usually have
+      you set up the same day.
+    </p>
+    <a class="btn btn-primary btn-sm" href="mailto:{{ request.user.userdata.square_access_request_mailto_query }}">
+      <i class="bi bi-credit-card"></i> Contact us and request access
+    </a>
   {% endif %}
 </div>
 

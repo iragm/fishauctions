@@ -146,7 +146,7 @@ class Command(BaseCommand):
             .distinct()
         )
         for user in candidates:
-            if not PaymentService._user_can_take_payments(user):
+            if not PaymentService.user_can_take_payments(user):
                 continue
             auction = PaymentService._latest_admin_auction(user)
             seller = auction.effective_square_seller if auction else None

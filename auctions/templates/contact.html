@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% load crispy_forms_tags %}
+{% block title %}Contact us{% endblock %}
+{% comment %}
+  The App Store Support URL lands here (and /faq/ links here for anyone not signed in). It has to
+  stand on its own with no session: no navigation to somewhere that asks you to sign in, and no
+  email address on the page -- hiding that from anonymous visitors is what this form exists to
+  replace, not something to undo here.
+{% endcomment %}
+{% block content %}
+<div class="container py-4">
+  <h1 class="h4 mb-3">Contact us</h1>
+  <div class="help-note">
+    <i class="bi bi-lightbulb-fill"></i>
+    <div>
+      Send a message and we'll get back to you by email. Most questions about bidding, invoices and
+      running an auction are already answered in the <a href="{% url 'faq' %}">FAQ</a>.
+    </div>
+  </div>
+  <div class="row">
+    <div class="col-12 col-lg-6">
+      {% crispy form form.helper %}
+    </div>
+  </div>
+</div>
+{% endblock %}
+{% block extra_js %}
+<script type='text/javascript'>pageView();</script>
+{% endblock %}

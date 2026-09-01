@@ -120,6 +120,31 @@ document.addEventListener("DOMContentLoaded", function() {
         {% if debug %}
         <a href='{% url "invoice_no_login" uuid=invoice.no_login_link %}' class='btn btn-primary'>View as bidder</a>
         {% endif %}
+        {% comment %}
+          Inside the native app: deep-link to the on-device Tap to Pay screen, the same
+          fishauctions://pay/<pk> handoff quick_checkout_htmx.html renders. Without it this page is
+          a dead end in the app -- the web PayPal and Square buttons are hidden below (both redirect
+          to a hosted checkout the WebView can't run) and nothing was offered in their place, so an
+          admin who opened an invoice from the users table, a search or a notification saw the
+          payment options disappear with no hint that a working path exists one screen away. A
+          reviewer handed a demo account navigates to Invoices first and concludes the feature does
+          not work.
+
+          Copy and the missing icon are fixed by Apple's Tap to Pay on iPhone review guide (5.4
+          approved wording, 5.5 SF Symbols' wave.3.right.circle only) -- the reasoning is written
+          out once, in quick_checkout_htmx.html, and TapToPayButtonCopyTests now covers both
+          locations so the two cannot drift apart. 5.2 puts it at the top of the payment list,
+          which is where the admin button row already is.
+
+          offers_tap_to_pay rather than show_square_button: this is the cashier collecting in the
+          room, not the buyer paying their own invoice, so the question is whether this auction's
+          Square account can take a card at all -- not whether online payments have opened yet.
+        {% endcomment %}
+        {% if request.is_mobile_app and invoice.status != "PAID" and invoice.auction.offers_tap_to_pay %}
+          <a href="fishauctions://pay/{{ invoice.pk }}" class="btn btn-primary btn-lg w-100 my-2">
+            {% if request.is_ios_app %}Tap to Pay on iPhone{% else %}Tap to Pay{% endif %}
+          </a>
+        {% endif %}
         <span id="invoice_control_buttons">{% include 'invoice_buttons.html' %}</span>
         <span style="display: none;" class='text-danger' id="form_dirty_warning">Save adjustments to mark ready or paid</span>
       {% endif %}

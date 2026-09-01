@@ -3984,6 +3984,47 @@ class CustomSignupForm(SignupForm):
         return user
 
 
+class ContactForm(forms.Form):
+    """Send the site owner a message without having an account.
+
+    The FAQ used to end with the site owner's address for signed-in users and the words
+    "(Sign in to see email)" for everybody else, which is the exact shape of an App Store
+    Guideline 1.5 metadata rejection: App Review opens the Support URL in a plain browser with no
+    session, and finds no way to contact anyone. Hiding the address from anonymous visitors is a
+    real anti-scraping measure and stays; this form is the way through it.
+
+    reCAPTCHA is the same invisible v2 the signup and password-reset forms use, and is dropped the
+    same way when the site has no keys configured -- otherwise every local and CI run would have to
+    solve one.
+    """
+
+    name = forms.CharField(max_length=100, label="Your name")
+    email = forms.EmailField(
+        max_length=254,
+        label="Your email",
+        help_text="So we can write back. We won't add you to anything.",
+    )
+    message = forms.CharField(widget=forms.Textarea(attrs={"rows": 6}), max_length=5000, label="Message")
+    captcha = ReCaptchaField(widget=ReCaptchaV2Invisible)
+
+    def __init__(self, *args, **kwargs):
+        user = kwargs.pop("user", None)
+        super().__init__(*args, **kwargs)
+        if not recaptcha_is_configured():
+            self.fields.pop("captcha", None)
+            logger.debug("reCAPTCHA is not configured; removing captcha from the contact form.")
+        # Somebody signed in has already told us both of these, and re-typing them is the fastest
+        # way to get a reply addressed to an account that isn't theirs.
+        if user is not None and user.is_authenticated:
+            self.fields["name"].initial = user.get_full_name() or user.username
+            self.fields["email"].initial = user.email
+        self.helper = FormHelper()
+        self.helper.form_method = "post"
+        self.helper.add_input(Submit("submit", "Send", css_class="btn-success text-dark"))
+        # No explicit Layout: the invisible reCAPTCHA has to render to produce a token, and a layout
+        # naming the three visible fields would silently leave it out and fail every submission.
+
+
 class CustomResetPasswordForm(ResetPasswordForm):
     captcha = ReCaptchaField(widget=ReCaptchaV2Invisible)
 

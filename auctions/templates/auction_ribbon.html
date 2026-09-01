@@ -77,9 +77,15 @@
         <li>Funds will go directly to your Square account</li>
       </ul>
       It's "free": we don't charge anything, but normal Square fees apply.  <a href='{% url "square_seller" %}' class="text-white">Learn more about accepting payments with Square</a>.<br>
+      {% if not request.user.userdata.square_enabled %}We review each account by hand before enabling card payments &mdash; taking cards means collecting money from other people. Ask and we'll usually have you set up the same day.<br>{% endif %}
     </small>
     <div>
+      {% comment %}The gate on square_enabled is disclosed here rather than hiding the banner: an organizer who was shown nothing had no button, no explanation and no way to ask, which reads as "this site can't take card payments". Same pattern as the promotion banner above. See Auction.show_square_banner.{% endcomment %}
+      {% if request.user.userdata.square_enabled %}
       <a href="{% url 'square_connect' %}" class="btn btn-info btn-sm mt-2">Connect Square account and enable payments</a>
+      {% else %}
+      <a href="mailto:{{ request.user.userdata.square_access_request_mailto_query }}" class="btn btn-info btn-sm mt-2">Contact us and request access</a>
+      {% endif %}
       <a href='{% url "auction_main" slug=auction.slug %}?dismissed_square_banner=true' class="btn btn-secondary btn-sm mt-2">Not this auction</a>
       <a href='{% url "auction_main" slug=auction.slug %}?never_show_square_connect=true' class="btn btn-secondary btn-sm mt-2">Never show this again</a>
     </div>

@@ -15,7 +15,8 @@ FAQ
           </div>
           <br><br>
         {% endfor %}
-        Still got questions? Email me: {% if request.user.is_authenticated %}{{admin_email|urlize}}{% else %}(Sign in to see email){% endif %}<br>
+        {% comment %}The address stays hidden from anonymous visitors (scrapers), but "(Sign in to see email)" is not a contact method -- and this page is the App Store Support URL, which App Review opens with no session. /contact/ emails the same address without publishing it.{% endcomment %}
+        Still got questions? {% if request.user.is_authenticated %}Email me: {{admin_email|urlize}}{% else %}<a href="{% url 'contact' %}">Send us a message</a>{% endif %}<br>
 {% endblock %}
 {% block extra_js %}
 <script type='text/javascript'>pageView();</script>

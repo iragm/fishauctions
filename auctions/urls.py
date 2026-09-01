@@ -652,6 +652,7 @@ urlpatterns = [
         name="remote_print_job_cancel",
     ),
     path("faq/", views.FAQ.as_view(), name="faq"),
+    path("contact/", views.ContactView.as_view(), name="contact"),
     path(
         "auctions/<slug:slug>/locations/",
         views.PickupLocations.as_view(),
