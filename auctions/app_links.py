@@ -32,16 +32,36 @@ from django.http import Http404, JsonResponse
 # short enough that a fixed fingerprint is live the same afternoon rather than the next week.
 CACHE_SECONDS = 3600
 
-# Paths iOS must NOT hand to the app. Only these two files: an app launched to fetch its own
-# association file is a loop with no purpose, and Apple's own examples exclude them.
+# Paths iOS must NOT hand to the app. The order matters: iOS takes the first component that matches,
+# and ``_apple_details`` emits every one of these ahead of the ``/*`` catch-all.
 #
-# The other candidates, listed here because they are the ones that would bite rather than because
-# they bite today: any path a *browser* has to handle for the flow to work (there is nothing today —
-# social login is hidden for the app's user agent), and the Square/PayPal OAuth return paths, which
-# the app shell already routes into an in-app browser view and which a cold app launch would handle
-# worse than the browser does. Add them here if that changes; the order matters, because iOS takes
-# the first component that matches.
-IOS_EXCLUDED_PATHS = ["/.well-known/*"]
+# The association files themselves, because an app launched to fetch its own association file is a
+# loop with no purpose (Apple's own examples exclude them).
+#
+# Then the four OAuth return paths. These are the ones a *browser* has to handle for the flow to
+# work: the app opens a connect flow in an auth session, the provider redirects back here, and the
+# code is exchanged server-side against the session that browsing context is holding. If the OS
+# hands that redirect to the app instead, the auth session is abandoned mid-flow and the app opens
+# the callback in its own WebView, which is a different session with none of the OAuth state in it
+# -- the user gets "your connection session expired", back on the home page, looking exactly like
+# having been signed out. A cold app launch on one of these does strictly nothing useful.
+#
+# Note the pattern shape: ``/mailchimp/callback*`` rather than ``/mailchimp/callback/*``. The real
+# URL is ``/mailchimp/callback/`` with the code in the query string (which is matched by a separate
+# ``?`` key, not by this one), so a trailing ``/*`` would only match if Apple reads ``*`` as
+# zero-or-more. Anchoring the star one character earlier matches the real path under either reading.
+# ``test_app_links`` checks the patterns against the URLconf rather than against this list, so a
+# renamed route fails the build instead of quietly un-excluding itself.
+#
+# This is the iOS half only. ``assetlinks.json`` has no per-path granularity, so the Android side of
+# the same rule lives in the app's intent-filter path patterns.
+IOS_EXCLUDED_PATHS = [
+    "/.well-known/*",
+    "/square/onboard/success*",
+    "/paypal/onboard/success*",
+    "/mailchimp/callback*",
+    "/google-calendar/callback*",
+]
 
 
 def _android_statements():
