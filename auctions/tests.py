@@ -29760,8 +29760,14 @@ class MobileConfigTests(TestCase):
     def test_returns_public_config_without_auth(self):
         resp = self.client.get(self.url)
         self.assertEqual(resp.status_code, 200)
+        payload = resp.json()
+        # The drawer is the one per-user block and has its own tests (auctions/test_mobile_menu.py);
+        # here it is only checked for being present and signed-out, then dropped so the rest of the
+        # response can still be asserted exactly.
+        menu = payload.pop("menu")
+        self.assertEqual([section["id"] for section in menu["sections"]], ["main", "about"])
         self.assertEqual(
-            resp.json(),
+            payload,
             {
                 "square_application_id": "sq0idp-test",
                 "square_environment": "sandbox",
@@ -29808,6 +29814,8 @@ class MobileConfigTests(TestCase):
                 "icon_url",
                 "terms_url",
                 "privacy_policy_url",
+                # Titles and paths of navbar links, nothing else -- see auctions/mobile/menu.py.
+                "menu",
             },
         )
         self.assertNotIn(b"sq0csp-supersecret", resp.content)

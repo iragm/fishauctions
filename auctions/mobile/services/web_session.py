@@ -6,10 +6,23 @@ from django.core.cache import cache
 
 logger = logging.getLogger(__name__)
 
-# Short TTL: the app POSTs for a token and immediately loads the consume URL, so the window
-# between mint and use is sub-second. 60s tolerates clock skew / a slow WebView load without
-# leaving a usable credential lying around.
-HANDOFF_TTL_SECONDS = 60
+# Short TTL, but not as short as the WebView case alone would want. The original 60s was sized for
+# the app's own WebView: it POSTs for a token and immediately loads the consume URL, so the window
+# between mint and use is sub-second and 60s was pure slack for clock skew and a slow load.
+#
+# The OAuth connect flows broke that premise. There the handoff is opened in
+# ASWebAuthenticationSession (Chrome Auth Tab on Android), and the OS draws its own consent sheet --
+# "<app> wants to use auction.fish to sign in" -- *before* the URL is ever fetched. A user who reads
+# that sheet for a minute lands on an expired token, and an expired token redirects to the web login
+# page (see MobileWebSessionConsumeView), which is byte-identical to the bug the handoff is there to
+# fix: "connecting anything signs me out". Five minutes covers a human reading a system prompt.
+#
+# What that costs, precisely: an *unused* token stays live for five minutes instead of one. It does
+# not widen what a token can do. It is 256 bits from secrets.token_urlsafe, bound server-side to one
+# user, and single-use by an atomic delete -- so it is worthless the instant the browser view loads
+# it, which is the whole of its intended life. The consume view is throttled (mobile_auth), and the
+# token is never a session by itself: it buys exactly one login as the user who asked for it.
+HANDOFF_TTL_SECONDS = 300
 
 # Namespaced so these never collide with other cache users. The token itself is the rest of the key.
 _CACHE_PREFIX = "mobile_web_session_handoff:"

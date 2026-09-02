@@ -7,7 +7,10 @@ nobody would notice breaking — the exact paths, the content type, that no auth
 and that neither one ever answers with a redirect.
 """
 
+from fnmatch import fnmatchcase
+
 from django.test import TestCase, override_settings
+from django.urls import reverse
 
 ANDROID = ["com.fishauctions.app=AA:BB:CC"]
 IOS = ["TEAMID.com.fishauctions.app"]
@@ -77,9 +80,55 @@ class AppLinkFilesTests(TestCase):
 
     def test_apple_file_never_claims_its_own_directory(self):
         # An app launched to fetch its own association file is a loop with no purpose.
+        self.assertIn("/.well-known/*", self._excluded())
+
+    def _excluded(self):
         components = self.client.get(AASA).json()["applinks"]["details"][0]["components"]
-        excluded = [c["/"] for c in components if c.get("exclude")]
-        self.assertIn("/.well-known/*", excluded)
+        return [component["/"] for component in components if component.get("exclude")]
+
+    def test_oauth_return_paths_are_never_handed_to_the_app(self):
+        """The four paths a browser has to keep for a connect flow to finish.
+
+        The app opens Square/PayPal/Mailchimp/Google Calendar OAuth in an auth session, and the code
+        is exchanged here against the session that browsing context holds. Letting the OS hand the
+        redirect to the app instead abandons the auth session mid-flow and lands the user on "your
+        connection session expired" — which reads as having been signed out.
+
+        Matched against the URLconf rather than against the literal list, so renaming or moving one
+        of these routes fails the build instead of quietly un-excluding it.
+        """
+        excluded = self._excluded()
+        for url_name in (
+            "square_callback",
+            "paypal_callback",
+            "mailchimp_callback",
+            "google_calendar_callback",
+        ):
+            path = reverse(url_name)
+            self.assertTrue(
+                any(fnmatchcase(path, pattern) for pattern in excluded),
+                f"{url_name} ({path}) is claimed as a Universal Link. Add a pattern covering it to "
+                f"app_links.IOS_EXCLUDED_PATHS; the OAuth callbacks must stay in the browser.",
+            )
+
+    def test_every_exclusion_precedes_the_catch_all(self):
+        """iOS takes the first component that matches, so an exclusion after ``/*`` is inert."""
+        components = self.client.get(AASA).json()["applinks"]["details"][0]["components"]
+        catch_all = components.index({"/": "/*"})
+        for position, component in enumerate(components):
+            if component.get("exclude"):
+                self.assertLess(position, catch_all, component)
+
+    def test_ordinary_pages_are_still_claimed(self):
+        """The exclusions are narrow. An over-broad pattern here would silently stop every emailed
+        link opening in the app, with nothing logged anywhere the site can see."""
+        excluded = self._excluded()
+        for url_name in ("allLots", "auctions", "home", "account"):
+            path = reverse(url_name)
+            self.assertFalse(
+                any(fnmatchcase(path, pattern) for pattern in excluded),
+                f"{url_name} ({path}) is excluded from Universal Links by an over-broad pattern.",
+            )
 
 
 class AppLinksUnconfiguredTests(TestCase):

@@ -2,14 +2,15 @@
 Mobile API views.
 
 All endpoints live under /api/mobile/ and require JWT Bearer authentication
-(except auth/login and auth/refresh which issue / rotate tokens, and config/
-which is public).
+(except auth/login and auth/refresh which issue / rotate tokens, and config/,
+which is public and reads a bearer token only if one happens to be sent).
 
 Config
 ------
 GET /api/mobile/config/
     Public deployment config the app reads *before* sign-in to wire up the Square Mobile
-    Payments SDK and Google Sign-In against the right deployment. Unauthenticated.
+    Payments SDK and Google Sign-In against the right deployment. Anonymous callers get a 200;
+    a bearer token is read when one is sent, and personalises the `menu` block only.
 
     PUBLIC VALUES ONLY — never add secrets here (see the view docstring).
 
@@ -46,6 +47,21 @@ GET /api/mobile/config/
             "weights": {"asr": 0.5, "keyword": 1.0, "snap": 1.0, "agreement": 0.4},
             "thresholds": {"confident": 0.85, "unsure": 0.5},
             "auto_submit_on_sold": true, "block_auto_submit_when_unsure": true
+          },
+          // The app's navigation drawer, built server-side so a new link needs a Django deploy
+          // rather than an app-store release. THE ONLY PER-USER BLOCK IN THIS RESPONSE: the
+          // Admin section appears for superusers only, the two account sections only when a
+          // bearer token was sent. See auctions/mobile/menu.py for the field-by-field contract
+          // and for the four rows the app supplies itself (sign out, offline mode, Tap to Pay,
+          // clubs), which are deliberately never sent here.
+          "menu": {
+            "version": 1,
+            "sections": [
+              {"id": "main", "items": [{"title": "Auctions", "path": "/auctions/",
+                                        "icon": "bi-hammer"}]},
+              {"id": "about", "title": "About", "icon": "bi-info-circle", "collapsed": true,
+               "items": [{"title": "FAQ", "path": "/faq/", "icon": "bi-question-circle"}]}
+            ]
           }
         }
 
@@ -691,6 +707,8 @@ from auctions.models import (
 )
 from auctions.printer_programs import PROGRAM_SCHEMA_VERSION, serialize_profile
 
+from .authentication import OptionalJWTAuthentication
+from .menu import menu_for
 from .permissions import IsMobileAuthenticated
 from .renderers import PdfRenderer, PngRenderer
 from .serializers import (
@@ -1245,15 +1263,24 @@ class MobileConfigView(APIView):
     Unauthenticated on purpose: the app fetches this *before* any sign-in to wire up the Square
     Mobile Payments SDK and Google Sign-In against the right deployment.
 
+    One block is per user: `menu`, the app's navigation drawer (auctions.mobile.menu). A bearer
+    token is therefore read when one is sent -- optionally, through OptionalJWTAuthentication, so an
+    anonymous fetch and a fetch with a stale token both still get a 200 and the public menu. That
+    makes this response user-specific: it must never be cached without varying on the caller.
+
     PUBLIC VALUES ONLY. Everything returned here is shipped to every device and is safe to expose
     publicly — these same values already appear in the web app's client-side code: the Square
     *application* id (NOT the secret), the Square environment name, the Google OAuth *client* id
     (NOT a client secret), the navbar brand, and the paths of the public terms and privacy pages.
     NEVER add secrets here: no OAuth access tokens, client secrets, API keys, signing keys, or
-    anything else that must stay server-side.
+    anything else that must stay server-side. The `menu` block is the one thing here that is not
+    the same for everybody, and it carries only link titles and paths -- pages the user could reach
+    from the navbar anyway.
     """
 
-    authentication_classes = []
+    # Optional, not required: authenticate a bearer token if one is sent, stay open to anonymous
+    # callers. permission_classes is empty on purpose -- there is nothing here to permit.
+    authentication_classes = [OptionalJWTAuthentication]
     permission_classes = []
     throttle_scope = "mobile_api"
     throttle_classes = [ScopedRateThrottle]
@@ -1301,6 +1328,9 @@ class MobileConfigView(APIView):
         grammar = VoiceGrammar.load()
         if grammar:
             data["voice"] = voice.serialize_grammar(grammar)
+        # The navigation drawer, gated the way base.html gates the navbar. The only per-user block
+        # in this response -- see auctions/mobile/menu.py for what the app does with it.
+        data["menu"] = menu_for(request.user)
         return Response(data)
 
 
