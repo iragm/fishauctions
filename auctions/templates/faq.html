@@ -15,7 +15,8 @@ FAQ
           </div>
           <br><br>
         {% endfor %}
-        Still got questions? Email me: {% if request.user.is_authenticated %}{{admin_email|urlize}}{% else %}(Sign in to see email){% endif %}<br>
+        {% comment %}Nobody gets the address here any more, signed in or not: it was published to every account on the site, which is a scraper away from being published outright, and /support/ reaches the same inbox without printing it. The rest of that page -- an agent, the videos -- answers more questions than an email does anyway. This page is also the App Store Support URL, opened by App Review with no session, so the link has to work signed out.{% endcomment %}
+        Still got questions? <a href="{% url 'support' %}">Get help</a><br>
 {% endblock %}
 {% block extra_js %}
 <script type='text/javascript'>pageView();</script>

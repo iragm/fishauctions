@@ -134,8 +134,31 @@ $(document).ready(function() {
     // viewport). On larger screens the d-md-none wrapper below hides it and getUserMedia is never
     // called, so the text search is the only input on desktop.
     const smallScreen = window.matchMedia('(max-width: 767px)');
+
+    // ...and only when the cashier has asked for it. Default off: an auction that doesn't print
+    // barcodes has no use for it at all, and one that does gets it back with one tap. The answer
+    // is per device rather than per account on purpose -- it is a fact about the phone in your
+    // hand (does it have a camera pointed at the check-in desk), not about who you are, and the
+    // same admin on a laptop should not inherit it. localStorage survives the round trip out to
+    // the Tap to Pay screen and back, which is the flow this exists for; every access is wrapped
+    // because a private window or blocked site data throws rather than returning null.
+    const CAMERA_PREFERENCE_KEY = 'quickCheckoutCamera';
+    function cameraWanted() {
+      try {
+        return window.localStorage.getItem(CAMERA_PREFERENCE_KEY) === 'on';
+      } catch (e) {
+        return false;
+      }
+    }
+    function rememberCameraPreference(on) {
+      try {
+        window.localStorage.setItem(CAMERA_PREFERENCE_KEY, on ? 'on' : 'off');
+      } catch (e) {
+        /* nothing to remember it in; the toggle still works for this visit */
+      }
+    }
     function cameraEnabled() {
-      return smallScreen.matches;
+      return smallScreen.matches && cameraWanted();
     }
 
     // Show the live camera preview inside #result. htmx swaps #result with invoice controls
@@ -175,9 +198,13 @@ $(document).ready(function() {
     async function showIdleCamera() {
       cancelRestart();
       expectingScanResult = false;
-      // On a wide desktop browser the camera is never offered; make sure nothing lingers in #result.
+      // On a wide desktop browser, or with the camera switched off, nothing may linger in #result --
+      // but only the preview we put there. Anything else on screen (the invoice just paid, a "no
+      // such bidder" message) belongs to the cashier and is left alone.
       if (!cameraEnabled()) {
         if (scanner) { await scanner.stop(); scanner = null; }
+        if (document.getElementById('checkout-camera-wrapper')) { resultEl.innerHTML = ''; }
+        updateCameraToggle();
         return;
       }
       // Release any previous camera before rebuilding the preview so we never hold two streams.
@@ -244,6 +271,30 @@ $(document).ready(function() {
       if (scanner) { await scanner.stop(); }
     }
 
+    function updateCameraToggle() {
+      const button = document.getElementById('checkout-camera-toggle');
+      if (!button) {
+        return;
+      }
+      const on = cameraWanted();
+      button.setAttribute('aria-pressed', on ? 'true' : 'false');
+      button.innerHTML = on
+        ? '<i class="bi bi-camera-video-off-fill"></i> Stop scanning'
+        : '<i class="bi bi-camera-fill"></i> Scan';
+    }
+
+    const cameraToggle = document.getElementById('checkout-camera-toggle');
+    if (cameraToggle) {
+      cameraToggle.addEventListener('click', async function() {
+        const turningOn = !cameraWanted();
+        rememberCameraPreference(turningOn);
+        updateCameraToggle();
+        // showIdleCamera covers both directions: with the camera no longer wanted it stops the
+        // stream and clears the preview, which is exactly what turning it off means.
+        await showIdleCamera();
+      });
+    }
+
     window.checkoutCamera = {
       showIdleCamera: showIdleCamera,
       scheduleRestartAfterPayment: scheduleRestartAfterPayment,
@@ -257,7 +308,9 @@ $(document).ready(function() {
       if (idle) { showIdleCamera(); }
     });
 
-    // Start with the camera live (no-op on wide desktop browsers).
+    // Start with whatever this device last asked for -- off, unless somebody turned it on here
+    // before. A no-op on wide desktop browsers either way.
+    updateCameraToggle();
     showIdleCamera();
   })();
 });
@@ -268,7 +321,23 @@ $(document).ready(function() {
 {% include 'auction_ribbon.html' %}
 <div class="help-note"><i class="bi bi-lightbulb-fill"></i><div>Use this page quickly mark invoices paid at the end of your auction.  <a href='https://github.com/iragm/fishauctions/issues/292'>Leave feedback about this page here.</a></div></div>
 <div class="container">
-  <input type="text" class="form-control" id="tos" placeholder="Bidder number or name" autocomplete="off">
+  <div class="d-flex gap-2 align-items-center">
+    <input type="text" class="form-control" id="tos" placeholder="Bidder number or name" autocomplete="off">
+    {% if show_camera_scanner %}
+    {% comment %}
+      The camera starts OFF and stays off until somebody asks for it. It used to open on load,
+      which is right if scanning bidder cards is what you were doing a moment ago and wrong for
+      every auction that doesn't print barcodes -- there the cashier got a live camera pointed at
+      the room on every checkout, in front of the person they were serving. The choice is
+      remembered per device (see the localStorage note in the script below), so scanning a card,
+      tapping to pay and coming back leaves the camera exactly as it was. d-md-none: same
+      small-screen rule as the preview itself, since there is nothing to turn on above it.
+    {% endcomment %}
+    <button type="button" id="checkout-camera-toggle" class="btn btn-primary flex-shrink-0 d-md-none" aria-pressed="false">
+      <i class="bi bi-camera-fill"></i> Scan
+    </button>
+    {% endif %}
+  </div>
 </div>
 <div id="result"></div>
 {% endblock %}

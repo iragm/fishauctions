@@ -1,5 +1,21 @@
+{% comment %}
+  One tutorial video plus its chapter list.
+
+  Sized twice, deliberately. `.video-container` in auction_site.css is the real answer -- a 16:9
+  box capped at MAX_PLAYER_WIDTH and at 100% of whatever it is put in, so the player reflows on a
+  rotate and inside a collapse that was display:none when it was built. But a stylesheet is
+  cached and this markup is not: nginx serves /static/ with no Cache-Control, so a returning
+  visitor can hold yesterday's auction_site.css against today's page, and a player that gets its
+  height *only* from CSS renders as a full-width 150px sliver when that happens. So the JS also
+  measures and passes real pixels, which ship with the HTML and cannot go stale. With the
+  stylesheet loaded the CSS wins and nothing here is visible; without it these numbers are the
+  whole layout.
+
+  What it replaced: a flat 875x531 above 1024px and 583x354 below, which is wider than every phone
+  and made every page carrying a tutorial scroll sideways.
+{% endcomment %}
 <div class="video-container">
-  <div id="player_{{videoId}}" class="embed-responsive"></div>
+  <div id="player_{{videoId}}"></div>
 </div>
 
 <script>
@@ -10,13 +26,40 @@
 
   var players = {};
 
+  // Keep in step with the max-width of .video-container in auction_site.css.
+  var MAX_PLAYER_WIDTH = 875;
+
+  // The width the player has to play with. A container inside a closed `collapse` measures 0, so
+  // walk up until something has a width -- the ancestors above the collapse are laid out normally.
+  // clientWidth includes padding, and the ancestor we land on is usually a Bootstrap .container
+  // with a gutter, so take the padding back off or the player ends up wider than the box it is in.
+  function availableWidth(el) {
+    for (var node = el; node && node !== document.documentElement; node = node.parentElement) {
+      if (!node.clientWidth) {
+        continue;
+      }
+      var style = window.getComputedStyle(node);
+      var inner = node.clientWidth - (parseFloat(style.paddingLeft) || 0) - (parseFloat(style.paddingRight) || 0);
+      if (inner > 0) {
+        return inner;
+      }
+    }
+    return document.documentElement.clientWidth || MAX_PLAYER_WIDTH;
+  }
+
+  function playerSize(el) {
+    var width = Math.min(MAX_PLAYER_WIDTH, availableWidth(el));
+    return {width: Math.round(width), height: Math.round(width * 9 / 16)};
+  }
+
   function onYouTubeIframeAPIReady() {
     var videoElements = document.querySelectorAll('[id^=player_]');
     videoElements.forEach(function(el) {
       var videoId = el.id.replace('player_', '');
+      var size = playerSize(el.parentElement || el);
       players[videoId] = new YT.Player(el.id, {
-        height: getPlayerHeight(),
-        width: getPlayerWidth(),
+        height: size.height,
+        width: size.width,
         videoId: videoId,
         playerVars: {
           'playsinline': 1
@@ -32,27 +75,17 @@
     }
   }
 
-  // Helper functions to get responsive width and height
-  function getPlayerWidth() {
-    if (window.innerWidth >= 1024) {
-      return 875; // Larger width for tablets and desktops
-    } else {
-      return 583; // Default width for smaller screens (phones)
-    }
-  }
-
-  function getPlayerHeight() {
-    if (window.innerWidth >= 1024) {
-      return 531; // Corresponding height for the larger width
-    } else {
-      return 354; // Default height for smaller screens
-    }
-  }
-
-  // Recalculate the player sizes on window resize
+  // Only does anything on a page whose stylesheet is stale; with the CSS loaded the box is fluid
+  // already and setSize writes attributes the CSS overrules.
   window.addEventListener('resize', function() {
     Object.keys(players).forEach(function(videoId) {
-      players[videoId].setSize(getPlayerWidth(), getPlayerHeight());
+      var player = players[videoId];
+      if (!player || !player.setSize || !player.getIframe) {
+        return;
+      }
+      var iframe = player.getIframe();
+      var size = playerSize(iframe.parentElement || iframe);
+      player.setSize(size.width, size.height);
     });
   });
 </script>

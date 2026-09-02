@@ -3984,6 +3984,74 @@ class CustomSignupForm(SignupForm):
         return user
 
 
+class ContactForm(forms.Form):
+    """Send the site owner a message without having an account.
+
+    The FAQ used to end with the site owner's address for signed-in users and the words
+    "(Sign in to see email)" for everybody else, which is the exact shape of an App Store
+    Guideline 1.5 metadata rejection: App Review opens the Support URL in a plain browser with no
+    session, and finds no way to contact anyone. Hiding the address from anonymous visitors is a
+    real anti-scraping measure and stays; this form is the way through it.
+
+    reCAPTCHA is the same invisible v2 the signup and password-reset forms use, and is dropped the
+    same way when the site has no keys configured -- otherwise every local and CI run would have to
+    solve one.
+
+    Signed in, the form is one box. The site already knows who they are and where to write back, so
+    ``name`` and ``email`` are removed rather than prefilled, and :attr:`sender_name` /
+    :attr:`sender_email` read the account instead of the POST. Signed out, both are asked for and
+    both are required -- there is nothing else to answer.
+    """
+
+    name = forms.CharField(max_length=100, label="Your name")
+    email = forms.EmailField(
+        max_length=254,
+        label="Your email",
+        help_text="So we can write back. We won't add you to anything.",
+    )
+    message = forms.CharField(widget=forms.Textarea(attrs={"rows": 6}), max_length=5000, label="Message")
+    captcha = ReCaptchaField(widget=ReCaptchaV2Invisible)
+
+    def __init__(self, *args, **kwargs):
+        self.user = kwargs.pop("user", None)
+        super().__init__(*args, **kwargs)
+        if not recaptcha_is_configured():
+            self.fields.pop("captcha", None)
+            logger.debug("reCAPTCHA is not configured; removing captcha from the contact form.")
+        # Somebody signed in has already told us both of these, so the form is one box: write the
+        # message. They are dropped rather than prefilled -- a prefilled field is still a field to
+        # read past, and it is one whose answer we are not going to trust anyway. The reply goes to
+        # the address on the account, which is the address they can actually receive mail at.
+        if self.sender_is_known:
+            self.fields.pop("name", None)
+            self.fields.pop("email", None)
+        self.helper = FormHelper()
+        self.helper.form_method = "post"
+        self.helper.add_input(Submit("submit", "Send", css_class="btn-success text-dark"))
+        # No explicit Layout: the invisible reCAPTCHA has to render to produce a token, and a layout
+        # naming the visible fields would silently leave it out and fail every submission.
+
+    @property
+    def sender_is_known(self) -> bool:
+        """Signed in *and* with an address to reply to. An account with no email on it still gets
+        asked for one, because the whole value of this form is that somebody writes back."""
+        return self.user is not None and self.user.is_authenticated and bool(self.user.email)
+
+    @property
+    def sender_name(self) -> str:
+        """Who wrote in. Read off the account when there is one, so it cannot be posted as somebody
+        else, and out of the form when there is not."""
+        if self.sender_is_known:
+            return self.user.get_full_name() or self.user.username
+        return self.cleaned_data.get("name", "")
+
+    @property
+    def sender_email(self) -> str:
+        if self.sender_is_known:
+            return self.user.email
+        return self.cleaned_data.get("email", "")
+
+
 class CustomResetPasswordForm(ResetPasswordForm):
     captcha = ReCaptchaField(widget=ReCaptchaV2Invisible)
 

@@ -141,6 +141,22 @@ ROUTE_LIST: list[Route] = [
     _r("tos", "Terms of service", "Browsing", keywords=["terms", "user agreement", "rules of the site"]),
     _r("privacy_policy", "Privacy policy", "Browsing", keywords=["privacy", "data"]),
     _r("feedback", "Leave feedback about the site", "Browsing", keywords=["suggest", "bug report", "contact"]),
+    _r(
+        "support",
+        "Help and support",
+        "Browsing",
+        keywords=[
+            "support",
+            "help",
+            "get help",
+            "contact",
+            "email us",
+            "ask a question",
+            "tutorial",
+            "video",
+            "who runs this",
+        ],
+    ),
     _r("add_to_calendar", "Add auctions to my calendar", "Browsing", keywords=["calendar", "ical", "subscribe"]),
     # --- My stuff ---
     _r("selling", "Lots I am selling", "My stuff", keywords=["my lots", "what am i selling"]),

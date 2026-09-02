@@ -332,9 +332,12 @@ class MobilePaymentCreateResponseSerializer(serializers.Serializer):
     # The Mobile Payments SDK authorizes on-device with authorize(accessToken, locationId), so we
     # ship the seller's OAuth access token to the device by design (the SDK requires it).
     access_token = serializers.CharField()
-    # Stable, invoice-derived (NOT random) so a retried create -> tap for the same invoice dedupes to a
-    # single on-device Square charge instead of double-charging.
-    idempotency_key = serializers.CharField(help_text="Stable per-invoice idempotency key for the on-device charge")
+    # One per call, recorded as an open attempt against the invoice. The app hands it to the Mobile
+    # Payments SDK as paymentAttemptId, which names one attempt -- a repeat is an error, not a
+    # dedup. See TapToPayAttempt for what replaced the old stable-key protection.
+    attempt_id = serializers.CharField(help_text="Per-attempt id for the on-device charge (paymentAttemptId)")
+    # The same value under the old name, for app builds that predate attempt_id.
+    idempotency_key = serializers.CharField(help_text="Deprecated alias of attempt_id")
     square_environment = serializers.CharField()
 
 
@@ -351,6 +354,21 @@ class MobilePaymentConfirmSerializer(serializers.Serializer):
             "Key from the create response. Accepted for contract compatibility only; the charge is "
             "verified by payment_id against Square and this is not used to charge."
         ),
+    )
+
+
+class MobilePaymentAttemptCloseSerializer(serializers.Serializer):
+    """Request body for POST /api/mobile/payments/attempt/close/.
+
+    Load-bearing: declines are routine, and without this a declined card would leave the attempt
+    open, ``create`` would refuse the retry, and the cashier would be blocked from the one action
+    that is definitely correct.
+    """
+
+    attempt_id = serializers.CharField(max_length=45)
+    outcome = serializers.ChoiceField(
+        choices=("canceled", "failed"),
+        help_text="How the attempt ended without capturing. A capture is closed by confirm, not here.",
     )
 
 

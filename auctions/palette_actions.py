@@ -14974,6 +14974,14 @@ NOT_A_SKILL: dict[str, str] = {
         "go_to_page opens it."
     ),
     "AdminUserFlow": _FORM_PAGE,
+    "SupportView": (
+        "The help page's POST is its message form: it emails the site owner a paragraph somebody "
+        "wrote in their own words, and its whole purpose is to work with no account, since it is "
+        "the App Store Support URL opened by a reviewer with no session. An assistant reaching it "
+        "is already signed in, and a signed-in person is shown the address itself on the FAQ -- so "
+        "the capability the form provides is one the caller does not need. request_a_skill is where "
+        "an agent records something this site could not do. go_to_page opens the page."
+    ),
     "AssistantSkillRequestsView": (
         "The POST is the four status buttons on the page, and the decision is the thing being read: "
         "how many different people asked for it, in whose words, and whether the site should build "

@@ -84,5 +84,6 @@ function initMap() {
             {% if not has_user_location and not request.is_mobile_app %}
             <span><a href="#" onclick="setLocation()">{{ location_message }}</a></span>
             {% endif %}
-            <div>Something missing? {% if not request.user.is_authenticated %}<a href="{% url 'account_login' %}?next={% firstof request.path '/' %}">Sign in</a> to report an issue{% else %}Contact me at {{ admin_email | urlize }}{% endif %}.</div>
+            {% comment %}Was: sign in to see the address. That asked somebody to make an account before they could report a wrong pin on a map, and printed the address to every account that did. /support/ takes the message from either.{% endcomment %}
+            <div>Something missing? <a href="{% url 'support' %}">Let us know</a>.</div>
 {% endblock %}

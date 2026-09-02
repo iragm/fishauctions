@@ -15,11 +15,25 @@
     merchant whose Square login is "Sign in with Google" still works. Loading the same OAuth in the
     shell's own WebView is what would fail: Google blocks its sign-in in embedded WebViews.
   {% endcomment %}
+  {% comment %}
+    The disclosed state for an account card payments haven't been enabled on yet. This used to say
+    only that Square was "disabled for your account" beside a connect button that bounces you back
+    to the home page, which reads as a broken feature rather than a queue. Say what the gate is,
+    and carry the same request-access mailto the promotion banner uses -- an organizer who cannot
+    ask is an organizer for whom this site simply cannot take cards. The gate itself stays: an
+    open OAuth flow that collects money from strangers is exactly the thing worth reviewing first.
+  {% endcomment %}
   {% if request.user.is_authenticated and not request.user.userdata.square_enabled %}
     <div class="alert alert-warning text-dark" role="alert">
       <i class="bi bi-exclamation-triangle"></i>
-      Square is currently disabled for your account. A site administrator can re-enable it for you. You can still
-      connect your Square account, but you won't be able to accept payments until it's enabled.
+      <strong>Card payments are reviewed before they're switched on.</strong>
+      Taking cards means collecting money from other people, so we look at each account by hand first.
+      Ask below and we'll usually have you set up the same day.
+      <div>
+        <a href="mailto:{{ request.user.userdata.square_access_request_mailto_query }}" class="btn btn-primary btn-sm mt-2">
+          Contact us and request access
+        </a>
+      </div>
     </div>
   {% endif %}
 
@@ -30,7 +44,7 @@
         This Square account was connected before in‑person (Tap to Pay) payments were supported.
         Reconnect to enable charging cards on your phone — your existing settings and club link stay in place.
       </div>
-      <a class="btn btn-primary btn-sm flex-shrink-0" href="{% url 'square_connect' %}">Reconnect Square</a>
+      {% if request.user.userdata.square_enabled %}<a class="btn btn-primary btn-sm flex-shrink-0" href="{% url 'square_connect' %}">Reconnect Square</a>{% else %}<a class="btn btn-primary btn-sm flex-shrink-0" href="mailto:{{ request.user.userdata.square_access_request_mailto_query }}">Request access to reconnect</a>{% endif %}
     </div>
   {% endif %}
 
@@ -40,7 +54,7 @@
   </div>
 
   <ol class="mb-4">
-    <li>{% if seller %}Connect your Square account{% else %}<a href="{% url 'square_connect' %}">Connect your Square account</a>{% endif %}</li>
+    <li>{% if seller or not request.user.userdata.square_enabled %}Connect your Square account{% else %}<a href="{% url 'square_connect' %}">Connect your Square account</a>{% endif %}</li>
     <li>That's it — users will see a Pay button on their invoices!</li>
   </ol>
 
@@ -110,9 +124,15 @@
 
   <h2 class="h5 mb-2">Ready to get started?</h2>
   <div class="d-flex align-items-center gap-2 mb-4">
-    <a class="btn btn-success text-dark" href="{% url 'square_connect' %}">Connect your Square account</a>
-    {% if auction %}
-      <span class="small">and start accepting payments in {{ auction }} today!</span>
+    {% if request.user.is_authenticated and not request.user.userdata.square_enabled %}
+      {% comment %}Not a dead connect button: SquareConnectView refuses an account card payments aren't enabled on, so the action that is actually available here is asking.{% endcomment %}
+      <a class="btn btn-primary" href="mailto:{{ request.user.userdata.square_access_request_mailto_query }}">Contact us and request access</a>
+      <span class="small">We review each account before enabling card payments.</span>
+    {% else %}
+      <a class="btn btn-success text-dark" href="{% url 'square_connect' %}">Connect your Square account</a>
+      {% if auction %}
+        <span class="small">and start accepting payments in {{ auction }} today!</span>
+      {% endif %}
     {% endif %}
   </div>
 

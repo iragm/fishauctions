@@ -4642,14 +4642,21 @@ class Auction(models.Model):
         """Can we show the link your Square account banner?
         One more check is needed on the template:
         this banner should only be shown to the auction creator.
-        Hidden when the auction has a club (the club's account is used, not the creator's)."""
+        Hidden when the auction has a club (the club's account is used, not the creator's).
+
+        Deliberately does **not** check ``square_enabled``. That flag decides which half of the
+        banner the template draws -- the connect button, or a sentence saying accounts are reviewed
+        first plus the same request-access mailto the promotion banner uses -- not whether the
+        organizer hears about card payments at all. Hiding it was indistinguishable from "this site
+        can't take card payments", which is the reading Apple's onboarding requirements (2.1, 2.2)
+        exist to prevent, and it left an organizer with no button, no explanation and nothing to
+        ask. The gate itself stays: it is a real fraud control, and only ``SquareConnectView``
+        enforces it."""
         from auctions.models import SquareSeller
 
         if self.club:
             return False
         if self.dismissed_square_banner:
-            return False
-        if not self.created_by.userdata.square_enabled:
             return False
         if self.created_by.is_superuser:
             return False
@@ -11404,6 +11411,59 @@ class InvoicePayment(models.Model):
     #     return f"Payment {self.pk} for Invoice {self.invoice_id}: {self.amount} {self.currency} ({self.status})"
 
 
+class TapToPayAttempt(models.Model):
+    """One on-device Tap to Pay charge attempt, from ``payments/create/`` until the app says how it
+    ended.
+
+    The window this closes is the only one left, and it is a real one: the Mobile Payments SDK
+    charges the card **on the device**, so a capture whose ``confirm`` never reaches us -- the app
+    is killed, the network drops in a hall with bad wifi -- leaves the invoice unpaid with nothing
+    to stop the next tap charging the same card again.
+
+    That used to be blocked by accident. ``create`` handed out a *stable* per-invoice
+    ``idempotency_key``, described in the comment as Square's server-side dedup key; the app passes
+    it to the SDK as ``paymentAttemptId``, which is a different concept with the opposite
+    behaviour -- it names one attempt, and reusing it is an error. On hardware that meant a
+    declined card could not be retried at all: Square answered "please contact the developer of
+    this app -- error code payment_attempt_id_reused", which is a failure precisely when Tap to Pay
+    is needed. Declines are routine, so the stable key had to go, and with it the accidental
+    protection, because it could not tell "already charged" from "the last card was declined".
+
+    This row can. An attempt is open from create until the app closes it (cancel, decline, timeout,
+    any SDK error) or ``confirm`` captures it, and while one is open ``create`` refuses with a 409
+    telling the cashier the one thing that matters: check Square before charging again. Attempts
+    age out after ``OPEN_ATTEMPT_TIMEOUT`` so a wedged record can never strand an invoice.
+    """
+
+    #: Outcomes. "" means still open -- the state the refusal is about.
+    OUTCOME_CAPTURED = "captured"
+    OUTCOME_CANCELED = "canceled"
+    OUTCOME_FAILED = "failed"
+    OUTCOME_EXPIRED = "expired"
+    OUTCOME_CHOICES = (
+        (OUTCOME_CAPTURED, "Captured"),
+        (OUTCOME_CANCELED, "Canceled"),
+        (OUTCOME_FAILED, "Failed"),
+        (OUTCOME_EXPIRED, "Expired"),
+    )
+
+    # 45 characters is Square's cap on both idempotency_key and paymentAttemptId, and this value is
+    # handed to the SDK verbatim. Unique so two devices cannot open the same attempt.
+    attempt_id = models.CharField(max_length=45, unique=True)
+    invoice = models.ForeignKey("Invoice", related_name="tap_to_pay_attempts", on_delete=models.CASCADE)
+    # Kept when the account goes: this is evidence about money, and an attempt with no name on it
+    # is still the record that says a card may have been charged.
+    created_by = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL)
+    createdon = models.DateTimeField(auto_now_add=True, db_index=True)
+    closed_at = models.DateTimeField(blank=True, null=True)
+    outcome = models.CharField(max_length=20, choices=OUTCOME_CHOICES, blank=True, default="")
+    # Square's payment id, once confirm has verified one against this invoice.
+    payment_id = models.CharField(max_length=255, blank=True, default="")
+
+    def __str__(self):
+        return f"Tap to Pay attempt {self.attempt_id} ({self.outcome or 'open'})"
+
+
 class ClubMoney(models.Model):
     DESCRIPTION_MAX_LENGTH = 500
 
@@ -12481,6 +12541,44 @@ class UserData(models.Model):
             return single
         clubs = list(Club.objects.filter(members__user=self.user, members__is_deleted=False).distinct()[:2])
         return clubs[0] if len(clubs) == 1 else None
+
+    @property
+    def can_take_card_payments(self):
+        """True when this person administers something a card payment could be collected for.
+
+        The gate on whether the Square pages are worth offering at all. Not a permission --
+        ``square_enabled`` is what decides whether they may connect an account, and
+        ``SquareConnectView`` is what enforces it. This answers the prior question: is there any
+        auction or club here whose money this person handles? Somebody with no answer to that has
+        nothing to connect Square *for*, and the menu entry would be noise.
+
+        Shares its definition with the Tap to Pay warm-up endpoint on purpose, so "the site offers
+        you Square" and "the app hands you a reader token" can never come apart.
+        """
+        from auctions.mobile.services.payments import PaymentService
+
+        return PaymentService.user_can_take_payments(self.user)
+
+    @property
+    def square_access_request_mailto_query(self):
+        """Pre-encoded subject/body for the 'ask for card payments to be enabled' mailto link.
+
+        The same shape as ``Auction.promotion_request_mailto_query``, and for the same reason: a
+        gate somebody can see but not ask about is a dead end. ``square_enabled`` is off by default
+        (``SQUARE_ENABLED_FOR_USERS``) because letting anyone who signs up start an OAuth flow to
+        collect money from strangers is a fraud control worth keeping -- so the way through it has
+        to be a button, not an email address the organizer has to go and find.
+        """
+        admin_email = settings.ADMINS[0][1]
+        subject = "Request access to accept card payments"
+        body = (
+            "Hello, I would like to connect a Square account so I can take card payments "
+            "for my auction or club.\n\n"
+            "My club's website/Facebook page is:\n\n"
+            f"My username here is: {self.user}\n\n"
+            "Thank you!"
+        )
+        return f"{admin_email}?subject={quote_plus(subject)}&body={quote_plus(body)}"
 
     @property
     def runs_an_auction(self):

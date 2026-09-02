@@ -16,13 +16,16 @@ Requirements, and three of these are review blockers rather than polish:
 * **TTP-4 (5.10)** — a receipt must be sendable for every outcome, approved or declined.
 """
 
+from datetime import timedelta
 from io import StringIO
 from types import SimpleNamespace
 from unittest.mock import MagicMock, PropertyMock, patch
 
+from django.conf import settings
 from django.contrib.auth.models import User
 from django.test import RequestFactory, TestCase, override_settings
 from django.urls import reverse
+from django.utils import timezone
 from rest_framework_simplejwt.tokens import RefreshToken
 
 from auctions.middleware import MobileAppMiddleware
@@ -117,31 +120,18 @@ class MobileAppPlatformFlagTests(TestCase):
         self.assertEqual(request.mobile_app_platform, "")
 
 
-class TapToPayButtonCopyTests(StandardTestCase):
-    """TTP-2 — requirement 5.4 (approved wording) and 5.5 (no unapproved iconography)."""
+class TapToPayButtonCopyMixin:
+    """TTP-2 — requirement 5.4 (approved wording) and 5.5 (no unapproved iconography).
 
-    def setUp(self):
-        super().setUp()
-        self.in_person_tos.bidder_number = "TTP1"
-        self.in_person_tos.save()
-        self.invoice, _ = Invoice.objects.get_or_create(auctiontos_user=self.in_person_tos)
-        self.client.force_login(self.admin_user)
-        self.url = reverse(
-            "auction_quick_checkout_htmx",
-            kwargs={"slug": self.in_person_auction.slug, "filter": "TTP1"},
-        )
+    Run against every page that renders the ``fishauctions://pay/`` handoff. There are two now
+    (quick checkout and the invoice page), and the whole risk with approved wording is that one of
+    them drifts: "Tap to Pay on iPhone" is a trademark Apple permits on iOS only, and an icon that
+    isn't SF Symbols' wave.3.right.circle is a review finding wherever it appears. Subclasses
+    supply ``_html(user_agent)`` and the invoice the button points at.
+    """
 
     def _html(self, user_agent):
-        from auctions.views import QuickCheckoutHTMX
-
-        with (
-            patch.object(Invoice, "show_square_button", new_callable=PropertyMock, return_value=True),
-            patch.object(Invoice, "reason_for_payment_not_available", new_callable=PropertyMock, return_value=""),
-            patch.object(
-                QuickCheckoutHTMX, "create_payment_link", return_value=("https://squareup.com/pay/fake", None)
-            ),
-        ):
-            return self.client.get(self.url, HTTP_USER_AGENT=user_agent).content.decode()
+        raise NotImplementedError
 
     def test_ios_uses_the_long_form_label(self):
         html = self._html(IOS_UA)
@@ -167,10 +157,94 @@ class TapToPayButtonCopyTests(StandardTestCase):
     def test_the_old_unapproved_label_is_gone(self):
         self.assertNotIn("Tap to Pay with card", self._html(IOS_UA))
 
+    def test_the_button_is_not_offered_outside_the_app(self):
+        # The scheme has no handler in a browser, and this is not a page people use on desktop
+        # expecting it -- see the app-only exception in style_reference.md.
+        self.assertNotIn("fishauctions://pay/", self._html("Mozilla/5.0"))
+
+
+class QuickCheckoutTapToPayCopyTests(TapToPayButtonCopyMixin, StandardTestCase):
+    """The checkout desk: the button's original home."""
+
+    def setUp(self):
+        super().setUp()
+        self.in_person_tos.bidder_number = "TTP1"
+        self.in_person_tos.save()
+        self.invoice, _ = Invoice.objects.get_or_create(auctiontos_user=self.in_person_tos)
+        self.client.force_login(self.admin_user)
+        self.url = reverse(
+            "auction_quick_checkout_htmx",
+            kwargs={"slug": self.in_person_auction.slug, "filter": "TTP1"},
+        )
+
+    def _html(self, user_agent):
+        from auctions.views import QuickCheckoutHTMX
+
+        with (
+            patch.object(Invoice, "show_square_button", new_callable=PropertyMock, return_value=True),
+            patch.object(Invoice, "reason_for_payment_not_available", new_callable=PropertyMock, return_value=""),
+            patch.object(
+                QuickCheckoutHTMX, "create_payment_link", return_value=("https://squareup.com/pay/fake", None)
+            ),
+        ):
+            return self.client.get(self.url, HTTP_USER_AGENT=user_agent).content.decode()
+
     def test_button_comes_before_the_qr_block(self):
         """5.2 — with several payment options, Tap to Pay sits at the top of the list."""
         html = self._html(IOS_UA)
         self.assertLess(html.index(f"fishauctions://pay/{self.invoice.pk}"), html.index("View or adjust invoice"))
+
+
+class InvoicePageTapToPayTests(TapToPayButtonCopyMixin, StandardTestCase):
+    """TTP-8 — the invoice page was a dead end in the app.
+
+    It hides the web PayPal and Square buttons for app requests (both redirect to a hosted checkout
+    the WebView can't run) and offered nothing in their place, so an admin who reached an invoice
+    from the users table, a search or a notification saw the payment options vanish with no hint
+    that a working path existed one screen away. A reviewer with a demo account goes to Invoices
+    first, and concludes Tap to Pay doesn't work.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.invoice, _ = Invoice.objects.get_or_create(auctiontos_user=self.in_person_tos)
+        self.client.force_login(self.admin_user)
+        self.url = reverse("invoice_by_pk", kwargs={"pk": self.invoice.pk})
+
+    def _html(self, user_agent, **patches):
+        offers = patches.pop("offers_tap_to_pay", True)
+        with patch.object(Auction, "offers_tap_to_pay", new_callable=PropertyMock, return_value=offers):
+            return self.client.get(self.url, HTTP_USER_AGENT=user_agent).content.decode()
+
+    def test_the_admin_gets_the_button_in_the_app(self):
+        self.assertIn(f"fishauctions://pay/{self.invoice.pk}", self._html(IOS_UA))
+
+    def test_nothing_is_offered_when_this_auctions_square_account_cannot_take_a_card(self):
+        # A seller connected before the in-person scope existed can't charge in the room, so the
+        # button would be a dead end -- the same question Auction.offers_tap_to_pay answers for the
+        # awareness modal.
+        self.assertNotIn("fishauctions://pay/", self._html(IOS_UA, offers_tap_to_pay=False))
+
+    def test_a_paid_invoice_is_not_offered_a_charge(self):
+        self.invoice.status = "PAID"
+        self.invoice.save()
+        self.assertNotIn("fishauctions://pay/", self._html(IOS_UA))
+
+    def test_the_buyer_is_never_offered_it(self):
+        """Tap to Pay authorizes with the *seller's* Square account: this is the cashier's button.
+
+        A bidder looking at their own invoice in the app gets the ordinary payment buttons or
+        nothing, never the reader. (self.user can't stand in for the bidder here -- they created
+        the auction, so the invoice page treats them as an admin, which is the correct answer.)
+        """
+        bidder = User.objects.create_user("ttpbidder", "ttpbid@example.com", "pw")
+        tos = AuctionTOS.objects.create(
+            user=bidder, auction=self.in_person_auction, pickup_location=self.in_person_location
+        )
+        invoice, _ = Invoice.objects.get_or_create(auctiontos_user=tos)
+        self.client.force_login(bidder)
+        self.url = reverse("invoice_by_pk", kwargs={"pk": invoice.pk})
+        self.assertNotIn("fishauctions://pay/", self._html(IOS_UA))
 
 
 class SquareOnboardingInAppTests(StandardTestCase):
@@ -178,6 +252,10 @@ class SquareOnboardingInAppTests(StandardTestCase):
 
     def setUp(self):
         super().setUp()
+        # Card payments enabled: this class is about the merchant path. The account waiting to be
+        # reviewed is SquareAccessGateDisclosureTests below.
+        self.user.userdata.square_enabled = True
+        self.user.userdata.save()
         self.client.force_login(self.user)
         self.url = reverse("square_seller")
 
@@ -203,8 +281,143 @@ class SquareOnboardingInAppTests(StandardTestCase):
         self.assertIn(reverse("square_connect"), html)
 
 
+class SquareAccessGateDisclosureTests(StandardTestCase):
+    """TTP-9 — ``square_enabled`` is off by default, and it used to be enforced by rendering nothing.
+
+    An organizer who wanted to take card payments found no button, no explanation and no way to
+    ask. From inside the app that is indistinguishable from "this site can't do card payments",
+    which is the reading Apple's onboarding requirements (2.1, 2.2) exist to prevent. The gate is
+    deliberately still here: what these tests hold is that it is *visible and requestable*.
+    """
+
+    def setUp(self):
+        super().setUp()
+        # Set rather than assumed: SQUARE_ENABLED_FOR_USERS decides the column default, and the dev
+        # .env turns it on while CI leaves it off. The state under test is the default one a live
+        # site runs -- an organizer whose account has not been reviewed yet.
+        self.user.userdata.square_enabled = False
+        self.user.userdata.save()
+        self.client.force_login(self.user)
+        self.url = reverse("square_seller")
+
+    def _html(self, user_agent=IOS_UA):
+        return self.client.get(self.url, HTTP_USER_AGENT=user_agent).content.decode()
+
+    def test_the_page_says_accounts_are_reviewed(self):
+        self.assertIn("reviewed before they're switched on", self._html())
+
+    def test_the_page_carries_the_request_access_button(self):
+        html = self._html()
+        self.assertIn("Contact us and request access", html)
+        self.assertIn("mailto:", html)
+
+    def test_no_connect_button_that_would_only_bounce_them_home(self):
+        # SquareConnectView refuses an account this isn't enabled on, so a connect button here is a
+        # dead end. Asking is the action that is actually available.
+        self.assertNotIn(reverse("square_connect"), self._html())
+
+    def test_reaching_connect_directly_lands_on_the_explanation(self):
+        """The gate's own error used to bounce them to the home page with "Square isn't enabled".
+
+        That is the same dead end as rendering nothing, one URL later -- and it is reachable from
+        an old bookmark or an app build that still deep-links here. square_seller is where the
+        review is explained and where the request-access button lives.
+        """
+        response = self.client.get(reverse("square_connect"))
+        self.assertRedirects(response, reverse("square_seller"))
+        self.assertContains(self.client.get(reverse("square_seller")), "request access", status_code=200)
+
+    def test_an_enabled_account_still_gets_the_connect_button(self):
+        self.user.userdata.square_enabled = True
+        self.user.userdata.save()
+        html = self._html()
+        self.assertIn(reverse("square_connect"), html)
+        self.assertNotIn("reviewed before they're switched on", html)
+
+    def test_the_menu_entry_stays_visible_for_someone_who_runs_an_auction(self):
+        """preferences_ribbon.html used to hide the whole Square item on square_enabled."""
+        html = self.client.get(reverse("preferences"), HTTP_USER_AGENT=IOS_UA).content.decode()
+        self.assertIn(reverse("square_seller"), html)
+
+    def test_the_menu_entry_is_not_offered_to_someone_with_nothing_to_charge_for(self):
+        # A bidder with no auction and no club has nothing to connect Square for; the entry would
+        # be noise. This is the half of the old gate that was doing useful work.
+        bidder = User.objects.create_user("squarebidder", "sqb@example.com", "pw")
+        bidder.userdata.square_enabled = False  # see setUp: the flag's default is site config
+        bidder.userdata.save()
+        self.client.force_login(bidder)
+        html = self.client.get(reverse("preferences")).content.decode()
+        self.assertNotIn(reverse("square_seller"), html)
+
+    def test_the_auction_banner_is_shown_rather_than_hidden(self):
+        """Auction.show_square_banner used to return False on the gate, so the organizer's one
+        route to card payments disappeared from the page they actually look at."""
+        self.assertTrue(self.in_person_auction.show_square_banner)
+
+    def test_the_banner_still_stops_for_the_reasons_that_are_not_the_gate(self):
+        self.user.userdata.never_show_square_connect = True
+        self.user.userdata.save()
+        self.in_person_auction.refresh_from_db()
+        self.assertFalse(self.in_person_auction.show_square_banner)
+
+    def test_the_request_access_mailto_names_the_admin_and_the_user(self):
+        query = self.user.userdata.square_access_request_mailto_query
+        self.assertTrue(query.startswith(settings.ADMINS[0][1]))
+        self.assertIn(self.user.username, query)
+
+    def _club_settings_html(self):
+        """The club's membership settings page, as an admin who can set its payment accounts."""
+        club = Club.objects.create(name="Gate Disclosure Club")
+        ClubMember.objects.create(club=club, user=self.user, name="Organizer", permission_edit_club=True)
+        return self.client.get(
+            reverse("club_membership_settings", kwargs={"slug": club.slug}), HTTP_USER_AGENT=IOS_UA
+        ).content.decode()
+
+    # Every test that renders this page names the site-level Square credentials, because this page
+    # asks a second question square_seller.html never asks -- whether the *site* has a Square app
+    # at all -- and that check sits ahead of the per-account gate in the template, deliberately:
+    # "nobody here can connect Square" is a different answer from "your account is in the queue",
+    # and sending a club admin to a request-access mailto on a site with no Square app would be
+    # asking them to queue for something nobody can be given. The dev .env carries sandbox
+    # credentials and .env.example -- which is the whole of CI's .env -- carries none, so a test
+    # that leaves them unpinned is really a test of whichever .env it ran under.
+    @override_settings(SQUARE_APPLICATION_ID="sq0idp-x", SQUARE_CLIENT_SECRET="sq0csp-x")
+    def test_the_clubs_payment_settings_do_not_show_a_bare_square_heading(self):
+        """The fourth surface, and the worst-looking one.
+
+        square_seller.html sends a club organizer here ("the club's connected Square account is
+        used ... set on the club's membership settings page"), and what they used to find was the
+        word "Square" with nothing whatsoever underneath it -- the connect button was inside an
+        ``{% elif %}`` with no ``{% else %}``. Everyone who can open this page is a club admin with
+        permission_edit_club or permission_money, so there is no question of whether they have a
+        use for it.
+        """
+        html = self._club_settings_html()
+        self.assertIn("reviewed before they're switched on", html)
+        self.assertIn("Contact us and request access", html)
+
+    @override_settings(SQUARE_APPLICATION_ID="sq0idp-x", SQUARE_CLIENT_SECRET="sq0csp-x")
+    def test_the_clubs_payment_settings_still_connect_once_enabled(self):
+        self.user.userdata.square_enabled = True
+        self.user.userdata.save()
+        html = self._club_settings_html()
+        self.assertIn("Connect a Square account for this club", html)
+        self.assertNotIn("Contact us and request access", html)
+
+    @override_settings(SQUARE_APPLICATION_ID="", SQUARE_CLIENT_SECRET="")
+    def test_a_site_with_no_square_app_says_that_instead_of_offering_the_queue(self):
+        """The other half of the pin above, and the reason the gate disclosure sits under it."""
+        html = self._club_settings_html()
+        self.assertIn("Square isn't configured on this site", html)
+        self.assertNotIn("Contact us and request access", html)
+
+    def test_the_mailto_covers_a_club_as_well_as_an_auction(self):
+        # The same property is now linked from a club page, so its body may not say "my auction".
+        self.assertIn("auction+or+club", self.user.userdata.square_access_request_mailto_query)
+
+
 class SquareCallbackReturnToAppTests(StandardTestCase):
-    """TTP-1 nice-to-have — end the OAuth round trip with a way back into the app."""
+    """TTP-1/TTP-7 — end the OAuth round trip with a confirmation page, not a dead deep link."""
 
     def setUp(self):
         super().setUp()
@@ -233,11 +446,11 @@ class SquareCallbackReturnToAppTests(StandardTestCase):
         response = self._callback_ok()
         self.assertEqual(response.status_code, 302)
 
-    def test_app_flow_offers_a_deep_link_back(self):
+    def test_app_flow_gets_the_confirmation_page(self):
         self._connect(return_to_app="1")
         response = self._callback_ok()
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "fishauctions://square-connected")
+        self.assertTemplateUsed(response, "auctions/square_connected_app.html")
 
     def test_a_session_the_app_opened_is_enough(self):
         """The in-app browser view sends Safari's User-Agent, so the session is the only signal."""
@@ -247,7 +460,37 @@ class SquareCallbackReturnToAppTests(StandardTestCase):
         mark_session_opened_by_app(session)
         session.save()
         self._connect()
-        self.assertContains(self._callback_ok(), "fishauctions://square-connected")
+        response = self._callback_ok()
+        self.assertEqual(response.status_code, 200)
+        self.assertTemplateUsed(response, "auctions/square_connected_app.html")
+
+    def test_no_dead_deep_link_back(self):
+        """Nothing receives fishauctions:// outside the shell's WebView, and this page renders in
+        an in-app browser view -- a different process the shell never sees.  See Part TTP-7."""
+        self._connect(return_to_app="1")
+        self.assertNotContains(self._callback_ok(), "fishauctions://")
+
+    def test_the_app_flow_redirects_to_the_auth_session_scheme(self):
+        """TTP-7 -- the browser view has to close itself, not wait to be dismissed.
+
+        Seller onboarding runs in ASWebAuthenticationSession (Chrome Auth Tab on Android), which
+        ends the moment it sees its callback scheme. Offering a link instead of redirecting is what
+        made this read, on camera, as the app handing the merchant to a website and abandoning them.
+        """
+        self._connect(return_to_app="1")
+        self.assertContains(self._callback_ok(), "fishauctions-oauth://square-connected")
+
+    def test_the_web_flow_never_sees_the_callback_scheme(self):
+        # The redirect is gated on the same session_opened_by_app branch as the whole page: a
+        # merchant connecting Square in a desktop browser must still land on their auction.
+        self._connect()
+        self.assertNotContains(self._callback_ok(), "fishauctions-oauth://", status_code=302)
+
+    def test_the_done_instruction_survives_the_redirect(self):
+        """The fallback for a session that doesn't complete -- an older build, or a plain browser
+        view. It names the control the system actually draws."""
+        self._connect(return_to_app="1")
+        self.assertContains(self._callback_ok(), "Done")
 
 
 class PaymentAuthorizationEndpointTests(StandardTestCase):
@@ -441,6 +684,188 @@ class ReceiptUrlTests(StandardTestCase):
     def test_missing_receipt_url_is_null_rather_than_empty(self):
         # The app treats a missing link as "no receipt to share"; "" would render as a broken one.
         self.assertIsNone(self._confirm("")["receipt_url"])
+
+
+class TapToPayAttemptTests(StandardTestCase):
+    """TTP-10 — the attempt record, and what it replaced.
+
+    ``create`` used to return a *stable* per-invoice ``idempotency_key`` whose comment described
+    Square's server-side dedup key. The app passes that value to the Mobile Payments SDK as
+    ``paymentAttemptId``, which is a different concept with the opposite behaviour: it names one
+    attempt, and a repeat is an error. Found on hardware — a card was declined, the cashier
+    retried, and Square's own UI said "something went wrong, please contact the developer of this
+    app — error code payment_attempt_id_reused". Declines are routine, so that made Tap to Pay fail
+    precisely when it is needed, and nothing was ever being deduplicated in the first place.
+
+    Making the key per-create fixes the decline, and gives up an accidental protection: a charge
+    captured on-device whose ``confirm`` never arrives (app killed, network dropped) leaves the
+    invoice unpaid with nothing to stop a second tap charging the card again. These tests are that
+    protection, done on purpose — and the endpoint that keeps it from becoming the same failure one
+    step later.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.buyer = User.objects.create_user("attemptbuyer", "ab@example.com", "pw")
+        tos = AuctionTOS.objects.create(user=self.buyer, auction=self.online_auction, pickup_location=self.location)
+        self.invoice, _ = Invoice.objects.get_or_create(auctiontos_user=tos)
+        InvoiceAdjustment.objects.create(adjustment_type="ADD", amount=20, notes="t", invoice=self.invoice)
+        self.invoice.refresh_from_db()
+        self.create_url = reverse("mobile-payment-create")
+        self.close_url = reverse("mobile-payment-attempt-close")
+
+    def _seller(self):
+        seller = MagicMock()
+        seller.get_valid_access_token.return_value = "tok"
+        seller.get_location_id.return_value = "LOC1"
+        seller.supports_tap_to_pay = True
+        return seller
+
+    def _create(self, user=None):
+        with patch.object(PaymentService, "_get_seller_for_invoice", return_value=self._seller()):
+            return self.client.post(
+                self.create_url, {"invoice_pk": self.invoice.pk}, **_bearer(user or self.admin_user)
+            )
+
+    def _confirm_ok(self):
+        """Drive confirm with a Square payment that verifies against this invoice."""
+        payment = SimpleNamespace(
+            id="PAYA",
+            status="COMPLETED",
+            receipt_number="RC1",
+            receipt_url="",
+            amount_money=SimpleNamespace(amount=2000, currency=self.invoice.currency),
+            location_id="LOC1",
+            reference_id=str(self.invoice.pk),
+        )
+        seller = self._seller()
+        seller.get_square_client.return_value.payments.get.return_value = SimpleNamespace(errors=None, payment=payment)
+        with (
+            patch.object(PaymentService, "_get_seller_for_invoice", return_value=seller),
+            patch("auctions.views._ensure_invoice_renewal_state"),
+            patch("auctions.views._process_invoice_membership_renewal"),
+        ):
+            return PaymentService.confirm_mobile_payment(
+                invoice_pk=self.invoice.pk, payment_id="PAYA", idempotency_key="ignored", user=self.admin_user
+            )
+
+    def test_create_records_an_open_attempt(self):
+        from auctions.models import TapToPayAttempt
+
+        body = self._create().json()
+        attempt = TapToPayAttempt.objects.get(attempt_id=body["attempt_id"])
+        self.assertEqual(attempt.invoice, self.invoice)
+        self.assertEqual(attempt.created_by, self.admin_user)
+        self.assertEqual(attempt.outcome, "")  # open
+        self.assertIsNone(attempt.closed_at)
+
+    def test_a_second_create_is_refused_while_one_is_open(self):
+        self._create()
+        response = self._create()
+        self.assertEqual(response.status_code, 409)
+        body = response.json()
+        self.assertEqual(body["code"], "attempt_in_progress")
+        # Written for somebody standing at a checkout desk, and shown by the app verbatim.
+        self.assertIn("may already have been charged", body["detail"])
+        self.assertIn("Square", body["detail"])
+
+    def test_a_declined_card_can_be_retried_once_the_app_closes_the_attempt(self):
+        """The failure this whole part exists to remove, moved one step later.
+
+        Declines are routine. If a declined attempt stayed open, create would refuse the retry and
+        the cashier would be blocked from the one action that is definitely correct.
+        """
+        attempt_id = self._create().json()["attempt_id"]
+        closed = self.client.post(
+            self.close_url, {"attempt_id": attempt_id, "outcome": "failed"}, **_bearer(self.admin_user)
+        )
+        self.assertEqual(closed.status_code, 200)
+        self.assertEqual(self._create().status_code, 200)
+
+    def test_a_canceled_attempt_is_closed_the_same_way(self):
+        attempt_id = self._create().json()["attempt_id"]
+        response = self.client.post(
+            self.close_url, {"attempt_id": attempt_id, "outcome": "canceled"}, **_bearer(self.admin_user)
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["outcome"], "canceled")
+
+    def test_closing_an_already_closed_attempt_is_not_an_error(self):
+        # The app calls this best-effort and never shows a cashier a bookkeeping error; confirm may
+        # also have won the race and closed it as captured.
+        attempt_id = self._create().json()["attempt_id"]
+        body = {"attempt_id": attempt_id, "outcome": "canceled"}
+        self.client.post(self.close_url, body, **_bearer(self.admin_user))
+        self.assertEqual(self.client.post(self.close_url, body, **_bearer(self.admin_user)).status_code, 200)
+
+    def test_an_unknown_attempt_is_a_404_the_app_can_ignore(self):
+        # What an older deployment (or an attempt that already aged out) looks like.
+        response = self.client.post(
+            self.close_url, {"attempt_id": "taptopay-inv-1-deadbeef", "outcome": "failed"}, **_bearer(self.admin_user)
+        )
+        self.assertEqual(response.status_code, 404)
+
+    def test_a_capture_may_not_be_reported_here(self):
+        # Only confirm may say a card was charged: it is the half that verifies against Square.
+        attempt_id = self._create().json()["attempt_id"]
+        response = self.client.post(
+            self.close_url, {"attempt_id": attempt_id, "outcome": "captured"}, **_bearer(self.admin_user)
+        )
+        self.assertEqual(response.status_code, 400)
+
+    def test_the_buyer_cannot_close_an_attempt(self):
+        attempt_id = self._create().json()["attempt_id"]
+        response = self.client.post(
+            self.close_url, {"attempt_id": attempt_id, "outcome": "failed"}, **_bearer(self.buyer)
+        )
+        self.assertEqual(response.status_code, 403)
+
+    def test_closing_requires_jwt(self):
+        attempt_id = self._create().json()["attempt_id"]
+        self.assertIn(
+            self.client.post(self.close_url, {"attempt_id": attempt_id, "outcome": "failed"}).status_code, (401, 403)
+        )
+
+    def test_confirm_closes_the_attempt_as_captured(self):
+        from auctions.models import TapToPayAttempt
+
+        attempt_id = self._create().json()["attempt_id"]
+        self._confirm_ok()
+        attempt = TapToPayAttempt.objects.get(attempt_id=attempt_id)
+        self.assertEqual(attempt.outcome, "captured")
+        self.assertEqual(attempt.payment_id, "PAYA")
+        self.assertIsNotNone(attempt.closed_at)
+
+    def test_an_attempt_ages_out_so_a_wedged_row_cannot_strand_an_invoice(self):
+        from auctions.models import TapToPayAttempt
+
+        attempt_id = self._create().json()["attempt_id"]
+        stale = timezone.now() - PaymentService.OPEN_ATTEMPT_TIMEOUT - timedelta(seconds=1)
+        # auto_now_add ignores an assigned value, so age the row with an update().
+        TapToPayAttempt.objects.filter(attempt_id=attempt_id).update(createdon=stale)
+        self.assertEqual(self._create().status_code, 200)
+        self.assertEqual(TapToPayAttempt.objects.get(attempt_id=attempt_id).outcome, "expired")
+
+    def test_an_attempt_on_one_invoice_does_not_block_another(self):
+        other_tos = AuctionTOS.objects.create(
+            user=User.objects.create_user("attemptbuyer2", "ab2@example.com", "pw"),
+            auction=self.online_auction,
+            pickup_location=self.location,
+        )
+        other_invoice, _ = Invoice.objects.get_or_create(auctiontos_user=other_tos)
+        InvoiceAdjustment.objects.create(adjustment_type="ADD", amount=20, notes="t", invoice=other_invoice)
+        other_invoice.refresh_from_db()
+        self._create()
+        with patch.object(PaymentService, "_get_seller_for_invoice", return_value=self._seller()):
+            response = self.client.post(self.create_url, {"invoice_pk": other_invoice.pk}, **_bearer(self.admin_user))
+        self.assertEqual(response.status_code, 200)
+
+    def test_no_attempt_is_opened_when_create_refuses(self):
+        from auctions.models import TapToPayAttempt
+
+        # A buyer reaching create is a 403; a row here would let a rejected caller block the desk.
+        self._create(user=self.buyer)
+        self.assertEqual(TapToPayAttempt.objects.filter(invoice=self.invoice).count(), 0)
 
 
 class LaunchAnnouncementTests(StandardTestCase):
