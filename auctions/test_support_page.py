@@ -98,23 +98,44 @@ class VideoEmbedFitsItsContainerTests(TestCase):
     phone -- so every page carrying a tutorial scrolled sideways, and an iframe is out of flow's
     reach, so nothing else on the page could shrink to compensate. Sized in CSS now."""
 
-    def test_the_embed_asks_for_no_pixel_size(self):
+    #: The one width in the file, in both places it is written down.
+    MAX_WIDTH = 875
+
+    def _embed_html(self):
         from django.template.loader import render_to_string
 
-        html = render_to_string("youtube_embed.html", {"videoId": "abc123", "chapters": []})
-        self.assertNotIn("583", html)
-        self.assertNotIn("875", html)
-        self.assertIn("video-container", html)
+        return render_to_string("youtube_embed.html", {"videoId": "abc123", "chapters": []})
 
-    def test_the_stylesheet_caps_it_at_the_page_width(self):
+    def _stylesheet(self):
         from pathlib import Path
 
         from django.conf import settings as django_settings
 
-        css = Path(django_settings.BASE_DIR, "auctions/static/css/auction_site.css").read_text()
-        block = css.split(".video-container {", 1)[1].split("}", 1)[0]
+        return Path(django_settings.BASE_DIR, "auctions/static/css/auction_site.css").read_text()
+
+    def test_the_phone_hostile_width_is_gone(self):
+        # 583px was the old "small screens" size, and it is wider than every phone in use.
+        self.assertNotIn("583", self._embed_html())
+        self.assertIn("video-container", self._embed_html())
+
+    def test_the_stylesheet_caps_it_at_the_page_width(self):
+        block = self._stylesheet().split(".video-container {", 1)[1].split("}", 1)[0]
         self.assertIn("width: 100%", block)
         self.assertIn("aspect-ratio", block)
+        self.assertIn(f"max-width: {self.MAX_WIDTH}px", block)
+
+    def test_the_script_measures_rather_than_hardcoding_a_screen_size(self):
+        # It also passes real pixels to YouTube, because /static/ is served with no Cache-Control:
+        # a visitor holding an older auction_site.css against this markup would otherwise get a
+        # full-width 150px sliver, which is what a height that only CSS knows collapses to.
+        html = self._embed_html()
+        self.assertIn("availableWidth", html)
+        self.assertIn("clientWidth", html)
+
+    def test_the_script_and_the_stylesheet_agree_on_the_cap(self):
+        """Two files have to say 875 and the comment in each points at the other."""
+        self.assertIn(f"MAX_PLAYER_WIDTH = {self.MAX_WIDTH}", self._embed_html())
+        self.assertIn(f"max-width: {self.MAX_WIDTH}px", self._stylesheet())
 
 
 @isolated_cache("contact-form")
