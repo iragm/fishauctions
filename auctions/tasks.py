@@ -35,7 +35,41 @@ BAP_RECALCULATION_TASK_PREFIX = "bap_recalculation_club_"
 CALENDAR_SYNC_LOCK_KEY = "sync_club_calendars_running"
 CALENDAR_SYNC_LOCK_SECONDS = 60 * 60
 
+# One endauctions at a time; see endauctions. Comfortably past CELERY_TASK_TIME_LIMIT so a worker
+# killed by the hard limit can't wedge the lock, and past the 60-second beat so a slow run blocks
+# the next tick rather than racing it.
+ENDAUCTIONS_LOCK_KEY = "endauctions_running"
+ENDAUCTIONS_LOCK_SECONDS = 15 * 60
+
+# One user-flow computation at a time; see compute_user_flow_all.
+USER_FLOW_LOCK_KEY = "compute_user_flow_all_running"
+USER_FLOW_LOCK_SECONDS = 6 * 60 * 60
+
 logger = logging.getLogger(__name__)
+
+
+def _per_item(task, label, items, do_one, exceptions=(requests.RequestException,)):
+    """Run ``do_one`` over ``items``, keeping going past a failure, then retry the task once.
+
+    The pattern ``delete_marketing_contact`` documents, factored out for the wallet tasks that were
+    doing the opposite. They re-raised on the first failing member, so Celery retried the *whole*
+    task from the top: everyone before the bad row was pushed again on each of five retries, and
+    everyone after it was never reached at all -- their pass kept saying "valid" after the
+    membership lapsed. One permanently broken row must not be able to do that.
+
+    Failures are collected and re-raised once at the end, so a genuinely transient outage (every
+    item failing) still retries, and a single bad row still gets its retries without holding up the
+    rest of the list.
+    """
+    failures = []
+    for item in items:
+        try:
+            do_one(item)
+        except exceptions as e:
+            logger.exception("%s failed for %s", label, item)
+            failures.append(f"{item}: {e}")
+    if failures:
+        raise task.retry(exc=RuntimeError(f"{label}: " + "; ".join(failures[:10])))
 
 
 def _membership_email_reply_to(club):
@@ -423,8 +457,23 @@ def endauctions(self):
     Sets active to false on lots.
 
     Previously run every minute via cron.
+
+    One at a time. The beat fires this every 60 seconds and the soft time limit is 300, so a run
+    that is slow -- which is precisely a run at the moment a big auction ends, when hundreds of lots
+    close at once -- overlaps the next one. Two runs read the same ``active=True`` rows, and both
+    see ``sold`` as False, so both send the lot-ended message and both write invoices. The lock is
+    the same shape as ``sync_club_calendars``: skipping a tick costs a minute, and the work is
+    picked up by the next one because it is driven off the lots' own state.
     """
-    call_command("endauctions")
+    from django.core.cache import cache
+
+    if not cache.add(ENDAUCTIONS_LOCK_KEY, "1", timeout=ENDAUCTIONS_LOCK_SECONDS):
+        logger.info("endauctions is already running; skipping this tick.")
+        return
+    try:
+        call_command("endauctions")
+    finally:
+        cache.delete(ENDAUCTIONS_LOCK_KEY)
 
 
 @shared_task(bind=True, ignore_result=True)
@@ -560,7 +609,9 @@ def refresh_announcement_opens(self, announcement_pk):
         announcements.refresh_email_opens(announcement)
 
 
-@shared_task
+# ignore_result: nothing reads the return value, and this is the highest-volume task on the site --
+# without it every push leaves a result row in the Redis result backend for a day.
+@shared_task(ignore_result=True)
 def send_push_to_user(user_pk, *, title, body, url, category, collapse_key=None, auction_pk=None, invoice_pk=None):
     """Send a push notification to every push-enabled device of a user; prune dead tokens.
 
@@ -878,20 +929,35 @@ def sync_discord_member_roles_for_club(self, club_pk):
         member.maybe_assign_discord_role()
 
 
+def _safely(label, do_it):
+    """Run one step of a nightly job, logging and swallowing whatever it raises.
+
+    These steps used to be five jobs in one task body, in sequence, with nothing between them. One
+    member with a bad email address -- or simply the 300-second soft time limit arriving partway
+    down the list -- ended the task, and everything below the failure was skipped for the day. They
+    are separate beat tasks now; this is the belt for the braces, so a step that fails inside one
+    of them still can't take a sibling with it.
+    """
+    try:
+        do_it()
+    except Exception:
+        logger.exception("Nightly step %s failed", label)
+
+
 @shared_task(bind=True, ignore_result=True)
 def update_expired_membership_discord_roles(self):
+    """Re-evaluate Discord roles for members whose auto-managed role no longer matches.
+
+    Runs daily. Only members whose computed role differs from last_discord_role_assigned trigger
+    Discord API calls.
+
+    This used to be five unrelated jobs in one task -- roles, the January BAP reset, welcome
+    emails, two expiration-reminder passes and the Mailchimp/Brevo backfills -- so the January
+    reset was downstream of a few thousand Discord API calls under a 300-second soft time limit.
+    Each is its own beat task now (see fishauctions/celery.py); this one kept the name because a
+    beat entry that changes name leaves an orphan PeriodicTask row behind.
     """
-    Re-evaluate and update Discord roles for all members whose auto-managed role
-    no longer matches what was last assigned (e.g. after membership expiration or renewal).
-
-    Also sends membership expiration reminder emails.
-
-    Runs daily. Only members whose computed role differs from last_discord_role_assigned
-    will trigger Discord API calls.
-    """
-    from django.utils import timezone
-
-    from auctions.models import ClubHistory, ClubMember
+    from auctions.models import ClubMember
 
     members = (
         ClubMember.objects.filter(
@@ -903,108 +969,173 @@ def update_expired_membership_discord_roles(self):
         .select_related("club", "last_discord_role_assigned")
         .prefetch_related("club__discord_roles")
     )
-
     for member in members:
         if member.discord_role != member.last_discord_role_assigned:
-            member.maybe_assign_discord_role()
+            _safely(f"discord role for member={member.pk}", member.maybe_assign_discord_role)
 
-    # Zero out YTD BAP/HAP/CAP counters at the start of each new year
-    today = datetime.datetime.now(tz=datetime.timezone.utc).date()
-    if today.month == 1 and today.day == 1:
-        ClubMember.objects.filter(
-            is_deleted=False,
-            club__enable_breeder_award_program=True,
-        ).update(bap_points_ytd=0, hap_points_ytd=0, culture_points_ytd=0)
+
+@shared_task(bind=True, ignore_result=True)
+def reset_yearly_bap_counters(self):
+    """Zero the year-to-date BAP/HAP/CAP counters at the start of each year.
+
+    Runs daily and is a no-op on 364 of them. It used to be an ``if today is January 1`` branch
+    buried in the middle of the Discord task, which meant it only happened if that whole task
+    reached its third statement on that one specific UTC day -- miss it (an exception above it, the
+    soft time limit, a worker down over the new year) and every club's year-to-date points carried
+    on accumulating from last year's totals until somebody noticed twelve months later.
+
+    ``Club.bap_ytd_reset_year`` is what makes it a fact rather than a date: a club whose recorded
+    year is behind the current one gets reset whenever this next runs, however late that is, and a
+    club already reset this year is skipped however many times this runs.
+    """
+    from django.utils import timezone
+
+    from auctions.models import Club, ClubMember
+
+    year = timezone.localtime().year
+    clubs = Club.objects.filter(enable_breeder_award_program=True).exclude(bap_ytd_reset_year=year)
+    for club in clubs:
+        ClubMember.objects.filter(club=club, is_deleted=False).update(
+            bap_points_ytd=0, hap_points_ytd=0, culture_points_ytd=0
+        )
+        Club.objects.filter(pk=club.pk).update(bap_ytd_reset_year=year)
+        logger.info("Reset year-to-date award points for club %s (%s)", club.pk, year)
+
+
+@shared_task(bind=True, ignore_result=True)
+def send_club_member_welcome_emails(self):
+    """Welcome letters for members who joined more than 24 hours ago. Daily."""
+    from django.utils import timezone
+
+    from auctions.models import ClubMember
+
+    members = ClubMember.objects.filter(
+        is_deleted=False,
+        welcome_email_sent=False,
+        createdon__lte=timezone.now() - datetime.timedelta(hours=24),
+    ).select_related("club")
+    for member in members:
+        _safely(f"welcome email for member={member.pk}", lambda member=member: _send_one_welcome(member))
+
+
+def _send_one_welcome(member):
+    from auctions.models import ClubHistory
+
+    update_fields = ["welcome_email_sent"]
+    member.welcome_email_sent = True
+    if member.source == "csv":
+        if member.send_welcome_email:
+            member.send_welcome_email = False
+            update_fields.append("send_welcome_email")
+        member.save(update_fields=update_fields)
+        return
+    if member.send_welcome_email and member.club.send_welcome_email_to_new_members:
+        sent = send_club_member_email(
+            member,
+            subject=f"Welcome to the {member.club.name}!",
+            message_text="",
+            email_type="welcome",
+        )
+        if sent:
+            # System action, so no user on the history entry
+            ClubHistory.objects.create(
+                club=member.club,
+                action=f"Sent welcome letter to {member} ({member.email})",
+                applies_to="MEMBERS",
+            )
+    member.save(update_fields=update_fields)
+
+
+@shared_task(bind=True, ignore_result=True)
+def send_membership_expiration_reminders(self):
+    """The 30-day and final "your membership expires" emails. Daily.
+
+    Both passes in one task because they are the same job at two offsets, and each member is
+    isolated: a bad address in the 30-day list used to skip the whole final-reminder pass, which is
+    the one that actually costs a club a renewal.
+    """
+    from django.utils import timezone
 
     now = timezone.now()
     today = now.date()
+    for due_field, subject, message, label in (
+        (
+            "membership_expiration_reminder_30_days_due",
+            "Your {club} membership expires in 30 days",
+            "Your {club} membership expires in 30 days.",
+            "30-day expiration reminder",
+        ),
+        (
+            "membership_expiration_reminder_due",
+            "Your {club} membership expires tomorrow",
+            "Your {club} membership expires tomorrow.",
+            "final expiration reminder",
+        ),
+    ):
+        _safely(
+            label,
+            lambda due_field=due_field, subject=subject, message=message, label=label: _run_reminder_pass(
+                now, today, due_field, subject, message, label
+            ),
+        )
 
-    welcome_qs = ClubMember.objects.filter(
-        is_deleted=False,
-        welcome_email_sent=False,
-        createdon__lte=now - datetime.timedelta(hours=24),
-    ).select_related("club")
-    for member in welcome_qs:
-        update_fields = ["welcome_email_sent"]
-        member.welcome_email_sent = True
-        if member.source == "csv":
-            if member.send_welcome_email:
-                member.send_welcome_email = False
-                update_fields.append("send_welcome_email")
-            member.save(update_fields=update_fields)
-            continue
-        if member.send_welcome_email and member.club.send_welcome_email_to_new_members:
-            sent = send_club_member_email(
-                member,
-                subject=f"Welcome to the {member.club.name}!",
-                message_text="",
-                email_type="welcome",
-            )
-            if sent:
-                # System action, so no user on the history entry
-                ClubHistory.objects.create(
-                    club=member.club,
-                    action=f"Sent welcome letter to {member} ({member.email})",
-                    applies_to="MEMBERS",
-                )
-        member.save(update_fields=update_fields)
 
-    reminder_30_days_qs = ClubMember.objects.filter(
+def _run_reminder_pass(now, today, due_field, subject, message, label):
+    from auctions.models import ClubMember
+
+    members = ClubMember.objects.filter(
         is_deleted=False,
         membership_last_paid__isnull=False,
         membership_expiration_date__isnull=False,
         membership_expiration_date__gte=today,
-        membership_expiration_reminder_30_days_due__lte=now,
         # PayPal-subscription members auto-renew, so don't nag them to renew (their due timestamp is
         # left intact, so reminders resume if the subscription is later cancelled).
         paypal_subscription_id="",
+        **{f"{due_field}__lte": now},
     ).select_related("club")
-    for member in reminder_30_days_qs:
-        if member.club.send_membership_expiration_reminders_30_days and member.club.membership_payment_emails_enabled:
-            sent = send_club_member_email(
-                member,
-                subject=f"Your {member.club.name} membership expires in 30 days",
-                message_text=f"Your {member.club.name} membership expires in 30 days.",
-                email_type="expiring_soon",
-            )
-            if sent:
-                ClubHistory.objects.create(
-                    club=member.club,
-                    action=f"Sent 30-day expiration reminder to {member} ({member.email})",
-                    applies_to="MEMBERSHIP",
-                )
-        member.membership_expiration_reminder_30_days_due = None
-        member.save(update_fields=["membership_expiration_reminder_30_days_due"])
+    for member in members:
+        _safely(
+            f"{label} for member={member.pk}",
+            lambda member=member: _send_one_reminder(member, due_field, subject, message, label),
+        )
 
-    reminder_qs = ClubMember.objects.filter(
-        is_deleted=False,
-        membership_last_paid__isnull=False,
-        membership_expiration_date__isnull=False,
-        membership_expiration_date__gte=today,
-        membership_expiration_reminder_due__lte=now,
-        # PayPal-subscription members auto-renew; skip the nag (see the 30-day query above).
-        paypal_subscription_id="",
-    ).select_related("club")
-    for member in reminder_qs:
-        if member.club.send_membership_expiration_reminders and member.club.membership_payment_emails_enabled:
-            sent = send_club_member_email(
-                member,
-                subject=f"Your {member.club.name} membership expires tomorrow",
-                message_text=f"Your {member.club.name} membership expires tomorrow.",
-                email_type="expiring_soon",
-            )
-            if sent:
-                ClubHistory.objects.create(
-                    club=member.club,
-                    action=f"Sent final expiration reminder to {member} ({member.email})",
-                    applies_to="MEMBERSHIP",
-                )
-        member.membership_expiration_reminder_due = None
-        member.save(update_fields=["membership_expiration_reminder_due"])
 
-    # Nightly Mailchimp catch-up: re-sync members of connected clubs so lifecycle tags
-    # (expiring-soon, expired, new-member -> long-term-member, probably-inactive) stay
-    # accurate even when no edit happened. backfill() enqueues one async task per member.
+def _send_one_reminder(member, due_field, subject, message, label):
+    from auctions.models import ClubHistory
+
+    reminders_on = getattr(
+        member.club,
+        "send_membership_expiration_reminders_30_days"
+        if due_field == "membership_expiration_reminder_30_days_due"
+        else "send_membership_expiration_reminders",
+    )
+    if reminders_on and member.club.membership_payment_emails_enabled:
+        sent = send_club_member_email(
+            member,
+            subject=subject.format(club=member.club.name),
+            message_text=message.format(club=member.club.name),
+            email_type="expiring_soon",
+        )
+        if sent:
+            ClubHistory.objects.create(
+                club=member.club,
+                action=f"Sent {label} to {member} ({member.email})",
+                applies_to="MEMBERSHIP",
+            )
+    # Cleared whether or not it sent: a club with reminders switched off must not be re-checked
+    # every night forever, and a send that failed is not worth retrying a year's worth of times.
+    type(member).objects.filter(pk=member.pk).update(**{due_field: None})
+
+
+@shared_task(bind=True, ignore_result=True)
+def backfill_marketing_contacts(self):
+    """Nightly Mailchimp/Brevo catch-up for connected clubs.
+
+    Re-syncs members so lifecycle tags (expiring-soon, expired, new-member -> long-term-member,
+    probably-inactive) stay accurate even when no edit happened. ``backfill()`` enqueues one async
+    task per member, so this is quick; it was last in the old monolith and therefore the first
+    thing to be skipped when anything above it failed.
+    """
     from auctions import brevo
     from auctions import mailchimp as mc
     from auctions.models import Club
@@ -1014,13 +1145,12 @@ def update_expired_membership_discord_roles(self):
     )
     for club in connected_clubs:
         if club.mailchimp_connected:
-            mc.backfill(club)
+            _safely(f"mailchimp backfill for club={club.pk}", lambda club=club: mc.backfill(club))
 
-    # Same nightly catch-up for Brevo.
     brevo_clubs = Club.objects.filter(active=True).exclude(brevo_list_id="")
     for club in brevo_clubs:
         if club.brevo_connected:
-            brevo.backfill(club)
+            _safely(f"brevo backfill for club={club.pk}", lambda club=club: brevo.backfill(club))
 
 
 @shared_task(bind=True, ignore_result=True)
@@ -1238,6 +1368,38 @@ def schedule_auction_stats_update(run_at=None):
     )
 
 
+#: How stale the self-scheduling stats task may look before the watchdog re-arms it.
+STATS_WATCHDOG_GRACE_SECONDS = 15 * 60
+
+
+@shared_task(bind=True, ignore_result=True)
+def ensure_auction_stats_task_scheduled(self):
+    """Re-arm the self-scheduling stats chain if it has stopped. Cheap, and runs on the beat.
+
+    ``update_auction_stats`` is deliberately not on the beat: it schedules its own next run at the
+    end of each run. That is fine right up until a run doesn't reach the end. The soft time limit
+    raises an exception the task catches, but the **hard** limit (``CELERY_TASK_TIME_LIMIT``)
+    SIGKILLs the child process -- no exception, no rescheduling -- and django-celery-beat has
+    already disabled the one-off row that fired it. Nothing then re-arms the chain except a worker
+    restart (``worker_ready``) or somebody opening an auction's stats page, and for the first
+    quarter of an hour after the death even that page won't do it: ``recalculation_pending`` in
+    ``AuctionStats`` is true for the very auction that was mid-recalculation when it died.
+
+    So auction statistics silently stopped updating until someone noticed. This is the backstop:
+    one indexed lookup on the beat, and a re-arm only when the row is gone, disabled, or overdue by
+    more than the grace period.
+    """
+    from django.utils import timezone
+
+    task = PeriodicTask.objects.filter(name=AUCTION_STATS_TASK_NAME).select_related("clocked").first()
+    if task and task.enabled and task.clocked:
+        overdue_since = timezone.now() - datetime.timedelta(seconds=STATS_WATCHDOG_GRACE_SECONDS)
+        if task.clocked.clocked_time > overdue_since:
+            return
+    logger.warning("The auction stats task was missing or overdue; re-arming it.")
+    schedule_auction_stats_update()
+
+
 @shared_task(bind=True, ignore_result=True)
 def update_auction_stats(self):
     """
@@ -1424,16 +1586,7 @@ def update_google_wallet_objects_for_club(self, club_pk):
     if not club:
         return
     members = ClubMember.objects.filter(club=club, is_deleted=False).select_related("user", "club")
-    for member in members:
-        try:
-            update_generic_object_for_member(member)
-        except requests.RequestException:
-            logger.exception(
-                "Google Wallet object refresh failed for club=%s member=%s",
-                club.pk,
-                member.pk,
-            )
-            raise
+    _per_item(self, f"Google Wallet object refresh for club={club.pk}", members, update_generic_object_for_member)
 
 
 @shared_task(
@@ -1577,15 +1730,12 @@ def expire_google_wallet_objects_for_club(self, club_pk, unpaid_only=False):
     club = Club.objects.filter(pk=club_pk).first()
     if not club:
         return
-    members = ClubMember.objects.filter(club=club, is_deleted=False)
-    for member in members:
-        if unpaid_only and member.is_paid_member:
-            continue
-        try:
-            expire_generic_object_for_member(member)
-        except requests.RequestException:
-            # Let Celery's autoretry handle transient failures on the outer task.
-            raise
+    members = [
+        member
+        for member in ClubMember.objects.filter(club=club, is_deleted=False)
+        if not (unpaid_only and member.is_paid_member)
+    ]
+    _per_item(self, f"Google Wallet expiry for club={club.pk}", members, expire_generic_object_for_member)
 
 
 @shared_task(
@@ -1623,12 +1773,7 @@ def refresh_google_wallet_membership_status(self):
         membership_expiration_date__gte=window_start,
         membership_expiration_date__lt=today,
     ).select_related("user", "club")
-    for member in members:
-        try:
-            update_generic_object_for_member(member)
-        except requests.RequestException:
-            logger.exception("Google Wallet daily status refresh failed for member=%s", member.pk)
-            raise
+    _per_item(self, "Google Wallet daily status refresh", members, update_generic_object_for_member)
 
 
 @shared_task(
@@ -1657,8 +1802,13 @@ def notify_apple_wallet_devices_for_member(self, member_pk):
         return
     if not ClubMember.objects.filter(pk=member_pk).update(apple_pass_updated=timezone.now()):
         return
-    for registration in AppleDeviceRegistration.objects.filter(member_id=member_pk):
-        send_pass_update_notification(registration)
+    _per_item(
+        self,
+        f"Apple Wallet push for member={member_pk}",
+        AppleDeviceRegistration.objects.filter(member_id=member_pk),
+        send_pass_update_notification,
+        exceptions=(httpx.HTTPError,),
+    )
 
 
 @shared_task(
@@ -1684,8 +1834,13 @@ def notify_apple_wallet_devices_for_club(self, club_pk):
         return
     ClubMember.objects.filter(club_id=club_pk).update(apple_pass_updated=timezone.now())
     registrations = AppleDeviceRegistration.objects.filter(member__club_id=club_pk)
-    for registration in registrations:
-        send_pass_update_notification(registration)
+    _per_item(
+        self,
+        f"Apple Wallet club push for club={club_pk}",
+        registrations,
+        send_pass_update_notification,
+        exceptions=(httpx.HTTPError,),
+    )
 
 
 @shared_task(
@@ -1720,10 +1875,20 @@ def refresh_apple_wallet_membership_status(self):
         membership_expiration_date__lt=today,
         apple_device_registrations__isnull=False,
     ).distinct()
-    for member in members:
-        ClubMember.objects.filter(pk=member.pk).update(apple_pass_updated=timezone.now())
-        for registration in AppleDeviceRegistration.objects.filter(member=member):
-            send_pass_update_notification(registration)
+    member_pks = list(members.values_list("pk", flat=True))
+    if not member_pks:
+        return
+    ClubMember.objects.filter(pk__in=member_pks).update(apple_pass_updated=timezone.now())
+    # One query for every registration rather than one per member, and one failing device no longer
+    # leaves every member after it with a pass that still says "valid" -- see _per_item.
+    registrations = AppleDeviceRegistration.objects.filter(member_id__in=member_pks)
+    _per_item(
+        self,
+        "Apple Wallet daily status refresh",
+        registrations,
+        send_pass_update_notification,
+        exceptions=(httpx.HTTPError,),
+    )
 
 
 @shared_task(
@@ -1808,6 +1973,22 @@ def compute_user_flow_all(self, sleep_seconds=2):
     The final step aggregates all page views into a combined "all auctions" result.
     Trigger via the admin user-flow page; results persist indefinitely in Redis.
     """
+    from django.core.cache import cache
+
+    # One at a time. This is enqueued by a button on the admin page, holds a worker slot for as long
+    # as it takes (time_limit=None) and sleeps between auctions, and the worker runs with
+    # concurrency=2 -- so two presses of the button occupied both slots and stopped every other task
+    # on the site, endauctions included. A second press is now a no-op rather than a queue.
+    if not cache.add(USER_FLOW_LOCK_KEY, "1", timeout=USER_FLOW_LOCK_SECONDS):
+        logger.info("compute_user_flow_all is already running; ignoring this request.")
+        return
+    try:
+        _compute_user_flow_all(sleep_seconds)
+    finally:
+        cache.delete(USER_FLOW_LOCK_KEY)
+
+
+def _compute_user_flow_all(sleep_seconds):
     import time
 
     from django.core.cache import cache

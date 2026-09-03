@@ -56,7 +56,7 @@ from django.db.models import (
     prefetch_related_objects,
 )
 from django.db.models.base import Model as Model
-from django.db.models.functions import ExtractHour, ExtractIsoWeekDay, TruncDay, TruncMonth
+from django.db.models.functions import ExtractHour, ExtractIsoWeekDay, TruncDate, TruncDay, TruncMonth
 from django.forms import modelformset_factory
 from django.http import (
     Http404,
@@ -7542,6 +7542,194 @@ class ImportLotsFromCSV(LoginRequiredMixin, CSVContactImportMixin, AuctionViewMi
         return self.redirect_to_preview(token)
 
 
+#: How far back the page-view history modals look.  Fifteen days is what the modals say on the
+#: tin, and it is also the bound that keeps them cheap: PageView is the largest table on the site.
+PAGE_VIEW_HISTORY_DAYS = 15
+
+#: How many off-site referrers the history lists.  The referrer column is free text with a long
+#: tail, so the whole list would be unreadable and unbounded; the top few are the useful part.
+PAGE_VIEW_HISTORY_REFERRERS = 5
+
+
+def page_view_history(page_views, days=PAGE_VIEW_HISTORY_DAYS):
+    """A short traffic history: totals, a breakdown by where people came from, and a daily count.
+
+    ``page_views`` is a :class:`~auctions.models.PageView` queryset the caller has **already**
+    narrowed to the rows this reader may see -- one lot, or one seller's lots.  This function then
+    narrows it again to the last ``days`` days.  PageView is the biggest table on the site, so
+    every query below carries both bounds: a query here that is not limited by an owner *and* a
+    date has no business existing.
+
+    Four aggregate queries, and no PageView row is ever fetched into Python:
+
+    * one ``values("source").annotate(...)`` for the breakdown by ``?src=``,
+    * one ``TruncDate`` group-by for the per-day totals,
+    * one for the top :data:`PAGE_VIEW_HISTORY_REFERRERS` off-site referrers,
+    * one ``aggregate()`` for the unique-viewer total, which cannot be summed back out of the
+      per-source counts (the same person shows up under two sources).
+
+    What comes back is at most ``days`` day rows, one row per ``?src=`` value in use and five
+    referrers, so the dict handed to the template stays small however busy the window was.
+
+    ``source`` is the primary breakdown and ``referrer`` the secondary one on purpose.  ``source``
+    is the ``?src=`` parameter, a vocabulary this site writes itself and can therefore label
+    (``Lot.PAGE_VIEW_SOURCE_LABELS``); ``referrer`` is whatever a browser chose to send, is blank
+    on most visits, and is mostly this site linking to itself.  So the source rows answer "which of
+    our surfaces sent them" and the referrer rows are kept for the one thing source cannot say:
+    who linked to this from somewhere else.
+    """
+    now = timezone.localtime()
+    first_day = (now - timedelta(days=days - 1)).date()
+    start = (now - timedelta(days=days - 1)).replace(hour=0, minute=0, second=0, microsecond=0)
+    recent = page_views.filter(date_start__gte=start)
+
+    # Sources.  ``None`` and ``""`` both mean "no ?src= on the URL" and are one row, the same way
+    # Lot.page_view_source_breakdown merges them; the labels come from that same table.
+    merged = {}
+    for row in recent.values("source").annotate(
+        views=Count("pk"),
+        users=Count("user", distinct=True),
+        sessions=Count("session_id", distinct=True, filter=Q(user__isnull=True)),
+    ):
+        source = row["source"] or ""
+        entry = merged.setdefault(
+            source,
+            {
+                "source": source,
+                "label": Lot.PAGE_VIEW_SOURCE_LABELS.get(source, source),
+                "is_ar_event": source in Lot.AR_PAGE_VIEW_SOURCES,
+                "views": 0,
+                "unique": 0,
+            },
+        )
+        entry["views"] += row["views"]
+        entry["unique"] += row["users"] + row["sessions"]
+    sources = sorted(merged.values(), key=lambda entry: (-entry["views"], entry["label"]))
+
+    # One row per day, including the days nobody looked -- a history with holes in it reads as
+    # missing data rather than as a quiet Tuesday.
+    counted = {
+        row["day"]: row["views"]
+        for row in recent.annotate(day=TruncDate("date_start"))
+        .values("day")
+        .annotate(views=Count("pk"))
+        .order_by("day")
+    }
+    day_rows = [{"day": first_day + timedelta(days=offset), "views": 0} for offset in range(days)]
+    for row in day_rows:
+        row["views"] = counted.get(row["day"], 0)
+    busiest = max([row["views"] for row in day_rows], default=0)
+    for row in day_rows:
+        row["bar"] = round(row["views"] * 100 / busiest) if busiest else 0
+
+    # Off-site referrers only: our own pages are already the source breakdown, in better words.
+    domain = Site.objects.get_current().domain
+    referrers = list(
+        recent.exclude(referrer__isnull=True)
+        .exclude(referrer="")
+        .exclude(referrer__startswith=domain)
+        .exclude(referrer__startswith=f"https://{domain}")
+        .exclude(referrer__startswith=f"http://{domain}")
+        .values("referrer")
+        .annotate(views=Count("pk"))
+        .order_by("-views", "referrer")[:PAGE_VIEW_HISTORY_REFERRERS]
+    )
+
+    totals = recent.aggregate(
+        views=Count("pk"),
+        users=Count("user", distinct=True),
+        sessions=Count("session_id", distinct=True, filter=Q(user__isnull=True)),
+    )
+    return {
+        "days": days,
+        "first_day": first_day,
+        "last_day": now.date(),
+        "total_views": totals["views"] or 0,
+        "unique_viewers": (totals["users"] or 0) + (totals["sessions"] or 0),
+        "day_rows": day_rows,
+        "sources": sources,
+        "referrers": referrers,
+        "has_ar_rows": any(row["is_ar_event"] for row in sources),
+    }
+
+
+def can_see_lot_page_view_history(user, lot):
+    """Who gets the view-history button on a lot page, and on which lots.
+
+    Two questions, and both are answered here rather than in the template so that
+    :class:`LotPageViewHistoryView` and the button that opens it can never disagree.
+
+    **Who:** the seller, and anyone who administers the auction the lot is in.  Nobody else -- how
+    many people looked at a lot, and how they found it, is the seller's business.
+
+    **Which lots:** only lots in an *online* auction, or with no auction at all.  A lot in an
+    in-person auction already has the per-source breakdown in the collapse under "Views"
+    (``show_page_view_breakdown`` and :attr:`Lot.page_view_source_breakdown`), and a second table of
+    the same numbers on the same page is worse than either alone.  A sealed-bid lot publishes no
+    view count at all, so it gets no history either.
+    """
+    if not lot or lot.sealed_bid:
+        return False
+    if lot.auction_id and not lot.auction.is_online:
+        return False
+    if lot.is_owned_by(user):
+        return True
+    return bool(lot.auction_id and lot.auction.permission_check(user))
+
+
+class LotPageViewHistoryView(LoginRequiredMixin, View):
+    """The last 15 days of traffic on one lot, as a modal loaded over HTMX into ``#modals-here``.
+
+    GET only -- it reads and never writes, which is also why it needs no ``palette_actions`` entry
+    (see the Housekeeping section of CLAUDE.md); ``palette_routes.EXCLUDED`` carries the reason it
+    is not a page somebody can be navigated to.
+    """
+
+    def get(self, request, pk):
+        lot = get_object_or_404(Lot.objects.exclude(is_deleted=True).select_related("auction"), pk=pk)
+        # The permission check lives here, not only on the button: the URL is guessable.  A lot
+        # whose *type* has no history modal is refused here too, so there is exactly one rule.
+        if not can_see_lot_page_view_history(request.user, lot):
+            raise PermissionDenied
+        return render(
+            request,
+            "auctions/page_view_history_modal.html",
+            {
+                "history": page_view_history(PageView.objects.filter(lot_number=lot)),
+                "modal_title": "How people found this lot",
+                "modal_subtitle": lot.lot_name,
+            },
+        )
+
+
+class MyLotsPageViewHistoryView(LoginRequiredMixin, View):
+    """The same 15 days as :class:`LotPageViewHistoryView`, totalled over every lot you are selling.
+
+    Opened from the selling dashboard (``MyLots``).  There is no permission question -- the answer
+    is scoped to ``request.user``'s own lots, matched the way ``filters.UserLotFilter`` matches
+    them, so one person can never be handed another's numbers.  The lot set goes in as a subquery
+    rather than a list of primary keys: it is one round trip, and it keeps the PageView query
+    bounded by owner in the database instead of in Python.
+    """
+
+    def get(self, request):
+        lots = (
+            Lot.objects.exclude(is_deleted=True)
+            .filter(Q(user=request.user) | Q(auctiontos_seller__user=request.user))
+            .order_by()
+            .values("pk")
+        )
+        return render(
+            request,
+            "auctions/page_view_history_modal.html",
+            {
+                "history": page_view_history(PageView.objects.filter(lot_number__in=lots)),
+                "modal_title": "How people found your lots",
+                "modal_subtitle": "Every lot you are selling",
+            },
+        )
+
+
 class ViewLot(DetailView):
     """Show the picture and detailed information about a lot, and allow users to place bids"""
 
@@ -7821,6 +8009,11 @@ class ViewLot(DetailView):
         context["show_page_view_breakdown"] = bool(
             is_lot_creator and lot.auction and not lot.auction.is_online and not lot.sealed_bid
         )
+        # The 15-day history modal is the other half of that: online (and auction-less) lots, where
+        # there is no in-room scanning to break down, and open to the auction's admins as well as
+        # the seller. can_see_lot_page_view_history is the one rule; LotPageViewHistoryView asks it
+        # again, so this flag only decides whether the button is drawn.
+        context["show_page_view_history"] = can_see_lot_page_view_history(self.request.user, lot)
         # chat subscription stuff
         if self.request.user.is_authenticated:
             context["show_chat_subscriptions_checkbox"] = True

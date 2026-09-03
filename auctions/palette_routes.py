@@ -1142,6 +1142,12 @@ EXCLUDED: dict[str, str] = {
     "delete_auction_chat": _API,
     "auctionlotadmin": _API,
     "lot_bap_points": _API,
+    # The two page-view history modals (a lot's, and every lot on the selling dashboard). Both are
+    # GET-only HTMX fragments that open over the page they were pressed on; there is no page here to
+    # send anybody to, and the pages that carry the buttons -- lot_by_pk and selling -- are both in
+    # the catalog already.
+    "lot_page_view_history": _API,
+    "my_lots_page_view_history": _API,
     "auction_custom_dropdown_options": _API,
     "auctiontosadmin": _API,
     "auctiontosdelete": _API,

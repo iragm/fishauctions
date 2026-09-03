@@ -3880,6 +3880,10 @@ SETTINGS_NOT_DESCRIBED: dict[str, str] = {
 POINTS_NOT_DESCRIBED: dict[str, str] = {
     "last_bap_recalculation": "When the totals were last recomputed, not a rule. Already in the admin block.",
     "next_bap_recalculation": "Internal scheduling for the recalculation job; nobody asks the palette about it.",
+    "bap_ytd_reset_year": (
+        "Bookkeeping for tasks.reset_yearly_bap_counters -- which year this club's year-to-date "
+        "counters were last zeroed. Not a rule anybody earns points under, and not editable."
+    ),
 }
 
 

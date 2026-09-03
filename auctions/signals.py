@@ -851,7 +851,12 @@ def on_cloudflare_image_row_deleted(sender, instance, **kwargs):
     ):
         from .tasks import delete_cloudflare_image
 
-        delete_cloudflare_image.delay(instance.cloudflare_image_id)
+        # on_commit, like every other .delay() in this file. post_delete fires *inside* the
+        # transaction Django wraps every delete in (and inside the enclosing one, for a cascade),
+        # so enqueuing here directly meant a rollback could leave the row alive and pointing at an
+        # image that had already been deleted from Cloudflare -- unrecoverable, and invisible until
+        # somebody opened the lot.
+        transaction.on_commit(lambda image_id=instance.cloudflare_image_id: delete_cloudflare_image.delay(image_id))
 
 
 @receiver(post_save, sender="auctions.ThermalPrinterProfile")

@@ -1,0 +1,80 @@
+{% comment %}
+The last 15 days of page views, in three tables.  Shared by both history modals: one lot's
+(view_lot_images.html) and every lot somebody is selling (the selling dashboard).  Everything here
+comes out of views.page_view_history, which does the counting in the database; nothing in this file
+loops over PageView rows.
+
+No help-note: /selling/ already spends its one note (style_reference.md, "One help note per page"),
+so the standing explanations here are text-muted instead.
+{% endcomment %}
+<p class="mb-3">
+  <span class="fs-4">{{ history.total_views }}</span> view{{ history.total_views|pluralize }}
+  from {{ history.unique_viewers }} {% if history.unique_viewers == 1 %}person{% else %}people{% endif %},
+  {{ history.first_day|date:"N j" }}&ndash;{{ history.last_day|date:"N j, Y" }}.
+  <br><small class="text-muted">{{ modal_subtitle }} &middot; the last {{ history.days }} days only.</small>
+</p>
+
+<h6 class="border-bottom pb-2">How they got here</h6>
+<div class="table-responsive">
+  <table class="table table-sm align-middle">
+    <thead>
+      <tr><th>How they got here</th><th class="text-end">Views</th><th class="text-end">People</th></tr>
+    </thead>
+    <tbody>
+      {% for row in history.sources %}
+      <tr>
+        <td>{{ row.label }}</td>
+        <td class="text-end">{{ row.views }}</td>
+        <td class="text-end">{{ row.unique }}</td>
+      </tr>
+      {% empty %}
+      <tr><td colspan="3" class="text-muted">Nothing in the last {{ history.days }} days.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% if history.has_ar_rows %}
+<small class="text-muted d-block mb-3">The lot-scanning rows count each person once, no matter how many times they looked. Everything else is one row per visit.</small>
+{% endif %}
+
+<h6 class="border-bottom pb-2 mt-3">Day by day</h6>
+<div class="table-responsive">
+  <table class="table table-sm align-middle mb-1">
+    <thead>
+      <tr><th>Day</th><th class="text-end">Views</th><th class="w-50"><span class="visually-hidden">Relative to the busiest day</span></th></tr>
+    </thead>
+    <tbody>
+      {% for row in history.day_rows %}
+      <tr>
+        <td class="text-nowrap">{{ row.day|date:"D N j" }}</td>
+        <td class="text-end">{{ row.views }}</td>
+        <td>
+          {% comment %}Bars are scaled to the busiest day in the window, which views.page_view_history works out; an empty day is deliberately an empty cell rather than a zero-width bar.{% endcomment %}
+          {% if row.bar %}<div class="progress" role="img" aria-label="{{ row.views }} view{{ row.views|pluralize }}" style="height:.5rem;"><div class="progress-bar bg-primary" style="width:{{ row.bar }}%"></div></div>{% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<h6 class="border-bottom pb-2 mt-3">Links from other sites</h6>
+{% if history.referrers %}
+<div class="table-responsive">
+  <table class="table table-sm align-middle mb-1">
+    <thead>
+      <tr><th>Page they came from</th><th class="text-end">Views</th></tr>
+    </thead>
+    <tbody>
+      {% for row in history.referrers %}
+      <tr>
+        <td class="text-break"><small>{{ row.referrer|truncatechars:120 }}</small></td>
+        <td class="text-end">{{ row.views }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+<small class="text-muted">Nobody arrived from another website in the last {{ history.days }} days. Most browsers send nothing at all, so this is usually empty even when they did.</small>
+{% endif %}

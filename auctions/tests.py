@@ -8408,10 +8408,12 @@ class ClubMembershipEmailTaskTests(TestCase):
 
     @patch("auctions.tasks.mail.send")
     def test_daily_membership_task_sends_welcome_email(self, mock_send):
-        from auctions.tasks import update_expired_membership_discord_roles
+        # Its own beat task since the nightly membership work was split up: it used to sit below a
+        # few thousand Discord API calls in one task body, under a 300-second soft time limit.
+        from auctions.tasks import send_club_member_welcome_emails
 
         ClubMember.objects.filter(pk=self.member.pk).update(createdon=timezone.now() - datetime.timedelta(days=2))
-        update_expired_membership_discord_roles.run()
+        send_club_member_welcome_emails.run()
 
         self.member.refresh_from_db()
         self.assertTrue(self.member.welcome_email_sent)
@@ -8424,13 +8426,13 @@ class ClubMembershipEmailTaskTests(TestCase):
     @patch("auctions.tasks.mail.send")
     def test_daily_membership_task_logs_no_history_when_welcome_email_not_sent(self, mock_send):
         """A do-not-contact member gets no welcome email, so there's nothing to log."""
-        from auctions.tasks import update_expired_membership_discord_roles
+        from auctions.tasks import send_club_member_welcome_emails
 
         ClubMember.objects.filter(pk=self.member.pk).update(
             createdon=timezone.now() - datetime.timedelta(days=2),
             contact_status="do_not_contact",
         )
-        update_expired_membership_discord_roles.run()
+        send_club_member_welcome_emails.run()
 
         self.member.refresh_from_db()
         self.assertTrue(self.member.welcome_email_sent)
@@ -8439,13 +8441,13 @@ class ClubMembershipEmailTaskTests(TestCase):
 
     @patch("auctions.tasks.mail.send")
     def test_daily_membership_task_sends_30_day_expiration_email(self, mock_send):
-        from auctions.tasks import update_expired_membership_discord_roles
+        from auctions.tasks import send_membership_expiration_reminders
 
         self.member.welcome_email_sent = True
         self.member.membership_expiration_reminder_30_days_due = timezone.now() - datetime.timedelta(minutes=1)
         self.member.save(update_fields=["welcome_email_sent", "membership_expiration_reminder_30_days_due"])
 
-        update_expired_membership_discord_roles.run()
+        send_membership_expiration_reminders.run()
 
         self.member.refresh_from_db()
         self.assertIsNone(self.member.membership_expiration_reminder_30_days_due)
@@ -8455,7 +8457,7 @@ class ClubMembershipEmailTaskTests(TestCase):
 
     @patch("auctions.tasks.mail.send")
     def test_daily_membership_task_sends_day_before_expiration_email(self, mock_send):
-        from auctions.tasks import update_expired_membership_discord_roles
+        from auctions.tasks import send_membership_expiration_reminders
 
         ClubMember.objects.filter(pk=self.member.pk).update(
             welcome_email_sent=True,
@@ -8463,7 +8465,7 @@ class ClubMembershipEmailTaskTests(TestCase):
             membership_expiration_reminder_due=timezone.now() - datetime.timedelta(minutes=1),
         )
 
-        update_expired_membership_discord_roles.run()
+        send_membership_expiration_reminders.run()
 
         self.member.refresh_from_db()
         self.assertIsNone(self.member.membership_expiration_reminder_due)
@@ -14907,7 +14909,7 @@ class ModelMethodsTestCase(StandardTestCase):
         self.assertTrue(auction.is_deleted)
 
     def test_pageview_merge_and_delete_duplicate_extends_time_range(self):
-        """Test PageView.merge_and_delete_duplicate extends time range correctly"""
+        """Test PageView.merge_and_delete_duplicates extends time range correctly"""
         from auctions.models import PageView
 
         # Create two PageView instances that are duplicates
@@ -14931,7 +14933,7 @@ class ModelMethodsTestCase(StandardTestCase):
 
         # Merge view2 into view1
         # Call as method now (no longer a property)
-        view1.merge_and_delete_duplicate()
+        view1.merge_and_delete_duplicates()
 
         # view1 should have extended time range and combined total_time
         view1.refresh_from_db()
@@ -31343,11 +31345,37 @@ class CloudflareImagesTests(WritableMediaRoot, StandardTestCase):
         new_image = LotImage.objects.filter(lot_number=new_lot).first()
         self.assertEqual(new_image.cloudflare_image_id, "shared-id")
 
+    ROLLBACK = "rolled back on purpose"
+
     def test_deleting_row_queues_cloudflare_delete(self):
+        """Queued on commit, not from inside the delete.
+
+        post_delete fires inside the transaction Django wraps every delete in, so enqueuing there
+        directly meant a rollback could leave the row alive pointing at an image that had already
+        been deleted from Cloudflare. captureOnCommitCallbacks is what runs the callback in a
+        TestCase, where nothing ever really commits.
+        """
         image = LotImage.objects.create(lot_number=self._lot(), cloudflare_image_id="gone1")
         with patch("auctions.tasks.delete_cloudflare_image.delay") as mock_delay:
-            image.delete()
+            with self.captureOnCommitCallbacks(execute=True):
+                image.delete()
         mock_delay.assert_called_once_with("gone1")
+
+    def test_a_rolled_back_delete_does_not_delete_the_image(self):
+        """The reason for the on_commit. A Cloudflare delete cannot be undone."""
+        image = LotImage.objects.create(lot_number=self._lot(), cloudflare_image_id="gone2")
+        from django.db import transaction
+
+        with patch("auctions.tasks.delete_cloudflare_image.delay") as mock_delay:
+            with self.captureOnCommitCallbacks(execute=True):
+                try:
+                    with transaction.atomic():
+                        image.delete()
+                        raise ValueError(self.ROLLBACK)
+                except ValueError:
+                    pass
+        mock_delay.assert_not_called()
+        self.assertTrue(LotImage.objects.filter(cloudflare_image_id="gone2").exists())
 
     def test_delete_task_skips_shared_images(self):
         from auctions import tasks

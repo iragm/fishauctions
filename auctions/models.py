@@ -963,6 +963,12 @@ class Club(CloudflareImageMixin, models.Model):
         default=False,
         help_text="Track when users breed fish and show a leaderboard of top breeders.",
     )
+    bap_ytd_reset_year = models.PositiveIntegerField(null=True, blank=True, editable=False)
+    bap_ytd_reset_year.help_text = (
+        "The last year this club's year-to-date award counters were zeroed.  Written by "
+        "tasks.reset_yearly_bap_counters, which is what makes the reset a fact about the club "
+        "rather than something that only happens if a nightly task lands on January 1."
+    )
     enable_membership = models.BooleanField(
         default=False,
         verbose_name="Enable membership",
@@ -11647,7 +11653,15 @@ class PageView(models.Model):
 
     @property
     def duplicates(self):
-        """Some duplciates have appeared and I can't figure out how it's possible"""
+        """The other rows that are the same visit as this one.
+
+        A blank ``session_id`` is not a match. Without that guard the filter below reads as
+        ``session_id IS NULL`` (or ``= ''``) and every *anonymous* view of one URL becomes a
+        duplicate of every other one, so the deduplicator would collapse thousands of unrelated
+        visits into a single row with their counters summed.
+        """
+        if not self.session_id:
+            return PageView.objects.none()
         return PageView.objects.filter(
             user=self.user,
             lot_number=self.lot_number,
@@ -11660,46 +11674,83 @@ class PageView(models.Model):
     def duplicate_count(self):
         return self.duplicates.count()
 
-    def merge_and_delete_duplicate(self):
-        """Merge duplicate PageView records and delete the duplicate.
+    def merge_and_delete_duplicates(self):
+        """Fold **every** duplicate of this view into it, delete them, and mark it checked.
 
-        This method should be called explicitly, not accessed as a property,
-        as it has side effects (modifies and deletes database records).
+        Returns how many rows were merged away. Called explicitly, never as a property: it
+        modifies and deletes rows.
+
+        Three things here are load-bearing, and all three were bugs:
+
+        * **Every duplicate, not one.** This used to merge ``duplicates.first()`` and return, while
+          the caller marked the row done regardless -- so a view with three duplicates kept two of
+          them forever.
+        * **``update()`` on this row, never ``save()``.** The caller iterates a queryset it
+          materialised before any of this ran, so it reaches rows that a previous iteration has
+          already deleted. ``save()`` on a deleted instance finds no row to UPDATE and Django
+          **re-INSERTs it** under its old primary key (``select_on_save`` is False and the pk is an
+          ``AutoField``), resurrecting a merged-away duplicate with double-counted totals and
+          deleting the row it had just been merged into. An ``UPDATE ... WHERE pk = x`` that matches
+          nothing is simply a no-op, which is the behaviour this needs.
+        * **One transaction.** Summing the counters and deleting the rows they came from must not be
+          separable, or a crash between them double-counts every one of them on the next pass.
         """
-        if self.duplicate_count:
-            dup = self.duplicates.first()
-            self.date_start = min(self.date_start, dup.date_start)
-            if self.date_end and dup.date_end:
-                self.date_end = max(self.date_end, dup.date_end)
-            self.total_time = self.total_time + dup.total_time
-            if not self.source:
-                self.source = dup.source
-            self.counter = self.counter + dup.counter
-            if dup.notification_sent:
-                self.notification_sent = True
-            if not self.title:
-                self.title = dup.title
-            if not self.referrer:
-                self.referrer = dup.referrer
-            self.save()
-            dup.delete()
+        duplicates = list(self.duplicates)
+        fields = {"duplicate_check_completed": True}
+        if duplicates:
+            starts = [d.date_start for d in duplicates if d.date_start]
+            if self.date_start:
+                starts.append(self.date_start)
+            ends = [d.date_end for d in duplicates if d.date_end]
+            if self.date_end:
+                ends.append(self.date_end)
+            fields["date_start"] = min(starts) if starts else self.date_start
+            # Left alone when nothing in the group has an end time, rather than invented.
+            if ends:
+                fields["date_end"] = max(ends)
+            fields["total_time"] = self.total_time + sum(d.total_time for d in duplicates)
+            fields["counter"] = self.counter + sum(d.counter for d in duplicates)
+            fields["notification_sent"] = self.notification_sent or any(d.notification_sent for d in duplicates)
+            for name in ("source", "title", "referrer"):
+                value = getattr(self, name)
+                if not value:
+                    value = next((getattr(d, name) for d in duplicates if getattr(d, name)), value)
+                fields[name] = value
+        with transaction.atomic():
+            PageView.objects.filter(pk=self.pk).update(**fields)
+            if duplicates:
+                PageView.objects.filter(pk__in=[d.pk for d in duplicates]).delete()
+        for name, value in fields.items():
+            setattr(self, name, value)
+        return len(duplicates)
 
     def save(self, *args, **kwargs):
         if not self.latitude and self.ip_address:
-            other_view_with_same_ip = (
+            # values_list, not first(): this needs two floats, and hydrating a whole PageView to
+            # read them is the expensive half of a query that runs on every save of every row whose
+            # latitude is still 0. The (ip_address, -date_start) index is what keeps the rest of it
+            # cheap -- ip_address alone left MariaDB sorting the matches by hand.
+            nearby = (
                 PageView.objects.exclude(latitude=0, longitude=0)
                 .filter(ip_address=self.ip_address)
                 .order_by("-date_start")
+                .values_list("latitude", "longitude")
                 .first()
             )
-            if other_view_with_same_ip:
-                self.latitude = other_view_with_same_ip.latitude
-                self.longitude = other_view_with_same_ip.longitude
-            elif self.user:
-                if self.user.userdata.latitude:
-                    self.latitude = self.user.userdata.latitude
-                    self.longitude = self.user.userdata.longitude
+            if nearby:
+                self.latitude, self.longitude = nearby
+            elif self.user and self.user.userdata.latitude:
+                self.latitude = self.user.userdata.latitude
+                self.longitude = self.user.userdata.longitude
         super().save(*args, **kwargs)
+
+    class Meta:
+        indexes = [
+            # For the lookup in save() above. ip_address was indexed on its own, which found the
+            # rows but left the "-date_start" ordering to a filesort over all of them -- on the
+            # largest table on the site, from a query that runs on every page view.
+            models.Index(fields=["ip_address", "-date_start"], name="pageview_ip_recent_idx"),
+        ]
 
 
 class UserLabelPrefs(models.Model):

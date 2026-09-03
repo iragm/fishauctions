@@ -112,8 +112,34 @@ app.conf.beat_schedule = {
         "schedule": 86400.0,  # Run every 24 hours
     },
     # Update Discord roles for members whose membership has expired or been renewed - every 24 hours
+    #
+    # The four entries below it were all part of this one task until they were split out. They ran
+    # in sequence in a single body under CELERY_TASK_SOFT_TIME_LIMIT, so a slow Discord sync -- or
+    # one member with a bad email address -- silently skipped everything after it, including the
+    # once-a-year award-points reset. Separate entries mean one failing is one failing.
     "update_expired_membership_discord_roles": {
         "task": "auctions.tasks.update_expired_membership_discord_roles",
+        "schedule": 86400.0,  # Run every 24 hours
+    },
+    # Zero the year-to-date award counters at the start of each year - every 24 hours (a no-op on
+    # 364 of them; it catches up whenever it runs, rather than needing to land on January 1)
+    "reset_yearly_bap_counters": {
+        "task": "auctions.tasks.reset_yearly_bap_counters",
+        "schedule": 86400.0,  # Run every 24 hours
+    },
+    # Welcome letters for members who joined more than 24 hours ago - every 24 hours
+    "send_club_member_welcome_emails": {
+        "task": "auctions.tasks.send_club_member_welcome_emails",
+        "schedule": 86400.0,  # Run every 24 hours
+    },
+    # "your membership expires in 30 days" and "expires tomorrow" - every 24 hours
+    "send_membership_expiration_reminders": {
+        "task": "auctions.tasks.send_membership_expiration_reminders",
+        "schedule": 86400.0,  # Run every 24 hours
+    },
+    # Nightly Mailchimp/Brevo catch-up so lifecycle tags stay accurate - every 24 hours
+    "backfill_marketing_contacts": {
+        "task": "auctions.tasks.backfill_marketing_contacts",
         "schedule": 86400.0,  # Run every 24 hours
     },
     # Refresh Google Wallet passes for members who recently expired so the pass status/color updates - every 24 hours
@@ -155,6 +181,15 @@ app.conf.beat_schedule = {
     # Note: update_auction_stats is NOT in beat_schedule as it's self-scheduling.
     # It starts on worker_ready and schedules itself based on when the next
     # auction's stats are due for update.
+    #
+    # This is the watchdog for that chain, and it is on the beat precisely because the chain is
+    # not: a run killed by the hard time limit never reaches its own rescheduling call, and until
+    # this existed the only things that re-armed it were a worker restart and an admin opening a
+    # stats page. One indexed lookup every 15 minutes.
+    "ensure_auction_stats_task_scheduled": {
+        "task": "auctions.tasks.ensure_auction_stats_task_scheduled",
+        "schedule": 900.0,  # Run every 15 minutes
+    },
 }
 
 

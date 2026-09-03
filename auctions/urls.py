@@ -116,6 +116,16 @@ urlpatterns = [
     path("api/lot/<int:pk>/", views.LotAdmin.as_view(), name="auctionlotadmin"),
     path("api/lot/<int:pk>/bap/", views.LotBapPointsView.as_view(), name="lot_bap_points"),
     path(
+        "api/lot/<int:pk>/page-views/",
+        views.LotPageViewHistoryView.as_view(),
+        name="lot_page_view_history",
+    ),
+    path(
+        "api/selling/page-views/",
+        views.MyLotsPageViewHistoryView.as_view(),
+        name="my_lots_page_view_history",
+    ),
+    path(
         "api/auctions/<slug:slug>/custom-dropdown-options/",
         views.AuctionDropdownOptionsAPI.as_view(),
         name="auction_custom_dropdown_options",
