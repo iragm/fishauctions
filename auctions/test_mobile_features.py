@@ -693,18 +693,18 @@ class MobileDeviceApiTests(StandardTestCase):
 
 class PreferencesPushToggleTests(TestCase):
     def test_toggle_disabled_without_device(self):
-        from auctions.forms import ChangeUserPreferencesForm
+        from auctions.forms import ChangeUserNotificationsForm
 
         user = User.objects.create_user(username="pref1", password="x")
-        form = ChangeUserPreferencesForm(user, instance=user.userdata)
+        form = ChangeUserNotificationsForm(user, instance=user.userdata)
         self.assertTrue(form.fields["push_notifications_instead_of_email"].disabled)
 
     def test_toggle_enabled_with_device(self):
-        from auctions.forms import ChangeUserPreferencesForm
+        from auctions.forms import ChangeUserNotificationsForm
 
         user = User.objects.create_user(username="pref2", password="x")
         MobileDevice.objects.create(user=user, device_uuid=uuid.uuid4(), fcm_token="tok", push_enabled=True)
-        form = ChangeUserPreferencesForm(user, instance=user.userdata)
+        form = ChangeUserNotificationsForm(user, instance=user.userdata)
         self.assertFalse(form.fields["push_notifications_instead_of_email"].disabled)
 
 
@@ -1777,9 +1777,9 @@ class PreferencesWebpushVisibilityTests(TestCase):
         self.user = User.objects.create_user(username="prefs_push", password="x")
 
     def _form(self, **kwargs):
-        from auctions.forms import ChangeUserPreferencesForm
+        from auctions.forms import ChangeUserNotificationsForm
 
-        return ChangeUserPreferencesForm(self.user, instance=self.user.userdata, **kwargs)
+        return ChangeUserNotificationsForm(self.user, instance=self.user.userdata, **kwargs)
 
     def test_offered_on_the_web_without_the_app(self):
         self.assertTrue(self._form().can_subscribe_to_webpush)
@@ -2035,28 +2035,26 @@ class UninstallFallbackTests(TestCase):
         delay.assert_not_called()
 
     def test_preferences_explain_a_phone_that_has_gone_quiet(self):
-        from auctions.forms import ChangeUserPreferencesForm
+        from auctions.forms import ChangeUserNotificationsForm
 
         MobileDevice.objects.filter(pk=self.device.pk).update(fcm_token="")
-        form = ChangeUserPreferencesForm(self.user, instance=self.user.userdata)
+        form = ChangeUserNotificationsForm(self.user, instance=self.user.userdata)
         field = form.fields["push_notifications_instead_of_email"]
         self.assertTrue(field.disabled)
         self.assertIn("isn't receiving notifications right now", field.help_text)
 
     def test_preferences_still_pitch_the_app_to_someone_who_never_had_it(self):
-        from auctions.forms import ChangeUserPreferencesForm
+        from auctions.forms import ChangeUserNotificationsForm
 
         newcomer = User.objects.create_user(username="newbie", password="x")
-        form = ChangeUserPreferencesForm(newcomer, instance=newcomer.userdata)
-        self.assertIn("Install the FishAuctions app", form.fields["push_notifications_instead_of_email"].help_text)
+        form = ChangeUserNotificationsForm(newcomer, instance=newcomer.userdata)
+        self.assertIn("Install the app", form.fields["push_notifications_instead_of_email"].help_text)
 
     def test_the_stored_choice_survives_so_reinstalling_resumes_push(self):
-        from auctions.forms import ChangeUserPreferencesForm
+        from auctions.forms import ChangeUserNotificationsForm
 
         MobileDevice.objects.filter(pk=self.device.pk).update(fcm_token="")
-        form = ChangeUserPreferencesForm(
-            self.user, data={"distance_unit": "mi", "preferred_currency": "USD"}, instance=self.user.userdata
-        )
+        form = ChangeUserNotificationsForm(self.user, data={}, instance=self.user.userdata)
         form.is_valid()
         # A disabled field ignores POST and keeps the stored value, so an uninstall can't quietly
         # erase what the user asked for.
@@ -2072,7 +2070,7 @@ class MobileNotificationPrefsApiTests(TestCase):
     """/api/mobile/notifications/prefs/ — the third step of the app's "Enable notifications".
 
     The app raises the OS permission, registers the device, then writes these two toggles. Without
-    this endpoint the app could only get the permission and send the user to /preferences/, where
+    this endpoint the app could only get the permission and send the user to /notifications/, where
     the checkbox is greyed out until the page is reloaded with a live device.
     """
 
@@ -2204,14 +2202,18 @@ class LotPagePushPromptOfferTests(StandardTestCase):
 
 
 class PreferencesPushBridgeTests(TestCase):
-    """/preferences/ asks the app about this phone instead of showing an unexplained grey checkbox."""
+    """/notifications/ asks the app about this phone instead of showing an unexplained grey checkbox.
+
+    This lived on /preferences/ until the notification settings were split onto a page of their own;
+    the bridge follows the checkbox it explains.
+    """
 
     APP_UA = "FishAuctionsApp/1.0 (Flutter; Android)"
 
     def setUp(self):
         self.user = User.objects.create_user(username="prefs_bridge", password="x")
         self.client.force_login(self.user)
-        self.url = reverse("preferences")
+        self.url = reverse("notification_preferences")
 
     def test_controls_rendered_in_the_app(self):
         response = self.client.get(self.url, HTTP_USER_AGENT=self.APP_UA)

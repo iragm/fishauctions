@@ -337,6 +337,7 @@ TEMPLATES = [
                 "auctions.context_processors.add_tz",
                 "auctions.context_processors.user_clubs",
                 "auctions.context_processors.label_print_method",
+                "auctions.context_processors.account_nav",
             ],
             "string_if_invalid": TEMPLATE_STRING_IF_INVALID,
         },

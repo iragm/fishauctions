@@ -299,6 +299,7 @@ urlpatterns = [
     path("", views.ToDefaultLandingPage.as_view(), name="home"),
     path("about/", views.PromoSite.as_view(), name="promo"),
     path("account/", views.MyAccount.as_view(), name="account"),
+    path("account/setup/", views.AccountSetupRedirect.as_view(), name="account_setup"),
     path("invoices/", login_required(views.Invoices.as_view()), name="my_invoices"),
     path(
         "invoices/<int:pk>/",
@@ -620,6 +621,11 @@ urlpatterns = [
         "preferences/",
         login_required(views.UserPreferencesUpdate.as_view()),
         name="preferences",
+    ),
+    path(
+        "notifications/",
+        login_required(views.UserNotificationsUpdate.as_view()),
+        name="notification_preferences",
     ),
     path(
         "account/delete/",

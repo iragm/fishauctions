@@ -118,19 +118,23 @@ def _lots_section():
 
 
 def _account_section():
-    """The navbar's "Account" header. Same links, ordered for a phone: the pages people open often
-    first, Feedback last. Sign out is not here -- the app owns it (see the module docstring)."""
+    """The navbar's account rows, which are now three: Invoices, Feedback, Account.
+
+    It used to be a flat list of every settings page. The web folded them behind one **Account**
+    row (``auctions/account_nav.py``) that lands on the page you were last on, and each of those
+    pages carries the Account setup sidebar -- which is the app's navigation there too, since the
+    app draws no navbar. Keeping the flat list here would have been a second menu of the same pages
+    that nothing kept in step with the first.
+
+    Sign out is not here -- the app owns it (see the module docstring), and it merges Tap to Pay
+    into this section by its ``id``, which is why the id stays ``account`` however short it gets.
+    """
     return _section(
         "account",
         [
-            _row("Account information", reverse("account"), "bi-info-circle"),
             _row("Invoices", reverse("my_invoices"), "bi-bag"),
-            _row("Messages", reverse("messages"), "bi-chat"),
-            _row("Contact info", reverse("contact_info"), "bi-telephone-fill"),
-            _row("Preferences", reverse("preferences"), "bi-sliders"),
-            _row("Label printing", reverse("printing"), "bi-tag"),
-            _row("Ignore categories", reverse("ignore_categories"), "bi-ban"),
             _row("Feedback", reverse("feedback"), "bi-chat-heart"),
+            _row("Account", reverse("account_setup"), "bi-person-gear"),
         ],
         title="Account",
     )

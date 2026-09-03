@@ -1,0 +1,11 @@
+{% comment %}The Account setup links. Included by account_sidebar.html for both the desktop column and the mobile offcanvas. Rows come from account_nav.groups_for().{% endcomment %}
+{% comment %}flex-nowrap for the same reason club_sidebar_nav.html needs it: .nav wraps, and a wrapping column flex container sizes its line to the widest item's max-content width, so a long label stretches the sidebar instead of being clipped. See style_reference.md.{% endcomment %}
+<nav class="nav flex-column flex-nowrap">
+  {% for group in account_nav_groups %}
+  {% if not forloop.first %}<hr class="my-2">{% endif %}
+  {% if group.title %}<h6 class="px-3 text-muted mb-1">{{ group.title }}</h6>{% endif %}
+  {% for row in group.rows %}
+  <a class="nav-link {% if row.active %}active{% endif %}" href="{{ row.url }}"><i class="bi {{ row.icon }} me-1"></i> {{ row.label }}</a>
+  {% endfor %}
+  {% endfor %}
+</nav>

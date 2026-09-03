@@ -2462,12 +2462,44 @@ _TRUTHY = frozenset({"on", "yes", "true", "enable", "enabled", "show", "1"})
 _FALSY = frozenset({"off", "no", "false", "disable", "disabled", "hide", "stop", "0"})
 
 
+def _preference_forms() -> tuple[Any, ...]:
+    """The two forms that edit a user's own settings, imported lazily.
+
+    /preferences/ and /notifications/ were one page and one form. They are two, and this action has
+    to keep reaching both: "stop emailing me about new auctions" is the request it exists for, and
+    that field is on the second one now. The forms partition the fields between them, so
+    :func:`_preference_form_for` can always name the one that owns a field.
+    """
+    from .forms import ChangeUserNotificationsForm, ChangeUserPreferencesForm
+
+    return (ChangeUserPreferencesForm, ChangeUserNotificationsForm)
+
+
 def _preference_fields() -> tuple[list[str], Any]:
-    """The preferences form's field list and the model behind it, imported lazily."""
-    from .forms import ChangeUserPreferencesForm
+    """Every field either form can set, and the model behind them."""
     from .models import UserData
 
-    return list(ChangeUserPreferencesForm.Meta.fields), UserData
+    fields = []
+    for form in _preference_forms():
+        fields.extend(form.Meta.fields)
+    return fields, UserData
+
+
+def _preference_form_for(field_name: str) -> Any:
+    """The form that owns ``field_name``. Saving through the other one would drop it silently."""
+    for form in _preference_forms():
+        if field_name in form.Meta.fields:
+            return form
+    return None
+
+
+def _preference_page_for(field_name: str) -> str:
+    """The URL of the page that field is on, for the followup link."""
+    from .forms import ChangeUserNotificationsForm
+
+    if field_name in ChangeUserNotificationsForm.Meta.fields:
+        return reverse("notification_preferences")
+    return reverse("preferences")
 
 
 def _resolve_preference(hint: str) -> str | None:
@@ -2511,14 +2543,11 @@ def update_preferences(request, params: dict[str, Any]) -> dict[str, Any]:
     "Stop emailing me about new auctions", "switch me to kilometres", "hide my email" are one-line
     requests that became a navigation to a page with thirty checkboxes on it.
 
-    Saved through :class:`auctions.forms.ChangeUserPreferencesForm` -- the preferences page's own
-    form, with the same ``user`` kwarg -- so the distance-unit conversion, the push-notification
-    gating and every other rule on that page apply here identically. Deliberately one setting at a
-    time: a countdown card the user is meant to read in five seconds can name one change honestly
-    and cannot name six.
+    Saved through whichever of the two settings pages' own forms owns the field -- with the same
+    ``user`` kwarg -- so the distance-unit conversion, the push-notification gating and every other
+    rule on that page apply here identically. Deliberately one setting at a time: a countdown card
+    the user is meant to read in five seconds can name one change honestly and cannot name six.
     """
-    from .forms import ChangeUserPreferencesForm
-
     user = request.user
     userdata = getattr(user, "userdata", None)
     if userdata is None:
@@ -2536,15 +2565,17 @@ def update_preferences(request, params: dict[str, Any]) -> dict[str, Any]:
                 {"label": "Whether my email is visible", "value": "email visible"},
             ],
         )
-    fields, model = _preference_fields()
+    _, model = _preference_fields()
     field = model._meta.get_field(field_name)
+    form_class = _preference_form_for(field_name)
+    fields = list(form_class.Meta.fields)
 
     # The unbound form first: its ``initial`` holds the *display* values (distances converted to km
     # for a km user), and its ``clean`` converts them back on the way in. Building the POST data out
     # of the raw model values instead would put miles into a form that is about to treat them as
     # kilometres, and silently shrink three of the user's search radii every time they changed any
     # unrelated checkbox.
-    unbound = ChangeUserPreferencesForm(user, instance=userdata)
+    unbound = form_class(user, instance=userdata)
     data = model_to_dict(userdata, fields=fields)
     data.update(unbound.initial)
 
@@ -2564,7 +2595,7 @@ def update_preferences(request, params: dict[str, Any]) -> dict[str, Any]:
         data[field_name] = raw
     was = getattr(userdata, field_name)
 
-    form = ChangeUserPreferencesForm(user, data, instance=userdata)
+    form = form_class(user, data, instance=userdata)
     if not form.is_valid():
         return _form_problem(form)
     form.save()
@@ -2574,7 +2605,7 @@ def update_preferences(request, params: dict[str, Any]) -> dict[str, Any]:
         return _ok(f"“{_preference_label(field)}” was already {_preference_phrase(field, now)}.")
     return _ok(
         f"Set “{_preference_label(field)}” to {_preference_phrase(field, now)}.",
-        followups=[{"label": "All my preferences", "url": reverse("preferences")}],
+        followups=[{"label": "All my settings", "url": _preference_page_for(field_name)}],
         undo={
             "action": "update_preferences",
             "params": {"setting": field_name, "value": was},
@@ -14825,6 +14856,9 @@ SKILLS: dict[str, str] = {
     "AddTosMemo": "update_person",
     "AuctionDoorPrizes": "draw_door_prize",
     "UserPreferencesUpdate": "update_preferences",
+    # The other half of what used to be one page: `update_preferences` picks the form the named
+    # setting lives on, so one tool still covers both.
+    "UserNotificationsUpdate": "update_preferences",
     "UpdateLotPushNotificationsView": "watch_lot",
     # --- the writes that were only ever a page ---------------------------------------------
     #
@@ -15026,6 +15060,7 @@ NOT_A_SKILL: dict[str, str] = {
     # Neither of these is a form. They are ``RedirectView``s, which inherit a ``post`` from Django
     # and so get swept into the audit by ``postable_views``'s ``hasattr(view, "post")``. They are
     # navigation, and ``palette_routes`` is the half of this promise that covers navigation.
+    "AccountSetupRedirect": _REDIRECT,
     "LotQRView": _REDIRECT,
     "MyLastAuctionLots": _REDIRECT,
     "VolunteerJobAccept": (

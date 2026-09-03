@@ -148,6 +148,7 @@ from .forms import (
     BulkSellLotsToOnlineHighBidder,
     ChangeInvoiceStatusForm,
     ChangeUsernameForm,
+    ChangeUserNotificationsForm,
     ChangeUserPreferencesForm,
     ClubAnnouncementForm,
     ClubBapCategoryOverrideForm,
@@ -9858,6 +9859,21 @@ class MyAccount(LoginRequiredMixin, RedirectView):
         return reverse("userpage", kwargs={"slug": self.request.user.username})
 
 
+class AccountSetupRedirect(LoginRequiredMixin, RedirectView):
+    """/account/setup/ -- the one "Account" row in the navbar menu.
+
+    The Account setup menu has no page of its own: it is a sidebar beside whichever of its pages you
+    are on. So this lands on the page you were last on, and on Contact info the first time -- the
+    one people arrive for, and the one an auction needs filled in. `account_nav.landing_url` checks
+    the remembered name against the menu before reversing it.
+    """
+
+    def get_redirect_url(self, *args, **kwargs):
+        from auctions import account_nav
+
+        return account_nav.landing_url(self.request)
+
+
 class MyLastAuctionLots(LoginRequiredMixin, RedirectView):
     """GET /lots/my-last-auction/ — the app's "Lots in my last auction" home-screen shortcut.
 
@@ -14015,42 +14031,56 @@ class AccountDeletedView(TemplateView):
         return context
 
 
-class UserPreferencesUpdate(UpdateView, SuccessMessageMixin):
-    template_name = "user_preferences.html"
+class OwnUserDataUpdate(SuccessMessageMixin, LoginRequiredMixin, UpdateView):
+    """Base for the two pages that edit your own ``UserData``: /preferences/ and /notifications/.
+
+    ``SuccessMessageMixin`` is listed **first** on purpose. Written the other way round -- which is
+    what these views used to be -- ``UpdateView.form_valid`` wins the MRO and the mixin's never
+    runs, so the success message was configured on both pages and shown on neither.
+    """
+
     model = UserData
-    success_message = "User preferences updated"
-    form_class = ChangeUserPreferencesForm
-    user_pk = None
-
-    def dispatch(self, request, *args, **kwargs):
-        # self.user_pk = kwargs['pk'] # set the hack
-        self.user_pk = request.user.pk
-        auth = False
-        if self.get_object().user.pk == request.user.pk:
-            auth = True
-        if not auth:
-            messages.error(request, "Your account doesn't have permission to view this page.")
-            return redirect(reverse("home"))
-        return super().dispatch(request, *args, **kwargs)
-
-    def get_success_url(self):
-        data = self.request.GET.copy()
-        if len(data) == 0:
-            data["next"] = reverse("userpage", kwargs={"slug": self.request.user.username})
-            # data['next'] = "/users/" + str(self.kwargs['pk'])
-        return data["next"]
 
     def get_object(self, *args, **kwargs):
-        return UserData.objects.get(user__pk=self.user_pk)  # get the hack
+        # UserData is auto-created with the user, so this is always the caller's own row and there
+        # is nothing to authorize: the URL carries no key to a different one.
+        return UserData.objects.get(user=self.request.user)
 
-    def get_context_data(self, **kwargs):
-        context = super().get_context_data(**kwargs)
-        context["active_tab"] = "preferences"
-        return context
+    def get_success_url(self):
+        # Back to the page that was just saved, so the success message is read where the change was
+        # made. ``?next=`` is honoured for the pages that link here asking for one setting to be
+        # changed (the auction list's "change in preferences", the label pages' "printing
+        # preferences"). Read with ``.get()``: the old code indexed ``next`` after testing only
+        # whether the query string was *empty*, so any other parameter on the URL -- a utm tag was
+        # enough -- turned saving the form into a 500.
+        return self.request.GET.get("next") or self.request.path
 
     def get_form_kwargs(self):
         kwargs = super().get_form_kwargs()
         kwargs["user"] = self.request.user
+        return kwargs
+
+
+class UserPreferencesUpdate(OwnUserDataUpdate):
+    template_name = "user_preferences.html"
+    success_message = "Preferences saved"
+    form_class = ChangeUserPreferencesForm
+
+
+class UserNotificationsUpdate(OwnUserDataUpdate):
+    """/notifications/ -- the emails and push notifications half of the old preferences page.
+
+    Split out because it is the half people go looking for, and because it is what let the page's
+    JavaScript go: ``distance_unit`` stayed on /preferences/, so the three radii here are rendered
+    and read in one unit that cannot change while the page is open.
+    """
+
+    template_name = "user_notifications.html"
+    success_message = "Notification settings saved"
+    form_class = ChangeUserNotificationsForm
+
+    def get_form_kwargs(self):
+        kwargs = super().get_form_kwargs()
         kwargs["is_mobile_app"] = bool(getattr(self.request, "is_mobile_app", False))
         return kwargs
 

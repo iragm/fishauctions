@@ -78,7 +78,15 @@ class MenuPayloadTests(TestCase):
         payload = menu_for(self.user)
         self.assertEqual(_section_ids(payload), ["main", "lots", "account", "about"])
         self.assertIn(reverse("my_bids"), _paths(payload))
-        self.assertIn(reverse("preferences"), _paths(payload))
+        self.assertIn(reverse("account_setup"), _paths(payload))
+
+    def test_the_settings_pages_are_behind_the_account_row(self):
+        """The drawer used to list every settings page. They are behind /account/setup/ now, on the
+        web and here, and each of them carries the Account setup sidebar -- which is the whole of
+        the app's navigation on those pages, because the app draws no navbar."""
+        paths = _paths(menu_for(self.user))
+        for name in ("preferences", "contact_info", "printing", "ignore_categories", "messages"):
+            self.assertNotIn(reverse(name), paths, name)
 
     def test_admin_section_is_for_superusers_only(self):
         """The condition base.html uses. This section has never been in the app before -- who may

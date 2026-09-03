@@ -204,3 +204,25 @@ def user_clubs(request):
         clubs = list(Club.objects.filter(pk__in=club_ids).order_by("name"))
         return {"user_clubs": clubs}
     return {"user_clubs": []}
+
+
+def account_nav(request):
+    """The Account setup sidebar, on the pages that are part of it and nowhere else.
+
+    `base.html` needs the answer before it lays the row out (the sidebar is a column beside the
+    content, exactly as the club sidebar is), which is why this is a context processor rather than
+    an inclusion tag: a tag can render the menu but cannot tell the template whether there is one.
+
+    It also records the visit, so /account/setup/ can send somebody back where they were. That is a
+    write in a render path, which the `add_location` processor above already does; `remember()`
+    only touches the session when the value actually changes, and only for a GET, so a form post
+    that re-renders with errors can't rewrite it.
+    """
+    from auctions import account_nav as nav
+
+    active = nav.active_page(request)
+    if not active:
+        return {"account_nav_active": None, "account_nav_groups": []}
+    if request.method == "GET":
+        nav.remember(request, active)
+    return {"account_nav_active": active, "account_nav_groups": nav.groups_for(request.user, active)}

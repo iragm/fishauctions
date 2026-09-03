@@ -2,9 +2,6 @@
 {% block title %} {{ user.username }} {% endblock %}
 {% load static %}
 {% block content %}
-            {% if user.pk == request.user.id %}
-            {% include "preferences_ribbon.html" %}
-            {% endif %}
             <h4>{{ user.username }}</h4>
             <h6>Account information</h6>
             <div class="table-responsive">

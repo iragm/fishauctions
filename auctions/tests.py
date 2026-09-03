@@ -9268,8 +9268,13 @@ class DistanceUnitTests(StandardTestCase):
         self.assertEqual(userdata.distance_unit, "km")
 
     def test_preference_form_converts_km_to_miles_on_save(self):
-        """Test that ChangeUserPreferencesForm converts km to miles when saving"""
-        from auctions.forms import ChangeUserPreferencesForm
+        """The notifications form displays km and stores miles, with no unit field on the page.
+
+        `distance_unit` stayed on /preferences/ when the notification settings moved to their own
+        page, which is what let the page's distance-converting JavaScript go: the unit is read off
+        the instance and cannot change while this form is open.
+        """
+        from auctions.forms import ChangeUserNotificationsForm
 
         userdata = self.user.userdata
         userdata.distance_unit = "km"
@@ -9277,17 +9282,15 @@ class DistanceUnitTests(StandardTestCase):
         userdata.save()
 
         # Form should display ~161 km (100 * 1.60934)
-        form = ChangeUserPreferencesForm(user=self.user, instance=userdata)
+        form = ChangeUserNotificationsForm(user=self.user, instance=userdata)
         self.assertEqual(form.initial["local_distance"], 161)
+        self.assertEqual(form.fields["local_distance"].help_text, "km, from your address")
 
         # When user submits with 80 km, it should save as ~50 miles
         form_data = {
-            "distance_unit": "km",
-            "preferred_currency": "USD",
             "local_distance": 80,
             "email_me_about_new_auctions_distance": 160,
             "email_me_about_new_in_person_auctions_distance": 160,
-            "email_visible": False,
             "email_me_about_new_auctions": True,
             "email_me_about_new_local_lots": True,
             "email_me_about_new_lots_ship_to_location": True,
@@ -9295,12 +9298,9 @@ class DistanceUnitTests(StandardTestCase):
             "email_me_about_new_chat_replies": True,
             "email_me_about_new_in_person_auctions": True,
             "send_reminder_emails_about_joining_auctions": True,
-            "username_visible": True,
-            "share_lot_images": True,
-            "auto_add_images": True,
             "push_notifications_when_lots_sell": False,
         }
-        form = ChangeUserPreferencesForm(user=self.user, data=form_data, instance=userdata)
+        form = ChangeUserNotificationsForm(user=self.user, data=form_data, instance=userdata)
         self.assertTrue(form.is_valid())
         saved_instance = form.save()
 
@@ -9308,9 +9308,32 @@ class DistanceUnitTests(StandardTestCase):
         self.assertEqual(saved_instance.local_distance, 50)  # 80 km / 1.60934 ≈ 50 miles
         self.assertEqual(saved_instance.email_me_about_new_auctions_distance, 99)  # 160 km / 1.60934 ≈ 99 miles
 
+    def test_a_km_radius_survives_a_round_trip_untouched(self):
+        """Render, save nothing, save: the number the user never touched must come back the same.
+
+        The old single-page form could not promise this on its own -- the unit select and the radii
+        were on one screen, so the value in the box was only right if the page's JavaScript had
+        converted it. Saving the rendered value is now exactly a no-op.
+        """
+        from auctions.forms import ChangeUserNotificationsForm
+
+        userdata = self.user.userdata
+        userdata.distance_unit = "km"
+        userdata.email_me_about_new_auctions_distance = 100
+        userdata.save()
+
+        shown = ChangeUserNotificationsForm(user=self.user, instance=userdata).initial
+        form = ChangeUserNotificationsForm(
+            user=self.user,
+            data={"email_me_about_new_auctions_distance": shown["email_me_about_new_auctions_distance"]},
+            instance=userdata,
+        )
+        self.assertTrue(form.is_valid())
+        self.assertEqual(form.save().email_me_about_new_auctions_distance, 100)
+
     def test_preference_form_keeps_miles_when_unit_is_miles(self):
         """Test that form doesn't convert when unit is miles"""
-        from auctions.forms import ChangeUserPreferencesForm
+        from auctions.forms import ChangeUserNotificationsForm
 
         userdata = self.user.userdata
         userdata.distance_unit = "mi"
@@ -9318,12 +9341,9 @@ class DistanceUnitTests(StandardTestCase):
         userdata.save()
 
         form_data = {
-            "distance_unit": "mi",
-            "preferred_currency": "USD",
             "local_distance": 50,
             "email_me_about_new_auctions_distance": 100,
             "email_me_about_new_in_person_auctions_distance": 100,
-            "email_visible": False,
             "email_me_about_new_auctions": True,
             "email_me_about_new_local_lots": True,
             "email_me_about_new_lots_ship_to_location": True,
@@ -9331,12 +9351,9 @@ class DistanceUnitTests(StandardTestCase):
             "email_me_about_new_chat_replies": True,
             "email_me_about_new_in_person_auctions": True,
             "send_reminder_emails_about_joining_auctions": True,
-            "username_visible": True,
-            "share_lot_images": True,
-            "auto_add_images": True,
             "push_notifications_when_lots_sell": False,
         }
-        form = ChangeUserPreferencesForm(user=self.user, data=form_data, instance=userdata)
+        form = ChangeUserNotificationsForm(user=self.user, data=form_data, instance=userdata)
         self.assertTrue(form.is_valid())
         saved_instance = form.save()
 
@@ -13023,17 +13040,9 @@ class CurrencyCustomizationTests(StandardTestCase):
                 "preferred_currency": "GBP",
                 "distance_unit": "mi",
                 "email_visible": False,
-                "email_me_about_new_auctions": True,
-                "email_me_about_new_local_lots": True,
-                "email_me_about_new_lots_ship_to_location": True,
-                "email_me_when_people_comment_on_my_lots": True,
-                "email_me_about_new_chat_replies": True,
-                "email_me_about_new_in_person_auctions": True,
-                "send_reminder_emails_about_joining_auctions": True,
                 "username_visible": True,
                 "share_lot_images": True,
                 "auto_add_images": True,
-                "push_notifications_when_lots_sell": False,
             },
             follow=True,
         )

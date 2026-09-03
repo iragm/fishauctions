@@ -89,7 +89,7 @@ var form_id = '#printing-prefs';
 
         if (state.supported === false) {
             stateEl.className = 'text-muted';
-            stateEl.textContent = 'Bluetooth printing works in the FishAuctions app — install it and come back to this page.';
+            stateEl.textContent = 'Bluetooth printing works in the app — install it and come back to this page.';
             return;
         }
         // printerConnect opens the native sheet and resolves with the current state. The sheet is
@@ -173,8 +173,7 @@ var form_id = '#printing-prefs';
 </script>
 {% endblock %}
 {% block content %}
-{% include "preferences_ribbon.html" %}
-{% comment %}Nothing here is a heading: the ribbon above already says which page this is.  The reader's action goes on the left of this row and the admin's on the right, per style_reference.md.{% endcomment %}
+{% comment %}Nothing here is a heading: the Account setup sidebar already says which page this is.  The reader's action goes on the left of this row and the admin's on the right, per style_reference.md.{% endcomment %}
 <div class="d-flex flex-wrap gap-2 align-items-center justify-content-between mt-3 mb-2">
   <div class="d-flex flex-wrap gap-2">
     {% if last_auction_used %}<a href="{% url 'print_my_labels' slug=last_auction_used.slug %}" class="btn btn-sm btn-primary"><i class="bi bi-tag"></i> Print labels for {{ last_auction_used }}</a>{% endif %}

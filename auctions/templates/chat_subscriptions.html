@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}Messages{% endblock %}
+{% block title %}Chat notification setup{% endblock %}
 {% load static %}
 {% block extra_js %}
 <script type='text/javascript'>pageView();</script>
@@ -23,11 +23,11 @@ document.querySelectorAll('.chat_subscribe_checkbox').forEach(function(element) 
 </script>
 {% endblock %}
 {% block content %}
-<h4>Chat messages</h4>
+{% comment %}No heading: the Account setup sidebar names this page.{% endcomment %}
 <div class="help-note">
   <i class="bi bi-lightbulb-fill"></i>
   <div>Use this page to find new messages posted to your lots, as well as any lots on which you've posted messages.
-    There are <a href="{% url 'preferences' %}">preferences</a> to send email notifications for <b>your lots</b> (currently turned {% if data.email_me_when_people_comment_on_my_lots %}on{% else %}off{% endif %} for your account), as well as for <b>lots you've commented on</b> (notifications are
+    There are <a href="{% url 'notification_preferences' %}">notification settings</a> to send email notifications for <b>your lots</b> (currently turned {% if data.email_me_when_people_comment_on_my_lots %}on{% else %}off{% endif %} for your account), as well as for <b>lots you've commented on</b> (notifications are
     {% if data.email_me_about_new_chat_replies %}on{% else %}off{% endif %}).  If these settings are off, you won't get email notifications even if a lot is checked on this page.
   </div>
 </div>
