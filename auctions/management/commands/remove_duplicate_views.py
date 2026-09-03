@@ -32,7 +32,15 @@ class Command(BaseCommand):
         # happened, so it reached rows that an earlier iteration had already deleted and merged them
         # a second time -- see PageView.merge_and_delete_duplicates for what that cost. Re-fetching
         # each row by pk means a row that is gone is skipped instead.
-        pks = PageView.objects.filter(duplicate_check_completed=False).values_list("pk", flat=True)
+        #
+        # Newest first, and that is not a preference. `duplicate_check_completed` is not indexed and
+        # is True on all but the last few minutes of the largest table on the site, so the default
+        # ascending scan walks every settled row from the beginning of time before reaching a single
+        # candidate -- a full table scan every 15 minutes to find rows that are always at the end.
+        # Walking the primary key backwards finds the batch in about `limit` rows. It also means an
+        # unbounded backlog would be drained newest-first; indexing the column is the fix if that
+        # ever stops being hypothetical.
+        pks = PageView.objects.filter(duplicate_check_completed=False).order_by("-pk").values_list("pk", flat=True)
         if limit:
             pks = pks[:limit]
         merged = 0

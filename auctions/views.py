@@ -7550,6 +7550,19 @@ PAGE_VIEW_HISTORY_DAYS = 15
 #: tail, so the whole list would be unreadable and unbounded; the top few are the useful part.
 PAGE_VIEW_HISTORY_REFERRERS = 5
 
+#: How many sources the day-by-day chart draws a band for before the rest are added together.
+#: ``?src=`` is not a closed vocabulary -- the club API writes a key's name into it -- so without a
+#: cap one busy lot could ask for a stack thirty colours deep, most of them one view thick.
+PAGE_VIEW_HISTORY_CHART_SOURCES = 6
+
+#: The chart's y axis is always :data:`PAGE_VIEW_HISTORY_Y_TICKS` whole-number steps tall and never
+#: shorter than :data:`PAGE_VIEW_HISTORY_MIN_Y` views.  Most lots get five to fifteen views in the
+#: whole fortnight, and an axis fitted to numbers that small draws a single view as a full-height
+#: bar under half-view gridlines -- which reads as a busy lot with broken labels.  A floor and a
+#: whole-number step mean a quiet lot looks quiet and every gridline is a number of views.
+PAGE_VIEW_HISTORY_MIN_Y = 4
+PAGE_VIEW_HISTORY_Y_TICKS = 4
+
 
 def page_view_history(page_views, days=PAGE_VIEW_HISTORY_DAYS):
     """A short traffic history: totals, a breakdown by where people came from, and a daily count.
@@ -7563,20 +7576,25 @@ def page_view_history(page_views, days=PAGE_VIEW_HISTORY_DAYS):
     Four aggregate queries, and no PageView row is ever fetched into Python:
 
     * one ``values("source").annotate(...)`` for the breakdown by ``?src=``,
-    * one ``TruncDate`` group-by for the per-day totals,
+    * one ``TruncDate`` group-by over day *and* source, which the chart stacks and which the day
+      totals are the sum of -- so the per-day numbers cost no query of their own,
     * one for the top :data:`PAGE_VIEW_HISTORY_REFERRERS` off-site referrers,
     * one ``aggregate()`` for the unique-viewer total, which cannot be summed back out of the
       per-source counts (the same person shows up under two sources).
 
-    What comes back is at most ``days`` day rows, one row per ``?src=`` value in use and five
-    referrers, so the dict handed to the template stays small however busy the window was.
+    What comes back is at most ``days`` columns, seven chart bands, one row per ``?src=`` value in
+    use and five referrers, so the dict handed to the template stays small however busy the window
+    was.
 
     ``source`` is the primary breakdown and ``referrer`` the secondary one on purpose.  ``source``
     is the ``?src=`` parameter, a vocabulary this site writes itself and can therefore label
-    (``Lot.PAGE_VIEW_SOURCE_LABELS``); ``referrer`` is whatever a browser chose to send, is blank
-    on most visits, and is mostly this site linking to itself.  So the source rows answer "which of
-    our surfaces sent them" and the referrer rows are kept for the one thing source cannot say:
-    who linked to this from somewhere else.
+    (``Lot.PAGE_VIEW_SOURCE_LABELS``).  ``referrer`` is whatever the browser chose to send, which
+    for a visit from another site is normally only that site's origin: every current browser
+    defaults to ``strict-origin-when-cross-origin`` (the policy this site sets on its own pages in
+    ``settings.SECURE_REFERRER_POLICY`` too), which keeps the path only within one site.  Since our
+    own pages are excluded below, most of what is left is a bare domain.  So the source rows answer
+    "which of our surfaces sent them" and the referrer rows are kept for the one thing source
+    cannot say: who linked to this from somewhere else.
     """
     now = timezone.localtime()
     first_day = (now - timedelta(days=days - 1)).date()
@@ -7606,21 +7624,33 @@ def page_view_history(page_views, days=PAGE_VIEW_HISTORY_DAYS):
         entry["unique"] += row["users"] + row["sessions"]
     sources = sorted(merged.values(), key=lambda entry: (-entry["views"], entry["label"]))
 
-    # One row per day, including the days nobody looked -- a history with holes in it reads as
-    # missing data rather than as a quiet Tuesday.
-    counted = {
-        row["day"]: row["views"]
-        for row in recent.annotate(day=TruncDate("date_start"))
-        .values("day")
-        .annotate(views=Count("pk"))
-        .order_by("day")
-    }
-    day_rows = [{"day": first_day + timedelta(days=offset), "views": 0} for offset in range(days)]
-    for row in day_rows:
-        row["views"] = counted.get(row["day"], 0)
-    busiest = max([row["views"] for row in day_rows], default=0)
-    for row in day_rows:
-        row["bar"] = round(row["views"] * 100 / busiest) if busiest else 0
+    # One row per day *and* source: the chart stacks the sources inside each day, so this one
+    # group-by is both the day-by-day totals and the split within them.
+    counted = collections.defaultdict(int)
+    for row in recent.annotate(day=TruncDate("date_start")).values("day", "source").annotate(views=Count("pk")):
+        counted[(row["day"], row["source"] or "")] += row["views"]
+
+    # A column for every day, including the ones nobody looked -- a chart with the quiet days left
+    # out reads as a busier lot than it was.  Bands are the sources in the order the table has them
+    # (busiest first), so the tall part of every stack is at the bottom; everything past the cap is
+    # one "Everything else" band rather than a colour nobody can tell from its neighbour.
+    window = [first_day + timedelta(days=offset) for offset in range(days)]
+    bands = [row["label"] for row in sources[:PAGE_VIEW_HISTORY_CHART_SOURCES]]
+    band_of = {row["source"]: min(index, PAGE_VIEW_HISTORY_CHART_SOURCES) for index, row in enumerate(sources)}
+    if len(sources) > PAGE_VIEW_HISTORY_CHART_SOURCES:
+        bands.append("Everything else")
+    chart_data = [[0] * days for _ in bands]
+    for (day, source), views in counted.items():
+        column = (day - first_day).days
+        if 0 <= column < days and source in band_of:
+            chart_data[band_of[source]][column] += views
+    day_totals = [sum(band[column] for band in chart_data) for column in range(days)]
+    busiest = max(day_totals, default=0)
+
+    # The y axis is worked out here rather than left to Chart.js so that the fortnight a lot
+    # actually gets -- often a single view on a single day -- is drawn as a small bar on a
+    # whole-number axis instead of a full-height one against gridlines at 0.2 of a view.
+    y_step = -(-max(busiest, PAGE_VIEW_HISTORY_MIN_Y) // PAGE_VIEW_HISTORY_Y_TICKS)
 
     # Off-site referrers only: our own pages are already the source breakdown, in better words.
     domain = Site.objects.get_current().domain
@@ -7646,10 +7676,39 @@ def page_view_history(page_views, days=PAGE_VIEW_HISTORY_DAYS):
         "last_day": now.date(),
         "total_views": totals["views"] or 0,
         "unique_viewers": (totals["users"] or 0) + (totals["sessions"] or 0),
-        "day_rows": day_rows,
+        "chart": {
+            "labels": [date_format(day, "M j") for day in window],
+            "series": bands,
+            "data": chart_data,
+            "busiest": busiest,
+            "y_max": y_step * PAGE_VIEW_HISTORY_Y_TICKS,
+            "y_step": y_step,
+        },
         "sources": sources,
         "referrers": referrers,
         "has_ar_rows": any(row["is_ar_event"] for row in sources),
+    }
+
+
+def page_view_history_context(request, page_views, *, title, subtitle):
+    """The context both history modals render, so the two surfaces cannot answer differently.
+
+    The one thing worth putting here rather than in either view is ``show_source_table``.  The
+    "How they got here" table is **superuser-only**: which of our own surfaces sent somebody is
+    detail an ordinary seller has no use for, and a table of it above the chart is the first thing
+    they read.  The by-source split is still in the chart for everybody -- it is the table that
+    goes -- and the referrer list stays for everybody too, since "another website linked to my lot"
+    is news to a seller in a way that "they came from a lot list" is not.
+
+    Deciding it here rather than in the template is the same rule as
+    :func:`can_see_lot_page_view_history`: the template asks one question and gets one answer, and
+    a second surface added later cannot quietly gate it differently.
+    """
+    return {
+        "history": page_view_history(page_views),
+        "modal_title": title,
+        "modal_subtitle": subtitle,
+        "show_source_table": request.user.is_superuser,
     }
 
 
@@ -7694,11 +7753,12 @@ class LotPageViewHistoryView(LoginRequiredMixin, View):
         return render(
             request,
             "auctions/page_view_history_modal.html",
-            {
-                "history": page_view_history(PageView.objects.filter(lot_number=lot)),
-                "modal_title": "How people found this lot",
-                "modal_subtitle": lot.lot_name,
-            },
+            page_view_history_context(
+                request,
+                PageView.objects.filter(lot_number=lot),
+                title="How people found this lot",
+                subtitle=lot.lot_name,
+            ),
         )
 
 
@@ -7722,11 +7782,12 @@ class MyLotsPageViewHistoryView(LoginRequiredMixin, View):
         return render(
             request,
             "auctions/page_view_history_modal.html",
-            {
-                "history": page_view_history(PageView.objects.filter(lot_number__in=lots)),
-                "modal_title": "How people found your lots",
-                "modal_subtitle": "Every lot you are selling",
-            },
+            page_view_history_context(
+                request,
+                PageView.objects.filter(lot_number__in=lots),
+                title="How people found your lots",
+                subtitle="Every lot you are selling",
+            ),
         )
 
 
@@ -16006,10 +16067,17 @@ class AdminUserFlow(AdminOnlyViewMixin, TemplateView):
         return frequency_table, transition_table
 
     def post(self, request, *args, **kwargs):
-        from auctions.tasks import compute_user_flow_all
+        from auctions.tasks import USER_FLOW_LOCK_KEY, compute_user_flow_all
 
-        compute_user_flow_all.delay()
-        messages.success(request, "User flow computation started in the background. Refresh after a few minutes.")
+        # The task drops a second request rather than queueing it -- it holds a worker slot for as
+        # long as it takes, and the worker has two. Ask the same lock here so the page says what
+        # actually happened; the task asks again for real, so a press landing in the gap between
+        # these two lines is still dropped there rather than run twice.
+        if cache.get(USER_FLOW_LOCK_KEY):
+            messages.info(request, "A user flow computation is already running. Refresh in a few minutes.")
+        else:
+            compute_user_flow_all.delay()
+            messages.success(request, "User flow computation started in the background. Refresh after a few minutes.")
         target = request.get_full_path()
         if url_has_allowed_host_and_scheme(
             target,

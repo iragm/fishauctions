@@ -816,6 +816,17 @@ class OverlapLockTestCase(TestCase):
         mock_compute.assert_called_once()
         self.assertIsNone(cache.get(tasks.USER_FLOW_LOCK_KEY))
 
+    @patch("auctions.views.AdminUserFlow._compute_flow", return_value=([], []))
+    def test_the_run_re_stamps_its_own_lock(self, mock_flow):
+        """The task has no time limit, so the lock cannot be "longer than the longest run" -- it is
+        a heartbeat, kept alive by the run itself. Without this a long run would age its own lock
+        out and let a second press start beside it."""
+        from django.core.cache import cache
+
+        Auction.objects.create(title="Flow auction", date_start=timezone.now() - datetime.timedelta(days=1))
+        tasks._compute_user_flow_all(0)
+        self.assertEqual(cache.get(tasks.USER_FLOW_LOCK_KEY), "1")
+
 
 @isolated_cache("celery-ytd")
 class YearlyBapResetTestCase(TestCase):
@@ -829,10 +840,39 @@ class YearlyBapResetTestCase(TestCase):
 
         return ClubMember.objects.create(club=self.club, name="Breeder", bap_points_ytd=12, **kwargs)
 
+    def _reset_year(self, year):
+        Club.objects.filter(pk=self.club.pk).update(bap_ytd_reset_year=year)
+
     def test_it_catches_up_when_it_missed_the_first_of_january(self):
         """The whole point. Nothing here is a date check: a club whose recorded year is behind the
         current one is reset whenever this next runs, however late."""
         member = self._member()
+        self._reset_year(timezone.localtime().year - 1)
+        tasks.reset_yearly_bap_counters()
+        member.refresh_from_db()
+        self.assertEqual(member.bap_points_ytd, 0)
+
+    def test_a_club_that_has_never_been_stamped_is_stamped_and_not_zeroed(self):
+        """Null is "nobody has ever written this column", not "overdue since the beginning of
+        time" -- which is every club that existed before the column did. Zeroing them is a wipe of
+        the current year's points in whatever month the first run lands in."""
+        member = self._member()
+        self.assertIsNone(self.club.bap_ytd_reset_year)
+        tasks.reset_yearly_bap_counters()
+        member.refresh_from_db()
+        self.club.refresh_from_db()
+        self.assertEqual(member.bap_points_ytd, 12, "a club with no recorded year had its points wiped")
+        self.assertEqual(self.club.bap_ytd_reset_year, timezone.localtime().year)
+
+    def test_a_club_created_today_keeps_todays_points(self):
+        """The same rule a day at a time: a club made this morning is null until this first runs,
+        and the awards entered between the two must survive it."""
+        member = self._member()
+        tasks.reset_yearly_bap_counters()
+        member.refresh_from_db()
+        self.assertEqual(member.bap_points_ytd, 12)
+        # ...and it is stamped, so the next new year does reset it.
+        self._reset_year(timezone.localtime().year - 1)
         tasks.reset_yearly_bap_counters()
         member.refresh_from_db()
         self.assertEqual(member.bap_points_ytd, 0)
@@ -841,7 +881,10 @@ class YearlyBapResetTestCase(TestCase):
         """It runs daily and is a no-op on 364 of them; a second run must not wipe points earned
         since the first."""
         member = self._member()
+        self._reset_year(timezone.localtime().year - 1)
         tasks.reset_yearly_bap_counters()
+        member.refresh_from_db()
+        self.assertEqual(member.bap_points_ytd, 0)
         member.bap_points_ytd = 5
         member.save(update_fields=["bap_points_ytd"])
         tasks.reset_yearly_bap_counters()
@@ -898,9 +941,22 @@ class AuctionStatsWatchdogTestCase(TestCase):
         )
 
     @patch("auctions.tasks.schedule_auction_stats_update")
-    def test_it_re_arms_when_the_row_is_disabled(self, mock_schedule):
-        """Which is exactly the state django-celery-beat leaves a fired one-off row in."""
-        self._arm(timezone.now() + datetime.timedelta(minutes=5), enabled=False)
+    def test_a_just_dispatched_row_is_a_run_in_flight_not_a_dead_chain(self, mock_schedule):
+        """Disabling the row is what beat does the *moment* it dispatches a one-off, so `enabled`
+        cannot be part of "healthy": every tick landing during a live run would start a second
+        update_auction_stats beside it and race it to recreate the same uniquely-named row."""
+        self._arm(timezone.now() - datetime.timedelta(minutes=1), enabled=False)
+        tasks.ensure_auction_stats_task_scheduled()
+        mock_schedule.assert_not_called()
+
+    @patch("auctions.tasks.schedule_auction_stats_update")
+    def test_it_re_arms_when_a_disabled_row_has_gone_stale(self, mock_schedule):
+        """A run killed by the hard time limit leaves exactly this: disabled, and a scheduled time
+        that keeps receding because nothing is left alive to move it."""
+        self._arm(
+            timezone.now() - datetime.timedelta(seconds=tasks.STATS_WATCHDOG_GRACE_SECONDS + 60),
+            enabled=False,
+        )
         tasks.ensure_auction_stats_task_scheduled()
         mock_schedule.assert_called_once()
 

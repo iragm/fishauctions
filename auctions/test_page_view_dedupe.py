@@ -99,6 +99,16 @@ class DeduplicationTests(TestCase):
         # One row was looked at, so its duplicates are gone; nothing promises the rest are done.
         self.assertLessEqual(PageView.objects.filter(lot_number=self.lot).count(), 4)
 
+    def test_the_batch_is_taken_from_the_newest_rows(self):
+        """`duplicate_check_completed` is not indexed and is True on all but the last few minutes of
+        the biggest table on the site, so an ascending scan walks every settled row from the
+        beginning of time to reach candidates that are always at the end. Newest-first finds them
+        in about `limit` rows."""
+        views = [_view(self.user, self.lot) for _ in range(3)]
+        call_command("remove_duplicate_views", limit=1)
+        survivor = PageView.objects.get(lot_number=self.lot)
+        self.assertEqual(survivor.pk, views[-1].pk, "the oldest row was examined, not the newest")
+
     def test_the_merged_row_keeps_the_fields_the_others_had(self):
         _view(self.user, self.lot, source="", title="", referrer="")
         _view(self.user, self.lot, source="weekly_email", title="A lot", referrer="https://example.com/")

@@ -41,9 +41,13 @@ CALENDAR_SYNC_LOCK_SECONDS = 60 * 60
 ENDAUCTIONS_LOCK_KEY = "endauctions_running"
 ENDAUCTIONS_LOCK_SECONDS = 15 * 60
 
-# One user-flow computation at a time; see compute_user_flow_all.
+# One user-flow computation at a time; see compute_user_flow_all. The task has no time limit at all
+# (time_limit=None), so this cannot be "comfortably longer than the run" the way the endauctions lock
+# is. It is a heartbeat instead: the run re-stamps it after every auction, so it outlives a run of
+# any length, and a worker killed mid-run -- a deploy, most often -- wedges the button for this long
+# rather than for the length of the longest run anybody can imagine.
 USER_FLOW_LOCK_KEY = "compute_user_flow_all_running"
-USER_FLOW_LOCK_SECONDS = 6 * 60 * 60
+USER_FLOW_LOCK_SECONDS = 30 * 60
 
 logger = logging.getLogger(__name__)
 
@@ -52,14 +56,16 @@ def _per_item(task, label, items, do_one, exceptions=(requests.RequestException,
     """Run ``do_one`` over ``items``, keeping going past a failure, then retry the task once.
 
     The pattern ``delete_marketing_contact`` documents, factored out for the wallet tasks that were
-    doing the opposite. They re-raised on the first failing member, so Celery retried the *whole*
-    task from the top: everyone before the bad row was pushed again on each of five retries, and
-    everyone after it was never reached at all -- their pass kept saying "valid" after the
-    membership lapsed. One permanently broken row must not be able to do that.
+    doing the opposite. They re-raised on the first failing member, so everyone after the bad row
+    was never reached at all -- their pass kept saying "valid" after the membership lapsed. That is
+    what this fixes: one permanently broken row can no longer hide the whole rest of the list.
 
     Failures are collected and re-raised once at the end, so a genuinely transient outage (every
-    item failing) still retries, and a single bad row still gets its retries without holding up the
-    rest of the list.
+    item failing) still retries. What it does **not** change is that the retry re-runs the task from
+    the top, so the items that succeeded are done again -- more of them now than before, since the
+    list no longer stops early. That is the deliberate trade: every one of these is an idempotent
+    PATCH to Google or Apple, and up to six of those is cheaper than a member holding a pass that
+    lies about whether they are a member.
     """
     failures = []
     for item in items:
@@ -987,14 +993,30 @@ def reset_yearly_bap_counters(self):
     ``Club.bap_ytd_reset_year`` is what makes it a fact rather than a date: a club whose recorded
     year is behind the current one gets reset whenever this next runs, however late that is, and a
     club already reset this year is skipped however many times this runs.
+
+    **A club with no recorded year is stamped, not zeroed.** ``NULL`` does not mean "overdue since
+    the beginning of time", it means "nobody has ever written this column" -- which is true of every
+    club that existed before the column did, and of every club for the first day after it is
+    created. Django's ``exclude(bap_ytd_reset_year=year)`` matches ``NULL`` rows (it renders as
+    ``NOT (col = year AND col IS NOT NULL)``), so without this the first run after deploy would
+    zero every club's year-to-date points in whatever month it happened to be, and a club created
+    this morning would lose a day's awards tonight. A club whose counters really are stale because
+    an old January was missed is repaired by ``recalculate_club_bap_points``, which rebuilds them
+    from the ``BapAward`` rows -- zeroing is the wrong answer there too.
     """
     from django.utils import timezone
 
     from auctions.models import Club, ClubMember
 
+    # localtime, not now(): award dates are DateFields a club admin typed in their own calendar, and
+    # BapAward.recalculate_member_points decides what "this year" means the same way.
     year = timezone.localtime().year
     clubs = Club.objects.filter(enable_breeder_award_program=True).exclude(bap_ytd_reset_year=year)
     for club in clubs:
+        if club.bap_ytd_reset_year is None:
+            Club.objects.filter(pk=club.pk).update(bap_ytd_reset_year=year)
+            logger.info("Recorded %s as the award-points year for club %s; nothing zeroed", year, club.pk)
+            continue
         ClubMember.objects.filter(club=club, is_deleted=False).update(
             bap_points_ytd=0, hap_points_ytd=0, culture_points_ytd=0
         )
@@ -1386,13 +1408,21 @@ def ensure_auction_stats_task_scheduled(self):
     ``AuctionStats`` is true for the very auction that was mid-recalculation when it died.
 
     So auction statistics silently stopped updating until someone noticed. This is the backstop:
-    one indexed lookup on the beat, and a re-arm only when the row is gone, disabled, or overdue by
-    more than the grace period.
+    one indexed lookup on the beat, and a re-arm only when the row is gone or overdue by more than
+    the grace period.
+
+    ``enabled`` is deliberately **not** part of "healthy". Disabling the row is what beat does the
+    moment it dispatches a one-off, so a disabled row with a recent ``clocked_time`` is a run in
+    flight, not a dead chain -- and re-arming one of those starts a second ``update_auction_stats``
+    alongside the first and makes two ``schedule_auction_stats_update`` calls race to delete and
+    recreate the same uniquely-named row. The scheduled time is the only thing that distinguishes
+    the two cases: a run killed by the 600-second hard limit leaves a row whose ``clocked_time``
+    keeps receding, and one grace period later it is re-armed.
     """
     from django.utils import timezone
 
     task = PeriodicTask.objects.filter(name=AUCTION_STATS_TASK_NAME).select_related("clocked").first()
-    if task and task.enabled and task.clocked:
+    if task and task.clocked:
         overdue_since = timezone.now() - datetime.timedelta(seconds=STATS_WATCHDOG_GRACE_SECONDS)
         if task.clocked.clocked_time > overdue_since:
             return
@@ -2011,6 +2041,9 @@ def _compute_user_flow_all(sleep_seconds):
             logger.info("compute_user_flow_all: %d/%d done — %s", i, len(auctions), auction.slug)
         except Exception:
             logger.exception("compute_user_flow_all: failed for auction pk=%s", auction.pk)
+        # Re-stamp the lock rather than letting it age out under a run that has no time limit. A
+        # `set` and not an `add`: this run holds the lock, and refreshing it is the point.
+        cache.set(USER_FLOW_LOCK_KEY, "1", timeout=USER_FLOW_LOCK_SECONDS)
         time.sleep(sleep_seconds)
 
     # Combined view across all auctions

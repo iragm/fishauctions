@@ -963,11 +963,15 @@ class Club(CloudflareImageMixin, models.Model):
         default=False,
         help_text="Track when users breed fish and show a leaderboard of top breeders.",
     )
-    bap_ytd_reset_year = models.PositiveIntegerField(null=True, blank=True, editable=False)
-    bap_ytd_reset_year.help_text = (
-        "The last year this club's year-to-date award counters were zeroed.  Written by "
-        "tasks.reset_yearly_bap_counters, which is what makes the reset a fact about the club "
-        "rather than something that only happens if a nightly task lands on January 1."
+    bap_ytd_reset_year = models.PositiveIntegerField(
+        null=True,
+        blank=True,
+        editable=False,
+        help_text=(
+            "The last year this club's year-to-date award counters were zeroed.  Written by "
+            "tasks.reset_yearly_bap_counters, which is what makes the reset a fact about the club "
+            "rather than something that only happens if a nightly task lands on January 1."
+        ),
     )
     enable_membership = models.BooleanField(
         default=False,
@@ -10160,7 +10164,11 @@ class BapAward(models.Model):
         """Recalculate and persist all-time and YTD BAP/HAP/CAP totals for a club member."""
         from django.utils import timezone
 
-        this_year = timezone.now().year
+        # localtime, not now(): `date` is a DateField somebody typed in their own calendar, so the
+        # year it belongs to is the site's, not UTC's. now() disagreed with it -- and with
+        # tasks.reset_yearly_bap_counters -- for the five hours between 7pm Eastern on New Year's
+        # Eve and midnight UTC, which is the one evening of the year this is read.
+        this_year = timezone.localtime().year
         awards = BapAward.objects.filter(club_member=member).exclude(lot__is_deleted=True).exclude(lot__banned=True)
         bap = hap = cap = bap_ytd = hap_ytd = cap_ytd = 0
         for a in awards:
