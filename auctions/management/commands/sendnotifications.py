@@ -4,7 +4,7 @@ from django.core.management.base import BaseCommand
 from django.urls import reverse
 from post_office import mail
 
-from auctions.models import Auction, Lot, UserData, Watch
+from auctions.models import Auction, Lot, Watch
 
 
 class Command(BaseCommand):
@@ -63,18 +63,3 @@ class Command(BaseCommand):
                 ),
             )
             self.stdout.write(f"Notified {user.email} about their watched items")
-
-        # email people whose usernames are an email address
-        userdata = UserData.objects.filter(
-            username_visible=True,
-            user__username__icontains="@",
-            username_is_email_warning_sent=False,
-        )
-        for data in userdata:
-            data.username_is_email_warning_sent = True
-            data.save()
-            mail.send(
-                data.user.email,
-                template="username_is_email",
-                context={"username": data.user.username, "domain": current_site.domain},
-            )

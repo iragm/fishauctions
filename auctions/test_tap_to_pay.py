@@ -30,7 +30,17 @@ from rest_framework_simplejwt.tokens import RefreshToken
 
 from auctions.middleware import MobileAppMiddleware
 from auctions.mobile.services.payments import PaymentService
-from auctions.models import Auction, AuctionTOS, Club, ClubMember, Invoice, InvoiceAdjustment, SquareSeller
+from auctions.models import (
+    Auction,
+    AuctionTOS,
+    Club,
+    ClubMember,
+    Invoice,
+    InvoiceAdjustment,
+    InvoicePayment,
+    Lot,
+    SquareSeller,
+)
 from auctions.tests import StandardTestCase
 
 IOS_UA = "FishAuctionsApp/1.0 (Flutter; iOS)"
@@ -163,7 +173,63 @@ class TapToPayButtonCopyMixin:
         self.assertNotIn("fishauctions://pay/", self._html("Mozilla/5.0"))
 
 
-class QuickCheckoutTapToPayCopyTests(TapToPayButtonCopyMixin, StandardTestCase):
+class TapToPayWarmUpMixin:
+    """TTP-10 — requirement 1.5 (warm the reader early) and 5.6 (the prompt on screen in a second).
+
+    The app warms the reader at mount and again when it foregrounds, but a resume can be hours
+    before anybody actually charges a card. The page that draws the pay button is the last honest
+    moment to say "a charge is imminent", so every page that renders the ``fishauctions://pay/``
+    handoff also asks the app to warm up — and the two must not drift apart, which is why this runs
+    against both of them exactly as the copy mixin does.
+
+    The server drives it on purpose. The app deliberately does not infer checkout pages from the
+    URL: the awareness modal used to guess from a URL prefix and announced a merchant feature to
+    organizers who had none, so it now waits to be told. This is the same rule, and the tests below
+    are what stop it being "simplified" into a URL check in the app.
+    """
+
+    HANDLER = "callHandler('tapToPayWarm')"
+
+    def _html(self, user_agent):
+        raise NotImplementedError
+
+    def test_the_page_that_draws_the_button_warms_the_reader(self):
+        self.assertIn(self.HANDLER, self._html(IOS_UA))
+
+    def test_android_warms_too(self):
+        """Tap to Pay is iPhone-only wording, not an iPhone-only feature; Android readers warm too."""
+        self.assertIn(self.HANDLER, self._html(ANDROID_UA))
+
+    def test_nothing_is_warmed_outside_the_app(self):
+        self.assertNotIn(self.HANDLER, self._html("Mozilla/5.0"))
+
+    def test_warming_is_rendered_only_where_the_button_is(self):
+        """Warming asks the backend for eligibility, so a page-wide call is a wasted request a view.
+
+        Tying the count to the number of buttons is what keeps it that way: one button, one warm.
+        """
+        html = self._html(IOS_UA)
+        self.assertEqual(html.count(self.HANDLER), html.count("fishauctions://pay/"))
+        self.assertEqual(html.count(self.HANDLER), 1)
+
+    def test_the_call_is_fire_and_forget(self):
+        """An older app build has no such handler and the promise rejects.
+
+        Nothing on the page may depend on the answer — it resolves ``{warmed: true|false}`` and
+        ``false`` only means the app's throttle swallowed it — and an unhandled rejection from a
+        build that shipped before this handler existed must not break the page. So the call is
+        never awaited and always caught.
+        """
+        html = self._html(IOS_UA)
+        self.assertIn(".catch(", html.split(self.HANDLER)[1].split("</script>")[0])
+
+    def test_the_bridge_is_checked_before_it_is_called(self):
+        """In a browser there is no ``window.flutter_inappwebview`` at all, so calling it throws."""
+        script = self._html(IOS_UA).split(self.HANDLER)[0].rsplit("<script>", 1)[1]
+        self.assertIn("window.flutter_inappwebview &&", script)
+
+
+class QuickCheckoutTapToPayCopyTests(TapToPayButtonCopyMixin, TapToPayWarmUpMixin, StandardTestCase):
     """The checkout desk: the button's original home."""
 
     def setUp(self):
@@ -195,21 +261,46 @@ class QuickCheckoutTapToPayCopyTests(TapToPayButtonCopyMixin, StandardTestCase):
         self.assertLess(html.index(f"fishauctions://pay/{self.invoice.pk}"), html.index("View or adjust invoice"))
 
 
-class InvoicePageTapToPayTests(TapToPayButtonCopyMixin, StandardTestCase):
-    """TTP-8 — the invoice page was a dead end in the app.
+class InvoicePageTapToPayTests(TapToPayButtonCopyMixin, TapToPayWarmUpMixin, StandardTestCase):
+    """TTP-8 — the invoice page was a dead end in the app, and then offered a charge with nothing
+    left to collect.
 
     It hides the web PayPal and Square buttons for app requests (both redirect to a hosted checkout
     the WebView can't run) and offered nothing in their place, so an admin who reached an invoice
     from the users table, a search or a notification saw the payment options vanish with no hint
     that a working path existed one screen away. A reviewer with a demo account goes to Invoices
     first, and concludes Tap to Pay doesn't work.
+
+    The button that fixed that gated on ``status != "PAID"`` alone, which is not the same question
+    as "does this person still owe the club money". Every settled-but-not-PAID invoice — a zero
+    balance, one already covered by recorded payments, a seller the club owes — put a card reader in
+    front of a cashier with nothing to charge for. ``quick_checkout_htmx.html`` never had the bug:
+    ``show_square_button`` tests the balance. The tests below are the invoice page borrowing that
+    half without borrowing ``enable_square_payments`` with it.
     """
 
     def setUp(self):
         super().setUp()
+        # Every test in this class is about a cashier collecting money, so the shared fixture's
+        # invoice needs something to collect: in_person_tos neither buys nor sells anything in the
+        # fixture, which makes its invoice exactly the settled $0 one this feature must refuse.
+        # 25% to the club and a $2 entry fee are the auction's, so the balance is the buyer's $40
+        # plus 25% tax -- the number does not matter, only its sign.
+        self.won_lot = Lot.objects.create(
+            lot_name="a lot this bidder won",
+            auction=self.in_person_auction,
+            auctiontos_seller=self.admin_in_person_tos,
+            auctiontos_winner=self.in_person_tos,
+            winning_price=40,
+            quantity=1,
+            active=False,
+        )
         self.invoice, _ = Invoice.objects.get_or_create(auctiontos_user=self.in_person_tos)
         self.client.force_login(self.admin_user)
         self.url = reverse("invoice_by_pk", kwargs={"pk": self.invoice.pk})
+
+    def _balance(self):
+        return Invoice.objects.get(pk=self.invoice.pk).rounded_net_after_payments
 
     def _html(self, user_agent, **patches):
         offers = patches.pop("offers_tap_to_pay", True)
@@ -226,9 +317,81 @@ class InvoicePageTapToPayTests(TapToPayButtonCopyMixin, StandardTestCase):
         self.assertNotIn("fishauctions://pay/", self._html(IOS_UA, offers_tap_to_pay=False))
 
     def test_a_paid_invoice_is_not_offered_a_charge(self):
+        """And the status half of the gate is load-bearing on its own.
+
+        An invoice marked paid at the desk in cash has no ``InvoicePayment`` row, so its balance
+        still reads as owing. Dropping ``status != "PAID"`` in favour of the balance test alone
+        would put the reader back in front of the cashier for money already in the till.
+        """
         self.invoice.status = "PAID"
         self.invoice.save()
+        self.assertLess(self._balance(), 0)
         self.assertNotIn("fishauctions://pay/", self._html(IOS_UA))
+
+    def test_the_fixture_invoice_really_does_owe_the_club(self):
+        """Guards setUp: on a $0 invoice every other test in this class passes for the wrong reason.
+
+        ``rounded_net_after_payments`` is negative when the buyer owes the club and positive when
+        the club owes them (``Invoice.net_after_payments``), which is why the template asks for
+        ``< 0`` rather than a truthiness test.
+        """
+        self.assertLess(self._balance(), 0)
+
+    def test_a_zero_balance_is_not_offered_a_charge(self):
+        """The bug: a settled invoice nobody marked PAID still offered the cashier a card charge.
+
+        This is the ordinary shape of it -- an invoice with nothing on it at all -- and it is what
+        the whole fixture looked like before setUp gave this one a lot.
+        """
+        self.won_lot.delete()
+        self.assertEqual(self._balance(), 0)
+        html = self._html(IOS_UA)
+        self.assertNotIn("fishauctions://pay/", html)
+        # ...and with no button there is nothing to warm the reader for, either (TTP-10).
+        self.assertNotIn("tapToPayWarm", html)
+
+    def test_a_balance_already_covered_by_payments_is_not_offered_a_charge(self):
+        """The money is in: a Square QR, a PayPal capture, a cash payment somebody recorded.
+
+        ``status`` is still DRAFT here -- nothing marks an invoice PAID just because the payments
+        add up -- so this is precisely the case ``status != "PAID"`` cannot see.
+        """
+        invoice = Invoice.objects.get(pk=self.invoice.pk)
+        InvoicePayment.objects.create(invoice=invoice, amount=-invoice.net_after_payments)
+        self.assertNotEqual(invoice.status, "PAID")
+        self.assertEqual(self._balance(), 0)
+        self.assertNotIn("fishauctions://pay/", self._html(IOS_UA))
+
+    def test_a_seller_the_club_owes_is_not_offered_a_charge(self):
+        """The sign matters, not just the zero: a payout invoice owes money the other way.
+
+        Charging their card is not a smaller version of paying them out, it is the opposite thing,
+        and ``status != "PAID"`` alone offered it on every unpaid vendor invoice in the auction.
+        """
+        self.won_lot.delete()
+        Lot.objects.create(
+            lot_name="a lot this seller sold",
+            auction=self.in_person_auction,
+            auctiontos_seller=self.in_person_tos,
+            auctiontos_winner=self.in_person_buyer,
+            winning_price=100,
+            quantity=1,
+            active=False,
+        )
+        self.assertGreater(self._balance(), 0)
+        self.assertNotIn("fishauctions://pay/", self._html(IOS_UA))
+
+    def test_the_online_payment_switch_is_still_not_the_question(self):
+        """Only the balance half of ``show_square_button`` was borrowed, deliberately.
+
+        This is the cashier collecting in the room, so the question is whether the auction's Square
+        account can take a card at all (``offers_tap_to_pay``) -- not whether the buyer-facing
+        online payment flow has been opened.
+        """
+        self.in_person_auction.enable_square_payments = False
+        self.in_person_auction.enable_online_payments = False
+        self.in_person_auction.save()
+        self.assertIn("fishauctions://pay/", self._html(IOS_UA))
 
     def test_the_buyer_is_never_offered_it(self):
         """Tap to Pay authorizes with the *seller's* Square account: this is the cashier's button.

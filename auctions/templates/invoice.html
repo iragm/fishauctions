@@ -139,11 +139,45 @@ document.addEventListener("DOMContentLoaded", function() {
           offers_tap_to_pay rather than show_square_button: this is the cashier collecting in the
           room, not the buyer paying their own invoice, so the question is whether this auction's
           Square account can take a card at all -- not whether online payments have opened yet.
+
+          The balance half of show_square_button is borrowed, though. status != "PAID" alone misses
+          every invoice that is settled without being marked paid -- a zero balance, one already
+          covered by recorded InvoicePayment rows, or a seller the club owes money to -- and offered
+          the cashier a card charge with nothing to collect. rounded_net_after_payments is negative
+          when the buyer owes the club (see Invoice.net_after_payments), so < 0 is "there is still
+          something to collect". Both halves are needed: an invoice marked paid in cash has no
+          InvoicePayment row, so its balance still reads as owing.
         {% endcomment %}
-        {% if request.is_mobile_app and invoice.status != "PAID" and invoice.auction.offers_tap_to_pay %}
+        {% if request.is_mobile_app and invoice.status != "PAID" and invoice.auction.offers_tap_to_pay and invoice.rounded_net_after_payments < 0 %}
           <a href="fishauctions://pay/{{ invoice.pk }}" class="btn btn-primary btn-lg w-100 my-2">
             {% if request.is_ios_app %}Tap to Pay on iPhone{% else %}Tap to Pay{% endif %}
           </a>
+          {% comment %}
+            TTP-10 (Apple 1.5 / 5.6): warm the reader from the page that renders the button. The app
+            already warms at mount and on resume, but a resume can be hours before the cashier
+            actually charges a card, and 5.6 wants the payment prompt on screen within a second of
+            the tap. Rendering the button is the last honest moment to say "a charge is imminent".
+
+            The server drives this on purpose, and it must stay that way: the app deliberately does
+            not guess which pages are checkout pages from the URL. The awareness modal used to guess
+            from a URL prefix and announced a merchant feature to organizers who had none, so it now
+            waits to be told (tapToPayOffer in auction_ribbon.html). Do not "simplify" this into the
+            app.
+
+            Fire and forget. It resolves {warmed: true|false} and nothing here reads the answer --
+            false only means the app's one-warm-per-2-minutes throttle swallowed it. The catch (and
+            the try around it) is what makes this safe to ship before any app change: an older build
+            has no such handler, and the promise rejects.
+          {% endcomment %}
+          <script>
+            (function () {
+              try {
+                if (window.flutter_inappwebview && window.flutter_inappwebview.callHandler) {
+                  window.flutter_inappwebview.callHandler('tapToPayWarm').catch(function () {});
+                }
+              } catch (e) { /* older app build with no handler: nothing to warm */ }
+            })();
+          </script>
         {% endif %}
         <span id="invoice_control_buttons">{% include 'invoice_buttons.html' %}</span>
         <span style="display: none;" class='text-danger' id="form_dirty_warning">Save adjustments to mark ready or paid</span>

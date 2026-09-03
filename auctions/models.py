@@ -11928,10 +11928,6 @@ class UserData(models.Model):
     username_visible.help_text = "Uncheck to bid anonymously.  Your username will still be visible on lots you sell, chat messages, and to the people running any auctions you've joined."
     show_email_warning_sent = models.BooleanField(default=False, blank=True)
     show_email_warning_sent.help_text = "When a user has their email address hidden and sells a lot, this is checked"
-    username_is_email_warning_sent = models.BooleanField(default=False, blank=True)
-    username_is_email_warning_sent.help_text = (
-        "Warning email has been sent because this user made their username an email"
-    )
     send_reminder_emails_about_joining_auctions = models.BooleanField(default=True, blank=True)
     send_reminder_emails_about_joining_auctions.help_text = (
         "Get an annoying reminder email when you view an auction but don't join it"

@@ -180,17 +180,21 @@ var form_id = '#printing-prefs';
   </div>
   {% comment %}The auction named here is last_admin_auction, which is also what the block is gated on.  It used to link last_auction_used, an unrelated (and often blank) variable -- an admin who had never opened an auction reversed auction_printing with an empty slug and got a 500 on their own preferences page.{% endcomment %}
   {% if last_admin_auction %}
-  <div class="d-flex flex-wrap gap-2">
-    <a class="btn btn-sm btn-info" href="{% url 'auction_printing' slug=last_admin_auction.slug %}"><i class="bi bi-printer"></i> Print labels for other users</a>
-    <a class="btn btn-sm btn-info" href="{% url 'auction_label_config' slug=last_admin_auction.slug %}"><i class="bi bi-sliders"></i> What gets printed on labels</a>
+  <div class="d-flex flex-column align-items-lg-end gap-1">
+    {% comment %}Naming the auction is the whole point of this line: these two buttons are the only things on the page that aren't about the reader's own labels, and they act on last_admin_auction -- which is frequently a different auction from the one the button on the left names.  A muted line rather than a second help-note; style_reference.md allows one per page and it is spent on the note below.{% endcomment %}
+    <small class="text-muted">Because you're an admin in {{ last_admin_auction }}:</small>
+    <div class="d-flex flex-wrap gap-2">
+      <a class="btn btn-sm btn-info" href="{% url 'auction_printing' slug=last_admin_auction.slug %}"><i class="bi bi-printer"></i> Print labels for other users</a>
+      <a class="btn btn-sm btn-info" href="{% url 'auction_label_config' slug=last_admin_auction.slug %}"><i class="bi bi-sliders"></i> What gets printed on labels</a>
+    </div>
   </div>
   {% endif %}
 </div>
 <div class="help-note">
   <i class="bi bi-lightbulb-fill"></i>
   <div>These are your own label settings &mdash; they don't change anything for anyone else{% if last_admin_auction %}, including the auctions you run{% endif %}.  Print on regular paper, cut the labels out and tape them to your lots (make sure your bags are dry!), or set the size below to match self-adhesive
-    <a href="https://www.google.com/search?q=Avery 5160 labels">small</a> or <a href="https://www.google.com/search?q=Avery 18262 labels">large</a> labels and print those on a laser printer &mdash; inkjet runs when it's wet.</div>
+    <a href="https://www.google.com/search?q=Avery 5160 labels">small</a> or <a href="https://www.google.com/search?q=Avery 18262 labels">large</a> labels and print those on a laser printer &mdash; inkjet runs when it's wet.
+    Most peel and stick (Avery) labels don't have the same margin at the top and the bottom, so if the text isn't printing on the labels, there's a good chance you've got the paper turned around.  If you're printing lots of labels, or running club auctions, it likely makes sense to purchase a thermal printer.</div>
 </div>
-<p class="text-muted small">Most peel and stick (Avery) labels don't have the same margin at the top and the bottom, so if the text isn't printing on the labels, there's a good chance you've got the paper turned around.  If you're printing lots of labels, or running club auctions, it likely makes sense to purchase a thermal printer.</p>
 {% crispy form form.helper %}
 {% endblock %}
