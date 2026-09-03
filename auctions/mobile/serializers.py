@@ -1,3 +1,13 @@
+"""Request and response shapes for the mobile app's own API.
+
+The app talks to ``/api/mobile/`` rather than to the club API, because it is a different kind of
+client: it holds a JWT pair, it works offline and replays what it queued, and it needs the site to
+describe itself (config, menus, feature flags) before anybody has signed in.
+
+Session IDs the app generates are stored as **char, not UUID** -- MariaDB's native UUID column
+rejects a variant nibble outside 8-b and silently killed about half of these.
+"""
+
 import math
 
 from django.urls import reverse

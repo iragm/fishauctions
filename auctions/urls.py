@@ -1,3 +1,16 @@
+"""Every URL on the site, and the one place a new one has to be declared.
+
+Ordinary Django routing, with one local rule worth knowing before you add anything: **a new named
+URL or POST view costs you two entries.** It must either be catalogued as an ``Action`` in
+:mod:`auctions.palette_actions` -- which is what puts it in the command palette *and* on the MCP
+endpoint, since both read one registry -- or be excused in ``palette_actions.NOT_A_SKILL`` with a
+reason about the capability rather than about the palette. ``test_palette_skills`` fails the build
+otherwise.
+
+``/mcp`` is matched with and without its trailing slash on purpose: ``APPEND_SLASH`` drops a POST
+body, and that endpoint is a POST.
+"""
+
 from allauth.socialaccount import views as socialaccount_views
 from django.contrib.auth.decorators import login_required
 from django.urls import include, path, re_path

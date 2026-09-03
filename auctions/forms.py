@@ -1,3 +1,26 @@
+"""Every form on the site: what a person is allowed to type, and what it means when they do.
+
+Django forms, `crispy_forms` helpers and the validators they share. Four things here are
+load-bearing beyond the usual:
+
+* **``configure_species_field``** is the single place a species picker is set up, and its
+  ``picker=`` and ``dal_for=`` arguments are the difference between the three surfaces: the lot form
+  gets a picker that opens itself when a name is ambiguous, quick-add pages get no picker at all
+  (one certain match goes into a hidden input, anything less is left blank), and the auction admin's
+  lot editor gets one `dal` picker over every species including strains.
+* **``ChangeUserPreferencesForm`` and ``ChangeUserNotificationsForm`` partition the ``UserData``
+  fields between them** -- no field on both. That is why neither page needs any JavaScript:
+  ``distance_unit`` stayed on preferences and the three radii went to notifications, so nothing on
+  either page can change a unit a field beside it must be converted against. Distances are stored in
+  **miles** always; the notifications form converts once in ``__init__`` and once in ``clean()``.
+  A field added to neither form disappears from the ``update_preferences`` assistant tool.
+* **A field removed from a model must come off every form here in the same commit.** A form naming a
+  dropped field raises ``FieldError`` at import, which takes ``urls.py`` with it and crash-loops the
+  container behind an entrypoint that will not serve a half-migrated database.
+* **``clean_summernote`` and the image validators are the trust boundary** for anything a member of
+  the public types or uploads.
+"""
+
 import datetime
 import logging
 import re

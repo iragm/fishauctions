@@ -466,7 +466,7 @@ def _club_member_arriving(auction, hint: str):
     Exactly one match, and only ever an exact-ish one: creating the wrong participant row hands a
     stranger a bidder number and an invoice. Several matches is a question.
     """
-    from .views import _upsert_clubmember_shadow_tos
+    from .views.base import _upsert_clubmember_shadow_tos
 
     if not (auction.is_club_managed and auction.club_id and hint):
         return None, None
@@ -3389,7 +3389,7 @@ def _membership_card(member) -> dict[str, Any]:
     something to pay -- the same ``_membership_renewal_state`` answer the card page itself uses, so
     a member who is paid up is never shown a Renew button and a member who is not always is.
     """
-    from .views import _membership_renewal_state
+    from .views.club_pages import _membership_renewal_state
 
     club = member.club
     is_expired, expiring_soon, should_show_payment, _can_pay = _membership_renewal_state(club, member)
@@ -8133,7 +8133,7 @@ def add_club_event(request, params: dict[str, Any]) -> dict[str, Any]:
     """
     from .forms import ClubEventForm
     from .models import ClubEvent
-    from .views import _push_event_to_integrations
+    from .views.club_integrations import _push_event_to_integrations
 
     user = request.user
     club, problem = _club_or_problem(request, params)
@@ -8186,7 +8186,7 @@ def update_club_event(request, params: dict[str, Any]) -> dict[str, Any]:
     disagrees with its auction is worse than no feature at all.
     """
     from .forms import ClubEventForm
-    from .views import _push_event_to_integrations
+    from .views.club_integrations import _push_event_to_integrations
 
     user = request.user
     club, problem = _club_or_problem(request, params)
@@ -11369,7 +11369,8 @@ def set_invoice_renewal(request, params: dict[str, Any]) -> dict[str, Any]:
     club's ``permission_add_edit``. An auction admin does not get a club's invoices by
     administering one of its auctions.
     """
-    from .views import _sync_tos_alternate_split, check_club_permission
+    from .views import check_club_permission
+    from .views.base import _sync_tos_alternate_split
 
     user = request.user
     auction, problem = _auction_or_problem(request, params)
@@ -15216,6 +15217,12 @@ def postable_views() -> dict[str, list[str]]:
     Only ``auctions.views``: the mobile API is the app's own screens, and PassKit and Apple's
     server-to-server notifications are webhooks. Both are already written down in
     ``palette_routes.EXCLUDED``.
+
+    That test is a **prefix** match, not equality, because ``auctions.views`` is a package: a view's
+    ``__module__`` is ``auctions.views.club_members``, not ``auctions.views``. Written as equality it
+    matches nothing at all, and the audit then reports full coverage of an empty write surface --
+    which is the exact silent pass this function exists to prevent. ``test_palette_skills`` checks
+    that the audit still sees the site for that reason.
     """
     from django.urls import get_resolver
 
@@ -15230,7 +15237,10 @@ def postable_views() -> dict[str, list[str]]:
     for pattern in walk(get_resolver()):
         callback = pattern.callback
         view = getattr(callback, "view_class", None) or getattr(callback, "cls", None)
-        if view is None or view.__module__ != "auctions.views" or not hasattr(view, "post"):
+        in_views = view is not None and (
+            view.__module__ == "auctions.views" or view.__module__.startswith("auctions.views.")
+        )
+        if not in_views or not hasattr(view, "post"):
             continue
         found.setdefault(view.__name__, [])
         if pattern.name:

@@ -1,0 +1,44 @@
+# Files that are tracked in git but are not this project's source code.
+#
+# Read by ripgrep (and anything else honouring `.ignore`), which is what Claude Code's Grep and
+# Glob tools run underneath. `.gitignore` cannot do this job: these files are *committed*, so git
+# has to keep seeing them and only the search tools should look away.
+#
+# Why it matters here: `zxing.min.js` is a single 336 KB line, `bootstrap.min.css` a single 232 KB
+# one, and `mcp/vendor/ext_apps.js` 172 KB. One grep for a common word that happens to hit one of
+# them returns that whole line as "context" -- tens of thousands of tokens of minified vendor
+# code, in place of the answer. There are 16 such files.
+#
+# This hides them from *search*, not from reading. `rg --no-ignore`, and every path named
+# explicitly (Read, cat, an import), still work exactly as before -- so the `export{...}` rewrite
+# in ext_apps.js that `widgets._bundle` depends on is still one `--no-ignore` away.
+#
+# Keep this list in step with the `exclude:` block at the top of .pre-commit-config.yaml: both
+# answer the same question, "which committed files did we not write?"
+
+# Vendored third-party libraries, wherever they sit.
+**/vendor/
+
+# Minified builds, including the ones outside a vendor/ directory
+# (auctions/static/js/Chart.min.js, auctions/static/css/print.min.css, bootstrap.min.css4).
+*.min.js
+*.min.css
+*.min.css4
+*.map
+
+# Web fonts and images: binary, and grep can only ever produce noise from them.
+*.woff
+*.woff2
+*.ttf
+*.eot
+*.png
+*.jpg
+*.jpeg
+*.ico
+*.webp
+
+# Deliberately NOT ignored, because they are ours and get searched on purpose:
+#   auctions/data/aquarium_species.csv   the curated species vocabulary (41 KB)
+#   auctions/fixtures/demo_data.json     the demo fixture (33 KB)
+#   auctions/migrations/                 294 files, but they are the schema's history
+#   *.svg                                red_tail_cat.svg etc. are hand-editable source

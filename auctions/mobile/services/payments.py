@@ -1,3 +1,15 @@
+"""Taking a card payment in the room, through the app's Tap to Pay.
+
+:class:`PaymentService` is the whole flow: open an attempt, hand the app what Square needs, verify
+what comes back, and book it against the invoice exactly once. The error classes at the top are the
+states the app has to tell a volunteer about -- already charged, attempt still open, Square needs
+reconnecting -- and they exist because "payment failed" is not an answer when somebody is standing
+at the table with a card.
+
+Booking a payment goes through the same invoice and renewal helpers the web pages use, so a payment
+taken here and one typed into an invoice cannot end up meaning different things.
+"""
+
 import logging
 import uuid
 from datetime import timedelta
@@ -721,7 +733,7 @@ class PaymentService:
         # Renewal hooks may not be idempotent, so only the request that actually recorded the payment
         # runs them — and only after commit, to avoid holding the row lock across email/Discord work.
         if created:
-            from auctions.views import _ensure_invoice_renewal_state, _process_invoice_membership_renewal
+            from auctions.views.base import _ensure_invoice_renewal_state, _process_invoice_membership_renewal
 
             try:
                 _ensure_invoice_renewal_state(invoice)

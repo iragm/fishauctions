@@ -57,7 +57,7 @@ from auctions.printer_programs import (
     validate_profile_programs,
 )
 from auctions.printing import label_prefs_warnings, warning_matrix
-from auctions.tests import StandardTestCase
+from auctions.tests import StandardTestCase, patch_views
 
 # A plausible-looking inline service-account JSON; push_configured() only checks it's non-empty and
 # no real FCM call is made (send_push_to_user.delay / send_fcm_message are mocked where needed).
@@ -1674,8 +1674,8 @@ class WatchedLotPushRoutingTests(StandardTestCase):
         from auctions.views import notify_watchers_lot_selling_soon
 
         with (
-            patch("auctions.views.send_push_to_user.delay") as app_push,
-            patch("auctions.views.send_user_notification") as web_push,
+            patch_views("send_push_to_user.delay") as app_push,
+            patch_views("send_user_notification") as web_push,
         ):
             notify_watchers_lot_selling_soon(self.in_person_lot, **kwargs)
         return app_push, web_push
@@ -1736,8 +1736,8 @@ class WatchedLotPushRoutingTests(StandardTestCase):
         self._app_device()
         self.client.login(username=self.watcher.username, password="testpassword")
         with (
-            patch("auctions.views.send_push_to_user.delay") as app_push,
-            patch("auctions.views.send_user_notification") as web_push,
+            patch_views("send_push_to_user.delay") as app_push,
+            patch_views("send_user_notification") as web_push,
         ):
             response = self.client.post(reverse("lot_push_test", kwargs={"pk": self.in_person_lot.pk}))
         self.assertEqual(response.status_code, 200)
@@ -1815,7 +1815,7 @@ class QueueRespectsTheAuctionNotificationSettingTests(StandardTestCase):
     def _process(self):
         from auctions.views import process_queue_notifications
 
-        with patch("auctions.views.notify_watchers_lot_selling_soon") as notify:
+        with patch_views("notify_watchers_lot_selling_soon") as notify:
             process_queue_notifications(self.in_person_auction)
         return notify
 
@@ -1834,7 +1834,7 @@ class QueueRespectsTheAuctionNotificationSettingTests(StandardTestCase):
         self.in_person_auction.save()
         from auctions.views import process_queue_notifications
 
-        with patch("auctions.views.broadcast_queue_update") as broadcast:
+        with patch("auctions.views.selling.broadcast_queue_update") as broadcast:
             process_queue_notifications(self.in_person_auction)
         broadcast.assert_called_once()
 

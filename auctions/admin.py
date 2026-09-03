@@ -1,3 +1,14 @@
+"""The Django admin: the staff-only back door, and the handful of jobs that only live here.
+
+Most of this file is registration -- a `ModelAdmin` per model so a superuser can look at a row.
+The parts worth knowing are the ones that are not: the bulk actions (approving a species, merging a
+duplicate, marking one "not a duplicate") are real capabilities with no other home, and
+``export_to_csv`` is the generic exporter every changelist hangs off.
+
+Nothing here is a permission boundary anyone else relies on. Everything the *site* can do is gated
+in the views and in ``palette_actions``; this file assumes whoever reached it is already staff.
+"""
+
 import csv
 import datetime
 

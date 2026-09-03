@@ -434,7 +434,7 @@ class ClubCalendarTests(NoPageTestCase):
 
     def test_adding_an_event_puts_it_on_the_calendar(self):
         when = (timezone.now() + datetime.timedelta(days=10)).replace(microsecond=0)
-        with patch("auctions.views._push_event_to_integrations"):
+        with patch("auctions.views.club_integrations._push_event_to_integrations"):
             result = self._run(
                 "add_club_event",
                 {
@@ -480,7 +480,7 @@ class ClubCalendarTests(NoPageTestCase):
             date_start=timezone.now() + datetime.timedelta(days=5),
             source=ClubEvent.SOURCE_AUCTION,
         )
-        with patch("auctions.views._push_event_to_integrations"):
+        with patch("auctions.views.club_integrations._push_event_to_integrations"):
             result = self._run(
                 "update_club_event",
                 {"club": self.club.slug, "event": "Auto event", "new_title": "Monthly meeting"},

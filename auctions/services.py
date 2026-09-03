@@ -1,3 +1,15 @@
+"""The operations that are the same whoever asked: web page, API, app or assistant.
+
+A function here is the single implementation of one thing the site can do -- join an auction, check
+somebody in, create a club member, finish setting up a new auction. Views call them, the club API
+calls them, the mobile endpoints call them and ``palette_actions`` calls them, which is the point:
+a rule enforced in a view is a rule the API does not have, and this file is where that stops being
+possible.
+
+Permission checks are the caller's job. Nothing here asks whether the user is allowed; by the time
+a service function runs, that has been settled.
+"""
+
 from django.utils import timezone
 
 from .models import AuctionTOS, ClubHistory, ClubMember
@@ -804,7 +816,8 @@ def finish_new_auction(auction, created_by, *, copied_from=None, note=""):
     :func:`auctions.palette_actions.via`, so a club reading its own history can tell an auction an
     assistant copied from one somebody made on the site.
     """
-    from .views import _add_club_admins_as_auction_tos, check_club_permission
+    from .views import check_club_permission
+    from .views.auction_pages import _add_club_admins_as_auction_tos
 
     action = "Created auction"
     if copied_from:

@@ -830,8 +830,8 @@ class ReceiptUrlTests(StandardTestCase):
         seller.get_square_client.return_value.payments.get.return_value = SimpleNamespace(errors=None, payment=payment)
         with (
             patch.object(PaymentService, "_get_seller_for_invoice", return_value=seller),
-            patch("auctions.views._ensure_invoice_renewal_state"),
-            patch("auctions.views._process_invoice_membership_renewal"),
+            patch("auctions.views.base._ensure_invoice_renewal_state"),
+            patch("auctions.views.base._process_invoice_membership_renewal"),
         ):
             return PaymentService.confirm_mobile_payment(
                 invoice_pk=self.pay_invoice.pk,
@@ -905,8 +905,8 @@ class TapToPayAttemptTests(StandardTestCase):
         seller.get_square_client.return_value.payments.get.return_value = SimpleNamespace(errors=None, payment=payment)
         with (
             patch.object(PaymentService, "_get_seller_for_invoice", return_value=seller),
-            patch("auctions.views._ensure_invoice_renewal_state"),
-            patch("auctions.views._process_invoice_membership_renewal"),
+            patch("auctions.views.base._ensure_invoice_renewal_state"),
+            patch("auctions.views.base._process_invoice_membership_renewal"),
         ):
             return PaymentService.confirm_mobile_payment(
                 invoice_pk=self.invoice.pk, payment_id="PAYA", idempotency_key="ignored", user=self.admin_user
@@ -1137,7 +1137,7 @@ class SetupChecklistTests(TestCase):
     def setUp(self):
         self.superuser = User.objects.create_superuser("checkadmin", "check@example.com", "pw")
         self.client.force_login(self.superuser)
-        ip_patcher = patch("auctions.views.get_server_public_ip", return_value="203.0.113.7")
+        ip_patcher = patch("auctions.views.admin_checklist.get_server_public_ip", return_value="203.0.113.7")
         ip_patcher.start()
         self.addCleanup(ip_patcher.stop)
 

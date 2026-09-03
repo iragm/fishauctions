@@ -1,3 +1,13 @@
+"""The search and filter boxes above every table: what a query in one of them means.
+
+One ``django_filters`` class per table, paired with the ``django_tables2`` class of the same subject
+in :mod:`auctions.tables`. They are the *admin's* filters and deliberately search more than the
+public API does -- :class:`LotAdminFilter` looks at seller name, username and bidder number, which
+is exactly why the club API has its own narrower list (``views.LOT_GENERIC_FILTER_COLUMNS``) rather
+than reusing this one. Copying this list out to a public caller would let it confirm a member's name
+one character at a time.
+"""
+
 import datetime
 import re
 import shlex

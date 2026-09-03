@@ -793,7 +793,7 @@ class ClubManagedParticipantTests(ClubSkillTestCase):
 
     def setUp(self):
         super().setUp()
-        from auctions.views import _upsert_clubmember_shadow_tos
+        from auctions.views.base import _upsert_clubmember_shadow_tos
 
         self.in_person_auction.club = self.club
         self.in_person_auction.manage_users_through_club = "all"

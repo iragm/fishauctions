@@ -466,9 +466,10 @@ def read(path: str, start: int = 1, count: int = DEFAULT_LINES) -> dict[str, Any
 #: Files worth naming to somebody who has just arrived and does not know the shape of this
 #: repository. Read off nothing -- it is a hand-written signpost, and it is short on purpose.
 LANDMARKS = (
-    ("CLAUDE.md", "How the whole site is put together, feature by feature. Start here."),
+    ("docs/module_map.md", "One line per module: what it is and what it defines. Start here."),
+    ("CLAUDE.md", "How the site is built and the rules that apply everywhere."),
     ("auctions/models.py", "Every model, and most of the rules that matter."),
-    ("auctions/views.py", "The pages."),
+    ("auctions/views/", "The pages, split by area. Its __init__.py says which module holds what."),
     ("auctions/palette_actions.py", "The action registry behind /mcp/ and the command palette."),
     ("auctions/mcp/", "The MCP server itself: tools, protocol, transport, auth, resources."),
 )

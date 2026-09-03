@@ -16,7 +16,7 @@ reported symptom is app-side item 2.
 
 ### 1. The connect views require a session, and the app opens them somewhere that has none
 
-`SquareConnectView` ([views.py:12291](../auctions/views.py)) is `LoginRequiredMixin`, and its own
+`SquareConnectView` ([auctions/views/payments.py](../auctions/views/payments.py)) is `LoginRequiredMixin`, and its own
 comment four lines down says the app opens this URL "in a browser view that carries no session of
 ours". Both statements are true, which is the bug: `LoginRequiredMixin` runs in `dispatch()`, so the
 `?return_to_app=1` handling underneath it is never reached by an anonymous request. What the browser
@@ -26,20 +26,25 @@ The same shape holds for every connect flow:
 
 | Flow | Connect view | Callback | Off-host authorize URL |
 |---|---|---|---|
-| Square | `views.py:12291` | `views.py:12343` | `connect.squareup.com/oauth2/authorize` |
-| PayPal | `views.py:12008` | `views.py:12053` | PayPal `action_url` |
-| Mailchimp | `views.py:12518` | `views.py:12541` | `login.mailchimp.com/oauth2/authorize` |
-| Google Calendar | `views.py:12853` | `views.py:12877` | `accounts.google.com/o/oauth2/v2/auth` |
-| Discord bot | `views.py:25543` | — | `discord.com/oauth2/authorize` |
+| Square | `SquareConnectView` | `SquareCallbackView` | `connect.squareup.com/oauth2/authorize` |
+| PayPal | `PayPalConnectView` | `PayPalCallbackView` | PayPal `action_url` |
+| Mailchimp | `MailchimpConnectView` | `MailchimpCallbackView` | `login.mailchimp.com/oauth2/authorize` |
+| Google Calendar | `GoogleCalendarConnectView` | `GoogleCalendarCallbackView` | `accounts.google.com/o/oauth2/v2/auth` |
+| Discord bot | `ClubDiscordConfigView` | — | `discord.com/oauth2/authorize` |
+
+The Square and PayPal pairs are in `auctions/views/payments.py`; Mailchimp and Google Calendar are in
+`auctions/views/club_integrations.py`; the Discord one is in `auctions/views/discord.py`. Views are
+named rather than given line numbers on purpose -- a line number in a document is wrong by the next
+commit, and `docs/module_map.md` will find any of these by name.
 
 `?return_to_app=1`, `session_opened_by_app` and the `fishauctions-oauth://` exit exist for **Square
-only** (`views.py:12313`, `views.py:12506`, `square_connected_app.html`). The other four have none of
+only** (`views/club_integrations.py`, `views/club_integrations.py`, `square_connected_app.html`). The other four have none of
 it, so even when they work they end on a web page the merchant has no way out of.
 
 ### 2. All the OAuth state lives in the Django session, so a second cookie jar cannot finish the trip
 
 `GOOGLE_CALENDAR_OAUTH_CLUB_SESSION_KEY` + a per-attempt `state` nonce (`views.py:12869-12872`),
-`MAILCHIMP_OAUTH_CLUB_SESSION_KEY` (`views.py:12532`), `_stash_club_for_payment_oauth`
+`MAILCHIMP_OAUTH_CLUB_SESSION_KEY` (`views/club_integrations.py`), `_stash_club_for_payment_oauth`
 (`views.py:922-936`). Signing in again inside the browser view does not help: the state was written
 to the *other* session. The callback then takes the "Your Google Calendar connection session
 expired. Please try again." branch (`views.py:12886-12889`, `views.py:12547-12550`) and redirects to
@@ -143,16 +148,16 @@ unconditionally, as do `club_mailchimp_settings.html:22`, `square_seller.html:47
 Ordered by value, none of them done yet. 5 is the one that makes the flow *correct* rather than
 better-signposted; 1 and 6 are the ones that stop the reported symptom on their own.
 
-1. Replace `LoginRequiredMixin` on the four connect views (`views.py:12291`, `12008`, `12518`,
+1. Replace `LoginRequiredMixin` on the four connect views (`views/club_integrations.py`, `12008`, `12518`,
    `12853`) with a mixin that, for an anonymous request carrying `?return_to_app=1`, renders "open
    this from the app" (or bounces to a `fishauctions-oauth://reauth` scheme) instead of `/login/`.
-2. Generalise `session_opened_by_app(request) or request.GET.get("return_to_app")` (`views.py:12313`)
+2. Generalise `session_opened_by_app(request) or request.GET.get("return_to_app")` (`views/club_integrations.py`)
    into a shared helper and call it from the Mailchimp, Google Calendar, PayPal and Discord connect
    views. Only Square marks the session today.
-3. Promote `SquareCallbackView._done` (`views.py:12488`) into a shared "finish in the app" helper so
+3. Promote `SquareCallbackView._done` (`views/club_integrations.py`) into a shared "finish in the app" helper so
    each callback ends at its own `fishauctions-oauth://…-connected`. The other three leave the
    merchant on a web page holding a `messages.success` they will never see.
-4. Make the "connection session expired" branches (`views.py:12886`, `views.py:12547`) redirect to
+4. Make the "connection session expired" branches (`views/club_integrations.py`, `views/club_integrations.py`) redirect to
    the club's config page with actionable copy instead of `home`.
 5. ~~**Move the OAuth state out of the Django session**~~ — **rejected 2026-09-02.** It would make
    this class of bug impossible rather than merely avoided, but it means hand-rolling state handling

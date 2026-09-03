@@ -22,6 +22,7 @@ from auctions.models import (
     VolunteerJob,
     VolunteerSignup,
 )
+from auctions.tests import patch_views
 
 User = get_user_model()
 
@@ -133,7 +134,7 @@ class VolunteerCreateTests(VolunteerBase):
     def _ask_for_help(self, description="Run the door", people_needed=2):
         self.client.force_login(self.admin)
         with (
-            patch("auctions.views.send_push_to_user.delay") as push,
+            patch_views("send_push_to_user.delay") as push,
             patch("post_office.mail.send") as email,
         ):
             resp = self.client.post(
@@ -185,7 +186,7 @@ class VolunteerSignupTests(VolunteerBase):
     def test_signup_with_bounty_creates_linked_discount(self):
         job = self._job(bounty=Decimal("10.00"))
         self.client.force_login(self.helper1)
-        with patch("auctions.views.withdraw_volunteer_notification") as mock_withdraw:
+        with patch("auctions.views.selling.withdraw_volunteer_notification") as mock_withdraw:
             resp = self.client.post(self._job_url(job))
         self.assertEqual(resp.status_code, 302)
         signup = VolunteerSignup.objects.get(job=job)
@@ -237,7 +238,7 @@ class VolunteerSignupTests(VolunteerBase):
     def test_cancel_job_logs_history_and_retracts(self):
         job = self._job()
         self.client.force_login(self.admin)
-        with patch("auctions.views.withdraw_volunteer_notification") as mock_withdraw:
+        with patch("auctions.views.selling.withdraw_volunteer_notification") as mock_withdraw:
             self.client.post(self._volunteers_url(), {"action": "cancel", "job_pk": job.pk})
         job.refresh_from_db()
         self.assertTrue(job.canceled)

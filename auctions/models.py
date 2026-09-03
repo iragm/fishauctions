@@ -1,3 +1,40 @@
+"""The database: 80 models, and the reason they are still in one file.
+
+This module is far past the size anything else here is allowed to be, and that is a recorded
+decision rather than an oversight. **29 of the 80 models form a single dependency cycle** --
+``Auction``, ``Lot``, ``Club``, ``ClubMember``, ``AuctionTOS``, ``Invoice``, ``UserData``,
+``Species`` and the twenty-one others that reference them -- worth 11,308 of these lines. They
+reference each other as *class objects* rather than as ``"app.Model"`` strings, in field definitions
+and in method bodies alike, so splitting them across modules is not a file move: it means converting
+those references, and a mistake in that conversion is a broken foreign key rather than an
+``ImportError`` somebody notices immediately. Moving only the 51 acyclic models out would leave a
+12,300-line core and churn the history of every model for very little. Whoever breaks the cycle
+should do it as its own piece of work, and this paragraph is the note saying why it has not been.
+
+Roughly what is where, in file order:
+
+* **The site's furniture** -- ``BlogPost``, ``Location``, ``GeneralInterest``, ``FAQ``, ``Category``.
+* **``Club`` and the things hanging off it** -- ``ClubMember`` (a ``ContactRecord``),
+  ``ClubDiscordRole``, ``ClubHistory``, ``ClubEvent``, ``ClubAnnouncement``, ``ClubMoney``, the BAP
+  overrides and ``BapAward``.
+* **API keys** -- ``HashedAPIKey`` and its two subclasses, ``ClubAPIKey`` (a club, one checkbox per
+  capability) and ``UserAPIKey`` (a person, for ``/mcp/``). The prefix is stored in the clear and the
+  secret only ever as a salted hash.
+* **The auction itself** -- ``Auction``, ``AuctionTOS``, ``PickupLocation``, ``Lot``, ``Bid``,
+  ``Invoice`` and the adjustments and payments against it. This is the cycle.
+* **Species** -- ``Species``, ``SpeciesCommonName``, ``SpeciesSearchCache``,
+  ``SpeciesNameRejection``. ``Species.save()`` is where the shapes are enforced: a cultivar carries
+  ``variety`` plus a ``parent``, a hybrid carries ``variety`` with ``genus``, ``species`` and
+  ``parent`` all empty.
+* **The people-facing rest** -- ``UserData``, ``Watch``, ``PageView`` (the biggest table on the
+  site), ``ChatSubscription``, the ad models, speakers, volunteers, printing, mobile and voice.
+
+Two rules that apply to the whole file. ``PageView`` is written to on nearly every request, so
+anything added to it is added to the busiest insert here. And a ``.delay()`` from a signal goes
+inside ``transaction.on_commit`` -- a ``post_delete`` fires *inside* Django's delete transaction, and
+enqueuing directly once left a task pointing at an image already gone from Cloudflare.
+"""
+
 import datetime
 import logging
 import re
