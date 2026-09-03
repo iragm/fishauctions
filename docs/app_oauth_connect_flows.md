@@ -38,17 +38,19 @@ named rather than given line numbers on purpose -- a line number in a document i
 commit, and `docs/module_map.md` will find any of these by name.
 
 `?return_to_app=1`, `session_opened_by_app` and the `fishauctions-oauth://` exit exist for **Square
-only** (`views/club_integrations.py`, `views/club_integrations.py`, `square_connected_app.html`). The other four have none of
-it, so even when they work they end on a web page the merchant has no way out of.
+only** — all of it in `SquareConnectView` and `SquareCallbackView._done`
+(`auctions/views/payments.py`) and `square_connected_app.html`. The other four have none of it, so
+even when they work they end on a web page the merchant has no way out of.
 
 ### 2. All the OAuth state lives in the Django session, so a second cookie jar cannot finish the trip
 
-`GOOGLE_CALENDAR_OAUTH_CLUB_SESSION_KEY` + a per-attempt `state` nonce (`views.py:12869-12872`),
-`MAILCHIMP_OAUTH_CLUB_SESSION_KEY` (`views/club_integrations.py`), `_stash_club_for_payment_oauth`
-(`views.py:922-936`). Signing in again inside the browser view does not help: the state was written
-to the *other* session. The callback then takes the "Your Google Calendar connection session
-expired. Please try again." branch (`views.py:12886-12889`, `views.py:12547-12550`) and redirects to
-`home` — which reads as "it signed me out and dumped me on the front page", and loops forever.
+`GOOGLE_CALENDAR_OAUTH_CLUB_SESSION_KEY` + a per-attempt `state` nonce and
+`MAILCHIMP_OAUTH_CLUB_SESSION_KEY` (both `auctions/views/club_integrations.py`),
+`_stash_club_for_payment_oauth` (`auctions/views/base.py`, used by the Square and PayPal flows).
+Signing in again inside the browser view does not help: the state was written to the *other*
+session. Both callbacks in `club_integrations.py` then take their "connection session expired.
+Please try again." branch and redirect to `home` — which reads as "it signed me out and dumped me
+on the front page", and loops forever.
 
 ### 3. The site claims every path as a Universal Link, so the OAuth *return* can be stolen back
 
@@ -148,16 +150,18 @@ unconditionally, as do `club_mailchimp_settings.html:22`, `square_seller.html:47
 Ordered by value, none of them done yet. 5 is the one that makes the flow *correct* rather than
 better-signposted; 1 and 6 are the ones that stop the reported symptom on their own.
 
-1. Replace `LoginRequiredMixin` on the four connect views (`views/club_integrations.py`, `12008`, `12518`,
-   `12853`) with a mixin that, for an anonymous request carrying `?return_to_app=1`, renders "open
+1. Replace `LoginRequiredMixin` on the four connect views (`SquareConnectView`,
+   `PayPalConnectView`, `MailchimpConnectView`, `GoogleCalendarConnectView`) with a mixin that,
+   for an anonymous request carrying `?return_to_app=1`, renders "open
    this from the app" (or bounces to a `fishauctions-oauth://reauth` scheme) instead of `/login/`.
-2. Generalise `session_opened_by_app(request) or request.GET.get("return_to_app")` (`views/club_integrations.py`)
-   into a shared helper and call it from the Mailchimp, Google Calendar, PayPal and Discord connect
+2. Generalise `session_opened_by_app(request) or request.GET.get("return_to_app")`
+   (`SquareConnectView`, `auctions/views/payments.py`) into a shared helper and call it from the Mailchimp, Google Calendar, PayPal and Discord connect
    views. Only Square marks the session today.
-3. Promote `SquareCallbackView._done` (`views/club_integrations.py`) into a shared "finish in the app" helper so
+3. Promote `SquareCallbackView._done` (`auctions/views/payments.py`) into a shared "finish in the app" helper so
    each callback ends at its own `fishauctions-oauth://…-connected`. The other three leave the
    merchant on a web page holding a `messages.success` they will never see.
-4. Make the "connection session expired" branches (`views/club_integrations.py`, `views/club_integrations.py`) redirect to
+4. Make the "connection session expired" branches (`MailchimpCallbackView` and
+   `GoogleCalendarCallbackView`, both `auctions/views/club_integrations.py`) redirect to
    the club's config page with actionable copy instead of `home`.
 5. ~~**Move the OAuth state out of the Django session**~~ — **rejected 2026-09-02.** It would make
    this class of bug impossible rather than merely avoided, but it means hand-rolling state handling

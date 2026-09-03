@@ -19,7 +19,7 @@ became and carries the three greps that keep it that way — run them before you
   after Bootstrap in `auctions/templates/base.html`).
 - After editing CSS: `docker exec django python3 manage.py collectstatic --no-input`
   (use `-u root` if permissions complain).
-- Some HTML is emitted from Python (`auctions/views.py`, `auctions/tables.py`,
+- Some HTML is emitted from Python (`auctions/views/`, `auctions/tables.py`,
   `auctions/forms.py`) — the same rules apply there.
 
 ### Why overrides are per-component, not just `:root`

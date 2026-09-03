@@ -40,10 +40,18 @@ def iter_template_files(root):
     """Every template under ``root``, found by directory name rather than by asking Django.
 
     Keeps this importable without settings configured, and picks up templates in any app.
+
+    ``root`` may also be a single **file**, so the same entry point serves the whole tree (CI) and
+    one template (the edit hook in ``.claude/hooks/``). Without that, a file path here matched no
+    ``templates`` directory and the checker reported nothing at all -- a lint that always passes,
+    which is worse than not having one.
     """
+    root = Path(root)
+    if root.is_file():
+        return [root] if root.suffix in TEMPLATE_SUFFIXES else []
     return sorted(
         path
-        for templates_dir in Path(root).rglob("templates")
+        for templates_dir in root.rglob("templates")
         if templates_dir.is_dir()
         for path in templates_dir.rglob("*")
         if path.is_file() and path.suffix in TEMPLATE_SUFFIXES
@@ -112,10 +120,13 @@ def check_templates(root):
 
 
 def main(argv=None):
-    """Print anything found and exit non-zero, so this works as a lint step."""
+    """Print anything found and exit non-zero, so this works as a lint step.
+
+    Each argument is a directory to walk or a single template to check; with none, the repository.
+    """
     argv = list(sys.argv[1:] if argv is None else argv)
-    root = Path(argv[0]) if argv else Path(__file__).resolve().parent.parent
-    findings = check_templates(root)
+    roots = [Path(arg) for arg in argv] or [Path(__file__).resolve().parent.parent]
+    findings = [finding for root in roots for finding in check_templates(root)]
     for path, number, message in findings:
         sys.stderr.write(f"{path}:{number}: {message}\n")
     if findings:

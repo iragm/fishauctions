@@ -48,7 +48,11 @@ from auctions.models import (
 )
 
 from .base import ClubViewMixin, check_club_permission
-from .payments import MAILCHIMP_OAUTH_CLUB_SESSION_KEY, SquareAPIMixin
+from .payments import SquareAPIMixin
+
+#: The club whose Mailchimp connection is half-finished, carried across the trip to Mailchimp and
+#: back in the session -- which is why the callback cannot be reached from a second cookie jar.
+MAILCHIMP_OAUTH_CLUB_SESSION_KEY = "mailchimp_oauth_club_slug"
 
 logger = logging.getLogger(__name__)
 

@@ -43,7 +43,7 @@ docker compose up -d
 Access at `http://127.0.0.1` (port **80**, not 8000).
 
 ```bash
-docker exec -it django python3 manage.py shell -c "from django.contrib.auth import get_user_model; User=get_user_model(); u=User.objects.create_superuser('admin', 'admin@example.com', 'example'); u.emailaddress_set.create(email=u.email, verified=True, primary=True)"
+docker exec django python3 manage.py shell -c "from django.contrib.auth import get_user_model; User=get_user_model(); u=User.objects.create_superuser('admin', 'admin@example.com', 'example'); u.emailaddress_set.create(email=u.email, verified=True, primary=True)"
 ```
 
 ## Testing & Linting
@@ -52,7 +52,7 @@ docker exec -it django python3 manage.py shell -c "from django.contrib.auth impo
 docker compose run --rm test --ci --verbose   # format + lint + template + module map. NO TESTS.
 docker compose run --rm test --format         # auto-fix formatting
 docker compose run --rm test --lint           # auto-fix linting
-docker exec -it django python3 manage.py test # the tests (needs compose up)
+docker exec django python3 manage.py test # the tests (needs compose up)
 ```
 
 Ruff config: `ruff.toml` (line-length 120). Replicate CI with
@@ -75,15 +75,17 @@ Ruff config: `ruff.toml` (line-length 120). Replicate CI with
 
 ## Django Commands
 
-Always inside the container:
+Always inside the container. **No `-t`** unless a command genuinely wants a terminal: `docker exec
+-t` fails with "the input device is not a TTY" for every caller that is not one -- an agent, a
+hook, a script, CI.
 
 ```bash
-docker exec -it django python3 manage.py makemigrations
-docker exec -it django python3 manage.py migrate
-docker exec -it django python3 manage.py shell
+docker exec -i django python3 manage.py makemigrations   # -i: it asks about renames
+docker exec django python3 manage.py migrate
+docker exec -it django python3 manage.py shell           # -it: a REPL, so only from a terminal
 ```
 
-Migration permission error? `docker exec -u root -it django ...`
+Migration permission error? `docker exec -u root django ...`
 
 ## Dependencies
 
@@ -144,8 +146,8 @@ Species, ChatMessage, PageView. **URLs:** `auctions/urls.py`, `fishauctions/urls
 |---|---|
 | Won't start | First 4 lines of `.env` not removed |
 | Port 80 in use | Add `HTTP_PORT=81` to `.env` |
-| Migration permission error | `docker exec -u root -it django ...` |
-| Static files missing | `docker exec -it django python3 manage.py collectstatic --no-input` |
-| DB out of sync | `docker exec -it django python3 manage.py migrate` |
+| Migration permission error | `docker exec -u root django ...` |
+| Static files missing | `docker exec django python3 manage.py collectstatic --no-input` |
+| DB out of sync | `docker exec django python3 manage.py migrate` |
 | `IntegrityError (1364, "Field 'x' doesn't have a default value")` | A `NOT NULL` column left behind by an abandoned branch. In no model and no migration, so every insert 500s. `migrate` -- `0418_drop_orphan_columns` drops any such column and leaves inert ones alone. Test databases are built from migrations, so the suite can never catch this. |
 | Build fails | `docker compose down && docker system prune -a -f && docker compose --profile "*" build --no-cache` |

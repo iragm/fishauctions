@@ -11,7 +11,7 @@ Four rules hold it together.
   **acyclic**. That property is what made the split possible and it is not decorative: a cycle here
   is an `ImportError` at startup, and Django will not tell you which module to blame. If a helper is
   wanted in two areas, it moves to `base.py` -- it does not get imported sideways.
-- **`__init__.py` re-exports everything with `import *`**, because `urls.py` refers to 381 of these
+- **`__init__.py` re-exports everything with `import *`**, because `urls.py` refers to 347 of these
   names as `views.SomeView`. That works for public names only. A **private** helper (`_foo`) is
   imported from the module that defines it -- `from auctions.views.base import _foo` -- and so is
   patched there in tests, since patching `auctions.views._foo` no longer reaches anything.

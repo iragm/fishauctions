@@ -167,7 +167,7 @@ this only quotes its opening sentence.
   The ``django_tables2`` tables behind every list on the site.
 - **`tasks.py`** (2089 lines)
   Celery tasks for the auctions app.
-- **`template_lint.py`** (128 lines)
+- **`template_lint.py`** (139 lines)
   Catches Django template tags that silently render as text instead of being parsed.
   `iter_template_files`, `check_text`, `check_templates`, `main`
 - **`test_account_deletion.py`** (711 lines)
@@ -310,9 +310,9 @@ this only quotes its opening sentence.
 - **`test_models_misc.py`** (1239 lines)
   Model methods, signal behaviour, and the management commands that email people.
   `ModelMethodsTestCase`, `SignalLogicTestCase`, `DuplicateAuctionTOSTests`, `AuctionNoShowURLEncodingTest`, `WeeklyPromoManagementCommandTests`, `AuctionTOSNotificationsCommandTests`
-- **`test_module_map.py`** (125 lines)
+- **`test_module_map.py`** (211 lines)
   Guards the module map: that it is current, and that the modules it reads are worth reading.
-  `ModuleMapIsCurrentTests`, `ModuleRulesTests`, `RuleCheckerTests`, `SummaryTests`
+  `ModuleMapIsCurrentTests`, `ModuleRulesTests`, `RuleCheckerTests`, `SummaryTests`, `ViewsPackageStaysAcyclicTests`
 - **`test_page_view_dedupe.py`** (119 lines)
   `remove_duplicate_views`, which used to corrupt the data it was cleaning up.
   `DeduplicationTests`
@@ -362,7 +362,7 @@ this only quotes its opening sentence.
   `SupportUrlWorksSignedOutTests`, `SupportPageIsTheHelpPageTests`, `OldContactUrlStillWorksTests`, `VideoEmbedFitsItsContainerTests`, `SupportFormDeliveryTests`, `SupportFormSignedInTests`
 - **`test_tap_to_pay.py`** (1325 lines)
   Tests for the Tap to Pay on iPhone review-guide work (TTP-1..4).
-- **`test_template_hygiene.py`** (82 lines)
+- **`test_template_hygiene.py`** (105 lines)
   Guards against template tags that render as text instead of being parsed.
   `TemplateTagsAreParseableTests`, `TemplateLintTests`
 - **`test_user_features.py`** (518 lines)
@@ -653,7 +653,7 @@ Every view on the site, split by what part of it the view belongs to.
 - **`club_api_keys.py`** (424 lines)
   Club API keys, and the page that documents the API they open.
   `ClubAPIKeyListView`, `ClubAPIKeyCreateView`, `club_api_documentation_context`, `ClubAPIKeyDetailView`, `ClubAPIKeyRevokeView`, `ClubAPIKeyFieldMapCreateView`, `ClubAPIKeyFieldMapDeleteView`, `ClubMemberMapView`, `SelfServeContactLinkView`
-- **`club_integrations.py`** (1317 lines)
+- **`club_integrations.py`** (1321 lines)
   The outside accounts a club connects: Mailchimp, Brevo, Google Calendar, Square links.
 - **`club_members.py`** (1063 lines)
   The club's list of people: joining, renewing, permissions, cards.
@@ -677,7 +677,7 @@ Every view on the site, split by what part of it the view belongs to.
   One lot: its page, its photos, and creating or editing it.
 - **`palette.py`** (580 lines)
   The command palette and the assistant surface behind it.
-- **`payments.py`** (1152 lines)
+- **`payments.py`** (1149 lines)
   Connecting a club's PayPal and Square accounts, and taking a payment through them.
 - **`printing.py`** (616 lines)
   Labels: what gets drawn on them, and getting them to a printer.

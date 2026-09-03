@@ -31,4 +31,6 @@ Three places to stop and read rather than carry on:
 - **The category table printed at the end.** Read it. The interesting mistake is a hint that
   matched something unexpected. `--only-categories` re-runs just that pass.
 
-`-it` matters only on `--review`, which is the one that reads stdin. None of this needs an LLM key.
+`-it` matters only on `--review`, which is the one that reads stdin -- and it is therefore the one
+step here that cannot be run from an agent or a script at all: `docker exec -t` fails outright
+without a terminal. Everything else is plain `docker exec`. None of this needs an LLM key.

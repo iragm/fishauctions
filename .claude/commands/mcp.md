@@ -4,7 +4,7 @@ allowed-tools: Bash(docker exec django python3 manage.py test *), Bash(curl *), 
 ---
 
 ```
-docker exec -it django python3 manage.py test \
+docker exec django python3 manage.py test \
   auctions.test_mcp auctions.test_mcp_widgets auctions.test_mcp_resources \
   auctions.test_mcp_permissions auctions.test_source_code auctions.test_palette_account \
   auctions.test_palette_skills auctions.test_palette_assist auctions.test_palette_routes

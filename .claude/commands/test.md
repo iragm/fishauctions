@@ -1,7 +1,7 @@
 ---
 description: Run the Django test suite (or the modules you name)
 argument-hint: "[dotted.test.path ...]"
-allowed-tools: Bash(docker exec django python3 manage.py test *), Bash(docker compose ps*), Read
+allowed-tools: Bash(docker exec django python3 manage.py test *), Bash(docker compose ps*), Bash(docker exec db sh -c *), Read
 ---
 
 Run the site's tests: `$ARGUMENTS` if anything was named, otherwise the whole suite.
@@ -14,7 +14,14 @@ Rules that matter here, all of which have already cost somebody an afternoon:
 
 - **Never start a second run while one is going.** Both share the single `test_auctions` database
   and corrupt each other into hundreds of unrelated errors. Check with
-  `docker exec db mariadb -e 'SHOW PROCESSLIST' 2>/dev/null | grep -c test_auctions` if unsure.
+
+  ```
+  docker exec db sh -c 'mariadb -uroot -p"$MYSQL_ROOT_PASSWORD" -e "SHOW PROCESSLIST"' | grep -c test_auctions
+  ```
+
+  The password has to come from the container's own environment, so the quoting matters: without
+  credentials `mariadb` exits "Access denied" on *stderr* and `grep -c` prints `0` -- which reads
+  as "nothing running" exactly when you most need it not to.
 - **Run it in the background.** The whole suite is ~2.5 minutes parallel, and about half of that is
   building the test database from ~290 migrations rather than running tests.
 - **In a parallel log, the first `failed:` block is the real failure.** Anything after

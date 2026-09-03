@@ -1147,6 +1147,3 @@ class SquareCallbackView(LoginRequiredMixin, View):
             "auctions/square_connected_app.html",
             {"seller": seller, "web_url": web_url},
         )
-
-
-MAILCHIMP_OAUTH_CLUB_SESSION_KEY = "mailchimp_oauth_club_slug"

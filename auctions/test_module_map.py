@@ -7,12 +7,18 @@ that can be wrong. These tests are the reason it cannot be: the map is regenerat
 every run and compared to the copy on disk, so a module added, renamed or re-described without
 regenerating fails the build rather than sitting there misdirecting people.
 
+One more rule rides along, because it is the same kind of claim: the ``auctions.views`` package
+says in its own docstring that its import graph is **acyclic**, and a cycle there is an
+``ImportError`` at startup that Django reports against whichever module happened to be imported
+first. Written down and not checked, that is exactly the prose this repository does not keep.
+
 The other three tests are the rules that keep the *inputs* honest, and they matter more than the
 map does. A generated map of files that do not say what they are for is a list of filenames. So:
 anything over 300 lines carries a docstring, nothing new is born over 1500 lines, and the modules
 that were already too big when this landed are on a ratchet that only lets them shrink.
 """
 
+import ast
 from pathlib import Path
 
 from django.test import SimpleTestCase
@@ -123,3 +129,83 @@ class SummaryTests(SimpleTestCase):
     def test_private_names_are_not_listed(self):
         module = module_map.Module(Path("app/x.py"), source="def public():\n    pass\n\n\ndef _private():\n    pass\n")
         self.assertEqual(module.symbols, ["public"])
+
+
+class ViewsPackageStaysAcyclicTests(SimpleTestCase):
+    """`auctions/views/CLAUDE.md` promises an acyclic import graph. This is the promise, checked.
+
+    The 34 modules were split out of one file, so a helper that two areas want is easy to import
+    sideways -- and the day two modules want each other's, the site stops booting with a traceback
+    that names neither of them as the cause. `base.py` is where a shared helper goes instead.
+    """
+
+    PACKAGE = Path(__file__).resolve().parent / "views"
+
+    @classmethod
+    def _graph(cls):
+        """Which sibling modules each module in the package imports, by reading the source.
+
+        Read rather than imported: `import auctions.views` resolves every one of these edges
+        successfully, so a cycle is invisible from the inside once the package has loaded.
+        """
+        graph = {}
+        for path in sorted(cls.PACKAGE.glob("*.py")):
+            if path.name == "__init__.py":
+                continue
+            siblings = set()
+            for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+                if not isinstance(node, ast.ImportFrom) or not node.module:
+                    continue
+                if node.level == 1:
+                    siblings.add(node.module.split(".")[0])
+                elif node.module.startswith("auctions.views."):
+                    siblings.add(node.module.split(".")[2])
+            graph[path.stem] = siblings - {path.stem}
+        return graph
+
+    def test_the_package_finds_its_own_modules(self):
+        """A graph builder that found nothing would call an empty package acyclic for ever."""
+        graph = self._graph()
+        self.assertGreater(len(graph), 20, "expected the views package's modules")
+        self.assertIn("base", graph)
+
+    def test_no_module_imports_a_sibling_that_imports_it_back(self):
+        graph = self._graph()
+        cycles = []
+        visiting, done = set(), set()
+
+        def walk(module, path):
+            visiting.add(module)
+            for sibling in sorted(graph.get(module, ())):
+                if sibling in visiting:
+                    cycles.append(" -> ".join([*path[path.index(sibling) :], sibling]))
+                elif sibling not in done:
+                    walk(sibling, [*path, sibling])
+            visiting.discard(module)
+            done.add(module)
+
+        for module in sorted(graph):
+            if module not in done:
+                walk(module, [module])
+
+        self.assertEqual(
+            cycles,
+            [],
+            "auctions.views must stay acyclic -- move the shared helper into views/base.py rather "
+            "than importing sideways:\n  " + "\n  ".join(cycles),
+        )
+
+    def test_only_base_is_imported_widely(self):
+        """The rule is `base.py` for anything shared; a sibling edge is meant to be exceptional."""
+        graph = self._graph()
+        importers = {}
+        for module, siblings in graph.items():
+            for sibling in siblings:
+                importers.setdefault(sibling, set()).add(module)
+        popular = {name: sorted(mods) for name, mods in importers.items() if name != "base" and len(mods) > 3}
+        self.assertEqual(
+            popular,
+            {},
+            "a module other than base.py has become a shared dependency; move what they all want "
+            f"into views/base.py: {popular}",
+        )

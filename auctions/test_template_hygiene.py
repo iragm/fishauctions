@@ -11,6 +11,9 @@ every template with the context it expects isn't practical, and the mistake is v
 file either way.
 """
 
+import contextlib
+import io
+import tempfile
 from pathlib import Path
 
 from django.test import SimpleTestCase
@@ -36,6 +39,26 @@ class TemplateTagsAreParseableTests(SimpleTestCase):
         found = template_lint.iter_template_files(REPO_ROOT)
         self.assertGreater(len(found), 100, "expected to find the site's templates")
         self.assertIn(REPO_ROOT / "auctions" / "templates" / "base.html", found)
+
+    def test_one_template_can_be_checked_on_its_own(self):
+        """The edit hook in `.claude/hooks/` passes a single file, not the tree.
+
+        A file path used to match no ``templates`` directory and be reported clean whatever was in
+        it, so the hook that runs at every template edit passed on a broken template every time.
+        """
+        with tempfile.TemporaryDirectory() as directory:
+            broken = Path(directory) / "broken.html"
+            broken.write_text("<p>{# a note that\n   spilled over #}</p>\n", encoding="utf-8")
+            self.assertEqual(template_lint.iter_template_files(broken), [broken])
+            self.assertTrue(template_lint.check_templates(broken))
+            with contextlib.redirect_stderr(io.StringIO()):  # main() reports to stderr; the suite doesn't need it
+                self.assertEqual(template_lint.main([str(broken)]), 1)
+
+    def test_a_file_that_is_not_a_template_is_skipped_rather_than_walked(self):
+        with tempfile.TemporaryDirectory() as directory:
+            script = Path(directory) / "thing.py"
+            script.write_text("x = 1\n", encoding="utf-8")
+            self.assertEqual(template_lint.iter_template_files(script), [])
 
 
 class TemplateLintTests(SimpleTestCase):

@@ -4,14 +4,20 @@
 for it and reading it meant a line number. The split is by *area*, along the seams the file
 already had -- it was written in thematic runs, with each block of constants sitting just above
 the views that use them, so almost every module below is one contiguous stretch of the original
-file and `git log --follow` still works.
+file.
+
+``git log --follow`` does **not** carry that history across: one file becoming 34 is not a
+rename, so every module here starts at the commit that made it. For anything older, ask git
+about the content instead of the path -- ``git log -S'class SquareConnectView'`` finds every
+commit that touched a view wherever it lived, and ``git log -- auctions/views.py`` still has all
+1,036 commits of the file it came out of.
 
 :mod:`auctions.views.base` holds the mixins and the permission helpers; every other module
 imports from it and none of them import from each other in a circle. That property is checked:
 the split was chosen so the module graph is acyclic, and it has to stay that way.
 
 Names are re-exported here so ``from auctions import views`` and ``views.SomeView`` mean what
-they always did -- ``urls.py`` refers to 381 of them that way. Import a *private* helper from
+they always did -- ``urls.py`` refers to 347 of them that way. Import a *private* helper from
 the module that defines it rather than from the package.
 """
 

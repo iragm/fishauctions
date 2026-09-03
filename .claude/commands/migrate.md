@@ -5,11 +5,14 @@ allowed-tools: Bash(docker exec *django python3 manage.py *), Read
 ---
 
 ```
-docker exec -it django python3 manage.py makemigrations $ARGUMENTS
-docker exec -it django python3 manage.py migrate
+docker exec -i django python3 manage.py makemigrations $ARGUMENTS
+docker exec django python3 manage.py migrate
 ```
 
-Permission error? `docker exec -u root -it django ...`.
+`-i` and not `-it`: `makemigrations` asks questions ("did you rename x to y?") so it needs stdin,
+but `docker exec -t` fails outright with "the input device is not a TTY" whenever the caller is
+not a terminal -- which is every command run from an agent, a hook or a script. Same for the
+permission-error form: `docker exec -u root django ...`.
 
 Before you get here:
 

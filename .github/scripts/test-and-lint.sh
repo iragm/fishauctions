@@ -10,8 +10,9 @@ usage() {
 Usage: $0 [OPTIONS]
 Options:
 
---ci                  Run in CI mode: run all tests, lints, and formatting.
-                      Fail if changes are required
+--ci                  Run in CI mode: formatting, lints, the template-tag check and the
+                      module-map check. Fail if changes are required. NOT the tests --
+                      those are `manage.py test`, a separate step.
 -f, --format          Format the code
 -F, --format-check    Run the formatter and fail if changes would be made
 -l, --lint            Lint the code

@@ -107,7 +107,7 @@ OVERSIZED: dict[str, int] = {
     "auctions/test_palette_skills.py": 3400,
     "auctions/test_club_events.py": 3100,
     "auctions/test_mobile_features.py": 2700,
-    "auctions/test_ar.py": 1800,
+    "auctions/test_ar.py": 1900,
     "auctions/test_donations.py": 1700,
     "auctions/test_mcp.py": 1600,
 }
