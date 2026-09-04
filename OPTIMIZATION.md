@@ -98,7 +98,7 @@ Ordered by (traffic x cost). Status: `todo` | `wip` | `done` | `n/a`.
 | 6 | PageView write path + middleware | `middleware.py`, `signals.py`, `PageView`, `base_page_view.html` | done |
 | 7 | UserData / account pages | `views/account.py`, `UserData` properties, `account_sidebar*.html` | done |
 | 8 | Context processors (run on every request) | `context_processors.py`, `account_nav.py`, `templatetags/` | done |
-| 9 | Auction stats + admin checklist | `views/auction_stats.py`, `views/admin_checklist.py` | todo |
+| 9 | Auction stats + admin checklist | `views/auction_stats.py`, `views/admin_checklist.py` | done |
 | 10 | Club pages + members table | `views/club_pages.py`, `views/club_members.py`, `tables.py` | todo |
 | 11 | Mobile API | `mobile/views.py`, `mobile/serializers.py`, `mobile/services/` | todo |
 | 12 | Club REST API | `views/club_api.py`, `serializers.py` | todo |
@@ -106,7 +106,7 @@ Ordered by (traffic x cost). Status: `todo` | `wip` | `done` | `n/a`.
 | 14 | Command palette / MCP / assist | `command_palette.py`, `palette_*.py`, `mcp/` | todo |
 | 15 | Selling / bulk add / bulk actions | `views/selling.py`, `views/bulk_add*.py`, `views/bulk_actions.py` | todo |
 | 16 | Payments / webhooks / integrations | `views/payments.py`, `views/webhooks.py`, `views/club_integrations.py` | todo |
-| 17 | Exports, printing, labels | `views/exports.py`, `views/printing.py`, `printer_*.py` | todo |
+| 17 | Exports, printing, labels | `views/exports.py`, `views/printing.py`, `printer_*.py` | partial -- the auction report is done, printing is not |
 | 18 | Species matching + search cache | `species_matching.py`, `species_categories.py`, `views/species.py` | todo |
 | 19 | Forms | `forms.py` (7089 lines -- querysets built per form instance) | todo |
 | 20 | Django admin | `admin.py` | todo |
@@ -119,6 +119,29 @@ Ordered by (traffic x cost). Status: `todo` | `wip` | `done` | `n/a`.
 Newest first.
 
 <!-- PASS LOG START -->
+
+### Pass 8 -- Auction report CSV and auction stats  *(area 9, done)*
+
+**The auction report went 298 -> 75 queries**, and the stats page 50 -> 43.
+
+`AuctionReportView` wrote a CSV a row at a time and asked the database about each person nine
+times: six `len(queryset)` calls (each pulling every matching row into Python only to count it), an
+invoice lookup, a second invoice lookup behind `gross_sold`, and a count of that person's other
+auctions. An auction of five hundred people ran four and a half thousand queries for one file.
+
+- **`_report_counts(auction, users)`** works out every per-person number in five `GROUP BY`
+  queries, keyed by `AuctionTOS` pk (lots submitted / sold / bred / won) or user pk (page views,
+  bids, other auctions joined), and the loop looks each person up.
+- **The invoice is prefetched** with its auction and club, and `data.invoice` is what
+  `gross_sold` and `total_club_cut` read too -- that was two invoice queries per row and is now
+  none.
+- **47 more `Auction` properties cached**: the whole stats family (`total_lots`,
+  `number_of_participants`, `median_lot_price`, `club_profit`, `gross`, the campaign counts, ...).
+  The stats page reads most of them two or three times while deriving percentages.
+- **`AuctionTOS.save()` invalidates its auction**, so those participant counts cannot go stale --
+  the fourth model to do this, after `Bid` -> `Lot`, `PickupLocation` -> `Auction` and
+  `Lot` -> seller/winner/auction.
+
 
 ### Pass 6+7 -- The per-request path, and UserData  *(areas 6, 7, 8, done)*
 

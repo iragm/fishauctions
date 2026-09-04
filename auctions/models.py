@@ -4289,7 +4289,7 @@ class Auction(CachedPropertiesMixin, models.Model):
         """If this auction is marked as untrusted, return the message to show users"""
         return settings.UNTRUSTED_MESSAGE
 
-    @property
+    @cached_property
     def effective_paypal_seller(self):
         """The PayPalSeller used for payments on this auction.
 
@@ -4303,7 +4303,7 @@ class Auction(CachedPropertiesMixin, models.Model):
             return PayPalSeller.objects.filter(user=self.created_by).first()
         return None
 
-    @property
+    @cached_property
     def effective_square_seller(self):
         """The SquareSeller used for payments on this auction.
 
@@ -4377,7 +4377,7 @@ class Auction(CachedPropertiesMixin, models.Model):
         seller = self.effective_square_seller
         return seller.square_merchant_id if seller else None
 
-    @property
+    @cached_property
     def show_paypal_banner(self):
         """Can we show the link your PayPal account banner?
         One more check is needed on the template:
@@ -4397,7 +4397,7 @@ class Auction(CachedPropertiesMixin, models.Model):
             return False
         return True
 
-    @property
+    @cached_property
     def show_square_banner(self):
         """Can we show the link your Square account banner?
         One more check is needed on the template:
@@ -4544,7 +4544,7 @@ class Auction(CachedPropertiesMixin, models.Model):
                 return name_search
         return None
 
-    @property
+    @cached_property
     def estimate_end(self):
         try:
             if self.is_online:
@@ -5022,12 +5022,12 @@ class Auction(CachedPropertiesMixin, models.Model):
             return True
         return False
 
-    @property
+    @cached_property
     def club_profit_raw(self):
         """Total amount made by the club in this auction.  This number does not take into account rounding in the invoices, nor any invoice adjustments"""
         return add_price_info(self.lots_qs).aggregate(total_sold=Sum("club_cut"))["total_sold"] or 0
 
-    @property
+    @cached_property
     def _auction_tax_collected(self):
         """Total sales tax collected across this auction's invoices.
 
@@ -5060,7 +5060,7 @@ class Auction(CachedPropertiesMixin, models.Model):
         rate = Decimal(self.tax) / Decimal(100)
         return (Decimal(total_final) * rate).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
-    @property
+    @cached_property
     def _auction_membership_dues(self):
         """Total membership/renewal dues collected on this auction's invoices.
 
@@ -5076,7 +5076,7 @@ class Auction(CachedPropertiesMixin, models.Model):
         renewals = Invoice.objects.filter(auction=self.pk, renewal_needed=True).count()
         return Decimal(club.membership_annual_fee) * renewals
 
-    @property
+    @cached_property
     def club_profit(self):
         """What the club nets from AUCTION activity in this auction, positive when it made money.
 
@@ -5116,7 +5116,7 @@ class Auction(CachedPropertiesMixin, models.Model):
         profit -= self._auction_membership_dues
         return profit
 
-    @property
+    @cached_property
     def gross(self):
         """Refund-adjusted gross sales: the total buyers were billed for lots that sold here.
 
@@ -5159,7 +5159,7 @@ class Auction(CachedPropertiesMixin, models.Model):
             )
         )["total"]
 
-    @property
+    @cached_property
     def total_to_sellers(self):
         """Total credited to sellers for lots that sold in this auction.
 
@@ -5195,7 +5195,7 @@ class Auction(CachedPropertiesMixin, models.Model):
             return Decimal(0)
         return Decimal(self.club_profit) / Decimal(gross) * 100
 
-    @property
+    @cached_property
     def total_donations(self):
         # Exclude banned (removed) lots to stay consistent with gross/club_profit and the other
         # money figures on the stats table -- a pulled lot never contributed any money.
@@ -5226,7 +5226,7 @@ class Auction(CachedPropertiesMixin, models.Model):
         #    return False
         # return True
 
-    @property
+    @cached_property
     def users_with_bidding_disabled(self):
         """How many participants can't currently bid, for the bulk re-enable button on the users page.
 
@@ -5258,7 +5258,7 @@ class Auction(CachedPropertiesMixin, models.Model):
             return True
         return bool(self.enable_online_payments)
 
-    @property
+    @cached_property
     def tos_qs(self):
         """Return AuctionTOS queryset with has_ever_granted_permission annotation.
 
@@ -5285,12 +5285,12 @@ class Auction(CachedPropertiesMixin, models.Model):
             .order_by("-createdon")
         )
 
-    @property
+    @cached_property
     def number_of_confirmed_tos(self):
         """How many people selected a pickup location in this auction"""
         return self.tos_qs.count()
 
-    @property
+    @cached_property
     def seller_tos_qs(self):
         """AuctionTOS who submitted at least one live lot to this auction.
 
@@ -5305,7 +5305,7 @@ class Auction(CachedPropertiesMixin, models.Model):
             auctiontos_seller__is_deleted=False,
         ).distinct()
 
-    @property
+    @cached_property
     def buyer_tos_qs(self):
         """AuctionTOS who won at least one sold, live lot in this auction.
 
@@ -5319,11 +5319,11 @@ class Auction(CachedPropertiesMixin, models.Model):
             auctiontos_winner__is_deleted=False,
         ).distinct()
 
-    @property
+    @cached_property
     def number_of_sellers(self):
         return self.seller_tos_qs.count()
 
-    @property
+    @cached_property
     def number_of_sellers_who_didnt_buy(self):
         return self.seller_tos_qs.exclude(id__in=self.buyer_tos_qs.values_list("id", flat=True)).count()
 
@@ -5334,11 +5334,11 @@ class Auction(CachedPropertiesMixin, models.Model):
     #   users = User.objects.filter(lot__auction=self.pk, lot__winner__isnull=True).distinct()
     # 	return len(users)
 
-    @property
+    @cached_property
     def number_of_buyers(self):
         return self.buyer_tos_qs.count()
 
-    @property
+    @cached_property
     def median_lot_price(self):
         # Only sold, non-banned lots count -- removed (banned) lots are never charged and are
         # excluded from every other money stat on this auction (see ``total_sold_lots`` and
@@ -5350,17 +5350,17 @@ class Auction(CachedPropertiesMixin, models.Model):
         else:
             return 0
 
-    @property
+    @cached_property
     def lots_qs(self):
         """All lots in this auction"""
         # return Lot.objects.exclude(is_deleted=True).filter(auction=self.pk)
         return Lot.objects.exclude(is_deleted=True).filter(auctiontos_seller__auction__pk=self.pk)
 
-    @property
+    @cached_property
     def total_sold_lots(self):
         return self.lots_qs.filter(winning_price__isnull=False).exclude(banned=True).count()
 
-    @property
+    @cached_property
     def total_sold_lots_with_buy_now_percent(self):
         """Percentage of sold lots that went via "buy now".
 
@@ -5391,15 +5391,15 @@ class Auction(CachedPropertiesMixin, models.Model):
                 * 100
             )
 
-    @property
+    @cached_property
     def total_unsold_lots(self):
         return self.lots_qs.filter(winning_price__isnull=True).exclude(banned=True).count()
 
-    @property
+    @cached_property
     def total_lots(self):
         return self.lots_qs.exclude(banned=True).count()
 
-    @property
+    @cached_property
     def number_of_lots_with_scanned_qr(self):
         # Count a lot as "scanned" when its page was opened from a QR scan (src=qr) or from AR mode
         # (src=ar) — the app opens lots it recognises in AR as lot_link?src=ar.
@@ -5412,20 +5412,20 @@ class Auction(CachedPropertiesMixin, models.Model):
             .count()
         )
 
-    @property
+    @cached_property
     def number_of_lots_added_to_queue(self):
         # How much the in-person "Lot queue" tool was used: count lots that were ever queued.
         # Sticky Lot.added_to_queue, so it survives the queue entry being popped when the lot sells.
         return self.lots_qs.filter(added_to_queue=True).count()
 
-    @property
+    @cached_property
     def labels_qs(self):
         lots = self.lots_qs.exclude(banned=True)
         if self.is_online:
             lots = lots.filter(auctiontos_winner__isnull=False, winning_price__isnull=False)
         return lots
 
-    @property
+    @cached_property
     def unprinted_labels_qs(self):
         return self.labels_qs.exclude(label_printed=True)
 
@@ -5440,7 +5440,7 @@ class Auction(CachedPropertiesMixin, models.Model):
             return 0
         return self.total_unsold_lots / self.total_lots * 100
 
-    @property
+    @cached_property
     def lots_sold_per_minute(self):
         """Calculate the average lots sold per minute for in-person auctions.
         This uses the same logic as the auctioneer speed graph, ignoring the first and last 10% of lots."""
@@ -5481,7 +5481,7 @@ class Auction(CachedPropertiesMixin, models.Model):
         # Return lots per minute
         return num_lots / total_time
 
-    @property
+    @cached_property
     def total_auction_duration(self):
         """For in-person auctions, this also uses the same logic as the auctioneer speed graph, ignoring the first and last 10% of lots."""
         if self.is_online:
@@ -5553,7 +5553,7 @@ class Auction(CachedPropertiesMixin, models.Model):
                 return False
         return True
 
-    @property
+    @cached_property
     def number_of_participants(self):
         """
         Number of AuctionTOS who bought or sold at least one live lot in this auction.
@@ -5566,19 +5566,19 @@ class Auction(CachedPropertiesMixin, models.Model):
         sellers_who_didnt_buy = self.seller_tos_qs.exclude(id__in=buyer_ids).count()
         return sellers_who_didnt_buy + self.buyer_tos_qs.count()
 
-    @property
+    @cached_property
     def preregistered_users(self):
         return AuctionTOS.objects.filter(auction=self.pk, manually_added=False).count()
 
-    @property
+    @cached_property
     def campaigns_qs(self):
         return AuctionCampaign.objects.filter(auction=self.pk).order_by("-timestamp")
 
-    @property
+    @cached_property
     def number_of_reminder_emails(self):
         return self.campaigns_qs.exclude(result="ERR").count()
 
-    @property
+    @cached_property
     def reminder_email_clicks(self):
         if self.number_of_reminder_emails == 0:
             return 0
@@ -5588,27 +5588,27 @@ class Auction(CachedPropertiesMixin, models.Model):
             * 100
         )
 
-    @property
+    @cached_property
     def reminder_email_joins(self):
         if self.number_of_reminder_emails == 0:
             return 0
         return self.campaigns_qs.filter(result="JOINED").count() / self.number_of_reminder_emails * 100
 
-    @property
+    @cached_property
     def all_auctions_reminder_email_clicks(self):
         campaigns = AuctionCampaign.objects.exclude(result="ERR").count()
         if campaigns == 0:
             return 0
         return AuctionCampaign.objects.exclude(result="ERR").exclude(result="NONE").count() / campaigns * 100
 
-    @property
+    @cached_property
     def all_auctions_reminder_email_joins(self):
         campaigns = AuctionCampaign.objects.exclude(result="ERR").count()
         if campaigns == 0:
             return 0
         return AuctionCampaign.objects.filter(result="JOINED").count() / campaigns * 100
 
-    @property
+    @cached_property
     def weekly_promo_email_clicks(self):
         return PageView.objects.filter(source="weekly_email", auction=self.pk).count()
 
@@ -5639,14 +5639,14 @@ class Auction(CachedPropertiesMixin, models.Model):
         else:
             return True
 
-    @property
+    @cached_property
     def paypal_invoices(self):
         # all drafts and ready:
         # return Invoice.objects.filter(auction=self).exclude(status="PAID")
         # only ready:
         return Invoice.objects.filter(auction=self, status="UNPAID")
 
-    @property
+    @cached_property
     def draft_paypal_invoices(self):
         """Used for a tooltip warning telling people to make invoices ready"""
         return Invoice.objects.filter(auction=self, status="DRAFT", calculated_total__lt=0).count()
@@ -5769,7 +5769,7 @@ class Auction(CachedPropertiesMixin, models.Model):
             return True
         return False
 
-    @property
+    @cached_property
     def event_needing_custom_wording(self):
         """This auction's calendar event, when it is worth asking an admin to reword it.
 
@@ -5832,7 +5832,7 @@ class Auction(CachedPropertiesMixin, models.Model):
     def hybrid_tutorial_chapters(self):
         return settings.HYBRID_TUTORIAL_CHAPTERS
 
-    @property
+    @cached_property
     def auction_admins_qs(self):
         # user_id, not user: comparing model objects makes Django fetch the creator row to read
         # its pk, once per Auction instance.
@@ -5840,7 +5840,7 @@ class Auction(CachedPropertiesMixin, models.Model):
             Q(is_admin=True) | Q(user_id=self.created_by_id), auction__pk=self.pk
         ).order_by("name")
 
-    @property
+    @cached_property
     def auction_admins_pks(self):
         """For use in querysets, pks only"""
         return self.auction_admins_qs.values_list("user__pk", flat=True)
@@ -6374,7 +6374,7 @@ class Auction(CachedPropertiesMixin, models.Model):
             ],
         }
 
-    @property
+    @cached_property
     def unique_views(self):
         """Distinct visitors who viewed this auction's rules page or any of its lots.
 
@@ -7350,6 +7350,11 @@ class AuctionTOS(CachedPropertiesMixin, models.Model):
             needs_history = False
 
         super().save(*args, **kwargs)
+        # The auction caches its participant counts, the same way it caches its location list.
+        # fields_cache, so this only touches an Auction the caller is already holding.
+        auction = self._state.fields_cache.get("auction")
+        if auction is not None:
+            auction.invalidate_cached_properties()
 
         # Create history entry after save (needs pk to exist)
         if needs_history:

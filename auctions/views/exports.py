@@ -15,8 +15,10 @@ from django.contrib.auth.mixins import LoginRequiredMixin
 from django.contrib.sites.models import Site
 from django.core.exceptions import PermissionDenied
 from django.db.models import (
+    Count,
     IntegerField,
     OuterRef,
+    Prefetch,
     Q,
     Subquery,
     Sum,
@@ -165,6 +167,61 @@ class MyLotReportView(LoginRequiredMixin, View):
         return response
 
 
+def _report_counts(auction, users):
+    """Every per-person number the auction report prints, as four GROUP BYs.
+
+    Keyed by ``AuctionTOS`` pk (lots) or by user pk (views, bids, other auctions), so the loop that
+    writes the CSV can look each person up rather than asking the database about them.
+    """
+    tos_pks = [tos.pk for tos in users]
+    user_pks = [tos.user_id for tos in users if tos.user_id]
+    lots = Lot.objects.exclude(is_deleted=True).filter(auction=auction)
+    submitted = {
+        row["auctiontos_seller"]: row
+        for row in lots.filter(auctiontos_seller__in=tos_pks)
+        .order_by()
+        .values("auctiontos_seller")
+        .annotate(
+            submitted=Count("pk"),
+            sold=Count("pk", filter=Q(winning_price__isnull=False)),
+            bred=Count("pk", filter=Q(i_bred_this_fish=True)),
+        )
+    }
+    won = {
+        row["auctiontos_winner"]: row["total"]
+        for row in lots.filter(auctiontos_winner__in=tos_pks)
+        .order_by()
+        .values("auctiontos_winner")
+        .annotate(total=Count("pk"))
+    }
+    views = {
+        row["user"]: row["total"]
+        for row in PageView.objects.filter(lot_number__auction=auction, user__in=user_pks)
+        .order_by()
+        .values("user")
+        .annotate(total=Count("pk"))
+    }
+    bids = {
+        row["user"]: row["total"]
+        for row in Bid.objects.exclude(is_deleted=True)
+        .filter(lot_number__auction=auction, user__in=user_pks)
+        .order_by()
+        .values("user")
+        .annotate(total=Count("pk"))
+    }
+    auctions_joined = {
+        row["user"]: row["total"]
+        for row in AuctionTOS.objects.filter(user__in=user_pks).order_by().values("user").annotate(total=Count("pk"))
+    }
+    return {
+        "submitted": submitted,
+        "won": won,
+        "views": views,
+        "bids": bids,
+        "auctions_joined": auctions_joined,
+    }
+
+
 class AuctionReportView(LoginRequiredMixin, AuctionViewMixin, View):
     """Get a CSV file showing all users who are participating in this auction"""
 
@@ -215,10 +272,26 @@ class AuctionReportView(LoginRequiredMixin, AuctionViewMixin, View):
             ]
         )
         # Use the auction's tos_qs property to get the has_ever_granted_permission annotation
-        users = self.auction.tos_qs.select_related("user__userdata").select_related("pickup_location")
+        users = (
+            self.auction.tos_qs.select_related("user__userdata")
+            .select_related("pickup_location")
+            .prefetch_related(
+                Prefetch(
+                    "auctiontos",
+                    # the invoice's own numbers reach for its auction and that auction's club
+                    queryset=Invoice.objects.select_related("auction__club", "club").order_by("-date"),
+                )
+            )
+        )
         # Apply filter if query is provided
         if query:
             users = AuctionTOSFilter.generic(None, users, query)
+        users = list(users)
+        # Everything below used to be worked out one person at a time -- six `len(queryset)` calls
+        # (each pulling every matching row into Python only to count it), an invoice lookup, and a
+        # count of the person's other auctions. That is nine queries per row of a report an auction
+        # of five hundred people runs. These are the same numbers, one GROUP BY each.
+        counts = _report_counts(self.auction, users)
         # .annotate(distance_traveled=distance_to(\
         # '`auctions_userdata`.`latitude`', '`auctions_userdata`.`longitude`', \
         # lat_field_name='`auctions_pickuplocation`.`latitude`',\
@@ -230,8 +303,8 @@ class AuctionReportView(LoginRequiredMixin, AuctionViewMixin, View):
             club = ""
             if data.user and data.has_ever_granted_permission:
                 # these things will only be written out if the user wants you to have it
-                lotsViewed = PageView.objects.filter(lot_number__auction=self.auction, user=data.user)
-                lotsBid = Bid.objects.exclude(is_deleted=True).filter(lot_number__auction=self.auction, user=data.user)
+                lotsViewed = counts["views"].get(data.user_id, 0)
+                lotsBid = counts["bids"].get(data.user_id, 0)
                 lot_qs = Lot.objects.exclude(is_deleted=True).filter(
                     user=data.user,
                     auction__isnull=True,
@@ -248,7 +321,7 @@ class AuctionReportView(LoginRequiredMixin, AuctionViewMixin, View):
                 distance = data.distance_traveled or ""
                 club = getattr(data.user.userdata, "club", None)
                 username = data.user.username
-                previous_auctions = AuctionTOS.objects.filter(user=data.user).exclude(pk=data.pk).count()
+                previous_auctions = max(counts["auctions_joined"].get(data.user_id, 0) - 1, 0)
                 number_of_userbans = data.number_of_userbans
                 account_age = data.user.date_joined
                 add_to_calendar = "Yes" if data.add_to_calendar else ""
@@ -256,26 +329,27 @@ class AuctionReportView(LoginRequiredMixin, AuctionViewMixin, View):
                 add_to_calendar = ""
                 previous_auctions = ""
                 lotsViewed = ""
-                lotsBid = ""
+                lotsBid = ""  # noqa: F841 -- written out as a blank cell below
                 numberLotsOutsideAuction = ""
                 profitOutsideAuction = ""
                 username = ""
                 number_of_userbans = 0
                 account_age = ""
-            lotsSumbitted = Lot.objects.exclude(is_deleted=True).filter(auctiontos_seller=data, auction=self.auction)
-            lotsSold = lotsSumbitted.filter(winning_price__isnull=False)
-            lotsWon = Lot.objects.exclude(is_deleted=True).filter(auctiontos_winner=data, auction=self.auction)
-            breederPoints = Lot.objects.exclude(is_deleted=True).filter(
-                auctiontos_seller=data, auction=self.auction, i_bred_this_fish=True
-            )
+            submitted = counts["submitted"].get(data.pk, {})
+            lotsSumbitted = submitted.get("submitted", 0)
+            lotsSold = submitted.get("sold", 0)
+            breederPoints = submitted.get("bred", 0)
+            lotsWon = counts["won"].get(data.pk, 0)
             address = data.address or ""
-            try:
-                invoice = Invoice.objects.get(auction=self.auction, auctiontos_user=data)
+            # data.invoice is the prefetched one; gross_sold and total_club_cut below read it too,
+            # so fetching it separately here meant two invoice queries per row rather than none.
+            invoice = data.invoice
+            if invoice:
                 invoiceStatus = invoice.get_status_display()
                 totalSpent = invoice.total_bought
                 totalPaid = invoice.total_sold
                 invoiceTotal = invoice.rounded_net
-            except Invoice.DoesNotExist:
+            else:
                 invoiceStatus = ""
                 totalSpent = 0
                 totalPaid = 0
@@ -292,18 +366,18 @@ class AuctionReportView(LoginRequiredMixin, AuctionViewMixin, View):
                     data.pickup_location,
                     distance,
                     club,
-                    len(lotsViewed),
-                    len(lotsBid),
-                    len(lotsSumbitted),
-                    len(lotsSold),
-                    len(lotsWon),
+                    lotsViewed,
+                    lotsBid,
+                    lotsSumbitted,
+                    lotsSold,
+                    lotsWon,
                     invoiceStatus,
                     f"{totalSpent:.2f}",
                     f"{data.gross_sold:.2f}",
                     f"{totalPaid:.2f}",
                     f"{data.total_club_cut:.2f}",
                     f"{invoiceTotal:.2f}",
-                    len(breederPoints),
+                    breederPoints,
                     numberLotsOutsideAuction,
                     profitOutsideAuction,
                     data.time_spent_reading_rules,
