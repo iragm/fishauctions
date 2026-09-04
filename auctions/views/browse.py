@@ -65,8 +65,8 @@ from auctions.models import (
     UserIgnoreCategory,
     UserInterestCategory,
     Watch,
-    nearby_auctions,
 )
+from auctions.queryset_annotations import nearby_auctions
 from auctions.tables import (
     LotHTMxTableForUsers,
 )

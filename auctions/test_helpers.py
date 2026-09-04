@@ -362,7 +362,7 @@ class ModelUtilityFunctionsTestCase(StandardTestCase):
 
     def test_add_tos_info_requires_auctiontos_queryset(self):
         """Test that add_tos_info only accepts AuctionTOS querysets"""
-        from auctions.models import add_tos_info
+        from auctions.queryset_annotations import add_tos_info
 
         # Should raise TypeError when not passed an AuctionTOS queryset
         with self.assertRaises(TypeError) as context:
@@ -371,7 +371,7 @@ class ModelUtilityFunctionsTestCase(StandardTestCase):
 
     def test_add_tos_info_annotates_fields(self):
         """Test add_tos_info adds expected annotations"""
-        from auctions.models import add_tos_info
+        from auctions.queryset_annotations import add_tos_info
 
         qs = add_tos_info(AuctionTOS.objects.filter(pk=self.online_tos.pk))
         annotated_tos = qs.first()
@@ -388,7 +388,7 @@ class ModelUtilityFunctionsTestCase(StandardTestCase):
 
     def test_add_tos_info_permission_filtering(self):
         """Test add_tos_info respects permission flags"""
-        from auctions.models import add_tos_info
+        from auctions.queryset_annotations import add_tos_info
 
         # Create a manually added user (no permission granted)
         manual_user = User.objects.create_user(
@@ -410,7 +410,7 @@ class ModelUtilityFunctionsTestCase(StandardTestCase):
 
     def test_nearby_auctions_basic(self):
         """Test nearby_auctions returns auctions within distance"""
-        from auctions.models import nearby_auctions
+        from auctions.queryset_annotations import nearby_auctions
 
         # Set location for pickup location
         self.location.latitude = 40.7128
@@ -427,7 +427,7 @@ class ModelUtilityFunctionsTestCase(StandardTestCase):
 
     def test_nearby_auctions_return_slugs(self):
         """Test nearby_auctions can return just slugs"""
-        from auctions.models import nearby_auctions
+        from auctions.queryset_annotations import nearby_auctions
 
         # Set location for pickup location
         self.location.latitude = 40.7128
@@ -442,7 +442,7 @@ class ModelUtilityFunctionsTestCase(StandardTestCase):
 
     def test_nearby_auctions_filters_ignored(self):
         """Test nearby_auctions filters out ignored auctions for users"""
-        from auctions.models import nearby_auctions
+        from auctions.queryset_annotations import nearby_auctions
 
         # Set location for pickup location
         self.location.latitude = 40.7128
@@ -460,7 +460,7 @@ class ModelUtilityFunctionsTestCase(StandardTestCase):
 
     def test_nearby_auctions_filters_already_joined(self):
         """Test nearby_auctions can filter already joined auctions"""
-        from auctions.models import nearby_auctions
+        from auctions.queryset_annotations import nearby_auctions
 
         # Set location for pickup location
         self.location.latitude = 40.7128
@@ -479,7 +479,7 @@ class ModelUtilityFunctionsTestCase(StandardTestCase):
 
     def test_nearby_auctions_includes_joined_when_requested(self):
         """Test nearby_auctions includes joined auctions when flag is set"""
-        from auctions.models import nearby_auctions
+        from auctions.queryset_annotations import nearby_auctions
 
         # Set location for pickup location
         self.location.latitude = 40.7128

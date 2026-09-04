@@ -117,7 +117,7 @@ this only quotes its opening sentence.
 - **`model_caching.py`** (52 lines)
   ``@cached_property`` on a model, and the invalidation that makes it safe.
   `CachedPropertiesMixin`
-- **`models.py`** (14925 lines)
+- **`models.py`** (14828 lines)
   The database: 80 models, and the reason they are still in one file.
 - **`module_map.py`** (256 lines)
   The map of this repository: which module does what, generated from the modules themselves.
@@ -144,6 +144,9 @@ this only quotes its opening sentence.
 - **`printing.py`** (89 lines)
   Shared label-printing helpers.
   `deterministic_warnings`, `label_prefs_warnings`, `warning_matrix`
+- **`queryset_annotations.py`** (226 lines)
+  Queryset builders that answer a question about many rows at once.
+  `nearby_auctions`, `add_tos_info`, `add_tos_distance_info`
 - **`recurrence.py`** (151 lines)
   Repeating club events.
   `clean_lines`, `to_text`, `from_text`, `current_or_next`, `with_exdate`, `describe`
@@ -297,7 +300,7 @@ this only quotes its opening sentence.
 - **`test_membership_flow.py`** (1332 lines)
   Club membership as money: invoices, discounts, renewals and the confirmation emails.
   `InvoiceStatusButtonTests`, `ClubMembershipRenewalFlowTests`, `PayPalSubscriptionWebhookTests`, `ClubMemberDiscountTests`, `ClubMoneyRenewalConsistencyTests`, `ClubMembershipEmailTaskTests`, `ClubBarcodeViewTests`, `QuickCheckoutHTMXTests`
-- **`test_mobile_features.py`** (2650 lines)
+- **`test_mobile_features.py`** (2654 lines)
   Tests for the mobile-app web-side features.
 - **`test_mobile_last_used.py`** (156 lines)
   Tests for GET /api/mobile/auctions/last-used/ — the command palette's AR-gating lookup.
@@ -340,9 +343,9 @@ this only quotes its opening sentence.
 - **`test_paypal.py`** (939 lines)
   PayPal: the webhooks, their event handlers, refund idempotency and the CSV export.
   `PayPalWebhookViewTests`, `PayPalWebhookEventHandlerTests`, `RefundWebhookIdempotencyTests`, `SquarePaymentUpdatedRefundResurrectionTests`, `PayPalCSVExportTests`
-- **`test_query_counts.py`** (307 lines)
+- **`test_query_counts.py`** (354 lines)
   Query-count guards: the N+1s that were fixed, and stay fixed.
-  `QueryGrowthMixin`, `LotDetailQueryCountTests`, `CachedPropertyWiringTests`, `LotListQueryCountTests`, `LotCachedPropertyTests`
+  `QueryGrowthMixin`, `AuctionUsersTableQueryCountTests`, `LotDetailQueryCountTests`, `CachedPropertyWiringTests`, `LotListQueryCountTests`, `LotCachedPropertyTests`
 - **`test_remote_print.py`** (514 lines)
   Part R — printing from a computer to the phone's Bluetooth label printer.
 - **`test_security.py`** (314 lines)
@@ -631,7 +634,7 @@ Every view on the site, split by what part of it the view belongs to.
   `AdminSetupChecklistView`
 - **`ajax.py`** (744 lines)
   The small endpoints the pages call, rather than the pages themselves.
-- **`auction_admin.py`** (1226 lines)
+- **`auction_admin.py`** (1233 lines)
   Setting an auction up, and running the room: pickup locations, users, check-in.
 - **`auction_extras.py`** (644 lines)
   The rest of an auction's admin surface: label config, bulk printing, no-shows, chat.

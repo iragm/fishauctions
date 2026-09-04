@@ -19,7 +19,7 @@ from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
 from django.utils import timezone
 
-from auctions.models import Bid, Lot, LotImage
+from auctions.models import AuctionTOS, Bid, Invoice, Lot, LotImage
 from auctions.tests import StandardTestCase
 
 
@@ -55,6 +55,53 @@ class QueryGrowthMixin:
             f"the extra lots did not reach the page ({rows_before} -> {rows_after}), so this measures nothing",
         )
         return len(after.captured_queries) - len(before.captured_queries), added_rows
+
+
+class AuctionUsersTableQueryCountTests(QueryGrowthMixin, StandardTestCase):
+    """The users table is what an auction organiser runs the auction from, at 100 rows a page.
+
+    Every row shows "N lots sold", "N lots won", an invoice link and a labels menu, and each of
+    those was its own query -- 292 for 25 people. The counts are subquery annotations now and the
+    invoices are prefetched, so a row costs nothing.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.client = Client()
+        self.client.force_login(self.admin_user)
+        self._next_bidder = 600
+
+    def _make_people(self, count):
+        for _ in range(count):
+            self._next_bidder += 1
+            tos = AuctionTOS.objects.create(
+                name=f"person {self._next_bidder}",
+                email=f"p{self._next_bidder}@example.com",
+                auction=self.online_auction,
+                pickup_location=self.location,
+                bidder_number=str(self._next_bidder),
+            )
+            # something in every column of the row: a lot to sell, a lot won, an invoice
+            Lot.objects.create(
+                lot_name=f"lot for {tos.bidder_number}",
+                auction=self.online_auction,
+                auctiontos_seller=tos,
+                auctiontos_winner=tos,
+                winning_price=5,
+                quantity=1,
+            )
+            Invoice.objects.get_or_create(auctiontos_user=tos)
+
+    def test_the_users_table_does_not_query_per_person(self):
+        added, rows = self.queries_per_extra_row(
+            reverse("auction_tos_list", kwargs={"slug": self.online_auction.slug}), {}, self._make_people
+        )
+        self.assertEqual(
+            added,
+            0,
+            f"{added} queries for {rows} more people -- a row of the users table is reading "
+            "something one at a time again",
+        )
 
 
 class LotDetailQueryCountTests(StandardTestCase):

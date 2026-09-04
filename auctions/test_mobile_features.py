@@ -33,6 +33,7 @@ from auctions import notifications, tasks
 from auctions.mobile.services.devices import DeviceService
 from auctions.models import (
     Auction,
+    AuctionTOS,
     Lot,
     MobileDevice,
     ObservedPrinter,
@@ -1259,7 +1260,10 @@ class MobileLabelsPrintedApiTests(StandardTestCase):
         user, because only the PDF views set label_printed."""
         before = self.online_tos.unprinted_label_count
         self._post([self.lot.pk])
-        self.assertEqual(self.online_tos.unprinted_label_count, before - 1)
+        # Re-read: unprinted_label_count is cached on the instance, and this test is holding one
+        # from before the request, which no request could have invalidated.
+        after = AuctionTOS.objects.get(pk=self.online_tos.pk).unprinted_label_count
+        self.assertEqual(after, before - 1)
 
     def test_lots_the_caller_cannot_touch_are_skipped_not_refused(self):
         """A batch of forty is one print run and most of it printed fine — failing the whole

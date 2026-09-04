@@ -5702,7 +5702,7 @@ def auctions_near_me(request, params: dict[str, Any]) -> dict[str, Any]:
     because we do not know where they live was wrong: their own club's auction has nothing to do
     with where they live.
     """
-    from .models import nearby_auctions as nearby
+    from .queryset_annotations import nearby_auctions as nearby
 
     user = request.user
     ours = _my_auctions(user)

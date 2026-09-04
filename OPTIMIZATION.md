@@ -93,7 +93,7 @@ Ordered by (traffic x cost). Status: `todo` | `wip` | `done` | `n/a`.
 | 1 | Lot list pages (browse) | `views/browse.py`, `filters.py` LotFilter, `lot_tile_page.html`, `lot_list_page.html`, `Lot` read properties | done |
 | 2 | Lot detail page | `views/lot_pages.py`, `view_lot.html` | done |
 | 3 | Auction landing + auction pages | `views/auction_pages.py`, `auction.html`, `Auction` properties | done |
-| 4 | AuctionTOS admin table | `views/auction_admin.py`, `tables.py` AuctionTOSHTMxTable, `AuctionTOS` properties | todo |
+| 4 | AuctionTOS admin table | `views/auction_admin.py`, `tables.py` AuctionTOSHTMxTable, `AuctionTOS` properties | done |
 | 5 | Invoices | `views/invoices.py`, `Invoice` properties, `invoice.html` | todo |
 | 6 | PageView write path + middleware | `middleware.py`, `signals.py`, `PageView`, `base_page_view.html` | todo |
 | 7 | UserData / account pages | `views/account.py`, `UserData` properties, `account_sidebar*.html` | todo |
@@ -119,6 +119,39 @@ Ordered by (traffic x cost). Status: `todo` | `wip` | `done` | `n/a`.
 Newest first.
 
 <!-- PASS LOG START -->
+
+### Pass 4 -- The auction users / invoices table  *(area 4, done)*
+
+**292 -> 25 queries for 25 people, and flat: another person on the page now costs nothing.** This
+is the page an organiser runs an auction from, at 100 rows a page.
+
+Each row renders `actions_dropdown_html`, and that read `unbanned_lot_count` three times,
+`unprinted_label_count` twice, `bought_lots_qs.count()`, `lots_qs.count()` and `invoice` five
+times -- none of them cached, all of them a query.
+
+- **`AuctionTOS.annotate_lot_counts(queryset, auction=...)`** puts the five per-person counts in
+  the queryset as subqueries: lots sold, lots won, unbanned lots, unprinted labels, printable
+  labels. Subqueries rather than `Count(..., distinct=True)` over joins, because five joins to
+  `auctions_lot` against one another multiply rows and `distinct` then has to undo it. The matching
+  properties read the annotation when it is there and fall back to their own query when it is not,
+  so every other caller is unchanged.
+- **`AuctionTOS.invoice` reads the reverse relation** and sorts in Python, so the table can
+  `prefetch_related(Prefetch("auctiontos", queryset=Invoice.objects.order_by("-date")))`.
+- **The auction is prefetched, not joined.** `select_related("auction__created_by")` gave every row
+  its own `Auction` instance, so `self.auction.club` was a query per row and no `Auction`
+  cached_property survived from one row to the next.
+- 17 more `AuctionTOS` properties cached (`club_member_record`, `distance_traveled`,
+  `trying_to_avoid_ban`, `closest_location_for_this_user`, the label links, ...).
+- **`Lot.invalidate_cached_properties()` cascades** to the seller, the winner and the auction it is
+  holding -- a lot being sold or its label printed changes counts they cache. `test_mobile_features`
+  caught the one case this cannot reach: a test holding an `AuctionTOS` from before an HTTP request,
+  which nothing inside that request could invalidate. It re-reads now.
+
+**`auctions/queryset_annotations.py`** -- `nearby_auctions`, `add_tos_info` and
+`add_tos_distance_info` moved out of `models.py` (176 lines). `models.py` never called them, so the
+dependency runs one way and there is no cycle. This is the second such split; when the ceiling comes
+back, take another group out rather than raising the number.
+
 
 ### Pass 3 -- Lot detail page  *(area 2, done)*
 

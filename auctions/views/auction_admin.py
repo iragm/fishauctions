@@ -15,6 +15,7 @@ from django.contrib.auth.mixins import LoginRequiredMixin
 from django.core.exceptions import ValidationError
 from django.db import transaction
 from django.db.models import (
+    Prefetch,
     Q,
 )
 from django.db.models.base import Model as Model
@@ -601,10 +602,16 @@ class AuctionUsers(LoginRequiredMixin, AuctionViewMixin, HTMxTableView):
         # Every row renders the Admin badge, which reads the auction's creator and (in a
         # club-managed auction) the member row behind it, so without this each of the 100-odd
         # rows on a page costs its own handful of queries.
-        return (
+        return AuctionTOS.annotate_lot_counts(
             AuctionTOS.objects.filter(auction=self.auction)
-            .select_related("auction__created_by", "clubmember__club", "user")
-            .order_by("name")
+            .select_related("clubmember__club", "user__userdata")
+            .prefetch_related(Prefetch("auctiontos", queryset=Invoice.objects.order_by("-date")))
+            # prefetch, not select_related, for the auction: a join hands every row its own Auction
+            # instance, so `self.auction.club` in actions_dropdown_html was a query per row and no
+            # cached_property on Auction survived from one row to the next.
+            .prefetch_related("auction__club", "auction__created_by")
+            .order_by("name"),
+            auction=self.auction,
         )
 
     def get_table_kwargs(self):

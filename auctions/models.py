@@ -112,43 +112,6 @@ CUSTOM_DROPDOWN_MAX_LENGTH = 15
 PRIVACY_POLICY_SLUG = "privacy"
 
 
-def nearby_auctions(
-    latitude,
-    longitude,
-    distance=100,
-    include_already_joined=False,
-    user=None,
-    return_slugs=False,
-):
-    """Return a list of auctions or auction slugs that are within a specified distance of the given location"""
-    auctions = []
-    slugs = []
-    distances = []
-    locations = (
-        PickupLocation.objects.annotate(distance=distance_to(latitude, longitude))
-        .exclude(distance__gt=distance)
-        .filter(
-            auction__date_end__gte=timezone.now(),
-            auction__date_start__lte=timezone.now(),
-        )
-        .exclude(auction__promote_this_auction=False)
-        .exclude(auction__isnull=True)
-    )
-    if user:
-        if user.is_authenticated and not include_already_joined:
-            locations = locations.exclude(auction__auctiontos__user=user)
-        locations = locations.exclude(auction__auctionignore__user=user)
-    for location in locations:
-        if location.auction.slug not in slugs:
-            auctions.append(location.auction)
-            slugs.append(location.auction.slug)
-            distances.append(location.distance)
-    if return_slugs:
-        return slugs
-    else:
-        return auctions, distances
-
-
 def median_value(queryset, term):
     """Median of ``term`` across ``queryset`` (values sorted ascending).
 
@@ -377,151 +340,6 @@ def distance_to(
     #     (latitude, longitude, latitude, correction)
     # )
     return distance_raw_sql
-
-
-def add_tos_info(qs):
-    """Add fields to a given AuctionTOS queryset."""
-    if not (isinstance(qs, QuerySet) and qs.model == AuctionTOS):
-        msg = "must be passed a queryset of the AuctionTOS model"
-        raise TypeError(msg)
-
-    # Add has_ever_granted_permission annotation if not already present
-    # This checks if the user has ever joined an auction (manually_added=False)
-    # for the same auction creator
-    qs = qs.annotate(
-        has_ever_granted_permission=Case(
-            When(
-                Q(user__isnull=False)
-                & Exists(
-                    AuctionTOS.objects.filter(
-                        user=OuterRef("user"), auction__created_by=OuterRef("auction__created_by"), manually_added=False
-                    )
-                ),
-                then=Value(True),
-            ),
-            default=Value(False),
-            output_field=BooleanField(),
-        )
-    )
-
-    return qs.annotate(
-        lots_bid_actual=Coalesce(
-            Subquery(
-                Bid.objects.exclude(is_deleted=True)
-                .filter(user=OuterRef("user"), lot_number__auction=OuterRef("auction"))
-                .values("user")
-                .annotate(count=Count("pk", distinct=True))
-                .values("count"),
-                output_field=IntegerField(),
-            ),
-            0,
-        ),
-        lots_bid=Case(When(Q(has_ever_granted_permission=False), then=Value(0)), default=F("lots_bid_actual")),
-        lots_viewed_actual=Coalesce(
-            Subquery(
-                PageView.objects.filter(user=OuterRef("user"), lot_number__auction=OuterRef("auction"))
-                .values("user")
-                .annotate(count=Count("lot_number", distinct=True))
-                .values("count"),
-                output_field=IntegerField(),
-            ),
-            0,
-        ),
-        lots_viewed=Case(When(Q(has_ever_granted_permission=False), then=Value(0)), default=F("lots_viewed_actual")),
-        lots_won=Count("auctiontos_winner", distinct=True),
-        lots_submitted=Count("auctiontos_seller", distinct=True),
-        other_auctions=Coalesce(
-            Subquery(
-                AuctionTOS.objects.filter(email=OuterRef("email"))
-                .exclude(id=OuterRef("id"))
-                .values("email")
-                .annotate(count=Count("*"))
-                .values("count"),
-                output_field=IntegerField(),
-            ),
-            0,
-        ),
-        lots_outbid=Case(
-            When(lots_won__gt=F("lots_bid"), then=0),
-            default=F("lots_bid") - F("lots_won"),
-            output_field=IntegerField(),
-        ),
-        account_age_ms=Case(
-            When(
-                Q(has_ever_granted_permission=False),
-                then=ExpressionWrapper(timezone.now() - F("createdon"), output_field=IntegerField()),
-            ),
-            default=ExpressionWrapper(timezone.now() - F("user__date_joined"), output_field=IntegerField()),
-        ),
-        account_age_days=ExpressionWrapper(F("account_age_ms") / 86400000000, output_field=IntegerField()),
-        other_user_bans_actual=Coalesce(
-            Subquery(
-                UserBan.objects.filter(banned_user=OuterRef("user"))
-                .values("pk")
-                .annotate(count=Count("*"))
-                .values("count"),
-                output_field=IntegerField(),
-            ),
-            0,
-        ),
-        other_user_bans=Case(
-            When(Q(has_ever_granted_permission=False), then=Value(0)),
-            default=F("other_user_bans_actual"),
-        ),
-        trust=ExpressionWrapper(
-            1 * F("lots_bid")
-            + 0.2 * F("lots_viewed")
-            + 2 * F("lots_won")
-            + 2 * F("lots_submitted")
-            + 5 * F("other_auctions")
-            - 2 * F("lots_outbid")
-            + 0.01 * F("account_age_days")
-            - 100 * F("other_user_bans"),
-            output_field=IntegerField(),
-        ),
-    )
-
-
-def add_tos_distance_info(qs):
-    """Add a distance_traveled to an auctiontos query"""
-    if not (isinstance(qs, QuerySet) and qs.model == AuctionTOS):
-        msg = "must be passed a queryset of the AuctionTOS model"
-        raise TypeError(msg)
-
-    # Add has_ever_granted_permission annotation if not already present
-    qs = qs.annotate(
-        has_ever_granted_permission=Case(
-            When(
-                Q(user__isnull=False)
-                & Exists(
-                    AuctionTOS.objects.filter(
-                        user=OuterRef("user"), auction__created_by=OuterRef("auction__created_by"), manually_added=False
-                    )
-                ),
-                then=Value(True),
-            ),
-            default=Value(False),
-            output_field=BooleanField(),
-        )
-    )
-
-    return (
-        qs.select_related("user__userdata")
-        .select_related("pickup_location")
-        .annotate(
-            new_distance_traveled=Case(
-                When(Q(has_ever_granted_permission=False), then=Value(-1)),
-                default=distance_to(
-                    """`auctions_userdata`.`latitude`""",
-                    """`auctions_userdata`.`longitude`""",
-                    lat_field_name="""`auctions_pickuplocation`.`latitude`""",
-                    lng_field_name="""`auctions_pickuplocation`.`longitude`""",
-                    approximate_distance_to=1,
-                ),
-                output_field=IntegerField(),
-            ),
-        )
-    )
 
 
 def guess_category(text):
@@ -7003,6 +6821,57 @@ class AuctionTOS(CachedPropertiesMixin, models.Model):
         lots = Lot.objects.exclude(is_deleted=True).filter(auctiontos_seller=self.pk, auction__isnull=False)
         return lots
 
+    @staticmethod
+    def annotate_lot_counts(queryset, auction=None):
+        """Add the per-person lot counts the users table renders, as subqueries.
+
+        Every row of that table shows "N lots sold", "N lots won" and a labels menu, and each of
+        those was its own ``COUNT`` -- 125 queries for 25 people. Subqueries rather than
+        ``Count(..., distinct=True)`` over joins, because several joins to the same table against
+        one another is a row explosion that ``distinct`` then has to undo.
+
+        Pass ``auction`` when every row belongs to one, so the label counts can apply that
+        auction's printing rule (an online auction only prints labels for lots that sold).
+        """
+        lots = Lot.objects.exclude(is_deleted=True).filter(auction__isnull=False)
+
+        def count_of(field, **extra):
+            return Subquery(
+                lots.filter(**{field: OuterRef("pk")}, **extra)
+                .order_by()
+                .values(field)
+                .annotate(total=Count("pk"))
+                .values("total")[:1],
+                output_field=IntegerField(),
+            )
+
+        unprinted = {"banned": False, "label_printed": False}
+        printable = {"banned": False}
+        if auction is not None and auction.is_online:
+            # print_labels_qs: an online auction only prints labels for lots that sold
+            sold = {"auctiontos_winner__isnull": False, "winning_price__isnull": False}
+            unprinted |= sold
+            printable |= sold
+        return queryset.annotate(
+            annotated_lots_count=Coalesce(count_of("auctiontos_seller"), Value(0)),
+            annotated_bought_lots_count=Coalesce(count_of("auctiontos_winner"), Value(0)),
+            annotated_unbanned_lot_count=Coalesce(count_of("auctiontos_seller", banned=False), Value(0)),
+            annotated_unprinted_label_count=Coalesce(count_of("auctiontos_seller", **unprinted), Value(0)),
+            annotated_print_labels_count=Coalesce(count_of("auctiontos_seller", **printable), Value(0)),
+        )
+
+    @cached_property
+    def bought_lots_count(self):
+        """Lots this person won. From the annotation when there is one -- see ``annotate_lot_counts``."""
+        annotated = getattr(self, "annotated_bought_lots_count", None)
+        return self.bought_lots_qs.count() if annotated is None else annotated
+
+    @cached_property
+    def lots_count(self):
+        """Lots this person is selling. Annotation first, same as bought_lots_count."""
+        annotated = getattr(self, "annotated_lots_count", None)
+        return self.lots_qs.count() if annotated is None else annotated
+
     def lot_owner(self, added_by=None):
         """The account to store in `Lot.user` for a lot sold by this TOS.
 
@@ -7025,11 +6894,12 @@ class AuctionTOS(CachedPropertiesMixin, models.Model):
     def unbanned_lot_qs(self):
         return self.lots_qs.exclude(banned=True)
 
-    @property
+    @cached_property
     def unbanned_lot_count(self):
-        return self.unbanned_lot_qs.count()
+        annotated = getattr(self, "annotated_unbanned_lot_count", None)
+        return self.unbanned_lot_qs.count() if annotated is None else annotated
 
-    @property
+    @cached_property
     def self_submitted_unbanned_lot_count(self):
         """Count of unbanned lots that this user added themselves (not added by admin)"""
         return self.unbanned_lot_qs.filter(added_by=self.user).count()
@@ -7046,11 +6916,14 @@ class AuctionTOS(CachedPropertiesMixin, models.Model):
     def unprinted_labels_qs(self):
         return self.print_labels_qs.exclude(label_printed=True)
 
-    @property
+    @cached_property
     def unprinted_label_count(self):
+        annotated = getattr(self, "annotated_unprinted_label_count", None)
+        if annotated is not None:
+            return annotated
         return self.unprinted_labels_qs.count()
 
-    @property
+    @cached_property
     def print_labels_link_html(self):
         if self.unbanned_lot_count:
             url = reverse(
@@ -7060,9 +6933,16 @@ class AuctionTOS(CachedPropertiesMixin, models.Model):
             return f"<a href='{url}'><i class='bi bi-tags me-1'></i>Print labels</a>"
         return ""
 
-    @property
+    @cached_property
+    def print_labels_count(self):
+        annotated = getattr(self, "annotated_print_labels_count", None)
+        if annotated is not None:
+            return annotated
+        return self.print_labels_qs.count()
+
+    @cached_property
     def print_unprinted_labels_link_html(self):
-        if self.unprinted_label_count and self.unprinted_label_count != self.print_labels_qs.count():
+        if self.unprinted_label_count and self.unprinted_label_count != self.print_labels_count:
             unprinted_url = reverse(
                 "print_unprinted_labels_by_bidder_number",
                 kwargs={"bidder_number": self.bidder_number, "slug": self.auction.slug},
@@ -7070,7 +6950,7 @@ class AuctionTOS(CachedPropertiesMixin, models.Model):
             return f"<a href='{unprinted_url}'>Print only {self.unprinted_label_count} unprinted labels</a>"
         return ""
 
-    @property
+    @cached_property
     def print_labels_html(self):
         """For use in HTMX users table; print lot labels for this user"""
         if self.unbanned_lot_count:
@@ -7085,7 +6965,7 @@ class AuctionTOS(CachedPropertiesMixin, models.Model):
             return html.format_html(result)
         return ""
 
-    @property
+    @cached_property
     def actions_dropdown_html(self):
         show_on_mobile_string = "d-md-none"
         result = f"""<button type='button' class='btn btn-sm btn-primary dropdown-toggle dropdown-toggle-split' data-bs-toggle='dropdown'
@@ -7113,12 +6993,12 @@ class AuctionTOS(CachedPropertiesMixin, models.Model):
         won_lots_url = (
             reverse("auction_lot_list", kwargs={"slug": self.auction.slug}) + f"?query=winner%3A{self.bidder_number}"
         )
-        result += f"<span class='dropdown-item'><a href={won_lots_url}><i class='bi bi bi-calendar-check me-1'></i>View {self.bought_lots_qs.count()} lots won</a></span>"
+        result += f"<span class='dropdown-item'><a href={won_lots_url}><i class='bi bi bi-calendar-check me-1'></i>View {self.bought_lots_count} lots won</a></span>"
         sold_lots_url = (
             reverse("auction_lot_list", kwargs={"slug": self.auction.slug}) + f"?query=seller%3A{self.bidder_number}"
         )
 
-        result += f"<span class='dropdown-item'><a href={sold_lots_url}><i class='bi bi-calendar me-1'></i>View {self.lots_qs.count()} lots sold</a></span>"
+        result += f"<span class='dropdown-item'><a href={sold_lots_url}><i class='bi bi-calendar me-1'></i>View {self.lots_count} lots sold</a></span>"
         delete_url = reverse("auctiontosdelete", kwargs={"pk": self.pk})
         merge_url = f"{delete_url}?action=merge"
         result += (
@@ -7209,11 +7089,21 @@ class AuctionTOS(CachedPropertiesMixin, models.Model):
         result += "</div>"
         return html.format_html(result)
 
-    @property
+    @cached_property
     def invoice(self):
-        return Invoice.objects.filter(auctiontos_user=self.pk).order_by("-date").first()
+        """This person's invoice for this auction, or None.
 
-    @property
+        Reads the reverse relation so a list of people can
+        ``prefetch_related(Prefetch("auctiontos", queryset=Invoice.objects.order_by("-date")))``
+        and pay one query for the page. Sorted here rather than in SQL for the same reason: a
+        prefetch cannot carry a per-row ``.first()``.
+        """
+        invoices = self.auctiontos.all()
+        if invoices._result_cache is None:
+            return invoices.order_by("-date").first()
+        return max(invoices, key=lambda invoice: invoice.date, default=None)
+
+    @cached_property
     def club_member_record(self):
         """The ClubMember for this user in the auction's club, or None.
         Uses the direct clubmember link first, then falls back to matching by user and email."""
@@ -7262,7 +7152,7 @@ class AuctionTOS(CachedPropertiesMixin, models.Model):
     def can_bid_in_auction(self):
         return self.bidding_allowed and not self.requires_check_in_before_bidding
 
-    @property
+    @cached_property
     def invoice_link_html(self):
         """HTML snippet with a link to the invoice for this auctionTOS, if set.  Otherwise, show create link"""
         if self.invoice:
@@ -7710,7 +7600,7 @@ class AuctionTOS(CachedPropertiesMixin, models.Model):
         # Delete the duplicate (cascades to delete its now-empty invoice)
         duplicate.delete()
 
-    @property
+    @cached_property
     def closest_location_for_this_user(self):
         result = PickupLocation.objects.none()
         if self.user and self.auction.multi_location:
@@ -7733,7 +7623,7 @@ class AuctionTOS(CachedPropertiesMixin, models.Model):
         # single location auction, or user's location not set; anyway, not a problem
         return True
 
-    @property
+    @cached_property
     def distance_traveled(self):
         if self.user and not self.manually_added:
             userData = self.user.userdata
@@ -7753,7 +7643,7 @@ class AuctionTOS(CachedPropertiesMixin, models.Model):
                 return location.distance
         return -1
 
-    @property
+    @cached_property
     def previous_auctions_count(self):
         return AuctionTOS.objects.filter(email=self.email, createdon__lte=self.createdon).exclude(pk=self.pk).count()
 
@@ -7764,14 +7654,14 @@ class AuctionTOS(CachedPropertiesMixin, models.Model):
                 return int(self.distance_traveled - self.closest_location_for_this_user.distance)
         return 0
 
-    @property
+    @cached_property
     def closer_location_warning(self):
         current_site = Site.objects.get_current()
         if self.closer_location_savings > 9:
             return f"You've selected {self.pickup_location}, but {self.closest_location_for_this_user} is {int(self.closer_location_savings)} miles closer to you.  You can change your pickup location on the auction rules page: https://{current_site.domain}{self.auction.get_absolute_url()}#join"
         return ""
 
-    @property
+    @cached_property
     def closer_location_warning_html(self):
         current_site = Site.objects.get_current()
         if self.closer_location_savings > 9:
@@ -7812,7 +7702,7 @@ class AuctionTOS(CachedPropertiesMixin, models.Model):
         localized_time = time.astimezone(self.timezone)
         return localized_time.strftime("%B %d at %I:%M %p")
 
-    @property
+    @cached_property
     def trying_to_avoid_ban(self):
         """We track IPs in userdata, so we can do a quick check for this"""
         if self.user:
@@ -7829,7 +7719,7 @@ class AuctionTOS(CachedPropertiesMixin, models.Model):
                         return f"<a href='{url}'>{other_user.user.username}</a>"
         return False
 
-    @property
+    @cached_property
     def number_of_userbans(self):
         if self.user:
             other_bans = UserBan.objects.filter(banned_user=self.user)
@@ -8172,6 +8062,19 @@ class Lot(CachedPropertiesMixin, models.Model):
         else:
             # No lock needed, proceed normally
             self._do_save(*args, **kwargs)
+
+    def invalidate_cached_properties(self, *names):
+        """Drop this lot's caches, and the counts the people and auction behind it are holding.
+
+        A lot changing hands (sold, banned, label printed) changes ``AuctionTOS.lots_count``,
+        ``unprinted_label_count`` and friends -- which the users table caches per row. Reached
+        through fields_cache, so this only touches instances the caller is already holding.
+        """
+        super().invalidate_cached_properties(*names)
+        for relation in ("auctiontos_seller", "auctiontos_winner", "auction"):
+            related = self._state.fields_cache.get(relation)
+            if related is not None:
+                related.invalidate_cached_properties()
 
     def _do_save(self, *args, **kwargs):
         """Internal method to complete the save operation"""

@@ -47,9 +47,9 @@ from .models import (
     SpeakerTopic,
     UserInterestCategory,
     Watch,
-    add_tos_info,
     distance_to,
 )
+from .queryset_annotations import add_tos_info
 
 
 class AuctionFilter(django_filters.FilterSet):
