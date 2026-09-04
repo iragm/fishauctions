@@ -4,7 +4,44 @@ A long-running, resumable sweep for wasted work: extra queries, missing `select_
 `@property` that should be `@cached_property`, and non-DB waste. **No known user-visible problem
 started this** -- it is a systematic pass over the whole codebase.
 
-**To resume: read "How a pass works", then take the first area in the queue with status `todo`.**
+**The first sweep is finished** -- every area in the queue below is `done` or `partial`, and the
+pages people actually load are measured flat (a row of a list costs nothing extra). What is left,
+newest work first, is under "Still open". **To resume: pick one of those, or re-run the growth sweep
+under "Measuring" and act on whatever it turns up.**
+
+Numbers from a dev database, warm, signed in as an admin:
+
+| Page | Before | After |
+|---|---|---|
+| Auction users / invoices table (25 people) | 292 | 21 |
+| The auction report CSV | 298 | 75 |
+| One invoice | 189 | 38 |
+| The lot list, **per extra lot** | ~10 | 1 |
+| A lot page | 40 | 22 |
+| The home page | 54 | 27 |
+| An auction page | 48 | 21 |
+| The auction stats page | 50 | 42 |
+| /feedback/ | 21 | 6 |
+| A user page | 30 | 17 |
+| /auctions/ | 12 | 8 |
+| /lots/ | 41 | 17 |
+
+## Still open
+
+- **`base.html` loads six render-blocking scripts in `<head>`.** Deferring them would measurably
+  improve first paint, but templates all over the site have inline `<script>` blocks calling `$(...)`
+  while the page parses. Needs an audit of those first, and the same piece of work should switch to
+  `ManifestStaticFilesStorage` so `/static/` can be cached for a year instead of an hour.
+- **The stats page and the auction report still cost ~6 queries per person**, both of them the
+  invoice number tree. Each person genuinely needs their own totals; doing it in one query means
+  expressing the whole tree in SQL, which is its own project.
+- **Bulk write paths** (`views/bulk_actions.py`, `views/bulk_add*.py`) were never measured -- the
+  sweep only covers GET.
+- **The once-a-day management commands** (imports, backfills, the species refresh) still query per
+  row. That is the readable choice there and nobody is waiting on them, but a slow one is worth a
+  look if it ever holds up a deploy.
+- **The three admin inlines** (`InterestInline`, `BidInline`, `WatchInline`) query per row; an
+  inline needs `get_queryset`, not `list_select_related`.
 
 ## How a pass works
 
@@ -26,20 +63,23 @@ One pass = one **area** from the queue below. Keep passes small enough to verify
 
 ### Measuring
 
-There is no query-count baseline infrastructure other than the tests. To measure a page by hand:
+**Totals are noise; growth is the bug.** A page's fixed cost moves whenever anything changes and is
+nobody's fault. What matters is what *one more row* costs. The technique that found most of what
+this campaign fixed, and the one to reach for again:
 
-```python
-# docker exec -it django python3 manage.py shell
-from django.test import Client
-from django.db import connection, reset_queries
-from django.conf import settings
-settings.DEBUG = True
-c = Client(); c.force_login(User.objects.get(username="..."))
-reset_queries(); c.get("/lots/"); print(len(connection.queries))
-```
+1. Write a throwaway `auctions/test_zzsweep.py` that walks `get_resolver().url_patterns`,
+   substitutes the fixture's slugs and pks into each route, and GETs every one under
+   `CaptureQueriesContext`.
+2. Add four more people / lots / bids / invoices / page views to the fixture auction.
+3. GET them all again and print the difference, sorted.
+4. Anything with a positive difference is an N+1. Delete the file when done.
 
-`auctions/test_query_counts.py` is the durable version of that and is where the numbers below come
-from.
+To find *where* a repeated query comes from, wrap `connection.cursor` and record a normalised SQL
+string with the last few `auctions/` stack frames; group by both. That names the property or
+template line responsible, which reading the code rarely does as fast.
+
+`auctions/test_query_counts.py` is the durable half: it asserts growth per row, so it does not break
+when an unrelated page cost changes.
 
 ## Caching rules
 
