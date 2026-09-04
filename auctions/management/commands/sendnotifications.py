@@ -1,4 +1,3 @@
-from django.contrib.auth.models import User
 from django.contrib.sites.models import Site
 from django.core.management.base import BaseCommand
 from django.urls import reverse
@@ -20,13 +19,14 @@ class Command(BaseCommand):
             if auction.ending_soon:
                 self.stdout.write(f"{auction} is ending soon")
                 lots = Lot.objects.exclude(is_deleted=True).filter(banned=False, auction=auction)
-                for lot in lots:
-                    self.stdout.write(rf" +-\ {lot}")
-                    watched = Watch.objects.filter(lot_number=lot.lot_number)
-                    for watch in watched:
-                        self.stdout.write(f" | +-- {watch}")
-                        user = User.objects.get(pk=watch.user.pk)
-                        notify_targets[user.pk] = user
+                # One query for the whole auction's watchers, with the users attached. This used to
+                # be a Watch query per lot and then *two* user fetches per watch -- the FK, and then
+                # a User.objects.get for the object the FK had already returned.
+                watched = Watch.objects.filter(lot_number__in=lots).select_related("user")
+                for watch in watched:
+                    self.stdout.write(f" | +-- {watch}")
+                    if watch.user:
+                        notify_targets[watch.user.pk] = watch.user
                 auction.watch_warning_email_sent = True
                 auction.save()
             # else:
@@ -35,16 +35,15 @@ class Command(BaseCommand):
         lots = Lot.objects.exclude(is_deleted=True).filter(
             watch_warning_email_sent=False, auction=None, deactivated=False
         )
-        for lot in lots:
-            if lot.ending_soon:
-                self.stdout.write(f"{lot}")
-                watched = Watch.objects.filter(lot_number=lot.lot_number)
-                for watch in watched:
-                    self.stdout.write(f"+-- {watch}")
-                    user = User.objects.get(pk=watch.user.pk)
-                    notify_targets[user.pk] = user
-                lot.watch_warning_email_sent = True
-                lot.save()
+        ending_soon = [lot for lot in lots if lot.ending_soon]
+        for watch in Watch.objects.filter(lot_number__in=ending_soon).select_related("user"):
+            self.stdout.write(f"+-- {watch}")
+            if watch.user:
+                notify_targets[watch.user.pk] = watch.user
+        for lot in ending_soon:
+            self.stdout.write(f"{lot}")
+            lot.watch_warning_email_sent = True
+            lot.save()
         # Collected all watchers; push for opted-in app users, otherwise email exactly as before.
         from auctions.notifications import notify_user
 

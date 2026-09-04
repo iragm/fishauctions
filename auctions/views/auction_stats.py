@@ -113,16 +113,25 @@ class AuctionLotBiddersChartData(AuctionChartView):
             "Lots with bids from 6 or more users",
         ]
         data = [0, 0, 0, 0, 0, 0, 0]
-        for lot in lots:
-            if not lot.winning_price:
+        # Distinct bidders per lot for the whole auction in one GROUP BY. This used to be a query
+        # per lot, so a five-hundred-lot auction drew this chart with five hundred queries.
+        bidders_per_lot = dict(
+            Bid.objects.exclude(is_deleted=True)
+            .filter(lot_number__in=lots)
+            .order_by()
+            .values("lot_number")
+            .annotate(bidders=Count("user", distinct=True))
+            .values_list("lot_number", "bidders")
+        )
+        for lot_pk, winning_price in lots.values_list("pk", "winning_price"):
+            if not winning_price:
                 data[0] += 1
             else:
                 # Count distinct bidders (the labels say "users"), not raw Bid rows. Clamp into the
                 # final "6 or more" bucket so lots with >6 bidders are counted rather than silently
                 # dropped. A sold lot with no recorded bids (buy-now / admin-declared winner) still
                 # had a buyer, so floor it at bucket 1 -- never "Not sold" (bucket 0).
-                bidders = Bid.objects.exclude(is_deleted=True).filter(lot_number=lot).values("user").distinct().count()
-                data[min(max(bidders, 1), 6)] += 1
+                data[min(max(bidders_per_lot.get(lot_pk, 0), 1), 6)] += 1
         return JsonResponse(
             data={
                 "labels": labels,
@@ -162,29 +171,37 @@ class AuctionCategoriesChartData(AuctionChartView):
             .aggregate(Sum("winning_price"))["winning_price__sum"]
         )
         if lot_count:
-            for category in categories[: self.number_of_categories_to_show]:
+            shown = list(categories[: self.number_of_categories_to_show])
+            # Three GROUP BYs for the whole chart, rather than three queries per category.
+            views_by_category = dict(
+                PageView.objects.filter(lot_number__auction=self.auction, lot_number__species_category__in=shown)
+                .order_by()
+                .values("lot_number__species_category")
+                .annotate(total=Count("pk"))
+                .values_list("lot_number__species_category", "total")
+            )
+            bids_by_category = dict(
+                Bid.objects.exclude(is_deleted=True)
+                .filter(lot_number__auction=self.auction, lot_number__species_category__in=shown)
+                .order_by()
+                .values("lot_number__species_category")
+                .annotate(total=Count("pk"))
+                .values_list("lot_number__species_category", "total")
+            )
+            volume_by_category = dict(
+                Lot.objects.exclude(is_deleted=True)
+                .filter(auction=self.auction, species_category__in=shown)
+                .order_by()
+                .values("species_category")
+                .annotate(total=Sum("winning_price"))
+                .values_list("species_category", "total")
+            )
+            for category in shown:
                 labels.append(str(category))
-                thisViews = PageView.objects.filter(
-                    lot_number__auction=self.auction,
-                    lot_number__species_category=category,
-                ).count()
-                thisBids = (
-                    Bid.objects.exclude(is_deleted=True)
-                    .filter(
-                        lot_number__auction=self.auction,
-                        lot_number__species_category=category,
-                    )
-                    .count()
-                )
-                thisVolume = (
-                    Lot.objects.exclude(is_deleted=True)
-                    .filter(auction=self.auction, species_category=category)
-                    .aggregate(Sum("winning_price"))["winning_price__sum"]
-                )
                 percentOfLots = self.process_stat(category.num_lots, lot_count)
-                percentOfViews = self.process_stat(thisViews, allViews)
-                percentOfBids = self.process_stat(thisBids, allBids)
-                percentOfVolume = self.process_stat(thisVolume, allVolume)
+                percentOfViews = self.process_stat(views_by_category.get(category.pk), allViews)
+                percentOfBids = self.process_stat(bids_by_category.get(category.pk), allBids)
+                percentOfVolume = self.process_stat(volume_by_category.get(category.pk), allVolume)
                 lots.append(percentOfLots)
                 views.append(percentOfViews)
                 bids.append(percentOfBids)

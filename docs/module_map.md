@@ -485,7 +485,7 @@ this only quotes its opening sentence.
   `Command`
 - **`remove_duplicate_views.py`** (58 lines)
   `Command`
-- **`sendnotifications.py`** (65 lines)
+- **`sendnotifications.py`** (64 lines)
   `Command`
 - **`set_user_location.py`** (164 lines)
   `Command`
@@ -640,7 +640,7 @@ Every view on the site, split by what part of it the view belongs to.
 - **`auction_pages.py`** (1057 lines)
   The auction as a thing you join: the TOS, creating one, and the auction's own page.
   `AuctionTOSDelete`, `AuctionTOSAdmin`, `AuctionConfirmView`, `AuctionCreateView`, `AuctionInfo`
-- **`auction_stats.py`** (1207 lines)
+- **`auction_stats.py`** (1224 lines)
   The JSON behind the charts on one auction's stats page.
 - **`bap.py`** (621 lines)
   The breeder award program: settings, overrides, awards and the lots behind them.
@@ -679,7 +679,7 @@ Every view on the site, split by what part of it the view belongs to.
   `InboundEmailRoutingView`, `verify_discord_signature`, `assign_discord_role`, `DiscordInteractionsView`, `LotBapPointsView`, `ClubDiscordConfigView`, `ClubDiscordFetchRolesView`, `ClubDiscordEditRoleView`, `ClubDiscordSetDefaultRoleView`, `ClubDiscordSendJoinMessageView`
 - **`embeds.py`** (693 lines)
   The snippets a club puts on its own website, and the pages behind them.
-- **`exports.py`** (961 lines)
+- **`exports.py`** (978 lines)
   Taking data back out: the CSV exports, the reports, and the mailing list.
 - **`invoices.py`** (391 lines)
   Invoices as a person reads them: the list, one invoice, and the no-login link.

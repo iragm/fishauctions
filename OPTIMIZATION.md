@@ -102,7 +102,7 @@ Ordered by (traffic x cost). Status: `todo` | `wip` | `done` | `n/a`.
 | 10 | Club pages + members table | `views/club_pages.py`, `views/club_members.py`, `tables.py` | done |
 | 11 | Mobile API | `mobile/views.py`, `mobile/serializers.py`, `mobile/services/` | todo |
 | 12 | Club REST API | `views/club_api.py`, `serializers.py` | todo |
-| 13 | Celery tasks + management commands | `tasks.py`, `management/commands/` | todo |
+| 13 | Celery tasks + management commands | `tasks.py`, `management/commands/` | partial -- sendnotifications done; the once-a-day imports and backfills are deliberately left alone |
 | 14 | Command palette / MCP / assist | `command_palette.py`, `palette_*.py`, `mcp/` | todo |
 | 15 | Selling / bulk add / bulk actions | `views/selling.py`, `views/bulk_add*.py`, `views/bulk_actions.py` | todo |
 | 16 | Payments / webhooks / integrations | `views/payments.py`, `views/webhooks.py`, `views/club_integrations.py` | todo |
@@ -119,6 +119,25 @@ Ordered by (traffic x cost). Status: `todo` | `wip` | `done` | `n/a`.
 Newest first.
 
 <!-- PASS LOG START -->
+
+### Pass 11 -- Queries inside loops  *(areas 13, 17 partial)*
+
+A scan for `.objects.` calls inside `for` loops, then the ones on a request or cron path:
+
+- **`AuctionBidsChartData`** counted distinct bidders with a query *per lot*. A five-hundred-lot
+  auction drew that chart with five hundred queries; it is one `GROUP BY` now.
+- **`AuctionCategoriesChartData`** ran three queries per category, twenty categories deep. Three
+  `GROUP BY`s for the whole chart now.
+- **"Add auction users to club"** did two `ClubMember` lookups per person in the auction. It loads
+  who is already a member in one query and keeps the map current as it adds, so two people sharing
+  an email still can't both be added.
+- **`manage.py sendnotifications`** (a cron) ran a `Watch` query per lot and then **two** user
+  fetches per watch -- the FK, and then a `User.objects.get` for the object the FK had just
+  returned. One `select_related` query per auction now.
+
+The rest of the hits are management commands that run once (imports, backfills, migrations of
+data), where a query per row is the readable choice and the cost is paid by nobody waiting.
+
 
 ### Pass 10 -- The remaining HTMx tables  *(area 10, done; area 4 extended)*
 

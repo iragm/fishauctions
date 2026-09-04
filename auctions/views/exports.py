@@ -423,15 +423,27 @@ class AddAuctionUsersToClub(LoginRequiredMixin, AuctionViewMixin, View):
             messages.error(request, "You don't have permission to add members to that club.")
             return redirect(reverse("auction_tos_list", kwargs={"slug": auction.slug}))
 
-        tos_qs = AuctionTOS.objects.filter(auction=auction).exclude(email="").filter(email__isnull=False)
+        tos_qs = (
+            AuctionTOS.objects.filter(auction=auction)
+            .exclude(email="")
+            .filter(email__isnull=False)
+            .select_related("user")
+        )
         added_count = 0
         skipped_count = 0
+        # Who is already a member, in two queries rather than two per person in the auction.
+        # Emails are matched case-insensitively, as the per-row lookup did.
+        members_by_email = {}
+        members_by_user = {}
+        for member_email, member_user_id in ClubMember.objects.filter(club=club).values_list("email", "user_id"):
+            if member_email:
+                members_by_email[member_email.lower()] = True
+            if member_user_id:
+                members_by_user[member_user_id] = True
         for tos in tos_qs:
-            existing = None
-            if tos.email:
-                existing = ClubMember.objects.filter(club=club, email__iexact=tos.email).first()
-            if not existing and tos.user:
-                existing = ClubMember.objects.filter(club=club, user=tos.user).first()
+            existing = bool(tos.email and members_by_email.get(tos.email.lower()))
+            if not existing and tos.user_id:
+                existing = bool(members_by_user.get(tos.user_id))
             if existing:
                 skipped_count += 1
                 continue
@@ -445,6 +457,11 @@ class AddAuctionUsersToClub(LoginRequiredMixin, AuctionViewMixin, View):
                 source=str(auction.title)[:200],
                 added_by=request.user,
             )
+            # keep the maps current so two TOS rows with the same email do not both get added
+            if tos.email:
+                members_by_email[tos.email.lower()] = True
+            if tos.user_id:
+                members_by_user[tos.user_id] = True
             added_count += 1
 
         if added_count:
