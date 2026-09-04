@@ -456,7 +456,12 @@ class ClubAdminView(LoginRequiredMixin, ClubViewMixin, HTMxTableView):
 
     def get_queryset(self):
         # is_deleted filtering is handled by ClubMemberFilter.filter_queryset (default: hide deactivated)
-        return ClubMember.objects.filter(club=self.club).order_by("name")
+        # Every row reads its club's membership fee to decide whether to show a Renew button.
+        # prefetch, not join: all the rows have the same club, so this way they share one instance
+        # of it -- and one copy of everything cached on it.
+        return (
+            ClubMember.objects.filter(club=self.club).select_related("user").prefetch_related("club").order_by("name")
+        )
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)

@@ -104,6 +104,40 @@ class AuctionUsersTableQueryCountTests(QueryGrowthMixin, StandardTestCase):
         )
 
 
+class AuctionLotAdminTableQueryCountTests(QueryGrowthMixin, StandardTestCase):
+    """The lot table an auction is run from -- hundreds of rows, each with two people on it.
+
+    Every row prints the seller and the winner (each of which reads the auction and the person's
+    userdata to build a display name), links to both of their invoices, and asks whether the lot
+    has an image.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.client = Client()
+        self.client.force_login(self.admin_user)
+        self._next = 0
+
+    def _make_lots(self, count):
+        for _ in range(count):
+            self._next += 1
+            Lot.objects.create(
+                lot_name=f"admin table lot {self._next}",
+                auction=self.online_auction,
+                auctiontos_seller=self.online_tos,
+                auctiontos_winner=self.tosB,
+                winning_price=5,
+                quantity=1,
+                active=False,
+            )
+
+    def test_the_lot_table_does_not_query_per_lot(self):
+        added, rows = self.queries_per_extra_row(
+            reverse("auction_lot_list", kwargs={"slug": self.online_auction.slug}), {}, self._make_lots
+        )
+        self.assertEqual(added, 0, f"{added} queries for {rows} more lots in the auction's lot table")
+
+
 class LotDetailQueryCountTests(StandardTestCase):
     """The lot page fetched the lot three times, and each copy re-derived every cached property.
 

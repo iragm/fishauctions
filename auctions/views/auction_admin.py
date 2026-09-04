@@ -487,7 +487,8 @@ class AuctionHistoryView(LoginRequiredMixin, AuctionViewMixin, HTMxTableView):
     template_name = "auctions/auction_history.html"
 
     def get_queryset(self):
-        return AuctionHistory.objects.filter(auction=self.auction).order_by("-timestamp")
+        # the table prints who did each thing
+        return AuctionHistory.objects.filter(auction=self.auction).select_related("user").order_by("-timestamp")
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
@@ -551,7 +552,27 @@ class AuctionLots(LoginRequiredMixin, AuctionViewMixin, HTMxTableView):
     # paginate_by = 50
 
     def get_queryset(self):
-        return Lot.objects.exclude(is_deleted=True).filter(auction=self.auction).order_by("lot_number")
+        # Every row of this table prints the seller and the winner (each of which reads the
+        # auction and the person's userdata to work out a display name), links to both of their
+        # invoices, and asks whether the lot has an image.
+        return (
+            Lot.objects.exclude(is_deleted=True)
+            .filter(auction=self.auction)
+            .select_related(
+                "auctiontos_seller__user__userdata",
+                "auctiontos_winner__user__userdata",
+                "user",
+            )
+            .prefetch_related(
+                "auction",
+                "auctiontos_seller__auction",
+                "auctiontos_winner__auction",
+                "auctiontos_seller__auctiontos",
+                "auctiontos_winner__auctiontos",
+                "lotimage_set",
+            )
+            .order_by("lot_number")
+        )
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)

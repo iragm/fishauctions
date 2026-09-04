@@ -74,7 +74,8 @@ class ClubHistoryView(LoginRequiredMixin, ClubViewMixin, HTMxTableView):
         return super().dispatch(request, *args, **kwargs)
 
     def get_queryset(self):
-        return ClubHistory.objects.filter(club=self.club).order_by("-timestamp")
+        # the table prints who did each thing
+        return ClubHistory.objects.filter(club=self.club).select_related("user").order_by("-timestamp")
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)

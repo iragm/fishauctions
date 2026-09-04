@@ -99,7 +99,7 @@ Ordered by (traffic x cost). Status: `todo` | `wip` | `done` | `n/a`.
 | 7 | UserData / account pages | `views/account.py`, `UserData` properties, `account_sidebar*.html` | done |
 | 8 | Context processors (run on every request) | `context_processors.py`, `account_nav.py`, `templatetags/` | done |
 | 9 | Auction stats + admin checklist | `views/auction_stats.py`, `views/admin_checklist.py` | done |
-| 10 | Club pages + members table | `views/club_pages.py`, `views/club_members.py`, `tables.py` | todo |
+| 10 | Club pages + members table | `views/club_pages.py`, `views/club_members.py`, `tables.py` | done |
 | 11 | Mobile API | `mobile/views.py`, `mobile/serializers.py`, `mobile/services/` | todo |
 | 12 | Club REST API | `views/club_api.py`, `serializers.py` | todo |
 | 13 | Celery tasks + management commands | `tasks.py`, `management/commands/` | todo |
@@ -119,6 +119,26 @@ Ordered by (traffic x cost). Status: `todo` | `wip` | `done` | `n/a`.
 Newest first.
 
 <!-- PASS LOG START -->
+
+### Pass 10 -- The remaining HTMx tables  *(area 10, done; area 4 extended)*
+
+The tables an auction or a club is administered from render a hundred rows at a time and none of
+their querysets said anything about what a row touches.
+
+- **The auction's lot table** (`auction_lot_list`) prints the seller and the winner -- each of which
+  reads the auction and that person's userdata to build a display name -- links to *both* of their
+  invoices, and asks whether the lot has an image. It now select_relates the two people and
+  prefetches the auction, their auctions, their invoices and the lot's images. Guarded by
+  `AuctionLotAdminTableQueryCountTests`.
+- **`Lot.sellers_invoice` / `winner_invoice` take the `AuctionTOS` route first.** They used to
+  build one `Q(auctiontos_user=...) | Q(auctiontos_user__user=..., auction=...)` query, which
+  nothing can prefetch. Going through `AuctionTOS.invoice` (which is prefetchable) and falling back
+  to the user query keeps the same answer and costs the table nothing.
+- **The club members table** prefetches its club: every row reads `club.membership_annual_fee` to
+  decide whether to draw a Renew button, and prefetch (rather than a join) means all the rows share
+  one `Club` instance and one copy of everything cached on it.
+- The two history tables (`AuctionHistory`, `ClubHistory`) select_related the user each row names.
+
 
 ### Pass 9 -- Sweep: the rest of the model properties, and the `len`/`count` shapes  *(areas 20, 21 partial)*
 

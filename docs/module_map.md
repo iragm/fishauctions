@@ -342,9 +342,9 @@ this only quotes its opening sentence.
 - **`test_paypal.py`** (939 lines)
   PayPal: the webhooks, their event handlers, refund idempotency and the CSV export.
   `PayPalWebhookViewTests`, `PayPalWebhookEventHandlerTests`, `RefundWebhookIdempotencyTests`, `SquarePaymentUpdatedRefundResurrectionTests`, `PayPalCSVExportTests`
-- **`test_query_counts.py`** (420 lines)
+- **`test_query_counts.py`** (454 lines)
   Query-count guards: the N+1s that were fixed, and stay fixed.
-  `QueryGrowthMixin`, `AuctionUsersTableQueryCountTests`, `LotDetailQueryCountTests`, `InvoiceQueryCountTests`, `CachedPropertyWiringTests`, `LotListQueryCountTests`, `LotCachedPropertyTests`
+  `QueryGrowthMixin`, `AuctionUsersTableQueryCountTests`, `AuctionLotAdminTableQueryCountTests`, `LotDetailQueryCountTests`, `InvoiceQueryCountTests`, `CachedPropertyWiringTests`, `LotListQueryCountTests`, `LotCachedPropertyTests`
 - **`test_remote_print.py`** (514 lines)
   Part R — printing from a computer to the phone's Bluetooth label printer.
 - **`test_security.py`** (314 lines)
@@ -633,7 +633,7 @@ Every view on the site, split by what part of it the view belongs to.
   `AdminSetupChecklistView`
 - **`ajax.py`** (744 lines)
   The small endpoints the pages call, rather than the pages themselves.
-- **`auction_admin.py`** (1233 lines)
+- **`auction_admin.py`** (1254 lines)
   Setting an auction up, and running the room: pickup locations, users, check-in.
 - **`auction_extras.py`** (644 lines)
   The rest of an auction's admin surface: label config, bulk printing, no-shows, chat.
@@ -668,10 +668,10 @@ Every view on the site, split by what part of it the view belongs to.
   The outside accounts a club connects: Mailchimp, Brevo, Google Calendar, Square links.
 - **`club_members.py`** (1063 lines)
   The club's list of people: joining, renewing, permissions, cards.
-- **`club_pages.py`** (587 lines)
+- **`club_pages.py`** (592 lines)
   A club's public page, and the two links that identify a member on it.
   `ClubDetailView`, `ClubMemberByUUIDView`, `ClubMemberByNumberView`, `ClubAdminView`
-- **`club_reports.py`** (814 lines)
+- **`club_reports.py`** (815 lines)
   What a club's officers read: history, stats, the treasurer's report, money in and out.
   `ClubHistoryView`, `ClubStatsView`, `ClubTreasurerReportView`, `ClubTreasurerReportExportView`, `ClubMoneyCreateView`, `ClubMoneyBalanceView`, `ClubMemberCSVImportView`, `ClubMemberCSVExportView`
 - **`discord.py`** (978 lines)

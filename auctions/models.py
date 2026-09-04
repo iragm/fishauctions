@@ -8478,39 +8478,39 @@ class Lot(CachedPropertiesMixin, models.Model):
 
     @cached_property
     def winner_invoice(self):
-        """Get the Invoice for this lot's winner
-        Returns Invoice object or None if not found
+        """Get the Invoice for this lot's winner, or None.
+
+        The ``AuctionTOS`` route first, because that one is prefetchable
+        (``prefetch_related("auctiontos_winner__auctiontos")``) and the auction's lot table renders it
+        once per row -- it was a query per lot, twice, for seller and winner alike.
         """
         from auctions.models import Invoice
 
-        if not (self.auctiontos_winner or self.winner):
-            return None
-
-        query = Q()
-        if self.auctiontos_winner:
-            query |= Q(auctiontos_user=self.auctiontos_winner)
-        if self.winner:
-            query |= Q(auctiontos_user__user=self.winner, auction=self.auction)
-
-        return Invoice.objects.filter(query).first()
+        if self.auctiontos_winner_id:
+            invoice = self.auctiontos_winner.invoice
+            if invoice:
+                return invoice
+        if self.winner_id:
+            return Invoice.objects.filter(auctiontos_user__user_id=self.winner_id, auction=self.auction).first()
+        return None
 
     @cached_property
     def sellers_invoice(self):
-        """Get the Invoice for this lot's seller
-        Returns Invoice object or None if not found
+        """Get the Invoice for this lot's seller, or None.
+
+        The ``AuctionTOS`` route first, because that one is prefetchable
+        (``prefetch_related("auctiontos_seller__auctiontos")``) and the auction's lot table renders it
+        once per row -- it was a query per lot, twice, for seller and winner alike.
         """
         from auctions.models import Invoice
 
-        if not (self.auctiontos_seller or self.user):
-            return None
-
-        query = Q()
-        if self.auctiontos_seller:
-            query |= Q(auctiontos_user=self.auctiontos_seller)
-        if self.user:
-            query |= Q(auctiontos_user__user=self.user, auction=self.auction)
-
-        return Invoice.objects.filter(query).first()
+        if self.auctiontos_seller_id:
+            invoice = self.auctiontos_seller.invoice
+            if invoice:
+                return invoice
+        if self.user_id:
+            return Invoice.objects.filter(auctiontos_user__user_id=self.user_id, auction=self.auction).first()
+        return None
 
     @cached_property
     def square_refund_possible(self):
