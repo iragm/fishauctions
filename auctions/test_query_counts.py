@@ -19,7 +19,7 @@ from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
 from django.utils import timezone
 
-from auctions.models import AuctionTOS, Bid, Invoice, Lot, LotImage
+from auctions.models import AuctionTOS, Bid, Invoice, InvoiceAdjustment, Lot, LotImage
 from auctions.tests import StandardTestCase
 
 
@@ -146,6 +146,72 @@ class LotDetailQueryCountTests(StandardTestCase):
             f"the lot page went from {before} to {after} queries when the lot got three bids and "
             "three images -- something is reading them one at a time",
         )
+
+
+class InvoiceQueryCountTests(StandardTestCase):
+    """The invoice page derived its whole number tree once per top-level read.
+
+    ``net`` reads ``subtotal`` reads ``total_sold`` and ``total_bought``; ``manual_adjustment_amount``
+    reads ``subtotal`` again; ``tax`` re-aggregates the bought lots. Nothing was cached and the view
+    fetched the invoice five separate times, so one invoice cost 189 queries -- 54 of them the same
+    ``SUM`` over four adjustment rows.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.client = Client()
+        self.client.force_login(self.user)
+
+    def test_the_invoice_page_does_not_grow_with_adjustments_and_lots(self):
+        invoice = Invoice.objects.get(pk=self.invoice.pk)
+        url = invoice.get_absolute_url()
+        self.client.get(url)
+        with CaptureQueriesContext(connection) as before:
+            self.assertEqual(self.client.get(url).status_code, 200)
+        for index in range(4):
+            InvoiceAdjustment.objects.create(
+                adjustment_type="ADD", amount=index + 1, notes=f"extra {index}", invoice=invoice
+            )
+            Lot.objects.create(
+                lot_name=f"invoice lot {index}",
+                auction=self.online_auction,
+                auctiontos_seller=self.online_tos,
+                auctiontos_winner=self.tosB,
+                winning_price=10,
+                quantity=1,
+                active=False,
+            )
+        with CaptureQueriesContext(connection) as after:
+            self.assertEqual(self.client.get(url).status_code, 200)
+        self.assertLessEqual(
+            len(after.captured_queries),
+            len(before.captured_queries),
+            f"the invoice page went from {len(before.captured_queries)} to "
+            f"{len(after.captured_queries)} queries with four more adjustments and four more lots",
+        )
+
+    def test_adjustment_totals_are_one_query(self):
+        invoice = Invoice.objects.get(pk=self.invoiceB.pk)
+        with CaptureQueriesContext(connection) as queries:
+            invoice.flat_value_adjustments
+            invoice.percent_value_adjustments
+            invoice.sum_adjusments("ADD")
+        sums = [q for q in queries.captured_queries if "auctions_invoiceadjustment" in q["sql"]]
+        self.assertEqual(len(sums), 1, "all four adjustment types come back in one GROUP BY")
+
+    def test_writing_an_adjustment_drops_the_invoice_s_totals(self):
+        invoice = Invoice.objects.get(pk=self.invoiceB.pk)
+        before = invoice.flat_value_adjustments
+        InvoiceAdjustment.objects.create(adjustment_type="ADD", amount=7, notes="x", invoice=invoice)
+        self.assertNotEqual(invoice.flat_value_adjustments, before)
+
+    def test_refresh_from_db_drops_cached_values(self):
+        """Otherwise refresh_from_db returns a mix of reloaded columns and stale derived numbers."""
+        lot = Lot.objects.get(pk=self.unsoldLot.pk)
+        self.assertEqual(lot.winner_as_str, "")
+        Lot.objects.filter(pk=lot.pk).update(auctiontos_winner=self.tosB, winning_price=5)
+        lot.refresh_from_db()
+        self.assertEqual(lot.winner_as_str, str(self.tosB))
 
 
 class CachedPropertyWiringTests(StandardTestCase):

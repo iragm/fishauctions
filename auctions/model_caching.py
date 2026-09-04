@@ -50,3 +50,10 @@ class CachedPropertiesMixin:
     def save(self, *args, **kwargs):
         super().save(*args, **kwargs)
         self.invalidate_cached_properties()
+
+    def refresh_from_db(self, *args, **kwargs):
+        super().refresh_from_db(*args, **kwargs)
+        # refresh_from_db reloads the columns and nothing else, so without this an instance can
+        # come back from the database carrying answers derived before the reload -- which is worse
+        # than not refreshing at all, because the caller asked for current data and got a mix.
+        self.invalidate_cached_properties()

@@ -799,7 +799,11 @@ class ClubMemberDiscountTests(StandardTestCase):
         self.assertEqual(self.invoice.total_sold, Decimal("17.00"))
         self.online_auction.alternate_split_mode = "off"
         self.online_auction.save()
-        # standard fees: 3 sold lots at (10 * 75% - 2) = 16.50, less the 10 unsold lot fee
+        # standard fees: 3 sold lots at (10 * 75% - 2) = 16.50, less the 10 unsold lot fee.
+        # Re-read: an invoice's totals are cached on the instance, and this one was worked out
+        # before the auction's split mode changed. A request never holds an invoice across an
+        # auction edit, so nothing invalidates it for us.
+        self.invoice.refresh_from_db()
         self.assertEqual(self.invoice.total_sold, Decimal("6.50"))
 
     def test_club_member_mode_sets_flag_from_membership(self):

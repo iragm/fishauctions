@@ -4685,7 +4685,7 @@ class Auction(CachedPropertiesMixin, models.Model):
             return "inperson_multi_location"
         return "unknown"
 
-    @property
+    @cached_property
     def auction_type_as_str(self):
         """Returns friendly string of whether this is an online, in-person, or hybrid auction"""
         auction_type = self.auction_type
@@ -4774,7 +4774,7 @@ class Auction(CachedPropertiesMixin, models.Model):
         # return f"{self.get_absolute_url()}lots/set-winners/{self.set_lot_winners_url}"
         return f"{self.get_absolute_url()}lots/set-winners/"
 
-    @property
+    @cached_property
     def is_club_managed(self):
         """True when this auction manages its participants via the associated club's ClubMember records."""
         return bool(self.manage_users_through_club) and bool(self.club_id)
@@ -4837,11 +4837,11 @@ class Auction(CachedPropertiesMixin, models.Model):
                 return True
         return False
 
-    @property
+    @cached_property
     def pickup_locations_before_end(self):
         """If there's a problem with the pickup location times, all of them need to be after the end date of the auction (or after the start date for an in-person auction).
         Returns the edit url for the first pickup location whose end time is before the auction end"""
-        locations = self.location_qs
+        locations = self.locations
         time_to_use = self.date_end
         if not self.is_online:
             time_to_use = self.date_start
@@ -4898,7 +4898,7 @@ class Auction(CachedPropertiesMixin, models.Model):
             dynamic_end = datetime.timedelta(minutes=60)
             return self.date_end + dynamic_end
 
-    @property
+    @cached_property
     def date_end_as_str(self):
         """Human-reable end date of the auction; this will always be an empty string for in-person auctions"""
         if self.is_online:
@@ -4925,7 +4925,7 @@ class Auction(CachedPropertiesMixin, models.Model):
         else:
             return False
 
-    @property
+    @cached_property
     def closed(self):
         """For display on the main auctions list"""
         if self.is_online and self.date_end:
@@ -4949,7 +4949,7 @@ class Auction(CachedPropertiesMixin, models.Model):
             return True
         return False
 
-    @property
+    @cached_property
     def wind_down_time(self):
         """The moment the auction is fully wound down, before the pretty_much_over grace period.
 
@@ -4967,13 +4967,13 @@ class Auction(CachedPropertiesMixin, models.Model):
                 self.lot_submission_end_date or self.date_start,
             )
         latest = self.date_end
-        for location in self.location_qs:
+        for location in self.locations:
             for pickup in (location.pickup_time, location.second_pickup_time):
                 if pickup and (latest is None or pickup > latest):
                     latest = pickup
         return latest
 
-    @property
+    @cached_property
     def pretty_much_over(self):
         """True once the auction has been wound down for at least 24 hours.
 
@@ -4994,7 +4994,7 @@ class Auction(CachedPropertiesMixin, models.Model):
             return mark_safe('<span class="badge bg-danger">Ended</span>')
         return ""
 
-    @property
+    @cached_property
     def started(self):
         """For display on the main auctions list"""
         if timezone.now() > self.date_start:
@@ -6252,7 +6252,7 @@ class Auction(CachedPropertiesMixin, models.Model):
         locations = []
         sold = []
         bought = []
-        for location in self.location_qs:
+        for location in self.locations:
             locations.append(location.name)
             sold.append(location.total_sold)
             bought.append(location.total_bought)
@@ -9291,7 +9291,7 @@ class Lot(CachedPropertiesMixin, models.Model):
                 return True
         return False
 
-    @property
+    @cached_property
     def ended(self):
         """Used by the view for display of whether or not the auction has ended
         See also the database field active, which is set (based on this field) by a system job (endauctions.py)"""
@@ -10200,7 +10200,7 @@ class Invoice(CachedPropertiesMixin, models.Model):
     renewal_manually_set = models.BooleanField(default=False)
     renewal_processed = models.BooleanField(default=False)
 
-    @property
+    @cached_property
     def currency(self):
         """Get the currency for this invoice based on the auction creator or club's connected seller"""
         # For club-managed auctions (or club-only invoices), derive currency from the club's seller
@@ -10214,12 +10214,12 @@ class Invoice(CachedPropertiesMixin, models.Model):
             return self.auction.created_by.userdata.currency
         return "USD"
 
-    @property
+    @cached_property
     def currency_symbol(self):
         """Get the currency symbol for this invoice"""
         return get_currency_symbol(self.currency)
 
-    @property
+    @cached_property
     def paypal_credentials(self):
         """Club-supplied PayPal app credentials governing this invoice, or ``None``.
 
@@ -10230,7 +10230,7 @@ class Invoice(CachedPropertiesMixin, models.Model):
         club = self.club or (self.auction.club if self.auction else None)
         return club.paypal_credentials if club else None
 
-    @property
+    @cached_property
     def show_payment_button(self):
         """True if we can show the PayPal or Square button"""
         # Check PayPal -- a club using its own (non-OAuth) credentials counts as configured
@@ -10283,7 +10283,7 @@ class Invoice(CachedPropertiesMixin, models.Model):
 
         return has_payment_method
 
-    @property
+    @cached_property
     def show_paypal_button(self):
         """True if we can show specifically the PayPal button"""
         # The site's platform app, or a club's own (non-OAuth) credentials, must be available.
@@ -10322,7 +10322,7 @@ class Invoice(CachedPropertiesMixin, models.Model):
             return False
         return True
 
-    @property
+    @cached_property
     def show_square_button(self):
         """True if we can show specifically the Square button
         Square requires OAuth - seller must have linked their account"""
@@ -10358,7 +10358,7 @@ class Invoice(CachedPropertiesMixin, models.Model):
             return False
         return True
 
-    @property
+    @cached_property
     def reason_for_payment_not_available(self):
         """Always use this after invoice.show_payment_button
         This assumes that the button will show up, but be grayed out
@@ -10377,7 +10377,7 @@ class Invoice(CachedPropertiesMixin, models.Model):
             # we can change it later
             pass
 
-    @property
+    @cached_property
     def soft_descriptor(self):
         """Used for PayPal payments -- short string describing the merchant
         https://developer.paypal.com/docs/multiparty/embedded-integration/reference/#soft-descriptors
@@ -10388,42 +10388,60 @@ class Invoice(CachedPropertiesMixin, models.Model):
         return None
 
     def sum_adjusments(self, adjustment_type):
-        total = self.adjustments.filter(adjustment_type=adjustment_type).aggregate(total=Sum("amount"))["total"]
-        if not total:
-            return 0
-        return total
+        return self.adjustment_totals.get(adjustment_type) or 0
 
-    @property
+    @cached_property
+    def adjustment_totals(self):
+        """Every adjustment type's total, in one GROUP BY.
+
+        There are four types and each was its own ``SUM``; the invoice page asked for all four
+        several times over while deriving the net, which was 54 aggregate queries for one invoice.
+        """
+        return {
+            row["adjustment_type"]: row["total"]
+            for row in self.adjustments.values("adjustment_type").order_by().annotate(total=Sum("amount"))
+        }
+
+    @cached_property
     def adjustments(self):
         return InvoiceAdjustment.objects.filter(invoice=self).order_by("-createdon")
 
-    @property
+    @cached_property
     def flat_value_adjustments(self):
         return self.sum_adjusments("DISCOUNT") - self.sum_adjusments("ADD")
 
-    @property
+    @cached_property
     def percent_value_adjustments(self):
         return self.sum_adjusments("ADD_PERCENT") - self.sum_adjusments("DISCOUNT_PERCENT")
 
-    @property
+    @cached_property
     def changed_adjustments(self):
-        return self.adjustments.exclude(amount=0)
+        """The adjustments worth showing, each already holding this invoice.
 
-    @property
+        ``InvoiceAdjustment.display`` reads a currency symbol off ``self.invoice``; without the
+        back-reference every line of the table fetched its own copy of this invoice and re-derived
+        the currency from the auction's creator -- four queries per adjustment.
+        """
+        adjustments = list(self.adjustments.exclude(amount=0))
+        for adjustment in adjustments:
+            adjustment.invoice = self
+        return adjustments
+
+    @cached_property
     def membership_fee_amount(self):
         club = self.club or (self.auction.club if self.auction else None)
         if not (club and self.renewal_needed and club.membership_annual_fee):
             return Decimal("0.00")
         return Decimal(club.membership_annual_fee)
 
-    @property
+    @cached_property
     def club_member_for_auction(self):
         """The ClubMember record for this invoice's user in the auction's club, or None."""
         if not self.auction or not self.auction.club or not self.auctiontos_user:
             return None
         return self.auctiontos_user.club_member_record
 
-    @property
+    @cached_property
     def member_has_paypal_subscription(self):
         """True when this invoice's club member auto-renews via a PayPal subscription.
 
@@ -10432,7 +10450,7 @@ class Invoice(CachedPropertiesMixin, models.Model):
         member = self.club_member_for_auction
         return bool(member and member.paypal_subscription_id)
 
-    @property
+    @cached_property
     def treat_as_club_member(self):
         """True when club member benefits (club member discount, automatic alternate split) apply
         to this invoice's user: either their membership is current, or this invoice will renew it
@@ -10444,7 +10462,7 @@ class Invoice(CachedPropertiesMixin, models.Model):
         member = self.club_member_for_auction
         return bool(member and member.is_paid_member)
 
-    @property
+    @cached_property
     def membership_status_for_invoice(self):
         if not self.auction or not self.auction.club:
             return "No club"
@@ -10490,20 +10508,23 @@ class Invoice(CachedPropertiesMixin, models.Model):
         """
         if self.pk and Invoice.objects.filter(pk=self.pk, status="PAID").exists():
             return
+        # "work it out again" is the whole job: every number below is cached on the instance, and
+        # the caller is here because something they hold has changed.
+        self.invalidate_cached_properties()
         self.calculated_total = self.rounded_net
         self.save()
 
-    @property
+    @cached_property
     def total_adjustment_amount(self):
         """There's a difference between the subtotal and the rounded net -- rounding, manual adjustments, fist bid payouts, etc"""
         return Decimal(self.subtotal) - Decimal(self.rounded_net)
 
-    @property
+    @cached_property
     def subtotal(self):
         """don't call this directly, use self.net or another property instead"""
         return Decimal(self.total_sold) - Decimal(self.total_bought)
 
-    @property
+    @cached_property
     def first_bid_payout(self):
         try:
             if self.auction.first_bid_payout:
@@ -10513,7 +10534,7 @@ class Invoice(CachedPropertiesMixin, models.Model):
             pass
         return 0
 
-    @property
+    @cached_property
     def club_member_discount(self):
         """Like first_bid_payout, but only for paid club members (or a user whose membership
         will be renewed by this invoice) who have purchased at least one lot."""
@@ -10525,7 +10546,7 @@ class Invoice(CachedPropertiesMixin, models.Model):
             return 0
         return self.auction.club_member_discount
 
-    @property
+    @cached_property
     def registration_fee_amount(self):
         """Flat registration fee charged on every invoice for the auction ("Added to all invoices").
 
@@ -10540,7 +10561,7 @@ class Invoice(CachedPropertiesMixin, models.Model):
             return Decimal(auction.registration_fee_for_club_members or 0)
         return Decimal(auction.registration_fee or 0)
 
-    @property
+    @cached_property
     def tax(self):
         totals = self.bought_lots_queryset.aggregate(
             total_final=Coalesce(
@@ -10557,7 +10578,7 @@ class Invoice(CachedPropertiesMixin, models.Model):
         tax_amount = total_final * rate
         return tax_amount.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
-    @property
+    @cached_property
     def manual_adjustment_amount(self):
         """Net dollar value of the manual invoice adjustments (flat + legacy percent).
 
@@ -10579,7 +10600,7 @@ class Invoice(CachedPropertiesMixin, models.Model):
             percent_base * Decimal(self.percent_value_adjustments) / Decimal(100)
         )
 
-    @property
+    @cached_property
     def net(self):
         """Factor in:
         Total bought
@@ -10604,12 +10625,12 @@ class Invoice(CachedPropertiesMixin, models.Model):
             subtotal = 0
         return Decimal(subtotal)
 
-    @property
+    @cached_property
     def net_after_payments(self):
         """negative number means they owe the club payment"""
         return self.net + self.total_payments
 
-    @property
+    @cached_property
     def user_should_be_paid(self):
         """Return True if the CLUB owes the user money (the user should be paid out).
 
@@ -10622,7 +10643,7 @@ class Invoice(CachedPropertiesMixin, models.Model):
         else:
             return False
 
-    @property
+    @cached_property
     def rounded_net(self):
         """Always round in the customer's favor (against the club) to make sure that the club doesn't need to deal with change, only whole dollar amounts"""
         if not self.auction or not self.auction.invoice_rounding:
@@ -10640,12 +10661,12 @@ class Invoice(CachedPropertiesMixin, models.Model):
             else:
                 return Decimal(rounded + 1)
 
-    @property
+    @cached_property
     def absolute_amount(self):
         """Give the absolute value of the invoice's net amount"""
         return abs(self.rounded_net)
 
-    @property
+    @cached_property
     def sold_lots_queryset(self):
         """Simple qs containing all lots SOLD by this user in this auction"""
         if not self.auctiontos_user:
@@ -10655,10 +10676,19 @@ class Invoice(CachedPropertiesMixin, models.Model):
                 auctiontos_seller=self.auctiontos_user,
                 auction=self.auction,
                 is_deleted=False,
-            ).order_by("pk")
+            )
+            # every row of the invoice prints a lot number (which reads the auction), a category,
+            # and where its winner is collecting it
+            .select_related(
+                "auction",
+                "species_category",
+                "auctiontos_winner__pickup_location",
+                "auctiontos_seller__pickup_location",
+            )
+            .order_by("pk")
         )
 
-    @property
+    @cached_property
     def bought_lots_queryset(self):
         """Simple qs containing all lots BOUGHT by this user in this auction"""
         base = (
@@ -10669,7 +10699,14 @@ class Invoice(CachedPropertiesMixin, models.Model):
                 # Removed (banned) lots are not charged -- a buyer never pays for a lot that
                 # was pulled, so it must not appear in (nor be summed into) their purchases.
                 banned=False,
-            ).order_by("pk")
+            )
+            .select_related(
+                "auction",
+                "species_category",
+                "auctiontos_seller__pickup_location",
+                "auctiontos_winner__pickup_location",
+            )
+            .order_by("pk")
             if self.auctiontos_user
             else Lot.objects.none()
         )
@@ -10702,29 +10739,29 @@ class Invoice(CachedPropertiesMixin, models.Model):
             )
         )
 
-    @property
+    @cached_property
     def sold_lots_queryset_sorted(self):
         try:
             return sorted(self.sold_lots_queryset, key=lambda t: str(t.winner_location))
         except:
             return self.sold_lots_queryset
 
-    @property
+    @cached_property
     def lots_sold(self):
         """Return number of lots the user attempted to sell in this invoice (unsold lots included)"""
         return len(self.sold_lots_queryset)
 
-    @property
+    @cached_property
     def lots_sold_successfully(self):
         """Queryset of lots the user sold in this invoice (unsold lots not included)"""
         return self.sold_lots_queryset.filter(auctiontos_winner__isnull=False)
 
-    @property
+    @cached_property
     def lots_sold_successfully_count(self):
         """Return number of lots the user sold in this invoice (unsold lots not included)"""
         return self.lots_sold_successfully.count()
 
-    @property
+    @cached_property
     def lot_labels(self):
         """For online auctions, only sold lots will have printed labels.  For in-person auctions, all submitted lots get printed"""
         if self.is_online:
@@ -10732,12 +10769,12 @@ class Invoice(CachedPropertiesMixin, models.Model):
         else:
             return self.sold_lots_queryset
 
-    @property
+    @cached_property
     def unsold_lots(self):
         """Return number of lots the user did not sell. This may be simply lots whose winner has not been set yet."""
         return len(self.sold_lots_queryset.exclude(auctiontos_winner__isnull=False))
 
-    @property
+    @cached_property
     def unsold_non_donation_lots(self):
         """For non-online auctions only.  Return number of lots the user did not sell. This may be simply lots whose winner has not been set yet."""
         if self.is_online:
@@ -10747,31 +10784,31 @@ class Invoice(CachedPropertiesMixin, models.Model):
             active=True, auctiontos_winner__isnull=True, donation=False, banned=False
         ).count()
 
-    @property
+    @cached_property
     def total_sold_gross(self):
         """Total winning price of all lots sold"""
         return self.sold_lots_queryset.aggregate(total=Sum("winning_price"))["total"] or 0
 
-    @property
+    @cached_property
     def total_sold(self):
         """Seller's cut of all lots sold"""
         return self.sold_lots_queryset.aggregate(total_sold=Sum("your_cut"))["total_sold"] or 0
 
-    @property
+    @cached_property
     def total_sold_club_cut(self):
         """Club's cut of all lots sold"""
         return self.sold_lots_queryset.aggregate(total=Sum("club_cut"))["total"] or 0
 
-    @property
+    @cached_property
     def lots_bought(self):
         """Return number of lots the user bought in this invoice"""
         return len(self.bought_lots_queryset)
 
-    @property
+    @cached_property
     def total_bought(self):
         return self.bought_lots_queryset.aggregate(total_bought=Sum("final_price"))["total_bought"] or 0
 
-    @property
+    @cached_property
     def total_donations(self):
         """Total value of all donated lots"""
         return (
@@ -10781,14 +10818,14 @@ class Invoice(CachedPropertiesMixin, models.Model):
             or 0
         )
 
-    @property
+    @cached_property
     def location(self):
         """Pickup location selected by the user"""
         if self.auctiontos_user:
             return self.auctiontos_user.pickup_location
         return None
 
-    @property
+    @cached_property
     def contact_email(self):
         if self.location:
             if self.location.pickup_location_contact_email:
@@ -10803,12 +10840,12 @@ class Invoice(CachedPropertiesMixin, models.Model):
                 return self.club.contact_email
         return None
 
-    @property
+    @cached_property
     def has_refunds(self):
         """Check if this invoice has any refunds (negative payment amounts)"""
         return self.payments.filter(amount__lt=0).exists()
 
-    @property
+    @cached_property
     def rounded_net_after_payments(self):
         """
         Calculate net_after_payments with rounding for cash payments.
@@ -10840,7 +10877,7 @@ class Invoice(CachedPropertiesMixin, models.Model):
                 # net_after_payments is between rounded and rounded+1 (e.g., -1.5 between -2 and -1)
                 return Decimal(rounded + 1)
 
-    @property
+    @cached_property
     def rounding_adjustment(self):
         """
         Calculate the rounding adjustment to display as a line item.
@@ -10856,7 +10893,7 @@ class Invoice(CachedPropertiesMixin, models.Model):
 
         return None
 
-    @property
+    @cached_property
     def invoice_summary_short(self):
         result = ""
         # Use rounded value for display when invoice_rounding is enabled
@@ -10873,7 +10910,7 @@ class Invoice(CachedPropertiesMixin, models.Model):
         # A fully settled ($0) invoice owes nothing -- don't render "owes the club $0.00".
         return result + "is settled up"
 
-    @property
+    @cached_property
     def invoice_summary(self):
         if self.auctiontos_user:
             return f"{self.auctiontos_user.name} {self.invoice_summary_short}"
@@ -10895,7 +10932,7 @@ class Invoice(CachedPropertiesMixin, models.Model):
     def get_absolute_url(self):
         return reverse("invoice_by_pk", kwargs={"pk": self.pk})
 
-    @property
+    @cached_property
     def is_online(self):
         """Based on the auction associated with this invoice"""
         if self.auctiontos_user:
@@ -10904,17 +10941,17 @@ class Invoice(CachedPropertiesMixin, models.Model):
             return self.auction.is_online
         return False
 
-    @property
+    @cached_property
     def unsold_lot_warning(self):
         if self.unsold_non_donation_lots:
             return f"{self.unsold_non_donation_lots} unsold lot(s), sell these before setting this paid"
         return ""
 
-    @property
+    @cached_property
     def pre_register_used(self):
         return self.sold_lots_queryset.filter(pre_register_discount__gt=0).exists()
 
-    @property
+    @cached_property
     def total_payments(self):
         """Sum of payments recorded against this invoice (Decimal)."""
         total = self.payments.aggregate(total=Coalesce(Sum("amount"), Value(Decimal("0.00"))))["total"]
@@ -11238,6 +11275,22 @@ class InvoiceAdjustment(models.Model):
     amount = models.PositiveIntegerField(default=0, validators=[MinValueValidator(0)])
     notes = models.CharField(max_length=150, default="")
 
+    def save(self, *args, **kwargs):
+        super().save(*args, **kwargs)
+        self._invalidate_invoice()
+
+    def delete(self, *args, **kwargs):
+        invoice = self._state.fields_cache.get("invoice")
+        super().delete(*args, **kwargs)
+        if invoice is not None:
+            invoice.invalidate_cached_properties()
+
+    def _invalidate_invoice(self):
+        """Every number on the invoice is cached on the instance, and this changed one of them."""
+        invoice = self._state.fields_cache.get("invoice")
+        if invoice is not None:
+            invoice.invalidate_cached_properties()
+
     @property
     def formatted_float_value(self):
         return f"{self.amount:.2f}"
@@ -11300,6 +11353,13 @@ class InvoicePayment(models.Model):
         max_length=50, blank=True, null=True, default="PayPal"
     )  # e.g. 'paypal', 'stripe', 'cash'
     createdon = models.DateTimeField(auto_now_add=True)
+
+    def save(self, *args, **kwargs):
+        super().save(*args, **kwargs)
+        # total_payments and everything downstream of it is cached on the Invoice instance
+        invoice = self._state.fields_cache.get("invoice")
+        if invoice is not None:
+            invoice.invalidate_cached_properties()
 
     # def __str__(self):
     #     return f"Payment {self.pk} for Invoice {self.invoice_id}: {self.amount} {self.currency} ({self.status})"

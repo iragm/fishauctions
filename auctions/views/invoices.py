@@ -171,16 +171,30 @@ class InvoiceView(DetailView, FormMixin, AuctionViewMixin):
     using_no_login_link = False
 
     def get_object(self):
-        """"""
+        """The invoice, fetched once.
+
+        dispatch, get and get_context_data all ask for it, and every one of those was its own
+        query *and* its own Invoice instance -- so the whole cached number tree (net, subtotal,
+        tax, the adjustment totals) was derived again for each copy. Memoized on the view.
+        """
+        if getattr(self, "object", None) is not None:
+            return self.object
         try:
-            return Invoice.objects.get(pk=self.kwargs.get(self.pk_url_kwarg))
+            self.object = Invoice.objects.select_related(
+                "auction__created_by__userdata",
+                "auctiontos_user__pickup_location",
+                "auctiontos_user__user",
+                "club",
+                "club_member",
+            ).get(pk=self.kwargs.get(self.pk_url_kwarg))
         except Invoice.DoesNotExist:
+            self.object = None
             if self.request.user.is_authenticated:
-                return Invoice.objects.filter(
+                self.object = Invoice.objects.filter(
                     auctiontos_user__user=self.request.user,
                     auction__slug=self.kwargs["slug"],
                 ).first()
-        return None
+        return self.object
 
     def dispatch(self, request, *args, **kwargs):
         # check to make sure the user has permission to view this invoice

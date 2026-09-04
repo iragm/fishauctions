@@ -114,10 +114,10 @@ this only quotes its opening sentence.
 - **`middleware.py`** (64 lines)
   Custom middleware for the auctions application.
   `MobileAppMiddleware`
-- **`model_caching.py`** (52 lines)
+- **`model_caching.py`** (59 lines)
   ``@cached_property`` on a model, and the invalidation that makes it safe.
   `CachedPropertiesMixin`
-- **`models.py`** (14828 lines)
+- **`models.py`** (14888 lines)
   The database: 80 models, and the reason they are still in one file.
 - **`module_map.py`** (256 lines)
   The map of this repository: which module does what, generated from the modules themselves.
@@ -297,7 +297,7 @@ this only quotes its opening sentence.
 - **`test_mcp_widgets.py`** (208 lines)
   Tests for the MCP-app widgets — the ``ui://`` resources a host renders instead of the JSON.
   `BundleTests`, `CatalogueTests`, `DocumentTests`, `ResourceEndpointTests`
-- **`test_membership_flow.py`** (1332 lines)
+- **`test_membership_flow.py`** (1336 lines)
   Club membership as money: invoices, discounts, renewals and the confirmation emails.
   `InvoiceStatusButtonTests`, `ClubMembershipRenewalFlowTests`, `PayPalSubscriptionWebhookTests`, `ClubMemberDiscountTests`, `ClubMoneyRenewalConsistencyTests`, `ClubMembershipEmailTaskTests`, `ClubBarcodeViewTests`, `QuickCheckoutHTMXTests`
 - **`test_mobile_features.py`** (2654 lines)
@@ -343,9 +343,9 @@ this only quotes its opening sentence.
 - **`test_paypal.py`** (939 lines)
   PayPal: the webhooks, their event handlers, refund idempotency and the CSV export.
   `PayPalWebhookViewTests`, `PayPalWebhookEventHandlerTests`, `RefundWebhookIdempotencyTests`, `SquarePaymentUpdatedRefundResurrectionTests`, `PayPalCSVExportTests`
-- **`test_query_counts.py`** (354 lines)
+- **`test_query_counts.py`** (420 lines)
   Query-count guards: the N+1s that were fixed, and stay fixed.
-  `QueryGrowthMixin`, `AuctionUsersTableQueryCountTests`, `LotDetailQueryCountTests`, `CachedPropertyWiringTests`, `LotListQueryCountTests`, `LotCachedPropertyTests`
+  `QueryGrowthMixin`, `AuctionUsersTableQueryCountTests`, `LotDetailQueryCountTests`, `InvoiceQueryCountTests`, `CachedPropertyWiringTests`, `LotListQueryCountTests`, `LotCachedPropertyTests`
 - **`test_remote_print.py`** (514 lines)
   Part R — printing from a computer to the phone's Bluetooth label printer.
 - **`test_security.py`** (314 lines)
@@ -682,7 +682,7 @@ Every view on the site, split by what part of it the view belongs to.
   The snippets a club puts on its own website, and the pages behind them.
 - **`exports.py`** (887 lines)
   Taking data back out: the CSV exports, the reports, and the mailing list.
-- **`invoices.py`** (377 lines)
+- **`invoices.py`** (391 lines)
   Invoices as a person reads them: the list, one invoice, and the no-login link.
   `Invoices`, `InvoiceCreateView`, `InvoiceView`, `InvoiceNoLoginView`, `SquarePaymentSuccessView`
 - **`lot_pages.py`** (1459 lines)

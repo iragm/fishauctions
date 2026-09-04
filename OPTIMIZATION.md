@@ -94,7 +94,7 @@ Ordered by (traffic x cost). Status: `todo` | `wip` | `done` | `n/a`.
 | 2 | Lot detail page | `views/lot_pages.py`, `view_lot.html` | done |
 | 3 | Auction landing + auction pages | `views/auction_pages.py`, `auction.html`, `Auction` properties | done |
 | 4 | AuctionTOS admin table | `views/auction_admin.py`, `tables.py` AuctionTOSHTMxTable, `AuctionTOS` properties | done |
-| 5 | Invoices | `views/invoices.py`, `Invoice` properties, `invoice.html` | todo |
+| 5 | Invoices | `views/invoices.py`, `Invoice` properties, `invoice.html` | done |
 | 6 | PageView write path + middleware | `middleware.py`, `signals.py`, `PageView`, `base_page_view.html` | todo |
 | 7 | UserData / account pages | `views/account.py`, `UserData` properties, `account_sidebar*.html` | todo |
 | 8 | Context processors (run on every request) | `context_processors.py`, `account_nav.py`, `templatetags/` | todo |
@@ -119,6 +119,37 @@ Ordered by (traffic x cost). Status: `todo` | `wip` | `done` | `n/a`.
 Newest first.
 
 <!-- PASS LOG START -->
+
+### Pass 5 -- Invoices  *(area 5, done)*
+
+**189 -> 40 queries for one invoice.** 54 of the original were the same `SUM` over four adjustment
+rows.
+
+The invoice's numbers are a tree -- `net` reads `subtotal` reads `total_sold` and `total_bought`;
+`manual_adjustment_amount` reads `subtotal` again; `tax` re-aggregates the bought lots -- and none
+of it was cached, so every top-level read re-derived the whole thing.
+
+- **55 `Invoice` properties cached**, the whole tree from `sold_lots_queryset` up to
+  `rounded_net_after_payments`.
+- **`Invoice.adjustment_totals`** -- one `GROUP BY` for all four adjustment types, where
+  `sum_adjusments` ran a separate `SUM` per type per call.
+- **`InvoiceView.get_object()` memoized** and select_related. `dispatch`, `get` and
+  `get_context_data` each fetched the invoice again -- five instances, five copies of the tree.
+- **`Invoice.changed_adjustments` hands each adjustment the invoice it came from.**
+  `InvoiceAdjustment.display` reads a currency symbol off `self.invoice`, which was four queries
+  per line of the table (its own invoice, the auction, the creator, their userdata).
+- **`sold_lots_queryset` / `bought_lots_queryset` select_related** the auction, category and both
+  pickup locations -- every row prints a lot number (which reads the auction) and where its winner
+  collects it.
+- **Writes invalidate:** `recalculate()` drops the tree before re-deriving (that is its whole job),
+  and `InvoiceAdjustment.save()/delete()` and `InvoicePayment.save()` drop the invoice they point at.
+- **`refresh_from_db()` now invalidates too**, for every model with the mixin. It reloads columns
+  and nothing else, so without this an instance comes back from the database carrying answers
+  derived before the reload -- worse than not refreshing, because the caller asked for current data
+  and got a mix. `test_paypal` caught exactly that.
+- `Auction.wind_down_time`, `pickup_locations_before_end` and `set_stat_location_volume` read the
+  cached location list; `closed`, `started`, `ended`, `pretty_much_over`, `is_club_managed` cached.
+
 
 ### Pass 4 -- The auction users / invoices table  *(area 4, done)*
 
