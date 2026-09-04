@@ -12,6 +12,7 @@ difference. A test that fails here names a real N+1 -- find what the new row tou
 """
 
 import datetime
+from decimal import Decimal
 
 from django.db import connection
 from django.test import Client
@@ -288,6 +289,56 @@ class SellerAndFeedbackQueryCountTests(QueryGrowthMixin, StandardTestCase):
             len(before.captured_queries),
             f"/feedback/ went from {len(before.captured_queries)} to {len(after.captured_queries)} "
             "queries with four more lots -- each row names the other party and links to the lot",
+        )
+
+
+class LongLivedInstanceTests(StandardTestCase):
+    """The one place on the site that holds a model instance for longer than a request.
+
+    A view is built per request, so its caches die with it. ``LotConsumer`` is not: it fetches its
+    ``Lot`` in ``connect()`` and keeps that instance for as long as the page is open, on a lot that
+    may be bid on the whole time. Everything derived from the lot is cached now, so the connection
+    has to drop that cache before it reads any of it.
+    """
+
+    def test_a_chat_message_is_filed_at_the_current_price(self):
+        import json
+
+        from auctions.consumers import LotConsumer
+        from auctions.models import LotHistory
+
+        lot = Lot.objects.create(
+            lot_name="websocket lot",
+            auction=self.online_auction,
+            auctiontos_seller=self.online_tos,
+            quantity=1,
+            reserve_price=2,
+            active=True,
+        )
+        Lot.objects.filter(pk=lot.pk).update(date_end=timezone.now() + datetime.timedelta(days=3))
+        lot = Lot.objects.get(pk=lot.pk)
+
+        consumer = LotConsumer()
+        consumer.lot = lot
+        consumer.user = self.user_with_no_lots
+        consumer.room_group_name = f"lot_{lot.pk}"
+        consumer.user_room_name = f"private_user_{self.user_with_no_lots.pk}_lot_{lot.pk}"
+        # one bidder, so the price is still the reserve -- and connect() plus an earlier chat
+        # message would have left exactly this cached on the instance
+        Bid.objects.create(user=self.userB, lot_number=Lot.objects.get(pk=lot.pk), amount=10)
+        self.assertEqual(lot.high_bid, 2)
+
+        # a second bidder moves the price: a dollar over the second-highest bid (whole-dollar auction)
+        Bid.objects.create(user=self.user_who_does_not_join, lot_number=Lot.objects.get(pk=lot.pk), amount=40)
+        consumer.receive(json.dumps({"message": "still here?"}))
+
+        history = LotHistory.objects.filter(lot=lot, message="still here?").first()
+        self.assertIsNotNone(history, "the message was not posted")
+        self.assertEqual(
+            history.current_price,
+            Decimal("11.00"),
+            "the chat message was filed at the price from before the bid -- the consumer's Lot "
+            "instance is holding a cached high_bid",
         )
 
 
