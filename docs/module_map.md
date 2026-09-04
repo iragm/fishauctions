@@ -29,7 +29,7 @@ this only quotes its opening sentence.
 - **`account_nav.py`** (220 lines)
   The **Account setup** menu: which pages are in it, which one you're on, and where /account/setup/ lands.
   `Row`, `Group`, `active_page`, `remember`, `landing_url`, `groups_for`
-- **`admin.py`** (1641 lines)
+- **`admin.py`** (1671 lines)
   The Django admin: the staff-only back door, and the handful of jobs that only live here.
 - **`announcements.py`** (491 lines)
   Club announcements: one message, sent to the places a club's members actually look.

@@ -109,16 +109,46 @@ Ordered by (traffic x cost). Status: `todo` | `wip` | `done` | `n/a`.
 | 17 | Exports, printing, labels | `views/exports.py`, `views/printing.py`, `printer_*.py` | done |
 | 18 | Species matching + search cache | `species_matching.py`, `species_categories.py`, `views/species.py` | done -- measured, 3-4 queries a call |
 | 19 | Forms | `forms.py` (7089 lines -- querysets built per form instance) | done -- the form-heavy pages measured flat |
-| 20 | Django admin | `admin.py` | not done -- staff-only, and not on the measured URL map |
+| 20 | Django admin | `admin.py` | done -- `list_select_related` on all 30 changelists that needed it |
 | 21 | Indexes + model `Meta` sweep | `models.py` Meta classes vs. the filters actually used | done |
 | 22 | Static/template rendering waste | `templates/`, `base.html`, vendored JS/CSS payload | partial -- caching headers and the broken `defer` done; the head scripts need an inline-script audit first |
 | 23 | Settings / infra | `settings.py`, `gunicorn.conf.py`, cache config, `docker-compose.yaml` | done |
+
+## Known test flakes
+
+The full `--parallel` suite is not quite deterministic and never was. Two seen during this work,
+both of which pass on a rerun and neither of which this campaign caused:
+
+- `test_species.ClubSpeciesCommonNameAPITests.test_another_club_is_not_answered_with_it` (and its
+  sibling). The test right below it is named "The route that made
+  test_another_club_is_not_answered_with_it flake" and its docstring says a leaked model call
+  writes a `SpeciesSearchCache` row "once in a few hundred" runs.
+- `test_palette_assist.ClubManagedPeopleTests.test_changing_contact_details_writes_them_to_the_club_member`,
+  once in about eight runs. Checked: it reads the `clubmember` FK off a freshly fetched row, so no
+  cached property is involved.
+
+If one of these fails, rerun before believing it. If a *new* one appears, suspect a cached property
+and read "Caching rules" above.
 
 ## Pass log
 
 Newest first.
 
 <!-- PASS LOG START -->
+
+### Pass 18 -- The Django admin  *(area 20, done)*
+
+Thirty admin changelists named a foreign key in `list_display` and none of them had
+`list_select_related`, so every row of every one fetched its own related row -- a hundred rows a
+page by default. Each now names exactly the FKs its own `list_display` renders (not
+`list_select_related = True`, which joins every non-null FK on the model whether the page shows it
+or not -- `Lot` has fourteen).
+
+Verified by loading every registered auctions changelist as a superuser: all thirty-odd return 200.
+
+The three inlines that have the same problem (`InterestInline`, `BidInline`, `WatchInline`) are not
+covered: an inline uses `get_queryset`, not `list_select_related`, and they render a handful of rows.
+
 
 ### Pass 17 -- Front end: caching headers and a `defer` that never was  *(areas 18, 22, done)*
 
