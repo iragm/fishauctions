@@ -479,6 +479,19 @@ class LotCachedPropertyTests(StandardTestCase):
         lot.save()
         self.assertEqual(lot.winner_as_str, str(self.tosB))
 
+    def test_an_unsaved_lot_answers_rather_than_raising(self):
+        """bulk-add and the offline sync both build Lots before saving them.
+
+        Both bids and images read a reverse relation now, and a reverse relation on a pk-less
+        instance raises ValueError -- which a template re-raises rather than swallowing.
+        """
+        lot = Lot(lot_name="not saved yet", reserve_price=3)
+        self.assertEqual(lot.bids, [])
+        self.assertEqual(lot.images, [])
+        self.assertEqual(lot.image_count, 0)
+        self.assertIsNone(lot.thumbnail)
+        self.assertEqual(lot.high_bid, 3)
+
     def test_invalidate_named_properties_only(self):
         lot = Lot.objects.get(pk=self.unsoldLot.pk)
         lot.bids

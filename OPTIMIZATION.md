@@ -120,6 +120,28 @@ Newest first.
 
 <!-- PASS LOG START -->
 
+### Pass 16 -- Code review, and two things it caught
+
+A full review of the campaign's diff. Two real defects, both from caching:
+
+- **The lot page's websocket held a stale price.** `LotConsumer` fetches its `Lot` in `connect()`
+  and keeps that one instance for as long as the page is open -- minutes, on a lot being bid on the
+  whole time. `lot.high_bid` used to be live because `bids` was a fresh queryset per access; cached,
+  it froze at whatever the first chat message saw, and every message after that was filed at the
+  price from before. `receive()` invalidates the instance now, which is exactly the old behaviour
+  and costs nothing on a connection nobody types into.
+- **`Lot.images` raised on an unsaved lot.** Reading a reverse relation on a pk-less instance is a
+  `ValueError`, and `bulk_add_lots` and the offline sync both build `Lot`s before saving them.
+  `bids` had the guard from the day it changed; `images` did not. Both now covered by
+  `test_an_unsaved_lot_answers_rather_than_raising`.
+
+Checked and found correct: the Python rewrite of `Lot.bids` matches the old subquery exactly
+(including tie-breaking on `-bid_time, -pk` and deleted bids); the read-after-write ordering in
+`bid_on_lot`; the annotations in `AuctionTOS.annotate_lot_counts` and `_report_counts` against the
+properties they replace; the list-vs-queryset conversions against every caller; and the MRO of the
+two new mixins against `ContactRecord` and `CloudflareImageMixin`.
+
+
 ### Pass 15 -- One declarative rule for stale caches  *(review of the campaign so far)*
 
 Five models had grown a hand-written `save()` (and sometimes `delete()`) that dropped the caches on

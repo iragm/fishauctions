@@ -9648,6 +9648,9 @@ class Lot(CachedPropertiesMixin, models.Model):
         than one per row (the lot page iterates it twice and counts it twice: four trips before).
         """
         source = self.use_images_from if self.use_images_from_id else self
+        if source.pk is None:
+            # an unsaved lot has no images, and source.lotimage_set would raise rather than say so
+            return []
         return sorted(source.lotimage_set.all(), key=lambda image: (not image.is_primary, image.createdon))
 
     @cached_property

@@ -278,6 +278,11 @@ class LotConsumer(WebsocketConsumer):
         # socket can never silently lose a bid.
         if self.user.is_authenticated:
             try:
+                # self.lot was fetched in connect() and this connection holds it for as long as the
+                # page is open -- minutes, on a lot that is being bid on the whole time. Everything
+                # derived from it (high_bid, high_bidder, ended, sold) is cached on the instance, so
+                # without this a message sent after a bid is filed at the price from before it.
+                self.lot.invalidate_cached_properties()
                 error = check_all_permissions(self.lot, self.user)
                 if error:
                     async_to_sync(self.channel_layer.group_send)(
