@@ -127,7 +127,7 @@ class LotImageManagementTests(StandardTestCase):
         test_lot.refresh_from_db()
         self.assertIsNone(test_lot.image_url)
         self.assertEqual(test_lot.image_count, 1)
-        self.assertEqual(test_lot.images.first().url, "https://example.com/new_fish.jpg")
+        self.assertEqual(test_lot.images[0].url, "https://example.com/new_fish.jpg")
 
     def test_create_image_form_url_validation_rejects_non_image(self):
         """CreateImageForm should reject URLs that don't have image extensions"""

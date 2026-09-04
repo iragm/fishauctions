@@ -184,19 +184,19 @@ class LotListView(AjaxListView):
         )
         context["embed"] = "all_lots"
         if self.request.user.is_authenticated:
-            context["lotsAreHidden"] = len(UserIgnoreCategory.objects.filter(user=self.request.user))
+            context["lotsAreHidden"] = UserIgnoreCategory.objects.filter(user=self.request.user).count()
         else:
             # probably not signed in
             context["lotsAreHidden"] = -1
         if self.request.user.is_authenticated:
-            try:
-                context["lastView"] = (
-                    PageView.objects.filter(user=self.request.user, lot_number__isnull=False)
-                    .order_by("-date_start")[0]
-                    .date_start
-                )
-            except IndexError:
-                context["lastView"] = timezone.now()
+            # values_list, so this reads one column off the biggest table on the site rather than
+            # building a whole PageView to read one field off it
+            context["lastView"] = (
+                PageView.objects.filter(user=self.request.user, lot_number__isnull=False)
+                .order_by("-date_start")
+                .values_list("date_start", flat=True)
+                .first()
+            ) or timezone.now()
         else:
             context["lastView"] = timezone.now()
         auction_slug = data.get("auction")

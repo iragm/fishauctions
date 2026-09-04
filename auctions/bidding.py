@@ -321,7 +321,7 @@ def bid_on_lot(lot, user, amount):
             # if we get to this point, the user has bid >= the high bid
             bid.was_high_bid = True
             bid.last_bid_time = timezone.now()
-            bid.save()
+            bid.save()  # Bid.save() drops lot.bids, so the reads below see this bid
             if lot.high_bidder.pk == user.pk:
                 try:
                     if originalHighBidder.pk == lot.high_bidder.pk:

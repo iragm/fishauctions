@@ -1682,7 +1682,7 @@ class PlaceBidTests(SkillTestCase):
     def test_under_the_reserve_is_refused_rather_than_rounded_up(self):
         result = self._run("place_bid", {"lot_id": self.for_sale.pk, "amount": 1}, user=self.user_with_no_lots)
         self.assertIn("error", result)
-        self.assertEqual(self.for_sale.bids.count(), 0)
+        self.assertEqual(len(self.for_sale.bids), 0)
 
     def test_no_amount_is_a_question(self):
         result = self._run("place_bid", {"lot_id": self.for_sale.pk}, user=self.user_with_no_lots)

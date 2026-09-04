@@ -79,6 +79,7 @@ from django.db.models.functions import Cast, Coalesce
 from django.db.models.query import QuerySet
 from django.urls import NoReverseMatch, reverse
 from django.utils import html, timezone
+from django.utils.functional import cached_property
 from django.utils.safestring import mark_safe
 from easy_thumbnails.fields import ThumbnailerImageField
 from easy_thumbnails.files import get_thumbnailer
@@ -99,6 +100,7 @@ from .email_routing import (
     sender_with_display_name,
 )
 from .helper_functions import bin_data, get_currency_symbol
+from .model_caching import CachedPropertiesMixin
 
 logger = logging.getLogger(__name__)
 
@@ -291,7 +293,7 @@ def add_price_info(qs):
 
 
 def find_image(name, user, auction):
-    """Find an image from the most recent lot with a given name"""
+    """Find an image from the most recent lot with a given name (one query, not two)."""
     qs = LotImage.objects.filter(
         (Q(lot_number__user__userdata__share_lot_images=True) | Q(lot_number__user__isnull=True)),
         lot_number__lot_name=name,
@@ -301,9 +303,13 @@ def find_image(name, user, auction):
         lot_number__auction__created_by__pk__in=auction.auction_admins_pks,
     ).order_by("-lot_number__date_posted")
     if user:
-        image_from_user = qs.filter(lot_number__user=user).first()
-        if image_from_user:
-            return image_from_user
+        # the user's own image first, then the most recent of anyone else's -- the same answer the
+        # two queries gave, decided in the ORDER BY instead of in Python
+        qs = qs.annotate(
+            not_from_this_user=Case(
+                When(lot_number__user=user, then=Value(0)), default=Value(1), output_field=IntegerField()
+            )
+        ).order_by("not_from_this_user", "-lot_number__date_posted")
     return qs.first()
 
 
@@ -4197,7 +4203,7 @@ def _slugify_auction_title(value):
     return slug or slugify(value)  # fall back to unsanitised slug if stripping leaves nothing
 
 
-class Auction(models.Model):
+class Auction(CachedPropertiesMixin, models.Model):
     """An auction is a collection of lots"""
 
     title = models.CharField("Auction name", max_length=255, blank=False, null=False)
@@ -6099,9 +6105,11 @@ class Auction(models.Model):
 
     @property
     def auction_admins_qs(self):
-        return AuctionTOS.objects.filter(Q(is_admin=True) | Q(user=self.created_by), auction__pk=self.pk).order_by(
-            "name"
-        )
+        # user_id, not user: comparing model objects makes Django fetch the creator row to read
+        # its pk, once per Auction instance.
+        return AuctionTOS.objects.filter(
+            Q(is_admin=True) | Q(user_id=self.created_by_id), auction__pk=self.pk
+        ).order_by("name")
 
     @property
     def auction_admins_pks(self):
@@ -6987,7 +6995,7 @@ class AuctionIgnore(models.Model):
         verbose_name_plural = "User ignoring auction"
 
 
-class AuctionTOS(models.Model):
+class AuctionTOS(CachedPropertiesMixin, models.Model):
     """Models how a user engages with an auction and is the basis for the user view when running an auction
     Usually this will correspond with a single person which may or may not also be a user"""
 
@@ -7599,7 +7607,7 @@ class AuctionTOS(models.Model):
                 related_campaign.result = "JOINED"
                 related_campaign.save()
 
-    @property
+    @cached_property
     def display_name_for_admins(self):
         """Same as display name, but no anonymous option"""
         if self.auction.is_online:
@@ -7609,7 +7617,7 @@ class AuctionTOS(models.Model):
             return self.bidder_number
         return "Unknown user"
 
-    @property
+    @cached_property
     def display_name(self):
         """Use usernames for online auctions, and bidder numbers for in-person auctions"""
         # return f"{self.user} will meet at {self.pickup_location} for {self.auction}"
@@ -7966,7 +7974,7 @@ class AuctionDropdown(models.Model):
         )
 
 
-class Lot(models.Model):
+class Lot(CachedPropertiesMixin, models.Model):
     """A lot is something to bid on"""
 
     PIC_CATEGORIES = (
@@ -8407,7 +8415,7 @@ class Lot(models.Model):
     def __str__(self):
         return "" + str(self.lot_number_display) + " - " + self.lot_name
 
-    @property
+    @cached_property
     def currency(self):
         """Get the currency for this lot based on the auction creator or lot owner"""
         if self.auction and self.auction.created_by:
@@ -8416,7 +8424,7 @@ class Lot(models.Model):
             return self.user.userdata.currency
         return "USD"
 
-    @property
+    @cached_property
     def currency_symbol(self):
         """Get the currency symbol for this lot"""
         return get_currency_symbol(self.currency)
@@ -8937,7 +8945,7 @@ class Lot(models.Model):
             return self.winner.email
         return ""
 
-    @property
+    @cached_property
     def seller_as_str(self):
         """String of the seller name or number, for use on lot pages"""
         if self.auctiontos_seller:
@@ -8946,7 +8954,7 @@ class Lot(models.Model):
             return str(self.user)
         return "Unknown"
 
-    @property
+    @cached_property
     def high_bidder_display(self):
         if self.sealed_bid:
             return "Sealed bid"
@@ -8964,7 +8972,7 @@ class Lot(models.Model):
             return ""
         return "No bids"
 
-    @property
+    @cached_property
     def high_bidder_for_admins(self):
         if self.auctiontos_winner:
             return self.auctiontos_winner.display_name_for_admins
@@ -9000,7 +9008,7 @@ class Lot(models.Model):
         else:
             return ""
 
-    @property
+    @cached_property
     def winner_as_str(self):
         """String of the winner name or number, for use on lot pages"""
         if self.auctiontos_winner:
@@ -9254,7 +9262,7 @@ class Lot(models.Model):
                         return True
         return False
 
-    @property
+    @cached_property
     def number_of_watchers(self):
         return Watch.objects.filter(lot_number=self.lot_number).count()
 
@@ -9573,21 +9581,36 @@ class Lot(models.Model):
         except:
             return self.reserve_price
 
-    @property
+    @cached_property
     def bids(self):
-        """Get all bids for this lot, highest bid first, one per user (their latest bid)"""
-        # bids = Bid.objects.filter(lot_number=self.lot_number, last_bid_time__lte=self.calculated_end, amount__gte=self.reserve_price).order_by('-amount', 'last_bid_time')
-        bids = (
-            Bid.objects.exclude(is_deleted=True)
-            .filter(
-                lot_number=self.lot_number,
-                last_bid_time__lte=self.calculated_end,
-                amount__gte=self.reserve_price,
-                pk=Subquery(self._latest_bid_per_user_subquery()),
-            )
-            .order_by("-amount", "last_bid_time")
-        )
-        return bids
+        """Bids on this lot, highest first, one per user (their latest bid). A **list**, not a queryset.
+
+        Read through ``self.bid_set`` and narrowed here rather than in SQL, so a lot list can
+        ``prefetch_related("bid_set")`` and pay one query per page instead of one per row. Same
+        rule as the old subquery, in the same order: of a user's bids only their **latest** counts,
+        and only if placed by the time the lot ended and at least the reserve -- a late or
+        under-reserve latest bid drops that user rather than falling back to an earlier one. A list
+        because callers index it twice; cached (``Bid.save()`` drops it) because a lot list row
+        reads ``high_bid``, ``high_bidder_display`` and ``ended``, all of which come through here.
+        """
+        if self.pk is None:
+            # an unsaved lot has no bids, and self.bid_set would raise rather than say so
+            return []
+        latest_per_user = {}
+        for bid in self.bid_set.all():
+            if bid.is_deleted:
+                continue
+            current = latest_per_user.get(bid.user_id)
+            if current is None or (bid.bid_time, bid.pk) > (current.bid_time, current.pk):
+                latest_per_user[bid.user_id] = bid
+        calculated_end = self.calculated_end
+        qualifying = [
+            bid
+            for bid in latest_per_user.values()
+            if bid.last_bid_time <= calculated_end and bid.amount >= self.reserve_price
+        ]
+        qualifying.sort(key=lambda bid: (-bid.amount, bid.last_bid_time))
+        return qualifying
 
     @property
     def high_bid(self):
@@ -9596,9 +9619,8 @@ class Lot(models.Model):
             return self.winning_price
         if self.sealed_bid:
             try:
-                bids = self.bids
                 return self.bids[0].amount
-            except:
+            except IndexError:
                 return 0
         else:
             if self.auction and self.auction.online_bidding == "buy_now_only" and not self.bids:
@@ -9631,20 +9653,19 @@ class Lot(models.Model):
         except:
             return False
 
-    @property
+    @cached_property
     def all_page_views(self):
         """Return a set of all users who have viewed this lot, and how long they looked at it for"""
         return PageView.objects.filter(lot_number=self.lot_number)
 
-    @property
+    @cached_property
     def anonymous_views(self):
-        return len(PageView.objects.filter(lot_number=self.lot_number, user_id__isnull=True))
+        return PageView.objects.filter(lot_number=self.lot_number, user_id__isnull=True).count()
 
-    @property
+    @cached_property
     def page_views(self):
-        """Total number of page views from all users"""
-        pageViews = self.all_page_views
-        return len(pageViews)
+        """Total page views from all users. COUNT(*), not len(): PageView is the biggest table here."""
+        return self.all_page_views.count()
 
     @property
     def ar_interaction_counts(self):
@@ -9732,7 +9753,7 @@ class Lot(models.Model):
             entry["unique"] += row["users"] + row["sessions"]
         return sorted(merged.values(), key=lambda entry: (-entry["views"], entry["label"]))
 
-    @property
+    @cached_property
     def number_of_bids(self):
         """How many users placed bids on this lot?"""
         return (
@@ -9768,10 +9789,10 @@ class Lot(models.Model):
         # 	return False
         return True
 
-    @property
+    @cached_property
     def image_count(self):
         """Count the number of images associated with this lot"""
-        return self.images.count()
+        return len(self.images)
 
     @property
     def multimedia_count(self):
@@ -9781,13 +9802,18 @@ class Lot(models.Model):
             count = 1
         return self.image_count + count
 
-    @property
+    @cached_property
     def images(self):
-        """All images associated with this lot; delegates to use_images_from if set"""
-        source = self.use_images_from if self.use_images_from_id else self
-        return LotImage.objects.filter(lot_number=source.lot_number).order_by("-is_primary", "createdon")
+        """All images associated with this lot; delegates to use_images_from if set.
 
-    @property
+        A **list**, read through the reverse relation and sorted here rather than filtered in SQL,
+        so a list view can ``prefetch_related("lotimage_set")`` and pay one query per page rather
+        than one per row (the lot page iterates it twice and counts it twice: four trips before).
+        """
+        source = self.use_images_from if self.use_images_from_id else self
+        return sorted(source.lotimage_set.all(), key=lambda image: (not image.is_primary, image.createdon))
+
+    @cached_property
     def auto_image(self):
         """Grab an automatically generated image"""
         if not self.auction:
@@ -9798,12 +9824,16 @@ class Lot(models.Model):
             return None
         return find_image(self.lot_name, self.user, self.auction)
 
-    @property
+    @cached_property
     def thumbnail(self):
-        source = self.use_images_from if self.use_images_from_id else self
-        default = LotImage.objects.filter(lot_number=source.lot_number, is_primary=True).first()
-        if default:
-            return default
+        """The image to show for this lot in a list, or None.
+
+        Cached: the tile template asks three times per row. self.images is sorted primary-first, so
+        this is the row the old ``filter(is_primary=True).first()`` returned, without its query.
+        """
+        for image in self.images:
+            if image.is_primary:
+                return image
         return self.auto_image
 
     def get_absolute_url(self):
@@ -9820,7 +9850,7 @@ class Lot(models.Model):
             return self.lot_number_int
         return self.lot_number
 
-    @property
+    @cached_property
     def lot_link(self):
         """Simplest link to access this lot with"""
         # Prefer real PK URLs; fall back to lot_number only for unsaved instances.
@@ -9851,13 +9881,13 @@ class Lot(models.Model):
             return reverse("lot_by_pk_and_slug", kwargs={"pk": lot_pk, "slug": self.slug})
         return reverse("lot_by_pk", kwargs={"pk": lot_pk})
 
-    @property
+    @cached_property
     def full_lot_link(self):
         """Full domain name URL for this lot"""
         current_site = Site.objects.get_current()
         return f"{current_site.domain}{self.lot_link}"
 
-    @property
+    @cached_property
     def qr_code(self):
         """Full domain name URL used to for QR codes"""
         current_site = Site.objects.get_current()
@@ -10287,7 +10317,7 @@ class ClubBapGenusOverride(models.Model):
         return f"{self.club} — {self.genus}: {self.points} pts"
 
 
-class Invoice(models.Model):
+class Invoice(CachedPropertiesMixin, models.Model):
     """
     The total amount you get paid or owe to the club for an auction
     """
@@ -10843,20 +10873,6 @@ class Invoice(models.Model):
                     output_field=DecimalField(max_digits=12, decimal_places=2),
                 )
             )
-        )
-
-    @property
-    def bought_lots_queryset_old(self):
-        """Simple qs containing all lots BOUGHT by this user in this auction"""
-        return (
-            Lot.objects.filter(
-                winning_price__isnull=False,
-                auctiontos_winner=self.auctiontos_user,
-                is_deleted=False,
-            )
-            .order_by("pk")
-            .annotate(final_price=F("winning_price") * (100 - F("partial_refund_percent")) / 100)
-            .annotate(tax=F("final_price") * F("auction__tax") / 100)
         )
 
     @property
@@ -11601,6 +11617,15 @@ class Bid(models.Model):
     def __str__(self):
         return str(self.user) + " bid " + str(self.amount) + " on lot " + str(self.lot_number)
 
+    def save(self, *args, **kwargs):
+        super().save(*args, **kwargs)
+        # bid_on_lot builds its Bid with the Lot *object* and then asks that same object who the
+        # high bidder is now, so this write has to drop lot.bids -- saving a Bid is not a Lot.save().
+        # fields_cache, not self.lot_number: a Bid built from a pk alone must not fetch a Lot.
+        lot = self._state.fields_cache.get("lot_number")
+        if lot is not None:
+            lot.invalidate_cached_properties()
+
     def delete(self, *args, **kwargs):
         self.is_deleted = True
         self.save()
@@ -11654,7 +11679,7 @@ class UserIgnoreCategory(models.Model):
         return str(self.user) + " hates " + str(self.category)
 
 
-class PageView(models.Model):
+class PageView(CachedPropertiesMixin, models.Model):
     """Track what lots a user views"""
 
     user = models.ForeignKey(User, on_delete=models.CASCADE, null=True, blank=True)
@@ -11889,7 +11914,7 @@ def get_default_is_trusted():
     return settings.USERS_ARE_TRUSTED_BY_DEFAULT
 
 
-class UserData(models.Model):
+class UserData(CachedPropertiesMixin, models.Model):
     """
     Extension of user model to store additional info
     """

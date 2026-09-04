@@ -737,10 +737,32 @@ class LotFilter(django_filters.FilterSet):
     def qs(self):
         primary_queryset = super().qs
         primary_queryset = primary_queryset.filter(is_deleted=False)
-        # it's faster without this
-        # with these, it's 320 queries in 5500 ms, without them it's 400 queries in 1500 ms
-        # primary_queryset = primary_queryset.select_related('species_category', 'user', 'user__userdata', 'auction', 'winner')
-        # primary_queryset = primary_queryset.prefetch_related('lot_number__pageview', 'lot_number__lothistory')
+        # Everything both lot templates render for a row, fetched for the whole page instead of
+        # per row. An earlier attempt at this was reverted as "slower" -- it also prefetched
+        # `pageview` and `lothistory`, the two biggest tables on the site, which costs far more
+        # than the per-row queries it saved. Those two stay out; the templates read them through
+        # the `all_chats`/`owner_chats` annotations below.
+        #
+        # prefetch_related rather than select_related for the relations that repeat down the page
+        # (the auction, the seller, the categories). A join would copy the same auction row into
+        # all 50 result rows and, worse, hand every Lot its *own* Auction instance -- so every
+        # cached_property on Auction would be recomputed once per row. prefetch_related fetches
+        # each related row once and assigns the same instance to every lot that points at it,
+        # which is what makes those caches worth having.
+        primary_queryset = primary_queryset.prefetch_related(
+            "auction",
+            "auction__created_by__userdata",  # Lot.currency_symbol
+            "species_category",
+            "user__userdata",
+            "winner__userdata",  # Lot.winner_as_str
+            "auctiontos_seller__auction",  # AuctionTOS.display_name -> auction.is_online
+            "auctiontos_seller__user__userdata",
+            "auctiontos_winner__auction",
+            "auctiontos_winner__user__userdata",
+            "shipping_locations",  # `request.user.userdata.location in lot.shipping_locations.all`
+            "lotimage_set",  # Lot.thumbnail, via Lot.images
+            "bid_set__user",  # Lot.bids, and high_bid / high_bidder_display through it
+        )
 
         if self.user.is_authenticated:
             if self.showViewed == "yes":

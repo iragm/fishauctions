@@ -86,7 +86,7 @@ this only quotes its opening sentence.
 - **`error_views.py`** (35 lines)
   Error handlers that surface otherwise-swallowed tracebacks.
   `error_404`, `error_500`
-- **`filters.py`** (1748 lines)
+- **`filters.py`** (1770 lines)
   The search and filter boxes above every table: what a query in one of them means.
 - **`fishbase.py`** (76 lines)
   Where the species list comes from.
@@ -111,7 +111,10 @@ this only quotes its opening sentence.
 - **`middleware.py`** (64 lines)
   Custom middleware for the auctions application.
   `MobileAppMiddleware`
-- **`models.py`** (14975 lines)
+- **`model_caching.py`** (52 lines)
+  ``@cached_property`` on a model, and the invalidation that makes it safe.
+  `CachedPropertiesMixin`
+- **`models.py`** (15000 lines)
   The database: 80 models, and the reason they are still in one file.
 - **`module_map.py`** (256 lines)
   The map of this repository: which module does what, generated from the modules themselves.
@@ -334,6 +337,9 @@ this only quotes its opening sentence.
 - **`test_paypal.py`** (939 lines)
   PayPal: the webhooks, their event handlers, refund idempotency and the CSV export.
   `PayPalWebhookViewTests`, `PayPalWebhookEventHandlerTests`, `RefundWebhookIdempotencyTests`, `SquarePaymentUpdatedRefundResurrectionTests`, `PayPalCSVExportTests`
+- **`test_query_counts.py`** (231 lines)
+  Query-count guards: the N+1s that were fixed, and stay fixed.
+  `QueryGrowthMixin`, `LotListQueryCountTests`, `LotCachedPropertyTests`
 - **`test_remote_print.py`** (514 lines)
   Part R — printing from a computer to the phone's Bluetooth label printer.
 - **`test_security.py`** (314 lines)
