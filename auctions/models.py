@@ -9513,8 +9513,15 @@ class Lot(CachedPropertiesMixin, models.Model):
         if self.pk is None:
             # an unsaved lot has no bids, and self.bid_set would raise rather than say so
             return []
+        related = self.bid_set.all()
+        if related._result_cache is None:
+            # Not prefetched, so this is going to be a query either way -- take the bidders with it,
+            # because every caller that shows bids shows who placed them. When it *is* prefetched
+            # (a lot list does `bid_set__user`) the rows are already here and re-fetching them with
+            # a join would throw that away, which is what the check is for.
+            related = related.select_related("user")
         latest_per_user = {}
-        for bid in self.bid_set.all():
+        for bid in related:
             if bid.is_deleted:
                 continue
             current = latest_per_user.get(bid.user_id)
@@ -12702,12 +12709,13 @@ class UserData(CachedPropertiesMixin, models.Model):
 
     def save(self, *args, **kwargs):
         if not self.email_me_about_new_chat_replies:
-            subscriptions = ChatSubscription.objects.exclude(lot__user=self.user).filter(
-                user=self.user, unsubscribed=False
+            # One UPDATE rather than a SELECT and a save per row. UserData is saved on ordinary
+            # page views (the location context processor, the lot page), so this ran on requests
+            # that were not changing anything. ChatSubscription.save() only fills in timestamps
+            # that are null, and a row that exists has them.
+            ChatSubscription.objects.exclude(lot__user=self.user).filter(user=self.user, unsubscribed=False).update(
+                unsubscribed=True
             )
-            for subscription in subscriptions:
-                subscription.unsubscribed = True
-                subscription.save()
         super().save(*args, **kwargs)
 
     def unsubscribe_from_all(self):

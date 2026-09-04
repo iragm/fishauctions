@@ -57,6 +57,50 @@ class QueryGrowthMixin:
         return len(after.captured_queries) - len(before.captured_queries), added_rows
 
 
+class LotDetailQueryCountTests(StandardTestCase):
+    """The lot page fetched the lot three times, and each copy re-derived every cached property.
+
+    ``get_object`` is memoized now and the queryset select_relates what the template renders, so
+    the page cost stops depending on how much has happened to the lot.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.client = Client()
+        self.client.force_login(self.user)
+
+    def _queries_for_lot_page(self, lot):
+        url = lot.lot_link
+        self.client.get(url)
+        with CaptureQueriesContext(connection) as queries:
+            response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        return len(queries.captured_queries)
+
+    def test_the_page_does_not_grow_with_the_lot_s_bids_and_images(self):
+        lot = Lot.objects.create(
+            lot_name="detail page lot",
+            auction=self.online_auction,
+            auctiontos_seller=self.online_tos,
+            user=self.user,
+            quantity=1,
+            reserve_price=2,
+        )
+        Lot.objects.filter(pk=lot.pk).update(date_end=timezone.now() + datetime.timedelta(days=3))
+        before = self._queries_for_lot_page(Lot.objects.get(pk=lot.pk))
+        for who in (self.user_with_no_lots, self.userB, self.user_who_does_not_join):
+            Bid.objects.create(user=who, lot_number=lot, amount=20)
+        for index in range(3):
+            LotImage.objects.create(lot_number=lot, url=f"https://example.com/{index}.png", is_primary=index == 0)
+        after = self._queries_for_lot_page(Lot.objects.get(pk=lot.pk))
+        self.assertLessEqual(
+            after,
+            before,
+            f"the lot page went from {before} to {after} queries when the lot got three bids and "
+            "three images -- something is reading them one at a time",
+        )
+
+
 class CachedPropertyWiringTests(StandardTestCase):
     """A model with a ``cached_property`` must be able to drop it.
 

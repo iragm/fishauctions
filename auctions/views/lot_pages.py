@@ -326,6 +326,21 @@ class MyLotsPageViewHistoryView(LoginRequiredMixin, View):
         )
 
 
+def _lot_distance_to(latitude, longitude):
+    """``distance_to`` with the lot's own latitude/longitude named explicitly.
+
+    ``distance_to`` defaults to bare column names, which MariaDB rejects as ambiguous the moment the
+    query joins anything else that has a ``latitude`` -- ``userdata`` and ``club`` both do, and the
+    lot page select_relates both.
+    """
+    return distance_to(
+        latitude,
+        longitude,
+        lat_field_name="`auctions_lot`.`latitude`",
+        lng_field_name="`auctions_lot`.`longitude`",
+    )
+
+
 class ViewLot(DetailView):
     """Show the picture and detailed information about a lot, and allow users to place bids"""
 
@@ -341,25 +356,47 @@ class ViewLot(DetailView):
         return super().dispatch(request, *args, **kwargs)
 
     def get_object(self):
+        """The lot, fetched once.
+
+        DetailView.get() already sets self.object, and get_context_data asks for the lot again --
+        as does image_permission_check further down. Each of those was a fresh query *and* a fresh
+        Lot instance, so every cached_property on it (bids, images, currency) was recomputed for
+        each one. Memoized on the view rather than reordering the callers.
+        """
+        if getattr(self, "object", None) is not None:
+            return self.object
         obj = self.get_queryset().first()
         if not obj and self.enable_404:
             raise Http404
+        self.object = obj
         return obj
 
     def get_queryset(self):
         pk = self.kwargs.get(self.pk_url_kwarg)
-        qs = Lot.objects.exclude(is_deleted=True)
+        # Everything view_lot_images.html renders about who is involved. Without these the page
+        # pays a query each for the auction, its creator's currency, the seller, the category and
+        # the submitter -- several of them more than once.
+        qs = Lot.objects.exclude(is_deleted=True).select_related(
+            "auction",
+            "auction__created_by__userdata",
+            "auction__club",
+            "species_category",
+            "user__userdata",
+            "auctiontos_seller__pickup_location",
+            "auctiontos_winner__pickup_location",
+            "winner__userdata",
+        )
         latitude = self.request.COOKIES.get("latitude")
         longitude = self.request.COOKIES.get("longitude")
         if latitude and longitude:
-            qs = qs.annotate(distance=distance_to(latitude, longitude))
+            qs = qs.annotate(distance=_lot_distance_to(latitude, longitude))
         elif self.request.user.is_authenticated:
             # UserData is auto-created when user is saved
             if self.request.user.userdata.latitude and self.request.user.userdata.longitude:
                 latitude = self.request.user.userdata.latitude
                 longitude = self.request.user.userdata.longitude
                 if latitude and longitude:
-                    qs = qs.annotate(distance=distance_to(latitude, longitude))
+                    qs = qs.annotate(distance=_lot_distance_to(latitude, longitude))
         if pk:
             qs = qs.filter(pk=pk)
         else:
@@ -395,8 +432,11 @@ class ViewLot(DetailView):
             context["auction"] = lot.auction
             context["is_auction_admin"] = lot.auction.permission_check(self.request.user)
             if lot.auction.first_bid_payout and not lot.auction.invoiced:
-                if not self.request.user.is_authenticated or not Bid.objects.exclude(is_deleted=True).filter(
-                    user=self.request.user, lot_number__auction=lot.auction
+                if (
+                    not self.request.user.is_authenticated
+                    or not Bid.objects.exclude(is_deleted=True)
+                    .filter(user=self.request.user, lot_number__auction=lot.auction)
+                    .exists()
                 ):
                     messages.info(
                         self.request,

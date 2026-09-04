@@ -91,7 +91,7 @@ Ordered by (traffic x cost). Status: `todo` | `wip` | `done` | `n/a`.
 | # | Area | Modules | Status |
 |---|---|---|---|
 | 1 | Lot list pages (browse) | `views/browse.py`, `filters.py` LotFilter, `lot_tile_page.html`, `lot_list_page.html`, `Lot` read properties | done |
-| 2 | Lot detail page | `views/lot_pages.py`, `view_lot.html` | todo |
+| 2 | Lot detail page | `views/lot_pages.py`, `view_lot.html` | done |
 | 3 | Auction landing + auction pages | `views/auction_pages.py`, `auction.html`, `Auction` properties | done |
 | 4 | AuctionTOS admin table | `views/auction_admin.py`, `tables.py` AuctionTOSHTMxTable, `AuctionTOS` properties | todo |
 | 5 | Invoices | `views/invoices.py`, `Invoice` properties, `invoice.html` | todo |
@@ -119,6 +119,30 @@ Ordered by (traffic x cost). Status: `todo` | `wip` | `done` | `n/a`.
 Newest first.
 
 <!-- PASS LOG START -->
+
+### Pass 3 -- Lot detail page  *(area 2, done)*
+
+**40 -> 23 queries**, and the page no longer gets more expensive as a lot collects bids.
+
+- **`ViewLot.get_object()` is memoized.** It was running `get_queryset().first()` three times --
+  three queries, and three *different* `Lot` instances, so every `cached_property` on the lot
+  (`bids`, `images`, `currency`, `high_bidder`) was computed once per copy.
+- **`ViewLot.get_queryset()` select_relates** the auction, its creator's userdata, the club, the
+  category, the submitter's userdata, both `AuctionTOS` rows and their pickup locations.
+  `distance_to` had to be given the lot's own column names to do it: it defaults to bare
+  `latitude`/`longitude`, and `userdata` and `club` both have a `latitude`, so MariaDB rejected the
+  query as ambiguous the moment it joined them. `_lot_distance_to` in `views/lot_pages.py` does that.
+- **`Lot.bids` takes the bidders with it** when it is not prefetched -- the page lists bids with
+  who placed them, which was a query per bid. It checks `_result_cache` first so a prefetched lot
+  list does not throw the prefetch away by re-fetching with a join.
+- **`UserData.save()` does one `UPDATE`** instead of a `SELECT` plus a save per row. It runs on
+  ordinary page views (the location context processor saves userdata when a cookie changes), and it
+  was walking the user's chat subscriptions every time.
+- `not Bid.objects.filter(...)` -> `.exists()`.
+
+New guard: `LotDetailQueryCountTests` gives a lot three bids and three images and asserts the page
+does not cost more than it did before.
+
 
 ### Pass 2 -- Auction pages and the location property family  *(area 3, done)*
 

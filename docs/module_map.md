@@ -117,7 +117,7 @@ this only quotes its opening sentence.
 - **`model_caching.py`** (52 lines)
   ``@cached_property`` on a model, and the invalidation that makes it safe.
   `CachedPropertiesMixin`
-- **`models.py`** (14917 lines)
+- **`models.py`** (14925 lines)
   The database: 80 models, and the reason they are still in one file.
 - **`module_map.py`** (256 lines)
   The map of this repository: which module does what, generated from the modules themselves.
@@ -340,9 +340,9 @@ this only quotes its opening sentence.
 - **`test_paypal.py`** (939 lines)
   PayPal: the webhooks, their event handlers, refund idempotency and the CSV export.
   `PayPalWebhookViewTests`, `PayPalWebhookEventHandlerTests`, `RefundWebhookIdempotencyTests`, `SquarePaymentUpdatedRefundResurrectionTests`, `PayPalCSVExportTests`
-- **`test_query_counts.py`** (263 lines)
+- **`test_query_counts.py`** (307 lines)
   Query-count guards: the N+1s that were fixed, and stay fixed.
-  `QueryGrowthMixin`, `CachedPropertyWiringTests`, `LotListQueryCountTests`, `LotCachedPropertyTests`
+  `QueryGrowthMixin`, `LotDetailQueryCountTests`, `CachedPropertyWiringTests`, `LotListQueryCountTests`, `LotCachedPropertyTests`
 - **`test_remote_print.py`** (514 lines)
   Part R — printing from a computer to the phone's Bluetooth label printer.
 - **`test_security.py`** (314 lines)
@@ -682,7 +682,7 @@ Every view on the site, split by what part of it the view belongs to.
 - **`invoices.py`** (377 lines)
   Invoices as a person reads them: the list, one invoice, and the no-login link.
   `Invoices`, `InvoiceCreateView`, `InvoiceView`, `InvoiceNoLoginView`, `SquarePaymentSuccessView`
-- **`lot_pages.py`** (1419 lines)
+- **`lot_pages.py`** (1459 lines)
   One lot: its page, its photos, and creating or editing it.
 - **`palette.py`** (580 lines)
   The command palette and the assistant surface behind it.
