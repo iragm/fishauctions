@@ -110,15 +110,37 @@ Ordered by (traffic x cost). Status: `todo` | `wip` | `done` | `n/a`.
 | 18 | Species matching + search cache | `species_matching.py`, `species_categories.py`, `views/species.py` | todo |
 | 19 | Forms | `forms.py` (7089 lines -- querysets built per form instance) | todo |
 | 20 | Django admin | `admin.py` | todo |
-| 21 | Indexes + model `Meta` sweep | `models.py` Meta classes vs. the filters actually used | todo |
+| 21 | Indexes + model `Meta` sweep | `models.py` Meta classes vs. the filters actually used | done |
 | 22 | Static/template rendering waste | `templates/`, `base.html`, vendored JS/CSS payload | todo |
-| 23 | Settings / infra | `settings.py`, `gunicorn.conf.py`, cache config, `docker-compose.yaml` | todo |
+| 23 | Settings / infra | `settings.py`, `gunicorn.conf.py`, cache config, `docker-compose.yaml` | done |
 
 ## Pass log
 
 Newest first.
 
 <!-- PASS LOG START -->
+
+### Pass 12 -- Settings and indexes  *(areas 21, 23, done)*
+
+- **Sessions live in Redis with the database behind them** (`SESSION_ENGINE = cached_db`). The
+  default engine reads `django_session` on every request that carries a cookie -- one query on
+  every page anybody loads -- and Redis was already here for the cache and the channel layer.
+  `cached_db`, not `cache`: a Redis restart or eviction loses nobody's session, the read just falls
+  back to the row. Together with the session-write fix in Pass 6 that is one query *and* one write
+  off every page.
+- **Two indexes** (`0423_query_indexes`), both backing a `filter(...).order_by(...).first()` that
+  had an index for the filter and nothing for the order, so MariaDB found the rows and then sorted
+  them by hand to return one:
+  - `PageView(user, -date_start)` -- every lot list a signed-in person opens asks for the date of
+    their most recent lot view, to badge lots as new. **Expensive to apply**: PageView is the
+    biggest table here. InnoDB builds it in place, but run it when the site is quiet.
+  - `Invoice(auctiontos_user, -date)` -- `AuctionTOS.invoice`. Small table, cheap.
+
+Checked and found already right: the **cached template loader** is on in production (Django adds it
+automatically for `APP_DIRS` when template debug is off), `CONN_MAX_AGE = 0` is correct under ASGI
+and documented as such, and `re` caches compiled patterns so the module-level-`re.compile` question
+does not arise.
+
 
 ### Pass 11 -- Queries inside loops  *(areas 13, 17 partial)*
 

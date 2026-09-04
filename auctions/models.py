@@ -10206,6 +10206,13 @@ class Invoice(CachedPropertiesMixin, models.Model):
     renewal_manually_set = models.BooleanField(default=False)
     renewal_processed = models.BooleanField(default=False)
 
+    class Meta:
+        indexes = [
+            # AuctionTOS.invoice: "this person's most recent invoice". The FK index found every
+            # invoice they have and left the ordering to a filesort.
+            models.Index(fields=["auctiontos_user", "-date"], name="invoice_tos_recent_idx"),
+        ]
+
     @cached_property
     def currency(self):
         """Get the currency for this invoice based on the auction creator or club's connected seller"""
@@ -11713,6 +11720,10 @@ class PageView(CachedPropertiesMixin, models.Model):
             # rows but left the "-date_start" ordering to a filesort over all of them -- on the
             # largest table on the site, from a query that runs on every page view.
             models.Index(fields=["ip_address", "-date_start"], name="pageview_ip_recent_idx"),
+            # Same shape, different question: every lot list a signed-in person opens asks for the
+            # date of their most recent lot view, to badge lots as new. The FK index on user found
+            # every page view they have ever made and sorted them to return one row.
+            models.Index(fields=["user", "-date_start"], name="pageview_user_recent_idx"),
         ]
 
 

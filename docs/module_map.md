@@ -116,7 +116,7 @@ this only quotes its opening sentence.
 - **`model_caching.py`** (59 lines)
   ``@cached_property`` on a model, and the invalidation that makes it safe.
   `CachedPropertiesMixin`
-- **`models.py`** (14909 lines)
+- **`models.py`** (14920 lines)
   The database: 80 models, and the reason they are still in one file.
 - **`module_map.py`** (256 lines)
   The map of this repository: which module does what, generated from the modules themselves.
@@ -728,7 +728,7 @@ This will make sure the app is always imported when
 - **`firebase_config.py`** (88 lines)
   Parse the public Firebase client-config files that ship with the mobile build.
   `load_android_config`, `load_ios_config`, `load_firebase_client_config`
-- **`settings.py`** (1349 lines)
+- **`settings.py`** (1356 lines)
   Django settings for fishauctions project.
 - **`test_runner.py`** (57 lines)
   The test runner, which exists to swap the password hasher out.

@@ -464,6 +464,13 @@ ACCOUNT_CHANGE_EMAIL = True
 
 SESSION_COOKIE_AGE = 1209600 * 100
 
+# Sessions live in Redis with the database behind them. The default engine reads django_session on
+# every request that carries a cookie -- one query on every page anybody loads, signed in or not --
+# and Redis is already here for the cache and the channel layer. `cached_db` (not `cache`) so a
+# Redis restart or eviction loses nobody's session: the read falls back to the row, which is still
+# written on every save.
+SESSION_ENGINE = "django.contrib.sessions.backends.cached_db"
+
 # The mobile WebView handoff relies on the session cookie being server-set with these flags so the
 # native app never has to read or reconstruct it. HttpOnly/SameSite=Lax are Django defaults, set
 # explicitly here; Secure is enabled whenever we're not in local dev (production is HTTPS-only behind
