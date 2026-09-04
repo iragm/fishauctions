@@ -25,8 +25,10 @@ from django.db.models import (
     Q,
     Subquery,
     Sum,
+    Value,
     When,
 )
+from django.db.models.functions import Coalesce
 from django.forms.widgets import HiddenInput, NumberInput, Select, TextInput
 from django.utils import timezone
 
@@ -43,6 +45,7 @@ from .models import (
     Location,
     Lot,
     LotPosition,
+    PageView,
     Speaker,
     SpeakerTopic,
     UserInterestCategory,
@@ -830,6 +833,23 @@ class LotFilter(django_filters.FilterSet):
                         LotPosition.objects.filter(lot=OuterRef("pk"), auction__in=locatable_auctions)
                     )
                 )
+        if self.regardingUser:
+            # lot_list_page.html prints a view count for each of your own lots, which was a COUNT
+            # on the biggest table on the site per row. A subquery rather than Count("pageview"),
+            # which would multiply the rows of every other annotation on this queryset.
+            primary_queryset = primary_queryset.annotate(
+                annotated_page_views=Coalesce(
+                    Subquery(
+                        PageView.objects.filter(lot_number=OuterRef("pk"))
+                        .order_by()
+                        .values("lot_number")
+                        .annotate(total=Count("pk"))
+                        .values("total")[:1],
+                        output_field=IntegerField(),
+                    ),
+                    Value(0),
+                )
+            )
         if self.order == "popularity" or self.order == "-popularity":
             primary_queryset = primary_queryset.annotate(
                 popularity=2 * Count("pageview", distinct=True)

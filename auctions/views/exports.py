@@ -803,12 +803,25 @@ class LeaveFeedbackView(LoginRequiredMixin, ListView):
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         cutoffDate = timezone.now() - timedelta(days=90)
+        # Each row names the other party and links to the lot, so it reads the lot's auction, the
+        # AuctionTOS, that TOS's auction (for the online/in-person display rule) and the person's
+        # userdata. Without these it was six queries a row.
+        related = (
+            "auction",
+            "auctiontos_seller__auction",
+            "auctiontos_seller__user__userdata",
+            "auctiontos_winner__auction",
+            "auctiontos_winner__user__userdata",
+            "winner__userdata",
+            "user__userdata",
+        )
         context["won_lots"] = (
             Lot.objects.exclude(is_deleted=True)
             .filter(
                 Q(winner=self.request.user) | Q(auctiontos_winner__user=self.request.user),
                 date_posted__gte=cutoffDate,
             )
+            .select_related(*related)
             .order_by("-date_posted")
         )
         context["sold_lots"] = (
@@ -818,6 +831,7 @@ class LeaveFeedbackView(LoginRequiredMixin, ListView):
                 date_posted__gte=cutoffDate,
                 winning_price__isnull=False,
             )
+            .select_related(*related)
             .order_by("-date_posted")
         )
         return context

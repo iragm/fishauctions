@@ -101,10 +101,10 @@ Ordered by (traffic x cost). Status: `todo` | `wip` | `done` | `n/a`.
 | 9 | Auction stats + admin checklist | `views/auction_stats.py`, `views/admin_checklist.py` | done |
 | 10 | Club pages + members table | `views/club_pages.py`, `views/club_members.py`, `tables.py` | done |
 | 11 | Mobile API | `mobile/views.py`, `mobile/serializers.py`, `mobile/services/` | todo |
-| 12 | Club REST API | `views/club_api.py`, `serializers.py` | todo |
+| 12 | Club REST API | `views/club_api.py`, `serializers.py` | done -- checked, already batched |
 | 13 | Celery tasks + management commands | `tasks.py`, `management/commands/` | partial -- sendnotifications done; the once-a-day imports and backfills are deliberately left alone |
 | 14 | Command palette / MCP / assist | `command_palette.py`, `palette_*.py`, `mcp/` | todo |
-| 15 | Selling / bulk add / bulk actions | `views/selling.py`, `views/bulk_add*.py`, `views/bulk_actions.py` | todo |
+| 15 | Selling / bulk add / bulk actions | `views/selling.py`, `views/bulk_add*.py`, `views/bulk_actions.py` | partial -- /selling/ and /feedback/ done; the bulk write paths are not measured |
 | 16 | Payments / webhooks / integrations | `views/payments.py`, `views/webhooks.py`, `views/club_integrations.py` | todo |
 | 17 | Exports, printing, labels | `views/exports.py`, `views/printing.py`, `printer_*.py` | partial -- the auction report is done, printing is not |
 | 18 | Species matching + search cache | `species_matching.py`, `species_categories.py`, `views/species.py` | todo |
@@ -119,6 +119,22 @@ Ordered by (traffic x cost). Status: `todo` | `wip` | `done` | `n/a`.
 Newest first.
 
 <!-- PASS LOG START -->
+
+### Pass 13 -- The member's own pages  *(area 15 partial)*
+
+- **/feedback/: 21 -> 6 queries.** Each row names the other party and links to the lot, so it read
+  the lot's auction, the `AuctionTOS`, that TOS's auction (for the online/in-person display rule)
+  and the person's userdata -- six queries a row, with no `select_related` on either list.
+- **/selling/: the Views column is annotated.** `Lot.page_views` is a `COUNT` on the biggest table
+  on the site and the table prints it for every row. `LotFilter` adds it as a subquery when the
+  list is scoped to one person (which is exactly when the template shows it), and `page_views`
+  reads the annotation when it is there.
+
+Measured and already flat, so left alone: `/auctions/`, `/bids/`, `/lots/watched/`, `/invoices/`,
+`/leaderboard/`, `/messages/`. The club REST API's lot list already select_relates everything its
+serializer touches and batches its images and auto-images through the serializer context -- that
+work was done before this campaign.
+
 
 ### Pass 12 -- Settings and indexes  *(areas 21, 23, done)*
 

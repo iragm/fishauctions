@@ -9497,7 +9497,15 @@ class Lot(CachedPropertiesMixin, models.Model):
 
     @cached_property
     def page_views(self):
-        """Total page views from all users. COUNT(*), not len(): PageView is the biggest table here."""
+        """Total page views from all users.
+
+        From the queryset annotation when there is one -- a lot list showing this column would
+        otherwise count rows of the biggest table on the site once per row. COUNT(*) rather than
+        len() of a queryset either way.
+        """
+        annotated = getattr(self, "annotated_page_views", None)
+        if annotated is not None:
+            return annotated
         return self.all_page_views.count()
 
     @cached_property

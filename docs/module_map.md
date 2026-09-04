@@ -85,7 +85,7 @@ this only quotes its opening sentence.
 - **`error_views.py`** (35 lines)
   Error handlers that surface otherwise-swallowed tracebacks.
   `error_404`, `error_500`
-- **`filters.py`** (1770 lines)
+- **`filters.py`** (1790 lines)
   The search and filter boxes above every table: what a query in one of them means.
 - **`fishbase.py`** (76 lines)
   Where the species list comes from.
@@ -116,7 +116,7 @@ this only quotes its opening sentence.
 - **`model_caching.py`** (59 lines)
   ``@cached_property`` on a model, and the invalidation that makes it safe.
   `CachedPropertiesMixin`
-- **`models.py`** (14920 lines)
+- **`models.py`** (14928 lines)
   The database: 80 models, and the reason they are still in one file.
 - **`module_map.py`** (256 lines)
   The map of this repository: which module does what, generated from the modules themselves.
@@ -342,9 +342,9 @@ this only quotes its opening sentence.
 - **`test_paypal.py`** (939 lines)
   PayPal: the webhooks, their event handlers, refund idempotency and the CSV export.
   `PayPalWebhookViewTests`, `PayPalWebhookEventHandlerTests`, `RefundWebhookIdempotencyTests`, `SquarePaymentUpdatedRefundResurrectionTests`, `PayPalCSVExportTests`
-- **`test_query_counts.py`** (454 lines)
+- **`test_query_counts.py`** (497 lines)
   Query-count guards: the N+1s that were fixed, and stay fixed.
-  `QueryGrowthMixin`, `AuctionUsersTableQueryCountTests`, `AuctionLotAdminTableQueryCountTests`, `LotDetailQueryCountTests`, `InvoiceQueryCountTests`, `CachedPropertyWiringTests`, `LotListQueryCountTests`, `LotCachedPropertyTests`
+  `QueryGrowthMixin`, `AuctionUsersTableQueryCountTests`, `AuctionLotAdminTableQueryCountTests`, `LotDetailQueryCountTests`, `InvoiceQueryCountTests`, `SellerAndFeedbackQueryCountTests`, `CachedPropertyWiringTests`, `LotListQueryCountTests`, `LotCachedPropertyTests`
 - **`test_remote_print.py`** (514 lines)
   Part R — printing from a computer to the phone's Bluetooth label printer.
 - **`test_security.py`** (314 lines)
@@ -679,7 +679,7 @@ Every view on the site, split by what part of it the view belongs to.
   `InboundEmailRoutingView`, `verify_discord_signature`, `assign_discord_role`, `DiscordInteractionsView`, `LotBapPointsView`, `ClubDiscordConfigView`, `ClubDiscordFetchRolesView`, `ClubDiscordEditRoleView`, `ClubDiscordSetDefaultRoleView`, `ClubDiscordSendJoinMessageView`
 - **`embeds.py`** (693 lines)
   The snippets a club puts on its own website, and the pages behind them.
-- **`exports.py`** (978 lines)
+- **`exports.py`** (992 lines)
   Taking data back out: the CSV exports, the reports, and the mailing list.
 - **`invoices.py`** (391 lines)
   Invoices as a person reads them: the list, one invoice, and the no-login link.

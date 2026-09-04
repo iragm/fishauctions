@@ -248,6 +248,49 @@ class InvoiceQueryCountTests(StandardTestCase):
         self.assertEqual(lot.winner_as_str, str(self.tosB))
 
 
+class SellerAndFeedbackQueryCountTests(QueryGrowthMixin, StandardTestCase):
+    """Two lists a member sees of their own lots: /selling/ and /feedback/."""
+
+    def setUp(self):
+        super().setUp()
+        self.client = Client()
+        self.client.force_login(self.user)
+        self._next = 0
+
+    def _make_lots(self, count):
+        for _ in range(count):
+            self._next += 1
+            Lot.objects.create(
+                lot_name=f"seller lot {self._next}",
+                auction=self.online_auction,
+                auctiontos_seller=self.online_tos,
+                auctiontos_winner=self.tosB,
+                user=self.user,
+                winning_price=5,
+                quantity=1,
+            )
+
+    def test_selling_does_not_query_per_lot(self):
+        """The Views column here is a COUNT on the biggest table on the site -- annotated, not per row."""
+        added, rows = self.queries_per_extra_row(reverse("selling"), {}, self._make_lots)
+        self.assertEqual(added, 0, f"{added} queries for {rows} more lots on /selling/")
+
+    def test_feedback_does_not_query_per_lot(self):
+        url = reverse("feedback")
+        self.client.get(url)
+        with CaptureQueriesContext(connection) as before:
+            self.assertEqual(self.client.get(url).status_code, 200)
+        self._make_lots(4)
+        with CaptureQueriesContext(connection) as after:
+            self.assertEqual(self.client.get(url).status_code, 200)
+        self.assertLessEqual(
+            len(after.captured_queries),
+            len(before.captured_queries),
+            f"/feedback/ went from {len(before.captured_queries)} to {len(after.captured_queries)} "
+            "queries with four more lots -- each row names the other party and links to the lot",
+        )
+
+
 class CachedPropertyWiringTests(StandardTestCase):
     """A model with a ``cached_property`` must be able to drop it.
 
