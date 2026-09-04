@@ -523,8 +523,11 @@ window.onload = function() {
       }
     </script>
     <!-- <script type="text/javascript" src="https://unpkg.com/htmx.org@1.8.0/dist/htmx.js"></script>-->
-    <script type="text/javascript" src="{% static 'js/htmx.min.js' defer %}"></script>
-    <script type="text/javascript" src="{% static 'js/ws.js' defer %}"></script>
+    {% comment %}defer belongs on the script element. Inside {% static %} it is an extra argument
+    the tag silently ignores, so these two have been loading render-blocking since they were
+    written -- the intent was clearly the opposite.{% endcomment %}
+    <script type="text/javascript" src="{% static 'js/htmx.min.js' %}" defer></script>
+    <script type="text/javascript" src="{% static 'js/ws.js' %}" defer></script>
     {# CRSF for use with HTMX #}
     <script>
       document.body.addEventListener('htmx:configRequest', (event) => {

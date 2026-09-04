@@ -107,11 +107,11 @@ Ordered by (traffic x cost). Status: `todo` | `wip` | `done` | `n/a`.
 | 15 | Selling / bulk add / bulk actions | `views/selling.py`, `views/bulk_add*.py`, `views/bulk_actions.py` | partial -- /selling/ and /feedback/ done; the bulk write paths are not measured |
 | 16 | Payments / webhooks / integrations | `views/payments.py`, `views/webhooks.py`, `views/club_integrations.py` | done -- measured flat |
 | 17 | Exports, printing, labels | `views/exports.py`, `views/printing.py`, `printer_*.py` | done |
-| 18 | Species matching + search cache | `species_matching.py`, `species_categories.py`, `views/species.py` | todo |
+| 18 | Species matching + search cache | `species_matching.py`, `species_categories.py`, `views/species.py` | done -- measured, 3-4 queries a call |
 | 19 | Forms | `forms.py` (7089 lines -- querysets built per form instance) | done -- the form-heavy pages measured flat |
 | 20 | Django admin | `admin.py` | not done -- staff-only, and not on the measured URL map |
 | 21 | Indexes + model `Meta` sweep | `models.py` Meta classes vs. the filters actually used | done |
-| 22 | Static/template rendering waste | `templates/`, `base.html`, vendored JS/CSS payload | todo |
+| 22 | Static/template rendering waste | `templates/`, `base.html`, vendored JS/CSS payload | partial -- caching headers and the broken `defer` done; the head scripts need an inline-script audit first |
 | 23 | Settings / infra | `settings.py`, `gunicorn.conf.py`, cache config, `docker-compose.yaml` | done |
 
 ## Pass log
@@ -119,6 +119,32 @@ Ordered by (traffic x cost). Status: `todo` | `wip` | `done` | `n/a`.
 Newest first.
 
 <!-- PASS LOG START -->
+
+### Pass 17 -- Front end: caching headers and a `defer` that never was  *(areas 18, 22, done)*
+
+Not the database for once.
+
+- **`/static/` and `/media/` had no caching policy at all.** Every navigation revalidated the six
+  scripts and stylesheets `base.html` loads, and every lot image. They now say
+  `Cache-Control: public, max-age=3600` and `max-age=2592000` respectively
+  (`nginx_fishauctions.conf`, which both dev and prod include). One hour on static and not longer
+  because these filenames are **not content-hashed** -- Django's plain `StaticFilesStorage` -- so a
+  deploy has to wait out whatever we set. Media is thirty days because an uploaded file is written
+  once under a name Django makes unique and never edited in place.
+- **`{% static 'js/htmx.min.js' defer %}`** -- `defer` inside the tag is an extra argument the
+  `static` tag silently ignores, so the two scripts somebody meant to defer had been loading
+  render-blocking ever since. The attribute is on the `<script>` element now.
+
+Species matching (area 18) was measured rather than changed: the suggestion endpoint the lot form
+calls is 4 queries and `exact_matches` is 3, which is what that work costs.
+
+**The next front-end win, deliberately not taken:** `base.html` loads six render-blocking scripts
+in `<head>` (jQuery, Bootstrap, and four of ours). Deferring them would measurably improve first
+paint, but templates all over the site have inline `<script>` blocks that call `$(...)` while the
+page parses, and every one of those would break. It needs an audit of the inline scripts first,
+which is its own piece of work. Content-hashed static filenames
+(`ManifestStaticFilesStorage` + `max-age=31536000, immutable`) belong in the same piece.
+
 
 ### Pass 16 -- Code review, and two things it caught
 
