@@ -191,6 +191,24 @@ class AuctionBulkPrintingPDF(LotLabelView):
         return handler(request, *args, **kwargs)
 
 
+def _lots_with_people(lots):
+    """A lot queryset that already knows its seller and winner, and where each of them collects.
+
+    Both location CSVs print those for every row, and reading them one lot at a time was four
+    queries a row: the AuctionTOS, its pickup location, and the auction that
+    ``AuctionTOS.display_name`` consults to decide between a name and a bidder number.
+    """
+    return lots.select_related(
+        "auction",
+        "auctiontos_seller__pickup_location",
+        "auctiontos_seller__auction",
+        "auctiontos_seller__user__userdata",
+        "auctiontos_winner__pickup_location",
+        "auctiontos_winner__auction",
+        "auctiontos_winner__user__userdata",
+    )
+
+
 class PickupLocationsIncoming(View, AuctionViewMixin):
     """All lots destined for this location"""
 
@@ -202,7 +220,8 @@ class PickupLocationsIncoming(View, AuctionViewMixin):
             return super().dispatch(request, *args, **kwargs)
 
     def get(self, request):
-        queryset = self.location.incoming_lots.order_by("-auctiontos_seller__name")
+        # each row prints the winner, the seller and where the lot is coming from
+        queryset = _lots_with_people(self.location.incoming_lots).order_by("-auctiontos_seller__name")
         response = HttpResponse(content_type="text/csv")
         name = self.location.name.lower().replace(" ", "_")
         response["Content-Disposition"] = f'attachment; filename="incoming_lots_destined_for_{name}.csv"'
@@ -241,7 +260,8 @@ class PickupLocationsOutgoing(View, AuctionViewMixin):
             return super().dispatch(request, *args, **kwargs)
 
     def get(self, request):
-        queryset = self.location.outgoing_lots.order_by("-auctiontos_winner__pickup_location__name")
+        # each row prints the winner, the seller and where the lot is going
+        queryset = _lots_with_people(self.location.outgoing_lots).order_by("-auctiontos_winner__pickup_location__name")
         response = HttpResponse(content_type="text/csv")
         name = self.location.name.lower().replace(" ", "_")
         response["Content-Disposition"] = f'attachment; filename="outgoing_lots_coming_from_{name}.csv"'

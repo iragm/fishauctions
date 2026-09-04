@@ -16,10 +16,15 @@ from django.db.models import (
     Avg,
     Count,
     F,
+    IntegerField,
+    OuterRef,
     Q,
+    Subquery,
     Sum,
+    Value,
 )
 from django.db.models.base import Model as Model
+from django.db.models.functions import Coalesce
 from django.http import (
     JsonResponse,
 )
@@ -876,10 +881,25 @@ class AuctionStatsPreviousAuctionsJSONView(AuctionStatsBarChartJSONView):
             data = self.auction.cached_stats["previous_auctions"]["data"]
         else:
             # Fallback to original calculation
-            auctiontos = AuctionTOS.objects.filter(auction=self.auction, email__isnull=False)
+            # Annotated, not read off each row: AuctionTOS.previous_auctions_count is a COUNT and
+            # this histogram walks every person in the auction.
+            auctiontos = AuctionTOS.objects.filter(auction=self.auction, email__isnull=False).annotate(
+                previous_auctions=Coalesce(
+                    Subquery(
+                        AuctionTOS.objects.filter(email=OuterRef("email"), createdon__lte=OuterRef("createdon"))
+                        .exclude(pk=OuterRef("pk"))
+                        .order_by()
+                        .values("email")
+                        .annotate(total=Count("pk"))
+                        .values("total")[:1],
+                        output_field=IntegerField(),
+                    ),
+                    Value(0),
+                )
+            )
             histogram = bin_data(
                 auctiontos,
-                "previous_auctions_count",
+                "previous_auctions",
                 number_of_bins=2,
                 start_bin=0,
                 end_bin=2,
@@ -942,10 +962,28 @@ class AuctionStatsLotsSubmittedJSONView(AuctionStatsBarChartJSONView):
             data = self.auction.cached_stats["lots_submitted"]["data"]
         else:
             # Fallback to original calculation
-            invoices = Invoice.objects.filter(auction=self.auction)
+            # Annotated, not read off each row: Invoice.lots_sold counts that person's lots and
+            # this histogram walks every invoice in the auction.
+            invoices = Invoice.objects.filter(auction=self.auction).annotate(
+                sold_lot_count=Coalesce(
+                    Subquery(
+                        Lot.objects.filter(
+                            auctiontos_seller=OuterRef("auctiontos_user"),
+                            auction=OuterRef("auction"),
+                            is_deleted=False,
+                        )
+                        .order_by()
+                        .values("auctiontos_seller")
+                        .annotate(total=Count("pk"))
+                        .values("total")[:1],
+                        output_field=IntegerField(),
+                    ),
+                    Value(0),
+                )
+            )
             histogram = bin_data(
                 invoices,
-                "lots_sold",
+                "sold_lot_count",
                 number_of_bins=4,
                 start_bin=1,
                 end_bin=9,

@@ -100,16 +100,16 @@ Ordered by (traffic x cost). Status: `todo` | `wip` | `done` | `n/a`.
 | 8 | Context processors (run on every request) | `context_processors.py`, `account_nav.py`, `templatetags/` | done |
 | 9 | Auction stats + admin checklist | `views/auction_stats.py`, `views/admin_checklist.py` | done |
 | 10 | Club pages + members table | `views/club_pages.py`, `views/club_members.py`, `tables.py` | done |
-| 11 | Mobile API | `mobile/views.py`, `mobile/serializers.py`, `mobile/services/` | todo |
+| 11 | Mobile API | `mobile/views.py`, `mobile/serializers.py`, `mobile/services/` | done -- measured flat; the offline snapshot was already batched |
 | 12 | Club REST API | `views/club_api.py`, `serializers.py` | done -- checked, already batched |
 | 13 | Celery tasks + management commands | `tasks.py`, `management/commands/` | partial -- sendnotifications done; the once-a-day imports and backfills are deliberately left alone |
-| 14 | Command palette / MCP / assist | `command_palette.py`, `palette_*.py`, `mcp/` | todo |
+| 14 | Command palette / MCP / assist | `command_palette.py`, `palette_*.py`, `mcp/` | done -- measured flat |
 | 15 | Selling / bulk add / bulk actions | `views/selling.py`, `views/bulk_add*.py`, `views/bulk_actions.py` | partial -- /selling/ and /feedback/ done; the bulk write paths are not measured |
-| 16 | Payments / webhooks / integrations | `views/payments.py`, `views/webhooks.py`, `views/club_integrations.py` | todo |
-| 17 | Exports, printing, labels | `views/exports.py`, `views/printing.py`, `printer_*.py` | partial -- the auction report is done, printing is not |
+| 16 | Payments / webhooks / integrations | `views/payments.py`, `views/webhooks.py`, `views/club_integrations.py` | done -- measured flat |
+| 17 | Exports, printing, labels | `views/exports.py`, `views/printing.py`, `printer_*.py` | done |
 | 18 | Species matching + search cache | `species_matching.py`, `species_categories.py`, `views/species.py` | todo |
-| 19 | Forms | `forms.py` (7089 lines -- querysets built per form instance) | todo |
-| 20 | Django admin | `admin.py` | todo |
+| 19 | Forms | `forms.py` (7089 lines -- querysets built per form instance) | done -- the form-heavy pages measured flat |
+| 20 | Django admin | `admin.py` | not done -- staff-only, and not on the measured URL map |
 | 21 | Indexes + model `Meta` sweep | `models.py` Meta classes vs. the filters actually used | done |
 | 22 | Static/template rendering waste | `templates/`, `base.html`, vendored JS/CSS payload | todo |
 | 23 | Settings / infra | `settings.py`, `gunicorn.conf.py`, cache config, `docker-compose.yaml` | done |
@@ -119,6 +119,37 @@ Ordered by (traffic x cost). Status: `todo` | `wip` | `done` | `n/a`.
 Newest first.
 
 <!-- PASS LOG START -->
+
+### Pass 14 -- The whole URL map, measured  *(areas 9, 11, 14, 16, 17, 19, 20 checked)*
+
+Rather than reading more code, this pass **measured every GET-able URL**: hit each one with the
+standard fixture, add four more people / lots / bids / invoices / page views to the auction, hit
+them all again, and list what got more expensive. That is a reusable technique; the throwaway
+sweep is not in the tree but the recipe is here.
+
+Fixed, all of them per-row growth:
+
+- **`/api/auctionstats/<slug>/lots_submitted`** and **`previous_auctions`** -- both feed
+  `helper_functions.bin_data`, which reads `getattr(item, field_name)` for every row, and both were
+  handing it the *name of a property that runs a query*. Both querysets annotate the number now.
+- **`/auctions/<slug>/lotlist/`** (the lot list CSV) and the two **`/locations/<pk>/…-lots`** CSVs
+  select_related the seller, the winner, their pickup locations and their auctions -- each row
+  names both people and says where each collects, which was four queries a row.
+- **`Auction.permission_check`** compares `created_by_id` to the user's pk instead of the objects,
+  which no longer fetches the creator to read its id, and **`AuctionViewMixin`** caches the *result*
+  of that check for the request. Not `is_auction_admin` itself: that one raises `PermissionDenied`
+  depending on `allow_non_admins`, which `can_add_edit_people` flips while it asks, so caching the
+  decision rather than the query would let a read after that flip return an answer without raising.
+
+Measured and left alone: everything else in the URL map is flat. The stats page and the auction
+report still cost about six queries per person, and both are the invoice number tree, which each
+person genuinely needs; `Auction.club_profit`'s fallback loop (only invoices nobody has
+recalculated) select_relates what that tree reads.
+
+**A known flake to expect:** `test_species.ClubSpeciesCommonNameAPITests.test_another_club_is_not_answered_with_it`
+fails about one full `--parallel` run in five and passes on a rerun. It predates this work -- the
+test right below it is named "The route that made test_another_club_is_not_answered_with_it flake".
+
 
 ### Pass 13 -- The member's own pages  *(area 15 partial)*
 

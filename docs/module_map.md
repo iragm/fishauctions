@@ -116,7 +116,7 @@ this only quotes its opening sentence.
 - **`model_caching.py`** (59 lines)
   ``@cached_property`` on a model, and the invalidation that makes it safe.
   `CachedPropertiesMixin`
-- **`models.py`** (14928 lines)
+- **`models.py`** (14933 lines)
   The database: 80 models, and the reason they are still in one file.
 - **`module_map.py`** (256 lines)
   The map of this repository: which module does what, generated from the modules themselves.
@@ -635,16 +635,16 @@ Every view on the site, split by what part of it the view belongs to.
   The small endpoints the pages call, rather than the pages themselves.
 - **`auction_admin.py`** (1254 lines)
   Setting an auction up, and running the room: pickup locations, users, check-in.
-- **`auction_extras.py`** (644 lines)
+- **`auction_extras.py`** (664 lines)
   The rest of an auction's admin surface: label config, bulk printing, no-shows, chat.
 - **`auction_pages.py`** (1057 lines)
   The auction as a thing you join: the TOS, creating one, and the auction's own page.
   `AuctionTOSDelete`, `AuctionTOSAdmin`, `AuctionConfirmView`, `AuctionCreateView`, `AuctionInfo`
-- **`auction_stats.py`** (1224 lines)
+- **`auction_stats.py`** (1262 lines)
   The JSON behind the charts on one auction's stats page.
 - **`bap.py`** (621 lines)
   The breeder award program: settings, overrides, awards and the lots behind them.
-- **`base.py`** (1087 lines)
+- **`base.py`** (1099 lines)
   Shared machinery for every view on the site: the mixins that decide who may see a page.
 - **`browse.py`** (832 lines)
   The lot lists people browse, and what they do to a lot without opening it.
@@ -679,7 +679,7 @@ Every view on the site, split by what part of it the view belongs to.
   `InboundEmailRoutingView`, `verify_discord_signature`, `assign_discord_role`, `DiscordInteractionsView`, `LotBapPointsView`, `ClubDiscordConfigView`, `ClubDiscordFetchRolesView`, `ClubDiscordEditRoleView`, `ClubDiscordSetDefaultRoleView`, `ClubDiscordSendJoinMessageView`
 - **`embeds.py`** (693 lines)
   The snippets a club puts on its own website, and the pages behind them.
-- **`exports.py`** (992 lines)
+- **`exports.py`** (1004 lines)
   Taking data back out: the CSV exports, the reports, and the mailing list.
 - **`invoices.py`** (391 lines)
   Invoices as a person reads them: the list, one invoice, and the no-login link.

@@ -36,6 +36,7 @@ from django.http import (
 )
 from django.shortcuts import get_object_or_404, redirect
 from django.utils import timezone
+from django.utils.functional import cached_property
 from django.utils.html import escape
 from django_filters.views import FilterView
 from django_tables2 import SingleTableMixin
@@ -132,6 +133,17 @@ class AuctionViewMixin:
         self.get_auction(kwargs.pop("slug", ""))
         return super().dispatch(request, *args, **kwargs)
 
+    @cached_property
+    def _auction_permission(self):
+        """Whether this request's user may change this auction. One answer per request.
+
+        The *result* is cached here, not `is_auction_admin` itself: that one raises
+        PermissionDenied depending on `allow_non_admins`, which `can_add_edit_people` flips while
+        it asks. Caching the decision instead of the query would let a read after that flip return
+        an answer without raising.
+        """
+        return self.auction.permission_check(self.request.user)
+
     @property
     def is_auction_admin(self):
         """Helper function used to check and see if request.user is the creator of the auction or is someone who has been made an admin of the auction.
@@ -139,7 +151,7 @@ class AuctionViewMixin:
         if not self.auction:
             msg = "you must set self.auction (typically in dispatch) for self.is_auction_admin to be available"
             raise requests.HTTPError(msg) from None
-        result = self.auction.permission_check(self.request.user)
+        result = self._auction_permission
         if not result:
             if self.allow_non_admins:
                 # logger.debug("non-admins allowed")

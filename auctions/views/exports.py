@@ -754,7 +754,19 @@ class AuctionLotsCSV(LoginRequiredMixin, AuctionViewMixin, View):
         if custom_dropdown_enabled:
             first_row_fields.append(self.auction.custom_dropdown_name)
         writer.writerow(first_row_fields)
-        lots = self.auction.lots_qs.select_related("species", "auction")
+        # Every row names the seller and the winner and says where each of them collects, which
+        # reaches the AuctionTOS, its pickup location, and (through display_name) its auction.
+        lots = self.auction.lots_qs.select_related(
+            "species",
+            "auction",
+            "species_category",
+            "auctiontos_seller__pickup_location",
+            "auctiontos_seller__auction",
+            "auctiontos_seller__user__userdata",
+            "auctiontos_winner__pickup_location",
+            "auctiontos_winner__auction",
+            "auctiontos_winner__user__userdata",
+        )
         lots = add_price_info(lots)
         if query:
             lots = LotAdminFilter.generic(None, lots, query)

@@ -4818,7 +4818,8 @@ class Auction(CachedPropertiesMixin, models.Model):
 
     def permission_check(self, user):
         """See if `user` can make changes to this auction"""
-        if self.created_by == user:
+        if self.created_by_id and self.created_by_id == getattr(user, "pk", None):
+            # by id, so the creator is not fetched just to compare them
             return True
         if user.is_superuser:
             return True
@@ -5106,7 +5107,11 @@ class Auction(CachedPropertiesMixin, models.Model):
         total_net = invoices.filter(calculated_total__isnull=False).aggregate(total=Sum("calculated_total"))[
             "total"
         ] or Decimal("0.00")
-        for invoice in invoices.filter(calculated_total__isnull=True):
+        # The fallback: an invoice nobody has recalculated yet has to be worked out live, and that
+        # reaches its auction and club. Usually an empty queryset.
+        for invoice in invoices.filter(calculated_total__isnull=True).select_related(
+            "auction__club", "club", "auctiontos_user"
+        ):
             total_net += Decimal(invoice.rounded_net)
         # calculated_total is negative when a buyer owes the club, so negate (never abs()) to make a
         # club gain positive while keeping a genuine loss negative.
