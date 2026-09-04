@@ -120,6 +120,29 @@ Newest first.
 
 <!-- PASS LOG START -->
 
+### Pass 15 -- One declarative rule for stale caches  *(review of the campaign so far)*
+
+Five models had grown a hand-written `save()` (and sometimes `delete()`) that dropped the caches on
+the row they hang off. Reviewing them together showed the same twelve lines five times over, and
+**two gaps**: nothing invalidated `Lot.images` when a `LotImage` was written, or
+`Lot.number_of_watchers` when somebody watched a lot.
+
+`InvalidatesRelatedCache` in `auctions/model_caching.py` replaces all five with a declaration:
+
+```python
+class Bid(InvalidatesRelatedCache, models.Model):
+    invalidates_cache_on = ("lot_number",)
+```
+
+Now on `Bid`, `PickupLocation`, `AuctionTOS`, `InvoiceAdjustment`, `InvoicePayment`,
+`VolunteerSignup`, and -- newly -- `LotImage` and `Watch`. It reaches the related object through
+`fields_cache`, so it never fetches a row just to invalidate a copy nobody is holding, and it
+handles `delete()` (reading the relation before the row goes).
+
+`test_invalidates_cache_on_names_real_foreign_keys` guards it: a typo in that tuple is otherwise
+completely silent -- nothing is invalidated and nothing complains.
+
+
 ### Pass 14 -- The whole URL map, measured  *(areas 9, 11, 14, 16, 17, 19, 20 checked)*
 
 Rather than reading more code, this pass **measured every GET-able URL**: hit each one with the

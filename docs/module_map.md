@@ -113,10 +113,10 @@ this only quotes its opening sentence.
 - **`middleware.py`** (64 lines)
   Custom middleware for the auctions application.
   `MobileAppMiddleware`
-- **`model_caching.py`** (59 lines)
+- **`model_caching.py`** (99 lines)
   ``@cached_property`` on a model, and the invalidation that makes it safe.
-  `CachedPropertiesMixin`
-- **`models.py`** (14933 lines)
+  `InvalidatesRelatedCache`, `CachedPropertiesMixin`
+- **`models.py`** (14895 lines)
   The database: 80 models, and the reason they are still in one file.
 - **`module_map.py`** (256 lines)
   The map of this repository: which module does what, generated from the modules themselves.
@@ -342,7 +342,7 @@ this only quotes its opening sentence.
 - **`test_paypal.py`** (939 lines)
   PayPal: the webhooks, their event handlers, refund idempotency and the CSV export.
   `PayPalWebhookViewTests`, `PayPalWebhookEventHandlerTests`, `RefundWebhookIdempotencyTests`, `SquarePaymentUpdatedRefundResurrectionTests`, `PayPalCSVExportTests`
-- **`test_query_counts.py`** (497 lines)
+- **`test_query_counts.py`** (524 lines)
   Query-count guards: the N+1s that were fixed, and stay fixed.
   `QueryGrowthMixin`, `AuctionUsersTableQueryCountTests`, `AuctionLotAdminTableQueryCountTests`, `LotDetailQueryCountTests`, `InvoiceQueryCountTests`, `SellerAndFeedbackQueryCountTests`, `CachedPropertyWiringTests`, `LotListQueryCountTests`, `LotCachedPropertyTests`
 - **`test_remote_print.py`** (514 lines)

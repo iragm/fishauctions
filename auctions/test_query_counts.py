@@ -299,6 +299,33 @@ class CachedPropertyWiringTests(StandardTestCase):
     lives. Nothing else notices, so this does.
     """
 
+    def test_invalidates_cache_on_names_real_foreign_keys(self):
+        """A typo in `invalidates_cache_on` is silent: nothing is invalidated and nothing complains."""
+        from django.apps import apps
+
+        from auctions.model_caching import CachedPropertiesMixin, InvalidatesRelatedCache
+
+        problems = []
+        for model in apps.get_app_config("auctions").get_models():
+            if not issubclass(model, InvalidatesRelatedCache):
+                continue
+            if not model.invalidates_cache_on:
+                problems.append(f"{model.__name__} mixes in InvalidatesRelatedCache but names nothing")
+            for name in model.invalidates_cache_on:
+                try:
+                    field = model._meta.get_field(name)
+                except Exception:
+                    problems.append(f"{model.__name__}.{name} is not a field")
+                    continue
+                if not (field.many_to_one or field.one_to_one) or not field.concrete:
+                    problems.append(f"{model.__name__}.{name} is not a forward foreign key")
+                elif not issubclass(field.related_model, CachedPropertiesMixin):
+                    problems.append(
+                        f"{model.__name__}.{name} points at {field.related_model.__name__}, "
+                        "which has no invalidate_cached_properties()"
+                    )
+        self.assertEqual(problems, [], "; ".join(problems))
+
     def test_every_model_with_a_cached_property_can_invalidate_it(self):
         from django.apps import apps
         from django.utils.functional import cached_property

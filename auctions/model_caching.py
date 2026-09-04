@@ -10,14 +10,54 @@ Two rules keep it correct, and :class:`CachedPropertiesMixin` implements the fir
   own write. That is automatic here rather than left to callers, because a stale read is a wrong
   page rather than an error and would be found in production instead of in review.
 * **A write to a different table needs somebody to say so.** ``bid_on_lot`` saves a ``Bid`` and then
-  asks the lot who the high bidder is now; no ``Lot.save()`` happened, so ``Bid.save()`` invalidates
-  the lot it was built with -- at the write, not at every call site. Copy that shape for the next
-  such pair rather than sprinkling invalidation through the views.
+  asks the lot who the high bidder is now; no ``Lot.save()`` happened. :class:`InvalidatesRelatedCache`
+  is how that is declared -- ``Bid.invalidates_cache_on = ("lot_number",)`` -- at the write, not at
+  every call site.
 
 Which properties are cached, and why each one was worth it, is in ``OPTIMIZATION.md``.
 """
 
 from django.utils.functional import cached_property
+
+
+class InvalidatesRelatedCache:
+    """Drop the cached properties on the rows this one is derived from, whenever it is written.
+
+    The other half of the problem :class:`CachedPropertiesMixin` solves. A cached value goes stale
+    when a *different* table changes under it -- ``Lot.bids`` when a ``Bid`` is saved,
+    ``Auction.locations`` when a ``PickupLocation`` is added, ``VolunteerJob.signups_count`` when
+    somebody signs up -- and the write is the only place that cannot be forgotten. Every one of
+    these was found by a test failing after the property it feeds was cached.
+
+    Name the forward foreign keys in ``invalidates_cache_on``. Only instances the caller is already
+    holding are touched (they are reached through ``fields_cache``), so this never fetches a row
+    just to invalidate a copy nobody has -- which is also why it cannot help a caller holding an
+    object from *before* an HTTP request; there, re-read.
+
+    Mix in **before** ``models.Model``, and before ``CachedPropertiesMixin`` when a model has both.
+    """
+
+    #: Forward FK names whose target should have its cached properties dropped on write.
+    invalidates_cache_on = ()
+
+    def _invalidate_related_caches(self):
+        for name in self.invalidates_cache_on:
+            related = self._state.fields_cache.get(name)
+            if related is not None:
+                related.invalidate_cached_properties()
+
+    def save(self, *args, **kwargs):
+        super().save(*args, **kwargs)
+        self._invalidate_related_caches()
+
+    def delete(self, *args, **kwargs):
+        # read the related objects before the delete clears anything
+        related = [self._state.fields_cache.get(name) for name in self.invalidates_cache_on]
+        result = super().delete(*args, **kwargs)
+        for obj in related:
+            if obj is not None:
+                obj.invalidate_cached_properties()
+        return result
 
 
 class CachedPropertiesMixin:

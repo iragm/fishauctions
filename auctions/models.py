@@ -100,7 +100,7 @@ from .email_routing import (
 )
 from .helper_functions import bin_data, get_currency_symbol
 from .html_sanitize import sanitize_summernote_html
-from .model_caching import CachedPropertiesMixin
+from .model_caching import CachedPropertiesMixin, InvalidatesRelatedCache
 
 logger = logging.getLogger(__name__)
 
@@ -6580,11 +6580,14 @@ class Auction(CachedPropertiesMixin, models.Model):
         )
 
 
-class PickupLocation(CachedPropertiesMixin, models.Model):
+class PickupLocation(InvalidatesRelatedCache, CachedPropertiesMixin, models.Model):
     """
     A pickup location associated with an auction
     A given auction can have multiple pickup locations
     """
+
+    # Auction.locations, and the dozen properties derived from it
+    invalidates_cache_on = ("auction",)
 
     name = models.CharField(max_length=70, default="", blank=True, null=True)
     name.help_text = "Location name shown to users.  e.x. University Mall in VT"
@@ -6657,16 +6660,6 @@ class PickupLocation(CachedPropertiesMixin, models.Model):
             return True
         return False
 
-    def save(self, *args, **kwargs):
-        super().save(*args, **kwargs)
-        # Auction caches its location list and the dozen properties derived from it, and adding or
-        # editing a location is the thing that makes those wrong. Same shape as Bid.save() dropping
-        # Lot.bids: done at the write, so no caller has to remember. fields_cache, not self.auction,
-        # so a location built from an auction pk alone does not fetch one to invalidate.
-        auction = self._state.fields_cache.get("auction")
-        if auction is not None:
-            auction.invalidate_cached_properties()
-
     @property
     def user_list(self):
         """All auctiontos associated with this location"""
@@ -6736,9 +6729,12 @@ class AuctionIgnore(models.Model):
         verbose_name_plural = "User ignoring auction"
 
 
-class AuctionTOS(CachedPropertiesMixin, models.Model):
+class AuctionTOS(InvalidatesRelatedCache, CachedPropertiesMixin, models.Model):
     """Models how a user engages with an auction and is the basis for the user view when running an auction
     Usually this will correspond with a single person which may or may not also be a user"""
+
+    # the auction caches its participant counts
+    invalidates_cache_on = ("auction",)
 
     user = models.ForeignKey(User, on_delete=models.SET_NULL, blank=True, null=True)
     auction = models.ForeignKey(Auction, on_delete=models.CASCADE)
@@ -7356,11 +7352,6 @@ class AuctionTOS(CachedPropertiesMixin, models.Model):
             needs_history = False
 
         super().save(*args, **kwargs)
-        # The auction caches its participant counts, the same way it caches its location list.
-        # fields_cache, so this only touches an Auction the caller is already holding.
-        auction = self._state.fields_cache.get("auction")
-        if auction is not None:
-            auction.invalidate_cached_properties()
 
         # Create history entry after save (needs pk to exist)
         if needs_history:
@@ -11280,8 +11271,11 @@ class Invoice(CachedPropertiesMixin, models.Model):
         return entries
 
 
-class InvoiceAdjustment(models.Model):
+class InvoiceAdjustment(InvalidatesRelatedCache, models.Model):
     """Alteration to a specific invoice"""
+
+    # every number on the invoice is derived from these
+    invalidates_cache_on = ("invoice",)
 
     invoice = models.ForeignKey("Invoice", null=True, blank=True, on_delete=models.CASCADE)
     user = models.ForeignKey(User, blank=True, null=True, on_delete=models.SET_NULL)
@@ -11300,22 +11294,6 @@ class InvoiceAdjustment(models.Model):
     )
     amount = models.PositiveIntegerField(default=0, validators=[MinValueValidator(0)])
     notes = models.CharField(max_length=150, default="")
-
-    def save(self, *args, **kwargs):
-        super().save(*args, **kwargs)
-        self._invalidate_invoice()
-
-    def delete(self, *args, **kwargs):
-        invoice = self._state.fields_cache.get("invoice")
-        super().delete(*args, **kwargs)
-        if invoice is not None:
-            invoice.invalidate_cached_properties()
-
-    def _invalidate_invoice(self):
-        """Every number on the invoice is cached on the instance, and this changed one of them."""
-        invoice = self._state.fields_cache.get("invoice")
-        if invoice is not None:
-            invoice.invalidate_cached_properties()
 
     @property
     def formatted_float_value(self):
@@ -11340,11 +11318,14 @@ class InvoiceAdjustment(models.Model):
         return result
 
 
-class InvoicePayment(models.Model):
+class InvoicePayment(InvalidatesRelatedCache, models.Model):
     """
     Record of a payment applied to an Invoice (supports partial payments).
     Payments are kept separate from InvoiceAdjustments.
     """
+
+    # total_payments, and everything downstream of it
+    invalidates_cache_on = ("invoice",)
 
     PAYMENT_STATUS = (
         ("PENDING", "Pending"),
@@ -11379,13 +11360,6 @@ class InvoicePayment(models.Model):
         max_length=50, blank=True, null=True, default="PayPal"
     )  # e.g. 'paypal', 'stripe', 'cash'
     createdon = models.DateTimeField(auto_now_add=True)
-
-    def save(self, *args, **kwargs):
-        super().save(*args, **kwargs)
-        # total_payments and everything downstream of it is cached on the Invoice instance
-        invoice = self._state.fields_cache.get("invoice")
-        if invoice is not None:
-            invoice.invalidate_cached_properties()
 
     # def __str__(self):
     #     return f"Payment {self.pk} for Invoice {self.invoice_id}: {self.amount} {self.currency} ({self.status})"
@@ -11513,8 +11487,12 @@ class ClubMoney(models.Model):
         return f"{self.club}: {self.date} {self.amount} {self.get_category_display()}"
 
 
-class Bid(models.Model):
+class Bid(InvalidatesRelatedCache, models.Model):
     """Bids apply to lots"""
+
+    # bid_on_lot builds its Bid with the Lot *object* and then asks that same object who the high
+    # bidder is now, so this write has to drop lot.bids -- saving a Bid is not a Lot.save().
+    invalidates_cache_on = ("lot_number",)
 
     user = models.ForeignKey(User, on_delete=models.CASCADE)
     lot_number = models.ForeignKey(Lot, on_delete=models.CASCADE)
@@ -11530,25 +11508,19 @@ class Bid(models.Model):
     def __str__(self):
         return str(self.user) + " bid " + str(self.amount) + " on lot " + str(self.lot_number)
 
-    def save(self, *args, **kwargs):
-        super().save(*args, **kwargs)
-        # bid_on_lot builds its Bid with the Lot *object* and then asks that same object who the
-        # high bidder is now, so this write has to drop lot.bids -- saving a Bid is not a Lot.save().
-        # fields_cache, not self.lot_number: a Bid built from a pk alone must not fetch a Lot.
-        lot = self._state.fields_cache.get("lot_number")
-        if lot is not None:
-            lot.invalidate_cached_properties()
-
     def delete(self, *args, **kwargs):
         self.is_deleted = True
         self.save()
 
 
-class Watch(models.Model):
+class Watch(InvalidatesRelatedCache, models.Model):
     """
     Users can watch lots.
     This adds them to a list on the users page, and sends an email 2 hours before the auction ends
     """
+
+    # Lot.number_of_watchers
+    invalidates_cache_on = ("lot_number",)
 
     user = models.ForeignKey(User, on_delete=models.CASCADE)
     lot_number = models.ForeignKey(Lot, on_delete=models.CASCADE)
@@ -13561,8 +13533,11 @@ class AuctionCampaign(CachedPropertiesMixin, models.Model):
         super().save(*args, **kwargs)
 
 
-class LotImage(CloudflareImageMixin, models.Model):
+class LotImage(InvalidatesRelatedCache, CloudflareImageMixin, models.Model):
     """An image that belongs to a lot.  Each lot can have multiple images"""
+
+    # Lot.images is a cached list, and image_count and thumbnail read it
+    invalidates_cache_on = ("lot_number",)
 
     PIC_CATEGORIES = (
         ("ACTUAL", "This picture is of the exact item"),
@@ -14380,9 +14355,13 @@ class VolunteerJob(CachedPropertiesMixin, models.Model):
         return max(0, self.people_needed - self.signups_count)
 
 
-class VolunteerSignup(models.Model):
+class VolunteerSignup(InvalidatesRelatedCache, models.Model):
     """One person signing up for a VolunteerJob. Hangs off AuctionTOS (not User) because the bounty is
     an invoice adjustment and invoices key off the in-auction identity."""
+
+    # signups_count is cached on the job, and the signup view asks whether the job is full both
+    # before and after creating one of these
+    invalidates_cache_on = ("job",)
 
     job = models.ForeignKey(VolunteerJob, on_delete=models.CASCADE, related_name="signups")
     auctiontos = models.ForeignKey(AuctionTOS, on_delete=models.CASCADE)
@@ -14394,23 +14373,6 @@ class VolunteerSignup(models.Model):
 
     def __str__(self):
         return f"{self.auctiontos} signed up for {self.job}"
-
-    def save(self, *args, **kwargs):
-        super().save(*args, **kwargs)
-        self._invalidate_job()
-
-    def delete(self, *args, **kwargs):
-        job = self._state.fields_cache.get("job")
-        super().delete(*args, **kwargs)
-        if job is not None:
-            job.invalidate_cached_properties()
-
-    def _invalidate_job(self):
-        """signups_count is cached on the job, and the signup view asks whether the job is full
-        both before and after creating one of these."""
-        job = self._state.fields_cache.get("job")
-        if job is not None:
-            job.invalidate_cached_properties()
 
 
 class LotQueueEntry(models.Model):
