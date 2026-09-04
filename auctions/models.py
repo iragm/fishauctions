@@ -49,7 +49,6 @@ import channels.layers
 import pytz
 from asgiref.sync import async_to_sync
 from autoslug import AutoSlugField
-from bs4 import BeautifulSoup
 from django.conf import settings
 from django.contrib.auth.hashers import check_password, make_password
 from django.contrib.auth.models import User
@@ -100,6 +99,7 @@ from .email_routing import (
     sender_with_display_name,
 )
 from .helper_functions import bin_data, get_currency_symbol
+from .html_sanitize import sanitize_summernote_html
 from .model_caching import CachedPropertiesMixin
 
 logger = logging.getLogger(__name__)
@@ -565,117 +565,6 @@ def guess_category(text):
         logger.debug("%s, %s", Category.objects.filter(pk=key).first(), value)
         return Category.objects.filter(pk=key).first()
     return None
-
-
-# Tags Summernote legitimately emits for rich-text formatting. Anything not on this
-# allowlist is stripped. An allowlist (unlike the previous fixed blocklist) can't be
-# bypassed by novel or foreign elements -- e.g. <svg>/<math>, which open a foreign
-# parsing context that browsers use for mutation-XSS and which no blocklist enumerates
-# completely.
-ALLOWED_SUMMERNOTE_TAGS = frozenset(
-    {
-        "a", "abbr", "b", "blockquote", "br", "caption", "cite", "code", "col",
-        "colgroup", "dd", "del", "dfn", "div", "dl", "dt", "em", "figcaption",
-        "figure", "font", "h1", "h2", "h3", "h4", "h5", "h6", "hr", "i", "ins",
-        "kbd", "li", "mark", "ol", "p", "pre", "q", "s", "samp", "small", "span",
-        "strike", "strong", "sub", "sup", "table", "tbody", "td", "tfoot", "th",
-        "thead", "time", "tr", "u", "ul", "var",
-    }
-)  # fmt: skip
-
-# Disallowed tags whose *contents* must also be dropped (not just the tag itself): these
-# carry executable code, foreign (SVG/MathML) or embedded/external content, or raw-text
-# parsing contexts that mutation-XSS relies on. Any other disallowed tag is unwrapped so
-# its plain text survives.
-UNSAFE_SUMMERNOTE_TAGS = frozenset(
-    {
-        "applet", "audio", "base", "canvas", "embed", "form", "frame", "frameset",
-        "iframe", "img", "link", "map", "math", "meta", "noembed", "noscript",
-        "object", "param", "plaintext", "script", "source", "style", "svg",
-        "template", "textarea", "title", "track", "video", "xmp",
-    }
-)  # fmt: skip
-
-
-def sanitize_summernote_html(text):
-    """Remove disallowed Summernote content while preserving supported formatting."""
-    if text is None:
-        return None
-    if text == "":
-        return ""
-
-    soup = BeautifulSoup(text, "html.parser")
-
-    # Enforce the tag allowlist. ``find_all(True)`` yields tags in document order (parents
-    # before children), so decomposing a parent marks its descendants ``decomposed`` and we
-    # skip them below. Executable/foreign tags are removed with their subtree; any other
-    # unexpected tag is unwrapped so its text content is preserved.
-    for tag in soup.find_all(True):
-        if getattr(tag, "decomposed", False):
-            continue
-        name = (tag.name or "").lower()
-        if name in ALLOWED_SUMMERNOTE_TAGS:
-            continue
-        if name in UNSAFE_SUMMERNOTE_TAGS:
-            tag.decompose()
-        else:
-            tag.unwrap()
-
-    for tag in soup.find_all():
-        for attr_name, attr_value in list(tag.attrs.items()):
-            normalized_attr = attr_name.lower()
-            if normalized_attr.startswith("on"):
-                del tag[attr_name]
-                continue
-            # These are the URI-bearing attributes we allow in Summernote content.
-            if normalized_attr in {"href", "src", "xlink:href"}:
-                # Some parsers represent multi-valued attributes as lists, so normalize both cases.
-                values = attr_value if isinstance(attr_value, list) else [attr_value]
-                if any(
-                    isinstance(value, str)
-                    # Block URI schemes commonly used for script execution or local file access in user HTML,
-                    # even when attackers split the scheme name with ASCII whitespace/control characters.
-                    and re.match(
-                        r"^(?:data|file|javascript|vbscript):",
-                        re.sub(r"[\x00-\x20\x7f]+", "", value),
-                        flags=re.IGNORECASE,
-                    )
-                    for value in values
-                ):
-                    del tag[attr_name]
-
-    # Remove 'color' attribute from <font> tags
-    for tag in soup.find_all("font"):
-        if tag.has_attr("color"):
-            del tag["color"]
-
-    # Clean style attributes: remove color/background-color (unwanted formatting) and any
-    # property containing url() which could load external resources.
-    for tag in soup.find_all(style=True):
-        styles = tag["style"].split(";")
-        cleaned_styles = []
-        for style in styles:
-            if not style.strip():
-                continue
-            name, *value_parts = style.split(":", 1)
-            prop = name.strip().lower()
-            value = value_parts[0] if value_parts else ""
-            if prop in {"color", "background-color"}:
-                continue
-            if "url(" in value.lower():
-                continue
-            cleaned_styles.append(style)
-        if cleaned_styles:
-            tag["style"] = ";".join(cleaned_styles)
-        else:
-            del tag["style"]
-
-    return str(soup)
-
-
-def remove_html_color_tags(text):
-    """Compatibility wrapper for legacy callers that now performs full Summernote sanitization."""
-    return sanitize_summernote_html(text)
 
 
 def normalize_email(value):
@@ -4889,6 +4778,17 @@ class Auction(CachedPropertiesMixin, models.Model):
         """All locations associated with this auction"""
         return PickupLocation.objects.filter(auction=self.pk).order_by("name")
 
+    @cached_property
+    def locations(self):
+        """Every pickup location for this auction, fetched once. A **list**.
+
+        An auction has a handful of locations and the auction page asks about them constantly --
+        ``multi_location`` alone was twelve COUNT queries on one render, because each of the
+        properties below rebuilt ``location_qs`` and counted it again. They all read this now.
+        ``location_qs`` stays a queryset for the callers that need one (form fields, slicing).
+        """
+        return list(self.location_qs)
+
     @property
     def physical_location_qs(self):
         """Find all non-default locations"""
@@ -4896,24 +4796,36 @@ class Auction(CachedPropertiesMixin, models.Model):
         # return self.location_qs.exclude(Q(pickup_by_mail=True)|Q(is_default=True))
         return self.location_qs.exclude(pickup_by_mail=True)
 
+    @cached_property
+    def physical_locations(self):
+        """physical_location_qs, off the cached list"""
+        return [location for location in self.locations if not location.pickup_by_mail]
+
     @property
     def location_with_location_qs(self):
         """Find all locations that have coordinates - useful to see if there's an actual location associated with this auction.  By default, auctions get a location with no coordinates added"""
         return self.physical_location_qs.exclude(latitude=0, longitude=0)
 
-    @property
+    @cached_property
+    def locations_with_coordinates(self):
+        """location_with_location_qs, off the cached list"""
+        return [
+            location for location in self.physical_locations if not (location.latitude == 0 and location.longitude == 0)
+        ]
+
+    @cached_property
     def number_of_locations(self):
         """The number of physical locations this auction has"""
-        return self.physical_location_qs.count()
+        return len(self.physical_locations)
 
-    @property
+    @cached_property
     def all_location_count(self):
         """All locations, even mail"""
-        return self.location_qs.count()
+        return len(self.locations)
 
-    @property
+    @cached_property
     def allow_mailing_lots(self):
-        return self.location_qs.filter(pickup_by_mail=True).exists()
+        return any(location.pickup_by_mail for location in self.locations)
 
     @staticmethod
     def get_closest_location_distance_subquery(latitude, longitude):
@@ -5888,25 +5800,19 @@ class Auction(CachedPropertiesMixin, models.Model):
             return 0
         return (self.weekly_promo_email_clicks / self.weekly_promo_emails_sent) * 100
 
-    @property
+    @cached_property
     def multi_location(self):
         """
         True if there's more than one location at this auction
         """
-        locations = self.physical_location_qs.count()
-        if locations > 1:
-            return True
-        return False
+        return self.number_of_locations > 1
 
-    @property
+    @cached_property
     def no_location(self):
         """
         True if there's no pickup location at all for this auction -- pickup by mail excluded
         """
-        locations = self.location_with_location_qs.count()
-        if not locations:
-            return True
-        return False
+        return not self.locations_with_coordinates
 
     @property
     def can_be_deleted(self):
@@ -5955,17 +5861,24 @@ class Auction(CachedPropertiesMixin, models.Model):
         chunks = (invoices_count + chunk_size - 1) // chunk_size
         return list(range(1, chunks + 1))
 
-    @property
+    @cached_property
     def set_location_link(self):
         """If there's a location without a lat and lng, this link will let you edit the first one found"""
-        location = self.location_qs.filter(latitude=0, longitude=0, pickup_by_mail=False).first()
+        location = next(
+            (
+                candidate
+                for candidate in self.locations
+                if candidate.latitude == 0 and candidate.longitude == 0 and not candidate.pickup_by_mail
+            ),
+            None,
+        )
         if self.all_location_count == 1:
-            location = self.location_qs.first()
+            location = self.locations[0]
         if location:
             return reverse("edit_pickup", kwargs={"pk": location.pk})
         return None
 
-    @property
+    @cached_property
     def admin_checklist_mostly_completed(self):
         if (
             self.admin_checklist_location_set
@@ -5977,7 +5890,7 @@ class Auction(CachedPropertiesMixin, models.Model):
             return True
         return False
 
-    @property
+    @cached_property
     def admin_checklist_completed(self):
         if (
             self.admin_checklist_mostly_completed
@@ -5988,19 +5901,17 @@ class Auction(CachedPropertiesMixin, models.Model):
             return True
         return False
 
-    @property
+    @cached_property
     def admin_checklist_location_set(self):
-        if self.allow_mailing_lots or self.location_with_location_qs.count():
-            return True
-        return False
+        return bool(self.allow_mailing_lots or self.locations_with_coordinates)
 
-    @property
+    @cached_property
     def admin_checklist_rules_updated(self):
         if "You should remove this line and edit this section to suit your auction." in self.summernote_description:
             return False
         return True
 
-    @property
+    @cached_property
     def admin_checklist_joined(self):
         if (
             AuctionTOS.objects.filter(auction__pk=self.pk).filter(Q(user=self.created_by) | Q(is_admin=True)).count()
@@ -6009,19 +5920,19 @@ class Auction(CachedPropertiesMixin, models.Model):
             return True
         return False
 
-    @property
+    @cached_property
     def admin_checklist_others_joined(self):
         if self.number_of_confirmed_tos > 1:
             return True
         return False
 
-    @property
+    @cached_property
     def admin_checklist_lots_added(self):
         if self.lots_qs.count() > 0:
             return True
         return False
 
-    @property
+    @cached_property
     def admin_checklist_winner_set(self):
         if self.is_online:
             return True
@@ -6029,7 +5940,7 @@ class Auction(CachedPropertiesMixin, models.Model):
             return True
         return False
 
-    @property
+    @cached_property
     def admin_checklist_additional_admin(self):
         if self.is_online:
             return True
@@ -6073,12 +5984,12 @@ class Auction(CachedPropertiesMixin, models.Model):
             return None
         return event
 
-    @property
+    @cached_property
     def location_link(self):
-        if not self.location_qs.count():
+        if not self.all_location_count:
             return reverse("create_auction_pickup_location", kwargs={"slug": self.slug})
-        if self.location_qs.count() == 1 and not self.is_online:
-            return reverse("edit_pickup", kwargs={"pk": self.location_qs.first().pk})
+        if self.all_location_count == 1 and not self.is_online:
+            return reverse("edit_pickup", kwargs={"pk": self.locations[0].pk})
         return reverse("auction_pickup_location", kwargs={"slug": self.slug})
 
     @property
@@ -6845,7 +6756,7 @@ class Auction(CachedPropertiesMixin, models.Model):
         )
 
 
-class PickupLocation(models.Model):
+class PickupLocation(CachedPropertiesMixin, models.Model):
     """
     A pickup location associated with an auction
     A given auction can have multiple pickup locations
@@ -6922,12 +6833,22 @@ class PickupLocation(models.Model):
             return True
         return False
 
+    def save(self, *args, **kwargs):
+        super().save(*args, **kwargs)
+        # Auction caches its location list and the dozen properties derived from it, and adding or
+        # editing a location is the thing that makes those wrong. Same shape as Bid.save() dropping
+        # Lot.bids: done at the write, so no caller has to remember. fields_cache, not self.auction,
+        # so a location built from an auction pk alone does not fetch one to invalidate.
+        auction = self._state.fields_cache.get("auction")
+        if auction is not None:
+            auction.invalidate_cached_properties()
+
     @property
     def user_list(self):
         """All auctiontos associated with this location"""
         return AuctionTOS.objects.filter(pickup_location=self.pk)
 
-    @property
+    @cached_property
     def number_of_users(self):
         """How many people have chosen this pickup location?"""
         return self.user_list.count()
@@ -6952,29 +6873,25 @@ class PickupLocation(models.Model):
         )
         return lots
 
-    @property
+    @cached_property
     def number_of_incoming_lots(self):
         return self.incoming_lots.count()
 
-    @property
+    @cached_property
     def number_of_outgoing_lots(self):
         return self.outgoing_lots.count()
 
-    @property
+    @cached_property
     def email_list(self):
         """String of all email addresses associated with this location, used for bcc'ing all people at a location"""
-        email = ""
-        for user in self.user_list:
-            if user.email:
-                email += user.email + ", "
-        return email
+        return "".join(f"{tos.email}, " for tos in self.user_list.only("email") if tos.email)
 
-    @property
+    @cached_property
     def total_sold(self):
         lots = self.outgoing_lots.aggregate(total_winning_price=Sum("winning_price"))
         return lots["total_winning_price"] or 0
 
-    @property
+    @cached_property
     def total_bought(self):
         lots = self.incoming_lots.aggregate(total_winning_price=Sum("winning_price"))
         return lots["total_winning_price"] or 0

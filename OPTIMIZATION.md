@@ -92,7 +92,7 @@ Ordered by (traffic x cost). Status: `todo` | `wip` | `done` | `n/a`.
 |---|---|---|---|
 | 1 | Lot list pages (browse) | `views/browse.py`, `filters.py` LotFilter, `lot_tile_page.html`, `lot_list_page.html`, `Lot` read properties | done |
 | 2 | Lot detail page | `views/lot_pages.py`, `view_lot.html` | todo |
-| 3 | Auction landing + auction pages | `views/auction_pages.py`, `auction.html`, `Auction` properties | todo |
+| 3 | Auction landing + auction pages | `views/auction_pages.py`, `auction.html`, `Auction` properties | done |
 | 4 | AuctionTOS admin table | `views/auction_admin.py`, `tables.py` AuctionTOSHTMxTable, `AuctionTOS` properties | todo |
 | 5 | Invoices | `views/invoices.py`, `Invoice` properties, `invoice.html` | todo |
 | 6 | PageView write path + middleware | `middleware.py`, `signals.py`, `PageView`, `base_page_view.html` | todo |
@@ -119,6 +119,38 @@ Ordered by (traffic x cost). Status: `todo` | `wip` | `done` | `n/a`.
 Newest first.
 
 <!-- PASS LOG START -->
+
+### Pass 2 -- Auction pages and the location property family  *(area 3, done)*
+
+**`/` went 54 -> 29 queries and an auction page 48 -> 23.** Twenty-eight of the auction page's 48
+were one family of properties asking the same question over and over.
+
+- **`Auction.locations`** -- a cached list of every `PickupLocation` for the auction. `location_qs`
+  stays a queryset (form fields, slicing and `.filter()` callers need one), but the twelve things
+  derived from it now read the list: `physical_locations`, `locations_with_coordinates`,
+  `number_of_locations`, `all_location_count`, `allow_mailing_lots`, `multi_location`,
+  `no_location`, `location_link`, `set_location_link`, `admin_checklist_location_set`. `auction.html`
+  alone reads `multi_location` six times and `pickup_locations` six times.
+- **`PickupLocation.save()` invalidates its auction**, the same shape as `Bid.save()` invalidating
+  its lot. `test_auction_props` caught this immediately: it adds a location and re-reads
+  `all_location_count` on an `Auction` it is still holding.
+- **`views/auction_pages.py`**: `context["pickup_locations"]` is the cached list, not the queryset
+  (six template loops, six queries); `dispatch` calls `get_object()` once and asks for
+  `all_location_count` rather than `location_qs.count()`.
+- **`PickupLocation`**: `number_of_users`, `email_list`, `number_of_incoming_lots`,
+  `number_of_outgoing_lots`, `total_sold`, `total_bought` cached; `email_list` uses `.only("email")`.
+- **`Auction.admin_checklist_*`** (9 properties) cached -- the ribbon and the checklist page read
+  the whole family, and each one re-derives the ones before it.
+
+**New guard: `CachedPropertyWiringTests`.** Adding `@cached_property` to a model that is not a
+`CachedPropertiesMixin` compiles, passes every test, and serves values from before the row's own
+save forever. The test walks every model in the app and fails if any has one without the mixin.
+
+**`auctions/html_sanitize.py`** -- `sanitize_summernote_html` and the two tag allowlists moved out
+of `models.py` (112 lines, no model dependencies). `models.py` is on a 15000-line ratchet and this
+campaign keeps adding to it; this buys the headroom for the next few passes. Take something else out
+when it runs out again -- do not raise the number.
+
 
 ### Pass 1 -- Lot list pages (browse)  *(area 1, done)*
 

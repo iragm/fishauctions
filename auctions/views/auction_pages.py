@@ -886,9 +886,9 @@ class AuctionInfo(FormMixin, DetailView, AuctionViewMixin):
         return form_kwargs
 
     def dispatch(self, request, *args, **kwargs):
-        if self.get_object().permission_check(request.user):
-            locations = self.get_object().location_qs.count()
-            if not locations:
+        auction = self.get_object()
+        if auction.permission_check(request.user):
+            if not auction.all_location_count:
                 messages.info(
                     self.request,
                     mark_safe(
@@ -900,7 +900,7 @@ class AuctionInfo(FormMixin, DetailView, AuctionViewMixin):
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
-        context["pickup_locations"] = self.auction.location_qs
+        context["pickup_locations"] = self.auction.locations
         current_site = Site.objects.get_current()
         context["domain"] = current_site.domain
         context["google_maps_api_key"] = settings.LOCATION_FIELD["provider.google.api_key"]

@@ -104,6 +104,9 @@ this only quotes its opening sentence.
 - **`helper_functions.py`** (141 lines)
   Got sick of these being scattered all over the codebase,
   `scrub_emails`, `get_currency_symbol`, `bin_data`
+- **`html_sanitize.py`** (134 lines)
+  Sanitizing the rich text people paste into Summernote.
+  `sanitize_summernote_html`, `remove_html_color_tags`
 - **`llm.py`** (453 lines)
   Provider abstraction for everything on this site that talks to a language model.
 - **`mailchimp.py`** (735 lines)
@@ -114,7 +117,7 @@ this only quotes its opening sentence.
 - **`model_caching.py`** (52 lines)
   ``@cached_property`` on a model, and the invalidation that makes it safe.
   `CachedPropertiesMixin`
-- **`models.py`** (15000 lines)
+- **`models.py`** (14917 lines)
   The database: 80 models, and the reason they are still in one file.
 - **`module_map.py`** (256 lines)
   The map of this repository: which module does what, generated from the modules themselves.
@@ -337,9 +340,9 @@ this only quotes its opening sentence.
 - **`test_paypal.py`** (939 lines)
   PayPal: the webhooks, their event handlers, refund idempotency and the CSV export.
   `PayPalWebhookViewTests`, `PayPalWebhookEventHandlerTests`, `RefundWebhookIdempotencyTests`, `SquarePaymentUpdatedRefundResurrectionTests`, `PayPalCSVExportTests`
-- **`test_query_counts.py`** (231 lines)
+- **`test_query_counts.py`** (263 lines)
   Query-count guards: the N+1s that were fixed, and stay fixed.
-  `QueryGrowthMixin`, `LotListQueryCountTests`, `LotCachedPropertyTests`
+  `QueryGrowthMixin`, `CachedPropertyWiringTests`, `LotListQueryCountTests`, `LotCachedPropertyTests`
 - **`test_remote_print.py`** (514 lines)
   Part R — printing from a computer to the phone's Bluetooth label printer.
 - **`test_security.py`** (314 lines)

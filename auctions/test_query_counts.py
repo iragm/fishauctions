@@ -57,6 +57,38 @@ class QueryGrowthMixin:
         return len(after.captured_queries) - len(before.captured_queries), added_rows
 
 
+class CachedPropertyWiringTests(StandardTestCase):
+    """A model with a ``cached_property`` must be able to drop it.
+
+    Adding ``@cached_property`` to a model that is not a ``CachedPropertiesMixin`` compiles, passes
+    every test, and serves a value from before the row's own save for as long as the instance
+    lives. Nothing else notices, so this does.
+    """
+
+    def test_every_model_with_a_cached_property_can_invalidate_it(self):
+        from django.apps import apps
+        from django.utils.functional import cached_property
+
+        from auctions.model_caching import CachedPropertiesMixin
+
+        offenders = []
+        for model in apps.get_app_config("auctions").get_models():
+            cached = sorted(
+                name
+                for klass in model.__mro__
+                for name, value in vars(klass).items()
+                if isinstance(value, cached_property)
+            )
+            if cached and not issubclass(model, CachedPropertiesMixin):
+                offenders.append(f"{model.__name__} ({', '.join(cached)})")
+        self.assertEqual(
+            offenders,
+            [],
+            "these models have a cached_property but do not mix in CachedPropertiesMixin, so a save "
+            "leaves the cached value in place: " + "; ".join(offenders),
+        )
+
+
 class LotListQueryCountTests(QueryGrowthMixin, StandardTestCase):
     """The lot list is the most-viewed page on the site and renders ~50 lots at a time.
 

@@ -62,6 +62,7 @@ from easy_thumbnails.exceptions import EasyThumbnailsError
 from PIL import Image, ImageFile, ImageOps, UnidentifiedImageError
 
 from .helper_functions import get_currency_symbol
+from .html_sanitize import sanitize_summernote_html
 from .models import (
     Auction,
     AuctionDropdown,
@@ -97,7 +98,6 @@ from .models import (
     UserLabelPrefs,
     VolunteerJob,
     normalize_species_name,
-    sanitize_summernote_html,
 )
 from .services import auction_to_copy, clone_lot_values, user_can_clone_lot
 from .site_setup import SINGLE_CLUB_DEFAULT_MANAGE_MODE, get_single_club
