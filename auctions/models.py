@@ -12004,11 +12004,11 @@ class UserData(CachedPropertiesMixin, models.Model):
 
         return deletion_due_date(self)
 
-    @property
+    @cached_property
     def last_auction_created(self):
         return Auction.objects.filter(created_by=self.user).order_by("-date_posted").first()
 
-    @property
+    @cached_property
     def available_auctions_to_submit_lots(self):
         """Returns auctions that this user can submit lots to"""
         from django.utils import timezone
@@ -12345,30 +12345,27 @@ class UserData(CachedPropertiesMixin, models.Model):
         channel_layer = channels.layers.get_channel_layer()
         async_to_sync(channel_layer.group_send)(f"user_{self.user.pk}", message)
 
-    @property
+    @cached_property
     def my_lots_qs(self):
         """All lots this user submitted, whether in an auction, or independently"""
         return Lot.objects.filter(Q(user=self.user) | Q(auctiontos_seller__user=self.user)).exclude(is_deleted=True)
 
-    @property
+    @cached_property
     def lots_submitted(self):
         """All lots this user has submitted, including unsold"""
         return self.my_lots_qs.count()
 
-    @property
+    @cached_property
     def lots_sold(self):
         """All lots this user has sold"""
         return self.my_lots_qs.filter(winner__isnull=False).count()
 
-    @property
+    @cached_property
     def total_sold(self):
         """Total amount this user has sold on this site"""
-        total = 0
-        for lot in self.my_lots_qs.filter(winning_price__isnull=False):
-            total += lot.winning_price
-        return total
+        return self.my_lots_qs.aggregate(total=Sum("winning_price"))["total"] or 0
 
-    @property
+    @cached_property
     def species_sold(self):
         """Total different species that this user has bred and sold in auctions.
 
@@ -12381,7 +12378,7 @@ class UserData(CachedPropertiesMixin, models.Model):
         """
         return self.my_lots_qs.filter(i_bred_this_fish=True, winner__isnull=False).values("species").distinct().count()
 
-    @property
+    @cached_property
     def my_won_lots_qs(self):
         """All lots won by this user, in an auction or independently"""
         return Lot.objects.filter(
@@ -12389,41 +12386,42 @@ class UserData(CachedPropertiesMixin, models.Model):
             winning_price__isnull=False,
         ).exclude(is_deleted=True)
 
-    @property
+    @cached_property
     def lots_bought(self):
         """Total number of lots this user has purchased"""
         return self.my_won_lots_qs.count()
 
-    @property
+    @cached_property
     def lots_bought_online(self):
         """Total number of lots this user has purchased only in online auctions"""
         return self.my_won_lots_qs.filter(auction__is_online=True).count()
 
-    @property
+    @cached_property
     def total_spent(self):
         """Total amount this user has spent on this site"""
-        total = 0
-        for lot in self.my_won_lots_qs:
-            total += lot.winning_price
-        return total
+        return self.my_won_lots_qs.aggregate(total=Sum("winning_price"))["total"] or 0
 
-    @property
+    @cached_property
     def calc_total_volume(self):
         """Bought + sold"""
         return self.total_spent + self.total_sold
 
-    @property
+    @cached_property
     def total_bids(self):
         """Total number of successful bids this user has placed (max one per lot)"""
         # return len(Bid.objects.filter(user=self.user, was_high_bid=True))
-        return len(Bid.objects.exclude(is_deleted=True).filter(user=self.user))
+        return Bid.objects.exclude(is_deleted=True).filter(user=self.user).count()
 
-    @property
+    @cached_property
     def lots_viewed(self):
-        """Total lots viewed by this user"""
-        return len(PageView.objects.filter(user=self.user.pk))
+        """Total lots viewed by this user.
 
-    @property
+        COUNT(*), not len(): PageView is the biggest table on the site, and the user page asks for
+        this five times while working out its ratios.
+        """
+        return PageView.objects.filter(user=self.user.pk).count()
+
+    @cached_property
     def bought_to_sold(self):
         """Ratio of lots bought to lots sold"""
         if self.lots_sold:
@@ -12431,7 +12429,7 @@ class UserData(CachedPropertiesMixin, models.Model):
         else:
             return 0
 
-    @property
+    @cached_property
     def bid_to_view(self):
         """Ratio of lots viewed to lots bought.  Lower number is indicative of tire kicking, higher number means business"""
         if self.lots_viewed:
@@ -12439,7 +12437,7 @@ class UserData(CachedPropertiesMixin, models.Model):
         else:
             return 0
 
-    @property
+    @cached_property
     def viewed_to_sold(self):
         """Ratio of lots viewed to lots sold"""
         if self.lots_viewed:
@@ -12447,7 +12445,7 @@ class UserData(CachedPropertiesMixin, models.Model):
         else:
             return 0
 
-    @property
+    @cached_property
     def dedication(self):
         """Ratio of bids to won lots, only for online auctions"""
         if self.lots_bought_online and self.total_bids:
@@ -12455,20 +12453,20 @@ class UserData(CachedPropertiesMixin, models.Model):
         else:
             return 0
 
-    @property
+    @cached_property
     def percent_success(self):
         """Ratio of bids to won lots, formatted"""
         return self.dedication * 100
 
-    @property
+    @cached_property
     def positive_feedback_as_seller(self):
         return self.my_lots_qs.filter(feedback_rating=1).count()
 
-    @property
+    @cached_property
     def negative_feedback_as_seller(self):
         return self.my_lots_qs.filter(feedback_rating=-1).count()
 
-    @property
+    @cached_property
     def percent_positive_feedback_as_seller(self):
         positive = self.positive_feedback_as_seller
         negative = self.negative_feedback_as_seller
@@ -12476,15 +12474,15 @@ class UserData(CachedPropertiesMixin, models.Model):
             return 100
         return int((positive / (positive + negative)) * 100)
 
-    @property
+    @cached_property
     def positive_feedback_as_winner(self):
         return self.my_won_lots_qs.filter(winner_feedback_rating=1).count()
 
-    @property
+    @cached_property
     def negative_feedback_as_winner(self):
         return self.my_won_lots_qs.filter(winner_feedback_rating=-1).count()
 
-    @property
+    @cached_property
     def percent_positive_feedback_as_winner(self):
         positive = self.positive_feedback_as_winner
         negative = self.negative_feedback_as_winner
@@ -12492,15 +12490,15 @@ class UserData(CachedPropertiesMixin, models.Model):
             return 100
         return int((positive / (positive + negative)) * 100)
 
-    @property
+    @cached_property
     def auctions_created(self):
         return Auction.objects.filter(created_by__pk=self.user.pk).count()
 
-    @property
+    @cached_property
     def auctions_admined(self):
         return Auction.objects.filter(auctiontos__email=self.user.email, auctiontos__is_admin=True).count()
 
-    @property
+    @cached_property
     def auctions_i_admin(self):
         """Every auction this user may make changes to, as a queryset.
 
@@ -12525,7 +12523,7 @@ class UserData(CachedPropertiesMixin, models.Model):
             is_deleted=False,
         ).distinct()
 
-    @property
+    @cached_property
     def only_club(self):
         """The club this user obviously belongs to, or None.  Never a guess.
 
@@ -12584,7 +12582,7 @@ class UserData(CachedPropertiesMixin, models.Model):
         )
         return f"{admin_email}?subject={quote_plus(subject)}&body={quote_plus(body)}"
 
-    @property
+    @cached_property
     def runs_an_auction(self):
         """True when this user is an admin of *any* auction.
 
@@ -12706,7 +12704,7 @@ class UserData(CachedPropertiesMixin, models.Model):
                     applies_to="MEMBERS",
                 )
 
-    @property
+    @cached_property
     def currency(self):
         # First check if user has set a preferred currency
         if self.preferred_currency:

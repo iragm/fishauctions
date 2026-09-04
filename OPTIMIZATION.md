@@ -95,9 +95,9 @@ Ordered by (traffic x cost). Status: `todo` | `wip` | `done` | `n/a`.
 | 3 | Auction landing + auction pages | `views/auction_pages.py`, `auction.html`, `Auction` properties | done |
 | 4 | AuctionTOS admin table | `views/auction_admin.py`, `tables.py` AuctionTOSHTMxTable, `AuctionTOS` properties | done |
 | 5 | Invoices | `views/invoices.py`, `Invoice` properties, `invoice.html` | done |
-| 6 | PageView write path + middleware | `middleware.py`, `signals.py`, `PageView`, `base_page_view.html` | todo |
-| 7 | UserData / account pages | `views/account.py`, `UserData` properties, `account_sidebar*.html` | todo |
-| 8 | Context processors (run on every request) | `context_processors.py`, `account_nav.py`, `templatetags/` | todo |
+| 6 | PageView write path + middleware | `middleware.py`, `signals.py`, `PageView`, `base_page_view.html` | done |
+| 7 | UserData / account pages | `views/account.py`, `UserData` properties, `account_sidebar*.html` | done |
+| 8 | Context processors (run on every request) | `context_processors.py`, `account_nav.py`, `templatetags/` | done |
 | 9 | Auction stats + admin checklist | `views/auction_stats.py`, `views/admin_checklist.py` | todo |
 | 10 | Club pages + members table | `views/club_pages.py`, `views/club_members.py`, `tables.py` | todo |
 | 11 | Mobile API | `mobile/views.py`, `mobile/serializers.py`, `mobile/services/` | todo |
@@ -119,6 +119,25 @@ Ordered by (traffic x cost). Status: `todo` | `wip` | `done` | `n/a`.
 Newest first.
 
 <!-- PASS LOG START -->
+
+### Pass 6+7 -- The per-request path, and UserData  *(areas 6, 7, 8, done)*
+
+- **`add_location` no longer writes the session on every request.** It set
+  `request.session["status"] = "started"` unconditionally to force a session key into existence,
+  which marks the session modified and so writes a `django_session` row for *every page anybody
+  loads*, signed in or not. It only sets it when it is missing now.
+- **`once_per_request`** in `context_processors.py`. Django binds context processors to each new
+  `RequestContext`, so a view that renders a partial as well as its page runs the querying ones
+  twice. `user_clubs`, `label_print_method` and `site_config` are memoized on the request.
+- **`user_clubs` is one query**, through the membership rows, instead of a `values_list` of club
+  ids followed by a query for the clubs.
+- **`UserData`: 36 properties cached**, and the user page went 29 -> 18 queries. Three of them were
+  `len(queryset)` -- `lots_viewed` pulled every one of the user's `PageView` rows into Python to
+  count them, five times per render, and `PageView` is the biggest table on the site. `total_sold`
+  and `total_spent` summed in a Python loop over every lot; they `aggregate()` now.
+
+Nine `UserData` properties are deliberately **not** cached -- see "Deliberately not done".
+
 
 ### Pass 5 -- Invoices  *(area 5, done)*
 
@@ -294,6 +313,12 @@ docstrings here are terse. Anything added to it now has to take something out.
 Things that look like waste but are not, so nobody "fixes" them twice.
 
 <!-- WONTFIX START -->
+
+- **`UserData.has_push_device` and the eight subscription properties are not cached.** They change
+  inside the request that reads them: a notification run registers a device and then asks whether
+  there is one; the chat pages read the subscription list, write a message, and read it again.
+  `test_mobile_features` and `test_lot_models` both catch it, which is how they got back on this list.
+
 
 - **`Lot.bids` doing its dedupe in Python.** It looks like work that belongs in SQL, and it was in
   SQL. As a correlated subquery it cost one query per row on every lot list and could not be

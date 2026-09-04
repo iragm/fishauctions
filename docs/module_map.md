@@ -71,8 +71,7 @@ this only quotes its opening sentence.
 - **`consumers.py`** (427 lines)
   The websocket half of the site: live bidding, chat, and "somebody else just bid".
   `check_chat_permissions`, `check_all_permissions`, `post_chat_message`, `broadcast_bid_result`, `LotConsumer`, `UserConsumer`, `AuctionConsumer`
-- **`context_processors.py`** (228 lines)
-  `google_analytics`, `google_oauth`, `theme`, `add_tz`, `add_location`, `dismissed_cookies_tos`, `site_config`, `label_print_method`, `user_clubs`, `account_nav`
+- **`context_processors.py`** (260 lines)
 - **`discord_events.py`** (355 lines)
   Discord scheduled events for clubs.
   `send_channel_message`, `delete_channel_message`, `create_scheduled_event`, `cancel_scheduled_event`, `sync_club_events`, `sync_one_event`, `sync_auction_events`
@@ -117,7 +116,7 @@ this only quotes its opening sentence.
 - **`model_caching.py`** (59 lines)
   ``@cached_property`` on a model, and the invalidation that makes it safe.
   `CachedPropertiesMixin`
-- **`models.py`** (14888 lines)
+- **`models.py`** (14886 lines)
   The database: 80 models, and the reason they are still in one file.
 - **`module_map.py`** (256 lines)
   The map of this repository: which module does what, generated from the modules themselves.
