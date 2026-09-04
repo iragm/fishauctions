@@ -1448,7 +1448,7 @@ def _generate_unique_bidder_number(*, is_taken, preferred=None, phone=None, addr
     return "ERROR"
 
 
-class ClubMember(ContactRecord):
+class ClubMember(CachedPropertiesMixin, ContactRecord):
     """A member of a club. Similar to AuctionTOS but for club membership."""
 
     user = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name="club_memberships")
@@ -1757,7 +1757,7 @@ class ClubMember(ContactRecord):
             return "Active Paid Membership" if self.is_paid_member else "Unpaid Membership"
         return "Membership"
 
-    @property
+    @cached_property
     def discord_role(self):
         """Return the ClubDiscordRole that should be assigned to this member.
 
@@ -1895,7 +1895,7 @@ class ClubMember(ContactRecord):
 
         return reverse("club_member_by_uuid", kwargs={"slug": self.club.slug, "uuid": self.uuid})
 
-    @property
+    @cached_property
     def wallet_link(self):
         """Absolute URL for adding this membership to Google/Apple Wallet (UUID-keyed)."""
         from django.contrib.sites.models import Site
@@ -1908,7 +1908,7 @@ class ClubMember(ContactRecord):
             domain = "localhost"
         return f"https://{domain}{self.member_page_url}"
 
-    @property
+    @cached_property
     def simple_membership_link(self):
         """Absolute URL for the member-number page (shows number, expiration, payment)."""
         from django.contrib.sites.models import Site
@@ -1926,7 +1926,7 @@ class ClubMember(ContactRecord):
         )
         return f"https://{domain}{path}"
 
-    @property
+    @cached_property
     def barcode_image_link(self):
         """Absolute URL to an SVG barcode for this member's membership number.
 
@@ -1949,7 +1949,7 @@ class ClubMember(ContactRecord):
         )
         return f"https://{domain}{path}"
 
-    @property
+    @cached_property
     def barcode_image_link_png(self):
         """Absolute URL to a PNG barcode for this member's membership number.
 
@@ -2072,7 +2072,7 @@ class ClubMember(ContactRecord):
         # No activity ever recorded: only "inactive" once they've been around past the window.
         return bool(self.createdon and self.createdon < cutoff)
 
-    @property
+    @cached_property
     def has_auction_checkin(self):
         return self.auction_tos_records.filter(checked_in__isnull=False).exists()
 
@@ -5746,7 +5746,7 @@ class Auction(CachedPropertiesMixin, models.Model):
 
     @cached_property
     def admin_checklist_lots_added(self):
-        if self.lots_qs.count() > 0:
+        if self.lots_qs.exists():
             return True
         return False
 
@@ -5754,7 +5754,7 @@ class Auction(CachedPropertiesMixin, models.Model):
     def admin_checklist_winner_set(self):
         if self.is_online:
             return True
-        if self.lots_qs.filter(auctiontos_winner__isnull=False).count():
+        if self.lots_qs.filter(auctiontos_winner__isnull=False).exists():
             return True
         return False
 
@@ -6323,18 +6323,19 @@ class Auction(CachedPropertiesMixin, models.Model):
                 .distinct()
                 .count()
             )
-        if auctiontos.count() == 0:
+        auctiontos_count = auctiontos.count()
+        if auctiontos_count == 0:
             lot_with_buy_now_percent = 0
             account_percent = 0
             mobile_app_percent = 0
         else:
-            account_percent = int(auctiontos_with_account.count() / auctiontos.count() * 100)
-            lot_with_buy_now_percent = int(lot_with_buy_now / auctiontos.count() * 100)
-            mobile_app_percent = int(mobile_app / auctiontos.count() * 100)
-        invoices = Invoice.objects.filter(auction=self)
-        viewed_invoices = invoices.filter(opened=True)
-        if invoices.count():
-            view_invoice_percent = int(viewed_invoices.count() / invoices.count() * 100)
+            account_percent = int(auctiontos_with_account.count() / auctiontos_count * 100)
+            lot_with_buy_now_percent = int(lot_with_buy_now / auctiontos_count * 100)
+            mobile_app_percent = int(mobile_app / auctiontos_count * 100)
+        invoice_count = Invoice.objects.filter(auction=self).count()
+        if invoice_count:
+            viewed_invoices = Invoice.objects.filter(auction=self, opened=True).count()
+            view_invoice_percent = int(viewed_invoices / invoice_count * 100)
         else:
             view_invoice_percent = 0
         sold_lots = Lot.objects.filter(auction=self, auctiontos_winner__isnull=False)
@@ -8475,7 +8476,7 @@ class Lot(CachedPropertiesMixin, models.Model):
         self.partial_refund_percent = amount
         self.save()
 
-    @property
+    @cached_property
     def winner_invoice(self):
         """Get the Invoice for this lot's winner
         Returns Invoice object or None if not found
@@ -8493,7 +8494,7 @@ class Lot(CachedPropertiesMixin, models.Model):
 
         return Invoice.objects.filter(query).first()
 
-    @property
+    @cached_property
     def sellers_invoice(self):
         """Get the Invoice for this lot's seller
         Returns Invoice object or None if not found
@@ -8511,7 +8512,7 @@ class Lot(CachedPropertiesMixin, models.Model):
 
         return Invoice.objects.filter(query).first()
 
-    @property
+    @cached_property
     def square_refund_possible(self):
         """Returns True if there's a Square payment associated with this lot's invoice
         with enough funds to cover the lot's cost and no refund has been issued yet"""
@@ -8695,7 +8696,7 @@ class Lot(CachedPropertiesMixin, models.Model):
             return reverse("invoice_by_pk", kwargs={"pk": invoice.pk})
         return ""
 
-    @property
+    @cached_property
     def tos_needed(self):
         if not self.auction:
             return False
@@ -8705,7 +8706,7 @@ class Lot(CachedPropertiesMixin, models.Model):
             return False
         return self.auction.get_absolute_url()
 
-    @property
+    @cached_property
     def winner_location(self):
         """String of location of the winner for this lot"""
         try:
@@ -8717,7 +8718,7 @@ class Lot(CachedPropertiesMixin, models.Model):
             return str(tos.pickup_location)
         return ""
 
-    @property
+    @cached_property
     def location_as_object(self):
         """Pickup location of the seller"""
         try:
@@ -8879,7 +8880,7 @@ class Lot(CachedPropertiesMixin, models.Model):
                 return "HAP"
         return "BAP"
 
-    @property
+    @cached_property
     def unsold_lot_no_bap_reason(self):
         """Return a BAP_REASON_CHOICES key if this lot is ineligible for BAP points, or None if eligible.
         Ignores whether the lot has sold — use sold_lot_no_bap_reason for that check."""
@@ -9386,7 +9387,7 @@ class Lot(CachedPropertiesMixin, models.Model):
             .values("pk")[:1]
         )
 
-    @property
+    @cached_property
     def max_bid(self):
         """returns the highest bid amount for this lot - this number should not be visible to the public"""
         allBids = (
@@ -9499,7 +9500,7 @@ class Lot(CachedPropertiesMixin, models.Model):
         """Total page views from all users. COUNT(*), not len(): PageView is the biggest table here."""
         return self.all_page_views.count()
 
-    @property
+    @cached_property
     def ar_interaction_counts(self):
         """How many distinct users scanned / zoomed in on / zoomed all the way in on this lot in AR.
 
@@ -9545,7 +9546,7 @@ class Lot(CachedPropertiesMixin, models.Model):
     # are the same number by construction and a repeat look never inflates them.
     AR_PAGE_VIEW_SOURCES = ("ar_scan", "ar_zoom", "ar_zoom_full")
 
-    @property
+    @cached_property
     def page_view_source_breakdown(self):
         """Page views on this lot grouped by ``src``, with a unique-viewer count for each.
 
@@ -9766,7 +9767,7 @@ class Lot(CachedPropertiesMixin, models.Model):
             return self.reserve_and_buy_now_info
         return self.seller_string
 
-    @property
+    @cached_property
     def label_line_3(self):
         """Used for printed labels"""
         result = ""
@@ -9789,7 +9790,7 @@ class Lot(CachedPropertiesMixin, models.Model):
         except:
             return None
 
-    @property
+    @cached_property
     def bidder_ip_same_as_seller(self):
         if self.seller_ip:
             bids = (
@@ -10777,7 +10778,7 @@ class Invoice(CachedPropertiesMixin, models.Model):
     @cached_property
     def unsold_lots(self):
         """Return number of lots the user did not sell. This may be simply lots whose winner has not been set yet."""
-        return len(self.sold_lots_queryset.exclude(auctiontos_winner__isnull=False))
+        return self.sold_lots_queryset.exclude(auctiontos_winner__isnull=False).count()
 
     @cached_property
     def unsold_non_donation_lots(self):
@@ -11613,7 +11614,7 @@ class PageView(CachedPropertiesMixin, models.Model):
         # thing = self.title
         return f"User {self.user} viewed {thing} for {self.total_time} seconds"
 
-    @property
+    @cached_property
     def duplicates(self):
         """The other rows that are the same visit as this one.
 
@@ -11632,7 +11633,7 @@ class PageView(CachedPropertiesMixin, models.Model):
             session_id=self.session_id,
         ).exclude(pk=self.pk)
 
-    @property
+    @cached_property
     def duplicate_count(self):
         return self.duplicates.count()
 
@@ -13375,7 +13376,7 @@ class AuctionHistory(models.Model):
             return f"System {self.action}"
 
 
-class AdCampaignGroup(models.Model):
+class AdCampaignGroup(CachedPropertiesMixin, models.Model):
     title = models.CharField(max_length=100, default="Untitled campaign")
     contact_user = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL)
     paid = models.BooleanField(default=False)
@@ -13384,12 +13385,12 @@ class AdCampaignGroup(models.Model):
     def __str__(self):
         return f"{self.title}"
 
-    @property
+    @cached_property
     def number_of_clicks(self):
         """..."""
         return AdCampaignResponse.objects.filter(campaign__campaign_group=self.pk, clicked=True).count()
 
-    @property
+    @cached_property
     def number_of_impressions(self):
         """How many times ads in this campaign group have been viewed"""
         return AdCampaignResponse.objects.filter(campaign__campaign_group=self.pk).count()
@@ -13399,13 +13400,13 @@ class AdCampaignGroup(models.Model):
         """What percent of views result in a click"""
         return (self.number_of_clicks / (self.number_of_impressions + 1)) * 100
 
-    @property
+    @cached_property
     def number_of_campaigns(self):
         """How many campaigns are there in this group"""
         return AdCampaign.objects.filter(campaign_group=self.pk).count()
 
 
-class AdCampaign(CloudflareImageMixin, models.Model):
+class AdCampaign(CachedPropertiesMixin, CloudflareImageMixin, models.Model):
     image = ThumbnailerImageField(upload_to="images/", blank=True)
     campaign_group = models.ForeignKey(AdCampaignGroup, null=True, blank=True, on_delete=models.SET_NULL)
     title = models.CharField(max_length=50, default="Click here")
@@ -13443,12 +13444,12 @@ class AdCampaign(CloudflareImageMixin, models.Model):
         """Ad-sized (250x150 max) image URL; from Cloudflare when migrated"""
         return cloudflare_images.image_url(self.image, self.cloudflare_image_id, "ad")
 
-    @property
+    @cached_property
     def number_of_clicks(self):
         """..."""
         return AdCampaignResponse.objects.filter(campaign=self.pk, clicked=True).count()
 
-    @property
+    @cached_property
     def number_of_impressions(self):
         """How many times this ad has been viewed"""
         return AdCampaignResponse.objects.filter(campaign=self.pk).count()
@@ -13480,7 +13481,7 @@ class AdCampaignResponse(models.Model):
         return f"{user} {action}"
 
 
-class AuctionCampaign(models.Model):
+class AuctionCampaign(CachedPropertiesMixin, models.Model):
     auction = models.ForeignKey(Auction, null=True, blank=True, on_delete=models.SET_NULL)
     uuid = models.CharField(max_length=255, default=uuid_module.uuid4, blank=True)
     user = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL)
@@ -13500,7 +13501,7 @@ class AuctionCampaign(models.Model):
     )
     email_sent = models.BooleanField(default=False)
 
-    @property
+    @cached_property
     def link(self):
         current_site = Site.objects.get_current()
         return f"{current_site.domain}/auctions/{self.uuid}"
@@ -14322,7 +14323,7 @@ class CheckinNudge(models.Model):
         return f"nudge {self.kind} user={self.user_id} auction={self.auction_id}"
 
 
-class VolunteerJob(models.Model):
+class VolunteerJob(CachedPropertiesMixin, models.Model):
     """A job an auction admin needs help with — announced to app users who can volunteer to do it.
 
     A bounty (optional) is applied as an invoice discount to whoever signs up. Signups are
@@ -14342,7 +14343,7 @@ class VolunteerJob(models.Model):
     def __str__(self):
         return f"volunteer job: {self.description}"
 
-    @property
+    @cached_property
     def signups_count(self):
         return self.signups.count()
 
@@ -14369,6 +14370,23 @@ class VolunteerSignup(models.Model):
 
     def __str__(self):
         return f"{self.auctiontos} signed up for {self.job}"
+
+    def save(self, *args, **kwargs):
+        super().save(*args, **kwargs)
+        self._invalidate_job()
+
+    def delete(self, *args, **kwargs):
+        job = self._state.fields_cache.get("job")
+        super().delete(*args, **kwargs)
+        if job is not None:
+            job.invalidate_cached_properties()
+
+    def _invalidate_job(self):
+        """signups_count is cached on the job, and the signup view asks whether the job is full
+        both before and after creating one of these."""
+        job = self._state.fields_cache.get("job")
+        if job is not None:
+            job.invalidate_cached_properties()
 
 
 class LotQueueEntry(models.Model):
@@ -14538,7 +14556,7 @@ class SpeakerTopic(models.Model):
         return str(self.name)
 
 
-class Speaker(CloudflareImageMixin, models.Model):
+class Speaker(CachedPropertiesMixin, CloudflareImageMixin, models.Model):
     """Someone who gives talks to aquarium clubs.
 
     Seeded from the Northeast Council's WordPress speaker database, but any user with a
@@ -14699,7 +14717,7 @@ class Speaker(CloudflareImageMixin, models.Model):
             return f"Added by {name} ({self.club.name})"
         return f"Added by {name}"
 
-    @property
+    @cached_property
     def display_name(self):
         """The NEC export stores names as "Last, First" — read it back the way people say it."""
         if self.name.count(",") == 1:
@@ -14821,7 +14839,7 @@ class SpeakerComment(models.Model):
         return bool(user.is_superuser or (self.user_id and self.user_id == user.pk))
 
 
-class AssistantSkillRequest(models.Model):
+class AssistantSkillRequest(CachedPropertiesMixin, models.Model):
     """Something an agent tried to do here and could not, in the agent's own words.
 
     The MCP endpoint has fifty-odd tools and every one of them was added because somebody said out
@@ -14874,7 +14892,7 @@ class AssistantSkillRequest(models.Model):
     def __str__(self):
         return f"{self.skill} ({self.get_status_display()})"
 
-    @property
+    @cached_property
     def others_asking(self):
         """How many other people have asked for something with the same name.
 

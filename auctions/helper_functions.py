@@ -66,8 +66,9 @@ def bin_data(
             msg = f"queryset cannot be ordered by '{field_name}', so start_bin and end_bin are required"
             raise ValueError(msg)
     working_with_date = False
-    if queryset.count():
-        value = getattr(queryset[0], field_name)
+    first = queryset.first()
+    if first is not None:
+        value = getattr(first, field_name)
         if isinstance(value, datetime):
             working_with_date = True
         else:

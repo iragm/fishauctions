@@ -120,6 +120,30 @@ Newest first.
 
 <!-- PASS LOG START -->
 
+### Pass 9 -- Sweep: the rest of the model properties, and the `len`/`count` shapes  *(areas 20, 21 partial)*
+
+Not a page, a sweep. The scan that started this campaign found ~180 `@property` methods on models
+that run a query; **52 are left**, and most of those are deliberate (the `*_qs` builders that exist
+to be a queryset, and the nine volatile `UserData` ones).
+
+- **`ClubMember`** (`discord_role` -- seven queries -- `has_auction_checkin`, the wallet and
+  barcode links), **`Lot`** (`unsold_lot_no_bap_reason` at twenty queries,
+  `page_view_source_breakdown`, `square_refund_possible`, `winner_invoice`, `sellers_invoice`,
+  `winner_location`, `max_bid`, ...), **`PageView`**, **`AdCampaign`**, **`AdCampaignGroup`**,
+  **`AuctionCampaign`**, **`VolunteerJob`**, **`Speaker`** and **`AssistantSkillRequest`** all cache
+  now, and all gained the mixin.
+- **`VolunteerSignup.save()/delete()` invalidate their job.** `test_volunteers` caught it: the
+  signup view asks whether a job is full both before and after creating a signup.
+- `.exists()` where a `.count()` was only tested for truth (`helper_functions.bin_data`,
+  `forms.py` duplicate checks, `Auction.admin_checklist_*`).
+- `Invoice.unsold_lots` counted in SQL instead of `len()` over a cloned queryset.
+- `Auction.set_stat_*` and `views/auction_stats.py` held the same duplicated block, each calling
+  `auctiontos.count()` three times and `invoices.count()` twice per render; both count once now.
+
+`sell_to_online_high_bidder` and `AuctionCampaign.update` are properties that *write*, and are
+deliberately left uncached.
+
+
 ### Pass 8 -- Auction report CSV and auction stats  *(area 9, done)*
 
 **The auction report went 298 -> 75 queries**, and the stats page 50 -> 43.

@@ -1108,18 +1108,19 @@ class AuctionStatsLocationFeatureUseJSONView(AuctionStatsBarChartJSONView):
                     .distinct()
                     .count()
                 )
-            if auctiontos.count() == 0:
+            auctiontos_count = auctiontos.count()
+            if auctiontos_count == 0:
                 lot_with_buy_now_percent = 0
                 account_percent = 0
                 mobile_app_percent = 0
             else:
-                account_percent = int(auctiontos_with_account.count() / auctiontos.count() * 100)
-                lot_with_buy_now_percent = int(lot_with_buy_now / auctiontos.count() * 100)
-                mobile_app_percent = int(mobile_app / auctiontos.count() * 100)
-            invoices = Invoice.objects.filter(auction=self.auction)
-            viewed_invoices = invoices.filter(opened=True)
-            if invoices.count():
-                view_invoice_percent = int(viewed_invoices.count() / invoices.count() * 100)
+                account_percent = int(auctiontos_with_account.count() / auctiontos_count * 100)
+                lot_with_buy_now_percent = int(lot_with_buy_now / auctiontos_count * 100)
+                mobile_app_percent = int(mobile_app / auctiontos_count * 100)
+            invoice_count = Invoice.objects.filter(auction=self.auction).count()
+            if invoice_count:
+                viewed_invoices = Invoice.objects.filter(auction=self.auction, opened=True).count()
+                view_invoice_percent = int(viewed_invoices / invoice_count * 100)
             else:
                 view_invoice_percent = 0
             sold_lots = Lot.objects.filter(auction=self.auction, auctiontos_winner__isnull=False)

@@ -1810,14 +1810,14 @@ class CreateEditAuctionTOS(forms.ModelForm):
         other_bidder_numbers = AuctionTOS.objects.filter(auction=self.auction, bidder_number=bidder_number)
         if self.auctiontos:
             other_bidder_numbers = other_bidder_numbers.exclude(pk=self.auctiontos.pk)
-        if other_bidder_numbers.count():
+        if other_bidder_numbers.exists():
             self.add_error("bidder_number", "This bidder number is already in this auction")
         email = cleaned_data.get("email")
         if email:
             other_emails = AuctionTOS.objects.filter(auction=self.auction, email=email)
             if self.auctiontos:
                 other_emails = other_emails.exclude(pk=self.auctiontos.pk)
-            if other_emails.count():
+            if other_emails.exists():
                 self.add_error("email", "This email is already in this auction")
         return cleaned_data
 

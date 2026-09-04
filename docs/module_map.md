@@ -100,7 +100,7 @@ this only quotes its opening sentence.
 - **`google_wallet.py`** (323 lines)
   Helpers for talking to the Google Wallet REST API.
   `is_configured`, `get_access_token`, `member_text_modules`, `update_generic_object_for_member`, `expire_generic_object_for_member`, `create_generic_class`
-- **`helper_functions.py`** (141 lines)
+- **`helper_functions.py`** (142 lines)
   Got sick of these being scattered all over the codebase,
   `scrub_emails`, `get_currency_symbol`, `bin_data`
 - **`html_sanitize.py`** (134 lines)
@@ -116,7 +116,7 @@ this only quotes its opening sentence.
 - **`model_caching.py`** (59 lines)
   ``@cached_property`` on a model, and the invalidation that makes it safe.
   `CachedPropertiesMixin`
-- **`models.py`** (14891 lines)
+- **`models.py`** (14909 lines)
   The database: 80 models, and the reason they are still in one file.
 - **`module_map.py`** (256 lines)
   The map of this repository: which module does what, generated from the modules themselves.
@@ -640,7 +640,7 @@ Every view on the site, split by what part of it the view belongs to.
 - **`auction_pages.py`** (1057 lines)
   The auction as a thing you join: the TOS, creating one, and the auction's own page.
   `AuctionTOSDelete`, `AuctionTOSAdmin`, `AuctionConfirmView`, `AuctionCreateView`, `AuctionInfo`
-- **`auction_stats.py`** (1206 lines)
+- **`auction_stats.py`** (1207 lines)
   The JSON behind the charts on one auction's stats page.
 - **`bap.py`** (621 lines)
   The breeder award program: settings, overrides, awards and the lots behind them.
