@@ -1,0 +1,15 @@
+{% comment %}Responsive account nav: inline column on desktop (>=lg), offcanvas on mobile. Context comes from the account_nav context processor; see auctions/account_nav.py for what's in it and why.{% endcomment %}
+{% comment %}btn-primary, not the club menu's btn-info: btn-info marks the admin half of a page, and every page behind this button is the reader's own. It is also the only navigation these pages have in the app, which draws no navbar -- Delete account included (App Store Review 5.1.1(v)).{% endcomment %}
+<button class="btn btn-primary btn-sm d-lg-none mb-3" type="button"
+        data-bs-toggle="offcanvas" data-bs-target="#accountSidebar" aria-controls="accountSidebar">
+  <i class="bi bi-list"></i> Account setup
+</button>
+<div class="offcanvas-lg offcanvas-start" tabindex="-1" id="accountSidebar" aria-labelledby="accountSidebarLabel">
+  <div class="offcanvas-header">
+    <h5 class="offcanvas-title" id="accountSidebarLabel">Account setup</h5>
+    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="offcanvas" data-bs-target="#accountSidebar" aria-label="Close"></button>
+  </div>
+  <div class="offcanvas-body d-block p-0">
+    {% include "account_sidebar_nav.html" %}
+  </div>
+</div>

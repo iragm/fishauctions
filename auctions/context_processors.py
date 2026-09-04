@@ -1,3 +1,4 @@
+import functools
 import zoneinfo
 
 from django.conf import settings  # import the settings file
@@ -8,6 +9,28 @@ GOOGLE_OAUTH_PLACEHOLDER_VALUES = {
     "secret",
     "secret.apps.googleusercontent.com",
 }
+
+
+def once_per_request(processor):
+    """Run a context processor once per request, however many templates are rendered.
+
+    Django binds the processors to each new ``RequestContext``, so a view that renders a partial as
+    well as its page (an HTMx table, an el-pagination page, a rendered-to-string email preview) runs
+    every one of these again -- and these ones query. The answer cannot change inside a request, so
+    it is remembered on the request itself.
+    """
+
+    attribute = f"_context_processor_{processor.__name__}"
+
+    @functools.wraps(processor)
+    def wrapper(request):
+        cached = getattr(request, attribute, None)
+        if cached is None:
+            cached = processor(request)
+            setattr(request, attribute, cached)
+        return cached
+
+    return wrapper
 
 
 def _safe_timezone(value: str | None) -> str | None:
@@ -86,8 +109,11 @@ def add_tz(request):
 
 def add_location(request):
     """request location if not set"""
-    # set some value to generate the session id
-    request.session["status"] = "started"
+    # Set a value so the session gets a key -- PageView identifies anonymous visitors by it.
+    # Only when it is missing: assigning it unconditionally marks the session modified on every
+    # request, which is a django_session UPDATE for every page anybody loads, signed in or not.
+    if request.session.get("status") != "started":
+        request.session["status"] = "started"
     has_user_location = False
     latitude_cookie = request.COOKIES.get("latitude")
     longitude_cookie = request.COOKIES.get("longitude")
@@ -153,6 +179,7 @@ def dismissed_cookies_tos(request):
     return {"hide_tos_banner": hide_tos_banner}
 
 
+@once_per_request
 def site_config(request):
     return {
         "navbar_brand": settings.NAVBAR_BRAND,
@@ -179,6 +206,7 @@ def _palette_assist_enabled(request):
     return assist_enabled_for(getattr(request, "user", None))
 
 
+@once_per_request
 def label_print_method(request):
     """Expose the user's saved label print method so per-lot print buttons can pick a target.
 
@@ -196,11 +224,37 @@ def label_print_method(request):
     return {"user_print_method": method}
 
 
+@once_per_request
 def user_clubs(request):
     if request.user.is_authenticated:
-        from auctions.models import Club, ClubMember
+        from auctions.models import Club
 
-        club_ids = ClubMember.objects.filter(user=request.user, is_deleted=False).values_list("club_id", flat=True)
-        clubs = list(Club.objects.filter(pk__in=club_ids).order_by("name"))
+        # One query through the membership rows, rather than a values_list of club ids and then a
+        # second query for the clubs themselves.
+        clubs = list(
+            Club.objects.filter(members__user=request.user, members__is_deleted=False).order_by("name").distinct()
+        )
         return {"user_clubs": clubs}
     return {"user_clubs": []}
+
+
+def account_nav(request):
+    """The Account setup sidebar, on the pages that are part of it and nowhere else.
+
+    `base.html` needs the answer before it lays the row out (the sidebar is a column beside the
+    content, exactly as the club sidebar is), which is why this is a context processor rather than
+    an inclusion tag: a tag can render the menu but cannot tell the template whether there is one.
+
+    It also records the visit, so /account/setup/ can send somebody back where they were. That is a
+    write in a render path, which the `add_location` processor above already does; `remember()`
+    only touches the session when the value actually changes, and only for a GET, so a form post
+    that re-renders with errors can't rewrite it.
+    """
+    from auctions import account_nav as nav
+
+    active = nav.active_page(request)
+    if not active:
+        return {"account_nav_active": None, "account_nav_groups": []}
+    if request.method == "GET":
+        nav.remember(request, active)
+    return {"account_nav_active": active, "account_nav_groups": nav.groups_for(request.user, active)}

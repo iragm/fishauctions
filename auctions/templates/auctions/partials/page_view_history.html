@@ -1,0 +1,136 @@
+{% comment %}
+The last 15 days of page views: the totals, a chart of them day by day, and the two tables worth
+having beside it.  Shared by both history modals -- one lot's (view_lot_images.html) and every lot
+somebody is selling (the selling dashboard).  Everything here comes out of views.page_view_history,
+which does the counting in the database; nothing in this file loops over PageView rows.
+
+"How they got here" is drawn only for superusers (views.page_view_history_context decides, so the
+template and the view cannot disagree); the same split is in the chart for everybody.
+
+No help-note: /selling/ already spends its one note (style_reference.md, "One help note per page"),
+so the standing explanations here are text-muted instead.
+{% endcomment %}
+{% load static %}
+<p class="mb-3">
+  <span class="fs-4">{{ history.total_views }}</span> view{{ history.total_views|pluralize }}
+  from {{ history.unique_viewers }} {% if history.unique_viewers == 1 %}person{% else %}people{% endif %},
+  {{ history.first_day|date:"N j" }}&ndash;{{ history.last_day|date:"N j, Y" }}.
+  <br><small class="text-muted">{{ modal_subtitle }} &middot; the last {{ history.days }} days only.</small>
+</p>
+
+{% if show_source_table %}
+<h6 class="border-bottom pb-2">How they got here</h6>
+<div class="table-responsive">
+  <table class="table table-sm align-middle">
+    <thead>
+      <tr><th>How they got here</th><th class="text-end">Views</th><th class="text-end">People</th></tr>
+    </thead>
+    <tbody>
+      {% for row in history.sources %}
+      <tr>
+        <td>{{ row.label }}</td>
+        <td class="text-end">{{ row.views }}</td>
+        <td class="text-end">{{ row.unique }}</td>
+      </tr>
+      {% empty %}
+      <tr><td colspan="3" class="text-muted">Nothing in the last {{ history.days }} days.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+
+<h6 class="border-bottom pb-2 mt-3">Day by day</h6>
+{{ history.chart|json_script:"page-view-history-data" }}
+{% comment %}Chart.js sizes a responsive chart to the canvas's parent element, so the canvas gets a wrapper of its own rather than being measured against the whole scrolling modal body.  The width/height are the aspect ratio it keeps, not a fixed size.{% endcomment %}
+<div class="mb-2"><canvas id="page-view-history-chart" width="600" height="260" role="img" aria-label="Views per day from {{ history.first_day|date:'N j' }} to {{ history.last_day|date:'N j' }}: {{ history.total_views }} in total, {{ history.chart.busiest }} on the busiest day."></canvas></div>
+{% if history.has_ar_rows %}
+<small class="text-muted d-block mt-1">Lot scanning counts each person once, however many times they looked. Everything else is one view per visit.</small>
+{% endif %}
+<script>
+{% comment %}Chart.js is not on the lot page or the selling dashboard, and 160KB of it for a chart most people never open is not worth loading there, so it is fetched the first time somebody opens this modal.  htmx appends a swapped-in <script src> asynchronously, which is why drawing hangs off onload rather than off a second tag below it.{% endcomment %}
+(function () {
+  var canvas = document.getElementById('page-view-history-chart');
+  var payload = document.getElementById('page-view-history-data');
+  if (!canvas || !payload) { return; }
+  var chart = JSON.parse(payload.textContent);
+
+  function draw() {
+    {% comment %}Same theming and the same palette as the auction stats charts (auction_stats.html): the site is dark everywhere, so the font is white and the six band colours are createBarChart's, in the same order.  The seventh band is only ever "Everything else", so it takes the neutral grey rather than starting the palette again next to its own first colour.{% endcomment %}
+    Chart.defaults.global.defaultFontColor = "#fff";
+    var colors = [
+      'rgba(52, 152, 219, 0.8)',   // Blue
+      'rgba(46, 204, 113, 0.8)',   // Green
+      'rgba(155, 89, 182, 0.8)',   // Purple
+      'rgba(241, 196, 15, 0.8)',   // Yellow
+      'rgba(231, 76, 60, 0.8)',    // Red
+      'rgba(26, 188, 156, 0.8)'    // Teal
+    ];
+    var datasets = chart.series.map(function (label, index) {
+      var leftovers = chart.series.length > colors.length && index === chart.series.length - 1;
+      var color = leftovers ? 'rgba(149, 165, 166, 0.8)' : colors[index % colors.length];
+      return {
+        label: label,
+        data: chart.data[index],
+        backgroundColor: color,
+        hoverBackgroundColor: color.replace('0.8', '1.0')
+      };
+    });
+    if (window.pageViewHistoryChart) { window.pageViewHistoryChart.destroy(); }
+    window.pageViewHistoryChart = new Chart(canvas.getContext('2d'), {
+      type: 'bar',
+      data: { labels: chart.labels, datasets: datasets },
+      options: {
+        responsive: true,
+        legend: { display: true, position: 'bottom' },
+        {% comment %}One tooltip for the whole day, with the sources that sent nobody left out of it -- on a lot with two views in a fortnight most bands are zero on most days, and listing them all is six lines of nothing.{% endcomment %}
+        tooltips: {
+          mode: 'index',
+          intersect: false,
+          filter: function (item) { return item.yLabel > 0; }
+        },
+        scales: {
+          xAxes: [{ stacked: true, gridLines: { display: false } }],
+          {% comment %}max and stepSize come from the view (see PAGE_VIEW_HISTORY_MIN_Y): whole numbers of views, and a floor so that one view on one day is a short bar rather than a full-height one.  Chart.js' own gridlines are near-black and invisible on this theme.{% endcomment %}
+          yAxes: [{
+            stacked: true,
+            ticks: { beginAtZero: true, max: chart.y_max, stepSize: chart.y_step },
+            gridLines: { color: 'rgba(255, 255, 255, 0.12)', zeroLineColor: 'rgba(255, 255, 255, 0.35)' }
+          }]
+        }
+      }
+    });
+  }
+
+  if (window.Chart) {
+    draw();
+  } else {
+    var script = document.createElement('script');
+    script.src = "{% static 'js/vendor/Chart.min.js' %}";
+    script.onload = draw;
+    document.head.appendChild(script);
+  }
+})();
+</script>
+
+<h6 class="border-bottom pb-2 mt-3">Links from other sites</h6>
+{% if history.referrers %}
+<div class="table-responsive">
+  <table class="table table-sm align-middle mb-1">
+    <thead>
+      <tr><th>Site they came from</th><th class="text-end">Views</th></tr>
+    </thead>
+    <tbody>
+      {% for row in history.referrers %}
+      <tr>
+        <td class="text-break"><small>{{ row.referrer|truncatechars:120 }}</small></td>
+        <td class="text-end">{{ row.views }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+<small class="text-muted">Browsers usually pass along only the site somebody came from and not the page it linked from, so a link in a forum thread shows up as the forum.</small>
+{% else %}
+<small class="text-muted">No other website linked here in the last {{ history.days }} days. Only links from somewhere else are listed: most people arrive from our own pages, and the chart above counts those by source. Browsers usually pass along only the site somebody came from and not the page it linked from, so a link in a forum thread would show up here as the forum.</small>
+{% endif %}

@@ -1,3 +1,14 @@
+"""The nightly email about auctions worth knowing about, and the Discord post beside it.
+
+One command, run from the beat schedule, that works out which auctions to tell which users about
+and sends one message each. The Discord half posts the same news into a club's channel and creates
+a scheduled event for it.
+
+It is a *per-user* job that iterates rows, so it follows the rule the rest of the task layer does:
+one bad row must not stop the rest. Anything added here belongs inside that isolation, not around
+it.
+"""
+
 import logging
 from datetime import timedelta
 

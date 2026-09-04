@@ -1,3 +1,14 @@
+"""The Django admin: the staff-only back door, and the handful of jobs that only live here.
+
+Most of this file is registration -- a `ModelAdmin` per model so a superuser can look at a row.
+The parts worth knowing are the ones that are not: the bulk actions (approving a species, merging a
+duplicate, marking one "not a duplicate") are real capabilities with no other home, and
+``export_to_csv`` is the generic exporter every changelist hangs off.
+
+Nothing here is a permission boundary anyone else relies on. Everything the *site* can do is gated
+in the views and in ``palette_actions``; this file assumes whoever reached it is already staff.
+"""
+
 import csv
 import datetime
 
@@ -107,6 +118,7 @@ class FaqAdmin(admin.ModelAdmin):
 class SearchHistoryAdmin(admin.ModelAdmin):
     model = SearchHistory
     list_display = ("user", "search")
+    list_select_related = ("user",)
     search_fields = ()
 
 
@@ -121,6 +133,7 @@ class CommandPalettePageAdmin(admin.ModelAdmin):
 class CommandPaletteSearchAdmin(admin.ModelAdmin):
     model = CommandPaletteSearch
     list_display = ("user", "search", "result", "result_type", "createdon")
+    list_select_related = ("user",)
     list_filter = ("result", "result_type")
     search_fields = ("search",)
     readonly_fields = ("createdon", "updatedon")
@@ -129,6 +142,7 @@ class CommandPaletteSearchAdmin(admin.ModelAdmin):
 class LLMUsageAdmin(admin.ModelAdmin):
     model = LLMUsage
     list_display = ("createdon", "user", "model", "query", "response_kind", "action", "total_tokens", "success")
+    list_select_related = ("user",)
     list_filter = ("success", "response_kind", "action", "model")
     search_fields = ("query", "action")
     readonly_fields = ("createdon",)
@@ -401,6 +415,7 @@ class MobileDeviceAdmin(admin.ModelAdmin):
         "last_heartbeat",
         "last_seen",
     )
+    list_select_related = ("user",)
     list_filter = ("platform", "app_version", "push_enabled", "print_ready", "ever_print_ready")
     search_fields = (
         "user__username",
@@ -426,6 +441,7 @@ class RemotePrintJobAdmin(admin.ModelAdmin):
     labels didn't come out. ``message`` is the app's own words, unedited."""
 
     list_display = ("uuid", "user", "device", "status", "printed_count", "total_count", "created_at")
+    list_select_related = ("user", "device")
     list_filter = ("status",)
     search_fields = ("uuid", "user__username", "user__email", "message")
     readonly_fields = (
@@ -452,6 +468,7 @@ class MobileOfflineOpAdmin(admin.ModelAdmin):
     """Idempotency ledger for offline-sync ops. Read-only — rows are written by the sync endpoint."""
 
     list_display = ("op_id", "op_type", "auction", "user", "result_pk", "created_at")
+    list_select_related = ("auction", "user")
     list_filter = ("op_type",)
     search_fields = ("op_id", "auction__title", "user__username")
     readonly_fields = ("op_id", "op_type", "auction", "user", "result_pk", "result_data", "created_at")
@@ -468,6 +485,7 @@ class AppleDeviceRegistrationAdmin(admin.ModelAdmin):
     """
 
     list_display = ("member", "club", "device_library_identifier", "createdon")
+    list_select_related = ("member",)
     search_fields = ("member__name", "member__email", "member__club__name", "device_library_identifier")
     readonly_fields = ("createdon",)
     raw_id_fields = ("member",)
@@ -580,6 +598,7 @@ class ObservedPrinterAdmin(admin.ModelAdmin):
         "user",
         "last_seen",
     )
+    list_select_related = ("user",)
     list_filter = ("matched_by", "characterized", "probed_language", "printed_ok", "profile_slug")
     search_fields = ("ble_name", "manufacturer", "model", "firmware", "hardware", "user__username")
     raw_id_fields = ("user",)
@@ -766,6 +785,7 @@ class VoiceCommandLogAdmin(admin.ModelAdmin):
     """
 
     list_display = ("createdon", "auction", "user", "slot", "heard", "chosen", "confidence", "corrected_to")
+    list_select_related = ("auction", "user")
     list_filter = (VoiceOutcomeFilter, "slot", "auction")
     search_fields = ("heard", "chosen", "corrected_to", "user__username", "auction__title")
     raw_id_fields = ("auction", "user")
@@ -790,6 +810,7 @@ class VoiceCommandLogAdmin(admin.ModelAdmin):
 @admin.register(PushNotificationSent)
 class PushNotificationSentAdmin(admin.ModelAdmin):
     list_display = ("user", "category", "auction", "invoice", "device", "sent_at")
+    list_select_related = ("user", "auction", "invoice", "device")
     list_filter = ("category",)
     search_fields = ("user__username", "user__email", "auction__title")
     raw_id_fields = ("user", "device", "auction", "invoice")
@@ -841,6 +862,7 @@ class UserAPIKeyAdmin(admin.ModelAdmin):
 
     model = UserAPIKey
     list_display = ("name", "user", "prefix", "allow_writes", "is_active", "created_at", "last_used_at", "expires_at")
+    list_select_related = ("user",)
     list_filter = ("is_active", "allow_writes")
     search_fields = ("name", "prefix", "user__username", "user__email")
     readonly_fields = ("prefix", "key_hash", "created_at", "last_used_at")
@@ -938,6 +960,7 @@ class PickupLocationInline(admin.TabularInline):
 class AuctionAdmin(admin.ModelAdmin):
     model = Auction
     list_display = ("title", "created_by")
+    list_select_related = ("created_by",)
     # list_filter = ("title",)
     search_fields = (
         "title",
@@ -1011,6 +1034,7 @@ class LotAdmin(admin.ModelAdmin):
         "user",
         "species_category",
     )
+    list_select_related = ("auction", "user", "species_category")
     list_filter = ("active", "auction", "banned")
     search_fields = (
         "lot_number",
@@ -1132,6 +1156,7 @@ class BidAdmin(admin.ModelAdmin):
         "bid_time",
         "amount",
     )
+    list_select_related = ("user", "lot_number")
     list_filter = (
         "user",
         "lot_number",
@@ -1194,6 +1219,7 @@ class ChatAdmin(admin.ModelAdmin):
         "message",
         "timestamp",
     )
+    list_select_related = ("lot", "user")
     list_filter = (
         "timestamp",
         "changed_price",
@@ -1235,6 +1261,7 @@ class SpeciesCommonNameAdmin(admin.ModelAdmin):
     model = SpeciesCommonName
     menu_label = "Species common names"
     list_display = ("name", "species", "source", "approved", "is_preferred", "added_by", "club")
+    list_select_related = ("species", "added_by", "club")
     # "approved" first: an unapproved name is offered to one club and nobody else, so the queue of
     # them is the one thing here anybody has to act on.
     list_filter = ("approved", "source", "club", "is_preferred")
@@ -1266,6 +1293,7 @@ class SpeciesAdmin(admin.ModelAdmin):
         "breeder_points",
         "possible_duplicate",
     )
+    list_select_related = ("category", "added_by", "club", "possible_duplicate")
     # Not family: there are 664 of them and the sidebar would list every one.  Search instead.
     # "approved" first: an unapproved species is suggested to one person and nobody else, so the
     # queue of them is the one thing on this page anybody has to act on.  possible_duplicate is an
@@ -1322,6 +1350,7 @@ class SpeciesSearchCacheAdmin(admin.ModelAdmin):
     # saved with it left alone counts once, a lot it was cleared from counts against it, and one
     # rejection in ten retires the row -- see species_matching.record_choice.
     list_display = ("search_text", "species", "source", "created_by", "hits", "accepts", "rejects", "createdon")
+    list_select_related = ("species", "created_by")
     list_filter = ("source",)
     search_fields = ("search_text", "species__scientific_name")
     # Deleting a row here is how you make the site look a name up again -- handy when a bad
@@ -1341,6 +1370,7 @@ class SpeciesNameRejectionAdmin(admin.ModelAdmin):
     model = SpeciesNameRejection
     menu_label = "Retired species names"
     list_display = ("search_text", "species", "createdon")
+    list_select_related = ("species",)
     search_fields = ("search_text", "species__scientific_name")
     autocomplete_fields = ("species",)
 
@@ -1352,6 +1382,7 @@ class BanAdmin(admin.ModelAdmin):
         "user",
         "banned_user",
     )
+    list_select_related = ("user", "banned_user")
     list_filter = ()
     search_fields = (
         "user__first_name",
@@ -1364,6 +1395,7 @@ class BanAdmin(admin.ModelAdmin):
 class AuctionTOSAdmin(admin.ModelAdmin):
     model = AuctionTOS
     list_display = ("name", "auction", "manually_added")
+    list_select_related = ("auction",)
     search_fields = (
         "name",
         "user__email",
@@ -1380,6 +1412,7 @@ class AuctionTOSAdmin(admin.ModelAdmin):
 class PageViewAdmin(admin.ModelAdmin):
     model = PageView
     list_display = ("user", "ip_address", "source", "url", "date_start")
+    list_select_related = ("user",)
     readonly_fields = (
         "user",
         "auction",
@@ -1391,6 +1424,7 @@ class PageViewAdmin(admin.ModelAdmin):
 class AuctionCampaignAdmin(admin.ModelAdmin):
     model = AuctionCampaign
     list_display = ("auction", "source", "result")
+    list_select_related = ("auction",)
 
 
 class AuctionHistoryAdmin(admin.ModelAdmin):
@@ -1421,6 +1455,7 @@ class AuctionHistoryAdmin(admin.ModelAdmin):
 @admin.register(BapAward)
 class BapAwardAdmin(admin.ModelAdmin):
     list_display = ("club_member", "date", "points", "hap_points", "cap_points", "lot", "awarded_by")
+    list_select_related = ("club_member", "lot", "awarded_by")
     list_filter = ("date",)
     search_fields = ("club_member__name", "club_member__email", "notes")
     ordering = ("-date",)
@@ -1462,6 +1497,7 @@ admin.site.register(AuctionHistory, AuctionHistoryAdmin)
 class ClubMemberAdmin(admin.ModelAdmin):
     model = ClubMember
     list_display = ("__str__", "club", "email", "source", "is_deleted", "createdon")
+    list_select_related = ("club",)
     search_fields = ("name", "email", "user__email", "user__username")
     list_filter = ("club", "source", "is_deleted")
     readonly_fields = (
@@ -1478,6 +1514,7 @@ class ClubMemberAdmin(admin.ModelAdmin):
 class ClubHistoryAdmin(admin.ModelAdmin):
     model = ClubHistory
     list_display = ("club", "user", "action", "applies_to", "timestamp")
+    list_select_related = ("club", "user")
     list_filter = ("timestamp", "applies_to", "club")
     search_fields = ("user__first_name", "user__last_name", "action", "club__name")
     ordering = ("-timestamp",)
@@ -1486,6 +1523,7 @@ class ClubHistoryAdmin(admin.ModelAdmin):
 class ClubEventAdmin(admin.ModelAdmin):
     model = ClubEvent
     list_display = ("title", "club", "date_start", "source", "cancelled", "is_deleted")
+    list_select_related = ("club",)
     list_filter = ("source", "cancelled", "is_deleted", "date_start")
     search_fields = ("title", "location", "club__name")
     raw_id_fields = ("auction", "created_by")
@@ -1513,6 +1551,7 @@ class ClubAnnouncementAdmin(admin.ModelAdmin):
         "email_opens",
         "is_deleted",
     )
+    list_select_related = ("club",)
     list_filter = (
         "send_to_discord",
         "send_to_push",
@@ -1582,6 +1621,7 @@ class SpeakerAdmin(admin.ModelAdmin):
         "is_deleted",
         "createdon",
     )
+    list_select_related = ("created_by",)
     list_filter = ("topics_need_review", "nec_only", "imported_from_nec", "is_deleted", "topics")
     search_fields = ("name", "bio", "programs", "location", "email")
     raw_id_fields = ("created_by", "club")
@@ -1604,6 +1644,7 @@ class SpeakerAdmin(admin.ModelAdmin):
 class SpeakerCommentAdmin(admin.ModelAdmin):
     model = SpeakerComment
     list_display = ("speaker", "user", "club", "is_deleted", "createdon")
+    list_select_related = ("speaker", "user", "club")
     list_filter = ("is_deleted", "createdon")
     search_fields = ("body", "speaker__name", "user__username")
     raw_id_fields = ("speaker", "user", "club")

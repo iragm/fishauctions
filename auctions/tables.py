@@ -1,3 +1,11 @@
+"""The ``django_tables2`` tables behind every list on the site.
+
+One class per table, paired with the filter of the same subject in :mod:`auctions.filters` and
+rendered through ``views.base.HTMxTableView``, which is what makes them sort and paginate without a
+page load. Columns that render HTML do it with ``format_html``; a table column is a place where an
+unescaped lot name written by a member of the public would become a script tag.
+"""
+
 from urllib.parse import urlencode
 
 import django_tables2 as tables

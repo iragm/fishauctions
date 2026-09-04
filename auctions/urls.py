@@ -1,3 +1,16 @@
+"""Every URL on the site, and the one place a new one has to be declared.
+
+Ordinary Django routing, with one local rule worth knowing before you add anything: **a new named
+URL or POST view costs you two entries.** It must either be catalogued as an ``Action`` in
+:mod:`auctions.palette_actions` -- which is what puts it in the command palette *and* on the MCP
+endpoint, since both read one registry -- or be excused in ``palette_actions.NOT_A_SKILL`` with a
+reason about the capability rather than about the palette. ``test_palette_skills`` fails the build
+otherwise.
+
+``/mcp`` is matched with and without its trailing slash on purpose: ``APPEND_SLASH`` drops a POST
+body, and that endpoint is a POST.
+"""
+
 from allauth.socialaccount import views as socialaccount_views
 from django.contrib.auth.decorators import login_required
 from django.urls import include, path, re_path
@@ -115,6 +128,16 @@ urlpatterns = [
     path("api/get_auction_info/", views.AuctionFinder.as_view(), name="get_auction_info"),
     path("api/lot/<int:pk>/", views.LotAdmin.as_view(), name="auctionlotadmin"),
     path("api/lot/<int:pk>/bap/", views.LotBapPointsView.as_view(), name="lot_bap_points"),
+    path(
+        "api/lot/<int:pk>/page-views/",
+        views.LotPageViewHistoryView.as_view(),
+        name="lot_page_view_history",
+    ),
+    path(
+        "api/selling/page-views/",
+        views.MyLotsPageViewHistoryView.as_view(),
+        name="my_lots_page_view_history",
+    ),
     path(
         "api/auctions/<slug:slug>/custom-dropdown-options/",
         views.AuctionDropdownOptionsAPI.as_view(),
@@ -299,6 +322,7 @@ urlpatterns = [
     path("", views.ToDefaultLandingPage.as_view(), name="home"),
     path("about/", views.PromoSite.as_view(), name="promo"),
     path("account/", views.MyAccount.as_view(), name="account"),
+    path("account/setup/", views.AccountSetupRedirect.as_view(), name="account_setup"),
     path("invoices/", login_required(views.Invoices.as_view()), name="my_invoices"),
     path(
         "invoices/<int:pk>/",
@@ -620,6 +644,11 @@ urlpatterns = [
         "preferences/",
         login_required(views.UserPreferencesUpdate.as_view()),
         name="preferences",
+    ),
+    path(
+        "notifications/",
+        login_required(views.UserNotificationsUpdate.as_view()),
+        name="notification_preferences",
     ),
     path(
         "account/delete/",

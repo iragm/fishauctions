@@ -29,3 +29,13 @@ repos:
       language: system
       pass_filenames: false
       files: templates/.*\.(html|txt)$
+    # docs/module_map.md is generated from every module's docstring and top-level names. Checked
+    # in so it can be read without running anything, which means it can also be stale; this is the
+    # check that it isn't. It also enforces "a module over 300 lines says what it is for" and the
+    # file-size ratchet. Same checker auctions.test_module_map runs.
+    - id: module-map
+      name: docs/module_map.md matches the modules it describes
+      entry: python3 auctions/module_map.py
+      language: system
+      pass_filenames: false
+      files: \.py$|^docs/module_map\.md$

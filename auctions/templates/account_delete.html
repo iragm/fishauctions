@@ -1,137 +1,132 @@
 {% extends "base.html" %}
 {% block title %}Delete account{% endblock %}
 {% block content %}
-{% include "preferences_ribbon.html" %}
-<br>
-<div class="row">
-  <div class="col-lg-9">
-    <h3>Delete your account</h3>
-
-    {% if deletion_due %}
-      {% comment %} Already asked: the only thing this page still needs to offer is the way out. {% endcomment %}
-      <div class="alert alert-warning text-dark">
-        <h5 class="alert-heading">Your account is scheduled to be deleted</h5>
-        <p class="mb-2">
-          Everything below happens on <strong>{{ deletion_due|date:"F j, Y" }}</strong>.
-          Until then nothing has changed, and you can stop it right here.
-        </p>
-        <form method="post" action="{% url 'account_delete' %}" class="mb-0">
-          {% csrf_token %}
-          <input type="hidden" name="action" value="cancel">
-          <button type="submit" class="btn btn-primary">Keep my account</button>
-        </form>
-      </div>
-    {% endif %}
-
-    <p>
-      Deleting your account removes you and your personal details from {{ navbar_brand }}.  Records that
-      belong to other people &mdash; auction results, invoices, and what clubs keep about their own members
-      &mdash; stay, without your name attached.  Here is exactly what that means.
+{% comment %}No heading: the sidebar names this page (and marks it, in red).  The reading width is base.html's column, not a col-lg-9 nested inside it -- that was 75% of 75%.{% endcomment %}
+<div class="mt-3">
+{% if deletion_due %}
+  {% comment %} Already asked: the only thing this page still needs to offer is the way out. {% endcomment %}
+  <div class="alert alert-warning text-dark">
+    <h5 class="alert-heading">Your account is scheduled to be deleted</h5>
+    <p class="mb-2">
+      Everything below happens on <strong>{{ deletion_due|date:"F j, Y" }}</strong>.
+      Until then nothing has changed, and you can stop it right here.
     </p>
-
-    <h5 class="mt-4">What is deleted</h5>
-    <ul>
-      <li>Your sign-in: username, email address, password, and any linked Google account.  You will not be able to sign in again.</li>
-      <li>Your profile: name, phone number, mailing address, map location, and all of your preferences.</li>
-      <li>Your watched lots, saved searches, browsing history, and category interests.</li>
-      <li>{% if summary.devices %}The {{ summary.devices }} device{{ summary.devices|pluralize }} you've used the app on, and their{% else %}Any app devices and their{% endif %} notification tokens &mdash; your phone stops receiving notifications.</li>
-      <li>Any PayPal or Square account you connected to receive payments.</li>
-      {% if summary.club_memberships_deleted %}
-      <li>
-        {{ summary.club_memberships_deleted }} club membership{{ summary.club_memberships_deleted|pluralize }}
-        you signed yourself up for and that no club admin has edited since &mdash; including your place on
-        {{ summary.club_memberships_deleted|pluralize:"that club's,those clubs'" }} mailing list, if they use
-        Mailchimp or Brevo.
-      </li>
-      {% endif %}
-    </ul>
-
-    <h5 class="mt-4">What stays</h5>
-    <ul>
-      {% if summary.auctions %}
-      <li>
-        The {{ summary.auctions }} auction{{ summary.auctions|pluralize }} you've taken part in keep your bidder
-        number and every amount on your invoices &mdash; a seller's payout history has to keep adding up &mdash;
-        but your name and contact details come off them.
-      </li>
-      {% else %}
-      <li>
-        Auction records keep bidder numbers and amounts so that other people's invoices and payouts still add up,
-        with your name and contact details removed.
-      </li>
-      {% endif %}
-      {% if summary.auctions_added_by_admins %}
-      <li>
-        {{ summary.auctions_added_by_admins }} of those record{{ summary.auctions_added_by_admins|pluralize }}
-        {{ summary.auctions_added_by_admins|pluralize:"was,were" }} written down by an auction admin when you turned
-        up in person, from what you told them at the door.  That is the auction's own note of who was there, so it
-        stays as it is &mdash; only the link to your account is removed.
-      </li>
-      {% endif %}
-      {% if summary.lots %}
-      <li>
-        Your {{ summary.lots }} lot{{ summary.lots|pluralize }} stay in the auctions they were sold in, listed without a
-        seller name.  Lots that aren't part of an auction are taken off the site.
-      </li>
-      {% endif %}
-      {% if summary.club_memberships_kept %}
-      <li>
-        {{ summary.club_memberships_kept }} club membership record{{ summary.club_memberships_kept|pluralize }}
-        stay{{ summary.club_memberships_kept|pluralize:"s," }} with the club.  A club admin created or edited
-        {{ summary.club_memberships_kept|pluralize:"it,them" }}, so {{ summary.club_memberships_kept|pluralize:"it is,they are" }}
-        the club's own record of a member &mdash; including dues paid, award points, and your place on the club's
-        mailing list.  We remove the link to your account and nothing else.  To have the record itself deleted, or to
-        stop the club emailing you, ask the club directly.
-      </li>
-      {% endif %}
-      <li>Chat messages and lot comments you posted stay on the lots they belong to, with no name attached.</li>
-      <li>
-        Auction and club history keeps a record of what happened, with no account attached.  Where those notes
-        mention your email address, the address is replaced with <em>[deleted]</em>.
-      </li>
-    </ul>
-
-    {% if summary.auctions_created or summary.clubs_administered %}
-    {% comment %} Not a blocker -- just the thing they'd want to have known afterwards. {% endcomment %}
-    <div class="alert alert-info">
-      <i class="bi bi-info-circle"></i>
-      {% if summary.auctions_created %}
-        You've created {{ summary.auctions_created }} auction{{ summary.auctions_created|pluralize }}, which will stay on the site
-        without you.
-      {% endif %}
-      {% if summary.clubs_administered %}
-        You're an admin of {{ summary.clubs_administered }} club{{ summary.clubs_administered|pluralize }}.
-      {% endif %}
-      Make sure somebody else has admin access before you go.
-    </div>
-    {% endif %}
-
-    <p class="text-muted">
-      Read the <a href="{% url 'privacy_policy' %}">privacy policy</a> for what we store and who can see it.
-    </p>
-
-    {% if not deletion_due %}
-    <div class="card border-danger mt-4">
-      <div class="card-body">
-        <h5 class="card-title">Delete my account</h5>
-        <p>
-          Your account will be deleted in {{ grace_period_days }} days.  Until then, signing in again cancels it
-          &mdash; after that it can't be undone.
-        </p>
-        <form method="post" action="{% url 'account_delete' %}">
-          {% csrf_token %}
-          <label for="confirm_username" class="form-label">
-            Type your username <strong>{{ request.user.username }}</strong> to confirm:
-          </label>
-          <input type="text" class="form-control mb-3" id="confirm_username" name="confirm_username"
-                 autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false" required
-                 style="max-width: 24rem;">
-          <button type="submit" class="btn btn-danger">Delete my account</button>
-          <a href="{% url 'preferences' %}" class="btn btn-secondary">Cancel</a>
-        </form>
-      </div>
-    </div>
-    {% endif %}
+    <form method="post" action="{% url 'account_delete' %}" class="mb-0">
+      {% csrf_token %}
+      <input type="hidden" name="action" value="cancel">
+      <button type="submit" class="btn btn-primary">Keep my account</button>
+    </form>
   </div>
+{% endif %}
+
+<p>
+  Deleting your account removes you and your personal details from {{ navbar_brand }}.  Records that
+  belong to other people &mdash; auction results, invoices, and what clubs keep about their own members
+  &mdash; stay, without your name attached.  Here is exactly what that means.
+</p>
+
+<h5 class="mt-4">What is deleted</h5>
+<ul>
+  <li>Your sign-in: username, email address, password, and any linked Google account.  You will not be able to sign in again.</li>
+  <li>Your profile: name, phone number, mailing address, map location, and all of your preferences.</li>
+  <li>Your watched lots, saved searches, browsing history, and category interests.</li>
+  <li>{% if summary.devices %}The {{ summary.devices }} device{{ summary.devices|pluralize }} you've used the app on, and their{% else %}Any app devices and their{% endif %} notification tokens &mdash; your phone stops receiving notifications.</li>
+  <li>Any PayPal or Square account you connected to receive payments.</li>
+  {% if summary.club_memberships_deleted %}
+  <li>
+    {{ summary.club_memberships_deleted }} club membership{{ summary.club_memberships_deleted|pluralize }}
+    you signed yourself up for and that no club admin has edited since &mdash; including your place on
+    {{ summary.club_memberships_deleted|pluralize:"that club's,those clubs'" }} mailing list, if they use
+    Mailchimp or Brevo.
+  </li>
+  {% endif %}
+</ul>
+
+<h5 class="mt-4">What stays</h5>
+<ul>
+  {% if summary.auctions %}
+  <li>
+    The {{ summary.auctions }} auction{{ summary.auctions|pluralize }} you've taken part in keep your bidder
+    number and every amount on your invoices &mdash; a seller's payout history has to keep adding up &mdash;
+    but your name and contact details come off them.
+  </li>
+  {% else %}
+  <li>
+    Auction records keep bidder numbers and amounts so that other people's invoices and payouts still add up,
+    with your name and contact details removed.
+  </li>
+  {% endif %}
+  {% if summary.auctions_added_by_admins %}
+  <li>
+    {{ summary.auctions_added_by_admins }} of those record{{ summary.auctions_added_by_admins|pluralize }}
+    {{ summary.auctions_added_by_admins|pluralize:"was,were" }} written down by an auction admin when you turned
+    up in person, from what you told them at the door.  That is the auction's own note of who was there, so it
+    stays as it is &mdash; only the link to your account is removed.
+  </li>
+  {% endif %}
+  {% if summary.lots %}
+  <li>
+    Your {{ summary.lots }} lot{{ summary.lots|pluralize }} stay in the auctions they were sold in, listed without a
+    seller name.  Lots that aren't part of an auction are taken off the site.
+  </li>
+  {% endif %}
+  {% if summary.club_memberships_kept %}
+  <li>
+    {{ summary.club_memberships_kept }} club membership record{{ summary.club_memberships_kept|pluralize }}
+    stay{{ summary.club_memberships_kept|pluralize:"s," }} with the club.  A club admin created or edited
+    {{ summary.club_memberships_kept|pluralize:"it,them" }}, so {{ summary.club_memberships_kept|pluralize:"it is,they are" }}
+    the club's own record of a member &mdash; including dues paid, award points, and your place on the club's
+    mailing list.  We remove the link to your account and nothing else.  To have the record itself deleted, or to
+    stop the club emailing you, ask the club directly.
+  </li>
+  {% endif %}
+  <li>Chat messages and lot comments you posted stay on the lots they belong to, with no name attached.</li>
+  <li>
+    Auction and club history keeps a record of what happened, with no account attached.  Where those notes
+    mention your email address, the address is replaced with <em>[deleted]</em>.
+  </li>
+</ul>
+
+{% if summary.auctions_created or summary.clubs_administered %}
+{% comment %} Not a blocker -- just the thing they'd want to have known afterwards. {% endcomment %}
+<div class="alert alert-info">
+  <i class="bi bi-info-circle"></i>
+  {% if summary.auctions_created %}
+    You've created {{ summary.auctions_created }} auction{{ summary.auctions_created|pluralize }}, which will stay on the site
+    without you.
+  {% endif %}
+  {% if summary.clubs_administered %}
+    You're an admin of {{ summary.clubs_administered }} club{{ summary.clubs_administered|pluralize }}.
+  {% endif %}
+  Make sure somebody else has admin access before you go.
+</div>
+{% endif %}
+
+<p class="text-muted">
+  Read the <a href="{% url 'privacy_policy' %}">privacy policy</a> for what we store and who can see it.
+</p>
+
+{% if not deletion_due %}
+<div class="card border-danger mt-4">
+  <div class="card-body">
+    <h5 class="card-title">Delete my account</h5>
+    <p>
+      Your account will be deleted in {{ grace_period_days }} days.  Until then, signing in again cancels it
+      &mdash; after that it can't be undone.
+    </p>
+    <form method="post" action="{% url 'account_delete' %}">
+      {% csrf_token %}
+      <label for="confirm_username" class="form-label">
+        Type your username <strong>{{ request.user.username }}</strong> to confirm:
+      </label>
+      <input type="text" class="form-control mb-3" id="confirm_username" name="confirm_username"
+             autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false" required
+             style="max-width: 24rem;">
+      <button type="submit" class="btn btn-danger">Delete my account</button>
+      <a href="{% url 'preferences' %}" class="btn btn-secondary">Cancel</a>
+    </form>
+  </div>
+</div>
+{% endif %}
 </div>
 {% endblock %}

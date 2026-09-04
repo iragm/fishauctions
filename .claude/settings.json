@@ -8,5 +8,18 @@
       "Bash(docker compose logs *)"
     ],
     "defaultMode": "bypassPermissions"
+  },
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/check-edit.sh"
+          }
+        ]
+      }
+    ]
   }
 }

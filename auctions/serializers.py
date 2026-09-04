@@ -1,3 +1,14 @@
+"""DRF serializers for the club API: the shape of what a key gets back.
+
+Two rules run through the whole file. **Everything that names somebody lives in a ``private``
+object** which :class:`PrivateBlockMixin` removes entirely -- absent, not null -- for a key without
+the privacy flag. And **money is always a string**: :class:`DecimalField` renders one, because a raw
+``Decimal`` in a hand-built dict comes out of DRF's encoder as a float.
+
+:class:`SparseFieldsMixin` implements ``?fields=`` by dropping fields in ``__init__``, so an omitted
+field costs no queries. It cannot conjure ``private`` -- the mixin pops that afterwards.
+"""
+
 import re
 from datetime import timezone as date_tz
 from urllib.parse import quote_plus

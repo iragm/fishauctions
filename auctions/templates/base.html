@@ -382,15 +382,10 @@ window.onload = function() {
                       <a class="dropdown-item" href="{% url 'my_bids' %}"><i class="bi bi-coin"></i> Bids</a>
                       <a class="dropdown-item" href="{% url 'won_lots' %}"><i class="bi bi-calendar-check"></i> Won lots</a>
                       <div class="dropdown-divider"></div>
-                      <h6 class="dropdown-header"><i class="bi bi-person-fill"></i> Account</h6>
-                      <a class="dropdown-item" href="{% url 'account' %}"><i class="bi bi-info-circle"></i> Account information</a>
-                      <a class="dropdown-item" href="{% url 'feedback' %}"><i class="bi bi-chat-heart"></i> Feedback</a>
+                      {% comment %}Three rows, not eleven. Contact info, Preferences, Label printing, Ignore categories and Messages -- and everything that used to be in the preferences ribbon's More dropdown -- are behind Account, which lands on the page you were last on (see auctions/account_nav.py). Invoices and Feedback keep a row of their own: neither is a setting, and both are things people come to the menu looking for.{% endcomment %}
                       <a class="dropdown-item" href="{% url 'my_invoices' %}"><i class="bi bi-bag"></i> Invoices</a>
-                      <a class="dropdown-item" href="{% url 'contact_info' %}"><i class="bi bi-telephone-fill"></i> Contact info</a>
-                      <a class="dropdown-item" href="{% url 'preferences' %}"><i class="bi bi-sliders"></i> Preferences</a>
-                      <a class="dropdown-item" href="{% url 'printing' %}"><i class="bi bi-tag"></i> Label printing</a>
-                      <a class="dropdown-item" href="{% url 'ignore_categories' %}"><i class="bi bi-ban"></i> Ignore categories</a>
-                      <a class="dropdown-item" href="{% url 'messages' %}"><i class="bi bi-chat"></i> Messages</a>
+                      <a class="dropdown-item" href="{% url 'feedback' %}"><i class="bi bi-chat-heart"></i> Feedback</a>
+                      <a class="dropdown-item" href="{% url 'account_setup' %}"><i class="bi bi-person-fill"></i> Account</a>
                       <form method="post" action="{% url 'account_logout' %}">
                         {% csrf_token %}
                         {% if redirect_field_value %}
@@ -482,8 +477,11 @@ window.onload = function() {
             <div class="row">
               {% if view.club_sidebar_can_view %}
               <div class="col-lg-3 col-xl-2 mb-3 min-w-0">{% club_sidebar %}</div>
+              {% elif account_nav_active %}
+              {% comment %}The account pages stay in the narrow `container` above: they are forms, not the wide tables the club sidebar's container-fluid is for.{% endcomment %}
+              <div class="col-lg-3 mb-3 min-w-0">{% include "account_sidebar.html" %}</div>
               {% endif %}
-              <div class="{% if view.club_sidebar_can_view %}col-lg-9 col-xl-10{% else %}col-md-12{% endif %}">
+              <div class="{% if view.club_sidebar_can_view %}col-lg-9 col-xl-10{% elif account_nav_active %}col-lg-9{% else %}col-md-12{% endif %}">
                 {% block content %}{% endblock %}
                 {% block extra_content %}{% endblock %}
               </div>
@@ -525,8 +523,11 @@ window.onload = function() {
       }
     </script>
     <!-- <script type="text/javascript" src="https://unpkg.com/htmx.org@1.8.0/dist/htmx.js"></script>-->
-    <script type="text/javascript" src="{% static 'js/htmx.min.js' defer %}"></script>
-    <script type="text/javascript" src="{% static 'js/ws.js' defer %}"></script>
+    {% comment %}defer belongs on the script element. Inside {% static %} it is an extra argument
+    the tag silently ignores, so these two have been loading render-blocking since they were
+    written -- the intent was clearly the opposite.{% endcomment %}
+    <script type="text/javascript" src="{% static 'js/htmx.min.js' %}" defer></script>
+    <script type="text/javascript" src="{% static 'js/ws.js' %}" defer></script>
     {# CRSF for use with HTMX #}
     <script>
       document.body.addEventListener('htmx:configRequest', (event) => {

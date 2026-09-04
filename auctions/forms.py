@@ -1,3 +1,26 @@
+"""Every form on the site: what a person is allowed to type, and what it means when they do.
+
+Django forms, `crispy_forms` helpers and the validators they share. Four things here are
+load-bearing beyond the usual:
+
+* **``configure_species_field``** is the single place a species picker is set up, and its
+  ``picker=`` and ``dal_for=`` arguments are the difference between the three surfaces: the lot form
+  gets a picker that opens itself when a name is ambiguous, quick-add pages get no picker at all
+  (one certain match goes into a hidden input, anything less is left blank), and the auction admin's
+  lot editor gets one `dal` picker over every species including strains.
+* **``ChangeUserPreferencesForm`` and ``ChangeUserNotificationsForm`` partition the ``UserData``
+  fields between them** -- no field on both. That is why neither page needs any JavaScript:
+  ``distance_unit`` stayed on preferences and the three radii went to notifications, so nothing on
+  either page can change a unit a field beside it must be converted against. Distances are stored in
+  **miles** always; the notifications form converts once in ``__init__`` and once in ``clean()``.
+  A field added to neither form disappears from the ``update_preferences`` assistant tool.
+* **A field removed from a model must come off every form here in the same commit.** A form naming a
+  dropped field raises ``FieldError`` at import, which takes ``urls.py`` with it and crash-loops the
+  container behind an entrypoint that will not serve a half-migrated database.
+* **``clean_summernote`` and the image validators are the trust boundary** for anything a member of
+  the public types or uploads.
+"""
+
 import datetime
 import logging
 import re
@@ -39,6 +62,7 @@ from easy_thumbnails.exceptions import EasyThumbnailsError
 from PIL import Image, ImageFile, ImageOps, UnidentifiedImageError
 
 from .helper_functions import get_currency_symbol
+from .html_sanitize import sanitize_summernote_html
 from .models import (
     Auction,
     AuctionDropdown,
@@ -74,7 +98,6 @@ from .models import (
     UserLabelPrefs,
     VolunteerJob,
     normalize_species_name,
-    sanitize_summernote_html,
 )
 from .services import auction_to_copy, clone_lot_values, user_can_clone_lot
 from .site_setup import SINGLE_CLUB_DEFAULT_MANAGE_MODE, get_single_club
@@ -1787,14 +1810,14 @@ class CreateEditAuctionTOS(forms.ModelForm):
         other_bidder_numbers = AuctionTOS.objects.filter(auction=self.auction, bidder_number=bidder_number)
         if self.auctiontos:
             other_bidder_numbers = other_bidder_numbers.exclude(pk=self.auctiontos.pk)
-        if other_bidder_numbers.count():
+        if other_bidder_numbers.exists():
             self.add_error("bidder_number", "This bidder number is already in this auction")
         email = cleaned_data.get("email")
         if email:
             other_emails = AuctionTOS.objects.filter(auction=self.auction, email=email)
             if self.auctiontos:
                 other_emails = other_emails.exclude(pk=self.auctiontos.pk)
-            if other_emails.count():
+            if other_emails.exists():
                 self.add_error("email", "This email is already in this auction")
         return cleaned_data
 
@@ -4221,7 +4244,7 @@ class UserLabelPrefsForm(forms.ModelForm):
                     disabled_values=("system", "bluetooth"),
                 )
                 self.fields["print_method"].help_text = (
-                    "System printer and Bluetooth printing only work in the FishAuctions app. "
+                    "System printer and Bluetooth printing only work in the app. "
                     "Only PDF labels are available from the web."
                 )
             print_method_layout = [
@@ -4342,45 +4365,127 @@ class UserLabelPrefsForm(forms.ModelForm):
 
 
 class ChangeUserPreferencesForm(forms.ModelForm):
+    """What the site shows you: /preferences/.
+
+    Everything about being *notified* moved to :class:`ChangeUserNotificationsForm` and its own
+    page. Splitting them took the page's JavaScript with it -- ``distance_unit`` lives here and the
+    three radii live there, so changing the unit can no longer need to convert a field on the same
+    screen. Distances are stored in miles whatever this says; the unit only decides how the
+    notifications page renders and reads them.
+    """
+
     class Meta:
         model = UserData
         fields = (
             "email_visible",
-            "distance_unit",
-            "preferred_currency",
-            "email_me_about_new_auctions",
-            "email_me_about_new_auctions_distance",
-            "email_me_about_new_local_lots",
-            "local_distance",
-            "email_me_about_new_lots_ship_to_location",
-            "email_me_when_people_comment_on_my_lots",
-            "email_me_about_new_chat_replies",
-            "push_notifications_instead_of_email",
-            "email_me_about_new_in_person_auctions",
-            "email_me_about_new_in_person_auctions_distance",
-            "send_reminder_emails_about_joining_auctions",
             "username_visible",
             "share_lot_images",
             "auto_add_images",
-            "push_notifications_when_lots_sell",
             "show_nearby_auctions",
+            "distance_unit",
+            "preferred_currency",
         )
+
+    def __init__(self, user, *args, **kwargs):
+        self.user = user
+        super().__init__(*args, **kwargs)
+        self.helper = FormHelper()
+        self.helper.form_method = "post"
+        self.helper.form_id = "user-form"
+        self.helper.form_class = "form"
+        self.helper.form_tag = True
+        self.helper.layout = Layout(
+            Div(
+                Div(
+                    "email_visible",
+                    css_class="col-md-4",
+                ),
+                Div(
+                    "username_visible",
+                    css_class="col-md-4",
+                ),
+                Div(
+                    "share_lot_images",
+                    css_class="col-md-6",
+                ),
+                Div(
+                    "auto_add_images",
+                    css_class="col-md-6",
+                ),
+                css_class="row",
+            ),
+            Div(
+                Div(
+                    "show_nearby_auctions",
+                    css_class="col-md-12",
+                ),
+                css_class="row",
+            ),
+            Div(
+                Div(
+                    "distance_unit",
+                    css_class="col-md-4",
+                ),
+                Div(
+                    "preferred_currency",
+                    css_class="col-md-4",
+                ),
+                css_class="row",
+            ),
+            Submit("submit", "Save", css_class="btn-success"),
+        )
+
+
+class ChangeUserNotificationsForm(forms.ModelForm):
+    """When the site is allowed to contact you: /notifications/.
+
+    These were the bottom half of the preferences page. They are a page of their own now because
+    they are what people come to change -- and because ``distance_unit`` staying behind on
+    /preferences/ is what let the last of this page's JavaScript go. The unit is fixed for the life
+    of the page, so a km user's radii are converted once in ``__init__`` for display and once in
+    ``clean`` on the way back to the miles the database stores. There is nothing left for a
+    ``change`` handler to keep in step.
+    """
+
+    class Meta:
+        model = UserData
+        fields = (
+            "push_notifications_instead_of_email",
+            "push_notifications_when_lots_sell",
+            "email_me_when_people_comment_on_my_lots",
+            "email_me_about_new_chat_replies",
+            "send_reminder_emails_about_joining_auctions",
+            "email_me_about_new_auctions",
+            "email_me_about_new_auctions_distance",
+            "email_me_about_new_in_person_auctions",
+            "email_me_about_new_in_person_auctions_distance",
+            "email_me_about_new_local_lots",
+            "local_distance",
+            "email_me_about_new_lots_ship_to_location",
+        )
+
+    #: The radii, and the fields whose help text names the unit. One list so the two conversions
+    #: and the help text cannot fall out of step with each other.
+    DISTANCE_FIELDS = (
+        "email_me_about_new_auctions_distance",
+        "email_me_about_new_in_person_auctions_distance",
+        "local_distance",
+    )
 
     def __init__(self, user, *args, is_mobile_app=False, **kwargs):
         self.user = user
         super().__init__(*args, **kwargs)
-        # Convert distances from miles to km for display if user prefers km
-        if self.instance and self.instance.distance_unit == "km":
-            if self.instance.email_me_about_new_auctions_distance:
-                self.initial["email_me_about_new_auctions_distance"] = round(
-                    self.instance.email_me_about_new_auctions_distance * MILES_TO_KM
-                )
-            if self.instance.email_me_about_new_in_person_auctions_distance:
-                self.initial["email_me_about_new_in_person_auctions_distance"] = round(
-                    self.instance.email_me_about_new_in_person_auctions_distance * MILES_TO_KM
-                )
-            if self.instance.local_distance:
-                self.initial["local_distance"] = round(self.instance.local_distance * MILES_TO_KM)
+        self.in_km = bool(self.instance and self.instance.distance_unit == "km")
+        # Stored in miles, always. A km user sees kilometres in the boxes and `clean` puts miles
+        # back; nothing on this page can change the unit underneath them mid-edit.
+        if self.in_km:
+            for field in self.DISTANCE_FIELDS:
+                value = getattr(self.instance, field, None)
+                if value:
+                    self.initial[field] = round(value * MILES_TO_KM)
+        unit = "km" if self.in_km else "miles"
+        for field in self.DISTANCE_FIELDS:
+            self.fields[field].help_text = f"{unit}, from your address"
         self.helper = FormHelper()
         self.helper.form_method = "post"
         self.helper.form_id = "user-form"
@@ -4410,7 +4515,7 @@ class ChangeUserPreferencesForm(forms.ModelForm):
                 )
             else:
                 self.fields["push_notifications_instead_of_email"].help_text = (
-                    "Install the FishAuctions app and sign in on a device to enable this. Then you'll get "
+                    "Install the app and sign in on a device to enable this. Then you'll get "
                     "notifications in the app instead of emails, for everything except account emails."
                 )
         # The watched-lot "bidding is starting" alert goes to the app whenever the app can receive
@@ -4430,11 +4535,6 @@ class ChangeUserPreferencesForm(forms.ModelForm):
                 "For in-person auctions, get a notification when bidding starts on a lot that you've "
                 "watched.  Allow notifications for this app to receive them."
             )
-        # Update help text for distance fields based on selected unit
-        unit = "km" if self.instance and self.instance.distance_unit == "km" else "miles"
-        self.fields["email_me_about_new_auctions_distance"].help_text = f"{unit}, from your address"
-        self.fields["email_me_about_new_in_person_auctions_distance"].help_text = f"{unit}, from your address"
-        self.fields["local_distance"].help_text = f"{unit}, from your address"
         local_lots_fields = []
         if settings.ALLOW_USERS_TO_CREATE_LOTS:
             local_lots_fields = [
@@ -4460,48 +4560,11 @@ class ChangeUserPreferencesForm(forms.ModelForm):
         self.helper.layout = Layout(
             Div(
                 Div(
-                    "email_visible",
-                    css_class="col-md-4",
-                ),
-                Div(
-                    "username_visible",
-                    css_class="col-md-4",
-                ),
-                Div(
-                    "share_lot_images",
-                    css_class="col-md-6",
-                ),
-                Div(
-                    "auto_add_images",
-                    css_class="col-md-6",
-                ),
-                # Div('use_list_view',css_class='col-md-4',),
-                # Div('use_dark_theme',css_class='col-md-4',),
-                Div(
-                    "push_notifications_when_lots_sell",
-                    css_class="col-md-6",
-                ),
-                Div(
-                    "distance_unit",
-                    css_class="col-md-4",
-                ),
-                Div(
-                    "preferred_currency",
-                    css_class="col-md-4",
-                ),
-                css_class="row",
-            ),
-            Div(
-                Div(
-                    "show_nearby_auctions",
+                    "push_notifications_instead_of_email",
                     css_class="col-md-12",
                 ),
-                css_class="row",
-            ),
-            HTML('<h4 class="mt-4">Notifications</h4>'),
-            Div(
                 Div(
-                    "push_notifications_instead_of_email",
+                    "push_notifications_when_lots_sell",
                     css_class="col-md-12",
                 ),
                 css_class="row",
@@ -4522,8 +4585,8 @@ class ChangeUserPreferencesForm(forms.ModelForm):
                 css_class="row",
             ),
             HTML(
-                "<p class=\"text-muted small\">You'll get one email per week that contains an update on everything you've"
-                " checked below, and only if you haven't visited the site in the last 6 days.</p>"
+                '<p class="text-muted small mt-3">You\'ll get one email per week that contains an update on'
+                " everything you've checked below, and only if you haven't visited the site in the last 6 days.</p>"
             ),
             Div(
                 Div(
@@ -4548,30 +4611,18 @@ class ChangeUserPreferencesForm(forms.ModelForm):
                 css_class="row",
             ),
             *local_lots_fields,
-            # Div(
-            #     Div('location',css_class='col-md-6',),
-            #
-            #     css_class='row',
-            # ),
             Submit("submit", "Save", css_class="btn-success"),
         )
 
     def clean(self):
         cleaned_data = super().clean()
-        # Convert distance values from km to miles if needed, as we store everything in miles
-        distance_unit = cleaned_data.get("distance_unit")
-        if distance_unit == "km":
-            # Convert km to miles for storage
-            if cleaned_data.get("email_me_about_new_auctions_distance"):
-                cleaned_data["email_me_about_new_auctions_distance"] = round(
-                    cleaned_data["email_me_about_new_auctions_distance"] / MILES_TO_KM
-                )
-            if cleaned_data.get("email_me_about_new_in_person_auctions_distance"):
-                cleaned_data["email_me_about_new_in_person_auctions_distance"] = round(
-                    cleaned_data["email_me_about_new_in_person_auctions_distance"] / MILES_TO_KM
-                )
-            if cleaned_data.get("local_distance"):
-                cleaned_data["local_distance"] = round(cleaned_data["local_distance"] / MILES_TO_KM)
+        # Everything is stored in miles. `self.in_km` is the unit the boxes were *rendered* in, read
+        # off the instance rather than off a field on this form -- the unit lives on /preferences/
+        # and cannot have changed while this page was open.
+        if self.in_km:
+            for field in self.DISTANCE_FIELDS:
+                if cleaned_data.get(field):
+                    cleaned_data[field] = round(cleaned_data[field] / MILES_TO_KM)
         return cleaned_data
 
 

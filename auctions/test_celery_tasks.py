@@ -14,8 +14,13 @@ from django_celery_beat.models import PeriodicTask
 
 from auctions import tasks
 from auctions.models import Auction, AuctionHistory, AuctionTOS, Club, Invoice, PickupLocation
+from auctions.test_support import isolated_cache
 
 
+# isolated_cache is required, not tidiness: endauctions and compute_user_flow_all now take a cache
+# lock, and --parallel workers share one Redis. Without it, two workers running these at the same
+# moment would have one of them correctly skip its run and fail its own assertion.
+@isolated_cache("celery-tasks")
 class CeleryTasksTestCase(TestCase):
     """Test case for Celery tasks."""
 
@@ -755,3 +760,309 @@ class FixedDatabaseSchedulerTestCase(TestCase):
         from django.db.models import Q
 
         self.assertEqual(str(exclude_query), str(Q()))
+
+
+@isolated_cache("celery-locks")
+class OverlapLockTestCase(TestCase):
+    """The two tasks that must never run twice at once."""
+
+    def setUp(self):
+        # A lock deliberately taken by one test would otherwise still be held by the next one --
+        # these tests are exactly the ones that leave locks behind.
+        from django.core.cache import cache
+
+        cache.delete(tasks.ENDAUCTIONS_LOCK_KEY)
+        cache.delete(tasks.USER_FLOW_LOCK_KEY)
+
+    @patch("auctions.tasks.call_command")
+    def test_endauctions_skips_a_tick_it_is_already_running(self, mock_call_command):
+        """The beat fires this every 60 seconds and the soft time limit is 300, so a slow run --
+        which is a run at the moment a big auction ends -- overlaps the next one. Two runs read the
+        same active lots and both see `sold` as False, so both send the lot-ended message and both
+        write invoices."""
+        from django.core.cache import cache
+
+        cache.add(tasks.ENDAUCTIONS_LOCK_KEY, "1", timeout=60)
+        tasks.endauctions()
+        mock_call_command.assert_not_called()
+
+    @patch("auctions.tasks.call_command")
+    def test_endauctions_releases_the_lock_when_the_command_raises(self, mock_call_command):
+        """A lock held by a crashed run would stop the auction ending for as long as it lasts."""
+        from django.core.cache import cache
+
+        boom = "the command blew up"
+        mock_call_command.side_effect = RuntimeError(boom)
+        with self.assertRaises(RuntimeError):
+            tasks.endauctions()
+        self.assertIsNone(cache.get(tasks.ENDAUCTIONS_LOCK_KEY))
+
+    @patch("auctions.tasks._compute_user_flow_all")
+    def test_a_second_user_flow_request_is_dropped_rather_than_queued(self, mock_compute):
+        """It holds a worker slot for as long as it takes (time_limit=None) and the worker runs at
+        concurrency=2, so two presses of the admin button used to stop every other task on the
+        site -- endauctions included."""
+        from django.core.cache import cache
+
+        cache.add(tasks.USER_FLOW_LOCK_KEY, "1", timeout=60)
+        tasks.compute_user_flow_all()
+        mock_compute.assert_not_called()
+
+    @patch("auctions.tasks._compute_user_flow_all")
+    def test_the_user_flow_lock_is_released_afterwards(self, mock_compute):
+        from django.core.cache import cache
+
+        tasks.compute_user_flow_all()
+        mock_compute.assert_called_once()
+        self.assertIsNone(cache.get(tasks.USER_FLOW_LOCK_KEY))
+
+    @patch("auctions.views.AdminUserFlow._compute_flow", return_value=([], []))
+    def test_the_run_re_stamps_its_own_lock(self, mock_flow):
+        """The task has no time limit, so the lock cannot be "longer than the longest run" -- it is
+        a heartbeat, kept alive by the run itself. Without this a long run would age its own lock
+        out and let a second press start beside it."""
+        from django.core.cache import cache
+
+        Auction.objects.create(title="Flow auction", date_start=timezone.now() - datetime.timedelta(days=1))
+        tasks._compute_user_flow_all(0)
+        self.assertEqual(cache.get(tasks.USER_FLOW_LOCK_KEY), "1")
+
+
+@isolated_cache("celery-ytd")
+class YearlyBapResetTestCase(TestCase):
+    """The reset used to be an `if today is January 1` branch in the middle of another task."""
+
+    def setUp(self):
+        self.club = Club.objects.create(name="YTD Club", enable_breeder_award_program=True)
+
+    def _member(self, **kwargs):
+        from auctions.models import ClubMember
+
+        return ClubMember.objects.create(club=self.club, name="Breeder", bap_points_ytd=12, **kwargs)
+
+    def _reset_year(self, year):
+        Club.objects.filter(pk=self.club.pk).update(bap_ytd_reset_year=year)
+
+    def test_it_catches_up_when_it_missed_the_first_of_january(self):
+        """The whole point. Nothing here is a date check: a club whose recorded year is behind the
+        current one is reset whenever this next runs, however late."""
+        member = self._member()
+        self._reset_year(timezone.localtime().year - 1)
+        tasks.reset_yearly_bap_counters()
+        member.refresh_from_db()
+        self.assertEqual(member.bap_points_ytd, 0)
+
+    def test_a_club_that_has_never_been_stamped_is_stamped_and_not_zeroed(self):
+        """Null is "nobody has ever written this column", not "overdue since the beginning of
+        time" -- which is every club that existed before the column did. Zeroing them is a wipe of
+        the current year's points in whatever month the first run lands in."""
+        member = self._member()
+        self.assertIsNone(self.club.bap_ytd_reset_year)
+        tasks.reset_yearly_bap_counters()
+        member.refresh_from_db()
+        self.club.refresh_from_db()
+        self.assertEqual(member.bap_points_ytd, 12, "a club with no recorded year had its points wiped")
+        self.assertEqual(self.club.bap_ytd_reset_year, timezone.localtime().year)
+
+    def test_a_club_created_today_keeps_todays_points(self):
+        """The same rule a day at a time: a club made this morning is null until this first runs,
+        and the awards entered between the two must survive it."""
+        member = self._member()
+        tasks.reset_yearly_bap_counters()
+        member.refresh_from_db()
+        self.assertEqual(member.bap_points_ytd, 12)
+        # ...and it is stamped, so the next new year does reset it.
+        self._reset_year(timezone.localtime().year - 1)
+        tasks.reset_yearly_bap_counters()
+        member.refresh_from_db()
+        self.assertEqual(member.bap_points_ytd, 0)
+
+    def test_it_does_not_zero_the_same_club_twice(self):
+        """It runs daily and is a no-op on 364 of them; a second run must not wipe points earned
+        since the first."""
+        member = self._member()
+        self._reset_year(timezone.localtime().year - 1)
+        tasks.reset_yearly_bap_counters()
+        member.refresh_from_db()
+        self.assertEqual(member.bap_points_ytd, 0)
+        member.bap_points_ytd = 5
+        member.save(update_fields=["bap_points_ytd"])
+        tasks.reset_yearly_bap_counters()
+        member.refresh_from_db()
+        self.assertEqual(member.bap_points_ytd, 5)
+
+    def test_a_club_without_the_program_is_left_alone(self):
+        other = Club.objects.create(name="No BAP", enable_breeder_award_program=False)
+        from auctions.models import ClubMember
+
+        member = ClubMember.objects.create(club=other, name="Somebody", bap_points_ytd=7)
+        tasks.reset_yearly_bap_counters()
+        member.refresh_from_db()
+        self.assertEqual(member.bap_points_ytd, 7)
+
+    def test_the_year_is_recorded_on_the_club(self):
+        self._member()
+        tasks.reset_yearly_bap_counters()
+        self.club.refresh_from_db()
+        self.assertEqual(self.club.bap_ytd_reset_year, timezone.localtime().year)
+
+
+@isolated_cache("celery-stats-watchdog")
+class AuctionStatsWatchdogTestCase(TestCase):
+    """update_auction_stats is not on the beat; it re-arms itself at the end of every run.
+
+    A run killed by the hard time limit never reaches that call, and beat has already disabled the
+    one-off row that fired it, so the chain simply stops.
+    """
+
+    @patch("auctions.tasks.schedule_auction_stats_update")
+    def test_it_re_arms_when_the_task_row_is_gone(self, mock_schedule):
+        PeriodicTask.objects.filter(name=tasks.AUCTION_STATS_TASK_NAME).delete()
+        tasks.ensure_auction_stats_task_scheduled()
+        mock_schedule.assert_called_once()
+
+    @staticmethod
+    def _arm(run_at, *, enabled=True):
+        """The row the real scheduler would leave behind, built without it.
+
+        `schedule_auction_stats_update` is what these tests patch, so calling it here would record
+        a call and create nothing.
+        """
+        from django_celery_beat.models import ClockedSchedule
+
+        schedule, _ = ClockedSchedule.objects.get_or_create(clocked_time=run_at)
+        PeriodicTask.objects.filter(name=tasks.AUCTION_STATS_TASK_NAME).delete()
+        return PeriodicTask.objects.create(
+            name=tasks.AUCTION_STATS_TASK_NAME,
+            task="auctions.tasks.update_auction_stats",
+            clocked=schedule,
+            one_off=True,
+            enabled=enabled,
+        )
+
+    @patch("auctions.tasks.schedule_auction_stats_update")
+    def test_a_just_dispatched_row_is_a_run_in_flight_not_a_dead_chain(self, mock_schedule):
+        """Disabling the row is what beat does the *moment* it dispatches a one-off, so `enabled`
+        cannot be part of "healthy": every tick landing during a live run would start a second
+        update_auction_stats beside it and race it to recreate the same uniquely-named row."""
+        self._arm(timezone.now() - datetime.timedelta(minutes=1), enabled=False)
+        tasks.ensure_auction_stats_task_scheduled()
+        mock_schedule.assert_not_called()
+
+    @patch("auctions.tasks.schedule_auction_stats_update")
+    def test_it_re_arms_when_a_disabled_row_has_gone_stale(self, mock_schedule):
+        """A run killed by the hard time limit leaves exactly this: disabled, and a scheduled time
+        that keeps receding because nothing is left alive to move it."""
+        self._arm(
+            timezone.now() - datetime.timedelta(seconds=tasks.STATS_WATCHDOG_GRACE_SECONDS + 60),
+            enabled=False,
+        )
+        tasks.ensure_auction_stats_task_scheduled()
+        mock_schedule.assert_called_once()
+
+    @patch("auctions.tasks.schedule_auction_stats_update")
+    def test_it_re_arms_when_the_scheduled_time_is_long_past(self, mock_schedule):
+        self._arm(timezone.now() - datetime.timedelta(seconds=tasks.STATS_WATCHDOG_GRACE_SECONDS + 60))
+        tasks.ensure_auction_stats_task_scheduled()
+        mock_schedule.assert_called_once()
+
+    @patch("auctions.tasks.schedule_auction_stats_update")
+    def test_a_healthy_chain_is_left_alone(self, mock_schedule):
+        """One indexed lookup every 15 minutes and nothing else, or the watchdog would be fighting
+        the task it is watching."""
+        self._arm(timezone.now() + datetime.timedelta(minutes=5))
+        tasks.ensure_auction_stats_task_scheduled()
+        mock_schedule.assert_not_called()
+
+
+class PerItemIsolationTestCase(TestCase):
+    """One failing row must not stop the rest of the list, and must not make the whole task retry
+    it from the top -- which is what the wallet tasks used to do."""
+
+    class _FakeTask:
+        """Stands in for a bound Celery task. `self.retry(exc=...)` returns the exception for the
+        caller to raise, which is how Celery's own retry is used in this file."""
+
+        def __init__(self):
+            self.retried_with = None
+
+        def retry(self, exc=None):
+            self.retried_with = exc
+            return exc
+
+    def test_every_item_is_attempted_even_after_a_failure(self):
+        import requests
+
+        seen = []
+        message = "nope"
+
+        def do_one(item):
+            seen.append(item)
+            if item == "b":
+                raise requests.RequestException(message)
+
+        task = self._FakeTask()
+        with self.assertRaises(RuntimeError):
+            tasks._per_item(task, "wallet refresh", ["a", "b", "c"], do_one)
+        self.assertEqual(seen, ["a", "b", "c"], "c was skipped -- one bad row stopped the list")
+        self.assertIn("b: nope", str(task.retried_with))
+
+    def test_nothing_is_raised_when_every_item_succeeds(self):
+        task = self._FakeTask()
+        self.assertIsNone(tasks._per_item(task, "label", [1, 2, 3], lambda item: None))
+        self.assertIsNone(task.retried_with)
+
+
+class OrphanedPeriodicTaskTestCase(TestCase):
+    """DatabaseScheduler only ever writes beat_schedule *into* the database.
+
+    A row that leaves beat_schedule -- or one created by hand for code that was never written --
+    keeps being dispatched forever and reaches the worker as NotRegistered.
+    """
+
+    def _scheduler(self):
+        from fishauctions.celery import app
+        from fishauctions.custom_scheduler import FixedDatabaseScheduler
+
+        scheduler = object.__new__(FixedDatabaseScheduler)
+        scheduler.app = app
+        return scheduler
+
+    @staticmethod
+    def _row(name, task, **kwargs):
+        """PeriodicTask insists on a schedule of some kind, even for a row nobody will run."""
+        from django_celery_beat.models import IntervalSchedule
+
+        interval, _ = IntervalSchedule.objects.get_or_create(every=1, period=IntervalSchedule.HOURS)
+        return PeriodicTask.objects.create(name=name, task=task, interval=interval, enabled=True, **kwargs)
+
+    def test_a_row_that_is_not_in_beat_schedule_is_removed(self):
+        self._row("send_club_event_reminders", "auctions.tasks.send_club_event_reminders")
+        self._scheduler()._prune_orphaned_entries()
+        self.assertFalse(PeriodicTask.objects.filter(name="send_club_event_reminders").exists())
+
+    def test_a_row_that_is_in_beat_schedule_survives(self):
+        self._row("endauctions", "auctions.tasks.endauctions")
+        self._scheduler()._prune_orphaned_entries()
+        self.assertTrue(PeriodicTask.objects.filter(name="endauctions").exists())
+
+    def test_one_off_rows_are_left_alone(self):
+        """Auction stats, invoice notifications and BAP recalculations are scheduled at runtime and
+        are not supposed to be in beat_schedule."""
+        self._row("invoice_notification_999", "auctions.tasks.send_invoice_notification", one_off=True)
+        self._scheduler()._prune_orphaned_entries()
+        self.assertTrue(PeriodicTask.objects.filter(name="invoice_notification_999").exists())
+
+    def test_celerys_own_row_survives(self):
+        self._row("celery.backend_cleanup", "celery.backend_cleanup")
+        self._scheduler()._prune_orphaned_entries()
+        self.assertTrue(PeriodicTask.objects.filter(name="celery.backend_cleanup").exists())
+
+    def test_every_beat_entry_names_a_task_that_exists(self):
+        """The other half: a beat entry whose task was renamed or deleted is dispatched forever and
+        never runs. This is what would have caught send_club_event_reminders at review time."""
+        from fishauctions.celery import app
+
+        app.loader.import_default_modules()
+        missing = sorted(entry["task"] for entry in app.conf.beat_schedule.values() if entry["task"] not in app.tasks)
+        self.assertEqual(missing, [], "these beat_schedule entries name tasks that do not exist")

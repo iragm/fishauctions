@@ -1,0 +1,26 @@
+{% comment %}
+Page-view history, opened over HTMX into #modals-here.  One shell for both callers -- a single lot
+(views.LotPageViewHistoryView) and every lot on the selling dashboard
+(views.MyLotsPageViewHistoryView) -- because the two answer the same question at different scopes.
+The numbers themselves are in the shared partial below.
+{% endcomment %}
+<div data-htmx-modal-root>
+  <div id="modal-backdrop" class="modal-backdrop fade show" style="display:block;"></div>
+  <div id="modal" class="modal fade show" tabindex="-1" style="display:block;">
+    <div class="modal-dialog modal-lg modal-dialog-scrollable modal-dialog-centered">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h5 class="modal-title">{{ modal_title }}</h5>
+          <button type="button" class="btn-close btn-close-white" data-modal-close-action="none" aria-label="Close"></button>
+        </div>
+        <div class="modal-body">
+          {% include "auctions/partials/page_view_history.html" %}
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" data-modal-close-action="none">Close</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+<script>window.mountHtmxModal(document.currentScript.previousElementSibling);</script>

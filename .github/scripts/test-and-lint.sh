@@ -10,8 +10,9 @@ usage() {
 Usage: $0 [OPTIONS]
 Options:
 
---ci                  Run in CI mode: run all tests, lints, and formatting.
-                      Fail if changes are required
+--ci                  Run in CI mode: formatting, lints, the template-tag check and the
+                      module-map check. Fail if changes are required. NOT the tests --
+                      those are `manage.py test`, a separate step.
 -f, --format          Format the code
 -F, --format-check    Run the formatter and fail if changes would be made
 -l, --lint            Lint the code
@@ -59,13 +60,23 @@ check_templates() {
   python3 /home/app/web/auctions/template_lint.py /home/app/web
 }
 
+# docs/module_map.md is generated from the modules' own docstrings, so it can go stale the moment
+# somebody adds a file. This regenerates it in memory and fails if the checked-in copy differs, and
+# enforces the docstring and file-size rules in auctions/module_map.py. Same code the
+# auctions.test_module_map tests use.
+check_module_map() {
+  python3 /home/app/web/auctions/module_map.py
+}
+
 if [ -z ${IS_CI+x} ]; then
   eval "ruff ${RUFF_MODE} /home/app/web ${RUFF_FLAGS}"
   if [ "${RUFF_MODE}" = 'check' ]; then
     check_templates
+    check_module_map
   fi
 else
   ruff format /home/app/web --check
   ruff check /home/app/web
   check_templates
+  check_module_map
 fi

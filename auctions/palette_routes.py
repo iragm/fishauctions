@@ -166,7 +166,12 @@ ROUTE_LIST: list[Route] = [
     _r("my_invoices", "My invoices", "My stuff", keywords=["invoice", "what do i owe", "bill", "receipt"]),
     _r("invoice_by_pk", "One specific invoice", "My stuff", scope=SCOPE_INVOICE, keywords=["invoice"]),
     _r("new_lot", "Add a single lot", "My stuff", keywords=["sell something", "list an item", "new lot"]),
-    _r("messages", "Chat messages I follow", "My stuff", keywords=["messages", "chat", "notifications"]),
+    _r(
+        "messages",
+        "Chat notification setup: the lots I get message notifications for",
+        "My stuff",
+        keywords=["messages", "chat", "notifications", "follow a lot", "unsubscribe from a lot"],
+    ),
     _r("my_lot_report", "Download my lots as a spreadsheet", "My stuff", keywords=["csv", "export my lots"]),
     _r("my_won_lot_csv", "Download lots I won as a spreadsheet", "My stuff", keywords=["csv", "export purchases"]),
     _r("lot_by_pk", "A specific lot's page", "My stuff", scope=SCOPE_LOT, keywords=["view lot", "open lot"]),
@@ -186,7 +191,19 @@ ROUTE_LIST: list[Route] = [
     _r("lot_by_pk_qr", "QR code for a lot", "My stuff", scope=SCOPE_LOT, keywords=["qr", "barcode"]),
     # --- Account ---
     _r("account", "My account", "Account", keywords=["profile", "settings", "my account"]),
-    _r("preferences", "Notification and display preferences", "Account", keywords=["settings", "emails", "opt out"]),
+    _r(
+        "account_setup",
+        "Account setup (lands on the page you were last on)",
+        "Account",
+        keywords=["account setup", "settings", "my settings", "account menu"],
+    ),
+    _r("preferences", "Display and privacy preferences", "Account", keywords=["settings", "units", "currency"]),
+    _r(
+        "notification_preferences",
+        "Email and push notification settings",
+        "Account",
+        keywords=["notifications", "emails", "opt out", "unsubscribe", "stop emailing me", "push"],
+    ),
     _r("contact_info", "My contact details and address", "Account", keywords=["address", "phone", "location"]),
     _r("change_username", "Change my username", "Account", keywords=["username", "rename"]),
     _r("ignore_categories", "Categories to hide", "Account", keywords=["ignore", "hide categories", "mute"]),
@@ -1125,6 +1142,12 @@ EXCLUDED: dict[str, str] = {
     "delete_auction_chat": _API,
     "auctionlotadmin": _API,
     "lot_bap_points": _API,
+    # The two page-view history modals (a lot's, and every lot on the selling dashboard). Both are
+    # GET-only HTMX fragments that open over the page they were pressed on; there is no page here to
+    # send anybody to, and the pages that carry the buttons -- lot_by_pk and selling -- are both in
+    # the catalog already.
+    "lot_page_view_history": _API,
+    "my_lots_page_view_history": _API,
     "auction_custom_dropdown_options": _API,
     "auctiontosadmin": _API,
     "auctiontosdelete": _API,

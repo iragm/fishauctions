@@ -44,6 +44,39 @@
           <a href="fishauctions://pay/{{ invoice.pk }}" class="btn btn-primary btn-lg w-100 my-2">
             {% if request.is_ios_app %}Tap to Pay on iPhone{% else %}Tap to Pay{% endif %}
           </a>
+          {% comment %}
+            TTP-10 (Apple 1.5 / 5.6): warm the reader from the page that renders the button. The app
+            already warms at mount and on resume, but a resume can be hours before the cashier
+            actually charges a card, and 5.6 wants the payment prompt on screen within a second of
+            the tap. Rendering the button is the last honest moment to say "a charge is imminent".
+
+            The server drives this on purpose, and it must stay that way: the app deliberately does
+            not guess which pages are checkout pages from the URL. The awareness modal used to guess
+            from a URL prefix and announced a merchant feature to organizers who had none, so it now
+            waits to be told (tapToPayOffer in auction_ribbon.html). Do not "simplify" this into the
+            app.
+
+            This is an htmx fragment: #result is re-swapped on every search, so htmx re-runs this
+            script each time the button comes back, which is what we want -- each new invoice on
+            screen is a fresh "a charge is imminent". It is a bare IIFE and deliberately binds no
+            listener: the sibling partial's document.body htmx:afterSwap handler accumulates one
+            copy per swap, and doing that here would turn a checkout desk into a warm-up storm.
+            Warming asks the backend for eligibility, so it is rendered only where the button is.
+
+            Fire and forget. It resolves {warmed: true|false} and nothing here reads the answer --
+            false only means the app's one-warm-per-2-minutes throttle swallowed it. The catch (and
+            the try around it) is what makes this safe to ship before any app change: an older build
+            has no such handler, and the promise rejects.
+          {% endcomment %}
+          <script>
+            (function () {
+              try {
+                if (window.flutter_inappwebview && window.flutter_inappwebview.callHandler) {
+                  window.flutter_inappwebview.callHandler('tapToPayWarm').catch(function () {});
+                }
+              } catch (e) { /* older app build with no handler: nothing to warm */ }
+            })();
+          </script>
         {% endif %}
         {% if not request.is_mobile_app %}
         {% if paypal_qr_code_link or square_qr_code_link %}

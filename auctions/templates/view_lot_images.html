@@ -707,6 +707,15 @@ Nothing has been dropped -- see the git history of this file if a fact looks mis
                     <tr>
                         <td class="text-nowrap"><b>Views:</b></td><td>{{ lot.page_views }} view{{ lot.page_views|pluralize }}{% if lot.number_of_watchers %}, {{lot.number_of_watchers}} watching{%endif%}
                         {% comment %}
+                        The seller and the auction's admins get the last 15 days in a modal, on
+                        online lots and on lots with no auction.  The in-person case is the collapse
+                        just below instead -- see views.can_see_lot_page_view_history, which is what
+                        sets this flag and what the modal's own view checks again.
+                        {% endcomment %}
+                        {% if show_page_view_history %}
+                            <button class="btn btn-sm btn-primary ms-1" type="button" hx-get="{% url 'lot_page_view_history' pk=lot.pk %}" hx-target="#modals-here" hx-trigger="click" aria-label="Show the last 15 days of views on this lot">15 day history <i class="bi bi-graph-up"></i></button>
+                        {% endif %}
+                        {% comment %}
                         The seller of a lot in an in-person auction gets the full per-source
                         breakdown (collapsed by default), which includes the lot-scanning rows below.
                         {% endcomment %}

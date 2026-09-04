@@ -12,7 +12,7 @@ from django.test import TestCase
 from django.urls import reverse
 from django.utils import timezone
 
-from .models import Auction, AuctionTOS, PickupLocation
+from auctions.models import Auction, AuctionTOS, PickupLocation
 
 User = get_user_model()
 

@@ -30,7 +30,7 @@
       <li>were created less than 2 years ago</li>
       {% if user.is_authenticated %}
         {% if user_has_location %}
-          <li>are within {{ online_distance }} {{ distance_unit }} (online) or {{ in_person_distance }} {{ distance_unit }} (in-person) of your location &mdash; <a href="{% url 'preferences' %}?next=/auctions/">change in preferences</a></li>
+          <li>are within {{ online_distance }} {{ distance_unit }} (online) or {{ in_person_distance }} {{ distance_unit }} (in-person) of your location &mdash; <a href="{% url 'notification_preferences' %}?next=/auctions/">change these distances</a></li>
         {% else %}
           <li><a href="{% url 'contact_info' %}">Set your exact location using the map here</a> to also see nearby auctions</li>
         {% endif %}

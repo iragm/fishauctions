@@ -3057,6 +3057,30 @@ class UpdatePreferencesTests(RunActionTestCase):
         self.user.userdata.refresh_from_db()
         self.assertEqual(self.user.userdata.local_distance, 100)
 
+    def test_switching_the_unit_itself_no_longer_shrinks_the_radii(self):
+        """This was the latent half of the same bug. `distance_unit` and the radii were on one
+        form, so saying "switch me to kilometres" re-saved three miles values through a form that
+        had just been told to read them as kilometres. They are on two forms now and the unit
+        cannot reach them."""
+        self.user.userdata.distance_unit = "mi"
+        self.user.userdata.email_me_about_new_auctions_distance = 100
+        self.user.userdata.local_distance = 60
+        self.user.userdata.save()
+        self._run("update_preferences", {"setting": "distance unit", "value": "km"})
+        self.user.userdata.refresh_from_db()
+        self.assertEqual(self.user.userdata.distance_unit, "km")
+        self.assertEqual(self.user.userdata.email_me_about_new_auctions_distance, 100)
+        self.assertEqual(self.user.userdata.local_distance, 60)
+
+    def test_a_notification_setting_saves_through_the_notifications_form(self):
+        """The settings split in two; the one tool still has to reach both halves."""
+        self.user.userdata.email_me_about_new_chat_replies = True
+        self.user.userdata.save()
+        result = self._run("update_preferences", {"setting": "chat emails", "value": False})
+        self.assertNotIn("error", result)
+        self.user.userdata.refresh_from_db()
+        self.assertFalse(self.user.userdata.email_me_about_new_chat_replies)
+
     def test_an_unknown_setting_asks_rather_than_guessing(self):
         result = self._run("update_preferences", {"setting": "the thing with the fish", "value": True})
         self.assertIn("more_info_needed", result)

@@ -1,3 +1,14 @@
+"""The websocket half of the site: live bidding, chat, and "somebody else just bid".
+
+Three consumers, one per thing a browser can watch. :class:`LotConsumer` is the important one -- it
+carries bids on an open lot, and the permission checks at the top of this module are what stop a
+socket doing something the equivalent POST would refuse.
+
+A dropped socket is invisible to the person using it, which is how a bid can appear to be placed
+and never arrive. Anything changed here wants testing with the connection actually interrupted, not
+just with a happy-path client.
+"""
+
 # chat/consumers.py
 import json
 import logging
@@ -267,6 +278,11 @@ class LotConsumer(WebsocketConsumer):
         # socket can never silently lose a bid.
         if self.user.is_authenticated:
             try:
+                # self.lot was fetched in connect() and this connection holds it for as long as the
+                # page is open -- minutes, on a lot that is being bid on the whole time. Everything
+                # derived from it (high_bid, high_bidder, ended, sold) is cached on the instance, so
+                # without this a message sent after a bid is filed at the price from before it.
+                self.lot.invalidate_cached_properties()
                 error = check_all_permissions(self.lot, self.user)
                 if error:
                     async_to_sync(self.channel_layer.group_send)(

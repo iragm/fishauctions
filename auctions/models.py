@@ -1,3 +1,40 @@
+"""The database: 80 models, and the reason they are still in one file.
+
+This module is far past the size anything else here is allowed to be, and that is a recorded
+decision rather than an oversight. **29 of the 80 models form a single dependency cycle** --
+``Auction``, ``Lot``, ``Club``, ``ClubMember``, ``AuctionTOS``, ``Invoice``, ``UserData``,
+``Species`` and the twenty-one others that reference them -- worth 11,308 of these lines. They
+reference each other as *class objects* rather than as ``"app.Model"`` strings, in field definitions
+and in method bodies alike, so splitting them across modules is not a file move: it means converting
+those references, and a mistake in that conversion is a broken foreign key rather than an
+``ImportError`` somebody notices immediately. Moving only the 51 acyclic models out would leave a
+12,300-line core and churn the history of every model for very little. Whoever breaks the cycle
+should do it as its own piece of work, and this paragraph is the note saying why it has not been.
+
+Roughly what is where, in file order:
+
+* **The site's furniture** -- ``BlogPost``, ``Location``, ``GeneralInterest``, ``FAQ``, ``Category``.
+* **``Club`` and the things hanging off it** -- ``ClubMember`` (a ``ContactRecord``),
+  ``ClubDiscordRole``, ``ClubHistory``, ``ClubEvent``, ``ClubAnnouncement``, ``ClubMoney``, the BAP
+  overrides and ``BapAward``.
+* **API keys** -- ``HashedAPIKey`` and its two subclasses, ``ClubAPIKey`` (a club, one checkbox per
+  capability) and ``UserAPIKey`` (a person, for ``/mcp/``). The prefix is stored in the clear and the
+  secret only ever as a salted hash.
+* **The auction itself** -- ``Auction``, ``AuctionTOS``, ``PickupLocation``, ``Lot``, ``Bid``,
+  ``Invoice`` and the adjustments and payments against it. This is the cycle.
+* **Species** -- ``Species``, ``SpeciesCommonName``, ``SpeciesSearchCache``,
+  ``SpeciesNameRejection``. ``Species.save()`` is where the shapes are enforced: a cultivar carries
+  ``variety`` plus a ``parent``, a hybrid carries ``variety`` with ``genus``, ``species`` and
+  ``parent`` all empty.
+* **The people-facing rest** -- ``UserData``, ``Watch``, ``PageView`` (the biggest table on the
+  site), ``ChatSubscription``, the ad models, speakers, volunteers, printing, mobile and voice.
+
+Two rules that apply to the whole file. ``PageView`` is written to on nearly every request, so
+anything added to it is added to the busiest insert here. And a ``.delay()`` from a signal goes
+inside ``transaction.on_commit`` -- a ``post_delete`` fires *inside* Django's delete transaction, and
+enqueuing directly once left a task pointing at an image already gone from Cloudflare.
+"""
+
 import datetime
 import logging
 import re
@@ -12,7 +49,6 @@ import channels.layers
 import pytz
 from asgiref.sync import async_to_sync
 from autoslug import AutoSlugField
-from bs4 import BeautifulSoup
 from django.conf import settings
 from django.contrib.auth.hashers import check_password, make_password
 from django.contrib.auth.models import User
@@ -42,6 +78,7 @@ from django.db.models.functions import Cast, Coalesce
 from django.db.models.query import QuerySet
 from django.urls import NoReverseMatch, reverse
 from django.utils import html, timezone
+from django.utils.functional import cached_property
 from django.utils.safestring import mark_safe
 from easy_thumbnails.fields import ThumbnailerImageField
 from easy_thumbnails.files import get_thumbnailer
@@ -62,6 +99,8 @@ from .email_routing import (
     sender_with_display_name,
 )
 from .helper_functions import bin_data, get_currency_symbol
+from .html_sanitize import sanitize_summernote_html
+from .model_caching import CachedPropertiesMixin, InvalidatesRelatedCache
 
 logger = logging.getLogger(__name__)
 
@@ -71,43 +110,6 @@ CUSTOM_DROPDOWN_MAX_LENGTH = 15
 # so it can be edited without a deploy. Both /privacy/ and /blog/privacy/ render this slug, and
 # /api/mobile/config/ hands its path to the app, which is required to link it from sign-up.
 PRIVACY_POLICY_SLUG = "privacy"
-
-
-def nearby_auctions(
-    latitude,
-    longitude,
-    distance=100,
-    include_already_joined=False,
-    user=None,
-    return_slugs=False,
-):
-    """Return a list of auctions or auction slugs that are within a specified distance of the given location"""
-    auctions = []
-    slugs = []
-    distances = []
-    locations = (
-        PickupLocation.objects.annotate(distance=distance_to(latitude, longitude))
-        .exclude(distance__gt=distance)
-        .filter(
-            auction__date_end__gte=timezone.now(),
-            auction__date_start__lte=timezone.now(),
-        )
-        .exclude(auction__promote_this_auction=False)
-        .exclude(auction__isnull=True)
-    )
-    if user:
-        if user.is_authenticated and not include_already_joined:
-            locations = locations.exclude(auction__auctiontos__user=user)
-        locations = locations.exclude(auction__auctionignore__user=user)
-    for location in locations:
-        if location.auction.slug not in slugs:
-            auctions.append(location.auction)
-            slugs.append(location.auction.slug)
-            distances.append(location.distance)
-    if return_slugs:
-        return slugs
-    else:
-        return auctions, distances
 
 
 def median_value(queryset, term):
@@ -254,7 +256,7 @@ def add_price_info(qs):
 
 
 def find_image(name, user, auction):
-    """Find an image from the most recent lot with a given name"""
+    """Find an image from the most recent lot with a given name (one query, not two)."""
     qs = LotImage.objects.filter(
         (Q(lot_number__user__userdata__share_lot_images=True) | Q(lot_number__user__isnull=True)),
         lot_number__lot_name=name,
@@ -264,9 +266,13 @@ def find_image(name, user, auction):
         lot_number__auction__created_by__pk__in=auction.auction_admins_pks,
     ).order_by("-lot_number__date_posted")
     if user:
-        image_from_user = qs.filter(lot_number__user=user).first()
-        if image_from_user:
-            return image_from_user
+        # the user's own image first, then the most recent of anyone else's -- the same answer the
+        # two queries gave, decided in the ORDER BY instead of in Python
+        qs = qs.annotate(
+            not_from_this_user=Case(
+                When(lot_number__user=user, then=Value(0)), default=Value(1), output_field=IntegerField()
+            )
+        ).order_by("not_from_this_user", "-lot_number__date_posted")
     return qs.first()
 
 
@@ -336,151 +342,6 @@ def distance_to(
     return distance_raw_sql
 
 
-def add_tos_info(qs):
-    """Add fields to a given AuctionTOS queryset."""
-    if not (isinstance(qs, QuerySet) and qs.model == AuctionTOS):
-        msg = "must be passed a queryset of the AuctionTOS model"
-        raise TypeError(msg)
-
-    # Add has_ever_granted_permission annotation if not already present
-    # This checks if the user has ever joined an auction (manually_added=False)
-    # for the same auction creator
-    qs = qs.annotate(
-        has_ever_granted_permission=Case(
-            When(
-                Q(user__isnull=False)
-                & Exists(
-                    AuctionTOS.objects.filter(
-                        user=OuterRef("user"), auction__created_by=OuterRef("auction__created_by"), manually_added=False
-                    )
-                ),
-                then=Value(True),
-            ),
-            default=Value(False),
-            output_field=BooleanField(),
-        )
-    )
-
-    return qs.annotate(
-        lots_bid_actual=Coalesce(
-            Subquery(
-                Bid.objects.exclude(is_deleted=True)
-                .filter(user=OuterRef("user"), lot_number__auction=OuterRef("auction"))
-                .values("user")
-                .annotate(count=Count("pk", distinct=True))
-                .values("count"),
-                output_field=IntegerField(),
-            ),
-            0,
-        ),
-        lots_bid=Case(When(Q(has_ever_granted_permission=False), then=Value(0)), default=F("lots_bid_actual")),
-        lots_viewed_actual=Coalesce(
-            Subquery(
-                PageView.objects.filter(user=OuterRef("user"), lot_number__auction=OuterRef("auction"))
-                .values("user")
-                .annotate(count=Count("lot_number", distinct=True))
-                .values("count"),
-                output_field=IntegerField(),
-            ),
-            0,
-        ),
-        lots_viewed=Case(When(Q(has_ever_granted_permission=False), then=Value(0)), default=F("lots_viewed_actual")),
-        lots_won=Count("auctiontos_winner", distinct=True),
-        lots_submitted=Count("auctiontos_seller", distinct=True),
-        other_auctions=Coalesce(
-            Subquery(
-                AuctionTOS.objects.filter(email=OuterRef("email"))
-                .exclude(id=OuterRef("id"))
-                .values("email")
-                .annotate(count=Count("*"))
-                .values("count"),
-                output_field=IntegerField(),
-            ),
-            0,
-        ),
-        lots_outbid=Case(
-            When(lots_won__gt=F("lots_bid"), then=0),
-            default=F("lots_bid") - F("lots_won"),
-            output_field=IntegerField(),
-        ),
-        account_age_ms=Case(
-            When(
-                Q(has_ever_granted_permission=False),
-                then=ExpressionWrapper(timezone.now() - F("createdon"), output_field=IntegerField()),
-            ),
-            default=ExpressionWrapper(timezone.now() - F("user__date_joined"), output_field=IntegerField()),
-        ),
-        account_age_days=ExpressionWrapper(F("account_age_ms") / 86400000000, output_field=IntegerField()),
-        other_user_bans_actual=Coalesce(
-            Subquery(
-                UserBan.objects.filter(banned_user=OuterRef("user"))
-                .values("pk")
-                .annotate(count=Count("*"))
-                .values("count"),
-                output_field=IntegerField(),
-            ),
-            0,
-        ),
-        other_user_bans=Case(
-            When(Q(has_ever_granted_permission=False), then=Value(0)),
-            default=F("other_user_bans_actual"),
-        ),
-        trust=ExpressionWrapper(
-            1 * F("lots_bid")
-            + 0.2 * F("lots_viewed")
-            + 2 * F("lots_won")
-            + 2 * F("lots_submitted")
-            + 5 * F("other_auctions")
-            - 2 * F("lots_outbid")
-            + 0.01 * F("account_age_days")
-            - 100 * F("other_user_bans"),
-            output_field=IntegerField(),
-        ),
-    )
-
-
-def add_tos_distance_info(qs):
-    """Add a distance_traveled to an auctiontos query"""
-    if not (isinstance(qs, QuerySet) and qs.model == AuctionTOS):
-        msg = "must be passed a queryset of the AuctionTOS model"
-        raise TypeError(msg)
-
-    # Add has_ever_granted_permission annotation if not already present
-    qs = qs.annotate(
-        has_ever_granted_permission=Case(
-            When(
-                Q(user__isnull=False)
-                & Exists(
-                    AuctionTOS.objects.filter(
-                        user=OuterRef("user"), auction__created_by=OuterRef("auction__created_by"), manually_added=False
-                    )
-                ),
-                then=Value(True),
-            ),
-            default=Value(False),
-            output_field=BooleanField(),
-        )
-    )
-
-    return (
-        qs.select_related("user__userdata")
-        .select_related("pickup_location")
-        .annotate(
-            new_distance_traveled=Case(
-                When(Q(has_ever_granted_permission=False), then=Value(-1)),
-                default=distance_to(
-                    """`auctions_userdata`.`latitude`""",
-                    """`auctions_userdata`.`longitude`""",
-                    lat_field_name="""`auctions_pickuplocation`.`latitude`""",
-                    lng_field_name="""`auctions_pickuplocation`.`longitude`""",
-                    approximate_distance_to=1,
-                ),
-                output_field=IntegerField(),
-            ),
-        )
-    )
-
-
 def guess_category(text):
     """Given some text, look up lots with similar names and make a guess at the category this `text` belongs to based on the category used there"""
     keywords = []
@@ -522,117 +383,6 @@ def guess_category(text):
         logger.debug("%s, %s", Category.objects.filter(pk=key).first(), value)
         return Category.objects.filter(pk=key).first()
     return None
-
-
-# Tags Summernote legitimately emits for rich-text formatting. Anything not on this
-# allowlist is stripped. An allowlist (unlike the previous fixed blocklist) can't be
-# bypassed by novel or foreign elements -- e.g. <svg>/<math>, which open a foreign
-# parsing context that browsers use for mutation-XSS and which no blocklist enumerates
-# completely.
-ALLOWED_SUMMERNOTE_TAGS = frozenset(
-    {
-        "a", "abbr", "b", "blockquote", "br", "caption", "cite", "code", "col",
-        "colgroup", "dd", "del", "dfn", "div", "dl", "dt", "em", "figcaption",
-        "figure", "font", "h1", "h2", "h3", "h4", "h5", "h6", "hr", "i", "ins",
-        "kbd", "li", "mark", "ol", "p", "pre", "q", "s", "samp", "small", "span",
-        "strike", "strong", "sub", "sup", "table", "tbody", "td", "tfoot", "th",
-        "thead", "time", "tr", "u", "ul", "var",
-    }
-)  # fmt: skip
-
-# Disallowed tags whose *contents* must also be dropped (not just the tag itself): these
-# carry executable code, foreign (SVG/MathML) or embedded/external content, or raw-text
-# parsing contexts that mutation-XSS relies on. Any other disallowed tag is unwrapped so
-# its plain text survives.
-UNSAFE_SUMMERNOTE_TAGS = frozenset(
-    {
-        "applet", "audio", "base", "canvas", "embed", "form", "frame", "frameset",
-        "iframe", "img", "link", "map", "math", "meta", "noembed", "noscript",
-        "object", "param", "plaintext", "script", "source", "style", "svg",
-        "template", "textarea", "title", "track", "video", "xmp",
-    }
-)  # fmt: skip
-
-
-def sanitize_summernote_html(text):
-    """Remove disallowed Summernote content while preserving supported formatting."""
-    if text is None:
-        return None
-    if text == "":
-        return ""
-
-    soup = BeautifulSoup(text, "html.parser")
-
-    # Enforce the tag allowlist. ``find_all(True)`` yields tags in document order (parents
-    # before children), so decomposing a parent marks its descendants ``decomposed`` and we
-    # skip them below. Executable/foreign tags are removed with their subtree; any other
-    # unexpected tag is unwrapped so its text content is preserved.
-    for tag in soup.find_all(True):
-        if getattr(tag, "decomposed", False):
-            continue
-        name = (tag.name or "").lower()
-        if name in ALLOWED_SUMMERNOTE_TAGS:
-            continue
-        if name in UNSAFE_SUMMERNOTE_TAGS:
-            tag.decompose()
-        else:
-            tag.unwrap()
-
-    for tag in soup.find_all():
-        for attr_name, attr_value in list(tag.attrs.items()):
-            normalized_attr = attr_name.lower()
-            if normalized_attr.startswith("on"):
-                del tag[attr_name]
-                continue
-            # These are the URI-bearing attributes we allow in Summernote content.
-            if normalized_attr in {"href", "src", "xlink:href"}:
-                # Some parsers represent multi-valued attributes as lists, so normalize both cases.
-                values = attr_value if isinstance(attr_value, list) else [attr_value]
-                if any(
-                    isinstance(value, str)
-                    # Block URI schemes commonly used for script execution or local file access in user HTML,
-                    # even when attackers split the scheme name with ASCII whitespace/control characters.
-                    and re.match(
-                        r"^(?:data|file|javascript|vbscript):",
-                        re.sub(r"[\x00-\x20\x7f]+", "", value),
-                        flags=re.IGNORECASE,
-                    )
-                    for value in values
-                ):
-                    del tag[attr_name]
-
-    # Remove 'color' attribute from <font> tags
-    for tag in soup.find_all("font"):
-        if tag.has_attr("color"):
-            del tag["color"]
-
-    # Clean style attributes: remove color/background-color (unwanted formatting) and any
-    # property containing url() which could load external resources.
-    for tag in soup.find_all(style=True):
-        styles = tag["style"].split(";")
-        cleaned_styles = []
-        for style in styles:
-            if not style.strip():
-                continue
-            name, *value_parts = style.split(":", 1)
-            prop = name.strip().lower()
-            value = value_parts[0] if value_parts else ""
-            if prop in {"color", "background-color"}:
-                continue
-            if "url(" in value.lower():
-                continue
-            cleaned_styles.append(style)
-        if cleaned_styles:
-            tag["style"] = ";".join(cleaned_styles)
-        else:
-            del tag["style"]
-
-    return str(soup)
-
-
-def remove_html_color_tags(text):
-    """Compatibility wrapper for legacy callers that now performs full Summernote sanitization."""
-    return sanitize_summernote_html(text)
 
 
 def normalize_email(value):
@@ -962,6 +712,16 @@ class Club(CloudflareImageMixin, models.Model):
     enable_breeder_award_program = models.BooleanField(
         default=False,
         help_text="Track when users breed fish and show a leaderboard of top breeders.",
+    )
+    bap_ytd_reset_year = models.PositiveIntegerField(
+        null=True,
+        blank=True,
+        editable=False,
+        help_text=(
+            "The last year this club's year-to-date award counters were zeroed.  Written by "
+            "tasks.reset_yearly_bap_counters, which is what makes the reset a fact about the club "
+            "rather than something that only happens if a nightly task lands on January 1."
+        ),
     )
     enable_membership = models.BooleanField(
         default=False,
@@ -1688,7 +1448,7 @@ def _generate_unique_bidder_number(*, is_taken, preferred=None, phone=None, addr
     return "ERROR"
 
 
-class ClubMember(ContactRecord):
+class ClubMember(CachedPropertiesMixin, ContactRecord):
     """A member of a club. Similar to AuctionTOS but for club membership."""
 
     user = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name="club_memberships")
@@ -1997,7 +1757,7 @@ class ClubMember(ContactRecord):
             return "Active Paid Membership" if self.is_paid_member else "Unpaid Membership"
         return "Membership"
 
-    @property
+    @cached_property
     def discord_role(self):
         """Return the ClubDiscordRole that should be assigned to this member.
 
@@ -2135,7 +1895,7 @@ class ClubMember(ContactRecord):
 
         return reverse("club_member_by_uuid", kwargs={"slug": self.club.slug, "uuid": self.uuid})
 
-    @property
+    @cached_property
     def wallet_link(self):
         """Absolute URL for adding this membership to Google/Apple Wallet (UUID-keyed)."""
         from django.contrib.sites.models import Site
@@ -2148,7 +1908,7 @@ class ClubMember(ContactRecord):
             domain = "localhost"
         return f"https://{domain}{self.member_page_url}"
 
-    @property
+    @cached_property
     def simple_membership_link(self):
         """Absolute URL for the member-number page (shows number, expiration, payment)."""
         from django.contrib.sites.models import Site
@@ -2166,7 +1926,7 @@ class ClubMember(ContactRecord):
         )
         return f"https://{domain}{path}"
 
-    @property
+    @cached_property
     def barcode_image_link(self):
         """Absolute URL to an SVG barcode for this member's membership number.
 
@@ -2189,7 +1949,7 @@ class ClubMember(ContactRecord):
         )
         return f"https://{domain}{path}"
 
-    @property
+    @cached_property
     def barcode_image_link_png(self):
         """Absolute URL to a PNG barcode for this member's membership number.
 
@@ -2312,7 +2072,7 @@ class ClubMember(ContactRecord):
         # No activity ever recorded: only "inactive" once they've been around past the window.
         return bool(self.createdon and self.createdon < cutoff)
 
-    @property
+    @cached_property
     def has_auction_checkin(self):
         return self.auction_tos_records.filter(checked_in__isnull=False).exists()
 
@@ -4150,7 +3910,7 @@ def _slugify_auction_title(value):
     return slug or slugify(value)  # fall back to unsanitised slug if stripping leaves nothing
 
 
-class Auction(models.Model):
+class Auction(CachedPropertiesMixin, models.Model):
     """An auction is a collection of lots"""
 
     title = models.CharField("Auction name", max_length=255, blank=False, null=False)
@@ -4529,7 +4289,7 @@ class Auction(models.Model):
         """If this auction is marked as untrusted, return the message to show users"""
         return settings.UNTRUSTED_MESSAGE
 
-    @property
+    @cached_property
     def effective_paypal_seller(self):
         """The PayPalSeller used for payments on this auction.
 
@@ -4543,7 +4303,7 @@ class Auction(models.Model):
             return PayPalSeller.objects.filter(user=self.created_by).first()
         return None
 
-    @property
+    @cached_property
     def effective_square_seller(self):
         """The SquareSeller used for payments on this auction.
 
@@ -4617,7 +4377,7 @@ class Auction(models.Model):
         seller = self.effective_square_seller
         return seller.square_merchant_id if seller else None
 
-    @property
+    @cached_property
     def show_paypal_banner(self):
         """Can we show the link your PayPal account banner?
         One more check is needed on the template:
@@ -4637,7 +4397,7 @@ class Auction(models.Model):
             return False
         return True
 
-    @property
+    @cached_property
     def show_square_banner(self):
         """Can we show the link your Square account banner?
         One more check is needed on the template:
@@ -4784,7 +4544,7 @@ class Auction(models.Model):
                 return name_search
         return None
 
-    @property
+    @cached_property
     def estimate_end(self):
         try:
             if self.is_online:
@@ -4836,6 +4596,17 @@ class Auction(models.Model):
         """All locations associated with this auction"""
         return PickupLocation.objects.filter(auction=self.pk).order_by("name")
 
+    @cached_property
+    def locations(self):
+        """Every pickup location for this auction, fetched once. A **list**.
+
+        An auction has a handful of locations and the auction page asks about them constantly --
+        ``multi_location`` alone was twelve COUNT queries on one render, because each of the
+        properties below rebuilt ``location_qs`` and counted it again. They all read this now.
+        ``location_qs`` stays a queryset for the callers that need one (form fields, slicing).
+        """
+        return list(self.location_qs)
+
     @property
     def physical_location_qs(self):
         """Find all non-default locations"""
@@ -4843,24 +4614,36 @@ class Auction(models.Model):
         # return self.location_qs.exclude(Q(pickup_by_mail=True)|Q(is_default=True))
         return self.location_qs.exclude(pickup_by_mail=True)
 
+    @cached_property
+    def physical_locations(self):
+        """physical_location_qs, off the cached list"""
+        return [location for location in self.locations if not location.pickup_by_mail]
+
     @property
     def location_with_location_qs(self):
         """Find all locations that have coordinates - useful to see if there's an actual location associated with this auction.  By default, auctions get a location with no coordinates added"""
         return self.physical_location_qs.exclude(latitude=0, longitude=0)
 
-    @property
+    @cached_property
+    def locations_with_coordinates(self):
+        """location_with_location_qs, off the cached list"""
+        return [
+            location for location in self.physical_locations if not (location.latitude == 0 and location.longitude == 0)
+        ]
+
+    @cached_property
     def number_of_locations(self):
         """The number of physical locations this auction has"""
-        return self.physical_location_qs.count()
+        return len(self.physical_locations)
 
-    @property
+    @cached_property
     def all_location_count(self):
         """All locations, even mail"""
-        return self.location_qs.count()
+        return len(self.locations)
 
-    @property
+    @cached_property
     def allow_mailing_lots(self):
-        return self.location_qs.filter(pickup_by_mail=True).exists()
+        return any(location.pickup_by_mail for location in self.locations)
 
     @staticmethod
     def get_closest_location_distance_subquery(latitude, longitude):
@@ -4902,7 +4685,7 @@ class Auction(models.Model):
             return "inperson_multi_location"
         return "unknown"
 
-    @property
+    @cached_property
     def auction_type_as_str(self):
         """Returns friendly string of whether this is an online, in-person, or hybrid auction"""
         auction_type = self.auction_type
@@ -4991,7 +4774,7 @@ class Auction(models.Model):
         # return f"{self.get_absolute_url()}lots/set-winners/{self.set_lot_winners_url}"
         return f"{self.get_absolute_url()}lots/set-winners/"
 
-    @property
+    @cached_property
     def is_club_managed(self):
         """True when this auction manages its participants via the associated club's ClubMember records."""
         return bool(self.manage_users_through_club) and bool(self.club_id)
@@ -5035,7 +4818,8 @@ class Auction(models.Model):
 
     def permission_check(self, user):
         """See if `user` can make changes to this auction"""
-        if self.created_by == user:
+        if self.created_by_id and self.created_by_id == getattr(user, "pk", None):
+            # by id, so the creator is not fetched just to compare them
             return True
         if user.is_superuser:
             return True
@@ -5054,11 +4838,11 @@ class Auction(models.Model):
                 return True
         return False
 
-    @property
+    @cached_property
     def pickup_locations_before_end(self):
         """If there's a problem with the pickup location times, all of them need to be after the end date of the auction (or after the start date for an in-person auction).
         Returns the edit url for the first pickup location whose end time is before the auction end"""
-        locations = self.location_qs
+        locations = self.locations
         time_to_use = self.date_end
         if not self.is_online:
             time_to_use = self.date_start
@@ -5115,7 +4899,7 @@ class Auction(models.Model):
             dynamic_end = datetime.timedelta(minutes=60)
             return self.date_end + dynamic_end
 
-    @property
+    @cached_property
     def date_end_as_str(self):
         """Human-reable end date of the auction; this will always be an empty string for in-person auctions"""
         if self.is_online:
@@ -5142,7 +4926,7 @@ class Auction(models.Model):
         else:
             return False
 
-    @property
+    @cached_property
     def closed(self):
         """For display on the main auctions list"""
         if self.is_online and self.date_end:
@@ -5166,7 +4950,7 @@ class Auction(models.Model):
             return True
         return False
 
-    @property
+    @cached_property
     def wind_down_time(self):
         """The moment the auction is fully wound down, before the pretty_much_over grace period.
 
@@ -5184,13 +4968,13 @@ class Auction(models.Model):
                 self.lot_submission_end_date or self.date_start,
             )
         latest = self.date_end
-        for location in self.location_qs:
+        for location in self.locations:
             for pickup in (location.pickup_time, location.second_pickup_time):
                 if pickup and (latest is None or pickup > latest):
                     latest = pickup
         return latest
 
-    @property
+    @cached_property
     def pretty_much_over(self):
         """True once the auction has been wound down for at least 24 hours.
 
@@ -5211,7 +4995,7 @@ class Auction(models.Model):
             return mark_safe('<span class="badge bg-danger">Ended</span>')
         return ""
 
-    @property
+    @cached_property
     def started(self):
         """For display on the main auctions list"""
         if timezone.now() > self.date_start:
@@ -5239,12 +5023,12 @@ class Auction(models.Model):
             return True
         return False
 
-    @property
+    @cached_property
     def club_profit_raw(self):
         """Total amount made by the club in this auction.  This number does not take into account rounding in the invoices, nor any invoice adjustments"""
         return add_price_info(self.lots_qs).aggregate(total_sold=Sum("club_cut"))["total_sold"] or 0
 
-    @property
+    @cached_property
     def _auction_tax_collected(self):
         """Total sales tax collected across this auction's invoices.
 
@@ -5277,7 +5061,7 @@ class Auction(models.Model):
         rate = Decimal(self.tax) / Decimal(100)
         return (Decimal(total_final) * rate).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
-    @property
+    @cached_property
     def _auction_membership_dues(self):
         """Total membership/renewal dues collected on this auction's invoices.
 
@@ -5293,7 +5077,7 @@ class Auction(models.Model):
         renewals = Invoice.objects.filter(auction=self.pk, renewal_needed=True).count()
         return Decimal(club.membership_annual_fee) * renewals
 
-    @property
+    @cached_property
     def club_profit(self):
         """What the club nets from AUCTION activity in this auction, positive when it made money.
 
@@ -5323,7 +5107,11 @@ class Auction(models.Model):
         total_net = invoices.filter(calculated_total__isnull=False).aggregate(total=Sum("calculated_total"))[
             "total"
         ] or Decimal("0.00")
-        for invoice in invoices.filter(calculated_total__isnull=True):
+        # The fallback: an invoice nobody has recalculated yet has to be worked out live, and that
+        # reaches its auction and club. Usually an empty queryset.
+        for invoice in invoices.filter(calculated_total__isnull=True).select_related(
+            "auction__club", "club", "auctiontos_user"
+        ):
             total_net += Decimal(invoice.rounded_net)
         # calculated_total is negative when a buyer owes the club, so negate (never abs()) to make a
         # club gain positive while keeping a genuine loss negative.
@@ -5333,7 +5121,7 @@ class Auction(models.Model):
         profit -= self._auction_membership_dues
         return profit
 
-    @property
+    @cached_property
     def gross(self):
         """Refund-adjusted gross sales: the total buyers were billed for lots that sold here.
 
@@ -5376,7 +5164,7 @@ class Auction(models.Model):
             )
         )["total"]
 
-    @property
+    @cached_property
     def total_to_sellers(self):
         """Total credited to sellers for lots that sold in this auction.
 
@@ -5412,7 +5200,7 @@ class Auction(models.Model):
             return Decimal(0)
         return Decimal(self.club_profit) / Decimal(gross) * 100
 
-    @property
+    @cached_property
     def total_donations(self):
         # Exclude banned (removed) lots to stay consistent with gross/club_profit and the other
         # money figures on the stats table -- a pulled lot never contributed any money.
@@ -5443,7 +5231,7 @@ class Auction(models.Model):
         #    return False
         # return True
 
-    @property
+    @cached_property
     def users_with_bidding_disabled(self):
         """How many participants can't currently bid, for the bulk re-enable button on the users page.
 
@@ -5475,7 +5263,7 @@ class Auction(models.Model):
             return True
         return bool(self.enable_online_payments)
 
-    @property
+    @cached_property
     def tos_qs(self):
         """Return AuctionTOS queryset with has_ever_granted_permission annotation.
 
@@ -5502,12 +5290,12 @@ class Auction(models.Model):
             .order_by("-createdon")
         )
 
-    @property
+    @cached_property
     def number_of_confirmed_tos(self):
         """How many people selected a pickup location in this auction"""
         return self.tos_qs.count()
 
-    @property
+    @cached_property
     def seller_tos_qs(self):
         """AuctionTOS who submitted at least one live lot to this auction.
 
@@ -5522,7 +5310,7 @@ class Auction(models.Model):
             auctiontos_seller__is_deleted=False,
         ).distinct()
 
-    @property
+    @cached_property
     def buyer_tos_qs(self):
         """AuctionTOS who won at least one sold, live lot in this auction.
 
@@ -5536,11 +5324,11 @@ class Auction(models.Model):
             auctiontos_winner__is_deleted=False,
         ).distinct()
 
-    @property
+    @cached_property
     def number_of_sellers(self):
         return self.seller_tos_qs.count()
 
-    @property
+    @cached_property
     def number_of_sellers_who_didnt_buy(self):
         return self.seller_tos_qs.exclude(id__in=self.buyer_tos_qs.values_list("id", flat=True)).count()
 
@@ -5551,11 +5339,11 @@ class Auction(models.Model):
     #   users = User.objects.filter(lot__auction=self.pk, lot__winner__isnull=True).distinct()
     # 	return len(users)
 
-    @property
+    @cached_property
     def number_of_buyers(self):
         return self.buyer_tos_qs.count()
 
-    @property
+    @cached_property
     def median_lot_price(self):
         # Only sold, non-banned lots count -- removed (banned) lots are never charged and are
         # excluded from every other money stat on this auction (see ``total_sold_lots`` and
@@ -5567,17 +5355,17 @@ class Auction(models.Model):
         else:
             return 0
 
-    @property
+    @cached_property
     def lots_qs(self):
         """All lots in this auction"""
         # return Lot.objects.exclude(is_deleted=True).filter(auction=self.pk)
         return Lot.objects.exclude(is_deleted=True).filter(auctiontos_seller__auction__pk=self.pk)
 
-    @property
+    @cached_property
     def total_sold_lots(self):
         return self.lots_qs.filter(winning_price__isnull=False).exclude(banned=True).count()
 
-    @property
+    @cached_property
     def total_sold_lots_with_buy_now_percent(self):
         """Percentage of sold lots that went via "buy now".
 
@@ -5608,15 +5396,15 @@ class Auction(models.Model):
                 * 100
             )
 
-    @property
+    @cached_property
     def total_unsold_lots(self):
         return self.lots_qs.filter(winning_price__isnull=True).exclude(banned=True).count()
 
-    @property
+    @cached_property
     def total_lots(self):
         return self.lots_qs.exclude(banned=True).count()
 
-    @property
+    @cached_property
     def number_of_lots_with_scanned_qr(self):
         # Count a lot as "scanned" when its page was opened from a QR scan (src=qr) or from AR mode
         # (src=ar) — the app opens lots it recognises in AR as lot_link?src=ar.
@@ -5629,20 +5417,20 @@ class Auction(models.Model):
             .count()
         )
 
-    @property
+    @cached_property
     def number_of_lots_added_to_queue(self):
         # How much the in-person "Lot queue" tool was used: count lots that were ever queued.
         # Sticky Lot.added_to_queue, so it survives the queue entry being popped when the lot sells.
         return self.lots_qs.filter(added_to_queue=True).count()
 
-    @property
+    @cached_property
     def labels_qs(self):
         lots = self.lots_qs.exclude(banned=True)
         if self.is_online:
             lots = lots.filter(auctiontos_winner__isnull=False, winning_price__isnull=False)
         return lots
 
-    @property
+    @cached_property
     def unprinted_labels_qs(self):
         return self.labels_qs.exclude(label_printed=True)
 
@@ -5657,7 +5445,7 @@ class Auction(models.Model):
             return 0
         return self.total_unsold_lots / self.total_lots * 100
 
-    @property
+    @cached_property
     def lots_sold_per_minute(self):
         """Calculate the average lots sold per minute for in-person auctions.
         This uses the same logic as the auctioneer speed graph, ignoring the first and last 10% of lots."""
@@ -5698,7 +5486,7 @@ class Auction(models.Model):
         # Return lots per minute
         return num_lots / total_time
 
-    @property
+    @cached_property
     def total_auction_duration(self):
         """For in-person auctions, this also uses the same logic as the auctioneer speed graph, ignoring the first and last 10% of lots."""
         if self.is_online:
@@ -5770,7 +5558,7 @@ class Auction(models.Model):
                 return False
         return True
 
-    @property
+    @cached_property
     def number_of_participants(self):
         """
         Number of AuctionTOS who bought or sold at least one live lot in this auction.
@@ -5783,19 +5571,19 @@ class Auction(models.Model):
         sellers_who_didnt_buy = self.seller_tos_qs.exclude(id__in=buyer_ids).count()
         return sellers_who_didnt_buy + self.buyer_tos_qs.count()
 
-    @property
+    @cached_property
     def preregistered_users(self):
         return AuctionTOS.objects.filter(auction=self.pk, manually_added=False).count()
 
-    @property
+    @cached_property
     def campaigns_qs(self):
         return AuctionCampaign.objects.filter(auction=self.pk).order_by("-timestamp")
 
-    @property
+    @cached_property
     def number_of_reminder_emails(self):
         return self.campaigns_qs.exclude(result="ERR").count()
 
-    @property
+    @cached_property
     def reminder_email_clicks(self):
         if self.number_of_reminder_emails == 0:
             return 0
@@ -5805,27 +5593,27 @@ class Auction(models.Model):
             * 100
         )
 
-    @property
+    @cached_property
     def reminder_email_joins(self):
         if self.number_of_reminder_emails == 0:
             return 0
         return self.campaigns_qs.filter(result="JOINED").count() / self.number_of_reminder_emails * 100
 
-    @property
+    @cached_property
     def all_auctions_reminder_email_clicks(self):
         campaigns = AuctionCampaign.objects.exclude(result="ERR").count()
         if campaigns == 0:
             return 0
         return AuctionCampaign.objects.exclude(result="ERR").exclude(result="NONE").count() / campaigns * 100
 
-    @property
+    @cached_property
     def all_auctions_reminder_email_joins(self):
         campaigns = AuctionCampaign.objects.exclude(result="ERR").count()
         if campaigns == 0:
             return 0
         return AuctionCampaign.objects.filter(result="JOINED").count() / campaigns * 100
 
-    @property
+    @cached_property
     def weekly_promo_email_clicks(self):
         return PageView.objects.filter(source="weekly_email", auction=self.pk).count()
 
@@ -5835,25 +5623,19 @@ class Auction(models.Model):
             return 0
         return (self.weekly_promo_email_clicks / self.weekly_promo_emails_sent) * 100
 
-    @property
+    @cached_property
     def multi_location(self):
         """
         True if there's more than one location at this auction
         """
-        locations = self.physical_location_qs.count()
-        if locations > 1:
-            return True
-        return False
+        return self.number_of_locations > 1
 
-    @property
+    @cached_property
     def no_location(self):
         """
         True if there's no pickup location at all for this auction -- pickup by mail excluded
         """
-        locations = self.location_with_location_qs.count()
-        if not locations:
-            return True
-        return False
+        return not self.locations_with_coordinates
 
     @property
     def can_be_deleted(self):
@@ -5862,14 +5644,14 @@ class Auction(models.Model):
         else:
             return True
 
-    @property
+    @cached_property
     def paypal_invoices(self):
         # all drafts and ready:
         # return Invoice.objects.filter(auction=self).exclude(status="PAID")
         # only ready:
         return Invoice.objects.filter(auction=self, status="UNPAID")
 
-    @property
+    @cached_property
     def draft_paypal_invoices(self):
         """Used for a tooltip warning telling people to make invoices ready"""
         return Invoice.objects.filter(auction=self, status="DRAFT", calculated_total__lt=0).count()
@@ -5902,17 +5684,24 @@ class Auction(models.Model):
         chunks = (invoices_count + chunk_size - 1) // chunk_size
         return list(range(1, chunks + 1))
 
-    @property
+    @cached_property
     def set_location_link(self):
         """If there's a location without a lat and lng, this link will let you edit the first one found"""
-        location = self.location_qs.filter(latitude=0, longitude=0, pickup_by_mail=False).first()
+        location = next(
+            (
+                candidate
+                for candidate in self.locations
+                if candidate.latitude == 0 and candidate.longitude == 0 and not candidate.pickup_by_mail
+            ),
+            None,
+        )
         if self.all_location_count == 1:
-            location = self.location_qs.first()
+            location = self.locations[0]
         if location:
             return reverse("edit_pickup", kwargs={"pk": location.pk})
         return None
 
-    @property
+    @cached_property
     def admin_checklist_mostly_completed(self):
         if (
             self.admin_checklist_location_set
@@ -5924,7 +5713,7 @@ class Auction(models.Model):
             return True
         return False
 
-    @property
+    @cached_property
     def admin_checklist_completed(self):
         if (
             self.admin_checklist_mostly_completed
@@ -5935,19 +5724,17 @@ class Auction(models.Model):
             return True
         return False
 
-    @property
+    @cached_property
     def admin_checklist_location_set(self):
-        if self.allow_mailing_lots or self.location_with_location_qs.count():
-            return True
-        return False
+        return bool(self.allow_mailing_lots or self.locations_with_coordinates)
 
-    @property
+    @cached_property
     def admin_checklist_rules_updated(self):
         if "You should remove this line and edit this section to suit your auction." in self.summernote_description:
             return False
         return True
 
-    @property
+    @cached_property
     def admin_checklist_joined(self):
         if (
             AuctionTOS.objects.filter(auction__pk=self.pk).filter(Q(user=self.created_by) | Q(is_admin=True)).count()
@@ -5956,27 +5743,27 @@ class Auction(models.Model):
             return True
         return False
 
-    @property
+    @cached_property
     def admin_checklist_others_joined(self):
         if self.number_of_confirmed_tos > 1:
             return True
         return False
 
-    @property
+    @cached_property
     def admin_checklist_lots_added(self):
-        if self.lots_qs.count() > 0:
+        if self.lots_qs.exists():
             return True
         return False
 
-    @property
+    @cached_property
     def admin_checklist_winner_set(self):
         if self.is_online:
             return True
-        if self.lots_qs.filter(auctiontos_winner__isnull=False).count():
+        if self.lots_qs.filter(auctiontos_winner__isnull=False).exists():
             return True
         return False
 
-    @property
+    @cached_property
     def admin_checklist_additional_admin(self):
         if self.is_online:
             return True
@@ -5987,7 +5774,7 @@ class Auction(models.Model):
             return True
         return False
 
-    @property
+    @cached_property
     def event_needing_custom_wording(self):
         """This auction's calendar event, when it is worth asking an admin to reword it.
 
@@ -6020,12 +5807,12 @@ class Auction(models.Model):
             return None
         return event
 
-    @property
+    @cached_property
     def location_link(self):
-        if not self.location_qs.count():
+        if not self.all_location_count:
             return reverse("create_auction_pickup_location", kwargs={"slug": self.slug})
-        if self.location_qs.count() == 1 and not self.is_online:
-            return reverse("edit_pickup", kwargs={"pk": self.location_qs.first().pk})
+        if self.all_location_count == 1 and not self.is_online:
+            return reverse("edit_pickup", kwargs={"pk": self.locations[0].pk})
         return reverse("auction_pickup_location", kwargs={"slug": self.slug})
 
     @property
@@ -6050,13 +5837,15 @@ class Auction(models.Model):
     def hybrid_tutorial_chapters(self):
         return settings.HYBRID_TUTORIAL_CHAPTERS
 
-    @property
+    @cached_property
     def auction_admins_qs(self):
-        return AuctionTOS.objects.filter(Q(is_admin=True) | Q(user=self.created_by), auction__pk=self.pk).order_by(
-            "name"
-        )
+        # user_id, not user: comparing model objects makes Django fetch the creator row to read
+        # its pk, once per Auction instance.
+        return AuctionTOS.objects.filter(
+            Q(is_admin=True) | Q(user_id=self.created_by_id), auction__pk=self.pk
+        ).order_by("name")
 
-    @property
+    @cached_property
     def auction_admins_pks(self):
         """For use in querysets, pks only"""
         return self.auction_admins_qs.values_list("user__pk", flat=True)
@@ -6468,7 +6257,7 @@ class Auction(models.Model):
         locations = []
         sold = []
         bought = []
-        for location in self.location_qs:
+        for location in self.locations:
             locations.append(location.name)
             sold.append(location.total_sold)
             bought.append(location.total_bought)
@@ -6539,18 +6328,19 @@ class Auction(models.Model):
                 .distinct()
                 .count()
             )
-        if auctiontos.count() == 0:
+        auctiontos_count = auctiontos.count()
+        if auctiontos_count == 0:
             lot_with_buy_now_percent = 0
             account_percent = 0
             mobile_app_percent = 0
         else:
-            account_percent = int(auctiontos_with_account.count() / auctiontos.count() * 100)
-            lot_with_buy_now_percent = int(lot_with_buy_now / auctiontos.count() * 100)
-            mobile_app_percent = int(mobile_app / auctiontos.count() * 100)
-        invoices = Invoice.objects.filter(auction=self)
-        viewed_invoices = invoices.filter(opened=True)
-        if invoices.count():
-            view_invoice_percent = int(viewed_invoices.count() / invoices.count() * 100)
+            account_percent = int(auctiontos_with_account.count() / auctiontos_count * 100)
+            lot_with_buy_now_percent = int(lot_with_buy_now / auctiontos_count * 100)
+            mobile_app_percent = int(mobile_app / auctiontos_count * 100)
+        invoice_count = Invoice.objects.filter(auction=self).count()
+        if invoice_count:
+            viewed_invoices = Invoice.objects.filter(auction=self, opened=True).count()
+            view_invoice_percent = int(viewed_invoices / invoice_count * 100)
         else:
             view_invoice_percent = 0
         sold_lots = Lot.objects.filter(auction=self, auctiontos_winner__isnull=False)
@@ -6590,7 +6380,7 @@ class Auction(models.Model):
             ],
         }
 
-    @property
+    @cached_property
     def unique_views(self):
         """Distinct visitors who viewed this auction's rules page or any of its lots.
 
@@ -6790,11 +6580,14 @@ class Auction(models.Model):
         )
 
 
-class PickupLocation(models.Model):
+class PickupLocation(InvalidatesRelatedCache, CachedPropertiesMixin, models.Model):
     """
     A pickup location associated with an auction
     A given auction can have multiple pickup locations
     """
+
+    # Auction.locations, and the dozen properties derived from it
+    invalidates_cache_on = ("auction",)
 
     name = models.CharField(max_length=70, default="", blank=True, null=True)
     name.help_text = "Location name shown to users.  e.x. University Mall in VT"
@@ -6872,7 +6665,7 @@ class PickupLocation(models.Model):
         """All auctiontos associated with this location"""
         return AuctionTOS.objects.filter(pickup_location=self.pk)
 
-    @property
+    @cached_property
     def number_of_users(self):
         """How many people have chosen this pickup location?"""
         return self.user_list.count()
@@ -6897,29 +6690,25 @@ class PickupLocation(models.Model):
         )
         return lots
 
-    @property
+    @cached_property
     def number_of_incoming_lots(self):
         return self.incoming_lots.count()
 
-    @property
+    @cached_property
     def number_of_outgoing_lots(self):
         return self.outgoing_lots.count()
 
-    @property
+    @cached_property
     def email_list(self):
         """String of all email addresses associated with this location, used for bcc'ing all people at a location"""
-        email = ""
-        for user in self.user_list:
-            if user.email:
-                email += user.email + ", "
-        return email
+        return "".join(f"{tos.email}, " for tos in self.user_list.only("email") if tos.email)
 
-    @property
+    @cached_property
     def total_sold(self):
         lots = self.outgoing_lots.aggregate(total_winning_price=Sum("winning_price"))
         return lots["total_winning_price"] or 0
 
-    @property
+    @cached_property
     def total_bought(self):
         lots = self.incoming_lots.aggregate(total_winning_price=Sum("winning_price"))
         return lots["total_winning_price"] or 0
@@ -6940,9 +6729,12 @@ class AuctionIgnore(models.Model):
         verbose_name_plural = "User ignoring auction"
 
 
-class AuctionTOS(models.Model):
+class AuctionTOS(InvalidatesRelatedCache, CachedPropertiesMixin, models.Model):
     """Models how a user engages with an auction and is the basis for the user view when running an auction
     Usually this will correspond with a single person which may or may not also be a user"""
+
+    # the auction caches its participant counts
+    invalidates_cache_on = ("auction",)
 
     user = models.ForeignKey(User, on_delete=models.SET_NULL, blank=True, null=True)
     auction = models.ForeignKey(Auction, on_delete=models.CASCADE)
@@ -7031,6 +6823,57 @@ class AuctionTOS(models.Model):
         lots = Lot.objects.exclude(is_deleted=True).filter(auctiontos_seller=self.pk, auction__isnull=False)
         return lots
 
+    @staticmethod
+    def annotate_lot_counts(queryset, auction=None):
+        """Add the per-person lot counts the users table renders, as subqueries.
+
+        Every row of that table shows "N lots sold", "N lots won" and a labels menu, and each of
+        those was its own ``COUNT`` -- 125 queries for 25 people. Subqueries rather than
+        ``Count(..., distinct=True)`` over joins, because several joins to the same table against
+        one another is a row explosion that ``distinct`` then has to undo.
+
+        Pass ``auction`` when every row belongs to one, so the label counts can apply that
+        auction's printing rule (an online auction only prints labels for lots that sold).
+        """
+        lots = Lot.objects.exclude(is_deleted=True).filter(auction__isnull=False)
+
+        def count_of(field, **extra):
+            return Subquery(
+                lots.filter(**{field: OuterRef("pk")}, **extra)
+                .order_by()
+                .values(field)
+                .annotate(total=Count("pk"))
+                .values("total")[:1],
+                output_field=IntegerField(),
+            )
+
+        unprinted = {"banned": False, "label_printed": False}
+        printable = {"banned": False}
+        if auction is not None and auction.is_online:
+            # print_labels_qs: an online auction only prints labels for lots that sold
+            sold = {"auctiontos_winner__isnull": False, "winning_price__isnull": False}
+            unprinted |= sold
+            printable |= sold
+        return queryset.annotate(
+            annotated_lots_count=Coalesce(count_of("auctiontos_seller"), Value(0)),
+            annotated_bought_lots_count=Coalesce(count_of("auctiontos_winner"), Value(0)),
+            annotated_unbanned_lot_count=Coalesce(count_of("auctiontos_seller", banned=False), Value(0)),
+            annotated_unprinted_label_count=Coalesce(count_of("auctiontos_seller", **unprinted), Value(0)),
+            annotated_print_labels_count=Coalesce(count_of("auctiontos_seller", **printable), Value(0)),
+        )
+
+    @cached_property
+    def bought_lots_count(self):
+        """Lots this person won. From the annotation when there is one -- see ``annotate_lot_counts``."""
+        annotated = getattr(self, "annotated_bought_lots_count", None)
+        return self.bought_lots_qs.count() if annotated is None else annotated
+
+    @cached_property
+    def lots_count(self):
+        """Lots this person is selling. Annotation first, same as bought_lots_count."""
+        annotated = getattr(self, "annotated_lots_count", None)
+        return self.lots_qs.count() if annotated is None else annotated
+
     def lot_owner(self, added_by=None):
         """The account to store in `Lot.user` for a lot sold by this TOS.
 
@@ -7053,11 +6896,12 @@ class AuctionTOS(models.Model):
     def unbanned_lot_qs(self):
         return self.lots_qs.exclude(banned=True)
 
-    @property
+    @cached_property
     def unbanned_lot_count(self):
-        return self.unbanned_lot_qs.count()
+        annotated = getattr(self, "annotated_unbanned_lot_count", None)
+        return self.unbanned_lot_qs.count() if annotated is None else annotated
 
-    @property
+    @cached_property
     def self_submitted_unbanned_lot_count(self):
         """Count of unbanned lots that this user added themselves (not added by admin)"""
         return self.unbanned_lot_qs.filter(added_by=self.user).count()
@@ -7074,11 +6918,14 @@ class AuctionTOS(models.Model):
     def unprinted_labels_qs(self):
         return self.print_labels_qs.exclude(label_printed=True)
 
-    @property
+    @cached_property
     def unprinted_label_count(self):
+        annotated = getattr(self, "annotated_unprinted_label_count", None)
+        if annotated is not None:
+            return annotated
         return self.unprinted_labels_qs.count()
 
-    @property
+    @cached_property
     def print_labels_link_html(self):
         if self.unbanned_lot_count:
             url = reverse(
@@ -7088,9 +6935,16 @@ class AuctionTOS(models.Model):
             return f"<a href='{url}'><i class='bi bi-tags me-1'></i>Print labels</a>"
         return ""
 
-    @property
+    @cached_property
+    def print_labels_count(self):
+        annotated = getattr(self, "annotated_print_labels_count", None)
+        if annotated is not None:
+            return annotated
+        return self.print_labels_qs.count()
+
+    @cached_property
     def print_unprinted_labels_link_html(self):
-        if self.unprinted_label_count and self.unprinted_label_count != self.print_labels_qs.count():
+        if self.unprinted_label_count and self.unprinted_label_count != self.print_labels_count:
             unprinted_url = reverse(
                 "print_unprinted_labels_by_bidder_number",
                 kwargs={"bidder_number": self.bidder_number, "slug": self.auction.slug},
@@ -7098,7 +6952,7 @@ class AuctionTOS(models.Model):
             return f"<a href='{unprinted_url}'>Print only {self.unprinted_label_count} unprinted labels</a>"
         return ""
 
-    @property
+    @cached_property
     def print_labels_html(self):
         """For use in HTMX users table; print lot labels for this user"""
         if self.unbanned_lot_count:
@@ -7113,7 +6967,7 @@ class AuctionTOS(models.Model):
             return html.format_html(result)
         return ""
 
-    @property
+    @cached_property
     def actions_dropdown_html(self):
         show_on_mobile_string = "d-md-none"
         result = f"""<button type='button' class='btn btn-sm btn-primary dropdown-toggle dropdown-toggle-split' data-bs-toggle='dropdown'
@@ -7141,12 +6995,12 @@ class AuctionTOS(models.Model):
         won_lots_url = (
             reverse("auction_lot_list", kwargs={"slug": self.auction.slug}) + f"?query=winner%3A{self.bidder_number}"
         )
-        result += f"<span class='dropdown-item'><a href={won_lots_url}><i class='bi bi bi-calendar-check me-1'></i>View {self.bought_lots_qs.count()} lots won</a></span>"
+        result += f"<span class='dropdown-item'><a href={won_lots_url}><i class='bi bi bi-calendar-check me-1'></i>View {self.bought_lots_count} lots won</a></span>"
         sold_lots_url = (
             reverse("auction_lot_list", kwargs={"slug": self.auction.slug}) + f"?query=seller%3A{self.bidder_number}"
         )
 
-        result += f"<span class='dropdown-item'><a href={sold_lots_url}><i class='bi bi-calendar me-1'></i>View {self.lots_qs.count()} lots sold</a></span>"
+        result += f"<span class='dropdown-item'><a href={sold_lots_url}><i class='bi bi-calendar me-1'></i>View {self.lots_count} lots sold</a></span>"
         delete_url = reverse("auctiontosdelete", kwargs={"pk": self.pk})
         merge_url = f"{delete_url}?action=merge"
         result += (
@@ -7237,11 +7091,21 @@ class AuctionTOS(models.Model):
         result += "</div>"
         return html.format_html(result)
 
-    @property
+    @cached_property
     def invoice(self):
-        return Invoice.objects.filter(auctiontos_user=self.pk).order_by("-date").first()
+        """This person's invoice for this auction, or None.
 
-    @property
+        Reads the reverse relation so a list of people can
+        ``prefetch_related(Prefetch("auctiontos", queryset=Invoice.objects.order_by("-date")))``
+        and pay one query for the page. Sorted here rather than in SQL for the same reason: a
+        prefetch cannot carry a per-row ``.first()``.
+        """
+        invoices = self.auctiontos.all()
+        if invoices._result_cache is None:
+            return invoices.order_by("-date").first()
+        return max(invoices, key=lambda invoice: invoice.date, default=None)
+
+    @cached_property
     def club_member_record(self):
         """The ClubMember for this user in the auction's club, or None.
         Uses the direct clubmember link first, then falls back to matching by user and email."""
@@ -7290,7 +7154,7 @@ class AuctionTOS(models.Model):
     def can_bid_in_auction(self):
         return self.bidding_allowed and not self.requires_check_in_before_bidding
 
-    @property
+    @cached_property
     def invoice_link_html(self):
         """HTML snippet with a link to the invoice for this auctionTOS, if set.  Otherwise, show create link"""
         if self.invoice:
@@ -7552,7 +7416,7 @@ class AuctionTOS(models.Model):
                 related_campaign.result = "JOINED"
                 related_campaign.save()
 
-    @property
+    @cached_property
     def display_name_for_admins(self):
         """Same as display name, but no anonymous option"""
         if self.auction.is_online:
@@ -7562,7 +7426,7 @@ class AuctionTOS(models.Model):
             return self.bidder_number
         return "Unknown user"
 
-    @property
+    @cached_property
     def display_name(self):
         """Use usernames for online auctions, and bidder numbers for in-person auctions"""
         # return f"{self.user} will meet at {self.pickup_location} for {self.auction}"
@@ -7738,7 +7602,7 @@ class AuctionTOS(models.Model):
         # Delete the duplicate (cascades to delete its now-empty invoice)
         duplicate.delete()
 
-    @property
+    @cached_property
     def closest_location_for_this_user(self):
         result = PickupLocation.objects.none()
         if self.user and self.auction.multi_location:
@@ -7761,7 +7625,7 @@ class AuctionTOS(models.Model):
         # single location auction, or user's location not set; anyway, not a problem
         return True
 
-    @property
+    @cached_property
     def distance_traveled(self):
         if self.user and not self.manually_added:
             userData = self.user.userdata
@@ -7781,7 +7645,7 @@ class AuctionTOS(models.Model):
                 return location.distance
         return -1
 
-    @property
+    @cached_property
     def previous_auctions_count(self):
         return AuctionTOS.objects.filter(email=self.email, createdon__lte=self.createdon).exclude(pk=self.pk).count()
 
@@ -7792,14 +7656,14 @@ class AuctionTOS(models.Model):
                 return int(self.distance_traveled - self.closest_location_for_this_user.distance)
         return 0
 
-    @property
+    @cached_property
     def closer_location_warning(self):
         current_site = Site.objects.get_current()
         if self.closer_location_savings > 9:
             return f"You've selected {self.pickup_location}, but {self.closest_location_for_this_user} is {int(self.closer_location_savings)} miles closer to you.  You can change your pickup location on the auction rules page: https://{current_site.domain}{self.auction.get_absolute_url()}#join"
         return ""
 
-    @property
+    @cached_property
     def closer_location_warning_html(self):
         current_site = Site.objects.get_current()
         if self.closer_location_savings > 9:
@@ -7840,7 +7704,7 @@ class AuctionTOS(models.Model):
         localized_time = time.astimezone(self.timezone)
         return localized_time.strftime("%B %d at %I:%M %p")
 
-    @property
+    @cached_property
     def trying_to_avoid_ban(self):
         """We track IPs in userdata, so we can do a quick check for this"""
         if self.user:
@@ -7857,7 +7721,7 @@ class AuctionTOS(models.Model):
                         return f"<a href='{url}'>{other_user.user.username}</a>"
         return False
 
-    @property
+    @cached_property
     def number_of_userbans(self):
         if self.user:
             other_bans = UserBan.objects.filter(banned_user=self.user)
@@ -7919,7 +7783,7 @@ class AuctionDropdown(models.Model):
         )
 
 
-class Lot(models.Model):
+class Lot(CachedPropertiesMixin, models.Model):
     """A lot is something to bid on"""
 
     PIC_CATEGORIES = (
@@ -8201,6 +8065,19 @@ class Lot(models.Model):
             # No lock needed, proceed normally
             self._do_save(*args, **kwargs)
 
+    def invalidate_cached_properties(self, *names):
+        """Drop this lot's caches, and the counts the people and auction behind it are holding.
+
+        A lot changing hands (sold, banned, label printed) changes ``AuctionTOS.lots_count``,
+        ``unprinted_label_count`` and friends -- which the users table caches per row. Reached
+        through fields_cache, so this only touches instances the caller is already holding.
+        """
+        super().invalidate_cached_properties(*names)
+        for relation in ("auctiontos_seller", "auctiontos_winner", "auction"):
+            related = self._state.fields_cache.get(relation)
+            if related is not None:
+                related.invalidate_cached_properties()
+
     def _do_save(self, *args, **kwargs):
         """Internal method to complete the save operation"""
         # custom lot number set for old auctions: bidder_number-lot_number format
@@ -8360,7 +8237,7 @@ class Lot(models.Model):
     def __str__(self):
         return "" + str(self.lot_number_display) + " - " + self.lot_name
 
-    @property
+    @cached_property
     def currency(self):
         """Get the currency for this lot based on the auction creator or lot owner"""
         if self.auction and self.auction.created_by:
@@ -8369,7 +8246,7 @@ class Lot(models.Model):
             return self.user.userdata.currency
         return "USD"
 
-    @property
+    @cached_property
     def currency_symbol(self):
         """Get the currency symbol for this lot"""
         return get_currency_symbol(self.currency)
@@ -8595,43 +8472,43 @@ class Lot(models.Model):
         self.partial_refund_percent = amount
         self.save()
 
-    @property
+    @cached_property
     def winner_invoice(self):
-        """Get the Invoice for this lot's winner
-        Returns Invoice object or None if not found
+        """Get the Invoice for this lot's winner, or None.
+
+        The ``AuctionTOS`` route first, because that one is prefetchable
+        (``prefetch_related("auctiontos_winner__auctiontos")``) and the auction's lot table renders it
+        once per row -- it was a query per lot, twice, for seller and winner alike.
         """
         from auctions.models import Invoice
 
-        if not (self.auctiontos_winner or self.winner):
-            return None
+        if self.auctiontos_winner_id:
+            invoice = self.auctiontos_winner.invoice
+            if invoice:
+                return invoice
+        if self.winner_id:
+            return Invoice.objects.filter(auctiontos_user__user_id=self.winner_id, auction=self.auction).first()
+        return None
 
-        query = Q()
-        if self.auctiontos_winner:
-            query |= Q(auctiontos_user=self.auctiontos_winner)
-        if self.winner:
-            query |= Q(auctiontos_user__user=self.winner, auction=self.auction)
-
-        return Invoice.objects.filter(query).first()
-
-    @property
+    @cached_property
     def sellers_invoice(self):
-        """Get the Invoice for this lot's seller
-        Returns Invoice object or None if not found
+        """Get the Invoice for this lot's seller, or None.
+
+        The ``AuctionTOS`` route first, because that one is prefetchable
+        (``prefetch_related("auctiontos_seller__auctiontos")``) and the auction's lot table renders it
+        once per row -- it was a query per lot, twice, for seller and winner alike.
         """
         from auctions.models import Invoice
 
-        if not (self.auctiontos_seller or self.user):
-            return None
+        if self.auctiontos_seller_id:
+            invoice = self.auctiontos_seller.invoice
+            if invoice:
+                return invoice
+        if self.user_id:
+            return Invoice.objects.filter(auctiontos_user__user_id=self.user_id, auction=self.auction).first()
+        return None
 
-        query = Q()
-        if self.auctiontos_seller:
-            query |= Q(auctiontos_user=self.auctiontos_seller)
-        if self.user:
-            query |= Q(auctiontos_user__user=self.user, auction=self.auction)
-
-        return Invoice.objects.filter(query).first()
-
-    @property
+    @cached_property
     def square_refund_possible(self):
         """Returns True if there's a Square payment associated with this lot's invoice
         with enough funds to cover the lot's cost and no refund has been issued yet"""
@@ -8815,7 +8692,7 @@ class Lot(models.Model):
             return reverse("invoice_by_pk", kwargs={"pk": invoice.pk})
         return ""
 
-    @property
+    @cached_property
     def tos_needed(self):
         if not self.auction:
             return False
@@ -8825,7 +8702,7 @@ class Lot(models.Model):
             return False
         return self.auction.get_absolute_url()
 
-    @property
+    @cached_property
     def winner_location(self):
         """String of location of the winner for this lot"""
         try:
@@ -8837,7 +8714,7 @@ class Lot(models.Model):
             return str(tos.pickup_location)
         return ""
 
-    @property
+    @cached_property
     def location_as_object(self):
         """Pickup location of the seller"""
         try:
@@ -8890,7 +8767,7 @@ class Lot(models.Model):
             return self.winner.email
         return ""
 
-    @property
+    @cached_property
     def seller_as_str(self):
         """String of the seller name or number, for use on lot pages"""
         if self.auctiontos_seller:
@@ -8899,7 +8776,7 @@ class Lot(models.Model):
             return str(self.user)
         return "Unknown"
 
-    @property
+    @cached_property
     def high_bidder_display(self):
         if self.sealed_bid:
             return "Sealed bid"
@@ -8917,7 +8794,7 @@ class Lot(models.Model):
             return ""
         return "No bids"
 
-    @property
+    @cached_property
     def high_bidder_for_admins(self):
         if self.auctiontos_winner:
             return self.auctiontos_winner.display_name_for_admins
@@ -8953,7 +8830,7 @@ class Lot(models.Model):
         else:
             return ""
 
-    @property
+    @cached_property
     def winner_as_str(self):
         """String of the winner name or number, for use on lot pages"""
         if self.auctiontos_winner:
@@ -8999,7 +8876,7 @@ class Lot(models.Model):
                 return "HAP"
         return "BAP"
 
-    @property
+    @cached_property
     def unsold_lot_no_bap_reason(self):
         """Return a BAP_REASON_CHOICES key if this lot is ineligible for BAP points, or None if eligible.
         Ignores whether the lot has sold — use sold_lot_no_bap_reason for that check."""
@@ -9207,7 +9084,7 @@ class Lot(models.Model):
                         return True
         return False
 
-    @property
+    @cached_property
     def number_of_watchers(self):
         return Watch.objects.filter(lot_number=self.lot_number).count()
 
@@ -9416,7 +9293,7 @@ class Lot(models.Model):
                 return True
         return False
 
-    @property
+    @cached_property
     def ended(self):
         """Used by the view for display of whether or not the auction has ended
         See also the database field active, which is set (based on this field) by a system job (endauctions.py)"""
@@ -9506,7 +9383,7 @@ class Lot(models.Model):
             .values("pk")[:1]
         )
 
-    @property
+    @cached_property
     def max_bid(self):
         """returns the highest bid amount for this lot - this number should not be visible to the public"""
         allBids = (
@@ -9526,21 +9403,43 @@ class Lot(models.Model):
         except:
             return self.reserve_price
 
-    @property
+    @cached_property
     def bids(self):
-        """Get all bids for this lot, highest bid first, one per user (their latest bid)"""
-        # bids = Bid.objects.filter(lot_number=self.lot_number, last_bid_time__lte=self.calculated_end, amount__gte=self.reserve_price).order_by('-amount', 'last_bid_time')
-        bids = (
-            Bid.objects.exclude(is_deleted=True)
-            .filter(
-                lot_number=self.lot_number,
-                last_bid_time__lte=self.calculated_end,
-                amount__gte=self.reserve_price,
-                pk=Subquery(self._latest_bid_per_user_subquery()),
-            )
-            .order_by("-amount", "last_bid_time")
-        )
-        return bids
+        """Bids on this lot, highest first, one per user (their latest bid). A **list**, not a queryset.
+
+        Read through ``self.bid_set`` and narrowed here rather than in SQL, so a lot list can
+        ``prefetch_related("bid_set")`` and pay one query per page instead of one per row. Same
+        rule as the old subquery, in the same order: of a user's bids only their **latest** counts,
+        and only if placed by the time the lot ended and at least the reserve -- a late or
+        under-reserve latest bid drops that user rather than falling back to an earlier one. A list
+        because callers index it twice; cached (``Bid.save()`` drops it) because a lot list row
+        reads ``high_bid``, ``high_bidder_display`` and ``ended``, all of which come through here.
+        """
+        if self.pk is None:
+            # an unsaved lot has no bids, and self.bid_set would raise rather than say so
+            return []
+        related = self.bid_set.all()
+        if related._result_cache is None:
+            # Not prefetched, so this is going to be a query either way -- take the bidders with it,
+            # because every caller that shows bids shows who placed them. When it *is* prefetched
+            # (a lot list does `bid_set__user`) the rows are already here and re-fetching them with
+            # a join would throw that away, which is what the check is for.
+            related = related.select_related("user")
+        latest_per_user = {}
+        for bid in related:
+            if bid.is_deleted:
+                continue
+            current = latest_per_user.get(bid.user_id)
+            if current is None or (bid.bid_time, bid.pk) > (current.bid_time, current.pk):
+                latest_per_user[bid.user_id] = bid
+        calculated_end = self.calculated_end
+        qualifying = [
+            bid
+            for bid in latest_per_user.values()
+            if bid.last_bid_time <= calculated_end and bid.amount >= self.reserve_price
+        ]
+        qualifying.sort(key=lambda bid: (-bid.amount, bid.last_bid_time))
+        return qualifying
 
     @property
     def high_bid(self):
@@ -9549,9 +9448,8 @@ class Lot(models.Model):
             return self.winning_price
         if self.sealed_bid:
             try:
-                bids = self.bids
                 return self.bids[0].amount
-            except:
+            except IndexError:
                 return 0
         else:
             if self.auction and self.auction.online_bidding == "buy_now_only" and not self.bids:
@@ -9584,22 +9482,29 @@ class Lot(models.Model):
         except:
             return False
 
-    @property
+    @cached_property
     def all_page_views(self):
         """Return a set of all users who have viewed this lot, and how long they looked at it for"""
         return PageView.objects.filter(lot_number=self.lot_number)
 
-    @property
+    @cached_property
     def anonymous_views(self):
-        return len(PageView.objects.filter(lot_number=self.lot_number, user_id__isnull=True))
+        return PageView.objects.filter(lot_number=self.lot_number, user_id__isnull=True).count()
 
-    @property
+    @cached_property
     def page_views(self):
-        """Total number of page views from all users"""
-        pageViews = self.all_page_views
-        return len(pageViews)
+        """Total page views from all users.
 
-    @property
+        From the queryset annotation when there is one -- a lot list showing this column would
+        otherwise count rows of the biggest table on the site once per row. COUNT(*) rather than
+        len() of a queryset either way.
+        """
+        annotated = getattr(self, "annotated_page_views", None)
+        if annotated is not None:
+            return annotated
+        return self.all_page_views.count()
+
+    @cached_property
     def ar_interaction_counts(self):
         """How many distinct users scanned / zoomed in on / zoomed all the way in on this lot in AR.
 
@@ -9645,7 +9550,7 @@ class Lot(models.Model):
     # are the same number by construction and a repeat look never inflates them.
     AR_PAGE_VIEW_SOURCES = ("ar_scan", "ar_zoom", "ar_zoom_full")
 
-    @property
+    @cached_property
     def page_view_source_breakdown(self):
         """Page views on this lot grouped by ``src``, with a unique-viewer count for each.
 
@@ -9685,7 +9590,7 @@ class Lot(models.Model):
             entry["unique"] += row["users"] + row["sessions"]
         return sorted(merged.values(), key=lambda entry: (-entry["views"], entry["label"]))
 
-    @property
+    @cached_property
     def number_of_bids(self):
         """How many users placed bids on this lot?"""
         return (
@@ -9721,10 +9626,10 @@ class Lot(models.Model):
         # 	return False
         return True
 
-    @property
+    @cached_property
     def image_count(self):
         """Count the number of images associated with this lot"""
-        return self.images.count()
+        return len(self.images)
 
     @property
     def multimedia_count(self):
@@ -9734,13 +9639,21 @@ class Lot(models.Model):
             count = 1
         return self.image_count + count
 
-    @property
+    @cached_property
     def images(self):
-        """All images associated with this lot; delegates to use_images_from if set"""
-        source = self.use_images_from if self.use_images_from_id else self
-        return LotImage.objects.filter(lot_number=source.lot_number).order_by("-is_primary", "createdon")
+        """All images associated with this lot; delegates to use_images_from if set.
 
-    @property
+        A **list**, read through the reverse relation and sorted here rather than filtered in SQL,
+        so a list view can ``prefetch_related("lotimage_set")`` and pay one query per page rather
+        than one per row (the lot page iterates it twice and counts it twice: four trips before).
+        """
+        source = self.use_images_from if self.use_images_from_id else self
+        if source.pk is None:
+            # an unsaved lot has no images, and source.lotimage_set would raise rather than say so
+            return []
+        return sorted(source.lotimage_set.all(), key=lambda image: (not image.is_primary, image.createdon))
+
+    @cached_property
     def auto_image(self):
         """Grab an automatically generated image"""
         if not self.auction:
@@ -9751,12 +9664,16 @@ class Lot(models.Model):
             return None
         return find_image(self.lot_name, self.user, self.auction)
 
-    @property
+    @cached_property
     def thumbnail(self):
-        source = self.use_images_from if self.use_images_from_id else self
-        default = LotImage.objects.filter(lot_number=source.lot_number, is_primary=True).first()
-        if default:
-            return default
+        """The image to show for this lot in a list, or None.
+
+        Cached: the tile template asks three times per row. self.images is sorted primary-first, so
+        this is the row the old ``filter(is_primary=True).first()`` returned, without its query.
+        """
+        for image in self.images:
+            if image.is_primary:
+                return image
         return self.auto_image
 
     def get_absolute_url(self):
@@ -9773,7 +9690,7 @@ class Lot(models.Model):
             return self.lot_number_int
         return self.lot_number
 
-    @property
+    @cached_property
     def lot_link(self):
         """Simplest link to access this lot with"""
         # Prefer real PK URLs; fall back to lot_number only for unsaved instances.
@@ -9804,13 +9721,13 @@ class Lot(models.Model):
             return reverse("lot_by_pk_and_slug", kwargs={"pk": lot_pk, "slug": self.slug})
         return reverse("lot_by_pk", kwargs={"pk": lot_pk})
 
-    @property
+    @cached_property
     def full_lot_link(self):
         """Full domain name URL for this lot"""
         current_site = Site.objects.get_current()
         return f"{current_site.domain}{self.lot_link}"
 
-    @property
+    @cached_property
     def qr_code(self):
         """Full domain name URL used to for QR codes"""
         current_site = Site.objects.get_current()
@@ -9857,7 +9774,7 @@ class Lot(models.Model):
             return self.reserve_and_buy_now_info
         return self.seller_string
 
-    @property
+    @cached_property
     def label_line_3(self):
         """Used for printed labels"""
         result = ""
@@ -9880,7 +9797,7 @@ class Lot(models.Model):
         except:
             return None
 
-    @property
+    @cached_property
     def bidder_ip_same_as_seller(self):
         if self.seller_ip:
             bids = (
@@ -10154,7 +10071,11 @@ class BapAward(models.Model):
         """Recalculate and persist all-time and YTD BAP/HAP/CAP totals for a club member."""
         from django.utils import timezone
 
-        this_year = timezone.now().year
+        # localtime, not now(): `date` is a DateField somebody typed in their own calendar, so the
+        # year it belongs to is the site's, not UTC's. now() disagreed with it -- and with
+        # tasks.reset_yearly_bap_counters -- for the five hours between 7pm Eastern on New Year's
+        # Eve and midnight UTC, which is the one evening of the year this is read.
+        this_year = timezone.localtime().year
         awards = BapAward.objects.filter(club_member=member).exclude(lot__is_deleted=True).exclude(lot__banned=True)
         bap = hap = cap = bap_ytd = hap_ytd = cap_ytd = 0
         for a in awards:
@@ -10236,7 +10157,7 @@ class ClubBapGenusOverride(models.Model):
         return f"{self.club} — {self.genus}: {self.points} pts"
 
 
-class Invoice(models.Model):
+class Invoice(CachedPropertiesMixin, models.Model):
     """
     The total amount you get paid or owe to the club for an auction
     """
@@ -10292,7 +10213,14 @@ class Invoice(models.Model):
     renewal_manually_set = models.BooleanField(default=False)
     renewal_processed = models.BooleanField(default=False)
 
-    @property
+    class Meta:
+        indexes = [
+            # AuctionTOS.invoice: "this person's most recent invoice". The FK index found every
+            # invoice they have and left the ordering to a filesort.
+            models.Index(fields=["auctiontos_user", "-date"], name="invoice_tos_recent_idx"),
+        ]
+
+    @cached_property
     def currency(self):
         """Get the currency for this invoice based on the auction creator or club's connected seller"""
         # For club-managed auctions (or club-only invoices), derive currency from the club's seller
@@ -10306,12 +10234,12 @@ class Invoice(models.Model):
             return self.auction.created_by.userdata.currency
         return "USD"
 
-    @property
+    @cached_property
     def currency_symbol(self):
         """Get the currency symbol for this invoice"""
         return get_currency_symbol(self.currency)
 
-    @property
+    @cached_property
     def paypal_credentials(self):
         """Club-supplied PayPal app credentials governing this invoice, or ``None``.
 
@@ -10322,7 +10250,7 @@ class Invoice(models.Model):
         club = self.club or (self.auction.club if self.auction else None)
         return club.paypal_credentials if club else None
 
-    @property
+    @cached_property
     def show_payment_button(self):
         """True if we can show the PayPal or Square button"""
         # Check PayPal -- a club using its own (non-OAuth) credentials counts as configured
@@ -10375,7 +10303,7 @@ class Invoice(models.Model):
 
         return has_payment_method
 
-    @property
+    @cached_property
     def show_paypal_button(self):
         """True if we can show specifically the PayPal button"""
         # The site's platform app, or a club's own (non-OAuth) credentials, must be available.
@@ -10414,7 +10342,7 @@ class Invoice(models.Model):
             return False
         return True
 
-    @property
+    @cached_property
     def show_square_button(self):
         """True if we can show specifically the Square button
         Square requires OAuth - seller must have linked their account"""
@@ -10450,7 +10378,7 @@ class Invoice(models.Model):
             return False
         return True
 
-    @property
+    @cached_property
     def reason_for_payment_not_available(self):
         """Always use this after invoice.show_payment_button
         This assumes that the button will show up, but be grayed out
@@ -10469,7 +10397,7 @@ class Invoice(models.Model):
             # we can change it later
             pass
 
-    @property
+    @cached_property
     def soft_descriptor(self):
         """Used for PayPal payments -- short string describing the merchant
         https://developer.paypal.com/docs/multiparty/embedded-integration/reference/#soft-descriptors
@@ -10480,42 +10408,60 @@ class Invoice(models.Model):
         return None
 
     def sum_adjusments(self, adjustment_type):
-        total = self.adjustments.filter(adjustment_type=adjustment_type).aggregate(total=Sum("amount"))["total"]
-        if not total:
-            return 0
-        return total
+        return self.adjustment_totals.get(adjustment_type) or 0
 
-    @property
+    @cached_property
+    def adjustment_totals(self):
+        """Every adjustment type's total, in one GROUP BY.
+
+        There are four types and each was its own ``SUM``; the invoice page asked for all four
+        several times over while deriving the net, which was 54 aggregate queries for one invoice.
+        """
+        return {
+            row["adjustment_type"]: row["total"]
+            for row in self.adjustments.values("adjustment_type").order_by().annotate(total=Sum("amount"))
+        }
+
+    @cached_property
     def adjustments(self):
         return InvoiceAdjustment.objects.filter(invoice=self).order_by("-createdon")
 
-    @property
+    @cached_property
     def flat_value_adjustments(self):
         return self.sum_adjusments("DISCOUNT") - self.sum_adjusments("ADD")
 
-    @property
+    @cached_property
     def percent_value_adjustments(self):
         return self.sum_adjusments("ADD_PERCENT") - self.sum_adjusments("DISCOUNT_PERCENT")
 
-    @property
+    @cached_property
     def changed_adjustments(self):
-        return self.adjustments.exclude(amount=0)
+        """The adjustments worth showing, each already holding this invoice.
 
-    @property
+        ``InvoiceAdjustment.display`` reads a currency symbol off ``self.invoice``; without the
+        back-reference every line of the table fetched its own copy of this invoice and re-derived
+        the currency from the auction's creator -- four queries per adjustment.
+        """
+        adjustments = list(self.adjustments.exclude(amount=0))
+        for adjustment in adjustments:
+            adjustment.invoice = self
+        return adjustments
+
+    @cached_property
     def membership_fee_amount(self):
         club = self.club or (self.auction.club if self.auction else None)
         if not (club and self.renewal_needed and club.membership_annual_fee):
             return Decimal("0.00")
         return Decimal(club.membership_annual_fee)
 
-    @property
+    @cached_property
     def club_member_for_auction(self):
         """The ClubMember record for this invoice's user in the auction's club, or None."""
         if not self.auction or not self.auction.club or not self.auctiontos_user:
             return None
         return self.auctiontos_user.club_member_record
 
-    @property
+    @cached_property
     def member_has_paypal_subscription(self):
         """True when this invoice's club member auto-renews via a PayPal subscription.
 
@@ -10524,7 +10470,7 @@ class Invoice(models.Model):
         member = self.club_member_for_auction
         return bool(member and member.paypal_subscription_id)
 
-    @property
+    @cached_property
     def treat_as_club_member(self):
         """True when club member benefits (club member discount, automatic alternate split) apply
         to this invoice's user: either their membership is current, or this invoice will renew it
@@ -10536,7 +10482,7 @@ class Invoice(models.Model):
         member = self.club_member_for_auction
         return bool(member and member.is_paid_member)
 
-    @property
+    @cached_property
     def membership_status_for_invoice(self):
         if not self.auction or not self.auction.club:
             return "No club"
@@ -10582,20 +10528,23 @@ class Invoice(models.Model):
         """
         if self.pk and Invoice.objects.filter(pk=self.pk, status="PAID").exists():
             return
+        # "work it out again" is the whole job: every number below is cached on the instance, and
+        # the caller is here because something they hold has changed.
+        self.invalidate_cached_properties()
         self.calculated_total = self.rounded_net
         self.save()
 
-    @property
+    @cached_property
     def total_adjustment_amount(self):
         """There's a difference between the subtotal and the rounded net -- rounding, manual adjustments, fist bid payouts, etc"""
         return Decimal(self.subtotal) - Decimal(self.rounded_net)
 
-    @property
+    @cached_property
     def subtotal(self):
         """don't call this directly, use self.net or another property instead"""
         return Decimal(self.total_sold) - Decimal(self.total_bought)
 
-    @property
+    @cached_property
     def first_bid_payout(self):
         try:
             if self.auction.first_bid_payout:
@@ -10605,7 +10554,7 @@ class Invoice(models.Model):
             pass
         return 0
 
-    @property
+    @cached_property
     def club_member_discount(self):
         """Like first_bid_payout, but only for paid club members (or a user whose membership
         will be renewed by this invoice) who have purchased at least one lot."""
@@ -10617,7 +10566,7 @@ class Invoice(models.Model):
             return 0
         return self.auction.club_member_discount
 
-    @property
+    @cached_property
     def registration_fee_amount(self):
         """Flat registration fee charged on every invoice for the auction ("Added to all invoices").
 
@@ -10632,7 +10581,7 @@ class Invoice(models.Model):
             return Decimal(auction.registration_fee_for_club_members or 0)
         return Decimal(auction.registration_fee or 0)
 
-    @property
+    @cached_property
     def tax(self):
         totals = self.bought_lots_queryset.aggregate(
             total_final=Coalesce(
@@ -10649,7 +10598,7 @@ class Invoice(models.Model):
         tax_amount = total_final * rate
         return tax_amount.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
-    @property
+    @cached_property
     def manual_adjustment_amount(self):
         """Net dollar value of the manual invoice adjustments (flat + legacy percent).
 
@@ -10671,7 +10620,7 @@ class Invoice(models.Model):
             percent_base * Decimal(self.percent_value_adjustments) / Decimal(100)
         )
 
-    @property
+    @cached_property
     def net(self):
         """Factor in:
         Total bought
@@ -10696,12 +10645,12 @@ class Invoice(models.Model):
             subtotal = 0
         return Decimal(subtotal)
 
-    @property
+    @cached_property
     def net_after_payments(self):
         """negative number means they owe the club payment"""
         return self.net + self.total_payments
 
-    @property
+    @cached_property
     def user_should_be_paid(self):
         """Return True if the CLUB owes the user money (the user should be paid out).
 
@@ -10714,7 +10663,7 @@ class Invoice(models.Model):
         else:
             return False
 
-    @property
+    @cached_property
     def rounded_net(self):
         """Always round in the customer's favor (against the club) to make sure that the club doesn't need to deal with change, only whole dollar amounts"""
         if not self.auction or not self.auction.invoice_rounding:
@@ -10732,12 +10681,12 @@ class Invoice(models.Model):
             else:
                 return Decimal(rounded + 1)
 
-    @property
+    @cached_property
     def absolute_amount(self):
         """Give the absolute value of the invoice's net amount"""
         return abs(self.rounded_net)
 
-    @property
+    @cached_property
     def sold_lots_queryset(self):
         """Simple qs containing all lots SOLD by this user in this auction"""
         if not self.auctiontos_user:
@@ -10747,10 +10696,19 @@ class Invoice(models.Model):
                 auctiontos_seller=self.auctiontos_user,
                 auction=self.auction,
                 is_deleted=False,
-            ).order_by("pk")
+            )
+            # every row of the invoice prints a lot number (which reads the auction), a category,
+            # and where its winner is collecting it
+            .select_related(
+                "auction",
+                "species_category",
+                "auctiontos_winner__pickup_location",
+                "auctiontos_seller__pickup_location",
+            )
+            .order_by("pk")
         )
 
-    @property
+    @cached_property
     def bought_lots_queryset(self):
         """Simple qs containing all lots BOUGHT by this user in this auction"""
         base = (
@@ -10761,7 +10719,14 @@ class Invoice(models.Model):
                 # Removed (banned) lots are not charged -- a buyer never pays for a lot that
                 # was pulled, so it must not appear in (nor be summed into) their purchases.
                 banned=False,
-            ).order_by("pk")
+            )
+            .select_related(
+                "auction",
+                "species_category",
+                "auctiontos_seller__pickup_location",
+                "auctiontos_winner__pickup_location",
+            )
+            .order_by("pk")
             if self.auctiontos_user
             else Lot.objects.none()
         )
@@ -10794,43 +10759,29 @@ class Invoice(models.Model):
             )
         )
 
-    @property
-    def bought_lots_queryset_old(self):
-        """Simple qs containing all lots BOUGHT by this user in this auction"""
-        return (
-            Lot.objects.filter(
-                winning_price__isnull=False,
-                auctiontos_winner=self.auctiontos_user,
-                is_deleted=False,
-            )
-            .order_by("pk")
-            .annotate(final_price=F("winning_price") * (100 - F("partial_refund_percent")) / 100)
-            .annotate(tax=F("final_price") * F("auction__tax") / 100)
-        )
-
-    @property
+    @cached_property
     def sold_lots_queryset_sorted(self):
         try:
             return sorted(self.sold_lots_queryset, key=lambda t: str(t.winner_location))
         except:
             return self.sold_lots_queryset
 
-    @property
+    @cached_property
     def lots_sold(self):
         """Return number of lots the user attempted to sell in this invoice (unsold lots included)"""
         return len(self.sold_lots_queryset)
 
-    @property
+    @cached_property
     def lots_sold_successfully(self):
         """Queryset of lots the user sold in this invoice (unsold lots not included)"""
         return self.sold_lots_queryset.filter(auctiontos_winner__isnull=False)
 
-    @property
+    @cached_property
     def lots_sold_successfully_count(self):
         """Return number of lots the user sold in this invoice (unsold lots not included)"""
         return self.lots_sold_successfully.count()
 
-    @property
+    @cached_property
     def lot_labels(self):
         """For online auctions, only sold lots will have printed labels.  For in-person auctions, all submitted lots get printed"""
         if self.is_online:
@@ -10838,12 +10789,12 @@ class Invoice(models.Model):
         else:
             return self.sold_lots_queryset
 
-    @property
+    @cached_property
     def unsold_lots(self):
         """Return number of lots the user did not sell. This may be simply lots whose winner has not been set yet."""
-        return len(self.sold_lots_queryset.exclude(auctiontos_winner__isnull=False))
+        return self.sold_lots_queryset.exclude(auctiontos_winner__isnull=False).count()
 
-    @property
+    @cached_property
     def unsold_non_donation_lots(self):
         """For non-online auctions only.  Return number of lots the user did not sell. This may be simply lots whose winner has not been set yet."""
         if self.is_online:
@@ -10853,31 +10804,31 @@ class Invoice(models.Model):
             active=True, auctiontos_winner__isnull=True, donation=False, banned=False
         ).count()
 
-    @property
+    @cached_property
     def total_sold_gross(self):
         """Total winning price of all lots sold"""
         return self.sold_lots_queryset.aggregate(total=Sum("winning_price"))["total"] or 0
 
-    @property
+    @cached_property
     def total_sold(self):
         """Seller's cut of all lots sold"""
         return self.sold_lots_queryset.aggregate(total_sold=Sum("your_cut"))["total_sold"] or 0
 
-    @property
+    @cached_property
     def total_sold_club_cut(self):
         """Club's cut of all lots sold"""
         return self.sold_lots_queryset.aggregate(total=Sum("club_cut"))["total"] or 0
 
-    @property
+    @cached_property
     def lots_bought(self):
         """Return number of lots the user bought in this invoice"""
         return len(self.bought_lots_queryset)
 
-    @property
+    @cached_property
     def total_bought(self):
         return self.bought_lots_queryset.aggregate(total_bought=Sum("final_price"))["total_bought"] or 0
 
-    @property
+    @cached_property
     def total_donations(self):
         """Total value of all donated lots"""
         return (
@@ -10887,14 +10838,14 @@ class Invoice(models.Model):
             or 0
         )
 
-    @property
+    @cached_property
     def location(self):
         """Pickup location selected by the user"""
         if self.auctiontos_user:
             return self.auctiontos_user.pickup_location
         return None
 
-    @property
+    @cached_property
     def contact_email(self):
         if self.location:
             if self.location.pickup_location_contact_email:
@@ -10909,12 +10860,12 @@ class Invoice(models.Model):
                 return self.club.contact_email
         return None
 
-    @property
+    @cached_property
     def has_refunds(self):
         """Check if this invoice has any refunds (negative payment amounts)"""
         return self.payments.filter(amount__lt=0).exists()
 
-    @property
+    @cached_property
     def rounded_net_after_payments(self):
         """
         Calculate net_after_payments with rounding for cash payments.
@@ -10946,7 +10897,7 @@ class Invoice(models.Model):
                 # net_after_payments is between rounded and rounded+1 (e.g., -1.5 between -2 and -1)
                 return Decimal(rounded + 1)
 
-    @property
+    @cached_property
     def rounding_adjustment(self):
         """
         Calculate the rounding adjustment to display as a line item.
@@ -10962,7 +10913,7 @@ class Invoice(models.Model):
 
         return None
 
-    @property
+    @cached_property
     def invoice_summary_short(self):
         result = ""
         # Use rounded value for display when invoice_rounding is enabled
@@ -10979,7 +10930,7 @@ class Invoice(models.Model):
         # A fully settled ($0) invoice owes nothing -- don't render "owes the club $0.00".
         return result + "is settled up"
 
-    @property
+    @cached_property
     def invoice_summary(self):
         if self.auctiontos_user:
             return f"{self.auctiontos_user.name} {self.invoice_summary_short}"
@@ -11001,7 +10952,7 @@ class Invoice(models.Model):
     def get_absolute_url(self):
         return reverse("invoice_by_pk", kwargs={"pk": self.pk})
 
-    @property
+    @cached_property
     def is_online(self):
         """Based on the auction associated with this invoice"""
         if self.auctiontos_user:
@@ -11010,17 +10961,17 @@ class Invoice(models.Model):
             return self.auction.is_online
         return False
 
-    @property
+    @cached_property
     def unsold_lot_warning(self):
         if self.unsold_non_donation_lots:
             return f"{self.unsold_non_donation_lots} unsold lot(s), sell these before setting this paid"
         return ""
 
-    @property
+    @cached_property
     def pre_register_used(self):
         return self.sold_lots_queryset.filter(pre_register_discount__gt=0).exists()
 
-    @property
+    @cached_property
     def total_payments(self):
         """Sum of payments recorded against this invoice (Decimal)."""
         total = self.payments.aggregate(total=Coalesce(Sum("amount"), Value(Decimal("0.00"))))["total"]
@@ -11323,8 +11274,11 @@ class Invoice(models.Model):
         return entries
 
 
-class InvoiceAdjustment(models.Model):
+class InvoiceAdjustment(InvalidatesRelatedCache, models.Model):
     """Alteration to a specific invoice"""
+
+    # every number on the invoice is derived from these
+    invalidates_cache_on = ("invoice",)
 
     invoice = models.ForeignKey("Invoice", null=True, blank=True, on_delete=models.CASCADE)
     user = models.ForeignKey(User, blank=True, null=True, on_delete=models.SET_NULL)
@@ -11367,11 +11321,14 @@ class InvoiceAdjustment(models.Model):
         return result
 
 
-class InvoicePayment(models.Model):
+class InvoicePayment(InvalidatesRelatedCache, models.Model):
     """
     Record of a payment applied to an Invoice (supports partial payments).
     Payments are kept separate from InvoiceAdjustments.
     """
+
+    # total_payments, and everything downstream of it
+    invalidates_cache_on = ("invoice",)
 
     PAYMENT_STATUS = (
         ("PENDING", "Pending"),
@@ -11533,8 +11490,12 @@ class ClubMoney(models.Model):
         return f"{self.club}: {self.date} {self.amount} {self.get_category_display()}"
 
 
-class Bid(models.Model):
+class Bid(InvalidatesRelatedCache, models.Model):
     """Bids apply to lots"""
+
+    # bid_on_lot builds its Bid with the Lot *object* and then asks that same object who the high
+    # bidder is now, so this write has to drop lot.bids -- saving a Bid is not a Lot.save().
+    invalidates_cache_on = ("lot_number",)
 
     user = models.ForeignKey(User, on_delete=models.CASCADE)
     lot_number = models.ForeignKey(Lot, on_delete=models.CASCADE)
@@ -11555,11 +11516,14 @@ class Bid(models.Model):
         self.save()
 
 
-class Watch(models.Model):
+class Watch(InvalidatesRelatedCache, models.Model):
     """
     Users can watch lots.
     This adds them to a list on the users page, and sends an email 2 hours before the auction ends
     """
+
+    # Lot.number_of_watchers
+    invalidates_cache_on = ("lot_number",)
 
     user = models.ForeignKey(User, on_delete=models.CASCADE)
     lot_number = models.ForeignKey(Lot, on_delete=models.CASCADE)
@@ -11603,7 +11567,7 @@ class UserIgnoreCategory(models.Model):
         return str(self.user) + " hates " + str(self.category)
 
 
-class PageView(models.Model):
+class PageView(CachedPropertiesMixin, models.Model):
     """Track what lots a user views"""
 
     user = models.ForeignKey(User, on_delete=models.CASCADE, null=True, blank=True)
@@ -11645,9 +11609,17 @@ class PageView(models.Model):
         # thing = self.title
         return f"User {self.user} viewed {thing} for {self.total_time} seconds"
 
-    @property
+    @cached_property
     def duplicates(self):
-        """Some duplciates have appeared and I can't figure out how it's possible"""
+        """The other rows that are the same visit as this one.
+
+        A blank ``session_id`` is not a match. Without that guard the filter below reads as
+        ``session_id IS NULL`` (or ``= ''``) and every *anonymous* view of one URL becomes a
+        duplicate of every other one, so the deduplicator would collapse thousands of unrelated
+        visits into a single row with their counters summed.
+        """
+        if not self.session_id:
+            return PageView.objects.none()
         return PageView.objects.filter(
             user=self.user,
             lot_number=self.lot_number,
@@ -11656,50 +11628,91 @@ class PageView(models.Model):
             session_id=self.session_id,
         ).exclude(pk=self.pk)
 
-    @property
+    @cached_property
     def duplicate_count(self):
         return self.duplicates.count()
 
-    def merge_and_delete_duplicate(self):
-        """Merge duplicate PageView records and delete the duplicate.
+    def merge_and_delete_duplicates(self):
+        """Fold **every** duplicate of this view into it, delete them, and mark it checked.
 
-        This method should be called explicitly, not accessed as a property,
-        as it has side effects (modifies and deletes database records).
+        Returns how many rows were merged away. Called explicitly, never as a property: it
+        modifies and deletes rows.
+
+        Three things here are load-bearing, and all three were bugs:
+
+        * **Every duplicate, not one.** This used to merge ``duplicates.first()`` and return, while
+          the caller marked the row done regardless -- so a view with three duplicates kept two of
+          them forever.
+        * **``update()`` on this row, never ``save()``.** The caller iterates a queryset it
+          materialised before any of this ran, so it reaches rows that a previous iteration has
+          already deleted. ``save()`` on a deleted instance finds no row to UPDATE and Django
+          **re-INSERTs it** under its old primary key (``select_on_save`` is False and the pk is an
+          ``AutoField``), resurrecting a merged-away duplicate with double-counted totals and
+          deleting the row it had just been merged into. An ``UPDATE ... WHERE pk = x`` that matches
+          nothing is simply a no-op, which is the behaviour this needs.
+        * **One transaction.** Summing the counters and deleting the rows they came from must not be
+          separable, or a crash between them double-counts every one of them on the next pass.
         """
-        if self.duplicate_count:
-            dup = self.duplicates.first()
-            self.date_start = min(self.date_start, dup.date_start)
-            if self.date_end and dup.date_end:
-                self.date_end = max(self.date_end, dup.date_end)
-            self.total_time = self.total_time + dup.total_time
-            if not self.source:
-                self.source = dup.source
-            self.counter = self.counter + dup.counter
-            if dup.notification_sent:
-                self.notification_sent = True
-            if not self.title:
-                self.title = dup.title
-            if not self.referrer:
-                self.referrer = dup.referrer
-            self.save()
-            dup.delete()
+        duplicates = list(self.duplicates)
+        fields = {"duplicate_check_completed": True}
+        if duplicates:
+            starts = [d.date_start for d in duplicates if d.date_start]
+            if self.date_start:
+                starts.append(self.date_start)
+            ends = [d.date_end for d in duplicates if d.date_end]
+            if self.date_end:
+                ends.append(self.date_end)
+            fields["date_start"] = min(starts) if starts else self.date_start
+            # Left alone when nothing in the group has an end time, rather than invented.
+            if ends:
+                fields["date_end"] = max(ends)
+            fields["total_time"] = self.total_time + sum(d.total_time for d in duplicates)
+            fields["counter"] = self.counter + sum(d.counter for d in duplicates)
+            fields["notification_sent"] = self.notification_sent or any(d.notification_sent for d in duplicates)
+            for name in ("source", "title", "referrer"):
+                value = getattr(self, name)
+                if not value:
+                    value = next((getattr(d, name) for d in duplicates if getattr(d, name)), value)
+                fields[name] = value
+        with transaction.atomic():
+            PageView.objects.filter(pk=self.pk).update(**fields)
+            if duplicates:
+                PageView.objects.filter(pk__in=[d.pk for d in duplicates]).delete()
+        for name, value in fields.items():
+            setattr(self, name, value)
+        return len(duplicates)
 
     def save(self, *args, **kwargs):
         if not self.latitude and self.ip_address:
-            other_view_with_same_ip = (
+            # values_list, not first(): this needs two floats, and hydrating a whole PageView to
+            # read them is the expensive half of a query that runs on every save of every row whose
+            # latitude is still 0. The (ip_address, -date_start) index is what keeps the rest of it
+            # cheap -- ip_address alone left MariaDB sorting the matches by hand.
+            nearby = (
                 PageView.objects.exclude(latitude=0, longitude=0)
                 .filter(ip_address=self.ip_address)
                 .order_by("-date_start")
+                .values_list("latitude", "longitude")
                 .first()
             )
-            if other_view_with_same_ip:
-                self.latitude = other_view_with_same_ip.latitude
-                self.longitude = other_view_with_same_ip.longitude
-            elif self.user:
-                if self.user.userdata.latitude:
-                    self.latitude = self.user.userdata.latitude
-                    self.longitude = self.user.userdata.longitude
+            if nearby:
+                self.latitude, self.longitude = nearby
+            elif self.user and self.user.userdata.latitude:
+                self.latitude = self.user.userdata.latitude
+                self.longitude = self.user.userdata.longitude
         super().save(*args, **kwargs)
+
+    class Meta:
+        indexes = [
+            # For the lookup in save() above. ip_address was indexed on its own, which found the
+            # rows but left the "-date_start" ordering to a filesort over all of them -- on the
+            # largest table on the site, from a query that runs on every page view.
+            models.Index(fields=["ip_address", "-date_start"], name="pageview_ip_recent_idx"),
+            # Same shape, different question: every lot list a signed-in person opens asks for the
+            # date of their most recent lot view, to badge lots as new. The FK index on user found
+            # every page view they have ever made and sorted them to return one row.
+            models.Index(fields=["user", "-date_start"], name="pageview_user_recent_idx"),
+        ]
 
 
 class UserLabelPrefs(models.Model):
@@ -11793,7 +11806,7 @@ def get_default_is_trusted():
     return settings.USERS_ARE_TRUSTED_BY_DEFAULT
 
 
-class UserData(models.Model):
+class UserData(CachedPropertiesMixin, models.Model):
     """
     Extension of user model to store additional info
     """
@@ -11928,10 +11941,6 @@ class UserData(models.Model):
     username_visible.help_text = "Uncheck to bid anonymously.  Your username will still be visible on lots you sell, chat messages, and to the people running any auctions you've joined."
     show_email_warning_sent = models.BooleanField(default=False, blank=True)
     show_email_warning_sent.help_text = "When a user has their email address hidden and sells a lot, this is checked"
-    username_is_email_warning_sent = models.BooleanField(default=False, blank=True)
-    username_is_email_warning_sent.help_text = (
-        "Warning email has been sent because this user made their username an email"
-    )
     send_reminder_emails_about_joining_auctions = models.BooleanField(default=True, blank=True)
     send_reminder_emails_about_joining_auctions.help_text = (
         "Get an annoying reminder email when you view an auction but don't join it"
@@ -12000,11 +12009,11 @@ class UserData(models.Model):
 
         return deletion_due_date(self)
 
-    @property
+    @cached_property
     def last_auction_created(self):
         return Auction.objects.filter(created_by=self.user).order_by("-date_posted").first()
 
-    @property
+    @cached_property
     def available_auctions_to_submit_lots(self):
         """Returns auctions that this user can submit lots to"""
         from django.utils import timezone
@@ -12341,30 +12350,27 @@ class UserData(models.Model):
         channel_layer = channels.layers.get_channel_layer()
         async_to_sync(channel_layer.group_send)(f"user_{self.user.pk}", message)
 
-    @property
+    @cached_property
     def my_lots_qs(self):
         """All lots this user submitted, whether in an auction, or independently"""
         return Lot.objects.filter(Q(user=self.user) | Q(auctiontos_seller__user=self.user)).exclude(is_deleted=True)
 
-    @property
+    @cached_property
     def lots_submitted(self):
         """All lots this user has submitted, including unsold"""
         return self.my_lots_qs.count()
 
-    @property
+    @cached_property
     def lots_sold(self):
         """All lots this user has sold"""
         return self.my_lots_qs.filter(winner__isnull=False).count()
 
-    @property
+    @cached_property
     def total_sold(self):
         """Total amount this user has sold on this site"""
-        total = 0
-        for lot in self.my_lots_qs.filter(winning_price__isnull=False):
-            total += lot.winning_price
-        return total
+        return self.my_lots_qs.aggregate(total=Sum("winning_price"))["total"] or 0
 
-    @property
+    @cached_property
     def species_sold(self):
         """Total different species that this user has bred and sold in auctions.
 
@@ -12377,7 +12383,7 @@ class UserData(models.Model):
         """
         return self.my_lots_qs.filter(i_bred_this_fish=True, winner__isnull=False).values("species").distinct().count()
 
-    @property
+    @cached_property
     def my_won_lots_qs(self):
         """All lots won by this user, in an auction or independently"""
         return Lot.objects.filter(
@@ -12385,41 +12391,42 @@ class UserData(models.Model):
             winning_price__isnull=False,
         ).exclude(is_deleted=True)
 
-    @property
+    @cached_property
     def lots_bought(self):
         """Total number of lots this user has purchased"""
         return self.my_won_lots_qs.count()
 
-    @property
+    @cached_property
     def lots_bought_online(self):
         """Total number of lots this user has purchased only in online auctions"""
         return self.my_won_lots_qs.filter(auction__is_online=True).count()
 
-    @property
+    @cached_property
     def total_spent(self):
         """Total amount this user has spent on this site"""
-        total = 0
-        for lot in self.my_won_lots_qs:
-            total += lot.winning_price
-        return total
+        return self.my_won_lots_qs.aggregate(total=Sum("winning_price"))["total"] or 0
 
-    @property
+    @cached_property
     def calc_total_volume(self):
         """Bought + sold"""
         return self.total_spent + self.total_sold
 
-    @property
+    @cached_property
     def total_bids(self):
         """Total number of successful bids this user has placed (max one per lot)"""
         # return len(Bid.objects.filter(user=self.user, was_high_bid=True))
-        return len(Bid.objects.exclude(is_deleted=True).filter(user=self.user))
+        return Bid.objects.exclude(is_deleted=True).filter(user=self.user).count()
 
-    @property
+    @cached_property
     def lots_viewed(self):
-        """Total lots viewed by this user"""
-        return len(PageView.objects.filter(user=self.user.pk))
+        """Total lots viewed by this user.
 
-    @property
+        COUNT(*), not len(): PageView is the biggest table on the site, and the user page asks for
+        this five times while working out its ratios.
+        """
+        return PageView.objects.filter(user=self.user.pk).count()
+
+    @cached_property
     def bought_to_sold(self):
         """Ratio of lots bought to lots sold"""
         if self.lots_sold:
@@ -12427,7 +12434,7 @@ class UserData(models.Model):
         else:
             return 0
 
-    @property
+    @cached_property
     def bid_to_view(self):
         """Ratio of lots viewed to lots bought.  Lower number is indicative of tire kicking, higher number means business"""
         if self.lots_viewed:
@@ -12435,7 +12442,7 @@ class UserData(models.Model):
         else:
             return 0
 
-    @property
+    @cached_property
     def viewed_to_sold(self):
         """Ratio of lots viewed to lots sold"""
         if self.lots_viewed:
@@ -12443,7 +12450,7 @@ class UserData(models.Model):
         else:
             return 0
 
-    @property
+    @cached_property
     def dedication(self):
         """Ratio of bids to won lots, only for online auctions"""
         if self.lots_bought_online and self.total_bids:
@@ -12451,20 +12458,20 @@ class UserData(models.Model):
         else:
             return 0
 
-    @property
+    @cached_property
     def percent_success(self):
         """Ratio of bids to won lots, formatted"""
         return self.dedication * 100
 
-    @property
+    @cached_property
     def positive_feedback_as_seller(self):
         return self.my_lots_qs.filter(feedback_rating=1).count()
 
-    @property
+    @cached_property
     def negative_feedback_as_seller(self):
         return self.my_lots_qs.filter(feedback_rating=-1).count()
 
-    @property
+    @cached_property
     def percent_positive_feedback_as_seller(self):
         positive = self.positive_feedback_as_seller
         negative = self.negative_feedback_as_seller
@@ -12472,15 +12479,15 @@ class UserData(models.Model):
             return 100
         return int((positive / (positive + negative)) * 100)
 
-    @property
+    @cached_property
     def positive_feedback_as_winner(self):
         return self.my_won_lots_qs.filter(winner_feedback_rating=1).count()
 
-    @property
+    @cached_property
     def negative_feedback_as_winner(self):
         return self.my_won_lots_qs.filter(winner_feedback_rating=-1).count()
 
-    @property
+    @cached_property
     def percent_positive_feedback_as_winner(self):
         positive = self.positive_feedback_as_winner
         negative = self.negative_feedback_as_winner
@@ -12488,15 +12495,15 @@ class UserData(models.Model):
             return 100
         return int((positive / (positive + negative)) * 100)
 
-    @property
+    @cached_property
     def auctions_created(self):
         return Auction.objects.filter(created_by__pk=self.user.pk).count()
 
-    @property
+    @cached_property
     def auctions_admined(self):
         return Auction.objects.filter(auctiontos__email=self.user.email, auctiontos__is_admin=True).count()
 
-    @property
+    @cached_property
     def auctions_i_admin(self):
         """Every auction this user may make changes to, as a queryset.
 
@@ -12521,7 +12528,7 @@ class UserData(models.Model):
             is_deleted=False,
         ).distinct()
 
-    @property
+    @cached_property
     def only_club(self):
         """The club this user obviously belongs to, or None.  Never a guess.
 
@@ -12580,7 +12587,7 @@ class UserData(models.Model):
         )
         return f"{admin_email}?subject={quote_plus(subject)}&body={quote_plus(body)}"
 
-    @property
+    @cached_property
     def runs_an_auction(self):
         """True when this user is an admin of *any* auction.
 
@@ -12668,12 +12675,13 @@ class UserData(models.Model):
 
     def save(self, *args, **kwargs):
         if not self.email_me_about_new_chat_replies:
-            subscriptions = ChatSubscription.objects.exclude(lot__user=self.user).filter(
-                user=self.user, unsubscribed=False
+            # One UPDATE rather than a SELECT and a save per row. UserData is saved on ordinary
+            # page views (the location context processor, the lot page), so this ran on requests
+            # that were not changing anything. ChatSubscription.save() only fills in timestamps
+            # that are null, and a row that exists has them.
+            ChatSubscription.objects.exclude(lot__user=self.user).filter(user=self.user, unsubscribed=False).update(
+                unsubscribed=True
             )
-            for subscription in subscriptions:
-                subscription.unsubscribed = True
-                subscription.save()
         super().save(*args, **kwargs)
 
     def unsubscribe_from_all(self):
@@ -12701,7 +12709,7 @@ class UserData(models.Model):
                     applies_to="MEMBERS",
                 )
 
-    @property
+    @cached_property
     def currency(self):
         # First check if user has set a preferred currency
         if self.preferred_currency:
@@ -13367,7 +13375,7 @@ class AuctionHistory(models.Model):
             return f"System {self.action}"
 
 
-class AdCampaignGroup(models.Model):
+class AdCampaignGroup(CachedPropertiesMixin, models.Model):
     title = models.CharField(max_length=100, default="Untitled campaign")
     contact_user = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL)
     paid = models.BooleanField(default=False)
@@ -13376,12 +13384,12 @@ class AdCampaignGroup(models.Model):
     def __str__(self):
         return f"{self.title}"
 
-    @property
+    @cached_property
     def number_of_clicks(self):
         """..."""
         return AdCampaignResponse.objects.filter(campaign__campaign_group=self.pk, clicked=True).count()
 
-    @property
+    @cached_property
     def number_of_impressions(self):
         """How many times ads in this campaign group have been viewed"""
         return AdCampaignResponse.objects.filter(campaign__campaign_group=self.pk).count()
@@ -13391,13 +13399,13 @@ class AdCampaignGroup(models.Model):
         """What percent of views result in a click"""
         return (self.number_of_clicks / (self.number_of_impressions + 1)) * 100
 
-    @property
+    @cached_property
     def number_of_campaigns(self):
         """How many campaigns are there in this group"""
         return AdCampaign.objects.filter(campaign_group=self.pk).count()
 
 
-class AdCampaign(CloudflareImageMixin, models.Model):
+class AdCampaign(CachedPropertiesMixin, CloudflareImageMixin, models.Model):
     image = ThumbnailerImageField(upload_to="images/", blank=True)
     campaign_group = models.ForeignKey(AdCampaignGroup, null=True, blank=True, on_delete=models.SET_NULL)
     title = models.CharField(max_length=50, default="Click here")
@@ -13435,12 +13443,12 @@ class AdCampaign(CloudflareImageMixin, models.Model):
         """Ad-sized (250x150 max) image URL; from Cloudflare when migrated"""
         return cloudflare_images.image_url(self.image, self.cloudflare_image_id, "ad")
 
-    @property
+    @cached_property
     def number_of_clicks(self):
         """..."""
         return AdCampaignResponse.objects.filter(campaign=self.pk, clicked=True).count()
 
-    @property
+    @cached_property
     def number_of_impressions(self):
         """How many times this ad has been viewed"""
         return AdCampaignResponse.objects.filter(campaign=self.pk).count()
@@ -13472,7 +13480,7 @@ class AdCampaignResponse(models.Model):
         return f"{user} {action}"
 
 
-class AuctionCampaign(models.Model):
+class AuctionCampaign(CachedPropertiesMixin, models.Model):
     auction = models.ForeignKey(Auction, null=True, blank=True, on_delete=models.SET_NULL)
     uuid = models.CharField(max_length=255, default=uuid_module.uuid4, blank=True)
     user = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL)
@@ -13492,7 +13500,7 @@ class AuctionCampaign(models.Model):
     )
     email_sent = models.BooleanField(default=False)
 
-    @property
+    @cached_property
     def link(self):
         current_site = Site.objects.get_current()
         return f"{current_site.domain}/auctions/{self.uuid}"
@@ -13528,8 +13536,11 @@ class AuctionCampaign(models.Model):
         super().save(*args, **kwargs)
 
 
-class LotImage(CloudflareImageMixin, models.Model):
+class LotImage(InvalidatesRelatedCache, CloudflareImageMixin, models.Model):
     """An image that belongs to a lot.  Each lot can have multiple images"""
+
+    # Lot.images is a cached list, and image_count and thumbnail read it
+    invalidates_cache_on = ("lot_number",)
 
     PIC_CATEGORIES = (
         ("ACTUAL", "This picture is of the exact item"),
@@ -14314,7 +14325,7 @@ class CheckinNudge(models.Model):
         return f"nudge {self.kind} user={self.user_id} auction={self.auction_id}"
 
 
-class VolunteerJob(models.Model):
+class VolunteerJob(CachedPropertiesMixin, models.Model):
     """A job an auction admin needs help with — announced to app users who can volunteer to do it.
 
     A bounty (optional) is applied as an invoice discount to whoever signs up. Signups are
@@ -14334,7 +14345,7 @@ class VolunteerJob(models.Model):
     def __str__(self):
         return f"volunteer job: {self.description}"
 
-    @property
+    @cached_property
     def signups_count(self):
         return self.signups.count()
 
@@ -14347,9 +14358,13 @@ class VolunteerJob(models.Model):
         return max(0, self.people_needed - self.signups_count)
 
 
-class VolunteerSignup(models.Model):
+class VolunteerSignup(InvalidatesRelatedCache, models.Model):
     """One person signing up for a VolunteerJob. Hangs off AuctionTOS (not User) because the bounty is
     an invoice adjustment and invoices key off the in-auction identity."""
+
+    # signups_count is cached on the job, and the signup view asks whether the job is full both
+    # before and after creating one of these
+    invalidates_cache_on = ("job",)
 
     job = models.ForeignKey(VolunteerJob, on_delete=models.CASCADE, related_name="signups")
     auctiontos = models.ForeignKey(AuctionTOS, on_delete=models.CASCADE)
@@ -14530,7 +14545,7 @@ class SpeakerTopic(models.Model):
         return str(self.name)
 
 
-class Speaker(CloudflareImageMixin, models.Model):
+class Speaker(CachedPropertiesMixin, CloudflareImageMixin, models.Model):
     """Someone who gives talks to aquarium clubs.
 
     Seeded from the Northeast Council's WordPress speaker database, but any user with a
@@ -14691,7 +14706,7 @@ class Speaker(CloudflareImageMixin, models.Model):
             return f"Added by {name} ({self.club.name})"
         return f"Added by {name}"
 
-    @property
+    @cached_property
     def display_name(self):
         """The NEC export stores names as "Last, First" — read it back the way people say it."""
         if self.name.count(",") == 1:
@@ -14813,7 +14828,7 @@ class SpeakerComment(models.Model):
         return bool(user.is_superuser or (self.user_id and self.user_id == user.pk))
 
 
-class AssistantSkillRequest(models.Model):
+class AssistantSkillRequest(CachedPropertiesMixin, models.Model):
     """Something an agent tried to do here and could not, in the agent's own words.
 
     The MCP endpoint has fifty-odd tools and every one of them was added because somebody said out
@@ -14866,7 +14881,7 @@ class AssistantSkillRequest(models.Model):
     def __str__(self):
         return f"{self.skill} ({self.get_status_display()})"
 
-    @property
+    @cached_property
     def others_asking(self):
         """How many other people have asked for something with the same name.
 

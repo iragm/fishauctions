@@ -846,29 +846,27 @@ def _form_field_match(model, field_names, ql):
 
 
 def _user_pref_field_items(user, q):
-    """Match the query against the user-preferences form fields and link to the preferences page.
+    """Match the query against the two settings forms and link to the page the field is on.
 
     Mirrors ``_auction_field_items``: searching "username" surfaces "Change username visible"
     on the user preferences page (the standalone "change username" page is a separate shortcut).
+    Notifications are a separate page and a separate form now, so the answer has to name the right
+    one -- linking "stop emailing me" at /preferences/ would be a page the setting isn't on.
     """
     if not user.is_authenticated or len(q) < 3:
         return []
-    from .forms import ChangeUserPreferencesForm
+    from .forms import ChangeUserNotificationsForm, ChangeUserPreferencesForm
     from .models import UserData
 
-    match = _form_field_match(UserData, set(ChangeUserPreferencesForm.Meta.fields), q.lower())
-    if not match:
-        return []
-    display = match[0]
-    return [
-        _item(
-            "page",
-            "User preferences",
-            reverse("preferences"),
-            "bi-sliders",
-            f"Change {display}",
-        )
-    ]
+    pages = (
+        (ChangeUserPreferencesForm, "User preferences", "preferences", "bi-sliders"),
+        (ChangeUserNotificationsForm, "Notification settings", "notification_preferences", "bi-bell"),
+    )
+    for form, title, url_name, icon in pages:
+        match = _form_field_match(UserData, set(form.Meta.fields), q.lower())
+        if match:
+            return [_item("page", title, reverse(url_name), icon, f"Change {match[0]}")]
+    return []
 
 
 def _club_settings_field_items(user, q):

@@ -3540,7 +3540,7 @@ class ClubSpeciesLookupAPITests(StandardTestCase):
         provider = FakeProvider([{"id": self.altispinosus.pk}])
         llm.set_provider_override(provider)
         try:
-            limit = views.SPECIES_LOOKUP_LLM_CALLS_PER_CLUB_PER_DAY
+            limit = views.club_api.SPECIES_LOOKUP_LLM_CALLS_PER_CLUB_PER_DAY
             free = self.get(q="Yellow lab")
             self.assertEqual(free["X-Species-LLM-Limit"], str(limit))
             self.assertEqual(free["X-Species-LLM-Remaining"], str(limit))
@@ -3557,8 +3557,8 @@ class ClubSpeciesLookupAPITests(StandardTestCase):
         """Answering "no species" would be writing down something the site never worked out."""
         provider = FakeProvider([{"id": self.altispinosus.pk}])
         llm.set_provider_override(provider)
-        original = views.SPECIES_LOOKUP_LLM_CALLS_PER_CLUB_PER_DAY
-        views.SPECIES_LOOKUP_LLM_CALLS_PER_CLUB_PER_DAY = 0
+        original = views.club_api.SPECIES_LOOKUP_LLM_CALLS_PER_CLUB_PER_DAY
+        views.club_api.SPECIES_LOOKUP_LLM_CALLS_PER_CLUB_PER_DAY = 0
         try:
             response = self.get(q="Bolivian ram")
             self.assertEqual(response.status_code, 429)
@@ -3566,18 +3566,18 @@ class ClubSpeciesLookupAPITests(StandardTestCase):
             self.assertEqual(response["X-Species-LLM-Remaining"], "0")
             self.assertTrue(int(response["Retry-After"]) > 0)
         finally:
-            views.SPECIES_LOOKUP_LLM_CALLS_PER_CLUB_PER_DAY = original
+            views.club_api.SPECIES_LOOKUP_LLM_CALLS_PER_CLUB_PER_DAY = original
             llm.set_provider_override(None)
 
     def test_out_of_budget_still_answers_everything_the_database_knows(self):
-        original = views.SPECIES_LOOKUP_LLM_CALLS_PER_CLUB_PER_DAY
-        views.SPECIES_LOOKUP_LLM_CALLS_PER_CLUB_PER_DAY = 0
+        original = views.club_api.SPECIES_LOOKUP_LLM_CALLS_PER_CLUB_PER_DAY
+        views.club_api.SPECIES_LOOKUP_LLM_CALLS_PER_CLUB_PER_DAY = 0
         try:
             response = self.get(q="Yellow lab")
             self.assertEqual(response.status_code, 200)
             self.assertEqual(response.json()["results"][0]["id"], self.yellow_lab.pk)
         finally:
-            views.SPECIES_LOOKUP_LLM_CALLS_PER_CLUB_PER_DAY = original
+            views.club_api.SPECIES_LOOKUP_LLM_CALLS_PER_CLUB_PER_DAY = original
 
     def test_out_of_budget_never_teaches_the_site_that_a_name_is_not_a_species(self):
         """The cache is shared by every club, so a name nobody looked at must not land in it.
@@ -3587,12 +3587,12 @@ class ClubSpeciesLookupAPITests(StandardTestCase):
         """
         provider = FakeProvider([{"id": self.altispinosus.pk}])
         llm.set_provider_override(provider)
-        original = views.SPECIES_LOOKUP_LLM_CALLS_PER_CLUB_PER_DAY
-        views.SPECIES_LOOKUP_LLM_CALLS_PER_CLUB_PER_DAY = 0
+        original = views.club_api.SPECIES_LOOKUP_LLM_CALLS_PER_CLUB_PER_DAY
+        views.club_api.SPECIES_LOOKUP_LLM_CALLS_PER_CLUB_PER_DAY = 0
         try:
             self.get(q="Bolivian ram")
         finally:
-            views.SPECIES_LOOKUP_LLM_CALLS_PER_CLUB_PER_DAY = original
+            views.club_api.SPECIES_LOOKUP_LLM_CALLS_PER_CLUB_PER_DAY = original
         self.assertFalse(SpeciesSearchCache.objects.filter(search_text="bolivian ram").exists())
         try:
             self.assertEqual(self.get(q="Bolivian ram").json()["results"][0]["id"], self.altispinosus.pk)
@@ -3603,8 +3603,8 @@ class ClubSpeciesLookupAPITests(StandardTestCase):
         """A club that has spent its allowance must not be able to switch the model off for anyone else."""
         provider = FakeProvider([{"id": self.altispinosus.pk}, {"id": self.altispinosus.pk}])
         llm.set_provider_override(provider)
-        original = views.SPECIES_LOOKUP_LLM_CALLS_PER_CLUB_PER_DAY
-        views.SPECIES_LOOKUP_LLM_CALLS_PER_CLUB_PER_DAY = 1
+        original = views.club_api.SPECIES_LOOKUP_LLM_CALLS_PER_CLUB_PER_DAY
+        views.club_api.SPECIES_LOOKUP_LLM_CALLS_PER_CLUB_PER_DAY = 1
         try:
             self.assertEqual(self.get(q="Bolivian ram").status_code, 200)
             self.assertEqual(self.get(q="something else entirely").status_code, 429)
@@ -3614,7 +3614,7 @@ class ClubSpeciesLookupAPITests(StandardTestCase):
             self.assertEqual(other.status_code, 200)
             self.assertEqual(provider.call_count, 2)
         finally:
-            views.SPECIES_LOOKUP_LLM_CALLS_PER_CLUB_PER_DAY = original
+            views.club_api.SPECIES_LOOKUP_LLM_CALLS_PER_CLUB_PER_DAY = original
             llm.set_provider_override(None)
 
     def test_a_site_with_no_model_answers_from_the_database_and_remembers_nothing(self):
