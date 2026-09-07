@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% load crispy_forms_tags %}
+{% block title %}Report a lot{% endblock %}
+{% comment %}
+  The "mechanism to report offensive content" App Store Review Guideline 1.2 asks any app carrying
+  user-generated content to provide. Copyright complaints are deliberately *not* here -- they go to
+  /dmca/, because a notice needs six specific things this form does not collect.
+{% endcomment %}
+{% block extra_js %}<script type='text/javascript'>pageView();</script>{% endblock %}
+{% block content %}
+<div class="container py-4">
+  <h1 class="h4 mb-3">Report "{{ lot.lot_name }}"</h1>
+
+  <div class="help-note">
+    <i class="bi bi-lightbulb-fill"></i>
+    <div>
+      Tell us what's wrong with this listing and we'll look at it. If it's your photo being used
+      without permission, <a href="{% url 'dmca' %}">send a copyright notice</a> instead - that's a
+      different process with its own rules.
+    </div>
+  </div>
+
+  <div class="row">
+    <div class="col-12 col-lg-6">
+      {% crispy form form.helper %}
+    </div>
+  </div>
+  <p class="mt-3"><a class="btn btn-secondary" href="{{ lot.lot_link }}">Back to the lot</a></p>
+</div>
+{% endblock %}

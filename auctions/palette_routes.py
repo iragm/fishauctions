@@ -140,6 +140,18 @@ ROUTE_LIST: list[Route] = [
     _r("faq", "Frequently asked questions", "Browsing", keywords=["faq", "help", "how does this work"]),
     _r("tos", "Terms of service", "Browsing", keywords=["terms", "user agreement", "rules of the site"]),
     _r("privacy_policy", "Privacy policy", "Browsing", keywords=["privacy", "data"]),
+    _r(
+        "dmca",
+        "Copyright and DMCA policy",
+        "Browsing",
+        keywords=["dmca", "copyright", "takedown", "designated agent", "my photo was stolen"],
+    ),
+    _r(
+        "dmca_notice",
+        "Send a copyright takedown notice",
+        "Browsing",
+        keywords=["dmca notice", "report copyright infringement", "someone used my photo"],
+    ),
     _r("feedback", "Leave feedback about the site", "Browsing", keywords=["suggest", "bug report", "contact"]),
     _r(
         "support",
@@ -175,6 +187,13 @@ ROUTE_LIST: list[Route] = [
     _r("my_lot_report", "Download my lots as a spreadsheet", "My stuff", keywords=["csv", "export my lots"]),
     _r("my_won_lot_csv", "Download lots I won as a spreadsheet", "My stuff", keywords=["csv", "export purchases"]),
     _r("lot_by_pk", "A specific lot's page", "My stuff", scope=SCOPE_LOT, keywords=["view lot", "open lot"]),
+    _r(
+        "report_lot",
+        "Report a problem with a lot",
+        "My stuff",
+        scope=SCOPE_LOT,
+        keywords=["report", "flag", "scam", "offensive", "shouldn't be sold"],
+    ),
     _r("edit_lot", "Edit a lot", "My stuff", scope=SCOPE_LOT, keywords=["change lot", "fix lot", "update lot"]),
     _r("delete_lot", "Delete a lot", "My stuff", scope=SCOPE_LOT, keywords=["remove lot", "cancel lot"]),
     _r(

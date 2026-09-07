@@ -12,6 +12,7 @@ from django.db.models.base import Model as Model
 from django.urls import reverse
 from django.views.generic import TemplateView
 
+from auctions import dmca
 from auctions.site_setup import get_server_public_ip
 
 from .base import AdminOnlyViewMixin
@@ -401,6 +402,45 @@ class AdminSetupChecklistView(AdminOnlyViewMixin, TemplateView):
                             f'WEBSITE_FOCUS="{settings.WEBSITE_FOCUS}"\n'
                             f'I_BRED_THIS_FISH_LABEL="{settings.I_BRED_THIS_FISH_LABEL}"\n'
                             'WEEKLY_PROMO_MESSAGE=""'
+                        )
+                    }
+                ],
+            },
+            {
+                "section": "Core setup",
+                "name": "DMCA designated agent",
+                "configured": dmca.is_configured(),
+                "what_it_does": (
+                    "Your users upload photos, so US law treats you as a service provider hosting "
+                    "other people's material. The safe harbour that protects you from what they "
+                    "upload (17 U.S.C. 512) is conditional: you have to register a designated "
+                    "agent with the Copyright Office at "
+                    "<a href='https://dmca.copyright.gov/osp/' target='_blank' rel='noopener'>"
+                    "dmca.copyright.gov/osp</a> &mdash; $6, and it <strong>lapses after three "
+                    "years</strong> &mdash; <em>and</em> publish the same details on your site. "
+                    "Set these to exactly what you filed and this site publishes them at "
+                    "<code>/dmca/</code>, along with a takedown form, a counter-notice policy and "
+                    "a repeat-infringer policy. Leave them unset and that page stays off."
+                    "<ul class='mb-0'>"
+                    "<li><code>DMCA_SERVICE_PROVIDER_NAME</code> &mdash; your full legal entity name.</li>"
+                    "<li><code>DMCA_AGENT_NAME</code> &mdash; a person, or a title like "
+                    "&ldquo;Copyright Agent&rdquo;, which ages better.</li>"
+                    "<li><code>DMCA_AGENT_PHONE</code> &mdash; required; it is published.</li>"
+                    "<li><code>DMCA_AGENT_EMAIL</code> &mdash; defaults to <code>ADMIN_EMAIL</code>. "
+                    "It goes into a public federal directory that gets scraped, and changing it "
+                    "later costs another filing, so an alias beats a personal mailbox.</li>"
+                    "<li><code>DMCA_AGENT_ADDRESS</code> &mdash; defaults to "
+                    "<code>MAILING_ADDRESS</code>. Also published, so not a home address.</li>"
+                    "</ul>"
+                ),
+                "snippets": [
+                    {
+                        "code": (
+                            'DMCA_SERVICE_PROVIDER_NAME="Your Club, Inc."\n'
+                            'DMCA_AGENT_NAME="Copyright Agent"\n'
+                            'DMCA_AGENT_PHONE="+1 802 555 0100"\n'
+                            'DMCA_AGENT_EMAIL="dmca@yourdomain.com"\n'
+                            'DMCA_AGENT_ADDRESS="123 Your Street, Anytown, USA"'
                         )
                     }
                 ],

@@ -615,6 +615,14 @@ CLOUDFLARE_IMAGES_ENABLED = bool(
     CLOUDFLARE_IMAGES_ACCOUNT_ID and CLOUDFLARE_IMAGES_API_TOKEN and CLOUDFLARE_IMAGES_ACCOUNT_HASH
 )
 
+# Purging the edge cache.  A separate token from the Images one: this needs Zone.Cache Purge on the
+# zone in front of the site, where CLOUDFLARE_IMAGES_API_TOKEN is account-scoped to Images.  It
+# matters because /media/ is served with a thirty-day Cache-Control (nginx_fishauctions.conf), so
+# deleting an uploaded file leaves the edge serving it for a month -- which is not the "expeditious
+# removal" a DMCA takedown requires.  Unset is safe and logged; the file still goes from the origin.
+CLOUDFLARE_ZONE_ID = os.environ.get("CLOUDFLARE_ZONE_ID", "")
+CLOUDFLARE_CACHE_PURGE_API_TOKEN = os.environ.get("CLOUDFLARE_CACHE_PURGE_API_TOKEN", "")
+
 SECURE_REFERRER_POLICY = "strict-origin-when-cross-origin"
 
 # Trust X-Forwarded-Proto header from nginx proxy for HTTPS detection
@@ -826,6 +834,19 @@ ENABLE_CLUB_FINDER = parse_bool_env(os.environ.get("ENABLE_CLUB_FINDER") or None
 ENABLE_HELP = parse_bool_env(os.environ.get("ENABLE_HELP") or None, default=False)
 MAILING_ADDRESS = os.environ.get("MAILING_ADDRESS", "No address configured")
 WEEKLY_PROMO_MESSAGE = os.environ.get("WEEKLY_PROMO_MESSAGE", "")
+
+# --- DMCA designated agent ---------------------------------------------------------------------
+# Published at /dmca/, and only if all five values below resolve to something.  They must match
+# what was filed with the US Copyright Office at https://dmca.copyright.gov/osp/ -- 512(c)(2)
+# requires the same name, address, phone number and email to be both filed and published, and the
+# filing lapses after three years.  ADMIN_EMAIL and MAILING_ADDRESS stand in for the last two when
+# they are not set separately, so an operator who has registered usually only adds the first three.
+# auctions/dmca.py resolves them; a deployment that has not registered publishes nothing.
+DMCA_SERVICE_PROVIDER_NAME = os.environ.get("DMCA_SERVICE_PROVIDER_NAME", "")
+DMCA_AGENT_NAME = os.environ.get("DMCA_AGENT_NAME", "")
+DMCA_AGENT_PHONE = os.environ.get("DMCA_AGENT_PHONE", "")
+DMCA_AGENT_EMAIL = os.environ.get("DMCA_AGENT_EMAIL", "")
+DMCA_AGENT_ADDRESS = os.environ.get("DMCA_AGENT_ADDRESS", "")
 
 # Natural-language command palette ("assist"). See auctions/llm.py and .env.example.
 # Assist is enabled only when the provider is configured (an API key is set); with no key the

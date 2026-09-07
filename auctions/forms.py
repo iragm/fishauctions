@@ -2372,9 +2372,10 @@ class CreateImageForm(forms.ModelForm):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.fields[
-            "image"
-        ].help_text = "Select an image to upload, or paste one from your clipboard (Ctrl+V) anywhere on this page"
+        self.fields["image"].help_text = (
+            "Select an image to upload, or paste one from your clipboard (Ctrl+V) anywhere on this "
+            "page.  Only upload photos you took yourself, or that you have permission to use."
+        )
         # Marking the input as image-only lets the native app's WebView file chooser offer the camera
         # (many WebViews only surface "Take photo" when accept is set to an image type). We deliberately
         # do NOT set `capture`, so picking from the photo library stays available too.

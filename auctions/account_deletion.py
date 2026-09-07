@@ -206,6 +206,8 @@ def _delete_personal_rows(user):
         ChatSubscription,
         CheckinNudge,
         CommandPaletteSearch,
+        ContentReport,
+        CopyrightNotice,
         LotObservation,
         MobileDevice,
         MobileOfflineOp,
@@ -258,6 +260,15 @@ def _delete_personal_rows(user):
     UserBan.objects.filter(user=user).delete()
     # An ad response is the campaign owner's statistic; keep the row, lose the person.
     AdCampaignResponse.objects.filter(user=user).update(user=None, session="")
+    # A report they filed is the moderation queue's record of a decision somebody has to make or
+    # has made, so the row stays and the reporter comes off it -- the same treatment as an ad
+    # response, for the same reason. A copyright notice they sent is a legal document that quotes
+    # its own sender's name and address in its own fields; the account link goes and the notice
+    # stays. Copyright strikes *against* them are not touched at all: they are this site's record
+    # of what its repeat-infringer policy did, they hang off the User row that survives deletion,
+    # and 512(i) is a condition we would be dismantling one deleted account at a time.
+    ContentReport.objects.filter(reported_by=user).update(reported_by=None, reporter_email="")
+    CopyrightNotice.objects.filter(submitted_by=user).update(submitted_by=None)
 
 
 def _anonymize_page_views(user):

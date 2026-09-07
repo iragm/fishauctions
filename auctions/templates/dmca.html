@@ -1,0 +1,90 @@
+{% extends "base.html" %}
+{% block title %}Copyright and DMCA{% endblock %}
+{% comment %}
+  Published because 17 U.S.C. 512(c)(2) requires the designated agent's name, address, phone number
+  and email to be available to the public on the site as well as filed with the Copyright Office.
+  The view 404s when auctions/dmca.py has no agent configured, so everything below can assume one.
+  If you change the number of strikes here, change STRIKES_BEFORE_TERMINATION and the terms too --
+  a published policy that does not match the one that runs is the thing that loses the safe harbour.
+{% endcomment %}
+{% block extra_js %}<script type='text/javascript'>pageView();</script>{% endblock %}
+{% block content %}
+<div class="container py-4">
+  <h1 class="h4 mb-3">Copyright and DMCA</h1>
+
+  <div class="help-note">
+    <i class="bi bi-lightbulb-fill"></i>
+    <div>
+      Photos and descriptions on this site are uploaded by the people selling the fish, not by us.
+      If something here is yours and shouldn't be, tell us and we'll take it down.
+    </div>
+  </div>
+
+  <h2 class="h5 mt-4">Designated agent</h2>
+  <p>Notices of claimed copyright infringement go to our designated agent, registered with the United States Copyright Office:</p>
+  <address class="ms-3">
+    <strong>{{ agent.name }}</strong><br>
+    {{ agent.service_provider }}<br>
+    {{ agent.address|linebreaksbr }}<br>
+    Phone: {{ agent.phone }}<br>
+    Email: <a href="mailto:{{ agent.email }}">{{ agent.email }}</a>
+  </address>
+  <p>
+    You can also <a href="{% url 'dmca_notice' %}">send a notice through this site</a>, which asks
+    for everything the law requires a notice to contain. Either way it reaches the same person.
+  </p>
+
+  <h2 class="h5 mt-4">What a notice has to say</h2>
+  <p>To be effective under section 512(c)(3), a notice must include all six of these:</p>
+  <ol>
+    <li>Your physical or electronic signature - typing your full legal name counts.</li>
+    <li>Which copyrighted work you say is being infringed.</li>
+    <li>What on this site infringes it, with enough detail for us to find it. A web address is best.</li>
+    <li>Your address, telephone number and email address.</li>
+    <li>A statement that you have a good faith belief the use isn't authorised by the copyright owner, its agent, or the law.</li>
+    <li>A statement, under penalty of perjury, that the information is accurate and that you are the owner or authorised to act for them.</li>
+  </ol>
+  <div class="alert alert-warning text-dark">
+    <i class="bi bi-exclamation-triangle"></i>
+    Under section 512(f), anyone who knowingly misrepresents that material is infringing is liable
+    for damages, including costs and legal fees. Please be sure before you send a notice.
+  </div>
+
+  <h2 class="h5 mt-4">What we do when one arrives</h2>
+  <p>
+    We remove or disable access to the material promptly, tell whoever posted it what happened and
+    why, and pass on your notice. We record a copyright strike against their account.
+  </p>
+
+  <h2 class="h5 mt-4">If your material was removed by mistake</h2>
+  <p>
+    You can send a counter-notice to the agent above. It has to include your signature, what was
+    removed and where it was, a statement under penalty of perjury that you believe in good faith it
+    was removed as a result of mistake or misidentification, and your name, address and telephone
+    number, along with your consent to the jurisdiction of the federal district court for your
+    address (or, if you are outside the United States, any district where we may be found) and your
+    agreement to accept service of process from the person who sent the notice.
+  </p>
+  <p>
+    If we get a valid counter-notice we pass it to whoever sent the original notice. Unless they
+    tell us they've filed a court action to stop you, we put the material back between 10 and 14
+    business days later.
+  </p>
+
+  <h2 class="h5 mt-4">Repeat infringers</h2>
+  <p>
+    We keep a record of the valid copyright notices we receive about each account. An account is
+    warned each time and closed at {{ strikes_before_termination }} strikes, though we may act
+    sooner where the infringement looks deliberate or serious. We don't count notices that are
+    withdrawn, that we believe are invalid, or where the material went back up after a
+    counter-notice.
+  </p>
+
+  <h2 class="h5 mt-4">Something else wrong with a listing?</h2>
+  <p>
+    Copyright is what this page is about. For anything else - a scam, an animal that shouldn't be
+    sold, or someone behaving badly - use the report button on the lot itself, or
+    <a href="{% url 'support' %}">get in touch</a>.
+  </p>
+</div>
+{% endblock %}

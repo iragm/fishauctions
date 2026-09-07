@@ -5,6 +5,7 @@ import logging
 
 from django.contrib.auth.models import User
 from django.contrib.auth.signals import user_logged_in
+from django.contrib.sites.models import Site
 from django.db import models, transaction
 from django.db.models.signals import post_delete, post_save, pre_delete, pre_save
 from django.dispatch import receiver
@@ -835,6 +836,7 @@ def on_club_member_saved(sender, instance, **kwargs):
 @receiver(post_delete, sender="auctions.LotImage")
 @receiver(post_delete, sender="auctions.Club")
 @receiver(post_delete, sender="auctions.AdCampaign")
+@receiver(post_delete, sender="auctions.Speaker")
 def on_cloudflare_image_row_deleted(sender, instance, **kwargs):
     """Queue deletion of the Cloudflare copy of an image when its row is deleted.
 
@@ -857,6 +859,80 @@ def on_cloudflare_image_row_deleted(sender, instance, **kwargs):
         # image that had already been deleted from Cloudflare -- unrecoverable, and invisible until
         # somebody opened the lot.
         transaction.on_commit(lambda image_id=instance.cloudflare_image_id: delete_cloudflare_image.delay(image_id))
+
+
+@receiver(post_delete, sender="auctions.LotImage")
+@receiver(post_delete, sender="auctions.Lot")
+@receiver(post_delete, sender="auctions.Club")
+@receiver(post_delete, sender="auctions.AdCampaign")
+@receiver(post_delete, sender="auctions.Speaker")
+def on_uploaded_image_deleted(sender, instance, **kwargs):
+    """Delete the uploaded file itself, its thumbnails, and the copy cached at the edge.
+
+    Django has never deleted files when a row goes, and for most of this site's life that was
+    harmless: an orphaned JPEG under ``mediafiles/`` cost a few kilobytes and nothing else. It
+    stopped being harmless when the question became whether a photograph somebody else owns is
+    still on the internet. ``/media/`` is unauthenticated and the filename does not change, so a
+    "deleted" image was still being served at the URL the takedown notice quoted --
+    17 U.S.C. 512(c)(1)(C) asks for expeditious removal, and that was not removal at all.
+
+    Three copies have to go, and they live in three places:
+
+    * the original under ``mediafiles/``, deleted here;
+    * every easy-thumbnails derivative of it, also here -- they are separate files under separate
+      names and deleting the source leaves them behind;
+    * the copy Cloudflare's edge is holding, which ``nginx_fishauctions.conf`` told it to keep for
+      thirty days. That one is a network call, so it is queued (:func:`auctions.tasks.purge_edge_cache`).
+
+    The Cloudflare *Images* copy is the fourth, and is handled by
+    :func:`on_cloudflare_image_row_deleted` above.
+
+    **A file two rows point at is left alone.** ``clone_lot_images`` gives the copy the original's
+    file rather than duplicating it, so relisting a lot means two ``LotImage`` rows and one JPEG:
+    deleting the first row must not take the second row's picture with it. The same check is why
+    the Cloudflare deletion is a task that re-checks rather than an immediate call.
+    """
+    from easy_thumbnails.files import get_thumbnailer
+
+    field_name = getattr(instance, "IMAGE_FIELD_NAME", "image")
+    field_file = getattr(instance, field_name, None)
+    if not field_file or not field_file.name:
+        return
+    name = field_file.name
+    if sender.objects.filter(**{field_name: name}).exists():
+        return
+
+    urls = []
+    thumbnailer = get_thumbnailer(field_file)
+    try:
+        urls.append(field_file.url)
+        for thumbnail in thumbnailer.get_thumbnails():
+            urls.append(thumbnail.url)
+    except Exception:
+        # A missing source file, or no thumbnail cache for it. The file still has to go; only the
+        # purge list is poorer for it.
+        logger.exception("Could not list files to purge for %s %s", sender.__name__, name)
+    try:
+        thumbnailer.delete_thumbnails()
+        field_file.delete(save=False)
+    except Exception:
+        logger.exception("Could not delete the file for %s %s", sender.__name__, name)
+        return
+
+    absolute = []
+    try:
+        domain = Site.objects.get_current().domain
+    except Exception:
+        domain = ""
+    for url in urls:
+        absolute.append(f"https://{domain}{url}" if domain and url.startswith("/") else url)
+    if absolute:
+        from .tasks import purge_edge_cache
+
+        # on_commit for the same reason the Cloudflare deletion above uses it: post_delete fires
+        # inside the delete transaction, and a rollback would otherwise leave a live row whose
+        # image had already been purged.
+        transaction.on_commit(lambda purge=absolute: purge_edge_cache.delay(purge))
 
 
 @receiver(post_save, sender="auctions.ThermalPrinterProfile")

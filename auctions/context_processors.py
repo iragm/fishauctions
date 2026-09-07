@@ -3,6 +3,8 @@ import zoneinfo
 
 from django.conf import settings  # import the settings file
 
+from auctions import dmca
+
 DEFAULT_USER_TIMEZONE = "America/New_York"
 GOOGLE_OAUTH_PLACEHOLDER_VALUES = {
     "unsecure",
@@ -189,6 +191,9 @@ def site_config(request):
         "enable_help": settings.ENABLE_HELP,
         "enable_promo_page": settings.ENABLE_PROMO_PAGE,
         "recaptcha_enabled": getattr(settings, "RECAPTCHA_ENABLED", False),
+        # Whether this deployment has a registered DMCA agent to publish. False hides the footer
+        # and menu links, because /dmca/ 404s without one -- see auctions/dmca.py.
+        "dmca_configured": dmca.is_configured(),
         # When the whole site is one club, the club name duplicates the navbar
         # brand, so templates can hide it.
         "single_club_mode": getattr(settings, "SINGLE_CLUB_MODE", False),

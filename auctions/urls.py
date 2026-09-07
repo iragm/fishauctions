@@ -267,6 +267,7 @@ urlpatterns = [
     path("lots/", views.AllLots.as_view(), name="allLots"),
     path("qr/<int:pk>/", views.LotQRView.as_view(), name="lot_by_pk_qr"),
     path("lots/<int:pk>/", views.ViewLot.as_view(), name="lot_by_pk"),
+    path("lots/<int:pk>/report/", views.ReportContentCreate.as_view(), name="report_lot"),
     path(
         "lots/edit/<int:pk>/",
         login_required(views.LotUpdate.as_view()),
@@ -720,6 +721,11 @@ urlpatterns = [
     ),
     path("blog/<slug:slug>/", views.BlogPostView.as_view(), name="blog_post"),
     path("privacy/", views.PrivacyPolicyView.as_view(), name="privacy_policy"),
+    # 512(c)(2) requires the designated agent's details to be published on the site as well as
+    # filed with the Copyright Office.  /dmca/ 404s on a deployment that hasn't configured one --
+    # see auctions/dmca.py.
+    path("dmca/", views.DmcaPolicyView.as_view(), name="dmca"),
+    path("dmca/notice/", views.CopyrightNoticeCreate.as_view(), name="dmca_notice"),
     path("feedback/", views.LeaveFeedbackView.as_view(), name="feedback"),
     path("unsubscribe/<slug:slug>/", views.UnsubscribeView.as_view()),
     path(

@@ -354,6 +354,8 @@ window.onload = function() {
                       {% endif %}
                       <a class="dropdown-item" href="{% url 'faq' %}">FAQ</a>
                       <a class="dropdown-item" href="{% url 'tos' %}">Terms and Conditions</a>
+                      <a class="dropdown-item" href="{% url 'privacy_policy' %}">Privacy policy</a>
+                      {% if dmca_configured %}<a class="dropdown-item" href="{% url 'dmca' %}">Copyright / DMCA</a>{% endif %}
                       </div>
                   </li>
                   {% if enable_club_finder %}
@@ -489,7 +491,9 @@ window.onload = function() {
         </div>
         {% block undiv_content %}{% endblock %}
         {% if not request.is_mobile_app %}
+        {% comment %}17 U.S.C. 512(c)(2) wants the designated agent's details "available to the public" on the site; the footer is where a rightsholder looks, and it is the one line that renders on every page. The link is hidden when no agent is configured, because /dmca/ 404s without one.{% endcomment %}
         <div class="mt-5 d-flex justify-content-center hide-fullscreen"><small class="text-muted hide-fullscreen">{% if show_footer_icon %}<img src="{% static 'icon-footer.png' %}" alt="" class="me-1" style="height:1.2em;width:auto;vertical-align:text-bottom;">{% endif %}{{ copyright_message | safe }}</small></div>
+        <div class="mb-3 d-flex justify-content-center hide-fullscreen"><small class="text-muted hide-fullscreen"><a class="text-muted" href="{% url 'tos' %}">Terms</a> &middot; <a class="text-muted" href="{% url 'privacy_policy' %}">Privacy</a>{% if dmca_configured %} &middot; <a class="text-muted" href="{% url 'dmca' %}">Copyright / DMCA</a>{% endif %} &middot; <a class="text-muted" href="{% url 'support' %}">Help</a></small></div>
         {% endif %}
         {% block extra_js %}
             {# Override this in templates to add extra javascript #}

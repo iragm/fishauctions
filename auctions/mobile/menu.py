@@ -47,6 +47,8 @@ from django.conf import settings
 from django.urls import reverse
 from django.utils.http import url_has_allowed_host_and_scheme
 
+from auctions import dmca
+
 # Advisory; the app ignores it today. Bump it if the *shape* ever changes incompatibly -- not for
 # adding a row, a section or a key, all of which are free (unknown keys are ignored on both sides).
 MENU_VERSION = 1
@@ -169,13 +171,18 @@ def _admin_section():
 
 
 def _about_section():
-    """Collapsed, and last. "About site" is gated on ENABLE_PROMO_PAGE exactly as the navbar gates
-    it -- a deployment with the promo page switched off has no such page to link to."""
+    """Collapsed, and last. Two rows here are gated exactly as the navbar gates them, because a
+    row only one side gates is the bug ``NavbarDriftTests`` exists to catch: "About site" on
+    ENABLE_PROMO_PAGE, since a deployment with the promo page off has no such page, and the
+    copyright row on whether a DMCA agent is configured, since ``/dmca/`` 404s without one."""
     rows = []
     if settings.ENABLE_PROMO_PAGE:
         rows.append(_row("About site", reverse("promo"), "bi-globe"))
     rows.append(_row("FAQ", reverse("faq"), "bi-question-circle"))
     rows.append(_row("Terms and Conditions", reverse("tos"), "bi-file-text"))
+    rows.append(_row("Privacy policy", reverse("privacy_policy"), "bi-shield-lock"))
+    if dmca.is_configured():
+        rows.append(_row("Copyright / DMCA", reverse("dmca"), "bi-c-circle"))
     return _section("about", rows, title="About", icon="bi-info-circle", collapsed=True)
 
 

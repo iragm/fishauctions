@@ -1669,3 +1669,8 @@ class AssistantSkillRequestAdmin(admin.ModelAdmin):
     search_fields = ("skill", "reason", "params", "user__username")
     readonly_fields = ("createdon", "updatedon")
     list_select_related = ("user",)
+
+
+# The moderation queue's admin lives in its own module (this file is at its size ceiling); imported
+# for the side effect of registering ContentReport, CopyrightNotice and CopyrightStrike.
+from . import moderation_admin  # noqa: E402, F401

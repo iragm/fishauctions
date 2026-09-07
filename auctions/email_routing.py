@@ -83,6 +83,7 @@ def resolve_routing_info(local_part):
 
     Recognised aliases:
     - ``info`` → site admin email
+    - ``dmca`` → the designated copyright agent (see :mod:`auctions.dmca`)
     - ``<club-slug>-auctions`` → oldest non-admin auction manager → oldest admin → site admin
     - ``<club-slug>-contact`` → oldest non-admin membership manager → oldest admin → **drop**
     - ``<club-slug>-donations-<10 digits>`` → the club's donation contact, **or nobody**
@@ -103,6 +104,16 @@ def resolve_routing_info(local_part):
         return None
     if local_part == "info":
         return {"recipient": admin_routing_email(), "display_name": "Info"}
+    if local_part == "dmca":
+        # The address published in the Copyright Office's directory, which is a public federal
+        # database and gets scraped -- so it is an alias rather than somebody's real mailbox, and
+        # re-pointing it is an .env edit rather than a $6 amendment filing and a window of being
+        # out of date.  It resolves to the site admin when DMCA_AGENT_EMAIL is unset, which is the
+        # same address ``info`` goes to.  It must resolve to *something*: an agent address that
+        # silently drops mail is how AOL lost the safe harbour in Ellison v. Robertson.
+        from auctions.dmca import agent_email
+
+        return {"recipient": agent_email() or admin_routing_email(), "display_name": "Copyright agent"}
 
     Club = apps.get_model("auctions", "Club")
     Auction = apps.get_model("auctions", "Auction")

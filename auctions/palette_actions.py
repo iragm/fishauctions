@@ -10364,8 +10364,10 @@ def add_species(request, params: dict[str, Any]) -> dict[str, Any]:
 
 #: What ``LotImage.PIC_CATEGORIES`` calls each kind of picture, keyed on what somebody would say.
 #: The model's own values are ``ACTUAL`` / ``REPRESENTATIVE`` / ``RANDOM``, and the third one is
-#: literally labelled "This picture is from the internet" -- which is exactly what an agent that
-#: went and found one is adding, and the reason this skill needs no new column to be honest.
+#: the catch-all: "Not my photo - I have permission to use it". That is what an agent which went
+#: and found a picture is adding, which is why this skill needs no new column to be honest -- and
+#: the reason the label asks about permission rather than provenance is in ``models.py``, next to
+#: the choices themselves.
 _IMAGE_SOURCES = {
     "actual": "ACTUAL",
     "mine": "ACTUAL",
@@ -10429,10 +10431,10 @@ def add_lot_image(request, params: dict[str, Any]) -> dict[str, Any]:
     deliberately all it checks, for exactly that reason.
 
     ``image_source`` is the part worth being careful about. The three values are the seller's own
-    photo of the actual item, their photo of something like it, and a picture off the internet --
-    and a bidder deciding what to pay is reading that label. A picture an assistant found is the
-    third one, so that is what it defaults to here: nothing an agent adds is ever silently
-    labelled as the seller's own photograph of the fish in the bag.
+    photo of the actual item, their photo of something like it, and somebody else's photo used with
+    permission -- and a bidder deciding what to pay is reading that label. A picture an assistant
+    found is the third one, so that is what it defaults to here: nothing an agent adds is ever
+    silently labelled as the seller's own photograph of the fish in the bag.
 
     Validation is :class:`auctions.forms.CreateImageForm`, the same form behind the add-image page.
     """
@@ -14982,6 +14984,19 @@ _PALETTE = "The palette's own endpoint. It is the thing running the skills."
 
 #: Views with no skill, and why. Every entry is a decision somebody made on purpose.
 NOT_A_SKILL: dict[str, str] = {
+    # Copyright and reporting
+    "CopyrightNoticeCreate": (
+        "Files a sworn document. The sender states, under penalty of perjury, that they own the "
+        "work and that everything in the notice is true -- and 512(f) makes a knowingly false "
+        "notice actionable in damages. A statement like that has to be made by the person whose "
+        "name is on it, not assembled from a sentence by something acting for them."
+    ),
+    "ReportContentCreate": (
+        "An accusation about a named person, made after looking at what is actually on the page. "
+        "Filing one off a spoken line means filing it in somebody's name on evidence nobody saw, "
+        "and it costs its subject an investigation whether or not it was meant. The page is one "
+        "click from the lot, which the palette can already reach."
+    ),
     # Speaker directory
     "SpeakerCreateView": _FORM_PAGE,
     "SpeakerUpdateView": _FORM_PAGE,

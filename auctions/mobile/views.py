@@ -29,6 +29,8 @@ GET /api/mobile/config/
           // Omitted when this deployment has no privacy policy page; the app then draws no
           // privacy link rather than a dead one.
           "privacy_policy_url":      "/privacy/",
+          // Omitted the same way when this deployment has no registered DMCA agent.
+          "dmca_url":                "/dmca/",
           // Optional; present only for platforms whose Firebase config file is set. Public values.
           "firebase": {
             "android": {"package_name": "...", "api_key": "...", "app_id": "...",
@@ -689,7 +691,7 @@ from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.views import TokenRefreshView
 
-from auctions import voice
+from auctions import dmca, voice
 from auctions.account_deletion import cancel_deletion
 from auctions.models import (
     PRIVACY_POLICY_SLUG,
@@ -1315,6 +1317,11 @@ class MobileConfigView(APIView):
         # then draws no privacy link at all, which is the honest state.
         if BlogPost.objects.filter(slug=PRIVACY_POLICY_SLUG).exists():
             data["privacy_policy_url"] = reverse("privacy_policy")
+        # Same rule one line down: omitted rather than pointing at a 404.  /dmca/ only exists on a
+        # deployment that has configured a designated agent (auctions/dmca.py), and the app draws
+        # no copyright link when there isn't one.
+        if dmca.is_configured():
+            data["dmca_url"] = reverse("dmca")
         # Public Firebase client config per platform, parsed from the mobile config files. Only the
         # platforms whose file is configured appear; the whole key is omitted when neither is set.
         # Public values only (api key, app id, sender id, project id, package/bundle id) — no secrets.

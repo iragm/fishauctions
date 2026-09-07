@@ -1317,17 +1317,28 @@ def delete_cloudflare_image(self, image_id):
     (lots copied with "relist" share the Cloudflare image of the original).
     """
     from auctions import cloudflare_images
-    from auctions.models import AdCampaign, Club, LotImage
+    from auctions.models import AdCampaign, Club, LotImage, Speaker
 
     if not cloudflare_images.enabled():
         return
-    for model in (LotImage, Club, AdCampaign):
+    for model in (LotImage, Club, AdCampaign, Speaker):
         if model.objects.filter(cloudflare_image_id=image_id).exists():
             return
     try:
         cloudflare_images.delete(image_id)
     except cloudflare_images.CloudflareImagesError:
         logger.exception("Could not delete Cloudflare image %s", image_id)
+
+
+@shared_task(bind=True, ignore_result=True)
+def purge_edge_cache(self, urls):
+    """Drop these URLs from the edge cache after the file behind them was deleted.
+
+    Why a deletion has to, and why nothing here raises, is in :mod:`auctions.cloudflare_cache`.
+    """
+    from auctions import cloudflare_cache
+
+    cloudflare_cache.purge_urls(urls)
 
 
 def schedule_auction_stats_update(run_at=None):

@@ -1052,7 +1052,7 @@ class ClubAuctionReadAPITests(WritableMediaRoot, TestCase):
         self.assertEqual(first["id"], primary.pk)
         self.assertTrue(first["is_primary"])
         self.assertEqual(first["caption"], "Parents")
-        self.assertEqual(first["image_source_display"], "This picture is of the exact item")
+        self.assertEqual(first["image_source_display"], "My photo of this exact item")
         self.assertTrue(first["url"].startswith("http"))
         self.assertTrue(first["thumbnail"].startswith("http"))
 

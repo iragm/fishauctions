@@ -102,6 +102,16 @@ from .helper_functions import bin_data, get_currency_symbol
 from .html_sanitize import sanitize_summernote_html
 from .model_caching import CachedPropertiesMixin, InvalidatesRelatedCache
 
+# Three models that would be here with the other eighty if there were room; models.py is at the
+# size ceiling module_map.py holds it to and that ratchet only comes down.  Imported so
+# `from auctions.models import ContentReport` keeps working and so Django sees them at app load.
+# They name their foreign keys as strings, so the import is one-way and there is no cycle.
+from .moderation_models import (  # noqa: F401
+    ContentReport,
+    CopyrightNotice,
+    CopyrightStrike,
+)
+
 logger = logging.getLogger(__name__)
 
 CUSTOM_DROPDOWN_MAX_LENGTH = 15
@@ -7787,12 +7797,19 @@ class Lot(CachedPropertiesMixin, models.Model):
     """A lot is something to bid on"""
 
     PIC_CATEGORIES = (
-        ("ACTUAL", "This picture is of the exact item"),
+        ("ACTUAL", "My photo of this exact item"),
         (
             "REPRESENTATIVE",
-            "This is my picture, but it's not of this exact item.  e.x. This is the parents of these fry",
+            "My photo, but not of this exact item.  e.x. This is the parents of these fry",
         ),
-        ("RANDOM", "This picture is from the internet"),
+        # Was "This picture is from the internet", which is a confession rather than an answer: it
+        # asked a user to record, in a column, that we are hosting somebody else's photograph -- and
+        # it is what a blank field is silently set to (see LotPage's image handling), so most rows
+        # said it whether the seller meant them to or not.  512(c) does not require a site to police
+        # what its users upload, but it does fall away on red-flag knowledge, and a database column
+        # full of self-reported infringement is the worst possible exhibit.  The category still has
+        # to exist -- it is the catch-all -- so it asks for the thing that actually needs to be true.
+        ("RANDOM", "Not my photo - I have permission to use it"),
     )
     # 3 lot numbers follow, in general use the property lot_number_display which will select the appropriate one
     # all have the verbose name lot number, and to users they are all essentially the same, but they are used differently
@@ -13543,12 +13560,19 @@ class LotImage(InvalidatesRelatedCache, CloudflareImageMixin, models.Model):
     invalidates_cache_on = ("lot_number",)
 
     PIC_CATEGORIES = (
-        ("ACTUAL", "This picture is of the exact item"),
+        ("ACTUAL", "My photo of this exact item"),
         (
             "REPRESENTATIVE",
-            "This is my picture, but it's not of this exact item.  e.x. This is the parents of these fry",
+            "My photo, but not of this exact item.  e.x. This is the parents of these fry",
         ),
-        ("RANDOM", "This picture is from the internet"),
+        # Was "This picture is from the internet", which is a confession rather than an answer: it
+        # asked a user to record, in a column, that we are hosting somebody else's photograph -- and
+        # it is what a blank field is silently set to (see LotPage's image handling), so most rows
+        # said it whether the seller meant them to or not.  512(c) does not require a site to police
+        # what its users upload, but it does fall away on red-flag knowledge, and a database column
+        # full of self-reported infringement is the worst possible exhibit.  The category still has
+        # to exist -- it is the catch-all -- so it asks for the thing that actually needs to be true.
+        ("RANDOM", "Not my photo - I have permission to use it"),
     )
     lot_number = models.ForeignKey(Lot, on_delete=models.CASCADE)
     caption = models.CharField(max_length=60, blank=True, null=True)
