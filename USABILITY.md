@@ -151,6 +151,26 @@ Newest first.
 
 <!-- PASS LOG START -->
 
+### 2026-09-08 -- review round on the above
+
+Seven findings, one of them fatal: the abandonment beacon sent no CSRF token to a DRF view using
+`SessionAuthentication`, so every abandonment by a signed-in organizer would have 403'd in
+production. Nothing caught it because Django's test client disables CSRF enforcement unless it is
+built with `enforce_csrf_checks=True` -- worth remembering for anything else on this site that
+posts without a form. Also: the sitewide submit handler disabled Save on the ten forms that post
+with `fetch` and call `preventDefault()`; `due_for_checkin()` sliced before sorting and so cut the
+two stages it leads with; `aria-busy` was never cleared for a request that ended without a swap;
+deleted club members were counted as members; "edited for" was a mean over a distribution whose
+tail is tabs left open over lunch; and an anonymous run was stored under an empty session id, which
+one later success would have used to resolve every other anonymous person's failures. All seven
+have a regression test.
+
+The one claim in the previous entry that was wrong: the auction edit form does **not** record its
+date fields as changed on every save. That was a bug in the test helper, which built its POST from
+`form.initial` rather than from what the widgets render. `test_resubmitting_the_form_unchanged_changes_nothing`
+now pins the real behaviour.
+
+
 ### 2026-09-08 -- Phases 1, 1b, 1.5, 2, 3, 4 and 5
 
 **1b, and the argument it settles.** `AuctionHistory.changed_fields` and `ClubHistory.changed_fields`
