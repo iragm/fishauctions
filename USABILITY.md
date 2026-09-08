@@ -1,48 +1,10 @@
 # Usability campaign
 
 A resumable sweep aimed at one thing: **a non-technical person can run an auction here without
-being taught.** The site is feature-complete; this is the pass over what those features feel like
-to somebody who has never seen them.
+being taught.** The site is feature-complete; this is the pass over what those features feel like to somebody who has never seen them.
 
-**The standing rule: measure before changing.** This codebase has more usable telemetry than it
-looks, and three separate places where it is collected and then thrown away at the last step. The
-first phases below fix those, because every design argument after that is otherwise a matter of
-taste. **To resume: take the lowest-numbered phase in the queue that is not `done`.**
-
-## What is already right
-
-Worth writing down, so no pass re-invents it:
-
-- A per-auction setup checklist with dismissible banners (`auction_ribbon.html`), gated on
-  `Auction.admin_checklist_*` and `UserData.is_experienced`.
-- `CreateAuctionForm` is deliberately two fields (`forms.py:2445`). Creation is not the problem.
-- `/support/` collects every route to help on one page and works with no session (`SupportView`,
-  `views/site_pages.py:95`), which App Review requires.
-- `AdminSetupChecklistView` does the same job for whole-site configuration.
-- Jargon is contained. "AuctionTOS" appears in comments, not in copy.
-- `AdminUserSignupsJSON` (`views/site_admin.py:200`) already plots an activation funnel: total users,
-  joined an auction, won or sold a lot, stale.
-
-## Three bugs found while scoping this
-
-These are the perishable part of this document. All three are "the data is being collected and
-discarded at the last step", which is why none of them looked broken from the outside.
-
-### 1. `PageView.url` stores an absolute URL, and one consumer assumes a path
-
-`base_page_view.html` sends `data.url = newUrl`, derived from `window.location.href`. The server
-strips only the query string (`views/ajax.py:337`), so rows hold `https://auction.fish/lots/123`.
-
-`AdminUserFlow.URL_SECTIONS` (`views/site_admin.py:507`) anchors every pattern at `^/` and matches
-with `pattern.match(url)`. **An absolute URL never matches, so 100% of rows classify as `"Other"`.**
-The flow page has never worked on any dataset, and there is no test for `classify_url` -- which is
-exactly why it shipped that way and stayed.
-
-The fix belongs on the write side (store a path). Old rows stay absolute, so anything reading `url`
-has to tolerate both until they are backfilled or aged out.
-
-This is a prerequisite, not a nicety: `url__startswith='/account/'` is what makes "how many people
-opened preferences" a query rather than a broken one.
+Human note, Let's also clear up one thing - the goal is not just "a non-technical person can run an auction here without
+being taught" - it's "a non-technical person can participate in an auction as a buyer only, or as a seller, with or without an account, and have an excellent experience that makes them want to come back".  Smooth UX is quite literally the only thing this project offers over a spreadsheet.  Once the stuff listed here is done, we need to do this again thinking about how to engage all users, not just auction admins.
 
 ### 2. `Auction.create_history` knows which settings changed and stringifies it
 
@@ -69,65 +31,7 @@ opened preferences" a query rather than a broken one.
   hops that a usability pass is looking for. Every report built on `PageView` is therefore biased
   toward pages people did **not** struggle with.
 
-Neither is worth fixing globally on its own. Both are worth knowing before trusting a number.
-
-## Decisions already made
-
-Recorded so they are not re-litigated.
-
-### A/B testing: shelved, revisit in years
-
-The engine already exists in disguise -- `AdCampaignGroup` / `AdCampaign` / `AdCampaignResponse`
-(`models.py:13407`+), where `bid` is literally traffic allocation and `click_rate` is a conversion
-rate. The only missing piece is sticky assignment: `bid` re-rolls per impression, which is correct
-for an ad and fatal for an experiment. `hash(experiment_slug + (user_id or session_id))` bucketed
-against cumulative weights would fix it in a day.
-
-It is shelved anyway, because of sample size. At 80% power, alpha 0.05, per arm:
-
-| Surface | Metric | Baseline | Lift detectable | n/arm | Verdict |
-|---|---|---|---|---|---|
-| Promo email | open rate | ~35% (assumed) | +20% rel. | ~750 | ~3 weeks -- viable |
-| Promo email | click rate | ~5% | +20% rel. | ~7,600 | ~6 months -- no |
-| Promo email | click rate | ~5% | +50% rel. | ~1,200 | ~4 weeks -- large swings only |
-| Promo email | joined an auction | ~1% | +50% rel. | ~6,300 | no |
-| Organizer flows | anything | -- | -- | -- | dozens of organizers a year; never |
-
-The promo email sends 400-800/week. Sticky assignment means each **person** counts once, so the
-ceiling is the size of the eligible pool, not sends x weeks -- re-sending to the same person next
-week adds no independent sample. That caps the whole programme at roughly one subject-line test a
-month, and buys nothing at all for the organizer-facing surfaces that actually need the work.
-
-Anything organizer-facing gets the friction instrument plus instrumented before/after instead.
-
-### Google One Tap placement: count it, do not test it
-
-`base.html:283` renders One Tap on every page for anonymous users, with six ad-hoc opt-outs
-(`context["hide_google_login"] = True` in `views/site_pages.py` and `views/site_admin.py`).
-
-Not testable -- signups are rare events, same wall as above. It does not need to be: One Tap posts
-to `google_login_by_token`, a different endpoint from allauth's regular Google login, so One Tap
-signups are already distinguishable from sign-in-button signups. Count them for a month with the
-originating page.
-
-The decision rule is asymmetric, which is what makes counting sufficient. The cost is known now: a
-third-party script on every anonymous page load and a floating prompt over content on mobile. So
-only the *existence* of the benefit has to be established, not its size. Near-zero One Tap signups
-off login/signup pages -> restrict it to those two. Otherwise keep it.
-
-Whichever way it goes, the six scattered opt-outs become one positive list.
-
-### `AdminUserFlow`: delete it
-
-Fixing bug 1 makes it run, and it still should not exist. Its input is biased by both halves of bug
-3, `_compute_flow(None)` pulls every `PageView` ever into Python with no date bound, it is not in
-the beat schedule, and it caches with `timeout=None` in Redis so a restart empties it. It infers
-"where do people get stuck" from navigation; Phase 1 answers that question directly.
-
-`dashboard_traffic` stays. It groups by raw `url` and `title` and works today, precisely because it
-never tries to classify.
-
-## Phase queue
+This design decision was done to provide useful data to auction admins: putting page view on admin only pages generates meaningless data for people running auctions, and I stand by it being the right call - 1000x page views on set lot winners is worthless to them (that page now all js, but it was one of the drivers at the time)
 
 Ordered by (unblocks-other-work x value). Status: `todo` | `wip` | `done`.
 
@@ -138,12 +42,14 @@ Ordered by (unblocks-other-work x value). Status: `todo` | `wip` | `done`.
 | 1b | `AuctionHistory.changed_fields` / `ClubHistory.changed_fields` as JSON, written alongside `action` | `models.py:6566`, migration | todo |
 | 1.5 | Settings-reach panel over `PageView` (needs Phase 0) | `views/site_admin.py`, a dashboard template | todo |
 | 2 | Club health: derived lifecycle rollup + "due for check-in" queue | new model, `tasks.py`, `Club`, `admin.py` | todo |
-| 3 | Progressive disclosure on `AuctionEditForm` -- essentials vs. Advanced | `forms.py:2560`, `auction_edit_form.html` | blocked on 1b |
-| 4 | Contextual help: `FAQ.help_key` + a template tag rendering relevant answers in place | `models.py` FAQ, `templatetags/` | todo |
+| 3 | Progressive disclosure on `AuctionEditForm` -- essentials vs. Advanced | `forms.py:2560`, `auction_edit_form.html` | blocked on 1b -- Claude says it's blocked but it is NOT - we can reconstruct this from existing auctions trivially - walk the fields and see which ones have been changed from the default.  Not perfect but very close. |
+| 4 | Contextual help: `FAQ.help_key` + a template tag rendering relevant answers in place | `models.py` FAQ, `templatetags/`
+Human note: I have never seen people click on help buttons, have you?  This does not seem like a good idea.  Small contextual help using the help blurb format found on almost every template is perfect.
+ | todo |
 | 5 | Accessibility debt: 10 `<img>` with no `alt`, 7 icon-only controls with no name, 3 `aria-live` regions against heavy HTMX use | `templates/` | todo |
 | 6 | First paint: defer the six head scripts, `ManifestStaticFilesStorage` | `base.html`, `settings.py` | see OPTIMIZATION.md |
 
-Phase 0 unblocks 1.5. Phase 1b unblocks 3 but needs months of data first, so start it early even
+Phase 0 - pretty much done now, code review it - unblocks 1.5. Phase 1b unblocks 3 but needs months of data first, so start it early even
 though the payoff is late. Phase 2 is independent of everything and can run in parallel. Phases 5
 and 6 need no data and can be picked up whenever.
 
@@ -171,6 +77,8 @@ Clubs have nothing. `Club.active` is a hand-set boolean defaulting True (`models
 `date_contacted` and `date_contacted_for_in_person_auctions` are hand-maintained and surfaced only
 through an `EmptyFieldListFilter` in Django admin (`admin.py:894`). Nothing is derived.
 
+(Human note: Active is set when a club dissolves and needs to be hidden from the map.  Rare and unrelated to this.)
+
 That is the wrong way round. A dormant bidder is one person; a dormant club is an organizer, its
 members, and a recurring auction that stops appearing -- silently, because `active` still says True.
 
@@ -186,6 +94,9 @@ Two design constraints for the rollup:
 Note for whoever builds the re-engagement side: `weekly_promo.py:48` excludes anyone active in the
 last 6 days, so that email's audience is by construction the semi-lapsed. That makes it the natural
 re-engagement channel -- and worth confirming the exclusion is deliberate before building on it.
+
+Let's talk more about clubs:
+There's probably 200-300 clubs out there that I don't know about and they aren't on the list.  I don't know how long the average fish club exists for, I don't know how to get in touch with them.  Medium term I want an ongoing campaign to find new clubs, contact them, onboard them, track if they've made a test auction, if they've done a real auction, how many real auctions, if they've used any club management tools and if so which ones, and if they're not using the site as much, to speculate on why or reach out and try to re-engage
 
 ## How a pass works
 
@@ -234,4 +145,18 @@ Newest first.
 
 <!-- PASS LOG START -->
 
-*(No passes yet. Scoping notes that produced this file are the three bugs above.)*
+### 2026-09-08 -- Phase 0, third half: One Tap rationed on intent
+
+`context_processors.google_one_tap` replaces the `hide_google_login` flag and the six views that set
+it (`FAQ`, `PromoSite`, `AllAuctions`, `AllLots`, `ClubMap`, `UserAgreement`). The prompt now needs
+one page load behind the visitor, or the sign-in/sign-up page; HTMx fragments and crawlers do not
+count, the session counter stops at the threshold so a visitor costs one extra write once, and the
+app is excluded because it signs in natively. Eleven tests in `test_helpers.py`, including an
+end-to-end pair over `base.html`.
+
+### 2026-09-08 -- Phase 0, second half: `AdminUserFlow` deleted
+
+The view, `dashboard_user_flow.html`, the `admin_user_flow` URL and both of its palette entries,
+the `compute_user_flow_all` task with its heartbeat lock, and the links to it in `base.html` and the
+app's admin menu. `test_user_flow.py` kept the half of itself that is about the shape of
+`PageView.url` -- the endpoint, migration 0425 -- and is now `test_page_view_url.py`.

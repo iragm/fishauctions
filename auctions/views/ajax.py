@@ -323,11 +323,11 @@ def clean_referrer(url):
 def page_view_path(url, host=""):
     """The stored form of ``PageView.url``: a site-relative path, starting with ``/``.
 
-    Every reader of that field wants a path. ``AdminUserFlow.URL_SECTIONS`` anchors every pattern
-    at ``^/``, ``PageView.duplicates`` matches on equality, and ``url__startswith="/account/"`` is
-    what makes "how many people opened preferences" a query rather than a full scan. The browser
-    beacon posts ``window.location.href``, so normalizing here -- not trusting the caller -- is
-    what makes the invariant true: this endpoint is ``AllowAny`` and stores whatever it is handed.
+    Every reader of that field wants a path. ``PageView.duplicates`` matches on equality, and
+    ``url__startswith="/account/"`` is what makes "how many people opened preferences" a query
+    rather than a full scan. The browser beacon posts ``window.location.href``, so normalizing here
+    -- not trusting the caller -- is what makes the invariant true: this endpoint is ``AllowAny``
+    and stores whatever it is handed.
 
     The query string was always stripped (one page, one row); the fragment never was, and split
     ``/lots/1`` from ``/lots/1#chat``. ``urlsplit`` drops both.

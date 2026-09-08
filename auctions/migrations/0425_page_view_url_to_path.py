@@ -2,10 +2,10 @@
 
 The beacon in ``base_page_view.html`` posted ``window.location.href``, so every row written from a
 browser holds ``https://auction.fish/lots/123`` -- while every *reader* of the column wants a path.
-``AdminUserFlow.URL_SECTIONS`` anchors each pattern at ``^/`` and so classified all of them as
-"Other"; ``url__startswith="/account/"`` is what makes "how many people opened preferences" a
-query rather than a broken one.  The write side is fixed in ``views.ajax.page_view_path``; this
-brings the rows already on disk into the same shape so nothing has to tolerate both.
+``url__startswith="/account/"`` is what makes "how many people opened preferences" a query rather
+than a broken one, and it matches nothing at all while the rows hold an origin.  The write side is
+fixed in ``views.ajax.page_view_path``; this brings the rows already on disk into the same shape so
+nothing has to tolerate both.
 
 Only *this deployment's own* hosts are stripped, taken from ``ALLOWED_HOSTS`` -- the same list that
 decides what ``request.get_host()`` is allowed to return, which is what the write side compares
@@ -28,10 +28,6 @@ them going forward; this is the same rule applied backwards.
 Batched by primary key because this is the biggest table on the site: each statement is one bounded
 index range rather than a lock over the whole table.  The reverse is a no-op -- the host that was
 stripped is not recoverable from the row, and nothing wants it back.
-
-Cached user-flow results (``user_flow_*``, set with no timeout) still hold pre-migration numbers.
-They are not invalidated here: the flow page prints when its numbers were computed and carries the
-button that recomputes them.
 """
 
 from django.conf import settings

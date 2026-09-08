@@ -833,6 +833,167 @@ class ContextProcessorsTestCase(TestCase):
         context = google_oauth(request)
         self.assertTrue(context["GOOGLE_LOGIN_ENABLED"])
 
+    def _one_tap_request(self, path="/", *, url_name=None, view_class=None, session=None, user=None, **extra):
+        """An anonymous GET, with only the attributes google_one_tap() actually reads."""
+        from types import SimpleNamespace
+
+        from django.contrib.auth.models import AnonymousUser
+        from django.test import RequestFactory
+
+        request = RequestFactory().get(path, **extra)
+        request.user = user if user is not None else AnonymousUser()
+        request.session = {} if session is None else session
+        if url_name or view_class:
+            func = SimpleNamespace(view_class=view_class) if view_class else SimpleNamespace()
+            request.resolver_match = SimpleNamespace(url_name=url_name, func=func)
+        return request
+
+    @override_settings(GOOGLE_OAUTH_LINK="real-client-id.apps.googleusercontent.com")
+    def test_one_tap_withheld_on_a_visitors_first_page(self):
+        """The prompt is a one-shot, so it is not spent on somebody who has not browsed yet."""
+        from auctions.context_processors import ONE_TAP_PAGE_VIEW_SESSION_KEY, google_one_tap
+
+        request = self._one_tap_request()
+        self.assertFalse(google_one_tap(request)["SHOW_GOOGLE_ONE_TAP"])
+        self.assertEqual(request.session[ONE_TAP_PAGE_VIEW_SESSION_KEY], 1)
+
+    @override_settings(GOOGLE_OAUTH_LINK="real-client-id.apps.googleusercontent.com")
+    def test_one_tap_shown_once_a_page_load_is_behind_them(self):
+        from auctions.context_processors import ONE_TAP_PAGE_VIEW_SESSION_KEY, google_one_tap
+
+        request = self._one_tap_request(session={ONE_TAP_PAGE_VIEW_SESSION_KEY: 1})
+        self.assertTrue(google_one_tap(request)["SHOW_GOOGLE_ONE_TAP"])
+
+    @override_settings(GOOGLE_OAUTH_LINK="real-client-id.apps.googleusercontent.com")
+    def test_one_tap_stops_counting_at_the_threshold(self):
+        """Past the threshold the answer cannot change, so a returning visitor costs no session write."""
+        from auctions.context_processors import ONE_TAP_PAGE_VIEW_SESSION_KEY, google_one_tap
+
+        session = {ONE_TAP_PAGE_VIEW_SESSION_KEY: 1}
+        google_one_tap(self._one_tap_request(session=session))
+        self.assertEqual(session[ONE_TAP_PAGE_VIEW_SESSION_KEY], 1)
+
+    @override_settings(GOOGLE_OAUTH_LINK="real-client-id.apps.googleusercontent.com")
+    def test_one_tap_always_shown_on_sign_in_and_sign_up(self):
+        """It cannot be wasted on the two pages somebody reaches meaning to get an account."""
+        from auctions.context_processors import google_one_tap
+
+        for url_name in ("account_login", "account_signup"):
+            with self.subTest(url_name=url_name):
+                request = self._one_tap_request(url_name=url_name, session={})
+                self.assertTrue(google_one_tap(request)["SHOW_GOOGLE_ONE_TAP"])
+
+    @override_settings(GOOGLE_OAUTH_LINK="real-client-id.apps.googleusercontent.com")
+    def test_one_tap_does_not_count_htmx_fragments(self):
+        """An HTMx-heavy page swaps several times; that is one page, not a browsing session."""
+        from auctions.context_processors import ONE_TAP_PAGE_VIEW_SESSION_KEY, google_one_tap
+
+        session = {}
+        for _ in range(3):
+            request = self._one_tap_request(session=session)
+            request.htmx = True
+            self.assertFalse(google_one_tap(request)["SHOW_GOOGLE_ONE_TAP"])
+        self.assertNotIn(ONE_TAP_PAGE_VIEW_SESSION_KEY, session)
+
+    @override_settings(GOOGLE_OAUTH_LINK="real-client-id.apps.googleusercontent.com")
+    def test_one_tap_does_not_count_crawlers(self):
+        from auctions.context_processors import ONE_TAP_PAGE_VIEW_SESSION_KEY, google_one_tap
+
+        session = {}
+        request = self._one_tap_request(session=session, HTTP_USER_AGENT="Mozilla/5.0 (compatible; Googlebot/2.1)")
+        self.assertFalse(google_one_tap(request)["SHOW_GOOGLE_ONE_TAP"])
+        self.assertNotIn(ONE_TAP_PAGE_VIEW_SESSION_KEY, session)
+
+    @override_settings(GOOGLE_OAUTH_LINK="real-client-id.apps.googleusercontent.com")
+    def test_one_tap_counts_a_page_once_however_many_templates_it_renders(self):
+        """once_per_request: a page that also renders a partial is still one page load."""
+        from auctions.context_processors import ONE_TAP_PAGE_VIEW_SESSION_KEY, google_one_tap
+
+        request = self._one_tap_request()
+        google_one_tap(request)
+        google_one_tap(request)
+        self.assertEqual(request.session[ONE_TAP_PAGE_VIEW_SESSION_KEY], 1)
+
+    @override_settings(GOOGLE_OAUTH_LINK="real-client-id.apps.googleusercontent.com")
+    def test_one_tap_hidden_for_signed_in_users_and_in_the_app(self):
+        from types import SimpleNamespace
+
+        from auctions.context_processors import ONE_TAP_PAGE_VIEW_SESSION_KEY, google_one_tap
+
+        signed_in = self._one_tap_request(user=SimpleNamespace(is_authenticated=True))
+        self.assertFalse(google_one_tap(signed_in)["SHOW_GOOGLE_ONE_TAP"])
+
+        in_app = self._one_tap_request(session={ONE_TAP_PAGE_VIEW_SESSION_KEY: 1})
+        in_app.is_mobile_app = True
+        self.assertFalse(google_one_tap(in_app)["SHOW_GOOGLE_ONE_TAP"])
+
+    @override_settings(GOOGLE_OAUTH_LINK="secret.apps.googleusercontent.com")
+    def test_one_tap_hidden_when_google_login_is_not_configured(self):
+        from auctions.context_processors import ONE_TAP_PAGE_VIEW_SESSION_KEY, google_one_tap
+
+        request = self._one_tap_request(url_name="account_signup", session={ONE_TAP_PAGE_VIEW_SESSION_KEY: 1})
+        self.assertFalse(google_one_tap(request)["SHOW_GOOGLE_ONE_TAP"])
+
+    @override_settings(GOOGLE_OAUTH_LINK="real-client-id.apps.googleusercontent.com")
+    def test_one_tap_never_shown_on_the_pages_it_would_land_on_top_of(self):
+        """Layout beats intent, and every name on that list is still a real view."""
+        from auctions import views
+        from auctions.context_processors import (
+            ONE_TAP_NEVER_SHOWN_ON,
+            ONE_TAP_PAGE_VIEW_SESSION_KEY,
+            google_one_tap,
+        )
+
+        for name in sorted(ONE_TAP_NEVER_SHOWN_ON):
+            with self.subTest(view=name):
+                view_class = getattr(views, name, None)
+                self.assertIsNotNone(view_class, f"{name} is on the list but is not a view any more")
+                request = self._one_tap_request(view_class=view_class, session={ONE_TAP_PAGE_VIEW_SESSION_KEY: 1})
+                self.assertFalse(google_one_tap(request)["SHOW_GOOGLE_ONE_TAP"])
+
+    @override_settings(GOOGLE_OAUTH_LINK="real-client-id.apps.googleusercontent.com")
+    def test_one_tap_suppressed_pages_still_count_as_browsing(self):
+        """Hiding the prompt on the lot list is not the same as pretending the visit did not happen."""
+        from auctions import views
+        from auctions.context_processors import ONE_TAP_PAGE_VIEW_SESSION_KEY, google_one_tap
+
+        session = {}
+        google_one_tap(self._one_tap_request(view_class=views.AllLots, session=session))
+        self.assertEqual(session[ONE_TAP_PAGE_VIEW_SESSION_KEY], 1)
+
+    @override_settings(GOOGLE_OAUTH_LINK="real-client-id.apps.googleusercontent.com", SINGLE_CLUB_MODE=False)
+    def test_one_tap_script_appears_on_the_second_page_a_visitor_loads(self):
+        """End to end: base.html draws the Google script only once the gate is open."""
+        from django.urls import reverse
+
+        script = "accounts.google.com/gsi/client"
+
+        first = self.client.get(reverse("support"))
+        self.assertEqual(first.status_code, 200)
+        self.assertNotContains(first, script)
+
+        second = self.client.get(reverse("support"))
+        self.assertEqual(second.status_code, 200)
+        self.assertContains(second, script)
+
+    @override_settings(GOOGLE_OAUTH_LINK="real-client-id.apps.googleusercontent.com", SINGLE_CLUB_MODE=False)
+    def test_one_tap_script_stays_off_the_lot_list_however_much_browsing_came_first(self):
+        from django.urls import reverse
+
+        self.client.get(reverse("support"))
+        self.client.get(reverse("support"))
+        response = self.client.get(reverse("allLots"))
+        self.assertEqual(response.status_code, 200)
+        self.assertNotContains(response, "accounts.google.com/gsi/client")
+
+    @override_settings(GOOGLE_OAUTH_LINK="real-client-id.apps.googleusercontent.com", SINGLE_CLUB_MODE=False)
+    def test_one_tap_script_appears_on_the_signup_page_straight_away(self):
+        from django.urls import reverse
+
+        response = self.client.get(reverse("account_signup"))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "accounts.google.com/gsi/client")
+
     def test_theme_context_anonymous_user(self):
         """Test theme context processor for anonymous users"""
         from django.contrib.auth.models import AnonymousUser

@@ -1,12 +1,13 @@
-"""``AdminUserFlow`` section classification, and the ``PageView.url`` shape it depends on.
+"""The shape of ``PageView.url``: a site-relative path, on the way in and on the rows already there.
 
-``URL_SECTIONS`` anchors every pattern at ``^/``, and until 2026-09 the beacon in
-``base_page_view.html`` posted ``window.location.href`` -- so every row it wrote was
-``https://auction.fish/lots/123``, nothing matched, and the whole page read "Other".  There was no
-test for ``classify_url`` on either side of that, which is why it shipped and stayed.
+Until 2026-09 the beacon in ``base_page_view.html`` posted ``window.location.href``, so every row it
+wrote was ``https://auction.fish/lots/123`` while every reader of the column -- ``duplicates``,
+``url__startswith="/account/"``, the traffic dashboard -- wants a path.  There was no test on either
+side of that, which is why it shipped and stayed.
 
-So the cases below are deliberately paired: one set fixes what the patterns mean, and one set fixes
-the shape of the column they read, including the round trip through the endpoint that writes it.
+So the cases below are deliberately paired: one set fixes what the endpoint stores, and one set
+fixes what migration 0425 does to the rows written before it, including the round trip through the
+endpoint itself.
 """
 
 from importlib import import_module
@@ -16,72 +17,9 @@ from django.test import TestCase, override_settings
 
 from auctions.models import PageView
 from auctions.views.ajax import page_view_path
-from auctions.views.site_admin import AdminUserFlow
 
-classify = AdminUserFlow.classify_url
 # A migration module's name starts with a digit, so it cannot be imported with an import statement.
 our_hosts = import_module("auctions.migrations.0425_page_view_url_to_path").our_hosts
-
-
-class ClassifyUrlTests(TestCase):
-    def test_each_section_claims_a_representative_path(self):
-        cases = {
-            "/": "Homepage",
-            "/lots/": "All Lots",
-            "/lots/all/": "All Lots",
-            "/lots/123": "Lot Detail",
-            "/lots/123/some-slug": "Lot Detail",
-            "/lots/new/": "Add Lot",
-            "/lots/edit/123": "Edit Lot",
-            "/auctions/": "All Auctions",
-            "/auctions/spring-2026": "Auction Browse",
-            "/auctions/spring-2026/": "Auction Browse",
-            "/auctions/spring-2026/rules/": "Auction Rules",
-            "/auctions/spring-2026/edit/": "Auction Edit",
-            "/auctions/spring-2026/stats/": "Auction Stats",
-            "/auctions/spring-2026/invoice/": "Auction Invoice (Mine)",
-            "/auctions/spring-2026/invoices/": "Auction Invoices",
-            "/auctions/spring-2026/lots/bulk-add/": "Bulk Add Lots",
-            "/auctions/spring-2026/lots/": "Lot Detail",
-            "/invoices/42": "Invoice",
-            "/users/somebody/": "User Profile",
-            "/account/": "My Account",
-            "/preferences/": "Other",
-        }
-        for url, expected in cases.items():
-            with self.subTest(url=url):
-                self.assertEqual(classify(url), expected)
-
-    def test_order_decides_the_overlaps(self):
-        """Four pairs where more than one pattern matches and the first one has to win."""
-        # /auctions/<slug>/invoices/ would also match the singular "invoice/" prefix
-        self.assertEqual(classify("/auctions/spring-2026/invoices/"), "Auction Invoices")
-        # bulk-add lives under .../lots/, which is otherwise Lot Detail
-        self.assertEqual(classify("/auctions/spring-2026/lots/bulk-add-auto/"), "Bulk Add Lots")
-        # /lots/new/ and /lots/edit/1 both start /lots/, but only /lots/<digits> is a lot
-        self.assertEqual(classify("/lots/new/"), "Add Lot")
-        self.assertEqual(classify("/lots/edit/1"), "Edit Lot")
-
-    def test_the_all_lots_page_people_actually_visit_counts_as_all_lots(self):
-        """``/lots/`` and ``/lots/all/`` are both the ``allLots`` view under the same URL name, and
-        ``/lots/all/`` is the one ``reverse()`` returns -- so it is what every link points at and
-        what nearly every row holds. Matching only ``/lots/`` filed the site's most-visited lot
-        page under "Other"."""
-        self.assertEqual(classify("/lots/all/"), "All Lots")
-        self.assertEqual(classify("/lots/all"), "All Lots")
-        self.assertEqual(classify("/lots/allsomething/"), "Other")
-
-    def test_a_blank_url_is_other_rather_than_the_homepage(self):
-        """``^/?$`` matches the empty string, so blank has to be caught before the loop."""
-        self.assertEqual(classify(""), "Other")
-        self.assertEqual(classify(None), "Other")
-
-    def test_an_absolute_url_is_other(self):
-        """The bug this file exists for. Kept as a test so the column's shape stays a decision:
-        if these ever classify, the patterns have been loosened and the paths have stopped being
-        anchored at the site root."""
-        self.assertEqual(classify("https://auction.fish/lots/123"), "Other")
-        self.assertEqual(classify("https://auction.fish/"), "Other")
 
 
 class PageViewPathTests(TestCase):
@@ -152,7 +90,7 @@ class MigrationHostListTests(TestCase):
 
 
 class PageViewCreateStoresAPathTests(TestCase):
-    """End to end: what the beacon posts, through the endpoint, into the section it classifies as."""
+    """End to end: what the beacon posts, through the endpoint, into the column."""
 
     @classmethod
     def setUpTestData(cls):
@@ -167,10 +105,8 @@ class PageViewCreateStoresAPathTests(TestCase):
         self.assertEqual(response.status_code, 200)
         return PageView.objects.order_by("-pk").first()
 
-    def test_an_absolute_url_is_stored_as_a_path_and_classifies(self):
-        view = self._post("https://testserver/lots/123")
-        self.assertEqual(view.url, "/lots/123")
-        self.assertEqual(classify(view.url), "Lot Detail")
+    def test_an_absolute_url_is_stored_as_a_path(self):
+        self.assertEqual(self._post("https://testserver/lots/123").url, "/lots/123")
 
     def test_the_homepage_is_stored_as_a_slash(self):
         self.assertEqual(self._post("https://testserver").url, "/")

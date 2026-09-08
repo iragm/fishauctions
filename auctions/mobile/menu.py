@@ -157,7 +157,6 @@ def _admin_section():
             _row("Traffic", reverse("admin_traffic") + "?days=30", "bi-graph-up"),
             _row("Referrers", reverse("admin_referrers") + "?days=30", "bi-signpost-split"),
             _row("User signups", reverse("admin_user_signups") + "?days=90", "bi-person-plus"),
-            _row("User flow", reverse("admin_user_flow"), "bi-diagram-3"),
             _row("Command palette searches", reverse("command_palette_analytics"), "bi-search"),
             _row("Lots with no scientific name", reverse("species_gaps"), "bi-tags"),
             _row("Assistant skill requests", reverse("assistant_skill_requests"), "bi-stars"),

@@ -29,20 +29,15 @@ of them is a bug that has already happened here:
   that really are stale are repaired by `recalculate_club_bap_points`, which rebuilds them from the
   `BapAward` rows. Both it and the reset read the year off `timezone.localtime()`, because
   `BapAward.date` is a `DateField` somebody typed in their own calendar.
-- **Anything on a short interval takes a cache lock.** `endauctions` (60s beat, 300s limit),
-  `sync_club_calendars` and `compute_user_flow_all` each `cache.add` a key with a timeout past the
-  hard limit and delete it in a `finally`. Two `endauctions` runs both see a lot as unsold and both
-  invoice it; two `compute_user_flow_all` runs occupy both worker slots and stop everything else.
+- **Anything on a short interval takes a cache lock.** `endauctions` (60s beat, 300s limit) and
+  `sync_club_calendars` each `cache.add` a key with a timeout past the hard limit and delete it in a
+  `finally`. Two `endauctions` runs both see a lot as unsold and both invoice it.
 - **A self-scheduling task needs a watchdog on the beat.** `update_auction_stats` re-arms itself at
   the end of each run, which a hard-limit SIGKILL never reaches;
   `ensure_auction_stats_task_scheduled` is one indexed lookup every 15 minutes that re-arms it. It
   judges the row by its **scheduled time only** — `enabled` is what beat clears the moment it
   dispatches a one-off, so a disabled row with a recent `clocked_time` is a run in flight, and
   re-arming that starts a second one beside it.
-- **A lock on a task with no time limit is a heartbeat, not a ceiling.** `compute_user_flow_all`
-  re-stamps `USER_FLOW_LOCK_KEY` after every auction, so the lock outlives a run of any length and a
-  worker killed mid-run wedges the admin button for 30 minutes rather than for however long the
-  longest imaginable run is. The view asks the same lock so the page says which of the two happened.
 
 Two more that are not about time limits:
 

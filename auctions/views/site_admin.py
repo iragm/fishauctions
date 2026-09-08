@@ -1,12 +1,10 @@
-"""The superuser's dashboard: traffic, signups, referrers, the user flow map.
+"""The superuser's dashboard: traffic, signups, referrers, the user map.
 
 Charts and maps over the whole site rather than over one auction. The setup checklist that the
 admin landing page is built around is next door in :mod:`auctions.views.admin_checklist`.
 """
 
-import collections
 import logging
-import re
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -15,7 +13,6 @@ from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth.models import User
 from django.contrib.sites.models import Site
-from django.core.cache import cache
 from django.core.exceptions import ImproperlyConfigured
 from django.db.models import (
     Count,
@@ -30,12 +27,10 @@ from django.shortcuts import redirect
 from django.templatetags.static import static
 from django.urls import reverse
 from django.utils import timezone
-from django.utils.http import url_has_allowed_host_and_scheme
 from django.views.generic import TemplateView
 
 from auctions.helper_functions import bin_data
 from auctions.models import (
-    Auction,
     AuctionTOS,
     Club,
     Lot,
@@ -492,189 +487,6 @@ class UserMap(TemplateView):
         return context
 
 
-class AdminUserFlow(AdminOnlyViewMixin, TemplateView):
-    """Navigation flow analysis for Command Palette design.
-
-    Shows per-auction: which page sections users visit most, and where they go next.
-    Scoped to logged-in users only. Sessions split on 30-minute idle gaps.
-    """
-
-    template_name = "dashboard_user_flow.html"
-
-    SESSION_GAP = timedelta(minutes=30)
-
-    # Ordered — first match wins
-    URL_SECTIONS = [
-        ("Bulk Add Lots", re.compile(r"^/auctions/[^/]+/(users/[^/]+/(bulk-add-auto)?$|lots/bulk-add(-auto)?/)")),
-        ("Auction Rules", re.compile(r"^/auctions/[^/]+/rules/")),
-        ("Auction Invoice (Mine)", re.compile(r"^/auctions/[^/]+/invoice/")),
-        ("Auction Invoices", re.compile(r"^/auctions/[^/]+/invoices/")),
-        ("Auction Stats", re.compile(r"^/auctions/[^/]+/stats/")),
-        ("Auction Edit", re.compile(r"^/auctions/[^/]+/edit/")),
-        ("Auction Browse", re.compile(r"^/auctions/[^/]+/?$")),
-        ("All Auctions", re.compile(r"^/auctions/?$")),
-        ("Lot Detail", re.compile(r"^/lots/\d+")),
-        ("Lot Detail", re.compile(r"^/auctions/[^/]+/lots/")),
-        ("Add Lot", re.compile(r"^/lots/new/")),
-        ("Edit Lot", re.compile(r"^/lots/edit/\d+")),
-        ("Invoice", re.compile(r"^/invoices/[^/]")),
-        ("User Profile", re.compile(r"^/users/")),
-        ("My Account", re.compile(r"^/account/")),
-        # Both /lots/ and /lots/all/ are the allLots view, and /lots/all/ is the one reverse()
-        # returns -- so it is the one every link points at and effectively all of the traffic.
-        ("All Lots", re.compile(r"^/lots/(all/?)?$")),
-        ("Homepage", re.compile(r"^/?$")),
-    ]
-
-    @classmethod
-    def classify_url(cls, url):
-        if not url:
-            return "Other"
-        for label, pattern in cls.URL_SECTIONS:
-            if pattern.match(url):
-                return label
-        return "Other"
-
-    @classmethod
-    def _process_session(cls, session, transitions):
-        sections = []
-        for v in session:
-            section = cls.classify_url(v["url"])
-            if not sections or sections[-1] != section:
-                sections.append(section)
-        for i in range(len(sections) - 1):
-            transitions[sections[i]][sections[i + 1]] += 1
-
-    @classmethod
-    def _compute_flow(cls, auction):
-        """Compute (frequency_table, transition_table) for auction, or all auctions if None."""
-        if auction is None:
-            views_qs = (
-                PageView.objects.filter(user__isnull=False)
-                .order_by("user_id", "date_start")
-                .values("user_id", "url", "date_start", "total_time")
-            )
-        else:
-            auction_views = PageView.objects.filter(auction=auction, user__isnull=False).values(
-                "user_id", "url", "date_start", "total_time"
-            )
-            lot_views = PageView.objects.filter(lot_number__auction=auction, user__isnull=False).values(
-                "user_id", "url", "date_start", "total_time"
-            )
-            # UNION keeps both branches on their own index paths; OR forces a full scan
-            views_qs = auction_views.union(lot_views, all=True).order_by("user_id", "date_start")
-
-        section_stats = collections.defaultdict(lambda: {"views": 0, "users": set(), "total_time": 0})
-        transitions = collections.defaultdict(lambda: collections.defaultdict(int))
-
-        current_user = None
-        session = []
-        for v in views_qs:
-            if v["user_id"] != current_user:
-                if session:
-                    cls._process_session(session, transitions)
-                current_user = v["user_id"]
-                session = [v]
-            else:
-                if session and (v["date_start"] - session[-1]["date_start"]) > cls.SESSION_GAP:
-                    cls._process_session(session, transitions)
-                    session = [v]
-                else:
-                    session.append(v)
-            section = cls.classify_url(v["url"])
-            section_stats[section]["views"] += 1
-            section_stats[section]["users"].add(v["user_id"])
-            section_stats[section]["total_time"] += v["total_time"] or 0
-        if session:
-            cls._process_session(session, transitions)
-
-        frequency_table = sorted(
-            [
-                {
-                    "section": section,
-                    "views": stats["views"],
-                    "unique_users": len(stats["users"]),
-                    "avg_time": round(stats["total_time"] / stats["views"]) if stats["views"] else 0,
-                }
-                for section, stats in section_stats.items()
-            ],
-            key=lambda x: -x["views"],
-        )
-        transition_table = []
-        for from_section, nexts in transitions.items():
-            total = sum(nexts.values())
-            top_nexts = sorted(nexts.items(), key=lambda x: -x[1])[:5]
-            transition_table.append(
-                {
-                    "from": from_section,
-                    "total_transitions": total,
-                    "nexts": [{"section": s, "count": c, "pct": round(100 * c / total)} for s, c in top_nexts],
-                }
-            )
-        transition_table.sort(key=lambda x: -x["total_transitions"])
-        return frequency_table, transition_table
-
-    def post(self, request, *args, **kwargs):
-        from auctions.tasks import USER_FLOW_LOCK_KEY, compute_user_flow_all
-
-        # The task drops a second request rather than queueing it -- it holds a worker slot for as
-        # long as it takes, and the worker has two. Ask the same lock here so the page says what
-        # actually happened; the task asks again for real, so a press landing in the gap between
-        # these two lines is still dropped there rather than run twice.
-        if cache.get(USER_FLOW_LOCK_KEY):
-            messages.info(request, "A user flow computation is already running. Refresh in a few minutes.")
-        else:
-            compute_user_flow_all.delay()
-            messages.success(request, "User flow computation started in the background. Refresh after a few minutes.")
-        target = request.get_full_path()
-        if url_has_allowed_host_and_scheme(
-            target,
-            allowed_hosts={request.get_host()},
-            require_https=request.is_secure(),
-        ):
-            return redirect(target)
-        return redirect("/")
-
-    def get_context_data(self, **kwargs):
-        context = super().get_context_data(**kwargs)
-        context["auctions"] = Auction.objects.order_by("-date_end")[:50]
-        context["all_flow_cached_at"] = cache.get("user_flow_all_computed_at")
-
-        auction_slug = self.request.GET.get("auction")
-        if not auction_slug:
-            return context
-
-        if auction_slug == "__all__":
-            cached = cache.get("user_flow_all")
-            if cached:
-                context["is_all_auctions"] = True
-                context["flow_cached_at"] = cache.get("user_flow_all_computed_at")
-                context["frequency_table"] = cached["frequency_table"]
-                context["transition_table"] = cached["transition_table"]
-            else:
-                context["is_all_auctions"] = True
-                context["flow_not_cached"] = True
-            return context
-
-        try:
-            auction = Auction.objects.get(slug=auction_slug)
-        except Auction.DoesNotExist:
-            return context
-        context["selected_auction"] = auction
-
-        cached = cache.get(f"user_flow_{auction.pk}")
-        if cached:
-            context["flow_cached_at"] = cached.get("computed_at")
-            context["frequency_table"] = cached["frequency_table"]
-            context["transition_table"] = cached["transition_table"]
-            return context
-
-        frequency_table, transition_table = self._compute_flow(auction)
-        context["frequency_table"] = frequency_table
-        context["transition_table"] = transition_table
-        return context
-
-
 class ClubMap(TemplateView):
     template_name = "clubs.html"
 
@@ -693,7 +505,6 @@ class ClubMap(TemplateView):
         if latitude_cookie:
             context["latitude"] = latitude_cookie
             context["longitude"] = longitude_cookie
-        context["hide_google_login"] = True
         return context
 
 
@@ -702,7 +513,6 @@ class UserAgreement(TemplateView):
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
-        context["hide_google_login"] = True
         tos_path = Path(settings.BASE_DIR / "tos.html")
         if Path.exists(tos_path):
             with Path.open(tos_path) as file:

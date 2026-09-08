@@ -17,9 +17,9 @@ from auctions.models import Auction, AuctionHistory, AuctionTOS, Club, Invoice, 
 from auctions.test_support import isolated_cache
 
 
-# isolated_cache is required, not tidiness: endauctions and compute_user_flow_all now take a cache
-# lock, and --parallel workers share one Redis. Without it, two workers running these at the same
-# moment would have one of them correctly skip its run and fail its own assertion.
+# isolated_cache is required, not tidiness: endauctions now takes a cache lock, and --parallel
+# workers share one Redis. Without it, two workers running these at the same moment would have one
+# of them correctly skip its run and fail its own assertion.
 @isolated_cache("celery-tasks")
 class CeleryTasksTestCase(TestCase):
     """Test case for Celery tasks."""
@@ -764,7 +764,7 @@ class FixedDatabaseSchedulerTestCase(TestCase):
 
 @isolated_cache("celery-locks")
 class OverlapLockTestCase(TestCase):
-    """The two tasks that must never run twice at once."""
+    """The task that must never run twice at once."""
 
     def setUp(self):
         # A lock deliberately taken by one test would otherwise still be held by the next one --
@@ -772,7 +772,6 @@ class OverlapLockTestCase(TestCase):
         from django.core.cache import cache
 
         cache.delete(tasks.ENDAUCTIONS_LOCK_KEY)
-        cache.delete(tasks.USER_FLOW_LOCK_KEY)
 
     @patch("auctions.tasks.call_command")
     def test_endauctions_skips_a_tick_it_is_already_running(self, mock_call_command):
@@ -796,36 +795,6 @@ class OverlapLockTestCase(TestCase):
         with self.assertRaises(RuntimeError):
             tasks.endauctions()
         self.assertIsNone(cache.get(tasks.ENDAUCTIONS_LOCK_KEY))
-
-    @patch("auctions.tasks._compute_user_flow_all")
-    def test_a_second_user_flow_request_is_dropped_rather_than_queued(self, mock_compute):
-        """It holds a worker slot for as long as it takes (time_limit=None) and the worker runs at
-        concurrency=2, so two presses of the admin button used to stop every other task on the
-        site -- endauctions included."""
-        from django.core.cache import cache
-
-        cache.add(tasks.USER_FLOW_LOCK_KEY, "1", timeout=60)
-        tasks.compute_user_flow_all()
-        mock_compute.assert_not_called()
-
-    @patch("auctions.tasks._compute_user_flow_all")
-    def test_the_user_flow_lock_is_released_afterwards(self, mock_compute):
-        from django.core.cache import cache
-
-        tasks.compute_user_flow_all()
-        mock_compute.assert_called_once()
-        self.assertIsNone(cache.get(tasks.USER_FLOW_LOCK_KEY))
-
-    @patch("auctions.views.AdminUserFlow._compute_flow", return_value=([], []))
-    def test_the_run_re_stamps_its_own_lock(self, mock_flow):
-        """The task has no time limit, so the lock cannot be "longer than the longest run" -- it is
-        a heartbeat, kept alive by the run itself. Without this a long run would age its own lock
-        out and let a second press start beside it."""
-        from django.core.cache import cache
-
-        Auction.objects.create(title="Flow auction", date_start=timezone.now() - datetime.timedelta(days=1))
-        tasks._compute_user_flow_all(0)
-        self.assertEqual(cache.get(tasks.USER_FLOW_LOCK_KEY), "1")
 
 
 @isolated_cache("celery-ytd")

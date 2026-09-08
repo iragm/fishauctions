@@ -94,7 +94,7 @@ OVERSIZED: dict[str, int] = {
     "auctions/models.py": 15000,
     "auctions/forms.py": 7100,
     "auctions/mobile/views.py": 2500,
-    "auctions/tasks.py": 2100,
+    "auctions/tasks.py": 2050,
     "auctions/palette_routes.py": 1900,
     "auctions/filters.py": 1800,
     "auctions/admin.py": 1700,

@@ -15030,7 +15030,6 @@ NOT_A_SKILL: dict[str, str] = {
         "the page that explains what the key can do, and the secret is shown once and never again. "
         "go_to_page opens it."
     ),
-    "AdminUserFlow": _FORM_PAGE,
     "SupportView": (
         "The help page's POST is its message form: it emails the site owner a paragraph somebody "
         "wrote in their own words, and its whole purpose is to work with no account, since it is "

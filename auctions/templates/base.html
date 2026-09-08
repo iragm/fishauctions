@@ -280,7 +280,8 @@ window.onload = function() {
       {% else %}
           <span class="hide-fullscreen">
       {% endif %}
-      {% if not request.user.is_authenticated and not hide_google_login and GOOGLE_LOGIN_ENABLED %}
+      {% comment %}Rationed rather than drawn on every page: see google_one_tap() in auctions/context_processors.py for what a dismissal costs.{% endcomment %}
+      {% if SHOW_GOOGLE_ONE_TAP %}
       <script src="//accounts.google.com/gsi/client" async></script>
         <div id="g_id_onload"
             data-client_id="{{ GOOGLE_OAUTH_LINK }}"
@@ -335,7 +336,6 @@ window.onload = function() {
                     <a class="dropdown-item" href="{% url 'admin_traffic' %}?days=30">Traffic</a>
                     <a class="dropdown-item" href="{% url 'admin_referrers' %}?days=30">Referrers</a>
                     <a class="dropdown-item" href="{% url 'admin_user_signups' %}?days=90">User signups</a>
-                    <a class="dropdown-item" href="{% url 'admin_user_flow' %}">User flow</a>
                     <a class="dropdown-item" href="{% url 'command_palette_analytics' %}">Command palette searches</a>
                     <a class="dropdown-item" href="{% url 'species_gaps' %}">Lots with no scientific name</a>
                     <a class="dropdown-item" href="{% url 'assistant_skill_requests' %}">Assistant skill requests</a>

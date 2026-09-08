@@ -1058,7 +1058,6 @@ ROUTE_LIST: list[Route] = [
     ),
     _r("admin_traffic", "Site traffic", "Site admin", admin=ADMIN_SUPERUSER, keywords=["traffic", "pageviews"]),
     _r("admin_referrers", "Where visitors come from", "Site admin", admin=ADMIN_SUPERUSER, keywords=["referrers"]),
-    _r("admin_user_flow", "How visitors move around", "Site admin", admin=ADMIN_SUPERUSER, keywords=["user flow"]),
     _r("admin_user_map", "Map of users", "Site admin", admin=ADMIN_SUPERUSER, keywords=["user map", "where users are"]),
     _r("admin_user_signups", "New signups", "Site admin", admin=ADMIN_SUPERUSER, keywords=["signups", "new users"]),
     _r("admin_error", "Trigger a test error", "Site admin", admin=ADMIN_SUPERUSER, keywords=["test error", "500"]),

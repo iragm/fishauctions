@@ -41,14 +41,6 @@ CALENDAR_SYNC_LOCK_SECONDS = 60 * 60
 ENDAUCTIONS_LOCK_KEY = "endauctions_running"
 ENDAUCTIONS_LOCK_SECONDS = 15 * 60
 
-# One user-flow computation at a time; see compute_user_flow_all. The task has no time limit at all
-# (time_limit=None), so this cannot be "comfortably longer than the run" the way the endauctions lock
-# is. It is a heartbeat instead: the run re-stamps it after every auction, so it outlives a run of
-# any length, and a worker killed mid-run -- a deploy, most often -- wedges the button for this long
-# rather than for the length of the longest run anybody can imagine.
-USER_FLOW_LOCK_KEY = "compute_user_flow_all_running"
-USER_FLOW_LOCK_SECONDS = 30 * 60
-
 logger = logging.getLogger(__name__)
 
 
@@ -2004,70 +1996,6 @@ def bootstrap_bap_recalculation_tasks(run_at):
             schedule_bap_recalculation(club.pk, run_at=run_at)
         else:
             schedule_bap_recalculation(club.pk, run_at=club.next_bap_recalculation)
-
-
-@shared_task(bind=True, ignore_result=True, time_limit=None, soft_time_limit=None)
-def compute_user_flow_all(self, sleep_seconds=2):
-    """Pre-compute user flow data for every auction and store results in the cache.
-
-    Processes one auction at a time, sleeping between each to stay low-CPU.
-    The final step aggregates all page views into a combined "all auctions" result.
-    Trigger via the admin user-flow page; results persist indefinitely in Redis.
-    """
-    from django.core.cache import cache
-
-    # One at a time. This is enqueued by a button on the admin page, holds a worker slot for as long
-    # as it takes (time_limit=None) and sleeps between auctions, and the worker runs with
-    # concurrency=2 -- so two presses of the button occupied both slots and stopped every other task
-    # on the site, endauctions included. A second press is now a no-op rather than a queue.
-    if not cache.add(USER_FLOW_LOCK_KEY, "1", timeout=USER_FLOW_LOCK_SECONDS):
-        logger.info("compute_user_flow_all is already running; ignoring this request.")
-        return
-    try:
-        _compute_user_flow_all(sleep_seconds)
-    finally:
-        cache.delete(USER_FLOW_LOCK_KEY)
-
-
-def _compute_user_flow_all(sleep_seconds):
-    import time
-
-    from django.core.cache import cache
-    from django.utils import timezone
-
-    from auctions.models import Auction
-    from auctions.views import AdminUserFlow
-
-    auctions = list(Auction.objects.filter(is_deleted=False).order_by("-date_end"))
-    logger.info("compute_user_flow_all: starting for %d auctions (sleep=%ss)", len(auctions), sleep_seconds)
-
-    for i, auction in enumerate(auctions, 1):
-        try:
-            freq, trans = AdminUserFlow._compute_flow(auction)
-            cache.set(
-                f"user_flow_{auction.pk}",
-                {"frequency_table": freq, "transition_table": trans, "computed_at": timezone.now().isoformat()},
-                timeout=None,
-            )
-            logger.info("compute_user_flow_all: %d/%d done — %s", i, len(auctions), auction.slug)
-        except Exception:
-            logger.exception("compute_user_flow_all: failed for auction pk=%s", auction.pk)
-        # Re-stamp the lock rather than letting it age out under a run that has no time limit. A
-        # `set` and not an `add`: this run holds the lock, and refreshing it is the point.
-        cache.set(USER_FLOW_LOCK_KEY, "1", timeout=USER_FLOW_LOCK_SECONDS)
-        time.sleep(sleep_seconds)
-
-    # Combined view across all auctions
-    try:
-        freq, trans = AdminUserFlow._compute_flow(None)
-        now_iso = timezone.now().isoformat()
-        cache.set("user_flow_all", {"frequency_table": freq, "transition_table": trans}, timeout=None)
-        cache.set("user_flow_all_computed_at", now_iso, timeout=None)
-        logger.info("compute_user_flow_all: combined all-auctions result cached")
-    except Exception:
-        logger.exception("compute_user_flow_all: failed to compute combined result")
-
-    logger.info("compute_user_flow_all: complete")
 
 
 @shared_task(

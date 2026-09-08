@@ -330,6 +330,7 @@ TEMPLATES = [
                 "django.contrib.messages.context_processors.messages",
                 "auctions.context_processors.google_analytics",
                 "auctions.context_processors.google_oauth",
+                "auctions.context_processors.google_one_tap",
                 "auctions.context_processors.theme",
                 "auctions.context_processors.add_location",
                 "auctions.context_processors.dismissed_cookies_tos",
