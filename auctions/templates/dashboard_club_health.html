@@ -1,0 +1,115 @@
+{% extends "base.html" %}
+{% block title %}Club health{% endblock %}
+{% block content %}
+<h3>Club health</h3>
+<div class="help-note">
+  <i class="bi bi-lightbulb-fill" aria-hidden="true"></i>
+  <div>A club is judged against <em>its own</em> cadence, not a global cutoff: a club that runs
+  monthly and has missed two is in trouble, and a club that runs one big auction a year is fine at
+  eight months. One threshold gets both wrong, which is probably why nobody trusted
+  <code>Club.active</code> enough to maintain it. Rebuilt nightly.</div>
+</div>
+{% if never_computed %}<p class="text-muted small"><span class="text-warning">{{ never_computed }}
+  club(s) have never been computed &mdash; the nightly task has not run since they were
+  created.</span></p>{% endif %}
+
+<h4 class="mt-4">Due for a check-in</h4>
+<p class="text-muted small">
+  Ordered by what kind of conversation it is, not by how late: a club that set the site up and
+  never ran a real auction is a different (and much more recoverable) case than one that ran twelve
+  and stopped. Marking a club contacted writes <code>date_contacted</code> and takes it off this
+  list for {{ contact_cooldown_days }} days.
+  {% if unreachable %}<span class="text-warning">{{ unreachable }} of these have no contact
+  address on file &mdash; there is nobody to write to.</span>{% endif %}
+</p>
+<div class="table-responsive">
+  <table class="table table-sm">
+    <thead>
+      <tr>
+        <th>Club</th>
+        <th>Stage</th>
+        <th>Why</th>
+        <th class="text-end">Real</th>
+        <th class="text-end">Test</th>
+        <th class="text-end">Members</th>
+        <th>Tools used</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in queue %}
+      <tr>
+        <td><a href="{{ row.club.get_absolute_url }}">{{ row.club.name }}</a></td>
+        <td>
+          {% if row.stage == "trial" or row.stage == "empty" %}
+            <span class="badge text-bg-warning text-dark">{{ row.get_stage_display }}</span>
+          {% else %}
+            <span class="badge bg-secondary">{{ row.get_stage_display }}</span>
+          {% endif %}
+        </td>
+        <td class="small">
+          {{ row.checkin_reason }}
+          {% if not row.is_reachable %}<br><span class="text-warning">No contact address</span>{% endif %}
+        </td>
+        <td class="text-end">{{ row.real_auctions }}</td>
+        <td class="text-end">{{ row.test_auctions }}</td>
+        <td class="text-end">{{ row.members }}</td>
+        <td class="small">
+          {% for tool in row.tools_used %}<span class="badge bg-secondary">{{ tool }}</span> {% empty %}
+            <span class="text-muted">none</span>
+          {% endfor %}
+        </td>
+        <td>
+          <form method="post" action="{% url 'club_mark_contacted' pk=row.club.pk %}">
+            {% csrf_token %}
+            <button type="submit" class="btn btn-sm btn-secondary">Mark contacted</button>
+          </form>
+        </td>
+      </tr>
+      {% empty %}
+      <tr><td colspan="8" class="text-muted">Nobody is due for a check-in. Either everything is
+        healthy or the nightly rollup has not run.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<h4 class="mt-4">Where every club is</h4>
+<div class="table-responsive">
+  <table class="table table-sm">
+    <thead><tr><th>Stage</th><th class="text-end">Clubs</th></tr></thead>
+    <tbody>
+      {% for row in stages %}
+      <tr>
+        <td>{{ row.label }}</td>
+        <td class="text-end">{{ row.clubs }}</td>
+      </tr>
+      {% empty %}
+      <tr><td colspan="2" class="text-muted">Nothing computed yet.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<h4 class="mt-4">Which club management tools anybody actually uses</h4>
+<p class="text-muted small">
+  The same question the auction settings adoption table asks, at the level of whole features: a
+  tool no club has switched on is either undiscoverable or unwanted, and the two need telling
+  apart before either is worked on.
+</p>
+<div class="table-responsive">
+  <table class="table table-sm">
+    <thead><tr><th>Tool</th><th class="text-end">Clubs using it</th></tr></thead>
+    <tbody>
+      {% for row in tool_counts %}
+      <tr>
+        <td>{{ row.tool }}</td>
+        <td class="text-end">
+          {% if row.clubs %}{{ row.clubs }}{% else %}<span class="text-warning">0</span>{% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

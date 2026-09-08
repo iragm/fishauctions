@@ -91,6 +91,10 @@
 </script>
 {% endblock %}
 {% block content %}
+<div class="help-note">
+  <i class="bi bi-lightbulb-fill" aria-hidden="true"></i>
+  <div>This page is when the site is allowed to <em>contact</em> you. What it <em>shows</em> you is on the <a href="{% url 'preferences' %}">preferences page</a>. Distances here are in whichever unit you set there.</div>
+</div>
 <div class="mt-3">
 {% comment %}
 Filled in by the app (see extra_js): a real notification control instead of a checkbox that's

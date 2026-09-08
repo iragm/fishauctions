@@ -14987,6 +14987,20 @@ _PALETTE = "The palette's own endpoint. It is the thing running the skills."
 
 #: Views with no skill, and why. Every entry is a decision somebody made on purpose.
 NOT_A_SKILL: dict[str, str] = {
+    # The usability instruments
+    "FormAbandonedBeacon": (
+        "The page reporting that somebody edited a form and left without saving it. It is a "
+        "measurement of what a person did in a browser, fired by that browser as the page goes "
+        "away; there is no version of it an assistant could perform, because the thing being "
+        "recorded is the giving up."
+    ),
+    # The outreach queue
+    "ClubMarkContacted": (
+        "Records that a real person wrote to a club that has gone quiet -- it is the note saying "
+        "the conversation happened, not the conversation. Marking it from a sentence would take "
+        "the club off the queue for three months on the strength of an intention, and the queue "
+        "is only worth anything if what is on it is what has not been done yet."
+    ),
     # Copyright and reporting
     "CopyrightNoticeCreate": (
         "Files a sworn document. The sender states, under penalty of perjury, that they own the "

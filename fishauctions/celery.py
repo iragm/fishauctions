@@ -48,6 +48,12 @@ app.conf.beat_schedule = {
         "task": "auctions.tasks.auctiontos_notifications",
         "schedule": 900.0,  # Run every 15 minutes
     },
+    # Club lifecycle rollup and the outreach queue - daily. Nothing it measures moves faster than
+    # that: the quickest column on it is "days since the last auction".
+    "refresh_club_health": {
+        "task": "auctions.tasks.refresh_club_health",
+        "schedule": 86400.0,  # Run every 24 hours
+    },
     # Send queued mail (post_office) - every 10 minutes (retry failed emails)
     "send_queued_mail": {
         "task": "post_office.tasks.send_queued_mail",

@@ -8,8 +8,6 @@
 <script src="https://code.jquery.com/ui/1.12.1/jquery-ui.js"></script>
 <script type="text/javascript">
 
-var form_id = '#lot-form';
-{% include 'leave_page_warning.js' %}
 
 function setAuction(setting) {
     if (setting) {
@@ -439,6 +437,10 @@ $(document).ready(function() {
 {% endblock %}
 {% block title %}{{ title }}{% endblock %}
 {% block content %}
+<div class="help-note">
+  <i class="bi bi-lightbulb-fill" aria-hidden="true"></i>
+  <div>A lot is one thing you are selling &mdash; a bag of fish, a plant, a piece of equipment. Sell it in an auction by picking one below, or on its own if you would rather. You can edit anything here until bidding starts.</div>
+</div>
             {% crispy form form.helper %}
 <div class="modal fade" id="joinAuction" tabindex="-1" aria-labelledby="label" aria-hidden="true">
     <div class="modal-dialog">

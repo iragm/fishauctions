@@ -61,6 +61,7 @@ from django_summernote.widgets import SummernoteWidget
 from easy_thumbnails.exceptions import EasyThumbnailsError
 from PIL import Image, ImageFile, ImageOps, UnidentifiedImageError
 
+from . import auction_form_layout
 from .helper_functions import get_currency_symbol
 from .html_sanitize import sanitize_summernote_html
 from .models import (
@@ -2801,301 +2802,28 @@ class AuctionEditForm(forms.ModelForm):
             currency = "USD"
         currency_symbol = get_currency_symbol(currency)
 
-        def slot(field_name, visible_element):
-            """Place a field in its grid column when visible, but render just the
-            bare hidden input (no empty column) when its widget has been switched
-            to HiddenInput above. This keeps the value in the POST without leaving
-            a blank cell in the row. See auction_edit_form.html for the JS-toggled
-            fields, which collapse their own column via toggleCol()."""
-            if isinstance(self.fields[field_name].widget, forms.HiddenInput):
-                return field_name
-            return visible_element
+        self.helper = auction_form_layout.build_layout(self, currency_symbol)
 
-        self.helper = FormHelper()
-        self.helper.form_method = "post"
-        self.helper.form_id = "auction-form"
-        self.helper.form_class = "form"
-        self.helper.form_tag = True
-        self.helper.layout = Layout(
-            "summernote_description",
-            HTML("<h4>Dates</h4>"),
-            Div(
-                Div(
-                    "lot_submission_start_date",
-                    css_class="col-md-3",
-                ),
-                Div(
-                    "lot_submission_end_date",
-                    css_class="col-md-3",
-                ),
-                Div(
-                    "date_start",
-                    css_class="col-md-3",
-                    label="Bidding opens",
-                ),
-                slot(
-                    "date_end",
-                    Div(
-                        "date_end",
-                        css_class="col-md-3",
-                    ),
-                ),
-                css_class="row",
-            ),
-            HTML("<h4>Lot fees</h4>"),
-            Div(
-                slot(
-                    "unsold_lot_fee",
-                    PrependedAppendedText(
-                        "unsold_lot_fee",
-                        currency_symbol,
-                        ".00",
-                        wrapper_class="col-lg-3",
-                    ),
-                ),
-                PrependedAppendedText(
-                    "lot_entry_fee",
-                    currency_symbol,
-                    ".00",
-                    wrapper_class="col-lg-3",
-                ),
-                PrependedAppendedText(
-                    "registration_fee",
-                    currency_symbol,
-                    ".00",
-                    wrapper_class="col-lg-3",
-                ),
-                PrependedAppendedText(
-                    "winning_bid_percent_to_club",
-                    "",
-                    "%",
-                    wrapper_class="col-lg-3",
-                ),
-                PrependedAppendedText(
-                    "user_cut",
-                    "",
-                    "%",
-                    wrapper_class="col-lg-3",
-                ),
-                PrependedAppendedText(
-                    "force_donation_threshold",
-                    currency_symbol,
-                    ".00",
-                    wrapper_class="col-lg-3",
-                ),
-                css_class="row",
-            ),
-            HTML("<h4>Lot fee discounts</h4>"),
-            Div(
-                Div(
-                    "alternate_split_mode",
-                    css_class="col-lg-3",
-                ),
-                Div(
-                    "alternative_split_label",
-                    css_class="col-lg-9",
-                ),
-                css_class="row",
-            ),
-            Div(
-                slot(
-                    "pre_register_lot_discount_percent",
-                    PrependedAppendedText(
-                        "pre_register_lot_discount_percent",
-                        "",
-                        "%",
-                        wrapper_class="col-lg-3",
-                    ),
-                ),
-                PrependedAppendedText(
-                    "lot_entry_fee_for_club_members",
-                    currency_symbol,
-                    ".00",
-                    wrapper_class="col-lg-3",
-                ),
-                PrependedAppendedText(
-                    "registration_fee_for_club_members",
-                    currency_symbol,
-                    ".00",
-                    wrapper_class="col-lg-3",
-                ),
-                PrependedAppendedText(
-                    "winning_bid_percent_to_club_for_club_members",
-                    "",
-                    "%",
-                    wrapper_class="col-lg-3",
-                ),
-                PrependedAppendedText(
-                    "club_member_cut",
-                    "",
-                    "%",
-                    wrapper_class="col-lg-3",
-                ),
-                css_class="row",
-            ),
-            HTML("<h4>Lot permissions</h4>"),
-            Div(
-                slot(
-                    "online_bidding",
-                    Div(
-                        "online_bidding",
-                        css_class="col-md-3",
-                    ),
-                ),
-                slot(
-                    "date_online_bidding_starts",
-                    Div(
-                        "date_online_bidding_starts",
-                        css_class="col-md-3",
-                    ),
-                ),
-                slot(
-                    "date_online_bidding_ends",
-                    Div(
-                        "date_online_bidding_ends",
-                        css_class="col-md-3",
-                    ),
-                ),
-                Div(
-                    "allow_deleting_bids",
-                    css_class="col-md-3",
-                ),
-                css_class="row",
-            ),
-            Div(
-                Div(
-                    "max_lots_per_user",
-                    css_class="col-md-4",
-                ),
-                Div(
-                    "allow_additional_lots_as_donation",
-                    css_class="col-md-4",
-                ),
-                Div(
-                    "only_approved_sellers",
-                    css_class="col-md-4",
-                ),
-                Div(
-                    "only_approved_bidders",
-                    css_class="col-md-4",
-                ),
-                slot(
-                    "copy_users_when_copying_this_auction",
-                    Div(
-                        "copy_users_when_copying_this_auction",
-                        css_class="col-md-4",
-                    ),
-                ),
-                Div(
-                    "use_seller_dash_lot_numbering",
-                    css_class="col-md-4",
-                ),
-                css_class="row",
-            ),
-            HTML("<h4>Club</h4>"),
-            Div(
-                slot(
-                    "club",
-                    Div(
-                        "club",
-                        css_class="col-md-6",
-                    ),
-                ),
-                Div(
-                    "manage_users_through_club",
-                    css_class="col-md-6",
-                ),
-                # Only applies to check-in mode; shown/hidden by update_club_fields() in
-                # auction_edit_form.html as the mode select changes.
-                Div(
-                    "allow_self_checkin",
-                    css_class="col-md-6",
-                ),
-                PrependedAppendedText(
-                    "club_member_discount",
-                    currency_symbol,
-                    ".00",
-                    wrapper_class="col-md-6",
-                ),
-                css_class="row",
-            ),
-            HTML("<h4>General</h4>"),
-            Div(
-                Div(
-                    "require_phone_number",
-                    css_class="col-md-3",
-                ),
-                Div(
-                    "email_users_when_invoices_ready",
-                    css_class="col-md-3",
-                ),
-                slot(
-                    "add_membership_fee_to_invoices_for_expired_members",
-                    Div(
-                        "add_membership_fee_to_invoices_for_expired_members",
-                        css_class="col-md-3",
-                    ),
-                ),
-                slot(
-                    "enable_online_payments",
-                    Div(
-                        "enable_online_payments",
-                        css_class="col-md-3",
-                    ),
-                ),
-                slot(
-                    "enable_square_payments",
-                    Div(
-                        "enable_square_payments",
-                        css_class="col-md-3",
-                    ),
-                ),
-                Div(
-                    "invoice_payment_instructions",
-                    css_class="col-md-6",
-                ),
-                Div(
-                    "invoice_rounding",
-                    css_class="col-md-3",
-                ),
-                Div(
-                    "only_whole_dollar_bids",
-                    css_class="col-md-3",
-                ),
-                Div(
-                    "minimum_bid",
-                    css_class="col-md-3",
-                ),
-                # Div(
-                #     "advanced_lot_adding",
-                #     css_class="col-md-3",
-                # ),
-                Div(
-                    "auto_add_images",
-                    css_class="col-md-3",
-                ),
-                slot(
-                    "message_users_when_lots_sell",
-                    Div(
-                        "message_users_when_lots_sell",
-                        css_class="col-md-3",
-                    ),
-                ),
-                # Div('set_lot_winners_url', css_class='col-md-3',),
-                PrependedAppendedText(
-                    "tax",
-                    "",
-                    "%",
-                    wrapper_class="col-md-3",
-                ),
-                Div(
-                    "promote_this_auction",
-                    css_class="col-md-3",
-                ),
-                css_class="row",
-            ),
-            Submit("submit", "Save", css_class="create-update-auction btn-success"),
-        )
+    @property
+    def advanced_fields(self):
+        """The fields the layout puts behind the Advanced disclosure."""
+        return [name for name in self.fields if name not in auction_form_layout.ESSENTIAL_FIELDS]
+
+    @property
+    def advanced_open(self):
+        """Whether the Advanced section renders already open. See auctions/auction_form_layout.py.
+
+        Read from the template at render time, not built into the layout, because two of the three
+        answers are not known when __init__ runs.
+        """
+        advanced = self.advanced_fields
+        if any(name in advanced for name in self.errors):
+            return True
+        if auction_form_layout.advanced_fields_in_use(self.instance, advanced):
+            return True
+        # An organizer on their third auction knows what is down there and goes looking for it.
+        user = self.user or getattr(self.instance, "created_by", None)
+        return bool(user and hasattr(user, "userdata") and user.userdata.is_experienced)
 
     def clean(self):
         cleaned_data = super().clean()

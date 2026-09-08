@@ -7,8 +7,6 @@
 <script type='text/javascript'>pageView();</script>
 {% if is_admin %}
 <script type='text/javascript'>
-var form_id = '#form-container';
-{% include 'leave_page_warning.js' %}
 $('#add-form').click(function() {
   cloneMore('.adjustment-form:last', 'form');
 });

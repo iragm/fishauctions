@@ -55,4 +55,5 @@ from .site_admin import *  # noqa: F403
 from .site_pages import *  # noqa: F403
 from .speakers import *  # noqa: F403
 from .species import *  # noqa: F403
+from .usability import *  # noqa: F403
 from .webhooks import *  # noqa: F403

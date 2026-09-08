@@ -156,6 +156,8 @@ def _admin_section():
             _row("User map", reverse("admin_user_map") + "?view=recent&filter=24", "bi-geo-alt"),
             _row("Traffic", reverse("admin_traffic") + "?days=30", "bi-graph-up"),
             _row("Referrers", reverse("admin_referrers") + "?days=30", "bi-signpost-split"),
+            _row("Usability", reverse("admin_usability") + "?days=30", "bi-clipboard-data"),
+            _row("Club health", reverse("admin_club_health"), "bi-heart-pulse"),
             _row("User signups", reverse("admin_user_signups") + "?days=90", "bi-person-plus"),
             _row("Command palette searches", reverse("command_palette_analytics"), "bi-search"),
             _row("Lots with no scientific name", reverse("species_gaps"), "bi-tags"),

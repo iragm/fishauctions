@@ -495,6 +495,19 @@ def auctiontos_notifications(self):
 
 
 @shared_task(bind=True, ignore_result=True)
+def refresh_club_health(self):
+    """Recompute every club's lifecycle rollup and the outreach queue that comes out of it.
+
+    Nightly, because nothing it measures moves faster than that: the fastest column is "days since
+    the last auction". See auctions/club_health.py for what the numbers mean.
+    """
+    from auctions import club_health
+
+    written = club_health.refresh_all()
+    logger.info("refreshed club health for %s clubs", written)
+
+
+@shared_task(bind=True, ignore_result=True)
 def flush_expired_tokens(self):
     """
     Delete expired JWT blacklist / outstanding-token rows.

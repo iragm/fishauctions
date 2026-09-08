@@ -19,8 +19,6 @@ $('#id_winning_bid_percent_to_club_for_club_members').blur(function(event) {
 $('#id_club_member_cut').blur(function(event) {
     $('#id_winning_bid_percent_to_club_for_club_members').val(100-this.value);
 });
-var form_id = '#auction-form';
-{% include 'leave_page_warning.js' %}
 
 $(document).ready(function() {
     change_bidding(document.getElementById('id_online_bidding').value);
@@ -128,6 +126,10 @@ $(document).ready(function() {
         <div class="col-md-10 offset-md1">
           <div style='padding: 2vw;'> -->
             {% include 'auction_ribbon.html' %}
+<div class="help-note">
+  <i class="bi bi-lightbulb-fill" aria-hidden="true"></i>
+  <div>These are the rules for your auction, and you can change any of them while it is running. Only the settings most auctions change are on this screen; everything else is under <strong>Advanced settings</strong>, which opens by itself if you have already changed something in there.</div>
+</div>
             {% crispy form form.helper %}
         <!-- </div>
     </div>

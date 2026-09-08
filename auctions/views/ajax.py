@@ -45,12 +45,18 @@ from webpush.models import PushInformation
 from auctions.filters import (
     AuctionTOSFilter,
 )
+from auctions.form_friction import (
+    ABANDON_SESSION_KEY,
+    MAX_ABANDONED_FIELDS,
+    read_abandon_token,
+)
 from auctions.models import (
     Auction,
     AuctionCampaign,
     AuctionTOS,
     Bid,
     ClubMember,
+    FormFailure,
     Invoice,
     Lot,
     LotImage,
@@ -348,6 +354,69 @@ def page_view_path(url, host=""):
     if parts.netloc and parts.netloc.lower() != (host or "").lower():
         return url[:600]
     return (parts.path or "/")[:600]
+
+
+class FormAbandonedBeacon(APIView):
+    """Record a form somebody edited and left without saving.
+
+    The other half of the friction instrument, and on this site the bigger half: almost every field
+    is optional and most of the rest are filled in on save, so a validator refusing something is
+    the rare case. Somebody changing three settings, failing to work out the fourth and closing the
+    tab is the ordinary one, and the server never sees it. ``unsaved_changes.js`` already knows
+    which fields have changed -- it has to, to draw the unsaved-changes bar -- and posts that here
+    with ``navigator.sendBeacon`` as the page goes away.
+
+    Unauthenticated by necessity: a beacon fires during unload, when there may be no time for
+    anything but a fire-and-forget POST, and the person may never have signed in. Three things
+    keep that from being a hole:
+
+    * The form name comes from a **signed token** the server itself rendered
+      (``form_friction.abandon_token``), so this endpoint's vocabulary is exactly the set of forms
+      it handed out, not whatever a caller invents.
+    * **Field names only**, filtered against the form name's own token -- never values. The whole
+      point of the abandonment case is that the values were not saved, and a table of what people
+      typed into forms they thought better of submitting is the last thing this site should keep.
+    * One row per form per session, so a page reopened twenty times is one story.
+    """
+
+    authentication_classes = [SessionAuthentication]
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        form_name = read_abandon_token(request.POST.get("token", ""))
+        if not form_name:
+            # A forged, stale or absent token. Nothing to record and nothing to say about it.
+            return JsonResponse({"recorded": False}, status=200)
+        session = request.session
+        already = session.get(ABANDON_SESSION_KEY) or []
+        if form_name in already:
+            return JsonResponse({"recorded": False}, status=200)
+        fields = [
+            str(name)[:100]
+            for name in str(request.POST.get("fields", "")).split(",")[:MAX_ABANDONED_FIELDS]
+            if name.strip()
+        ]
+        try:
+            # Clamped at both ends: the column is a PositiveIntegerField, and a negative or absurd
+            # duration from an unauthenticated caller would otherwise be a DataError -- a 500 on a
+            # beacon, which is a page-load failure for the person who was just leaving.
+            seconds = max(0, min(int(request.POST.get("seconds", 0) or 0), 60 * 60 * 24))
+        except (TypeError, ValueError):
+            seconds = None
+        user = request.user if request.user.is_authenticated else None
+        if not user and not request.session.session_key:
+            request.session.save()
+        FormFailure.objects.create(
+            kind="abandoned",
+            form_name=form_name,
+            url=page_view_path(request.POST.get("url", ""), request.get_host()),
+            user=user,
+            session_id=(request.session.session_key or "")[:100],
+            field_errors={name: ["edited"] for name in fields},
+            seconds_on_page=seconds,
+        )
+        session[ABANDON_SESSION_KEY] = [*already, form_name][-40:]
+        return JsonResponse({"recorded": True}, status=201)
 
 
 class PageViewCreate(APIView):

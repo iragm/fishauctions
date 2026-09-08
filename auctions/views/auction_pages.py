@@ -32,6 +32,7 @@ from django.views.generic.edit import (
     FormMixin,
 )
 
+from auctions.form_friction import FormFrictionMixin
 from auctions.forms import (
     AuctionJoin,
     AuctionTOSMergeReviewForm,
@@ -622,7 +623,7 @@ def _add_club_admins_as_auction_tos(auction, requesting_user):
             )
 
 
-class AuctionCreateView(CreateView, LoginRequiredMixin):
+class AuctionCreateView(FormFrictionMixin, CreateView, LoginRequiredMixin):
     """
     Creating a new auction
     """
@@ -754,7 +755,7 @@ class AuctionCreateView(CreateView, LoginRequiredMixin):
         return super().form_valid(form)
 
 
-class AuctionInfo(FormMixin, DetailView, AuctionViewMixin):
+class AuctionInfo(FormFrictionMixin, FormMixin, DetailView, AuctionViewMixin):
     """Main view of a single auction"""
 
     template_name = "auction.html"

@@ -209,7 +209,11 @@ class ClubSettingsViewTests(TestCase):
         self.club.refresh_from_db()
         self.assertEqual(self.club.name, "Updated Settings Club")
         self.assertEqual(self.club.discord_invite_link, "https://discord.gg/settingsclub")
-        self.assertTrue(ClubHistory.objects.filter(club=self.club, action="Updated club settings").exists())
+        row = ClubHistory.objects.filter(club=self.club, action__startswith="Updated club settings").first()
+        self.assertIsNotNone(row)
+        # The queryable half: which settings, by model field name. See auctions/history.py.
+        self.assertIn("discord_invite_link", row.changed_fields)
+        self.assertEqual(row.changed_fields["discord_invite_link"]["to"], "https://discord.gg/settingsclub")
 
     def test_membership_settings_save_updates_fields_and_creates_history(self):
         self.client.login(username="club_settings_editor", password="testpass")
@@ -226,7 +230,10 @@ class ClubSettingsViewTests(TestCase):
         self.assertEqual(self.club.membership_system, "rolling")
         self.assertEqual(self.club.membership_annual_fee, Decimal("20.00"))
         self.assertFalse(self.club.send_membership_expiration_reminders)
-        self.assertTrue(ClubHistory.objects.filter(club=self.club, action="Updated membership settings").exists())
+        row = ClubHistory.objects.filter(club=self.club, action__startswith="Updated membership settings").first()
+        self.assertIsNotNone(row)
+        self.assertIn("membership_system", row.changed_fields)
+        self.assertEqual(row.changed_fields["membership_system"]["to"], "rolling")
 
     def test_membership_settings_none_system_forces_zero_fee(self):
         """Selecting 'No membership fees' zeroes the fee even if one was submitted."""
@@ -341,7 +348,9 @@ class ClubSettingsViewTests(TestCase):
         self.assertEqual(self.club.renewal_closing, "Thanks for staying with us.")
         self.assertEqual(self.club.expiring_soon_opening, "Your membership expires soon.")
         self.assertEqual(self.club.expiring_soon_closing, "Renew today to stay connected.")
-        self.assertTrue(ClubHistory.objects.filter(club=self.club, action="Updated email settings").exists())
+        row = ClubHistory.objects.filter(club=self.club, action__startswith="Updated email settings").first()
+        self.assertIsNotNone(row)
+        self.assertIn("welcome_opening", row.changed_fields)
 
     def test_email_text_still_rejects_html_and_links(self):
         from auctions.forms import ClubEmailSettingsForm

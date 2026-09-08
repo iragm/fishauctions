@@ -60,6 +60,16 @@ check_templates() {
   python3 /home/app/web/auctions/template_lint.py /home/app/web
 }
 
+# An <img> with no alt and an icon-only button with no name are both invisible when you look at
+# the page, which is exactly what makes them accessibility bugs rather than rendering bugs — so
+# they come back unless something fails the build. Same code auctions.test_template_a11y uses.
+check_accessibility() {
+  # -m rather than by path: this one shares iter_template_files() with template_lint, so the
+  # package has to be importable. PYTHONPATH because the lint container's working directory is
+  # not the repo root.
+  PYTHONPATH=/home/app/web python3 -m auctions.template_a11y /home/app/web
+}
+
 # docs/module_map.md is generated from the modules' own docstrings, so it can go stale the moment
 # somebody adds a file. This regenerates it in memory and fails if the checked-in copy differs, and
 # enforces the docstring and file-size rules in auctions/module_map.py. Same code the
@@ -72,11 +82,13 @@ if [ -z ${IS_CI+x} ]; then
   eval "ruff ${RUFF_MODE} /home/app/web ${RUFF_FLAGS}"
   if [ "${RUFF_MODE}" = 'check' ]; then
     check_templates
+    check_accessibility
     check_module_map
   fi
 else
   ruff format /home/app/web --check
   ruff check /home/app/web
   check_templates
+  check_accessibility
   check_module_map
 fi

@@ -90,7 +90,8 @@ from post_office import mail
 from pytz import timezone as pytz_timezone
 from webpush.models import PushInformation
 
-from . import cloudflare_images, printer_programs, voice
+from . import cloudflare_images, history, printer_programs, voice
+from .club_health import ClubHealth  # noqa: F401
 from .email_routing import (
     admin_routing_email,
     build_routed_sender_address,
@@ -98,6 +99,7 @@ from .email_routing import (
     email_routing_enabled,
     sender_with_display_name,
 )
+from .friction_models import FormFailure  # noqa: F401
 from .helper_functions import bin_data, get_currency_symbol
 from .html_sanitize import sanitize_summernote_html
 from .model_caching import CachedPropertiesMixin, InvalidatesRelatedCache
@@ -2343,6 +2345,8 @@ class ClubHistory(models.Model):
     club = models.ForeignKey(Club, on_delete=models.CASCADE, related_name="history")
     user = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL)
     action = models.CharField(max_length=800, blank=True, null=True)
+    # See AuctionHistory.changed_fields; written by auctions.history.record_club_history.
+    changed_fields = models.JSONField(default=dict, blank=True)
     timestamp = models.DateTimeField(auto_now_add=True)
     applies_to = models.CharField(
         max_length=20,
@@ -6570,14 +6574,11 @@ class Auction(CachedPropertiesMixin, models.Model):
         # Don't create history if the auction hasn't been saved yet
         if not self.pk:
             return
+        changed_fields = history.changed_field_summary(form)
         if form:
             action += " "
             for field_name in form.changed_data:
-                try:
-                    field = form.instance._meta.get_field(field_name)
-                    action += field.verbose_name
-                except Exception:
-                    action += field_name.replace("_", " ").title()
+                action += history.field_label(form, field_name)
                 action += ", "
             action = action[:-2]  # remove the last comma and space
         if len(action) > 800:
@@ -6587,6 +6588,7 @@ class Auction(CachedPropertiesMixin, models.Model):
             user=user,
             action=action[:800],
             applies_to=applies_to,
+            changed_fields=changed_fields,
         )
 
 
@@ -13366,6 +13368,9 @@ class AuctionHistory(models.Model):
     auction = models.ForeignKey(Auction, on_delete=models.CASCADE)
     user = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL)
     action = models.CharField(max_length=800, blank=True, null=True)
+    # The queryable half of `action`: {field_name: {"from": x, "to": y}}. auctions/history.py says
+    # why prose alone could not answer "has anybody ever changed this setting".
+    changed_fields = models.JSONField(default=dict, blank=True)
     timestamp = models.DateTimeField(auto_now_add=True)
     applies_to = models.CharField(
         null=True,

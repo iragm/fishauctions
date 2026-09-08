@@ -44,6 +44,7 @@ from django.views.generic.edit import (
 )
 from webpush.models import PushInformation
 
+from auctions.form_friction import FormFrictionMixin
 from auctions.forms import (
     IMAGE_PROCESSING_EXCEPTIONS,
     CreateImageForm,
@@ -992,7 +993,7 @@ class LotValidation(LoginRequiredMixin):
         return kwargs
 
 
-class LotCreateView(LotValidation, CreateView):
+class LotCreateView(FormFrictionMixin, LotValidation, CreateView):
     """
     Creating a new lot
     """
@@ -1124,7 +1125,7 @@ class LotCreateView(LotValidation, CreateView):
         return super().dispatch(request, *args, **kwargs)
 
 
-class LotUpdate(LotValidation, UpdateView):
+class LotUpdate(FormFrictionMixin, LotValidation, UpdateView):
     """
     Changing an existing lot
     This is almost identical to the create view, but needs to verify permissions to edit the lot

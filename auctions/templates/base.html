@@ -335,6 +335,8 @@ window.onload = function() {
                     <a class="dropdown-item" href="{% url 'admin_user_map' %}?view=recent&filter=24">User map</a>
                     <a class="dropdown-item" href="{% url 'admin_traffic' %}?days=30">Traffic</a>
                     <a class="dropdown-item" href="{% url 'admin_referrers' %}?days=30">Referrers</a>
+                    <a class="dropdown-item" href="{% url 'admin_usability' %}?days=30">Usability</a>
+                    <a class="dropdown-item" href="{% url 'admin_club_health' %}">Club health</a>
                     <a class="dropdown-item" href="{% url 'admin_user_signups' %}?days=90">User signups</a>
                     <a class="dropdown-item" href="{% url 'command_palette_analytics' %}">Command palette searches</a>
                     <a class="dropdown-item" href="{% url 'species_gaps' %}">Lots with no scientific name</a>
@@ -532,11 +534,74 @@ window.onload = function() {
     written -- the intent was clearly the opposite.{% endcomment %}
     <script type="text/javascript" src="{% static 'js/htmx.min.js' %}" defer></script>
     <script type="text/javascript" src="{% static 'js/ws.js' %}" defer></script>
+    {% comment %}The unsaved-changes bar, on every page, finding its own forms -- see
+    auctions/static/js/unsaved_changes.js for which forms it attaches to and why it is here rather
+    than included per template (it was, and it was on 7 of the 99 templates that render a form).
+    data-token is present only on views carrying FormFrictionMixin, and is a signed form name: it
+    is what lets the page report a form somebody edited and left, which on this site is the common
+    shape of giving up. Without it the bar still works; nothing is recorded.{% endcomment %}
+    <div id="unsaved-changes-config" data-beacon-url="{% url 'form_abandoned' %}" data-token="{{ friction_token|default_if_none:'' }}" hidden></div>
+    <div id="unsaved-changes-bar" role="region" aria-label="Unsaved changes">
+      <div class="d-flex flex-wrap align-items-center justify-content-between gap-2">
+        <span><i class="bi bi-exclamation-triangle text-warning" aria-hidden="true"></i>
+          You have unsaved changes<span id="unsaved-changes-count"></span>.</span>
+        <span class="d-flex gap-2">
+          <button type="button" class="btn btn-secondary btn-sm" id="unsaved-changes-discard">Discard</button>
+          <button type="button" class="btn btn-success btn-sm" id="unsaved-changes-save">Save</button>
+        </span>
+      </div>
+    </div>
+    <script type="text/javascript" src="{% static 'js/unsaved_changes.js' %}" defer></script>
     {# CRSF for use with HTMX #}
     <script>
       document.body.addEventListener('htmx:configRequest', (event) => {
         event.detail.headers['X-CSRFToken'] = '{{ csrf_token }}';
       })
+    </script>
+    {% comment %}Announce HTMx swaps to a screen reader. Every filtered table, every paged list and
+    every modal on this site replaces content in place, and a swap is silent: the page does not
+    reload, focus does not move, and nothing tells a screen reader user that the thing they just
+    filtered has changed. The three aria-live regions that existed before this were the toast
+    container and the command palette, so the whole HTMx surface announced nothing at all.
+
+    One region for the page rather than aria-live on every target: a live region has to be in the
+    DOM and idle before the text lands in it, and an attribute on the element htmx is *replacing*
+    is neither. This one is empty from first paint and only ever has text written into it.
+
+    An element can say what to announce with data-hx-announce; the default names the swapped region
+    if it has an accessible name, because "Lots updated" is worth saying and "Updated" is barely.
+    aria-busy on the target during the request is what stops a reader announcing a half-swapped
+    list.{% endcomment %}
+    <div id="htmx-live-region" class="visually-hidden" role="status" aria-live="polite" aria-atomic="true"></div>
+    <script>
+      (function () {
+        function announce(text) {
+          var region = document.getElementById('htmx-live-region');
+          if (!region || !text) { return; }
+          // Same text twice in a row is not re-announced unless the node changes, so clear first.
+          region.textContent = '';
+          window.setTimeout(function () { region.textContent = text; }, 50);
+        }
+        document.body.addEventListener('htmx:beforeRequest', function (event) {
+          var target = event.detail.target;
+          if (target && target.setAttribute) { target.setAttribute('aria-busy', 'true'); }
+        });
+        document.body.addEventListener('htmx:afterSwap', function (event) {
+          var target = event.detail.target;
+          if (!target) { return; }
+          target.removeAttribute('aria-busy');
+          var said = target.getAttribute('data-hx-announce');
+          if (said === 'off') { return; }
+          var name = said || target.getAttribute('aria-label') || '';
+          announce(name ? name + ' updated' : 'Updated');
+        });
+        document.body.addEventListener('htmx:responseError', function (event) {
+          if (event.detail.target && event.detail.target.removeAttribute) {
+            event.detail.target.removeAttribute('aria-busy');
+          }
+          announce('Something went wrong loading that. Please try again.');
+        });
+      })();
     </script>
 
 </html>

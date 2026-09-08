@@ -37,35 +37,33 @@ Ordered by (unblocks-other-work x value). Status: `todo` | `wip` | `done`.
 
 | # | Phase | Touches | Status |
 |---|---|---|---|
-| 0 | Store a path in `PageView.url`; delete `AdminUserFlow` + `compute_user_flow_all`; add the One Tap counter | `base_page_view.html`, `views/ajax.py`, `views/site_admin.py`, `tasks.py` | todo |
-| 1 | Friction instrument: which form, which field, how many attempts, did they finish | new model + a `form_invalid` mixin, `views/` | todo |
-| 1b | `AuctionHistory.changed_fields` / `ClubHistory.changed_fields` as JSON, written alongside `action` | `models.py:6566`, migration | todo |
-| 1.5 | Settings-reach panel over `PageView` (needs Phase 0) | `views/site_admin.py`, a dashboard template | todo |
-| 2 | Club health: derived lifecycle rollup + "due for check-in" queue | new model, `tasks.py`, `Club`, `admin.py` | todo |
-| 3 | Progressive disclosure on `AuctionEditForm` -- essentials vs. Advanced | `forms.py:2560`, `auction_edit_form.html` | blocked on 1b -- Claude says it's blocked but it is NOT - we can reconstruct this from existing auctions trivially - walk the fields and see which ones have been changed from the default.  Not perfect but very close. |
-| 4 | Contextual help: `FAQ.help_key` + a template tag rendering relevant answers in place | `models.py` FAQ, `templatetags/`
-Human note: I have never seen people click on help buttons, have you?  This does not seem like a good idea.  Small contextual help using the help blurb format found on almost every template is perfect.
- | todo |
-| 5 | Accessibility debt: 10 `<img>` with no `alt`, 7 icon-only controls with no name, 3 `aria-live` regions against heavy HTMX use | `templates/` | todo |
+| 0 | Store a path in `PageView.url`; delete `AdminUserFlow` + `compute_user_flow_all`; add the One Tap counter | `base_page_view.html`, `views/ajax.py`, `views/site_admin.py`, `tasks.py` | done |
+| 1 | Friction instrument: which form, which field, how many attempts, did they finish -- **and whether they gave up without submitting at all** | `friction_models.py`, `form_friction.py`, `static/js/unsaved_changes.js`, 13 views | done |
+| 1b | `AuctionHistory.changed_fields` / `ClubHistory.changed_fields` as JSON, written alongside `action` | `history.py`, `models.py`, migration 0426 | done |
+| 1.5 | Reach / failure / adoption dashboard at `/admin-usability/` | `usability_report.py`, `views/usability.py` | done |
+| 2 | Club health: derived lifecycle rollup + "due for check-in" queue at `/admin-club-health/` | `club_health.py`, `tasks.py`, migration 0428 | done |
+| 3 | Progressive disclosure on `AuctionEditForm` -- essentials vs. Advanced | `auction_form_layout.py`, `field_adoption.py` | done |
+| 4 | Contextual help in the `help-note` format, one per page | `templates/` | done (first pass) |
+| 5 | Accessibility debt: images with no `alt`, icon-only controls with no name, silent HTMx swaps | `templates/`, `template_a11y.py` | done |
 | 6 | First paint: defer the six head scripts, `ManifestStaticFilesStorage` | `base.html`, `settings.py` | see OPTIMIZATION.md |
 
-Phase 0 - pretty much done now, code review it - unblocks 1.5. Phase 1b unblocks 3 but needs months of data first, so start it early even
-though the payoff is late. Phase 2 is independent of everything and can run in parallel. Phases 5
-and 6 need no data and can be picked up whenever.
+Every phase above has a test module: `test_usability_instruments.py`, `test_form_friction.py`,
+`test_usability_report.py`, `test_club_health.py`, `test_template_a11y.py`.
 
-### Why Phase 3 is blocked rather than todo
+### What Phase 3 turned on, since it was called blocked
 
-`Auction` has **105 fields** and `AuctionEditForm` covers ~90 of them in one page of flat `<h4>`
-headings with jQuery show/hide. It is the biggest single drop-off surface on the site: a two-field
-create hands straight over to it via the checklist's "Edit the rules".
+It was not blocked. `auctions/field_adoption.py` reconstructs the answer from the rows that already
+exist: compare every auction's stored value against the model default and count the ones that
+differ. It cannot tell "deliberately chose the default" from "never looked", and it is blind to a
+change somebody made and undid -- but the interesting answer is the zero, and a zero here is real.
+That is the retroactive half; `changed_fields` is the exact half, from the day it shipped. The
+dashboard shows them side by side, because a field with far more edits than off-default values is
+one people keep changing their minds about, which is a different problem from one nobody wants.
 
-The obvious fix -- essentials, with the rest behind Advanced, split on `UserData.is_experienced` --
-requires knowing which fields anyone has *ever* touched. Current state cannot tell "deliberately
-chose the default" from "never looked", and `changed_fields` gives nothing retroactive. So the
-clock starts when 1b ships, which is the argument for shipping it early.
-
-The expected finding is a long tail of fields changed by nobody, ever. Those are candidates for
-hiding, or for deletion.
+The split itself is a declared list (`auction_form_layout.ESSENTIAL_FIELDS`) rather than something
+derived per deployment, so the form is the same for everybody and can be tested. Three rules keep
+*Advanced* from hiding something somebody needs, each with a test: every field is in exactly one
+half, a setting already off its default forces the section open, and so does a field with an error.
 
 ### Why Phase 2 is about clubs, not users
 
@@ -121,9 +119,14 @@ One pass = one phase, or one coherent piece of a phase.
 
 - **Reach** -- did anybody open this page? `PageView`, grouped by url. Works after Phase 0. Read it
   knowing the 2-second and 38/247 caveats above.
-- **Failure** -- did they submit it and get bounced? The Phase 1 instrument. This is the only one
-  that catches a page people reach, try, and give up on -- which looks identical to success in
-  every reach metric.
+- **Failure** -- did they give up? The Phase 1 instrument, and it has **two halves**, because on
+  this site the obvious one is the rare one. A *rejection* is the server refusing a submission,
+  which hardly ever happens here on purpose: nearly every field is optional and most of the rest
+  are filled in on save. An *abandonment* is somebody editing a form and leaving without saving --
+  the ordinary way of giving up, invisible to the server, and reported by the page itself
+  (`unsaved_changes.js`) as it goes away. A form with rejections and no abandonments is one people
+  can see how to fill in and keep getting wrong; one with abandonments and no rejections is one
+  they cannot see how to fill in at all, and no validator will ever say so.
 - **Adoption** -- did anybody change this setting, ever? `changed_fields` after Phase 1b. The
   question behind every "should this field exist" argument.
 
@@ -136,14 +139,68 @@ candidate, not a redesign candidate.
 - Roughly how many active organizers per year? Decides whether any organizer-facing metric can ever
   be more than anecdote.
 - Is the `weekly_promo` 6-day exclusion deliberate? Phase 2's re-engagement half assumes it is.
-- `PageView` retention: nothing purges it. Adoption and staleness horizons both depend on how far
-  back the rows go.
+- `PageView` retention: nothing purges it, and `FormFailure` now has the same problem. Adoption and
+  staleness horizons both depend on how far back the rows go.
+- **The auction edit form records four date fields as changed on every save**, whether or not they
+  were touched: the datetime picker's rendered value does not round-trip through `has_changed()`.
+  Every `AuctionHistory` row from that form therefore names `date_start`, `date_end` and both lot
+  submission dates, and `changed_fields` inherits it. Found while writing the Phase 1b tests; it
+  makes those four fields' adoption numbers useless and nothing else.
+- The Phase 4 pass added five help notes on the pages a first-timer hits. The other ~50 templates
+  with no note have not been looked at, and "one help note per page" means each one is a judgement
+  about what the reader would get wrong without it, not a box to fill.
 
 ## Pass log
 
 Newest first.
 
 <!-- PASS LOG START -->
+
+### 2026-09-08 -- Phases 1, 1b, 1.5, 2, 3, 4 and 5
+
+**1b, and the argument it settles.** `AuctionHistory.changed_fields` and `ClubHistory.changed_fields`
+are JSON, keyed on the model field name, carrying before and after; `auctions/history.py` builds
+them and says why the prose column could not answer a query. The prose is untouched -- it is still
+what the history page renders. `record_club_history` gives the club side the same thing, and the
+three club settings views that wrote the constant string "Updated club settings" now say which
+settings.
+
+**3, which was not blocked.** `auctions/field_adoption.py` reconstructs "has anybody ever changed
+this" from the rows: every auction's stored value against the model default, one aggregate query
+for 43 fields. `AuctionEditForm`'s layout moved to `auctions/auction_form_layout.py` (which also
+took 294 lines off `forms.py`, ten under its ceiling) and split into 18 essential fields and 25
+behind a `<details>`. It opens itself when a hidden field is off its default, when a hidden field
+has an error, or for an organizer on their third auction.
+
+**1, and what the first attempt would have missed.** The `form_invalid` mixin is on 13 views. On its
+own it would have measured almost nothing: this site makes nearly every field optional and fills the
+rest in on save, so the server rarely gets to refuse anything, and somebody who edits a form and
+closes the tab leaves no trace at all. So the page reports that too. `leave_page_warning.js` -- a
+per-template include, on 7 of the 99 templates that render a form -- is now
+`static/js/unsaved_changes.js` in `base.html`, finding its own forms: POST, two or more editable
+fields, no opt-out. It draws a fixed bar with Save and Discard when a value actually differs from
+the one it was rendered with (the old one armed the browser's unload dialog on *blur*, which trains
+people to click through those dialogs), and beacons the field names -- never values -- to
+`FormAbandonedBeacon` on the way out. HTMx is most of the forms here and breaks every page-lifecycle
+assumption, so four cases are handled separately: forms that arrive in a swap, forms saved without
+an unload, forms swapped away while dirty (reported there, since nothing else ever will), and an
+hx-get link about to replace a dirty form (asked about, since the browser sees no navigation).
+
+**1.5** is `/admin-usability/`: reach by *route* rather than by URL -- the classifier is Django's own
+resolver, so it cannot drift from `urls.py` -- failure by form with both kinds side by side, and the
+adoption table. **2** is `/admin-club-health/`: a nightly rollup judging each club against its own
+median gap between auctions, so an annual club is healthy at eight months and a monthly one that has
+missed two is not, ending in a worklist that writes `Club.date_contacted`. Test auctions are counted
+separately, because a club that set the site up and never ran a real auction is the most recoverable
+case on the list and used to be indistinguishable from a working one.
+
+**5** fixed ten images with no `alt` and five icon-only controls with no accessible name, and added
+`auctions/template_a11y.py` so they cannot come back -- a pre-commit hook, a `--ci` step and a test,
+the same three-way shape as `template_lint`. HTMx swaps now announce themselves into one live region
+in `base.html`; there were three `aria-live` regions on the site and none of them was on the HTMx
+surface. **4** added five help notes in the existing `help-note` format, one per page, on the pages
+a first-timer actually lands on.
+
 
 ### 2026-09-08 -- Phase 0, third half: One Tap rationed on intent
 

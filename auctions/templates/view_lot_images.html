@@ -447,7 +447,7 @@ Nothing has been dropped -- see the git history of this file if a fact looks mis
                             {% endif %}
                             {% for image in lot.images %}
                             <div class="carousel-item {% if image.is_primary and not lot.video_link %}active{%endif%}">
-                                <img src="{{ image.display_url }}" class="img-fluid rounded">
+                                <img src="{{ image.display_url }}" alt="{{ image.caption|default:lot.lot_name }}" class="img-fluid rounded">
                                 <div class='carousel-caption text-light text-start'>
                                     {% if image.source_display %}<span class="text-muted"><small>{{ image.source_display }}</small></span>{% endif %}{% if image.caption %}{% if image.source_display %}<br>{% endif %}{{ image.caption }}{% endif %}
                                 </div>
@@ -480,12 +480,12 @@ Nothing has been dropped -- see the git history of this file if a fact looks mis
                     <div class="d-flex overflow-x-auto flex-nowrap gap-2 mt-2" style="scroll-snap-type: x mandatory;">
                         {% if lot.video_link %}
                         <button data-bs-target="#image_carousel" data-bs-slide-to="0" class="me-2 active thumbnail">
-                                <img style="min-width: 100px;" src="{% static 'youtube.png' %}" class="rounded">
+                                <img style="min-width: 100px;" src="{% static 'youtube.png' %}" alt="Video of this lot" class="rounded">
                         </button>
                         {% endif %}
                         {% for image in lot.images %}
                         <a href="#" data-bs-target="#image_carousel" data-bs-slide-to="{% if lot.video_link %}{{ forloop.counter }}{% else %}{{ forloop.counter0 }}{% endif %}"  class="me-2 {% if image.is_primary and not lot.video_link %}active{% endif %}">
-                            <img style="min-width: 100px;{% if not image.image %} max-height:150px; object-fit:cover;{% endif %}" src="{{ image.thumbnail_url }}" class="rounded">
+                            <img style="min-width: 100px;{% if not image.image %} max-height:150px; object-fit:cover;{% endif %}" src="{{ image.thumbnail_url }}" alt="Photo {{ forloop.counter }} of {{ lot.lot_name }}" class="rounded">
                         </a>
                         {% endfor %}
                     </div>
@@ -493,7 +493,7 @@ Nothing has been dropped -- see the git history of this file if a fact looks mis
                 </div>
                 {% else %}
                     {% if lot.auto_image %}
-                        <img src="{{ lot.auto_image.display_url }}" class="img-fluid rounded mb-1">
+                        <img src="{{ lot.auto_image.display_url }}" alt="A {{ lot.lot_name }} from another lot" class="img-fluid rounded mb-1">
                         <div class="text-muted small">This image was automatically added from another lot with the same name and may not be representative of this lot</div>
                         {% if is_lot_creator %}
                         <div class="text-muted small mb-2">This image was added because you have <a href="{% url 'preferences' %}">automatically add images to my lots</a> enabled</div>

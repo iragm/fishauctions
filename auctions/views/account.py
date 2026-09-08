@@ -34,6 +34,7 @@ from rest_framework.authentication import SessionAuthentication, TokenAuthentica
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.views import APIView
 
+from auctions.form_friction import FormFrictionMixin
 from auctions.forms import (
     ChangeUsernameForm,
     ChangeUserNotificationsForm,
@@ -294,7 +295,7 @@ class AccountDeletedView(TemplateView):
         return context
 
 
-class OwnUserDataUpdate(SuccessMessageMixin, LoginRequiredMixin, UpdateView):
+class OwnUserDataUpdate(FormFrictionMixin, SuccessMessageMixin, LoginRequiredMixin, UpdateView):
     """Base for the two pages that edit your own ``UserData``: /preferences/ and /notifications/.
 
     ``SuccessMessageMixin`` is listed **first** on purpose. Written the other way round -- which is
