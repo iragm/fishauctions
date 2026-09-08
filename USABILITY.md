@@ -141,14 +141,9 @@ candidate, not a redesign candidate.
 - Is the `weekly_promo` 6-day exclusion deliberate? Phase 2's re-engagement half assumes it is.
 - `PageView` retention: nothing purges it, and `FormFailure` now has the same problem. Adoption and
   staleness horizons both depend on how far back the rows go.
-- **The auction edit form records four date fields as changed on every save**, whether or not they
-  were touched: the datetime picker's rendered value does not round-trip through `has_changed()`.
-  Every `AuctionHistory` row from that form therefore names `date_start`, `date_end` and both lot
-  submission dates, and `changed_fields` inherits it. Found while writing the Phase 1b tests; it
-  makes those four fields' adoption numbers useless and nothing else.
 - The Phase 4 pass added five help notes on the pages a first-timer hits. The other ~50 templates
-  with no note have not been looked at, and "one help note per page" means each one is a judgement
-  about what the reader would get wrong without it, not a box to fill.
+  with a form have not been looked at. There is no quota either way -- most forms need no note at
+  all, and a page that genuinely has three or four things worth saying should say them.
 
 ## Pass log
 

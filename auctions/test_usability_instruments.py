@@ -9,6 +9,7 @@ split in ``auctions.auction_form_layout``.
 import datetime
 from decimal import Decimal
 
+from django import forms
 from django.contrib.auth.models import User
 from django.template import Context
 from django.test import TestCase
@@ -20,6 +21,27 @@ from auctions.auction_form_layout import ESSENTIAL_FIELDS
 from auctions.forms import AuctionEditForm
 from auctions.models import Auction, AuctionHistory, Club, ClubHistory
 from auctions.tests import StandardTestCase
+
+
+def _as_posted(bound_field):
+    """One bound field's value as a browser would submit it, or None for "not submitted at all".
+
+    An unchecked checkbox is *absent* from a POST rather than present and empty, and a select
+    posts one scalar rather than the list ``ChoiceWidget.format_value`` returns. Getting either
+    wrong makes a form that changed nothing look like a form that changed ten things.
+    """
+    widget = bound_field.field.widget
+    value = bound_field.value()
+    if isinstance(widget, forms.CheckboxInput):
+        return "on" if value else None
+    if isinstance(widget, forms.SelectMultiple):
+        return [str(item) for item in (value or [])]
+    if value is None:
+        return ""
+    formatted = widget.format_value(value)
+    if isinstance(formatted, list | tuple):
+        formatted = formatted[0] if formatted else ""
+    return "" if formatted is None else formatted
 
 
 class JsonableTests(TestCase):
@@ -117,7 +139,17 @@ class AuctionHistoryChangedFieldsTests(StandardTestCase):
     """Auction.create_history writes the queryable summary alongside the prose."""
 
     def _bound_form(self, **overrides):
-        """The edit form, resubmitted as it stands with `overrides` applied."""
+        """The edit form, resubmitted exactly as rendered, with `overrides` applied.
+
+        Values come through each widget's ``format_value``, which is what the browser posts back.
+        Building the dict from ``form.initial`` instead looks equivalent and is not: for a datetime
+        whose widget declares no microsecond support, ``get_initial_for_field`` strips microseconds
+        from the *initial* side of the comparison and nothing strips them from the data side, so
+        all four date fields come back as changed on a submission that changed nothing. That is a
+        bug in the test, not in the form -- see test_resubmitting_the_form_unchanged_changes_nothing
+        -- and it is worth the four lines here, because a helper that quietly marks four fields
+        dirty would make every assertion below weaker than it looks.
+        """
         kwargs = {
             "instance": self.online_auction,
             "user": self.user,
@@ -125,15 +157,26 @@ class AuctionHistoryChangedFieldsTests(StandardTestCase):
             "user_timezone": "America/New_York",
         }
         unbound = AuctionEditForm(**kwargs)
-        data = {
-            name: unbound.initial.get(name, field.initial)
-            for name, field in unbound.fields.items()
-            if unbound.initial.get(name, field.initial) is not None
-        }
+        data = {}
+        for name in unbound.fields:
+            value = _as_posted(unbound[name])
+            if value is not None:
+                data[name] = value
         data.update(overrides)
         form = AuctionEditForm(data=data, **kwargs)
         form.is_valid()
         return form
+
+    def test_resubmitting_the_form_unchanged_changes_nothing(self):
+        """Saving a form you did not touch must record nothing.
+
+        This is the guard on everything else here. A field that reads as changed on every save
+        writes a history row every time, and its adoption numbers -- both halves -- become noise
+        that looks like signal. The datetime pickers are the ones to watch: their rendered format
+        has to round-trip through DateTimeField.has_changed(), and nothing else on the site would
+        notice if it stopped.
+        """
+        self.assertEqual(self._bound_form().changed_data, [])
 
     def test_prose_is_unchanged_and_the_summary_is_written(self):
         form = self._bound_form(tax=7)

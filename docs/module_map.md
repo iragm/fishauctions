@@ -428,7 +428,7 @@ this only quotes its opening sentence.
 - **`test_template_hygiene.py`** (105 lines)
   Guards against template tags that render as text instead of being parsed.
   `TemplateTagsAreParseableTests`, `TemplateLintTests`
-- **`test_usability_instruments.py`** (368 lines)
+- **`test_usability_instruments.py`** (411 lines)
   Tests for the measurement half of the usability campaign: what an edit changed, and who has ever
   `JsonableTests`, `SecretFieldTests`, `ChangedFieldSummaryTests`, `AuctionHistoryChangedFieldsTests`, `ClubHistoryChangedFieldsTests`, `FieldAdoptionTests`, `AuctionEditFormLayoutTests`
 - **`test_usability_report.py`** (166 lines)

@@ -518,13 +518,16 @@ When to use which:
 Keep it to a sentence or three. If a page needs more explanation than that, the
 explanation belongs in the FAQ or a blog post with a link from the note.
 
-**One help note per page.** Not one per section, and not one per control — a
-page with a note above the form, a note under the table and a paragraph beside
-each checkbox has said everything and communicated nothing, and the reader skips
-all of it. Ask what the reader would get wrong if the sentence were missing; if
-the answer is "nothing", cut it. A field's own `help_text` is the right place for
-a fact the reader needs *while filling that field in* ("12 of your 143 members
-have the app"), and the wrong place for how the feature works.
+**There is no quota, in either direction.** Most forms need no help note at all,
+and a page with three or four genuinely different things worth saying should say
+all of them, next to the thing each one is about. The only test is the one that
+was always the point: ask what the reader would get wrong if the sentence were
+missing, and if the answer is "nothing", cut it. Notes that fail that test are
+what turns a page into wallpaper — not the number of them.
+
+A field's own `help_text` is the right place for a fact the reader needs *while
+filling that field in* ("12 of your 143 members have the app"), and the wrong
+place for how the feature works.
 
 ### Page headings
 
