@@ -657,7 +657,8 @@ class LotImageTests(SkillTestCase):
         self.assertTrue(result.get("ok"), result)
         image = LotImage.objects.get(lot_number=self.my_lot)
         self.assertEqual(image.url, self.photo)
-        # Labelled as what it is. A bidder reads this next to the photo.
+        # Recorded as what it is.  The catch-all is not printed on the lot page -- see
+        # LotImage.source_display -- but it is still what the row has to say.
         self.assertEqual(image.image_source, "RANDOM")
         self.assertTrue(image.is_primary, "the first picture on a lot is its thumbnail")
 

@@ -10432,9 +10432,11 @@ def add_lot_image(request, params: dict[str, Any]) -> dict[str, Any]:
 
     ``image_source`` is the part worth being careful about. The three values are the seller's own
     photo of the actual item, their photo of something like it, and somebody else's photo used with
-    permission -- and a bidder deciding what to pay is reading that label. A picture an assistant
-    found is the third one, so that is what it defaults to here: nothing an agent adds is ever
-    silently labelled as the seller's own photograph of the fish in the bag.
+    permission. The first two are printed under the picture, because whose photo it is and whether
+    it is of this exact fish is what a bidder is deciding on; the third is not shown to anybody --
+    see :attr:`auctions.models.LotImage.source_display`. A picture an assistant found is that third
+    one, so that is what it defaults to here: nothing an agent adds is ever silently labelled as the
+    seller's own photograph of the fish in the bag.
 
     Validation is :class:`auctions.forms.CreateImageForm`, the same form behind the add-image page.
     """
@@ -10481,10 +10483,11 @@ def add_lot_image(request, params: dict[str, Any]) -> dict[str, Any]:
     if image.is_primary:
         LotImage.objects.filter(lot_number=lot).exclude(pk=image.pk).update(is_primary=False)
 
+    shown = image.source_display
     kind = image.get_image_source_display()
     return _ok(
-        f"Added a picture to lot {lot.lot_number_display}, {lot.lot_name}. It's labelled “{kind}”, "
-        f"which is what buyers will see next to it.",
+        f"Added a picture to lot {lot.lot_number_display}, {lot.lot_name}. It's recorded as “{kind}”"
+        + (", which is what bidders see next to it." if shown else ", which bidders don't see."),
         **_lot_echo(lot),
         image=_image_echo(image),
         images_now=lot.image_count,
@@ -11967,10 +11970,10 @@ register(
             "Put a picture on a lot, from a link to the image. The seller or an auction admin "
             "only, up to six pictures per lot. This is what 'add a photo of this', 'find a picture "
             "of a blue dream shrimp for lot 12' and 'my lots need pictures' mean. Give the address "
-            "of the image itself — one ending .jpg, .png or .webp — not the page it sits on. A "
-            "picture found on the internet is labelled as such next to the lot, which is what "
-            "bidders read, and 'actual' means the seller photographed this exact item. To find "
-            "the lots that need one, use list_lots with without_images."
+            "of the image itself — one ending .jpg, .png or .webp — not the page it sits on. "
+            "'actual' means the seller photographed this exact item, and that is printed under the "
+            "picture for bidders to read, so only use it for a photo the user says is their own. "
+            "To find the lots that need one, use list_lots with without_images."
         ),
         params={
             "lot": "string, optional. Lot number or name. Required unless the user is on that lot's page.",

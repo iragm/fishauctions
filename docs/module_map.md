@@ -122,7 +122,7 @@ this only quotes its opening sentence.
 - **`model_caching.py`** (99 lines)
   ``@cached_property`` on a model, and the invalidation that makes it safe.
   `InvalidatesRelatedCache`, `CachedPropertiesMixin`
-- **`models.py`** (14922 lines)
+- **`models.py`** (14938 lines)
   The database: 80 models, and the reason they are still in one file.
 - **`moderation_admin.py`** (139 lines)
   The Django admin for the moderation queue: reports, copyright notices and strikes.
@@ -139,7 +139,7 @@ this only quotes its opening sentence.
 - **`notifications.py`** (265 lines)
   Email → mobile-push routing.
   `push_configured`, `user_prefers_push`, `user_has_app_push`, `notify_user`, `send_fcm_message`, `send_fcm_data_message`
-- **`palette_actions.py`** (15280 lines)
+- **`palette_actions.py`** (15283 lines)
   The things the command palette's natural-language assist is allowed to do.
 - **`palette_assist.py`** (1518 lines)
   Natural-language orchestration for the command palette.
@@ -289,9 +289,9 @@ this only quotes its opening sentence.
 - **`test_lot_create.py`** (542 lines)
   Creating a lot, and the invoice lists a seller and buyer see afterwards.
   `LotCreateViewTests`, `InvoiceViewTests`, `MyInvoicesListTests`
-- **`test_lot_images.py`** (688 lines)
+- **`test_lot_images.py`** (759 lines)
   Lot images: uploading, ordering, rotating and deleting them; plus signup forms.
-  `LotImageManagementTests`, `ChangeUsernameFormTest`, `CustomSignupFormTest`, `AdminUserSignupsJSONTests`
+  `LotImageManagementTests`, `ImageSourceOnThePageTests`, `ChangeUsernameFormTest`, `CustomSignupFormTest`, `AdminUserSignupsJSONTests`
 - **`test_lot_models.py`** (939 lines)
   Lot and auction model behaviour, and the chat subscriptions hanging off a lot.
   `ViewLotTest`, `AuctionModelTests`, `LotModelTests`, `LotModelConcurrencyTests`, `ChatSubscriptionTests`
@@ -355,7 +355,7 @@ this only quotes its opening sentence.
 - **`test_palette_routes.py`** (165 lines)
   Tests for the palette's page catalog.
   `RouteAuditTests`, `RouteMatchingTests`, `PageContextTests`
-- **`test_palette_skills.py`** (3304 lines)
+- **`test_palette_skills.py`** (3305 lines)
   Tests for what the command palette assistant can *do*.
 - **`test_paypal.py`** (939 lines)
   PayPal: the webhooks, their event handlers, refund idempotency and the CSV export.

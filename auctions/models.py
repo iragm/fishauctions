@@ -13601,6 +13601,22 @@ class LotImage(InvalidatesRelatedCache, CloudflareImageMixin, models.Model):
         """Small (250x150) version of display_url for lot tiles and carousel previews"""
         return cloudflare_images.image_url(self.image, self.cloudflare_image_id, "lot_list") or self.url or None
 
+    @property
+    def source_display(self):
+        """The image source as a page shows it, which is not always the label that was picked.
+
+        ``RANDOM``'s label is a promise made to us on the way in -- "Not my photo - I have
+        permission to use it" -- and it is also what a blank field is silently set to (see
+        LotPage's image handling), so it sits on most rows whether the seller ever chose it.  Under
+        the picture it told a bidder nothing they were deciding on, and told everybody else that
+        this site is where other people's photographs live.  The question is worth asking, so the
+        category stays on the form; the answer is for us, not for the lot page.  The other two say
+        who took the photo and of what, which is exactly what a bidder is reading, so they show.
+        """
+        if self.image_source == "RANDOM":
+            return ""
+        return self.get_image_source_display()
+
 
 class FAQ(models.Model):
     """Questions...constantly questions.  Maintained in the admin site, and used only on the FAQ page"""
