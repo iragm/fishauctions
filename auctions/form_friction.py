@@ -67,16 +67,21 @@ def error_codes(form) -> dict[str, list[str]]:
     return codes
 
 
-def _who(request):
+def _who(request, create_session=False):
     """``(user, session_id)``: whichever of the two identifies this person.
 
-    A signed-out visitor is joined up by session key, the same way ``PageView`` does it. The
-    session is only forced into existence if it already has one -- a rejected form is not a reason
-    to start writing a session row for a crawler.
+    A signed-out visitor is joined up by session key, the same way ``PageView`` does it -- and a
+    visitor on their first request has no key yet, so recording a failure has to force one. Without
+    that, every anonymous first bounce is stored under ``session_id=""``: it can never be resolved,
+    it is counted as "never finished" for ever, and worse, one anonymous person's success would
+    resolve every *other* anonymous person's empty-session failures at once. Somebody submitting a
+    form is a person, not a crawler, which is the case the session write was being saved for.
     """
     user = getattr(request, "user", None)
     user = user if (user is not None and user.is_authenticated) else None
     session = getattr(request, "session", None)
+    if user is None and session is not None and create_session and not session.session_key:
+        session.save()
     session_id = getattr(session, "session_key", "") or "" if session is not None else ""
     return user, session_id[:100]
 
@@ -143,7 +148,7 @@ class FormFrictionMixin:
             session[SESSION_KEY] = attempts
         if attempt > MAX_ATTEMPTS_RECORDED:
             return None
-        user, session_id = _who(request)
+        user, session_id = _who(request, create_session=True)
         return FormFailure.objects.create(
             form_name=form_name,
             url=(request.path or "")[:600],
@@ -166,6 +171,10 @@ class FormFrictionMixin:
         del attempts[form_name]
         session[SESSION_KEY] = attempts
         user, session_id = _who(request)
+        if user is None and not session_id:
+            # Nothing identifies this person, so there is no run of theirs to close. Resolving on
+            # an empty session id would mark every anonymous failure on the site resolved.
+            return 0
         rows = FormFailure.objects.filter(form_name=form_name, resolved=False)
         rows = rows.filter(user=user) if user is not None else rows.filter(session_id=session_id, user__isnull=True)
         return rows.update(resolved=True, resolved_at=timezone.now())

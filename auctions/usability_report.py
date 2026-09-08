@@ -27,9 +27,10 @@ from __future__ import annotations
 
 import functools
 import logging
+import statistics
 from datetime import timedelta
 
-from django.db.models import Avg, Count, Q
+from django.db.models import Count, Q
 from django.urls import Resolver404, resolve
 from django.utils import timezone
 
@@ -123,13 +124,13 @@ def friction_by_form(days=30, limit=40):
             people=Count("user", distinct=True),
             sessions=Count("session_id", distinct=True),
             gave_up_on_the_first_try=Count("pk", filter=Q(kind="rejected", resolved=False, attempt=1)),
-            median_seconds=Avg("seconds_on_page", filter=Q(kind="abandoned")),
         )
         .order_by("-abandoned", "-unresolved", "-bounces")[:limit]
     )
     rows = list(rows)
     worst = worst_fields(since)
     abandoned_fields = worst_fields(since, kind="abandoned")
+    durations = abandoned_durations(since)
     for row in rows:
         row["people"] = max(row["people"], row["sessions"])
         row["fields"] = worst.get(row["form_name"], [])
@@ -137,8 +138,27 @@ def friction_by_form(days=30, limit=40):
         row["completion"] = (
             round(100 * (row["bounces"] - row["unresolved"]) / row["bounces"], 1) if row["bounces"] else None
         )
-        row["seconds_before_leaving"] = round(row["median_seconds"]) if row["median_seconds"] else None
+        row["seconds_before_leaving"] = durations.get(row["form_name"])
     return rows
+
+
+def abandoned_durations(since):
+    """``{form_name: median seconds spent before leaving}``.
+
+    Median rather than the ``Avg`` this used to be. The distribution has a tail made entirely of
+    tabs somebody left open over lunch, and one of those moves a mean by minutes -- so a form
+    people bailed out of in fifteen seconds reads as one they wrestled with for ten minutes, which
+    is the opposite diagnosis.
+    """
+    from auctions.models import FormFailure
+
+    seconds: dict[str, list[int]] = {}
+    rows = FormFailure.objects.filter(
+        timestamp__gte=since, kind="abandoned", seconds_on_page__isnull=False
+    ).values_list("form_name", "seconds_on_page")
+    for form_name, value in rows.iterator(chunk_size=2000):
+        seconds.setdefault(form_name, []).append(value)
+    return {form_name: round(statistics.median(values)) for form_name, values in seconds.items() if values}
 
 
 def worst_fields(since, limit=4, kind="rejected"):

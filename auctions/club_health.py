@@ -199,7 +199,10 @@ def compute_club_health(club) -> ClubHealth:
     ratio = round(days_since / cadence, 2) if (cadence and days_since is not None and cadence > 0) else None
     stage, reason = classify(len(real), len(tests), days_since, cadence, ratio)
     counts = {
-        "members": club.members.count(),
+        # Removed members are not members. Counting them makes a club that has emptied out look
+        # staffed, and puts "members" in tools_used for a club that stopped using the feature --
+        # which is exactly the club this triage is trying to notice.
+        "members": club.members.filter(is_deleted=False).count(),
         "announcements": club.announcements.count(),
         "events": club.events.count(),
         "api_keys": club.api_keys.count(),
@@ -275,5 +278,9 @@ def due_for_checkin(limit=100):
     ran twelve and stopped, and the first is much more likely to be recoverable.
     """
     order = {"trial": 0, "empty": 1, "slipping": 2, "dormant": 3}
+    # Ordered first, then cut. Slicing the queryset would apply Meta.ordering -- "-overdue_ratio" --
+    # and a trial or empty club has no ratio at all: NULLs sort last under DESC on MariaDB, so the
+    # two stages this queue is meant to lead with are the two the slice would throw away.
     rows = ClubHealth.objects.filter(due_for_checkin=True).select_related("club")
-    return sorted(rows[:limit], key=lambda row: (order.get(row.stage, 9), -(row.overdue_ratio or 0)))
+    ordered = sorted(rows, key=lambda row: (order.get(row.stage, 9), -(row.overdue_ratio or 0)))
+    return ordered[:limit]

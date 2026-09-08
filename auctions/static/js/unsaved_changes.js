@@ -57,6 +57,11 @@
   var config = document.getElementById("unsaved-changes-config");
   var beaconUrl = config ? config.getAttribute("data-beacon-url") : "";
   var token = config ? config.getAttribute("data-token") : "";
+  // The beacon posts to a DRF view using SessionAuthentication, which enforces CSRF for a signed-in
+  // session -- so without this every abandonment from a logged-in organizer is a 403, which is
+  // every abandonment worth having. It goes in the body rather than a header because sendBeacon
+  // cannot set headers, and Django's CSRF middleware reads POST["csrfmiddlewaretoken"] first.
+  var csrfToken = config ? config.getAttribute("data-csrf") : "";
   var bar = document.getElementById("unsaved-changes-bar");
   var counter = document.getElementById("unsaved-changes-count");
   var saveButton = document.getElementById("unsaved-changes-save");
@@ -156,6 +161,7 @@
     if (!changed.length || !formToken || !beaconUrl || reported.indexOf(formToken) !== -1) { return; }
     reported.push(formToken);
     var payload = new FormData();
+    payload.append("csrfmiddlewaretoken", csrfToken);
     payload.append("token", formToken);
     payload.append("fields", changed.join(","));
     payload.append("seconds", String(Math.round((Date.now() - openedAt) / 1000)));
@@ -183,17 +189,34 @@
     tracked.push(tracker);
     form.addEventListener("input", refresh);
     form.addEventListener("change", refresh);
-    form.addEventListener("submit", function () {
+    form.addEventListener("submit", function (event) {
       tracker.submitting = true;
       refresh();
-      // Double-submit guard, carried over from the per-template include this replaced. On a
-      // timeout rather than inline: the browser builds the form data *after* dispatching submit,
-      // so disabling a named button synchronously drops its name and value from the payload --
-      // which is how a multi-button form quietly loses the button that was pressed.
+      // Double-submit guard, carried over from the per-template include this replaced. Two things
+      // about it are load-bearing:
+      //
+      // On a timeout, because the browser builds the form data *after* dispatching submit, so
+      // disabling a named button synchronously drops its name and value from the payload -- which
+      // is how a multi-button form quietly loses the button that was pressed.
+      //
+      // And only when the submission is actually going somewhere. Ten templates here call
+      // preventDefault() in their own submit handler and post with fetch (the treasurer ledger,
+      // the custom-fields form, the image form): the page never navigates, so a button disabled
+      // on submit is a button that works once. defaultPrevented is checked inside the timeout,
+      // by which point every other handler has run.
       window.setTimeout(function () {
+        if (event.defaultPrevented) { return; }
         Array.prototype.forEach.call(form.querySelectorAll("[type=submit]"), function (button) {
           button.disabled = true;
         });
+      }, 0);
+      // A cancelled submit is not a save. Anything that posts with fetch re-snapshots through
+      // htmx:afterRequest or leaves the form dirty, which is the honest answer either way.
+      window.setTimeout(function () {
+        if (event.defaultPrevented) {
+          tracker.submitting = false;
+          refresh();
+        }
       }, 0);
     });
     // Case 2: an HTMx form never fires a page-level submit and never unloads the page, so without

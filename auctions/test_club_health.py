@@ -198,6 +198,19 @@ class ComputeClubHealthTests(StandardTestCase):
         self.assertIn("membership dues", health.tools_used)
         self.assertNotIn("discord", health.tools_used)
 
+    def test_removed_members_are_not_counted_as_members(self):
+        """A club that emptied out must not read as staffed, or as using the members feature."""
+        from auctions.models import ClubMember
+
+        club = self._club()
+        member = ClubMember.objects.create(club=club, user=self.user_with_no_lots)
+        self.assertEqual(compute_club_health(club).members, 1)
+        member.is_deleted = True
+        member.save()
+        health = compute_club_health(club)
+        self.assertEqual(health.members, 0)
+        self.assertNotIn("members", health.tools_used)
+
     def test_recomputing_updates_the_same_row_rather_than_adding_one(self):
         club = self._club()
         compute_club_health(club)
@@ -214,6 +227,25 @@ class QueueTests(StandardTestCase):
                 club=Club.objects.create(name=name), stage=stage, due_for_checkin=True, overdue_ratio=3
             )
         self.assertEqual([row.club.name for row in due_for_checkin()], ["Tried it", "Late", "Stopped"])
+
+    def test_the_recoverable_cases_survive_the_limit(self):
+        """Ordering has to happen before the cut, not after.
+
+        Meta.ordering is "-overdue_ratio" and a trial or empty club has no ratio at all. NULLs sort
+        last under DESC on MariaDB, so slicing the queryset and sorting the slice throws away
+        exactly the two stages this queue is meant to lead with.
+        """
+        for index in range(30):
+            ClubHealth.objects.create(
+                club=Club.objects.create(name=f"Stopped {index}"),
+                stage="dormant",
+                due_for_checkin=True,
+                overdue_ratio=10 + index,
+            )
+        ClubHealth.objects.create(club=Club.objects.create(name="Tried it once"), stage="trial", due_for_checkin=True)
+        queue = due_for_checkin(limit=5)
+        self.assertEqual(len(queue), 5)
+        self.assertEqual(queue[0].club.name, "Tried it once")
 
     def test_healthy_clubs_are_not_in_the_queue(self):
         ClubHealth.objects.create(club=Club.objects.create(name="Fine"), stage="active", due_for_checkin=False)

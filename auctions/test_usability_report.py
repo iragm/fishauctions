@@ -133,6 +133,26 @@ class FrictionReportTests(StandardTestCase):
         row = friction_by_form(days=30)[0]
         self.assertEqual(row["fields"], [])
 
+    def test_time_before_leaving_is_a_median_not_a_mean(self):
+        """The tail is tabs somebody left open over lunch, and one of those moves a mean by minutes."""
+        for seconds in (10, 12, 14, 16, 20_000):
+            row = self._failure()
+            FormFailure.objects.filter(pk=row.pk).update(kind="abandoned", seconds_on_page=seconds)
+        reported = friction_by_form(days=30)[0]["seconds_before_leaving"]
+        self.assertEqual(reported, 14)
+
+    def test_a_form_with_no_abandonments_reports_no_duration(self):
+        self._failure()
+        self.assertIsNone(friction_by_form(days=30)[0]["seconds_before_leaving"])
+
+    def test_abandonments_and_rejections_are_counted_separately(self):
+        self._failure()
+        row = self._failure()
+        FormFailure.objects.filter(pk=row.pk).update(kind="abandoned")
+        reported = friction_by_form(days=30)[0]
+        self.assertEqual(reported["bounces"], 1)
+        self.assertEqual(reported["abandoned"], 1)
+
     def test_failures_outside_the_window_are_left_out(self):
         row = self._failure()
         FormFailure.objects.filter(pk=row.pk).update(timestamp=timezone.now() - timedelta(days=90))

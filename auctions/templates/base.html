@@ -540,7 +540,7 @@ window.onload = function() {
     data-token is present only on views carrying FormFrictionMixin, and is a signed form name: it
     is what lets the page report a form somebody edited and left, which on this site is the common
     shape of giving up. Without it the bar still works; nothing is recorded.{% endcomment %}
-    <div id="unsaved-changes-config" data-beacon-url="{% url 'form_abandoned' %}" data-token="{{ friction_token|default_if_none:'' }}" hidden></div>
+    <div id="unsaved-changes-config" data-beacon-url="{% url 'form_abandoned' %}" data-token="{{ friction_token|default_if_none:'' }}" data-csrf="{{ csrf_token }}" hidden></div>
     <div id="unsaved-changes-bar" role="region" aria-label="Unsaved changes">
       <div class="d-flex flex-wrap align-items-center justify-content-between gap-2">
         <span><i class="bi bi-exclamation-triangle text-warning" aria-hidden="true"></i>
@@ -585,6 +585,14 @@ window.onload = function() {
         document.body.addEventListener('htmx:beforeRequest', function (event) {
           var target = event.detail.target;
           if (target && target.setAttribute) { target.setAttribute('aria-busy', 'true'); }
+        });
+        {% comment %}Cleared on afterRequest, which fires however the request ended -- cancelled by
+        another handler, 204 with nothing to swap, timed out, errored. afterSwap alone leaves a
+        region permanently marked busy in every one of those cases, and a screen reader then treats
+        it as still loading for the rest of the visit.{% endcomment %}
+        document.body.addEventListener('htmx:afterRequest', function (event) {
+          var target = event.detail.target;
+          if (target && target.removeAttribute) { target.removeAttribute('aria-busy'); }
         });
         document.body.addEventListener('htmx:afterSwap', function (event) {
           var target = event.detail.target;

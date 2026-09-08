@@ -72,3 +72,26 @@ class CheckerBehaviourTests(SimpleTestCase):
     def test_the_line_number_points_at_the_problem(self):
         markup = "one\ntwo\n<img src='x.png'>\n"
         self.assertEqual(template_a11y.check_text(markup)[0][0], 3)
+
+
+class HtmxAnnouncementTests(SimpleTestCase):
+    """base.html's live region and the aria-busy lifecycle around HTMx swaps.
+
+    Every filtered table, paged list and modal on this site replaces content in place, and a swap
+    is silent: the page does not reload, focus does not move, and nothing tells a screen reader
+    that what was just filtered has changed.
+    """
+
+    def setUp(self):
+        self.base = (REPO_ROOT / "auctions" / "templates" / "base.html").read_text()
+
+    def test_there_is_a_live_region_for_swaps(self):
+        self.assertIn('id="htmx-live-region"', self.base)
+        self.assertIn('aria-live="polite"', self.base)
+
+    def test_aria_busy_is_cleared_on_every_terminated_request(self):
+        """afterSwap alone leaves a region marked busy for ever when a request is cancelled,
+        returns 204, times out or errors -- and a screen reader then treats it as still loading."""
+        self.assertIn("htmx:afterRequest", self.base)
+        after_request = self.base.split("htmx:afterRequest", 1)[1][:400]
+        self.assertIn("removeAttribute('aria-busy')", after_request)

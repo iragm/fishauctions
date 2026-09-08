@@ -10,7 +10,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from django.contrib.auth.models import User
-from django.test import RequestFactory, TestCase
+from django.test import Client, RequestFactory, TestCase
 from django.urls import reverse
 
 from auctions import form_friction
@@ -429,3 +429,104 @@ class UnsavedChangesBarTests(StandardTestCase):
     def test_the_old_per_template_include_is_gone(self):
         """Seven templates included it and ninety-two did not; that is why it is in base.html now."""
         self.assertFalse((Path(__file__).resolve().parent / "templates" / "leave_page_warning.js").exists())
+
+
+class BeaconCsrfTests(StandardTestCase):
+    """The beacon has to carry a CSRF token, and the default test client hides that it does not.
+
+    ``FormAbandonedBeacon`` uses DRF's ``SessionAuthentication``, which enforces CSRF for a
+    signed-in session. Django's test client sets ``_dont_enforce_csrf_checks`` unless it is built
+    with ``enforce_csrf_checks=True``, so every other test here would pass with the token missing
+    and every abandonment by a logged-in organizer -- which is every abandonment worth having --
+    would 403 in production.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.url = reverse("form_abandoned")
+        self.token = form_friction.abandon_token("AuctionEditForm")
+
+    def _strict(self, login=False):
+        client = Client(enforce_csrf_checks=True)
+        if login:
+            client.login(username="my_lot", password="testpassword")
+        return client
+
+    def test_a_signed_in_beacon_with_a_csrf_token_is_recorded(self):
+        client = self._strict(login=True)
+        client.get(reverse("edit_auction", kwargs={"slug": self.online_auction.slug}))
+        response = client.post(
+            self.url,
+            {
+                "csrfmiddlewaretoken": client.cookies["csrftoken"].value,
+                "token": self.token,
+                "fields": "tax",
+                "seconds": "30",
+            },
+        )
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(FormFailure.objects.get().user, self.user)
+
+    def test_a_signed_in_beacon_without_one_is_refused(self):
+        client = self._strict(login=True)
+        client.get(reverse("edit_auction", kwargs={"slug": self.online_auction.slug}))
+        response = client.post(self.url, {"token": self.token, "fields": "tax", "seconds": "30"})
+        self.assertEqual(response.status_code, 403)
+
+    def test_the_page_hands_the_script_a_csrf_token_to_send(self):
+        self.client.login(username="my_lot", password="testpassword")
+        page = self.client.get(reverse("edit_auction", kwargs={"slug": self.online_auction.slug})).content.decode()
+        match = re.search(r'id="unsaved-changes-config"[^>]*data-csrf="([^"]+)"', page)
+        self.assertIsNotNone(match, "no CSRF token on the config element")
+        self.assertGreater(len(match.group(1)), 10)
+
+    def test_the_script_puts_it_in_the_body_rather_than_a_header(self):
+        """sendBeacon cannot set headers, so it has to ride in the POST body."""
+        script = (Path(__file__).resolve().parent / "static" / "js" / "unsaved_changes.js").read_text()
+        self.assertIn('payload.append("csrfmiddlewaretoken", csrfToken)', script)
+
+
+class AnonymousRunTests(TestCase):
+    """A signed-out person needs a session key, or their run cannot be told from anybody else's."""
+
+    def setUp(self):
+        self.factory = RequestFactory()
+
+    def _request(self, session):
+        request = self.factory.post("/lots/new/")
+        request.user = _Anonymous()
+        request.session = session
+        return request
+
+    def _rejected_form(self):
+        from django import forms
+
+        class Example(forms.Form):
+            name = forms.CharField()
+
+        form = Example(data={})
+        form.is_valid()
+        return form
+
+    def test_a_first_bounce_forces_a_session_key_into_existence(self):
+        from django.contrib.sessions.backends.db import SessionStore
+
+        session = SessionStore()
+        self.assertIsNone(session.session_key)
+        Recorder(self._request(session)).form_invalid(self._rejected_form())
+        row = FormFailure.objects.get()
+        self.assertTrue(row.session_id, "an anonymous failure with no session id can never be resolved")
+
+    def test_one_anonymous_success_cannot_resolve_everybody_elses_failures(self):
+        """The reason the empty session id mattered: it is the same value for every visitor."""
+        FormFailure.objects.create(form_name="Example", session_id="", attempt=1)
+        FormFailure.objects.create(form_name="Example", session_id="", attempt=1)
+
+        class NoKeySession(dict):
+            session_key = None
+
+        session = NoKeySession()
+        session[SESSION_KEY] = {"Example": 1}
+        good = self._rejected_form()
+        Recorder(self._request(session)).form_valid(good)
+        self.assertEqual(FormFailure.objects.filter(resolved=True).count(), 0)

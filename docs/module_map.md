@@ -71,7 +71,7 @@ this only quotes its opening sentence.
   `CloudflareImagesError`, `enabled`, `delivery_url`, `image_url`, `upload`, `delete`, `sync_variants`
 - **`club_events.py`** (534 lines)
   Keeps a club's event list, its Google Calendar, and its Discord events in step.
-- **`club_health.py`** (279 lines)
+- **`club_health.py`** (286 lines)
   Whether a club is still running auctions here, judged against its own cadence.
   `ClubHealth`, `is_test_auction`, `median_gap`, `classify`, `compute_club_health`, `refresh_all`, `due_for_checkin`
 - **`command_palette.py`** (1547 lines)
@@ -106,7 +106,7 @@ this only quotes its opening sentence.
 - **`fishbase.py`** (76 lines)
   Where the species list comes from.
   `parquet_url`, `available_versions`
-- **`form_friction.py`** (171 lines)
+- **`form_friction.py`** (180 lines)
   The view mixin that writes :class:`auctions.friction_models.FormFailure` rows.
   `error_codes`, `abandon_token`, `read_abandon_token`, `FormFrictionMixin`
 - **`forms.py`** (6818 lines)
@@ -270,7 +270,7 @@ this only quotes its opening sentence.
   `ClubAPITests`, `ClubAPIKeyMemberPermissionTests`, `ClubBapLotAPITests`, `ClubAuctionReadAPITests`, `ParseBoolEnvTests`, `RequireSecureProdSecretsTests`, `ClubAuctionIntegrationTests`
 - **`test_club_events.py`** (3051 lines)
   Tests for club events, Google Calendar sync, and the Discord events built on top of them.
-- **`test_club_health.py`** (281 lines)
+- **`test_club_health.py`** (313 lines)
   Tests for the club lifecycle rollup and the outreach queue that comes out of it.
   `TestAuctionNameTests`, `MedianGapTests`, `ClassifyTests`, `ComputeClubHealthTests`, `QueueTests`, `ClubHealthDashboardTests`, `RefreshAllTests`
 - **`test_club_ledger.py`** (1226 lines)
@@ -305,9 +305,8 @@ this only quotes its opening sentence.
 - **`test_endauctions.py`** (930 lines)
   The ``endauctions`` command and the websocket layer that tells everyone what happened.
   `LotEndauctionsMethodsTests`, `WebsocketClientDisconnectTests`, `WebSocketConsumerTests`, `HasEverGrantedPermissionTests`
-- **`test_form_friction.py`** (431 lines)
+- **`test_form_friction.py`** (532 lines)
   Tests for the friction instrument: which form, which field, how many attempts, did they finish.
-  `FormFrictionWiringTests`, `ErrorCodeTests`, `Recorder`, `FormFrictionMixinTests`, `FrictionEndToEndTests`, `FormFailureModelTests`, `AbandonTokenTests`, `AbandonmentBeaconTests`, `UnsavedChangesBarTests`
 - **`test_helpers.py`** (1380 lines)
   The utility layer -- helper functions, model utilities, template tags, context processors.
   `HelperFunctionsTestCase`, `ModelUtilityFunctionsTestCase`, `FormsUtilityTestCase`, `TemplateTagsTestCase`, `ContextProcessorsTestCase`, `FooterIconTests`, `SiteWebmanifestTests`, `GoogleLoginTemplateVisibilityTests`, `AdminSetupChecklistViewTests`
@@ -422,16 +421,16 @@ this only quotes its opening sentence.
   `SupportUrlWorksSignedOutTests`, `SupportPageIsTheHelpPageTests`, `OldContactUrlStillWorksTests`, `VideoEmbedFitsItsContainerTests`, `SupportFormDeliveryTests`, `SupportFormSignedInTests`
 - **`test_tap_to_pay.py`** (1325 lines)
   Tests for the Tap to Pay on iPhone review-guide work (TTP-1..4).
-- **`test_template_a11y.py`** (74 lines)
+- **`test_template_a11y.py`** (97 lines)
   Guards the two accessibility rules in auctions/template_a11y.py.
-  `TemplatesAreAccessibleTests`, `CheckerBehaviourTests`
+  `TemplatesAreAccessibleTests`, `CheckerBehaviourTests`, `HtmxAnnouncementTests`
 - **`test_template_hygiene.py`** (105 lines)
   Guards against template tags that render as text instead of being parsed.
   `TemplateTagsAreParseableTests`, `TemplateLintTests`
 - **`test_usability_instruments.py`** (411 lines)
   Tests for the measurement half of the usability campaign: what an edit changed, and who has ever
   `JsonableTests`, `SecretFieldTests`, `ChangedFieldSummaryTests`, `AuctionHistoryChangedFieldsTests`, `ClubHistoryChangedFieldsTests`, `FieldAdoptionTests`, `AuctionEditFormLayoutTests`
-- **`test_usability_report.py`** (166 lines)
+- **`test_usability_report.py`** (186 lines)
   Tests for the usability dashboard's three panels, and for the URL classifier behind the first.
   `RouteNameTests`, `ReachTests`, `FrictionReportTests`, `DashboardTests`
 - **`test_user_features.py`** (518 lines)
@@ -458,9 +457,9 @@ this only quotes its opening sentence.
   Selenium-based browser tests for client-side JavaScript functionality.
 - **`urls.py`** (1315 lines)
   Every URL on the site, and the one place a new one has to be declared.
-- **`usability_report.py`** (174 lines)
+- **`usability_report.py`** (194 lines)
   The three usability measurements, in one place a dashboard can read.
-  `route_name`, `reach_by_route`, `friction_by_form`, `worst_fields`
+  `route_name`, `reach_by_route`, `friction_by_form`, `abandoned_durations`, `worst_fields`
 - **`validators.py`** (19 lines)
   `validate_username_no_at_symbol`
 - **`voice.py`** (303 lines)
