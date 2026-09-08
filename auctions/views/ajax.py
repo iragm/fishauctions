@@ -10,6 +10,7 @@ import logging
 import re
 from datetime import timedelta
 from io import BytesIO
+from urllib.parse import urlsplit
 
 from django.conf import settings
 from django.contrib import messages
@@ -319,6 +320,36 @@ def clean_referrer(url):
     return url
 
 
+def page_view_path(url, host=""):
+    """The stored form of ``PageView.url``: a site-relative path, starting with ``/``.
+
+    Every reader of that field wants a path. ``AdminUserFlow.URL_SECTIONS`` anchors every pattern
+    at ``^/``, ``PageView.duplicates`` matches on equality, and ``url__startswith="/account/"`` is
+    what makes "how many people opened preferences" a query rather than a full scan. The browser
+    beacon posts ``window.location.href``, so normalizing here -- not trusting the caller -- is
+    what makes the invariant true: this endpoint is ``AllowAny`` and stores whatever it is handed.
+
+    The query string was always stripped (one page, one row); the fragment never was, and split
+    ``/lots/1`` from ``/lots/1#chat``. ``urlsplit`` drops both.
+
+    A URL on some *other* host is stored whole. It is not one of our pages, and filing it as a
+    path would make it indistinguishable from one.
+
+    Nothing but ``http``/``https`` survives at all. That is a page-view beacon's whole vocabulary,
+    and the admin traffic dashboard renders this column as ``<a href="...">`` -- so a
+    ``javascript:`` URL posted to this endpoint by anyone at all (again: ``AllowAny``) would be
+    waiting as a link on an admin's page.
+    """
+    if not url:
+        return ""
+    parts = urlsplit(url)
+    if parts.scheme and parts.scheme not in ("http", "https"):
+        return ""
+    if parts.netloc and parts.netloc.lower() != (host or "").lower():
+        return url[:600]
+    return (parts.path or "/")[:600]
+
+
 class PageViewCreate(APIView):
     """Record page views"""
 
@@ -333,9 +364,7 @@ class PageViewCreate(APIView):
         lot_number = data.get("lot", None)
         if lot_number:
             lot_number = Lot.objects.filter(pk=lot_number, is_deleted=False).first()
-        url = data.get("url", None)
-        url_without_params = re.sub(r"\?.*", "", url)
-        url_without_params = url_without_params[:600]
+        url = page_view_path(data.get("url"), request.get_host())
         first_view = data.get("first_view", False)
         if request.user.is_authenticated:
             user = request.user
@@ -387,7 +416,7 @@ class PageViewCreate(APIView):
             if "Googlebot" not in user_agent and "Baiduspider" not in user_agent:
                 PageView.objects.create(
                     lot_number=lot_number,
-                    url=url_without_params,
+                    url=url,
                     auction=auction,
                     session_id=session_id,
                     user=user,

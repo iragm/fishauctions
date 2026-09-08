@@ -19,7 +19,8 @@
         data = data ?? {};
         data.src = src;
         data.uid = uid;
-        data.url = newUrl;
+        {# PageView.url stores a site-relative path -- see page_view_path() in views/ajax.py. #}
+        data.url = window.location.pathname;
         data.title = document.title;
         data.referrer = document.referrer;
         data.first_view = first_view;

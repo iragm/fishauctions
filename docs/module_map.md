@@ -397,6 +397,9 @@ this only quotes its opening sentence.
 - **`test_user_features.py`** (518 lines)
   Preferences that change what a user sees: distance units, exports, and the trust system.
   `DistanceUnitTests`, `PayPalInfoViewTests`, `UserExportTests`, `UserTrustSystemTests`, `WatchOrUnwatchViewTests`
+- **`test_user_flow.py`** (180 lines)
+  ``AdminUserFlow`` section classification, and the ``PageView.url`` shape it depends on.
+  `ClassifyUrlTests`, `PageViewPathTests`, `MigrationHostListTests`, `PageViewCreateStoresAPathTests`
 - **`test_userdata.py`** (299 lines)
   ``UserData`` and ``AuctionTOS`` properties, and merging one user into another.
   `AuctionTOSPropertyTests`, `UserDataPropertyTests`, `UserDataMergeIntoTests`
@@ -649,7 +652,7 @@ Every view on the site, split by what part of it the view belongs to.
 - **`admin_checklist.py`** (1064 lines)
   The admin setup checklist: the one page that says what a new site still needs.
   `AdminSetupChecklistView`
-- **`ajax.py`** (744 lines)
+- **`ajax.py`** (773 lines)
   The small endpoints the pages call, rather than the pages themselves.
 - **`auction_admin.py`** (1254 lines)
   Setting an auction up, and running the room: pickup locations, users, check-in.
@@ -716,7 +719,7 @@ Every view on the site, split by what part of it the view belongs to.
   `LotLabelView`, `UnprintedLotLabelsView`, `SingleLotLabelView`, `RemotePrintJobMixin`, `RemotePrintJobStatusView`, `RemotePrintJobRetryView`, `RemotePrintJobCancelView`
 - **`selling.py`** (1053 lines)
   Auction night: setting winners, the lot queue, and the volunteers who help.
-- **`site_admin.py`** (744 lines)
+- **`site_admin.py`** (746 lines)
   The superuser's dashboard: traffic, signups, referrers, the user flow map.
 - **`site_pages.py`** (603 lines)
   Pages that belong to the site rather than to any auction or club.

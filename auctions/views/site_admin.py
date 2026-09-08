@@ -520,7 +520,9 @@ class AdminUserFlow(AdminOnlyViewMixin, TemplateView):
         ("Invoice", re.compile(r"^/invoices/[^/]")),
         ("User Profile", re.compile(r"^/users/")),
         ("My Account", re.compile(r"^/account/")),
-        ("All Lots", re.compile(r"^/lots/?$")),
+        # Both /lots/ and /lots/all/ are the allLots view, and /lots/all/ is the one reverse()
+        # returns -- so it is the one every link points at and effectively all of the traffic.
+        ("All Lots", re.compile(r"^/lots/(all/?)?$")),
         ("Homepage", re.compile(r"^/?$")),
     ]
 
