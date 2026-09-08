@@ -1269,16 +1269,6 @@ def set_user_location(self):
 
 
 @shared_task(bind=True, ignore_result=True)
-def remove_duplicate_views(self):
-    """
-    Remove duplicate page views.
-
-    Previously run every 15 minutes via cron.
-    """
-    call_command("remove_duplicate_views")
-
-
-@shared_task(bind=True, ignore_result=True)
 def webpush_notifications_deduplicate(self):
     """
     Deduplicate web push notification subscriptions.

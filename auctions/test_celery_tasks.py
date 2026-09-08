@@ -67,12 +67,6 @@ class CeleryTasksTestCase(TestCase):
         mock_call_command.assert_called_once_with("set_user_location")
 
     @patch("auctions.tasks.call_command")
-    def test_remove_duplicate_views_task(self, mock_call_command):
-        """Test that remove_duplicate_views task calls the management command."""
-        tasks.remove_duplicate_views()
-        mock_call_command.assert_called_once_with("remove_duplicate_views")
-
-    @patch("auctions.tasks.call_command")
     def test_webpush_notifications_deduplicate_task(self, mock_call_command):
         """Test that webpush_notifications_deduplicate task calls the management command."""
         tasks.webpush_notifications_deduplicate()

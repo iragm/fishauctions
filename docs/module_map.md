@@ -29,8 +29,11 @@ this only quotes its opening sentence.
 - **`account_nav.py`** (220 lines)
   The **Account setup** menu: which pages are in it, which one you're on, and where /account/setup/ lands.
   `Row`, `Group`, `active_page`, `remember`, `landing_url`, `groups_for`
-- **`admin.py`** (1676 lines)
+- **`admin.py`** (1681 lines)
   The Django admin: the staff-only back door, and the handful of jobs that only live here.
+- **`admin_paginator.py`** (51 lines)
+  Paginate the admin's biggest changelists without counting the whole table.
+  `EstimatedCountPaginator`
 - **`announcements.py`** (491 lines)
   Club announcements: one message, sent to the places a club's members actually look.
 - **`app_links.py`** (153 lines)
@@ -141,7 +144,7 @@ this only quotes its opening sentence.
 - **`model_caching.py`** (99 lines)
   ``@cached_property`` on a model, and the invalidation that makes it safe.
   `InvalidatesRelatedCache`, `CachedPropertiesMixin`
-- **`models.py`** (14943 lines)
+- **`models.py`** (14888 lines)
   The database: 80 models, and the reason they are still in one file.
 - **`moderation_admin.py`** (139 lines)
   The Django admin for the moderation queue: reports, copyright notices and strikes.
@@ -207,7 +210,7 @@ this only quotes its opening sentence.
   Turn a lot name someone typed into a short list of species to pick from.
 - **`tables.py`** (1424 lines)
   The ``django_tables2`` tables behind every list on the site.
-- **`tasks.py`** (2041 lines)
+- **`tasks.py`** (2031 lines)
   Celery tasks for the auctions app.
 - **`template_a11y.py`** (96 lines)
   Two accessibility rules a template cannot break twice, checked against template source.
@@ -220,6 +223,9 @@ this only quotes its opening sentence.
 - **`test_account_nav.py`** (301 lines)
   The Account setup menu: `auctions/account_nav.py`, its sidebar, and /account/setup/.
   `SidebarReachTests`, `LandingTests`, `PaymentRowTests`, `NavbarTests`, `SettingsSplitTests`
+- **`test_admin_paginator.py`** (79 lines)
+  ``EstimatedCountPaginator``: what it counts exactly and what it guesses at.
+  `EstimatedCountPaginatorTests`, `PageViewChangelistTests`
 - **`test_app_links.py`** (154 lines)
   Part LINKS — the two files that make a site link open in the app.
   `AppLinkFilesTests`, `AppLinksUnconfiguredTests`
@@ -258,7 +264,7 @@ this only quotes its opening sentence.
 - **`test_camera_scanner.py`** (142 lines)
   Guards the iPhone code path through the camera barcode scanner.
   `CameraScannerSourceTests`, `ScannerTemplateTests`, `QuickCheckoutCameraStartsOffTests`
-- **`test_celery_tasks.py`** (1037 lines)
+- **`test_celery_tasks.py`** (1031 lines)
   Tests for Celery tasks.
   `CeleryTasksTestCase`, `SendInvoiceNotificationTaskTestCase`, `ScheduleInvoiceNotificationTestCase`, `CleanupOldInvoiceNotificationTasksTestCase`, `FixedDatabaseSchedulerTestCase`, `OverlapLockTestCase`, `YearlyBapResetTestCase`, `AuctionStatsWatchdogTestCase`, `PerItemIsolationTestCase`, `OrphanedPeriodicTaskTestCase`
 - **`test_checkin.py`** (653 lines)
@@ -360,15 +366,15 @@ this only quotes its opening sentence.
   `MobilePaymentConfirmTests`, `MobilePaymentEndpointTests`, `SquareSellerRoutingTests`, `SquareTokenHandoutAuditTests`
 - **`test_mobile_social_auth.py`** (901 lines)
   Tests for native social sign-in (Sign in with Apple / Google / Facebook) — SOCIAL-0..8.
-- **`test_models_misc.py`** (1239 lines)
+- **`test_models_misc.py`** (1206 lines)
   Model methods, signal behaviour, and the management commands that email people.
   `ModelMethodsTestCase`, `SignalLogicTestCase`, `DuplicateAuctionTOSTests`, `AuctionNoShowURLEncodingTest`, `WeeklyPromoManagementCommandTests`, `AuctionTOSNotificationsCommandTests`
 - **`test_module_map.py`** (211 lines)
   Guards the module map: that it is current, and that the modules it reads are worth reading.
   `ModuleMapIsCurrentTests`, `ModuleRulesTests`, `RuleCheckerTests`, `SummaryTests`, `ViewsPackageStaysAcyclicTests`
-- **`test_page_view_dedupe.py`** (119 lines)
-  `remove_duplicate_views`, which used to corrupt the data it was cleaning up.
-  `DeduplicationTests`
+- **`test_page_view_history_is_kept.py`** (47 lines)
+  Repeat views of a page are history, not duplicates.
+  `RepeatViewsAreKeptTests`
 - **`test_page_view_url.py`** (116 lines)
   The shape of ``PageView.url``: a site-relative path, on the way in and on the rows already there.
   `PageViewPathTests`, `MigrationHostListTests`, `PageViewCreateStoresAPathTests`
@@ -543,13 +549,11 @@ this only quotes its opening sentence.
   `Command`
 - **`relink_auctiontos_users.py`** (92 lines)
   `Command`
-- **`remove_duplicate_views.py`** (58 lines)
-  `Command`
 - **`sendnotifications.py`** (64 lines)
   `Command`
 - **`set_user_location.py`** (164 lines)
   `Command`
-- **`setup_celery_beat.py`** (128 lines)
+- **`setup_celery_beat.py`** (130 lines)
   Management command to set up Celery Beat periodic tasks in the database.
   `Command`
 - **`split_speaker_talks.py`** (178 lines)
@@ -785,7 +789,7 @@ This will make sure the app is always imported when
   `LogWebsocketExceptions`
 - **`asgi_old.py`** (25 lines)
   ASGI config for fishauctions project.
-- **`celery.py`** (240 lines)
+- **`celery.py`** (235 lines)
   Celery configuration for fishauctions project.
   `start_auction_stats_task`, `start_bap_recalculation_tasks`, `debug_task`
 - **`custom_scheduler.py`** (78 lines)

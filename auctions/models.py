@@ -11587,7 +11587,25 @@ class UserIgnoreCategory(models.Model):
 
 
 class PageView(CachedPropertiesMixin, models.Model):
-    """Track what lots a user views"""
+    """One row per page opened: the site's memory of what anybody looked at.
+
+    **Repeat views are history, not duplicates.** A ``remove_duplicate_views`` job used to merge
+    them every fifteen minutes and was removed, because it could only ever reach *anonymous* rows
+    (a signed-in view stores ``session_id=NULL``, and the matcher skipped those) and it had no time
+    window at all -- with ``SESSION_COOKIE_AGE`` set to about 230 years, one anonymous person's
+    every visit to a page, however far apart, folded into a single row. That deleted exactly the
+    return visits this table exists to record, and it left every raw-row count on the stats pages
+    reading anonymous and signed-in traffic by different rules.
+
+    Nothing purges this table and nothing is meant to. It is the largest one here and it is the
+    only record of what somebody did before they did anything countable; the queries that read it
+    carry a window and an owner instead (see ``page_view_history``, ``usability_report``).
+
+    Four columns are inert, left in place rather than dropped from a table this size:
+    ``total_time`` and ``counter`` were only ever raised by a ten-second heartbeat that is
+    commented out in ``base_page_view.html`` and ``views/ajax.py``, ``notification_sent`` has never
+    had a writer, and ``duplicate_check_completed`` belonged to the merge job above.
+    """
 
     user = models.ForeignKey(User, on_delete=models.CASCADE, null=True, blank=True)
     auction = models.ForeignKey(Auction, null=True, blank=True, on_delete=models.CASCADE)
@@ -11627,79 +11645,6 @@ class PageView(CachedPropertiesMixin, models.Model):
         thing = self.url
         # thing = self.title
         return f"User {self.user} viewed {thing} for {self.total_time} seconds"
-
-    @cached_property
-    def duplicates(self):
-        """The other rows that are the same visit as this one.
-
-        A blank ``session_id`` is not a match. Without that guard the filter below reads as
-        ``session_id IS NULL`` (or ``= ''``) and every *anonymous* view of one URL becomes a
-        duplicate of every other one, so the deduplicator would collapse thousands of unrelated
-        visits into a single row with their counters summed.
-        """
-        if not self.session_id:
-            return PageView.objects.none()
-        return PageView.objects.filter(
-            user=self.user,
-            lot_number=self.lot_number,
-            url=self.url,
-            auction=self.auction,
-            session_id=self.session_id,
-        ).exclude(pk=self.pk)
-
-    @cached_property
-    def duplicate_count(self):
-        return self.duplicates.count()
-
-    def merge_and_delete_duplicates(self):
-        """Fold **every** duplicate of this view into it, delete them, and mark it checked.
-
-        Returns how many rows were merged away. Called explicitly, never as a property: it
-        modifies and deletes rows.
-
-        Three things here are load-bearing, and all three were bugs:
-
-        * **Every duplicate, not one.** This used to merge ``duplicates.first()`` and return, while
-          the caller marked the row done regardless -- so a view with three duplicates kept two of
-          them forever.
-        * **``update()`` on this row, never ``save()``.** The caller iterates a queryset it
-          materialised before any of this ran, so it reaches rows that a previous iteration has
-          already deleted. ``save()`` on a deleted instance finds no row to UPDATE and Django
-          **re-INSERTs it** under its old primary key (``select_on_save`` is False and the pk is an
-          ``AutoField``), resurrecting a merged-away duplicate with double-counted totals and
-          deleting the row it had just been merged into. An ``UPDATE ... WHERE pk = x`` that matches
-          nothing is simply a no-op, which is the behaviour this needs.
-        * **One transaction.** Summing the counters and deleting the rows they came from must not be
-          separable, or a crash between them double-counts every one of them on the next pass.
-        """
-        duplicates = list(self.duplicates)
-        fields = {"duplicate_check_completed": True}
-        if duplicates:
-            starts = [d.date_start for d in duplicates if d.date_start]
-            if self.date_start:
-                starts.append(self.date_start)
-            ends = [d.date_end for d in duplicates if d.date_end]
-            if self.date_end:
-                ends.append(self.date_end)
-            fields["date_start"] = min(starts) if starts else self.date_start
-            # Left alone when nothing in the group has an end time, rather than invented.
-            if ends:
-                fields["date_end"] = max(ends)
-            fields["total_time"] = self.total_time + sum(d.total_time for d in duplicates)
-            fields["counter"] = self.counter + sum(d.counter for d in duplicates)
-            fields["notification_sent"] = self.notification_sent or any(d.notification_sent for d in duplicates)
-            for name in ("source", "title", "referrer"):
-                value = getattr(self, name)
-                if not value:
-                    value = next((getattr(d, name) for d in duplicates if getattr(d, name)), value)
-                fields[name] = value
-        with transaction.atomic():
-            PageView.objects.filter(pk=self.pk).update(**fields)
-            if duplicates:
-                PageView.objects.filter(pk__in=[d.pk for d in duplicates]).delete()
-        for name, value in fields.items():
-            setattr(self, name, value)
-        return len(duplicates)
 
     def save(self, *args, **kwargs):
         if not self.latitude and self.ip_address:

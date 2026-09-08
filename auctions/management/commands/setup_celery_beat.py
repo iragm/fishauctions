@@ -25,7 +25,10 @@ class Command(BaseCommand):
         # Get names of tasks that should exist
         expected_task_names = set(beat_schedule.keys())
 
-        # Delete tasks that are no longer in the beat_schedule
+        # Delete tasks that are no longer in the beat_schedule.
+        # This hand-maintained list is not the thing that keeps the beat database honest --
+        # FixedDatabaseScheduler._prune_orphaned_entries does that on every beat start, for every
+        # row, without being told the names. Do not add a removed task here to get it deleted.
         existing_tasks = PeriodicTask.objects.filter(
             name__in=[
                 "endauctions",
@@ -39,7 +42,6 @@ class Command(BaseCommand):
                 "weekly_promo",
                 "promo_push_notifications",
                 "set_user_location",
-                "remove_duplicate_views",
                 "webpush_notifications_deduplicate",
                 "deduplicate_user_interest",
                 "cleanup_old_invoice_notification_tasks",

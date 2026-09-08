@@ -20,6 +20,7 @@ from django.http import HttpResponse
 from django.urls import reverse
 from django.utils.html import format_html, format_html_join
 
+from .admin_paginator import EstimatedCountPaginator
 from .models import (
     FAQ,
     AdCampaign,
@@ -1419,6 +1420,10 @@ class PageViewAdmin(admin.ModelAdmin):
         "lot_number",
     )
     ordering = ("-date_start",)
+    # Two full scans of the biggest table on the site to render twenty rows of it; see
+    # auctions/admin_paginator.py for which count each of these removes.
+    show_full_result_count = False
+    paginator = EstimatedCountPaginator
 
 
 class AuctionCampaignAdmin(admin.ModelAdmin):

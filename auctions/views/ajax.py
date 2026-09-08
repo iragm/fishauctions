@@ -329,7 +329,7 @@ def clean_referrer(url):
 def page_view_path(url, host=""):
     """The stored form of ``PageView.url``: a site-relative path, starting with ``/``.
 
-    Every reader of that field wants a path. ``PageView.duplicates`` matches on equality, and
+    Every reader of that field wants a path. ``usability_report`` groups on it exactly, and
     ``url__startswith="/account/"`` is what makes "how many people opened preferences" a query
     rather than a full scan. The browser beacon posts ``window.location.href``, so normalizing here
     -- not trusting the caller -- is what makes the invariant true: this endpoint is ``AllowAny``

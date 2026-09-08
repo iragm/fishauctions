@@ -1,6 +1,6 @@
 ---
 name: celery-tasks
-description: Celery beat, task time limits, locks and the PageView dedupe job. Use when adding or changing anything in auctions/tasks.py, fishauctions/celery.py, the beat schedule, or a management command that a task calls.
+description: Celery beat, task time limits, locks, and why nothing periodic runs over PageView. Use when adding or changing anything in auctions/tasks.py, fishauctions/celery.py, the beat schedule, or a management command that a task calls.
 ---
 
 # Celery
@@ -52,21 +52,14 @@ Two more that are not about time limits:
 
 ## PageView is the biggest table on the site
 
-`remove_duplicate_views` runs every 15 minutes over it and had four faults at once. What the fixed
-version guarantees, all of it enforced by `auctions/test_page_view_dedupe.py`:
+There is no periodic job over it any more. `remove_duplicate_views` ran every 15 minutes merging
+repeat views and was deleted: it could only ever reach *anonymous* rows (a signed-in view stores
+`session_id=NULL` and the matcher skipped those), it had no time window, and `SESSION_COOKIE_AGE`
+is about 230 years -- so one anonymous person's every visit to a page folded into a single row. It
+deleted return visits, which is the thing the table is for. The reasoning is in `PageView`'s
+docstring; `total_time`, `counter`, `notification_sent` and `duplicate_check_completed` are the
+inert columns it left behind.
 
-- It iterates **primary keys and re-fetches**, bounded to `BATCH_SIZE`, **newest first**. The old
-  loop materialised the whole unchecked queryset and so reached rows an earlier iteration had
-  already deleted. `duplicate_check_completed` is unindexed and true on all but the last few
-  minutes of the table, so the default ascending scan walked every settled row from the beginning
-  of time to reach candidates that are always at the end; `order_by("-pk")` finds them in about
-  `BATCH_SIZE` rows. Indexing the column is the fix if a backlog ever becomes real.
-- **Nothing calls `save()` on a row it may have merged away.** `PageView._meta.select_on_save` is
-  False and the pk is an `AutoField`, so `save()` on a deleted instance runs an UPDATE that matches
-  nothing and Django **re-INSERTs it** under its old pk — resurrecting the duplicate with
-  double-counted totals and deleting the row it had just been merged into.
-  `merge_and_delete_duplicates` writes with `update()` for that reason.
-- It merges **every** duplicate, not `duplicates.first()`, in one transaction, and marks the
-  survivor itself rather than trusting the caller.
-- A blank `session_id` is **not** a match. `filter(session_id="")` would make every anonymous view
-  of one URL a duplicate of every other.
+Nothing purges this table and nothing is meant to. If a query over it is slow, bound the query --
+every reader carries a window and an owner, and `auctions/admin_paginator.py` is what keeps the
+admin changelist from counting the whole thing twice per load.

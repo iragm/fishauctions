@@ -97,11 +97,6 @@ app.conf.beat_schedule = {
         "task": "auctions.tasks.set_user_location",
         "schedule": 7200.0,  # Run every 2 hours
     },
-    # Remove duplicate page views - every 15 minutes
-    "remove_duplicate_views": {
-        "task": "auctions.tasks.remove_duplicate_views",
-        "schedule": 900.0,  # Run every 15 minutes
-    },
     # Deduplicate webpush notifications - every 24 hours
     "webpush_notifications_deduplicate": {
         "task": "auctions.tasks.webpush_notifications_deduplicate",

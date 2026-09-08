@@ -46,7 +46,6 @@ Celery handles:
 | `email_unseen_chats` | Daily at 10:00 | Unread chat notifications |
 | `weekly_promo` | Wednesday at 9:30 | Weekly promotional email |
 | `set_user_location` | Every 2 hours | Update user locations from IP |
-| `remove_duplicate_views` | Every 15 minutes | Clean duplicate page views |
 | `webpush_notifications_deduplicate` | Daily at 10:00 | Remove duplicate push subscriptions |
 | `update_auction_stats` | Self-scheduling | Update cached auction statistics |
 | `cleanup_old_invoice_notification_tasks` | Daily at 3:00 AM | Clean up old invoice notification tasks |

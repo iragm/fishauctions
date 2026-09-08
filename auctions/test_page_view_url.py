@@ -36,7 +36,7 @@ class PageViewPathTests(TestCase):
 
     def test_the_query_string_and_the_fragment_both_go(self):
         """The query string always did. The fragment did not, and split one page across rows --
-        which ``PageView.duplicates`` matches on exactly."""
+        which the reach report groups on exactly."""
         self.assertEqual(page_view_path("https://auction.fish/lots/1?src=abc", "auction.fish"), "/lots/1")
         self.assertEqual(page_view_path("https://auction.fish/lots/1#chat", "auction.fish"), "/lots/1")
         self.assertEqual(page_view_path("/lots/1?page=2#bottom", "auction.fish"), "/lots/1")
