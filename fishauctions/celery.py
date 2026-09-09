@@ -48,6 +48,13 @@ app.conf.beat_schedule = {
         "task": "auctions.tasks.auctiontos_notifications",
         "schedule": 900.0,  # Run every 15 minutes
     },
+    # One-shot: fill in PageView.auction on the lot views written before the beacon sent it, so
+    # the `auction_id OR lot.auction_id` in Auction.page_views can eventually go. Switches its own
+    # row off when the cursor passes the last row that needs it - every 15 minutes until then.
+    "backfill_page_view_auctions": {
+        "task": "auctions.tasks.backfill_page_view_auctions",
+        "schedule": 900.0,  # Run every 15 minutes
+    },
     # Club lifecycle rollup and the outreach queue - daily. Nothing it measures moves faster than
     # that: the quickest column on it is "days since the last auction".
     "refresh_club_health": {

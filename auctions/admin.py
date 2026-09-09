@@ -34,6 +34,7 @@ from .models import (
     Bid,
     BlogPost,
     Category,
+    ChunkedJobState,
     Club,
     ClubAnnouncement,
     ClubAPIKey,
@@ -1359,6 +1360,21 @@ class AuctionTOSAdmin(admin.ModelAdmin):
     )
 
 
+class ChunkedJobStateAdmin(admin.ModelAdmin):
+    """Read-only: how far a chunked background job has got. See auctions/tasks.py.
+
+    Editable would mean an admin could send a walk over the biggest table on the site back to the
+    beginning by typing in the wrong number, and there is nothing here worth typing.
+    """
+
+    model = ChunkedJobState
+    list_display = ("name", "cursor", "ceiling", "finished", "updated")
+    readonly_fields = ("name", "cursor", "ceiling", "finished", "updated")
+
+    def has_add_permission(self, request):
+        return False
+
+
 class PageViewAdmin(admin.ModelAdmin):
     model = PageView
     list_display = ("user", "ip_address", "source", "url", "date_start")
@@ -1442,6 +1458,7 @@ admin.site.register(FAQ, FaqAdmin)
 admin.site.register(LotAutoCategory, LotAutoCategoryAdmin)
 admin.site.register(AuctionTOS, AuctionTOSAdmin)
 admin.site.register(PageView, PageViewAdmin)
+admin.site.register(ChunkedJobState, ChunkedJobStateAdmin)
 admin.site.register(AuctionCampaign, AuctionCampaignAdmin)
 admin.site.register(AuctionHistory, AuctionHistoryAdmin)
 

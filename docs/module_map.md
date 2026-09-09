@@ -29,7 +29,7 @@ this only quotes its opening sentence.
 - **`account_nav.py`** (220 lines)
   The **Account setup** menu: which pages are in it, which one you're on, and where /account/setup/ lands.
   `Row`, `Group`, `active_page`, `remember`, `landing_url`, `groups_for`
-- **`admin.py`** (1634 lines)
+- **`admin.py`** (1651 lines)
   The Django admin: the staff-only back door, and the handful of jobs that only live here.
 - **`admin_paginator.py`** (51 lines)
   Paginate the admin's biggest changelists without counting the whole table.
@@ -150,7 +150,7 @@ this only quotes its opening sentence.
 - **`model_caching.py`** (101 lines)
   ``@cached_property`` on a model, and the invalidation that makes it safe.
   `InvalidatesRelatedCache`, `CachedPropertiesMixin`
-- **`models.py`** (15030 lines)
+- **`models.py`** (15060 lines)
   The database: 80 models, and the reason they are still in one file.
 - **`moderation_admin.py`** (139 lines)
   The Django admin for the moderation queue: reports, copyright notices and strikes.
@@ -216,7 +216,7 @@ this only quotes its opening sentence.
   Turn a lot name someone typed into a short list of species to pick from.
 - **`tables.py`** (1424 lines)
   The ``django_tables2`` tables behind every list on the site.
-- **`tasks.py`** (2031 lines)
+- **`tasks.py`** (2142 lines)
   Celery tasks for the auctions app.
 - **`template_a11y.py`** (96 lines)
   Two accessibility rules a template cannot break twice, checked against template source.
@@ -273,9 +273,8 @@ this only quotes its opening sentence.
 - **`test_camera_scanner.py`** (142 lines)
   Guards the iPhone code path through the camera barcode scanner.
   `CameraScannerSourceTests`, `ScannerTemplateTests`, `QuickCheckoutCameraStartsOffTests`
-- **`test_celery_tasks.py`** (1031 lines)
+- **`test_celery_tasks.py`** (1191 lines)
   Tests for Celery tasks.
-  `CeleryTasksTestCase`, `SendInvoiceNotificationTaskTestCase`, `ScheduleInvoiceNotificationTestCase`, `CleanupOldInvoiceNotificationTasksTestCase`, `FixedDatabaseSchedulerTestCase`, `OverlapLockTestCase`, `YearlyBapResetTestCase`, `AuctionStatsWatchdogTestCase`, `PerItemIsolationTestCase`, `OrphanedPeriodicTaskTestCase`
 - **`test_checkin.py`** (653 lines)
   Tests for Part 6 — proximity check-in & welcome (mobile ping/join/set-location).
 - **`test_club_announcements.py`** (1143 lines)
@@ -477,7 +476,7 @@ this only quotes its opening sentence.
   Selenium-based browser tests for client-side JavaScript functionality.
 - **`urls.py`** (1315 lines)
   Every URL on the site, and the one place a new one has to be declared.
-- **`usability_report.py`** (365 lines)
+- **`usability_report.py`** (366 lines)
   The usability measurements, in one place a dashboard can read.
   `route_name`, `reach_by_route`, `friction_by_form`, `abandoned_durations`, `worst_fields`, `buyer_funnel`, `funnel_referrers`
 - **`validators.py`** (19 lines)
@@ -803,7 +802,7 @@ This will make sure the app is always imported when
   `LogWebsocketExceptions`
 - **`asgi_old.py`** (25 lines)
   ASGI config for fishauctions project.
-- **`celery.py`** (235 lines)
+- **`celery.py`** (242 lines)
   Celery configuration for fishauctions project.
   `start_auction_stats_task`, `start_bap_recalculation_tasks`, `debug_task`
 - **`custom_scheduler.py`** (78 lines)

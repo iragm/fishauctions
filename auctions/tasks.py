@@ -41,6 +41,19 @@ CALENDAR_SYNC_LOCK_SECONDS = 60 * 60
 ENDAUCTIONS_LOCK_KEY = "endauctions_running"
 ENDAUCTIONS_LOCK_SECONDS = 15 * 60
 
+# The one-shot backfill of PageView.auction; see backfill_page_view_auctions. CHUNK is rows
+# written per run and SCAN is primary keys looked at, and both matter: without the second, a run
+# that lands on a stretch of the table with no lot views scans to the end looking for its five
+# thousand, which is the full scan of PageView this is all trying to retire. The beat entry name
+# has to match the key in fishauctions/celery.py, because that is what the PeriodicTask row is
+# called and this task switches its own row off.
+PAGE_VIEW_BACKFILL_JOB = "page_view_auction"
+PAGE_VIEW_BACKFILL_BEAT = "backfill_page_view_auctions"
+PAGE_VIEW_BACKFILL_CHUNK = 5000
+PAGE_VIEW_BACKFILL_SCAN = 50000
+PAGE_VIEW_BACKFILL_LOCK_KEY = "backfill_page_view_auctions_running"
+PAGE_VIEW_BACKFILL_LOCK_SECONDS = 20 * 60
+
 logger = logging.getLogger(__name__)
 
 
@@ -505,6 +518,104 @@ def refresh_club_health(self):
 
     written = club_health.refresh_all()
     logger.info("refreshed club health for %s clubs", written)
+
+
+def _switch_off_beat_entry(name):
+    """Stop beat dispatching a job that has nothing left to do.
+
+    ``save()`` rather than ``update()``: django-celery-beat tells a running beat to reload through
+    the ``post_save`` signal, and a queryset update does not send one -- the row would read as
+    disabled while beat kept firing the old in-memory entry until it was next restarted.
+    """
+    row = PeriodicTask.objects.filter(name=name).first()
+    if row and row.enabled:
+        row.enabled = False
+        row.save()
+        logger.info("periodic task %s has nothing left to do; disabled it", name)
+
+
+@shared_task(bind=True, ignore_result=True)
+def backfill_page_view_auctions(self):
+    """Fill in ``PageView.auction`` on the lot views written before the beacon started sending it.
+
+    A page view of a lot now names the lot *and* its auction, so a reader can match an auction on
+    one indexed column. Older rows name only the lot, which is why ``Auction.page_views`` -- and so
+    ``unique_views``, both stat charts and both funnel queries -- has to ask for
+    ``auction_id OR lot.auction_id``: an OR across a join, the one shape MariaDB cannot serve from
+    an index, over the largest and least-purged table on the site. This walks the old rows so that
+    clause can eventually go.
+
+    One window of primary keys per run, `PAGE_VIEW_BACKFILL_SCAN` wide, up to
+    `PAGE_VIEW_BACKFILL_CHUNK` rows written -- a range scan on the primary key, which is the
+    cheapest thing this table can be asked for and is bounded whatever it finds. The position is
+    kept in ``ChunkedJobState`` because working it out from ``PageView`` itself is the scan being
+    avoided.
+
+    It stops on its own. The ceiling is the last primary key at the time of the first run: rows
+    above it were written by code that already sets the column, so chasing them would mean a job
+    that never finishes. When the cursor passes it the row is stamped ``finished`` and the beat
+    entry is switched off -- and a re-enabled entry costs one indexed `SELECT` before returning.
+
+    Rows whose lot has no auction at all are read and skipped rather than filtered out in SQL. They
+    can never be written, so leaving them in the window is what carries the cursor past them; asking
+    the database to exclude them would leave the job looking at the same rows forever.
+    """
+    from collections import defaultdict
+
+    from django.core.cache import cache
+    from django.db.models import Max
+    from django.utils import timezone
+
+    from auctions.models import ChunkedJobState, PageView
+
+    state, _ = ChunkedJobState.objects.get_or_create(name=PAGE_VIEW_BACKFILL_JOB)
+    if state.finished:
+        _switch_off_beat_entry(PAGE_VIEW_BACKFILL_BEAT)
+        return
+
+    if not cache.add(PAGE_VIEW_BACKFILL_LOCK_KEY, "1", timeout=PAGE_VIEW_BACKFILL_LOCK_SECONDS):
+        logger.info("backfill_page_view_auctions is already running; skipping this tick.")
+        return
+    try:
+        if not state.ceiling:
+            state.ceiling = PageView.objects.aggregate(Max("pk"))["pk__max"] or 0
+        window_end = min(state.cursor + PAGE_VIEW_BACKFILL_SCAN, state.ceiling + 1)
+        rows = list(
+            PageView.objects.filter(
+                pk__gte=state.cursor,
+                pk__lt=window_end,
+                lot_number__isnull=False,
+                auction__isnull=True,
+            )
+            .order_by("pk")
+            .values_list("pk", "lot_number__auction")[:PAGE_VIEW_BACKFILL_CHUNK]
+        )
+        by_auction = defaultdict(list)
+        for pk, auction_id in rows:
+            if auction_id:
+                by_auction[auction_id].append(pk)
+        written = 0
+        for auction_id, pks in by_auction.items():
+            written += PageView.objects.filter(pk__in=pks).update(auction_id=auction_id)
+
+        # A short read means the whole window is done; a full one means we stopped mid-window and
+        # the next run picks up after the last row we looked at.
+        state.cursor = rows[-1][0] + 1 if len(rows) == PAGE_VIEW_BACKFILL_CHUNK else window_end
+        if state.cursor > state.ceiling:
+            state.finished = timezone.now()
+        state.save()
+    finally:
+        cache.delete(PAGE_VIEW_BACKFILL_LOCK_KEY)
+
+    logger.info(
+        "backfilled %s page views with their auction; cursor %s of %s%s",
+        written,
+        state.cursor,
+        state.ceiling,
+        " (finished)" if state.finished else "",
+    )
+    if state.finished:
+        _switch_off_beat_entry(PAGE_VIEW_BACKFILL_BEAT)
 
 
 @shared_task(bind=True, ignore_result=True)

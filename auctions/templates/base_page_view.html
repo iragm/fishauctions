@@ -11,7 +11,7 @@ would quietly fill an organizer's traffic number with their own admin visits.
 A lot page sends the auction too, not just the lot. Rows written before 2026-09-09 carry only the
 lot, which is why the readers of this data still match an auction as `auction_id OR
 lot_number__auction_id` -- an OR across a join, and the shape behind the July database incident.
-Backfilling the old rows is what would let that go.
+tasks.backfill_page_view_auctions is walking those rows in the background so that can go.
 
 auctions/test_page_view_beacon.py is the ratchet for all of it.{% endcomment %}
 

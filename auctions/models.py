@@ -6459,8 +6459,9 @@ class Auction(CachedPropertiesMixin, models.Model):
 
         It is here because rows written before 2026-09-09 named only the lot. A lot page (and an
         AR scan) now sends its auction as well -- see ``base_page_view.html`` for why only the
-        three visitor-facing pages send anything at all. Backfilling ``auction_id`` from
-        ``lot_number__auction_id`` on the old rows is what would collapse this to one column.
+        three visitor-facing pages send anything at all. ``tasks.backfill_page_view_auctions`` is
+        walking the older rows in the background; when it has stamped itself finished, this can
+        become ``filter(auction=self)`` and the join goes away.
         """
         return PageView.objects.filter(Q(auction=self) | Q(lot_number__auction=self))
 
@@ -11747,6 +11748,35 @@ class PageView(CachedPropertiesMixin, models.Model):
             # every page view they have ever made and sorted them to return one row.
             models.Index(fields=["user", "-date_start"], name="pageview_user_recent_idx"),
         ]
+
+
+class ChunkedJobState(models.Model):
+    """Where a long-running chunked job got to, so a run resumes instead of starting over.
+
+    One row per job, named by the job. It exists for ``tasks.backfill_page_view_auctions``, and the
+    reason it is a table rather than a cache key is the table that job walks: the only way to work
+    out "where did I get to" without recording it is to ask ``PageView``, and every query that could
+    answer that is the full scan the chunking exists to avoid. Losing a cached position would not be
+    incorrect -- the work is idempotent -- but it would restart a walk that takes days, and a cache
+    is flushed by things as ordinary as a deploy.
+
+    Delete the row, and this model, when the job that owns it is done for good.
+    """
+
+    name = models.CharField(max_length=100, primary_key=True)
+    cursor = models.BigIntegerField(default=0)
+    cursor.help_text = "The next primary key to look at. Everything below this has been handled."
+    ceiling = models.BigIntegerField(default=0)
+    ceiling.help_text = (
+        "The primary key the job stops at, captured on its first run. Rows written after that were "
+        "written by code that already does the right thing, so chasing them would never finish."
+    )
+    finished = models.DateTimeField(null=True, blank=True)
+    updated = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        state = "finished" if self.finished else f"at {self.cursor} of {self.ceiling}"
+        return f"{self.name} ({state})"
 
 
 class UserLabelPrefs(models.Model):

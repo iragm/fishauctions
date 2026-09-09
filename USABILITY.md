@@ -501,13 +501,14 @@ because they are decisions about what this site should do, not about how to writ
 - **A single-club deployment lists its own club automatically.** `get_single_club` now forces
   `outreach_stage` to `listed` on every call, so that one club cannot be un-listed by hand. On a
   single-club site the club is the site; anywhere else that would be the wrong rule.
-- **Old `PageView` rows were left alone.** Since 7a.2 a lot view names its auction, so
-  `Auction.page_views` only needs its `auction_id OR lot.auction_id` for rows written before
-  2026-09-09 -- and that OR is why `unique_views`, both stat charts and both funnel queries can
-  never be served by one index. Retiring it means an `UPDATE ... SET auction_id = lot.auction_id`
-  across the largest and least-purged table on the site, which is not a migration: it is a chunked
-  management command run in a quiet window, next to migration `0423`'s advice about the same table.
-  Doing it silently in this change would have been the wrong call. **Worth doing, needs a window.**
+- **The old `PageView` rows are being walked in the background, not in a window.** Since 7a.2 a
+  lot view names its auction, so `Auction.page_views` only needs its `auction_id OR
+  lot.auction_id` for rows written before 2026-09-09 -- and that OR is why `unique_views`, both
+  stat charts and both funnel queries can never be served by one index. This was written up here
+  as needing a quiet window and a person to run it. It does not: `backfill_page_view_auctions` is
+  on the beat every fifteen minutes, does one bounded window of primary keys per run, and switches
+  its own beat entry off when it passes the last row that needs it. Nobody has to remember to run
+  it and nobody has to remember to stop it. **Done, 2026-09-09.**
 
 ## Still needs a person, not a decision
 
@@ -543,6 +544,27 @@ because they are decisions about what this site should do, not about how to writ
 Newest first.
 
 <!-- PASS LOG START -->
+
+### 2026-09-09 -- the backfill runs itself
+
+The open question from the pass below -- what to do about the `PageView` rows written before a lot
+page sent its auction -- turned out not to need a person at all.
+`tasks.backfill_page_view_auctions` is on the beat every fifteen minutes and converges on its own:
+one window of primary keys per run, up to 5000 rows written, and when the cursor passes the last
+row that needs it the task stamps itself finished and switches its own `PeriodicTask` row off.
+
+Three things about it are load-bearing rather than decorative. **The window** is a second limit
+beside the chunk: without it a run that lands on a stretch of the table with no lot views reads to
+the end looking for its five thousand, which is the full scan this whole exercise is retiring.
+**The cursor is a table row, not a cache key** (`ChunkedJobState`) -- losing it would not be
+incorrect, but it restarts a walk that takes days, and a cache is flushed by things as ordinary as
+a deploy. **Rows whose lot has no auction are read and skipped in Python** rather than excluded in
+SQL: nothing can ever be written for them, so filtering them out would leave the cursor looking at
+the same rows for ever. Each of those is a test.
+
+Switching the entry off uses `save()`, not `update()`: django-celery-beat tells a running beat to
+reload through the `post_save` signal, so a queryset update leaves a row that reads as disabled
+while beat keeps firing the old in-memory entry until it is restarted.
 
 ### 2026-09-09 -- the beacon's subject moves to the view
 

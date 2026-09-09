@@ -10,10 +10,20 @@ from unittest.mock import patch
 from django.contrib.auth.models import User
 from django.test import TestCase
 from django.utils import timezone
-from django_celery_beat.models import PeriodicTask
+from django_celery_beat.models import IntervalSchedule, PeriodicTask
 
 from auctions import tasks
-from auctions.models import Auction, AuctionHistory, AuctionTOS, Club, Invoice, PickupLocation
+from auctions.models import (
+    Auction,
+    AuctionHistory,
+    AuctionTOS,
+    ChunkedJobState,
+    Club,
+    Invoice,
+    Lot,
+    PageView,
+    PickupLocation,
+)
 from auctions.test_support import isolated_cache
 
 
@@ -1029,3 +1039,153 @@ class OrphanedPeriodicTaskTestCase(TestCase):
         app.loader.import_default_modules()
         missing = sorted(entry["task"] for entry in app.conf.beat_schedule.values() if entry["task"] not in app.tasks)
         self.assertEqual(missing, [], "these beat_schedule entries name tasks that do not exist")
+
+
+@isolated_cache("celery-backfill")
+class PageViewAuctionBackfillTestCase(TestCase):
+    """The one-shot walk that fills in PageView.auction on the rows written before the beacon did.
+
+    Everything here is about the two ways a chunked job goes wrong: doing the same rows forever
+    because nothing carries the cursor past them, and never stopping because the thing it is
+    catching up with keeps moving.
+    """
+
+    def setUp(self):
+        from django.core.cache import cache
+
+        cache.delete(tasks.PAGE_VIEW_BACKFILL_LOCK_KEY)
+        self.user = User.objects.create_user(username="backfill_user", password="testpassword")
+        self.auction = self._auction("Backfill auction")
+        self.location = PickupLocation.objects.create(
+            name="here", auction=self.auction, pickup_time=timezone.now() + datetime.timedelta(days=1)
+        )
+        self.tos = AuctionTOS.objects.create(
+            user=self.user, auction=self.auction, pickup_location=self.location, bidder_number="601"
+        )
+
+    def _auction(self, title):
+        return Auction.objects.create(
+            title=title,
+            created_by=self.user,
+            date_start=timezone.now() - datetime.timedelta(days=2),
+            date_end=timezone.now(),
+            is_online=True,
+        )
+
+    def _lot(self, name, auction):
+        return Lot.objects.create(
+            lot_name=name,
+            auction=auction,
+            auctiontos_seller=self.tos if auction else None,
+            user=None if auction else self.user,
+            quantity=1,
+        )
+
+    def _view(self, **kwargs):
+        return PageView.objects.create(url="/x/", **kwargs)
+
+    def _state(self):
+        return ChunkedJobState.objects.get(name=tasks.PAGE_VIEW_BACKFILL_JOB)
+
+    def test_a_lot_view_gets_its_lots_auction(self):
+        view = self._view(lot_number=self._lot("in an auction", self.auction))
+        tasks.backfill_page_view_auctions()
+        view.refresh_from_db()
+        self.assertEqual(view.auction, self.auction)
+
+    def test_it_leaves_rows_that_already_name_an_auction_alone(self):
+        other = self._auction("Some other auction")
+        view = self._view(lot_number=self._lot("in an auction", self.auction), auction=other)
+        tasks.backfill_page_view_auctions()
+        view.refresh_from_db()
+        self.assertEqual(view.auction, other)
+
+    def test_a_view_of_no_lot_is_never_given_an_auction(self):
+        """Most rows in this table. An untagged page view is what keeps organizer traffic out of
+        an organizer's own numbers, so inventing an auction for one would be the whole bug."""
+        view = self._view()
+        tasks.backfill_page_view_auctions()
+        view.refresh_from_db()
+        self.assertIsNone(view.auction)
+
+    def test_a_lot_with_no_auction_does_not_stall_the_job(self):
+        """Nothing can ever be written for these, so a query that filtered them out in SQL would
+        leave the cursor looking at them for ever. They are read and skipped instead."""
+        view = self._view(lot_number=self._lot("no auction", None))
+        tasks.backfill_page_view_auctions()
+        view.refresh_from_db()
+        self.assertIsNone(view.auction)
+        self.assertTrue(self._state().finished)
+
+    def test_it_finishes_and_switches_its_own_beat_entry_off(self):
+        every_15 = IntervalSchedule.objects.create(every=900, period=IntervalSchedule.SECONDS)
+        PeriodicTask.objects.create(
+            name=tasks.PAGE_VIEW_BACKFILL_BEAT,
+            task="auctions.tasks.backfill_page_view_auctions",
+            interval=every_15,
+            enabled=True,
+        )
+        self._view(lot_number=self._lot("in an auction", self.auction))
+        tasks.backfill_page_view_auctions()
+        self.assertTrue(self._state().finished)
+        self.assertFalse(PeriodicTask.objects.get(name=tasks.PAGE_VIEW_BACKFILL_BEAT).enabled)
+
+    def test_a_finished_job_does_nothing_and_does_not_move(self):
+        self._view(lot_number=self._lot("in an auction", self.auction))
+        tasks.backfill_page_view_auctions()
+        finished_at, cursor = self._state().finished, self._state().cursor
+        tasks.backfill_page_view_auctions()
+        self.assertEqual((self._state().finished, self._state().cursor), (finished_at, cursor))
+
+    def test_rows_written_after_it_started_are_not_chased(self):
+        """The ceiling. Those rows were written by code that already sets the column, so a job that
+        kept reaching for them would never finish on a site that is still being used."""
+        self._view(lot_number=self._lot("in an auction", self.auction))
+        tasks.backfill_page_view_auctions()
+        self.assertTrue(self._state().finished)
+        later = self._view(lot_number=self._lot("later", self.auction))
+        tasks.backfill_page_view_auctions()
+        later.refresh_from_db()
+        self.assertIsNone(later.auction)
+
+    @patch("auctions.tasks.PAGE_VIEW_BACKFILL_CHUNK", 1)
+    def test_a_full_chunk_resumes_after_the_last_row_it_looked_at(self):
+        lot = self._lot("in an auction", self.auction)
+        first, second = self._view(lot_number=lot), self._view(lot_number=lot)
+        tasks.backfill_page_view_auctions()
+        first.refresh_from_db()
+        second.refresh_from_db()
+        self.assertEqual((first.auction, second.auction), (self.auction, None))
+        self.assertEqual(self._state().cursor, first.pk + 1)
+        self.assertIsNone(self._state().finished)
+
+        tasks.backfill_page_view_auctions()
+        second.refresh_from_db()
+        self.assertEqual(second.auction, self.auction)
+        self.assertTrue(self._state().finished)
+
+    @patch("auctions.tasks.PAGE_VIEW_BACKFILL_SCAN", 1)
+    def test_the_scan_width_bounds_a_run_even_with_nothing_to_write(self):
+        """Without it, a run that lands on a stretch of the table with no lot views reads to the
+        end of it looking for a full chunk -- the full scan of PageView this job exists to retire."""
+        for _ in range(3):
+            self._view()
+        view = self._view(lot_number=self._lot("in an auction", self.auction))
+        runs = 0
+        while runs < 200:
+            tasks.backfill_page_view_auctions()
+            runs += 1
+            if self._state().finished:
+                break
+        view.refresh_from_db()
+        self.assertEqual(view.auction, self.auction)
+        self.assertGreater(runs, 3, "a one-key window should take a run per key, not one run for the lot")
+
+    def test_it_skips_a_tick_it_is_already_running(self):
+        from django.core.cache import cache
+
+        cache.add(tasks.PAGE_VIEW_BACKFILL_LOCK_KEY, "1", timeout=60)
+        view = self._view(lot_number=self._lot("in an auction", self.auction))
+        tasks.backfill_page_view_auctions()
+        view.refresh_from_db()
+        self.assertIsNone(view.auction)

@@ -255,7 +255,8 @@ def buyer_funnel(days=180, limit=FUNNEL_AUCTIONS):
     site. A full scan of ``PageView`` is the exact shape behind a past production incident, and this
     page is one an admin opens casually. ``date_start`` is indexed, and no view of an auction can
     predate the auction by more than :data:`FUNNEL_LOOKBACK_DAYS`. The OR itself is only there for
-    rows written before 2026-09-09 -- see ``Auction.page_views``.
+    rows written before 2026-09-09, which ``tasks.backfill_page_view_auctions`` is working through
+    -- see ``Auction.page_views``.
     """
     from auctions.models import Auction, AuctionTOS, Bid, Invoice, Lot, PageView
 
