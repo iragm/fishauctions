@@ -430,6 +430,30 @@ class ManageUsersThroughClubTests(TestCase):
         tos.refresh_from_db()
         self.assertEqual(tos.bidder_number, "77")
 
+    def test_a_new_member_does_not_take_a_bidder_number_the_auction_already_uses(self):
+        """The club and the auction are two scopes, and a club-managed auction spans both.
+
+        ``generate_bidder_number`` only avoids numbers other *club members* hold, so a member
+        joining a club-managed auction that already contains somebody who joined it directly could
+        be handed that person's number -- at random, about one row in a few hundred. Two people
+        with one number is not a cosmetic problem: every lookup by number picks one of them, and
+        ``update_person`` was writing one person's new email address onto the other.
+        """
+        self._enable_club_managed()
+        stranger = AuctionTOS.objects.create(
+            auction=self.auction,
+            pickup_location=self.location,
+            name="Joined directly",
+            bidder_number="314",
+        )
+        member = ClubMember.objects.create(club=self.club, user=self.joiner, name="Joiner", bidder_number="314")
+        shadow = AuctionTOS.objects.get(auction=self.auction, clubmember=member)
+        self.assertNotEqual(shadow.bidder_number, stranger.bidder_number)
+        self.assertEqual(AuctionTOS.objects.filter(auction=self.auction, bidder_number="314").count(), 1)
+        # The club number is the club's to keep; only this auction's copy had to move.
+        member.refresh_from_db()
+        self.assertEqual(member.bidder_number, "314")
+
     def test_signal_skips_bidder_number_when_auction_invoiced(self):
         self._enable_club_managed()
         cm = ClubMember.objects.create(

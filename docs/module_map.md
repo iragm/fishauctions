@@ -195,9 +195,9 @@ this only quotes its opening sentence.
 - **`routing.py`** (9 lines)
 - **`serializers.py`** (978 lines)
   DRF serializers for the club API: the shape of what a key gets back.
-- **`services.py`** (1106 lines)
+- **`services.py`** (1153 lines)
   The operations that are the same whoever asked: web page, API, app or assistant.
-- **`signals.py`** (1026 lines)
+- **`signals.py`** (1029 lines)
   Signal handlers for the auctions app.
 - **`site_setup.py`** (146 lines)
   `single_club_mode_enabled`, `single_club_name`, `site_paypal_configured`, `get_server_public_ip`, `get_single_club`, `ensure_single_club_membership_for_user`
@@ -298,7 +298,7 @@ this only quotes its opening sentence.
 - **`test_club_settings.py`** (695 lines)
   A club's own settings pages: BAP, general settings and email routing.
   `ClubBapSettingsViewTests`, `ClubSettingsViewTests`, `ClubEmailRoutingTests`, `RoutedSenderDisplayNameTests`, `SesSendsTheMessagesOwnFromAddressTests`, `InboundEmailRoutingAPITests`, `AuctionSlugSanitizationTests`, `AuctionEmailSenderTests`, `ClubEmailSettingsFormTests`
-- **`test_club_users.py`** (1046 lines)
+- **`test_club_users.py`** (1070 lines)
   Managing people through a club rather than through an auction, and the bid API.
   `ManageUsersThroughClubTests`, `PlaceBidApiTests`
 - **`test_clubs.py`** (1378 lines)

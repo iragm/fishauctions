@@ -10,9 +10,13 @@ Permission checks are the caller's job. Nothing here asks whether the user is al
 a service function runs, that has been settled.
 """
 
+import logging
+
 from django.utils import timezone
 
 from .models import AuctionTOS, ClubHistory, ClubMember
+
+logger = logging.getLogger(__name__)
 
 # Source of truth for ClubMember fields acceptable via API ingest.
 # Note: ``first_name`` and ``last_name`` are accepted as aliases but stored as ``name``.
@@ -272,6 +276,45 @@ def existing_tos_for_club_member(auction, member):
     return AuctionTOS.objects.filter(auction=auction, clubmember=member).order_by("createdon").first()
 
 
+def club_bidder_number_free_in(auction, member, tos=None):
+    """*member*'s club bidder number, or ``""`` if somebody else in *auction* already holds it.
+
+    The club and the auction are two different scopes. ``ClubMember.generate_bidder_number`` only
+    avoids numbers other *club members* hold, so a member joining a club-managed auction that also
+    contains people who joined it directly -- anyone who was there before it was switched to
+    club-managed -- can be handed a number that is already somebody else's here. It happens at
+    random, roughly one row in a few hundred, and it is not cosmetic: every lookup by number after
+    that (check-in, setting a winner, ``update_person``) has two rows to choose from and silently
+    picks one, so one person's new email address lands on another person's record.
+
+    Returning ``""`` lets ``AuctionTOS.save()`` pick a number that is free in this auction. The
+    member keeps the club number they were given -- it is the club's, and it is still unique there.
+    """
+    number = (member.bidder_number or "").strip()
+    if not number:
+        return ""
+    others = AuctionTOS.objects.filter(auction=auction, bidder_number=number).exclude(clubmember=member)
+    if tos is not None and tos.pk:
+        others = others.exclude(pk=tos.pk)
+    # Joining creates the participant row first and the club member second, so the row already
+    # holding this number is often the same person's. AuctionTOS.save() merges those two anyway.
+    if member.user_id:
+        others = others.exclude(user_id=member.user_id)
+    if member.email:
+        others = others.exclude(email__iexact=member.email)
+    if not others.exists():
+        return number
+    logger.warning(
+        "Club %s member pk=%s has bidder number '%s', which auction pk=%s already gave to somebody "
+        "else; their record there gets its own number.",
+        member.club_id,
+        member.pk,
+        number,
+        auction.pk,
+    )
+    return ""
+
+
 def apply_club_member_to_tos(auction, tos, member):
     """Copy *member*'s bidder number and permissions onto *tos*. Mutates it; does not save.
 
@@ -281,7 +324,11 @@ def apply_club_member_to_tos(auction, tos, member):
     if member is None or not auction.is_club_managed:
         return tos
     tos.clubmember = member
-    tos.bidder_number = member.bidder_number
+    free = club_bidder_number_free_in(auction, member, tos)
+    if free or tos.bidder_number == member.bidder_number:
+        # Blank when the club's number is taken here and this row is what is holding the duplicate:
+        # save() then picks one that is free. A row already carrying its own good number keeps it.
+        tos.bidder_number = free
     if auction.use_check_in_mode and not tos.checked_in:
         # Check-in mode: joining never grants bidding on its own. The member has to check in at the
         # event, which sets checked_in + bidding_allowed (mirrors the auto-add path in

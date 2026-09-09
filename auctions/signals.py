@@ -12,6 +12,7 @@ from django.dispatch import receiver
 from django.utils import timezone
 from django_ses.signals import bounce_received, complaint_received
 
+from .services import club_bidder_number_free_in
 from .site_setup import ensure_single_club_membership_for_user
 
 logger = logging.getLogger(__name__)
@@ -380,7 +381,9 @@ def propagate_clubmember_to_shadow_tos(sender, instance, created, **kwargs):
     (warning logged) rather than letting a unique-constraint violation crash the save.
 
     When a new member is created, auto-create shadow TOS records in any active
-    club-managed auctions that auto-add members ("all" or "checkin" mode).
+    club-managed auctions that auto-add members ("all" or "checkin" mode). Both paths check the
+    number against the auction as well as the club, because those are two different scopes and a
+    club-managed auction can still hold people who joined it directly.
     """
     from .models import Auction, AuctionTOS, PickupLocation
 
@@ -407,7 +410,7 @@ def propagate_clubmember_to_shadow_tos(sender, instance, created, **kwargs):
                 auction=auction,
                 pickup_location=default_location,
                 clubmember=instance,
-                bidder_number=instance.bidder_number,
+                bidder_number=club_bidder_number_free_in(auction, instance),
                 bidding_allowed=bidding,
                 selling_allowed=instance.selling_allowed,
                 name=instance.name or "",
