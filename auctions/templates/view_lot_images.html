@@ -92,11 +92,6 @@ function deactivate_lot() {
 }
 </script>
 <script type="text/javascript">
-    {% comment %}Recorded while the page parses, not from the load handler below: base_page_view.html
-    fires an automatic view at DOMContentLoaded, and the first call wins. From window.onload this
-    would arrive second and the lot FK -- which every organizer-facing report filters on -- would be
-    missing from the row.{% endcomment %}
-    pageView({'lot':{{ lot.pk }} });
     {% if only_whole_dollar_bids %}
     function next_bid(amount) {
         console.log(amount);

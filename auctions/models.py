@@ -5987,7 +5987,7 @@ class Auction(CachedPropertiesMixin, models.Model):
             date_start = date_end - time_difference
             dates_messed_with = True
 
-        views = PageView.objects.filter(Q(auction=self) | Q(lot_number__auction=self))
+        views = self.page_views
         joins = AuctionTOS.objects.filter(auction=self)
         new_lots = Lot.objects.filter(auction=self)
         searches = SearchHistory.objects.filter(auction=self)
@@ -6164,8 +6164,7 @@ class Auction(CachedPropertiesMixin, models.Model):
         from django.contrib.sites.models import Site
 
         views = (
-            PageView.objects.filter(Q(auction=self) | Q(lot_number__auction=self))
-            .exclude(referrer__isnull=True)
+            self.page_views.exclude(referrer__isnull=True)
             .exclude(referrer__startswith=Site.objects.get_current().domain)
             .exclude(referrer__exact="")
             .values("referrer")
@@ -6451,6 +6450,20 @@ class Auction(CachedPropertiesMixin, models.Model):
             ],
         }
 
+    @property
+    def page_views(self):
+        """Every page view of this auction: its rules page, its lot list, and its lots.
+
+        The OR is across a join, which is the one shape MariaDB cannot serve from an index, so
+        every caller of this needs its own window or its own reason to be cheap.
+
+        It is here because rows written before 2026-09-09 named only the lot. A lot page (and an
+        AR scan) now sends its auction as well -- see ``base_page_view.html`` for why only the
+        three visitor-facing pages send anything at all. Backfilling ``auction_id`` from
+        ``lot_number__auction_id`` on the old rows is what would collapse this to one column.
+        """
+        return PageView.objects.filter(Q(auction=self) | Q(lot_number__auction=self))
+
     @cached_property
     def unique_views(self):
         """Distinct visitors who viewed this auction's rules page or any of its lots.
@@ -6473,7 +6486,7 @@ class Auction(CachedPropertiesMixin, models.Model):
         Returns a dict with the total plus the logged-in / anonymous breakdown, reused by the
         auction stats page and the participation funnel chart.
         """
-        all_views = PageView.objects.filter(Q(auction=self) | Q(lot_number__auction=self))
+        all_views = self.page_views
         logged_in = all_views.filter(user__isnull=False).values("user").distinct().count()
         # Count anonymous sessions that never also appear on a logged-in row. Expressing this as
         # ``.exclude(session_id__in=<subquery over all_views>)`` makes MariaDB plan a
@@ -11666,7 +11679,7 @@ class PageView(CachedPropertiesMixin, models.Model):
 
     user = models.ForeignKey(User, on_delete=models.CASCADE, null=True, blank=True)
     auction = models.ForeignKey(Auction, null=True, blank=True, on_delete=models.CASCADE)
-    auction.help_text = "Only filled out when a user views an auction's rules page"
+    auction.help_text = "Set when a visitor views the auction's rules page, its lot list or one of its lots, and deliberately left empty on organizer-facing pages so that view counts stay visitor counts. Rows written before 2026-09-09 have it on the rules page only."
     lot_number = models.ForeignKey(Lot, null=True, blank=True, on_delete=models.CASCADE)
     lot_number.help_text = "Only filled out when a user views a specific lot's page"
     date_start = models.DateTimeField(auto_now_add=True, db_index=True)

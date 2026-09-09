@@ -1,12 +1,19 @@
 {% comment %}Included in base.html, so every page that extends it records exactly one view.
 
-A template that knows which lot or auction its page is about calls pageView with that pk from a
-parse-time script; that call *replaces* the automatic one rather than adding a second row, because
-the first call of either kind wins. That is why an enriched call has to run while the page is
-parsing. Made from a load handler it arrives after the automatic view has already gone, and the row
-lands with both FKs null -- which is invisible to every organizer-facing report, since they all
-filter on one of those two columns. auctions/test_page_view_beacon.py is the ratchet for that
-ordering.{% endcomment %}
+A page that is somebody looking at an auction says so from its *view*, by putting
+``page_view_auction`` (and ``page_view_lot``) in the context. Three do: the auction's rules page,
+its lot list, and a lot page. That list is the definition of Auction.unique_views -- "distinct
+visitors who viewed this auction's rules page or any of its lots" -- which organizers read on their
+own stats page, so the bidder list, the stats page and the edit form must not tag, even though all
+three have an `auction` in context. Reading the tag off whatever `auction` happens to be in scope
+would quietly fill an organizer's traffic number with their own admin visits.
+
+A lot page sends the auction too, not just the lot. Rows written before 2026-09-09 carry only the
+lot, which is why the readers of this data still match an auction as `auction_id OR
+lot_number__auction_id` -- an OR across a join, and the shape behind the July database incident.
+Backfilling the old rows is what would let that go.
+
+auctions/test_page_view_beacon.py is the ratchet for all of it.{% endcomment %}
 
 <script>
     var urlParams = new URLSearchParams(window.location.search);
@@ -17,13 +24,15 @@ ordering.{% endcomment %}
     // Remove uid
     newUrl = newUrl.replace(/(\?|&)uid=[^&]*(&|$)/, '$1').replace(/(&|\?)$/, '');
     window.history.replaceState(null, document.title, newUrl)
+    {% comment %}Empty on the pages that are not about a lot or an auction, which is most of them. The server treats an empty string as "not given" -- see PageViewCreate in views/ajax.py.{% endcomment %}
+    var pageViewSubject = {
+        lot: "{{ page_view_lot|default_if_none:'' }}",
+        auction: "{{ page_view_auction|default_if_none:'' }}",
+    };
     var pageViewSent = false;
     function pageView(data) {
         if (pageViewSent) { return; }
         pageViewSent = true;
-        sendPageView(data);
-    }
-    function sendPageView(data) {
         data = data ?? {};
         data.src = src;
         data.uid = uid;
@@ -45,5 +54,5 @@ ordering.{% endcomment %}
     }
     {% comment %}No timer. It used to wait two seconds, which deleted exactly the fast bounces --
     the confused mis-click, the immediate back button -- that a funnel is about.{% endcomment %}
-    document.addEventListener('DOMContentLoaded', function () { pageView(); });
+    document.addEventListener('DOMContentLoaded', function () { pageView(pageViewSubject); });
 </script>

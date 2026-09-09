@@ -150,7 +150,7 @@ this only quotes its opening sentence.
 - **`model_caching.py`** (101 lines)
   ``@cached_property`` on a model, and the invalidation that makes it safe.
   `InvalidatesRelatedCache`, `CachedPropertiesMixin`
-- **`models.py`** (15017 lines)
+- **`models.py`** (15030 lines)
   The database: 80 models, and the reason they are still in one file.
 - **`moderation_admin.py`** (139 lines)
   The Django admin for the moderation queue: reports, copyright notices and strikes.
@@ -241,7 +241,7 @@ this only quotes its opening sentence.
 - **`test_apple_notifications.py`** (645 lines)
   Tests for Sign in with Apple server-to-server notifications.
   `AppleNotificationTestCase`, `AppleNotificationVerificationTests`, `AppleNotificationForgeryTests`, `AppleNotificationEventParsingTests`, `AppleConsentRevokedTests`, `AppleAccountDeleteTests`, `AppleEmailForwardingTests`, `AppleNotificationRetryTests`, `AppleNotificationErrorTypeTests`, `AppleNotificationChecklistTests`
-- **`test_ar.py`** (1800 lines)
+- **`test_ar.py`** (1807 lines)
   Tests for Part 3 — AR lot scanning & location mapping, plus the two Part 1/2 follow-up fixes.
 - **`test_assistant_context.py`** (595 lines)
   What the assistant does when nobody is looking at a page.
@@ -380,9 +380,9 @@ this only quotes its opening sentence.
 - **`test_module_map.py`** (183 lines)
   Guards the module map: that it is current, and that the modules it reads are worth reading.
   `ModuleMapIsCurrentTests`, `ModuleRulesTests`, `RuleCheckerTests`, `SummaryTests`, `ViewsPackageStaysAcyclicTests`
-- **`test_page_view_beacon.py`** (141 lines)
+- **`test_page_view_beacon.py`** (159 lines)
   One view per page, recorded on every page, with no timer in front of it.
-  `BeaconSourceTests`, `OneViewPerPageTests`, `RowsFromTheBeaconTests`
+  `BeaconSourceTests`, `WhatCountsAsViewingAnAuctionTests`, `OneViewPerPageTests`, `RowsFromTheBeaconTests`
 - **`test_page_view_history_is_kept.py`** (47 lines)
   Repeat views of a page are history, not duplicates.
   `RepeatViewsAreKeptTests`
@@ -477,7 +477,7 @@ this only quotes its opening sentence.
   Selenium-based browser tests for client-side JavaScript functionality.
 - **`urls.py`** (1315 lines)
   Every URL on the site, and the one place a new one has to be declared.
-- **`usability_report.py`** (364 lines)
+- **`usability_report.py`** (365 lines)
   The usability measurements, in one place a dashboard can read.
   `route_name`, `reach_by_route`, `friction_by_form`, `abandoned_durations`, `worst_fields`, `buyer_funnel`, `funnel_referrers`
 - **`validators.py`** (19 lines)
@@ -643,7 +643,7 @@ The site's Model Context Protocol server, and the tool catalogue behind it.
 
 ## `auctions/mobile/services/`
 
-- **`ar.py`** (440 lines)
+- **`ar.py`** (445 lines)
   AR lot-scanning service — overlay/card metadata, observation ingestion, and position payloads.
   `ar_dirty_key`, `mark_auction_dirty`, `drain_dirty_auction_pks`, `locatable_auction_pks`, `build_lot_metadata`, `ingest_observations`, `record_ar_events`, `positions_payload`, `clear_positions`
 - **`auth.py`** (60 lines)
@@ -709,13 +709,13 @@ Every view on the site, split by what part of it the view belongs to.
 - **`admin_checklist.py`** (1064 lines)
   The admin setup checklist: the one page that says what a new site still needs.
   `AdminSetupChecklistView`
-- **`ajax.py`** (842 lines)
+- **`ajax.py`** (855 lines)
   The small endpoints the pages call, rather than the pages themselves.
 - **`auction_admin.py`** (1255 lines)
   Setting an auction up, and running the room: pickup locations, users, check-in.
 - **`auction_extras.py`** (664 lines)
   The rest of an auction's admin surface: label config, bulk printing, no-shows, chat.
-- **`auction_pages.py`** (1058 lines)
+- **`auction_pages.py`** (1061 lines)
   The auction as a thing you join: the TOS, creating one, and the auction's own page.
   `AuctionTOSDelete`, `AuctionTOSAdmin`, `AuctionConfirmView`, `AuctionCreateView`, `AuctionInfo`
 - **`auction_stats.py`** (1262 lines)
@@ -724,7 +724,7 @@ Every view on the site, split by what part of it the view belongs to.
   The breeder award program: settings, overrides, awards and the lots behind them.
 - **`base.py`** (1099 lines)
   Shared machinery for every view on the site: the mixins that decide who may see a page.
-- **`browse.py`** (832 lines)
+- **`browse.py`** (835 lines)
   The lot lists people browse, and what they do to a lot without opening it.
 - **`bulk_actions.py`** (476 lines)
   The bulk buttons on the auction admin pages: mark paid, set won, enable bidding.
@@ -762,7 +762,7 @@ Every view on the site, split by what part of it the view belongs to.
 - **`invoices.py`** (391 lines)
   Invoices as a person reads them: the list, one invoice, and the no-login link.
   `Invoices`, `InvoiceCreateView`, `InvoiceView`, `InvoiceNoLoginView`, `SquarePaymentSuccessView`
-- **`lot_pages.py`** (1467 lines)
+- **`lot_pages.py`** (1471 lines)
   One lot: its page, its photos, and creating or editing it.
 - **`moderation.py`** (227 lines)
   The copyright policy page, the notice form, and the report button on a lot.

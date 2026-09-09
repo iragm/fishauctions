@@ -230,6 +230,9 @@ class LotListView(AjaxListView):
             context["display_auction_on_lots"] = True
         if not self.request.COOKIES.get("longitude"):
             context["location_message"] = "Set your location to see lots near you"
+        # The beacon tags a page view with this auction. Only the three pages that are a
+        # visitor looking at an auction do -- see base_page_view.html.
+        context["page_view_auction"] = context["auction"].pk if context["auction"] else None
         context["src"] = "lot_list"
         return context
 

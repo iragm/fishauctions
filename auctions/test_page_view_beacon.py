@@ -6,107 +6,110 @@ rather than unvisited, and a page somebody bounced off in a second recorded noth
 deletes exactly the confused mis-clicks a funnel is about.  ``base_page_view.html`` now fires one
 view at ``DOMContentLoaded`` on every page that extends ``base.html``.
 
-Two of these tests read the template source rather than exercising behaviour, because the invariant
-they protect is a JavaScript one and this suite runs no JavaScript.  They are ratchets: the first
-``pageView()`` call of a page wins, so a call that carries a lot or an auction has to happen while
-the page is parsing.  Made from a load handler it arrives *after* the automatic view has gone, and
-the row lands with both FKs null -- which is invisible rather than wrong, since every
-organizer-facing read of ``PageView`` filters on one of those two columns.
+Which auction (if any) that view is *about* comes from the view, in ``page_view_auction`` and
+``page_view_lot``.  Three pages set it, and the list is not an accident of which templates have an
+``auction`` in context: it is the definition of ``Auction.unique_views`` -- "distinct visitors who
+viewed this auction's rules page or any of its lots" -- which organizers read on their own stats
+page.  The bidder list, the stats page and the auction edit form all have an ``auction`` in scope
+and must not tag, or an organizer's traffic number fills up with their own admin visits.  The
+class below that opens all six pages is what holds that line.
 """
 
-import re
 from pathlib import Path
 
 from django.contrib.auth.models import User
 from django.test import TestCase
 from django.urls import reverse
 
-from auctions.models import PageView
+from auctions.models import Lot, PageView
 from auctions.tests import StandardTestCase
 
 TEMPLATES = Path(__file__).resolve().parent / "templates"
 BEACON = TEMPLATES / "base_page_view.html"
 
-# Anything that defers a call past parse time. An enriched pageView() call inside one of these is
-# the bug this module exists to prevent.
-DEFERRED = (
-    "window.onload",
-    "$(document).ready(",
-    "$(function(",
-    "addEventListener('load'",
-    'addEventListener("load"',
-)
-
-
-COMMENT = re.compile(r"{% comment %}.*?{% endcomment %}|{#.*?#}", re.DOTALL)
-
-
-def _templates_calling_page_view():
-    """Every template that calls the beacon, with its comments stripped.
-
-    The comments have to go: this module's whole subject is where in a file a call sits, and the
-    notes explaining that rule name ``window.onload`` themselves.
-    """
-    for path in sorted(TEMPLATES.rglob("*.html")):
-        if path == BEACON:
-            continue
-        text = COMMENT.sub("", path.read_text())
-        if "pageView(" in text:
-            yield path, text
-
 
 class BeaconSourceTests(TestCase):
     def test_the_beacon_does_not_wait(self):
         """The two-second timer deleted the fast bounces, which are the interesting ones."""
-        source = BEACON.read_text()
-        self.assertNotIn("setTimeout", source)
+        self.assertNotIn("setTimeout", BEACON.read_text())
 
     def test_it_fires_itself_on_every_page(self):
         source = BEACON.read_text()
         self.assertIn("DOMContentLoaded", source)
-        self.assertIn("pageView();", source)
+        self.assertIn("pageView(pageViewSubject)", source)
 
-    def test_the_first_call_wins(self):
-        """An enriched call replaces the automatic view rather than adding a second row."""
+    def test_one_row_per_page(self):
         source = BEACON.read_text()
         self.assertIn("if (pageViewSent) { return; }", source)
         self.assertIn("pageViewSent = true;", source)
 
-    def test_a_call_naming_a_lot_or_an_auction_runs_while_the_page_parses(self):
-        """The ratchet. Moving one of these into a load handler loses the FK it exists to carry."""
-        enriched = re.compile(r"pageView\(\s*\{|pageView\(\{%")
-        checked = 0
-        for path, text in _templates_calling_page_view():
-            match = enriched.search(text)
-            if not match:
-                continue
-            checked += 1
-            for opener in DEFERRED:
-                position = text.find(opener)
-                if position == -1:
-                    continue
-                self.assertLess(
-                    match.start(),
-                    position,
-                    f"{path.name} calls pageView with data after {opener}; the automatic view in "
-                    "base_page_view.html has already fired by then and the lot/auction FK is lost.",
-                )
-        self.assertGreaterEqual(checked, 3, "expected the lot, auction and all-lots pages to name their FK")
+    def test_no_template_calls_the_beacon_itself(self):
+        """The ratchet, and the reason there is nothing left to get in the wrong order.
+
+        34 templates used to call ``pageView()`` with no arguments, which by then was exactly what
+        base.html already did, and three called it with a pk from a parse-time script -- where they
+        had to be, because whichever call ran first won.  A template calling it again brings that
+        back: run early it silently replaces the tagged view, run late it is dropped.
+        """
+        callers = [
+            path.name
+            for path in sorted(TEMPLATES.rglob("*.html"))
+            if path != BEACON and "pageView(" in path.read_text()
+        ]
+        self.assertEqual(
+            callers,
+            [],
+            f"{callers} call the beacon directly; set page_view_auction/page_view_lot in the view instead.",
+        )
+
+
+class WhatCountsAsViewingAnAuctionTests(StandardTestCase):
+    """The three pages that tag, and three with an auction in context that must not."""
+
+    def _subject(self, url):
+        """The lot and auction the beacon on this page will send, as the browser would read them."""
+        page = self.client.get(url).content.decode()
+        lot = page.split('lot: "', 1)[1].split('"', 1)[0]
+        auction = page.split('auction: "', 1)[1].split('"', 1)[0]
+        return lot, auction
+
+    def test_the_lot_page_sends_its_lot_and_its_auction(self):
+        """Both, so a reader can match the auction on one indexed column."""
+        self.assertEqual(
+            self._subject(self.lot.lot_link),
+            (str(self.lot.pk), str(self.online_auction.pk)),
+        )
+
+    def test_the_rules_page_sends_the_auction(self):
+        url = reverse("auction_main", kwargs={"slug": self.online_auction.slug})
+        self.assertEqual(self._subject(url), ("", str(self.online_auction.pk)))
+
+    def test_the_auctions_lot_list_sends_the_auction(self):
+        url = reverse("allLots") + f"?auction={self.online_auction.slug}"
+        self.assertEqual(self._subject(url), ("", str(self.online_auction.pk)))
+
+    def test_the_lot_list_with_no_auction_sends_nothing(self):
+        self.assertEqual(self._subject(reverse("allLots")), ("", ""))
+
+    def test_a_lot_with_no_auction_sends_only_the_lot(self):
+        lot = Lot.objects.create(lot_name="No auction here", user=self.user, quantity=1)
+        self.assertEqual(self._subject(lot.lot_link), (str(lot.pk), ""))
+
+    def test_the_organizers_own_pages_do_not_tag_the_auction(self):
+        """The one that protects unique_views. All three have an ``auction`` in context."""
+        self.client.login(username="admin_user", password="testpassword")
+        for name in ("auction_tos_list", "auction_stats", "edit_auction"):
+            url = reverse(name, kwargs={"slug": self.online_auction.slug})
+            with self.subTest(page=name):
+                self.assertEqual(self._subject(url), ("", ""))
 
 
 class OneViewPerPageTests(StandardTestCase):
-    def test_a_page_that_never_opted_in_now_records_one(self):
+    def test_a_page_that_never_opted_in_records_one(self):
         """105 pages gained the beacon this way; login and signup are the two this phase is for."""
         self.client.login(username="my_lot", password="testpassword")
-        response = self.client.get(reverse("user_api_keys"))
-        page = response.content.decode()
-        self.assertNotIn("pageView({", page)
-        self.assertIn("DOMContentLoaded', function () { pageView(); }", page)
-
-    def test_the_lot_page_names_its_lot_exactly_once(self):
-        response = self.client.get(self.lot.lot_link)
-        page = response.content.decode()
-        self.assertEqual(page.count(f"pageView({{'lot':{self.lot.pk} }})"), 1)
+        page = self.client.get(reverse("user_api_keys")).content.decode()
+        self.assertEqual(page.count("pageView(pageViewSubject)"), 1)
 
 
 class RowsFromTheBeaconTests(TestCase):
@@ -131,11 +134,26 @@ class RowsFromTheBeaconTests(TestCase):
         self._beacon("/account/")
         self.assertEqual(PageView.objects.filter(url="/account/").count(), 1)
 
-    def test_a_view_that_names_no_lot_and_no_auction_is_invisible_to_an_organizer(self):
-        """Why no admin-only flag is needed on the write side: the separation is already in the
-        data. Every organizer-facing read filters on one of these two FKs."""
+    def test_an_untagged_page_is_invisible_to_an_organizer(self):
+        """Why no admin-only flag is needed on the write side: the separation is in the data.
+        Every organizer-facing read of PageView filters on one of these two FKs."""
         for path in ("/account/", "/clubs/", "/auctions/x/edit/"):
             self._beacon(path)
         self.assertEqual(PageView.objects.count(), 3)
         self.assertEqual(PageView.objects.filter(lot_number__isnull=False).count(), 0)
         self.assertEqual(PageView.objects.filter(auction__isnull=False).count(), 0)
+
+    def test_an_empty_subject_is_not_a_pk(self):
+        """Every page posts both keys; most post them empty. An empty string is 'not given'."""
+        self._beacon("/account/", lot="", auction="")
+        row = PageView.objects.get(url="/account/")
+        self.assertIsNone(row.lot_number)
+        self.assertIsNone(row.auction)
+
+    def test_a_junk_subject_does_not_500(self):
+        """The endpoint is AllowAny, so anyone at all can post whatever they like to it."""
+        response = self._beacon("/account/", lot="abc", auction="../1")
+        self.assertEqual(response.status_code, 200)
+        row = PageView.objects.get(url="/account/")
+        self.assertIsNone(row.lot_number)
+        self.assertIsNone(row.auction)

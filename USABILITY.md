@@ -55,7 +55,7 @@ Ordered by (unblocks-other-work x value). Status: `todo` | `wip` | `done`.
 | 4 | Contextual help in the `help-note` format, one per page | `templates/` | done (first pass) |
 | 5 | Accessibility debt: images with no `alt`, icon-only controls with no name, silent HTMx swaps | `templates/`, `template_a11y.py` | done |
 | 6 | First paint: defer the head scripts, content-hashed `/static/` cached for a year | `base.html`, `static_storage.py`, `nginx_fishauctions.conf` | done -- jQuery is the one that cannot move, and `base.html` says why |
-| 7 | Buyers and sellers: fire `pageView` on every page and drop the 2s delay, then read the funnel off rows that already exist | `base_page_view.html`, `usability_report.py`, `views/lot_pages.py`, `view_lot_images.html` | done |
+| 7 | Buyers and sellers: fire `pageView` on every page and drop the 2s delay, then read the funnel off rows that already exist | `base_page_view.html`, `usability_report.py`, `views/lot_pages.py`, `views/browse.py`, `views/auction_pages.py`, `mobile/services/ar.py` | done |
 | 8a | The stage ladder on `Club`, the map gate, the stall reason, and the `aware` rung | `models.py`, `club_health.py`, `views/usability.py`, migrations 0430-0431 | done |
 | 8b-8f | The link verifier, umbrella directories, the crawl, city search, the outreach loop | `management/commands/` | todo -- needs the network, see below |
 
@@ -146,6 +146,10 @@ second -- so all 37 existing call sites keep working untouched. `REACH_CAVEATS` 
 `usability_report.py` comes out in the same commit; a caveat that is no longer true is worse than
 no caveat.
 
+*Revised the same day -- see 7a.2.* Keeping the 37 call sites working was the right way to land the
+change and the wrong place to leave it: 34 of them passed no arguments at all, which by then was
+exactly what `base.html` already did.
+
 **Growth, corrected.** An earlier draft of this section made a retention purge a prerequisite. It
 is not one, and the write-rate claim behind it was wrong. 248 is the *template* count; only 138
 extend `base.html`, and 33 of those already call `pageView`, so the beacon reaches **105 new
@@ -190,6 +194,9 @@ The read side is where the size of this table actually bites, and 7b is the exam
 page view to an auction is `pageview.auction_id OR lot.auction_id`, an OR across a join no single
 index serves, so both funnel queries carry a `date_start` floor. Unbounded they are a full scan of
 `PageView` -- the shape behind a past production incident -- from a page an admin opens casually.
+That OR is not inherent, though: it exists because a lot page recorded only its lot. Since 7a.2 it
+records both, so the OR only covers rows written before 2026-09-09. Backfilling those is the one
+thing that would retire it -- see the open questions below.
 
 The one deletion that is clearly right is the one migration `0232_delete_baiduspider_pageviews`
 already made: bots. Bot rows are not retention data.
@@ -231,6 +238,41 @@ rows are cheaper than the history they hold.
 Tests: a route that renders `base.html` records exactly one view; a template naming a lot records
 one row with the FK set, not two; an anonymous request records one; and the auction stats totals are
 unchanged by views of pages that name no lot and no auction.
+
+#### 7a.2. The subject of a view comes from the view -- done
+
+Landing 7a without touching the 37 call sites was deliberate; leaving them there was not. **34 of
+them called `pageView()` with no arguments**, which after 7a was precisely what `base.html` already
+did -- dead weight, and 34 more places for the ordering rule to be got wrong. They are gone. The
+other three carried a pk and had to run at parse time to beat the automatic view, which is a rule
+that only existed because there were two callers.
+
+There is one caller now. A page says what it is about from its **view**, in `page_view_auction` and
+`page_view_lot`; `base_page_view.html` reads them out of the context and sends them with the one
+view it already fires. No ordering, no `{% block %}`, nothing for a template to do.
+
+**Not from whatever `auction` is in the context.** That was the tempting version and it is wrong.
+An `auction` in context means an `Auction` is in scope; the tag means *a visitor looked at this
+auction*, and the two part company on exactly the pages that matter. `auction_stats.html` has 31
+references to `auction`, `auction_users.html` and the edit form have it too, and tagging them would
+quietly redefine `Auction.unique_views` -- "distinct visitors who viewed this auction's rules page
+or any of its lots", which organizers read on their own stats page -- to include the organizer's
+own admin traffic. The list of pages that tag *is* that definition, which is why it lives in three
+views and has a test that opens all six pages.
+
+**A lot page now sends its auction as well as its lot**, and so does an AR scan
+(`mobile/services/ar.py`, where the auction is already the argument every lot was filtered
+against). That is the point of the exercise: `Auction.page_views` -- the shared queryset behind
+`unique_views`, the activity chart and the referrer chart, extracted here because it was written
+out three times -- matches `pageview.auction_id OR lot.auction_id`, an OR across a join MariaDB
+cannot serve from one index and the shape behind a past production incident. New rows no longer
+need the OR at all.
+
+Writing the test found a bug that would have been a 500 on **every page of the site**: every page
+now posts `auction=""`, and `PageViewCreate` passed a falsy-but-not-`None` value straight to the
+FK, where Django raises `ValueError` before the row is built. The endpoint is `AllowAny`, so
+`beacon_subject()` treats a junk pk the same way -- `filter(pk="abc")` raises too, and a 500 on a
+beacon is a 500 in the middle of somebody's page load.
 
 ### 7b. The funnel is then a report, not a table -- done
 
@@ -459,6 +501,13 @@ because they are decisions about what this site should do, not about how to writ
 - **A single-club deployment lists its own club automatically.** `get_single_club` now forces
   `outreach_stage` to `listed` on every call, so that one club cannot be un-listed by hand. On a
   single-club site the club is the site; anywhere else that would be the wrong rule.
+- **Old `PageView` rows were left alone.** Since 7a.2 a lot view names its auction, so
+  `Auction.page_views` only needs its `auction_id OR lot.auction_id` for rows written before
+  2026-09-09 -- and that OR is why `unique_views`, both stat charts and both funnel queries can
+  never be served by one index. Retiring it means an `UPDATE ... SET auction_id = lot.auction_id`
+  across the largest and least-purged table on the site, which is not a migration: it is a chunked
+  management command run in a quiet window, next to migration `0423`'s advice about the same table.
+  Doing it silently in this change would have been the wrong call. **Worth doing, needs a window.**
 
 ## Still needs a person, not a decision
 
@@ -494,6 +543,28 @@ because they are decisions about what this site should do, not about how to writ
 Newest first.
 
 <!-- PASS LOG START -->
+
+### 2026-09-09 -- the beacon's subject moves to the view
+
+Asked why a page view needs 37 hand-placed calls when the views already know what page they are
+on. Mostly it did not: **34 of the 37 passed no arguments**, and had been redundant since the
+morning's commit made `base.html` fire the same view itself. They are deleted. The other three
+moved into their views as `page_view_auction` / `page_view_lot`, which leaves one caller, no
+ordering rule and nothing for a template to do -- `test_page_view_beacon.py` now fails the build if
+any template calls the beacon at all.
+
+The tempting version -- read the tag off whatever `auction` is in the context -- is the one thing
+that must not happen, and the reason is a number organizers already read. `unique_views` is
+"distinct visitors who viewed this auction's rules page or any of its lots"; the bidder list, the
+stats page and the edit form all have an `auction` in scope, and tagging them would fill an
+organizer's own traffic count with their own admin visits. Three pages tag, and that list is the
+definition.
+
+A lot page (and an AR scan) now names its auction as well as its lot, which is what makes the
+`auction_id OR lot.auction_id` in `Auction.page_views` a legacy clause rather than a permanent one.
+The new test caught a would-have-been-fatal bug on the way: with every page posting `auction=""`,
+`PageViewCreate` handed an empty string to the FK, which raises before the row is built -- a 500 on
+every page of the site.
 
 ### 2026-09-09 -- review round on phase 7 and 8a
 

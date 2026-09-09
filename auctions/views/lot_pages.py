@@ -429,6 +429,10 @@ class ViewLot(DetailView):
         context = super().get_context_data(**kwargs)
         context["domain"] = Site.objects.get_current().domain
         context["is_auction_admin"] = False
+        context["page_view_lot"] = lot.pk
+        # Sending the auction as well as the lot is what lets a reader of this data match an
+        # auction on one indexed column; see base_page_view.html.
+        context["page_view_auction"] = lot.auction_id
         if lot.auction:
             context["auction"] = lot.auction
             context["is_auction_admin"] = lot.auction.permission_check(self.request.user)

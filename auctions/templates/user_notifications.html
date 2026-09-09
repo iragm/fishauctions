@@ -12,7 +12,7 @@
     {% if form.can_subscribe_to_webpush %}{% webpush_header %}{% endif %}
 {% endblock %}
 {% block extra_js %}
-<script type='text/javascript'>pageView();
+<script type='text/javascript'>
     {% if form.can_subscribe_to_webpush %}
     $('#subscribe_message_area').html(`. <span class=''>This will only work if you {% webpush_button with_class="btn btn-link btn-sm" %} on this device</span>`);
     if (Notification.permission !== "granted") {

@@ -901,6 +901,9 @@ class AuctionInfo(FormFrictionMixin, FormMixin, DetailView, AuctionViewMixin):
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
+        # The beacon tags a page view with this auction. Only the three pages that are a
+        # visitor looking at an auction do -- see base_page_view.html.
+        context["page_view_auction"] = self.auction.pk
         context["pickup_locations"] = self.auction.locations
         current_site = Site.objects.get_current()
         context["domain"] = current_site.domain

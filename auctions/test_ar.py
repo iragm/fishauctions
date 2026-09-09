@@ -1213,6 +1213,13 @@ class ArEventsEndpointTests(ArApiBaseTestCase):
         self._post(self.user, [{"lot": self.lot_a.pk, "event": "scanned"}])
         self.assertEqual(Lot.objects.get(pk=self.lot_a.pk).page_views, before + 1)
 
+    def test_the_row_names_the_auction_as_well_as_the_lot(self):
+        """Same as the browser beacon: a reader matches the auction on one indexed column, not on
+        ``auction_id OR lot_number__auction_id``. See base_page_view.html."""
+        self._post(self.user, [{"lot": self.lot_a.pk, "event": "scanned"}])
+        row = PageView.objects.get(lot_number=self.lot_a, source="ar_scan")
+        self.assertEqual(row.auction, self.auction)
+
     def test_cross_auction_and_unknown_lots_dropped_silently(self):
         resp = self._post(
             self.user,

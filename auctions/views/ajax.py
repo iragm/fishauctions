@@ -419,6 +419,23 @@ class FormAbandonedBeacon(APIView):
         return JsonResponse({"recorded": True}, status=201)
 
 
+def beacon_subject(model, pk, **extra):
+    """The lot or auction a page view names, or None.
+
+    The beacon posts both keys on every page and most pages leave them empty (see
+    base_page_view.html), so "" has to mean "not given" rather than reach the FK -- assigning it
+    raises ValueError before the row is built. A junk pk has to mean the same thing: this endpoint
+    is AllowAny, and ``filter(pk="abc")`` raises too, which on a beacon is a 500 in the middle of
+    somebody's page load.
+    """
+    if not pk:
+        return None
+    try:
+        return model.objects.filter(pk=pk, **extra).first()
+    except (ValueError, TypeError):
+        return None
+
+
 class PageViewCreate(APIView):
     """Record page views"""
 
@@ -427,12 +444,8 @@ class PageViewCreate(APIView):
 
     def post(self, request):
         data = request.POST
-        auction = data.get("auction", None)
-        if auction:
-            auction = Auction.objects.filter(pk=auction).first()
-        lot_number = data.get("lot", None)
-        if lot_number:
-            lot_number = Lot.objects.filter(pk=lot_number, is_deleted=False).first()
+        auction = beacon_subject(Auction, data.get("auction"))
+        lot_number = beacon_subject(Lot, data.get("lot"), is_deleted=False)
         url = page_view_path(data.get("url"), request.get_host())
         first_view = data.get("first_view", False)
         if request.user.is_authenticated:
