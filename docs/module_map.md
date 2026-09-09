@@ -241,7 +241,7 @@ this only quotes its opening sentence.
 - **`test_apple_notifications.py`** (645 lines)
   Tests for Sign in with Apple server-to-server notifications.
   `AppleNotificationTestCase`, `AppleNotificationVerificationTests`, `AppleNotificationForgeryTests`, `AppleNotificationEventParsingTests`, `AppleConsentRevokedTests`, `AppleAccountDeleteTests`, `AppleEmailForwardingTests`, `AppleNotificationRetryTests`, `AppleNotificationErrorTypeTests`, `AppleNotificationChecklistTests`
-- **`test_ar.py`** (1807 lines)
+- **`test_ar.py`** (1813 lines)
   Tests for Part 3 — AR lot scanning & location mapping, plus the two Part 1/2 follow-up fixes.
 - **`test_assistant_context.py`** (595 lines)
   What the assistant does when nobody is looking at a page.
@@ -343,7 +343,7 @@ this only quotes its opening sentence.
   `LotLabelViewTestCase`, `UpdateLotPushNotificationsViewTestCase`, `LotPushTestNotificationViewTestCase`, `ViewLotSimpleTestCase`, `DynamicSetLotWinnerViewTestCase`, `LotQueueViewTestCase`, `AlternativeSplitLabelTests`
 - **`test_marketing.py`** (848 lines)
   Mailchimp and Brevo: syncing members, webhooks, self-service and what gets redacted.
-- **`test_mcp.py`** (1514 lines)
+- **`test_mcp.py`** (1540 lines)
   Tests for the MCP tool catalogue.
 - **`test_mcp_permissions.py`** (694 lines)
   Every tool on ``/mcp/``, pointed at somebody else's club and somebody else's auction.
@@ -422,7 +422,7 @@ this only quotes its opening sentence.
   `FakeResponse`, `fake_get`, `SourceTestCase`, `RepositorySettingTests`, `TheArchiveIsTheAllowlistTests`, `ReadingTests`, `ContentSearchTests`, `ReadSourceToolTests`
 - **`test_speakers.py`** (1380 lines)
   Tests for the speaker directory: the NEC WordPress import, NEC-only scoping, the
-- **`test_species.py`** (5056 lines)
+- **`test_species.py`** (5061 lines)
   Tests for scientific names on lots: matching, the picker, labels, and genus BAP points.
 - **`test_square.py`** (946 lines)
   Square: taking a payment, refunding one, the OAuth grant, and webhook signatures.
@@ -469,9 +469,9 @@ this only quotes its opening sentence.
   `DiscordJoinModalNameTests`, `DiscordJoinButtonTests`, `ClubMemberNameModelTests`, `ClubMemberIngestNameTests`, `GoogleWalletClassCreateTests`, `MembershipNumberUniquenessTests`, `AppleWalletPassTests`, `PassKitWebServiceTests`, `MembershipNumberModeTests`, `ClubIconWalletTests`
 - **`test_wallet_status.py`** (1353 lines)
   Wallet status text, error-page logging, and the label-printing surfaces in the app.
-- **`tests.py`** (405 lines)
+- **`tests.py`** (429 lines)
   The shared test fixture, and the helpers every other test module builds on.
-  `patch_views`, `WritableMediaRoot`, `CsvImportTestMixin`, `StandardTestCase`, `SuiteStaysFastTests`
+  `patch_views`, `WritableMediaRoot`, `CsvImportTestMixin`, `StandardTestCase`, `SuiteStaysFastTests`, `EveryTestStartsInTheSiteTimezoneTests`
 - **`tests_selenium.py`** (1045 lines)
   Selenium-based browser tests for client-side JavaScript functionality.
 - **`urls.py`** (1315 lines)
@@ -816,9 +816,9 @@ This will make sure the app is always imported when
 - **`static_storage.py`** (63 lines)
   Content-hashed names for `/static/`, tolerant of the two things that would break a deploy.
   `CacheBustedStaticFilesStorage`
-- **`test_runner.py`** (57 lines)
-  The test runner, which exists to swap the password hasher out.
-  `use_fast_hashers`, `FastParallelTestSuite`, `FastTestRunner`
+- **`test_runner.py`** (97 lines)
+  The test runner: the cheap password hasher, and the timezone reset between tests.
+  `reset_timezone_between_tests`, `use_fast_hashers`, `FastParallelTestSuite`, `FastTestRunner`
 - **`urls.py`** (88 lines)
 - **`uvicorn_worker.py`** (15 lines)
   Custom gunicorn worker that runs uvicorn on the stdlib asyncio loop.

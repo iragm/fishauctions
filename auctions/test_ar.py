@@ -301,6 +301,11 @@ class ArHeadingOdometryTests(TestCase):
 
     def setUp(self):
         self.now = timezone.now()
+        # Put the stream back afterwards. ``random`` is one generator per process, so seeding it
+        # here pins it for every test that runs after this one in the same --parallel worker --
+        # including AuctionTOS.save()'s bidder numbers, which then depend on the order the suite
+        # happened to be split in rather than on chance.
+        self.addCleanup(random.setstate, random.getstate())
         random.seed(1234)
 
     def test_walk_recovers_cross_table_direction_with_yaw(self):
@@ -336,6 +341,7 @@ class ArOdometryTests(TestCase):
 
     def setUp(self):
         self.now = timezone.now()
+        self.addCleanup(random.setstate, random.getstate())  # see ArHeadingOdometryTests.setUp
         random.seed(4321)
 
     def _one_pair_data(self, *, yaw_a=0.0, yaw_b=0.0, dodo=(2.0, 0.0)):

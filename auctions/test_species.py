@@ -4436,7 +4436,12 @@ class RememberedAnswersCanBeUnlearnedTests(StandardTestCase):
         finally:
             llm.set_provider_override(None)
         offered = provider.calls[-1]["messages"][-1]["content"]
-        self.assertNotIn(f"{self.guppy.pk}: ", offered)
+        # Anchored to the start of a candidate line: the listing is "<pk>: <name>" one per line, so
+        # a bare "12: " is also a substring of "112: " -- somebody else's line, on a run where the
+        # primary keys happen to straddle a power of ten. They are not fixed; MariaDB does not roll
+        # an AUTO_INCREMENT back with the transaction, so they depend on how many rows every class
+        # before this one in the same --parallel worker inserted.
+        self.assertNotIn(f"\n{self.guppy.pk}: ", offered)
         self.assertEqual(found, [])
 
     def test_and_naming_one_anyway_is_not_written_down_as_no_species(self):
