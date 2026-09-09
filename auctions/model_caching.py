@@ -14,7 +14,9 @@ Two rules keep it correct, and :class:`CachedPropertiesMixin` implements the fir
   is how that is declared -- ``Bid.invalidates_cache_on = ("lot_number",)`` -- at the write, not at
   every call site.
 
-Which properties are cached, and why each one was worth it, is in ``OPTIMIZATION.md``.
+Which properties are cached is visible where they are declared; what each one is worth is
+asserted in ``auctions/test_query_counts.py``, which measures the cost of one more row rather than
+describing it.
 """
 
 from django.utils.functional import cached_property

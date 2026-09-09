@@ -29,11 +29,17 @@ this only quotes its opening sentence.
 - **`account_nav.py`** (220 lines)
   The **Account setup** menu: which pages are in it, which one you're on, and where /account/setup/ lands.
   `Row`, `Group`, `active_page`, `remember`, `landing_url`, `groups_for`
-- **`admin.py`** (1681 lines)
+- **`admin.py`** (1630 lines)
   The Django admin: the staff-only back door, and the handful of jobs that only live here.
 - **`admin_paginator.py`** (51 lines)
   Paginate the admin's biggest changelists without counting the whole table.
   `EstimatedCountPaginator`
+- **`admin_performance.py`** (173 lines)
+  Two rules that keep an admin change page from querying once per row it shows.
+  `FlatInline`, `every_admin`, `use_lookup_widgets`
+- **`ads_admin.py`** (122 lines)
+  The advertising admin: campaign groups, the campaigns in one, and what they cost to show.
+  `AdCampaignResponseInline`, `AdCampaignInline`, `AdCampaignAdmin`, `AdCampaignGroupAdmin`
 - **`announcements.py`** (491 lines)
   Club announcements: one message, sent to the places a club's members actually look.
 - **`app_links.py`** (153 lines)
@@ -131,7 +137,7 @@ this only quotes its opening sentence.
 - **`history.py`** (161 lines)
   What an edit changed, in a form a query can answer.
   `is_secret_field`, `jsonable`, `truncate`, `changed_field_summary`, `record_club_history`, `field_label`
-- **`html_sanitize.py`** (134 lines)
+- **`html_sanitize.py`** (135 lines)
   Sanitizing the rich text people paste into Summernote.
   `sanitize_summernote_html`, `remove_html_color_tags`
 - **`llm.py`** (453 lines)
@@ -141,10 +147,10 @@ this only quotes its opening sentence.
 - **`middleware.py`** (64 lines)
   Custom middleware for the auctions application.
   `MobileAppMiddleware`
-- **`model_caching.py`** (99 lines)
+- **`model_caching.py`** (101 lines)
   ``@cached_property`` on a model, and the invalidation that makes it safe.
   `InvalidatesRelatedCache`, `CachedPropertiesMixin`
-- **`models.py`** (14888 lines)
+- **`models.py`** (14961 lines)
   The database: 80 models, and the reason they are still in one file.
 - **`moderation_admin.py`** (139 lines)
   The Django admin for the moderation queue: reports, copyright notices and strikes.
@@ -155,7 +161,7 @@ this only quotes its opening sentence.
 - **`moderation_models.py`** (218 lines)
   Reports about content, copyright notices, and the strikes that come out of them.
   `ContentReport`, `CopyrightNotice`, `CopyrightStrike`
-- **`module_map.py`** (256 lines)
+- **`module_map.py`** (203 lines)
   The map of this repository: which module does what, generated from the modules themselves.
   `Module`, `iter_modules`, `render`, `rule_violations`, `main`
 - **`notifications.py`** (265 lines)
@@ -226,6 +232,9 @@ this only quotes its opening sentence.
 - **`test_admin_paginator.py`** (79 lines)
   ``EstimatedCountPaginator``: what it counts exactly and what it guesses at.
   `EstimatedCountPaginatorTests`, `PageViewChangelistTests`
+- **`test_admin_performance.py`** (353 lines)
+  The admin's own query counts: no dropdown over an unbounded table, and no query per inline row.
+  `NoDropdownOverAnUnboundedTableTests`, `AdminChangePageGrowthTests`
 - **`test_app_links.py`** (154 lines)
   Part LINKS — the two files that make a site link open in the app.
   `AppLinkFilesTests`, `AppLinksUnconfiguredTests`
@@ -311,9 +320,9 @@ this only quotes its opening sentence.
 - **`test_endauctions.py`** (930 lines)
   The ``endauctions`` command and the websocket layer that tells everyone what happened.
   `LotEndauctionsMethodsTests`, `WebsocketClientDisconnectTests`, `WebSocketConsumerTests`, `HasEverGrantedPermissionTests`
-- **`test_form_friction.py`** (532 lines)
+- **`test_form_friction.py`** (535 lines)
   Tests for the friction instrument: which form, which field, how many attempts, did they finish.
-- **`test_helpers.py`** (1380 lines)
+- **`test_helpers.py`** (1389 lines)
   The utility layer -- helper functions, model utilities, template tags, context processors.
   `HelperFunctionsTestCase`, `ModelUtilityFunctionsTestCase`, `FormsUtilityTestCase`, `TemplateTagsTestCase`, `ContextProcessorsTestCase`, `FooterIconTests`, `SiteWebmanifestTests`, `GoogleLoginTemplateVisibilityTests`, `AdminSetupChecklistViewTests`
 - **`test_invoice_models.py`** (220 lines)
@@ -336,7 +345,7 @@ this only quotes its opening sentence.
   `LotLabelViewTestCase`, `UpdateLotPushNotificationsViewTestCase`, `LotPushTestNotificationViewTestCase`, `ViewLotSimpleTestCase`, `DynamicSetLotWinnerViewTestCase`, `LotQueueViewTestCase`, `AlternativeSplitLabelTests`
 - **`test_marketing.py`** (848 lines)
   Mailchimp and Brevo: syncing members, webhooks, self-service and what gets redacted.
-- **`test_mcp.py`** (1503 lines)
+- **`test_mcp.py`** (1514 lines)
   Tests for the MCP tool catalogue.
 - **`test_mcp_permissions.py`** (694 lines)
   Every tool on ``/mcp/``, pointed at somebody else's club and somebody else's auction.
@@ -347,7 +356,7 @@ this only quotes its opening sentence.
 - **`test_mcp_widgets.py`** (208 lines)
   Tests for the MCP-app widgets — the ``ui://`` resources a host renders instead of the JSON.
   `BundleTests`, `CatalogueTests`, `DocumentTests`, `ResourceEndpointTests`
-- **`test_membership_flow.py`** (1336 lines)
+- **`test_membership_flow.py`** (1339 lines)
   Club membership as money: invoices, discounts, renewals and the confirmation emails.
   `InvoiceStatusButtonTests`, `ClubMembershipRenewalFlowTests`, `PayPalSubscriptionWebhookTests`, `ClubMemberDiscountTests`, `ClubMoneyRenewalConsistencyTests`, `ClubMembershipEmailTaskTests`, `ClubBarcodeViewTests`, `QuickCheckoutHTMXTests`
 - **`test_mobile_features.py`** (2654 lines)
@@ -369,7 +378,7 @@ this only quotes its opening sentence.
 - **`test_models_misc.py`** (1206 lines)
   Model methods, signal behaviour, and the management commands that email people.
   `ModelMethodsTestCase`, `SignalLogicTestCase`, `DuplicateAuctionTOSTests`, `AuctionNoShowURLEncodingTest`, `WeeklyPromoManagementCommandTests`, `AuctionTOSNotificationsCommandTests`
-- **`test_module_map.py`** (211 lines)
+- **`test_module_map.py`** (183 lines)
   Guards the module map: that it is current, and that the modules it reads are worth reading.
   `ModuleMapIsCurrentTests`, `ModuleRulesTests`, `RuleCheckerTests`, `SummaryTests`, `ViewsPackageStaysAcyclicTests`
 - **`test_page_view_history_is_kept.py`** (47 lines)
@@ -382,7 +391,7 @@ this only quotes its opening sentence.
   The rest of the account, and the auction and club setup pages behind it.
 - **`test_palette_assist.py`** (3895 lines)
   Tests for the command palette's natural-language assist.
-- **`test_palette_core.py`** (1235 lines)
+- **`test_palette_core.py`** (1238 lines)
   The command palette itself, and the mobile surfaces that call into it.
   `CommandPaletteTests`, `MobileCommandPaletteTests`, `MobileMyClubsTests`, `MobileLabelTests`, `MobileConfigTests`, `FirebaseClientConfigParsingTests`, `SingleLotLabelPngTests`, `MobileEmailLoginTests`, `MobileWebSessionTests`
 - **`test_palette_mic.py`** (101 lines)
@@ -417,6 +426,9 @@ this only quotes its opening sentence.
 - **`test_square.py`** (946 lines)
   Square: taking a payment, refunding one, the OAuth grant, and webhook signatures.
   `SquarePaymentTests`, `SquareRefundFormTests`, `SquarePaymentSuccessViewTests`, `SquareOAuthRevocationTests`, `SquareWebhookSignatureValidationTests`
+- **`test_static_files.py`** (153 lines)
+  `/static/`: content-hashed names, and the nginx rule that caches them for a year.
+  `TemplatesNameRealFilesTests`, `HashedNamesReachTheYearLongCacheTests`, `MissingManifestEntriesDoNotRaiseTests`, `DebugSkipsHashingTests`
 - **`test_stats.py`** (1392 lines)
   The numbers on an auction's stats page, and the invoice wording that quotes them.
 - **`test_support.py`** (42 lines)
@@ -712,7 +724,7 @@ Every view on the site, split by what part of it the view belongs to.
   Shared machinery for every view on the site: the mixins that decide who may see a page.
 - **`browse.py`** (832 lines)
   The lot lists people browse, and what they do to a lot without opening it.
-- **`bulk_actions.py`** (471 lines)
+- **`bulk_actions.py`** (474 lines)
   The bulk buttons on the auction admin pages: mark paid, set won, enable bidding.
   `GetClubs`, `BulkSetLotsWon`, `InvoiceBulkUpdateStatus`, `MarkInvoicesReady`, `MarkInvoicesPaid`, `EnableBiddingForAllUsers`, `LotRefundDialog`
 - **`bulk_add.py`** (939 lines)
@@ -798,8 +810,11 @@ This will make sure the app is always imported when
 - **`firebase_config.py`** (88 lines)
   Parse the public Firebase client-config files that ship with the mobile build.
   `load_android_config`, `load_ios_config`, `load_firebase_client_config`
-- **`settings.py`** (1378 lines)
+- **`settings.py`** (1387 lines)
   Django settings for fishauctions project.
+- **`static_storage.py`** (63 lines)
+  Content-hashed names for `/static/`, tolerant of the two things that would break a deploy.
+  `CacheBustedStaticFilesStorage`
 - **`test_runner.py`** (57 lines)
   The test runner, which exists to swap the password hasher out.
   `use_fast_hashers`, `FastParallelTestSuite`, `FastTestRunner`

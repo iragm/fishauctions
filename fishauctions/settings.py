@@ -392,6 +392,15 @@ SINGLE_CLUB_MODE = parse_bool_env(os.environ.get("SINGLE_CLUB_MODE") or None, de
 STATIC_URL = "static/"
 STATIC_ROOT = "/home/app/web/staticfiles/"
 
+# Content-hashed static filenames, so nginx can cache /static/ for a year and a deploy that edits
+# auction_site.css still reaches every browser immediately -- see fishauctions/static_storage.py
+# and the two /static/ blocks in nginx_fishauctions.conf.  Django skips the hashing entirely when
+# DEBUG is on, so this is a production/CI-on behaviour only.
+STORAGES = {
+    "default": {"BACKEND": "django.core.files.storage.FileSystemStorage"},
+    "staticfiles": {"BACKEND": "fishauctions.static_storage.CacheBustedStaticFilesStorage"},
+}
+
 AUTHENTICATION_BACKENDS = [
     # Needed to login by username in Django admin, regardless of `allauth`
     "django.contrib.auth.backends.ModelBackend",

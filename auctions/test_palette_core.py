@@ -5,6 +5,7 @@ import tempfile
 from pathlib import Path
 
 from django.contrib.auth.models import User
+from django.contrib.staticfiles.storage import staticfiles_storage
 from django.core.cache import cache
 from django.test import TestCase, override_settings
 from django.test.client import Client
@@ -871,7 +872,9 @@ class MobileConfigTests(TestCase):
                 "apple_sign_in_enabled": True,
                 "facebook_app_id": "1234567890",
                 "brand_name": "Test Auctions",
-                "icon_url": "http://testserver/static/android-chrome-512x512.png",
+                # Through the storage: whether this name is hashed depends on whether collectstatic has
+                # run, which differs between CI and a dev container -- see fishauctions/static_storage.py.
+                "icon_url": "http://testserver" + staticfiles_storage.url("android-chrome-512x512.png"),
                 # Apple requires both to be linkable from inside the app at sign-up.
                 "terms_url": "/tos/",
                 "privacy_policy_url": "/privacy/",

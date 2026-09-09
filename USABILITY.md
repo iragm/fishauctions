@@ -51,7 +51,7 @@ Ordered by (unblocks-other-work x value). Status: `todo` | `wip` | `done`.
 | 3 | Progressive disclosure on `AuctionEditForm` -- essentials vs. Advanced | `auction_form_layout.py`, `field_adoption.py` | done |
 | 4 | Contextual help in the `help-note` format, one per page | `templates/` | done (first pass) |
 | 5 | Accessibility debt: images with no `alt`, icon-only controls with no name, silent HTMx swaps | `templates/`, `template_a11y.py` | done |
-| 6 | First paint: defer the six head scripts, `ManifestStaticFilesStorage` | `base.html`, `settings.py` | see OPTIMIZATION.md |
+| 6 | First paint: defer the head scripts, content-hashed `/static/` cached for a year | `base.html`, `static_storage.py`, `nginx_fishauctions.conf` | done -- jQuery is the one that cannot move, and `base.html` says why |
 | 7 | Buyers and sellers: fire `pageView` on every page and drop the 2s delay, then read the funnel off rows that already exist | `base_page_view.html`, `base.html`, `usability_report.py`, `tasks.py`, `view_lot_images.html` | todo |
 | 8 | Club discovery: one stage ladder on `Club` (which is also the map gate), a link verifier, then umbrella directories and a crawl outward | `models.py`, `club_health.py`, `views/usability.py`, `management/commands/` | todo |
 

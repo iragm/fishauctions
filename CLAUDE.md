@@ -134,8 +134,10 @@ Species, ChatMessage, PageView. **URLs:** `auctions/urls.py`, `fishauctions/urls
   `{% comment %}` for anything longer.
 - **`.delay()` goes inside `transaction.on_commit`.** A `post_delete` fires *inside* Django's delete
   transaction; enqueuing directly once left a task pointing at an image already gone from Cloudflare.
-- **No module over 1500 lines, and anything over 300 says what it is for.** `auctions/module_map.py`
-  enforces both. Its `OVERSIZED` list is a ratchet that only shrinks.
+- **Anything over 300 lines says what it is for**, in a module docstring;
+  `auctions/module_map.py` enforces that and generates the map from it. **There is no line limit.**
+  Split a file when splitting makes it easier to work in, which is a judgement about that file and
+  not a number.
 - **Never edit vendor CSS or JS.** Site-wide overrides go in `auctions/static/css/auction_site.css`.
   `.ignore` keeps vendored and minified files out of search results; `rg --no-ignore` when you really
   need one.

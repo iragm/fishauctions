@@ -104,10 +104,11 @@ from .helper_functions import bin_data, get_currency_symbol
 from .html_sanitize import sanitize_summernote_html
 from .model_caching import CachedPropertiesMixin, InvalidatesRelatedCache
 
-# Three models that would be here with the other eighty if there were room; models.py is at the
-# size ceiling module_map.py holds it to and that ratchet only comes down.  Imported so
-# `from auctions.models import ContentReport` keeps working and so Django sees them at app load.
-# They name their foreign keys as strings, so the import is one-way and there is no cycle.
+# The moderation models live in their own module rather than among the other eighty here: they are
+# a self-contained feature and nothing else in this file touches them, so they are quicker to read
+# and to change on their own.  Imported so `from auctions.models import ContentReport` keeps
+# working and so Django sees them at app load. They name their foreign keys as strings, so the
+# import is one-way and there is no cycle.
 from .moderation_models import (  # noqa: F401
     ContentReport,
     CopyrightNotice,
@@ -13351,14 +13352,48 @@ class AdCampaignGroup(CachedPropertiesMixin, models.Model):
     def __str__(self):
         return f"{self.title}"
 
+    @staticmethod
+    def annotate_totals(queryset):
+        """Add the three counts the changelist prints for every group, as subqueries.
+
+        ``list_display`` shows the campaigns, the impressions and the clicks, and each was its own
+        ``COUNT`` -- over ``AdCampaignResponse``, which holds a row per ad ever shown. Subqueries
+        rather than ``Count(..., distinct=True)`` over joins, for the reason
+        ``AuctionTOS.annotate_lot_counts`` gives: two multi-valued joins in one query multiply each
+        other's rows, and ``distinct`` then has to undo that.
+        """
+        campaigns = AdCampaign.objects.filter(campaign_group=OuterRef("pk"))
+        responses = AdCampaignResponse.objects.filter(campaign__campaign_group=OuterRef("pk"))
+
+        def count_of(rows, group_by, **extra):
+            return Coalesce(
+                Subquery(
+                    rows.filter(**extra).order_by().values(group_by).annotate(total=Count("pk")).values("total")[:1],
+                    output_field=IntegerField(),
+                ),
+                Value(0),
+            )
+
+        return queryset.annotate(
+            annotated_campaigns=count_of(campaigns, "campaign_group"),
+            annotated_impressions=count_of(responses, "campaign__campaign_group"),
+            annotated_clicks=count_of(responses, "campaign__campaign_group", clicked=True),
+        )
+
     @cached_property
     def number_of_clicks(self):
-        """..."""
+        """From the annotation when there is one -- see ``annotate_totals``."""
+        annotated = getattr(self, "annotated_clicks", None)
+        if annotated is not None:
+            return annotated
         return AdCampaignResponse.objects.filter(campaign__campaign_group=self.pk, clicked=True).count()
 
     @cached_property
     def number_of_impressions(self):
-        """How many times ads in this campaign group have been viewed"""
+        """How many times ads in this campaign group have been viewed."""
+        annotated = getattr(self, "annotated_impressions", None)
+        if annotated is not None:
+            return annotated
         return AdCampaignResponse.objects.filter(campaign__campaign_group=self.pk).count()
 
     @property
@@ -13369,6 +13404,9 @@ class AdCampaignGroup(CachedPropertiesMixin, models.Model):
     @cached_property
     def number_of_campaigns(self):
         """How many campaigns are there in this group"""
+        annotated = getattr(self, "annotated_campaigns", None)
+        if annotated is not None:
+            return annotated
         return AdCampaign.objects.filter(campaign_group=self.pk).count()
 
 
@@ -13405,6 +13443,31 @@ class AdCampaign(CachedPropertiesMixin, CloudflareImageMixin, models.Model):
             return f"{self.campaign_group.title} - {self.title} ({self.click_rate:.2f}% clicked)"
         return f"{self.title}"
 
+    @staticmethod
+    def annotate_response_counts(queryset):
+        """Add the two counts the changelist prints for every campaign, as subqueries.
+
+        Same shape and the same reason as ``AdCampaignGroup.annotate_totals``: ``list_display``
+        prints the impressions, the clicks and the rate between them, and each was a ``COUNT`` over
+        ``AdCampaignResponse`` per row.
+        """
+        responses = AdCampaignResponse.objects.filter(campaign=OuterRef("pk"))
+
+        def count_of(**extra):
+            return Coalesce(
+                Subquery(
+                    responses.filter(**extra)
+                    .order_by()
+                    .values("campaign")
+                    .annotate(total=Count("pk"))
+                    .values("total")[:1],
+                    output_field=IntegerField(),
+                ),
+                Value(0),
+            )
+
+        return queryset.annotate(annotated_impressions=count_of(), annotated_clicks=count_of(clicked=True))
+
     @property
     def image_display_url(self):
         """Ad-sized (250x150 max) image URL; from Cloudflare when migrated"""
@@ -13413,11 +13476,21 @@ class AdCampaign(CachedPropertiesMixin, CloudflareImageMixin, models.Model):
     @cached_property
     def number_of_clicks(self):
         """..."""
+        annotated = getattr(self, "annotated_clicks", None)
+        if annotated is not None:
+            return annotated
         return AdCampaignResponse.objects.filter(campaign=self.pk, clicked=True).count()
 
     @cached_property
     def number_of_impressions(self):
-        """How many times this ad has been viewed"""
+        """How many times this ad has been viewed.
+
+        From the queryset annotation when there is one -- the campaign-group admin page prints this
+        for every campaign in the group, which would otherwise be a COUNT per row.
+        """
+        annotated = getattr(self, "annotated_impressions", None)
+        if annotated is not None:
+            return annotated
         return AdCampaignResponse.objects.filter(campaign=self.pk).count()
 
     @property

@@ -72,18 +72,33 @@ window.onload = function() {
         <meta name="viewport" content="width=device-width, initial-scale=1" />
         {# Global javascript #}
 
+        {% comment %}Which of these carry `defer` is not a style choice -- a script without it blocks
+        the parser, and therefore the first paint, until it has downloaded and run.
+
+        jQuery cannot have it: forty templates run `$(...)` from an inline <script> while the page
+        parses, and an inline script runs before any deferred one. Deferring it means rewriting all
+        fifty-five of those blocks -- hoisting each one's function declarations onto `window` and
+        wrapping the rest in a ready handler -- so it is that piece of work, not a flag here.
+
+        htmx_modal.js cannot have it either, for the same reason in miniature: view_lot_images.html
+        and invoice_popup.html call `window.mountHtmxModal` inline, at parse time.
+
+        confirm_modal.js deliberately does not have it. It is what stands between a data-confirm
+        button and an unconfirmed POST, and a deferred copy would not be listening yet for a click
+        that lands before the parser finishes. Its own Bootstrap fallback covers the other half:
+        asked to confirm before Bootstrap has loaded, it uses the browser's confirm().{% endcomment %}
         {% block core_js %}
         <script type="text/javascript" src="{% static 'js/vendor/jquery.min.js' %}"></script>
         {# 3.5.1 needed for focus to go to select2 dropdowns https://github.com/select2/select2/issues/5993 #}
-        <script type="text/javascript" src="{% static 'js/vendor/bootstrap.bundle.min.js' %}"></script>
+        <script type="text/javascript" src="{% static 'js/vendor/bootstrap.bundle.min.js' %}" defer></script>
         {# Bootstrap bundle includes Popper.js, no need to load separately #}
         <script type="text/javascript" src="{% static 'js/htmx_modal.js' %}"></script>
         {# Styled yes/no dialogs for data-confirm actions, in place of the browser's confirm() #}
         <script type="text/javascript" src="{% static 'js/confirm_modal.js' %}"></script>
         {# Keeps an Actions menu inside a scrolling table from being clipped by the scroller #}
-        <script type="text/javascript" src="{% static 'js/table_scroll.js' %}"></script>
+        <script type="text/javascript" src="{% static 'js/table_scroll.js' %}" defer></script>
         {% if request.user.is_authenticated %}
-        <script type="text/javascript" src="{% static 'js/command_palette.js' %}"></script>
+        <script type="text/javascript" src="{% static 'js/command_palette.js' %}" defer></script>
         {% endif %}
         {% endblock %}
         {% comment %}

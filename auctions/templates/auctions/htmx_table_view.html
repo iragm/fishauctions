@@ -124,10 +124,21 @@
       });
       queryInput.addEventListener('blur', syncFilterCheckboxes);
 
-      if (window.bootstrap) {
+      {% comment %}Bootstrap's JS is deferred in base.html, so it does not exist yet while this
+      IIFE runs. The `window.bootstrap` branch covers a swap, where DOMContentLoaded has already
+      fired and would never fire again.{% endcomment %}
+      function initTableTooltips() {
+        if (!window.bootstrap) {
+          return;
+        }
         document.querySelectorAll('[data-bs-title]').forEach(function (element) {
-          new bootstrap.Tooltip(element);
+          bootstrap.Tooltip.getOrCreateInstance(element);
         });
+      }
+      if (window.bootstrap) {
+        initTableTooltips();
+      } else {
+        document.addEventListener('DOMContentLoaded', initTableTooltips);
       }
 
       syncFilterCheckboxes();

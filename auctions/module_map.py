@@ -8,20 +8,17 @@ moves: each module's **docstring** and its **top-level names**. ``docs/module_ma
 output, it is checked in so it can be read without running anything, and
 :mod:`auctions.test_module_map` fails the build if it stops matching what this script produces.
 
-Three checks ride along with the generation, because the map is only as good as what it is reading:
+One check rides along with the generation, because the map is only as good as what it is reading:
+**a module over** :data:`DOCSTRING_REQUIRED_OVER` **lines must have a module docstring.** That is
+the whole anti-drift mechanism, stated as a rule. A docstring sits in the diff of the change that
+invalidates it, which is the only reliable moment to fix a description; a separate document does
+not, and that is why separate documents rot. The threshold is high enough that a small helper
+module is not made to explain itself.
 
-* **A module over** :data:`DOCSTRING_REQUIRED_OVER` **lines must have a module docstring.** This is
-  the whole anti-drift mechanism, stated as a rule. A docstring sits in the diff of the change that
-  invalidates it, which is the only reliable moment to fix a description; a separate document does
-  not, and that is why separate documents rot. The threshold is high enough that a small helper
-  module is not made to explain itself.
-* **A new module may not be born over** :data:`NEW_MODULE_LINE_LIMIT` **lines.** Nothing here can
-  split the files that are already too big -- that is a person's job, one file at a time -- but the
-  set of them can be stopped from growing.
-* **The modules that are already too big are listed in** :data:`OVERSIZED` **with the size they are
-  allowed to be**, and may not grow past it. That is a ratchet, in the same spirit as
-  ``tests.SuiteStaysFastTests``: the numbers only ever come down, and lowering one is a deliberate
-  edit to this file rather than something that happens by accident.
+**There is no line limit here, and there should not be one.** Files in this repository get split
+when splitting makes them easier to work in -- less to read to find the thing you came for -- and
+that is a judgement about a particular file, not a number a script can hold anybody to. A line
+count has no opinion about whether a module is doing one job or five.
 
 Run it directly to check, or with ``--write`` to regenerate the map:
 
@@ -75,42 +72,6 @@ SKIP_DIR_NAMES = frozenset(
 SKIP_TOP_LEVEL = frozenset({"swag", ".git", ".github", "logs", "mediafiles", "staticfiles"})
 
 DOCSTRING_REQUIRED_OVER = 300
-NEW_MODULE_LINE_LIMIT = 1500
-
-# The modules that were already over the limit when this check was introduced, with the size each
-# is allowed to be. A number here is a debt, not a budget: bring it down when you are in the file
-# anyway, and delete the entry when the module drops under NEW_MODULE_LINE_LIMIT. Nothing may
-# exceed its entry, so a module on this list cannot get worse.
-#
-# Each allowance is its module's size rounded up to the next hundred. That headroom is deliberate:
-# set to the exact line count, the ratchet fires on somebody adding a docstring, and a check that
-# cries wolf over ordinary work gets raised reflexively until it means nothing. A hundred lines is
-# small enough that real growth still trips it.
-OVERSIZED: dict[str, int] = {
-    "auctions/palette_actions.py": 15300,
-    # models.py is the one entry with a *reason* rather than a debt: 29 of its 80 models are a
-    # single dependency cycle referencing each other as class objects, so splitting them is a
-    # conversion job rather than a file move. Its docstring has the whole argument.
-    "auctions/models.py": 15000,
-    "auctions/forms.py": 7100,
-    "auctions/mobile/views.py": 2500,
-    "auctions/tasks.py": 2050,
-    "auctions/palette_routes.py": 1900,
-    "auctions/filters.py": 1800,
-    "auctions/admin.py": 1700,
-    "auctions/command_palette.py": 1600,
-    "auctions/palette_assist.py": 1600,
-    # Test modules. A big one is less costly than a big source module -- nothing imports it and it
-    # is read in one place at a time -- but they are still on the ratchet.
-    "auctions/test_species.py": 5100,
-    "auctions/test_palette_assist.py": 3900,
-    "auctions/test_palette_skills.py": 3400,
-    "auctions/test_club_events.py": 3100,
-    "auctions/test_mobile_features.py": 2700,
-    "auctions/test_ar.py": 1900,
-    "auctions/test_donations.py": 1700,
-    "auctions/test_mcp.py": 1600,
-}
 
 # A module's top-level names are listed only when there are few enough of them to be an answer.
 # A truncated list ("+58 more") is not an index of anything -- grep does that job better -- and it
@@ -199,7 +160,7 @@ def render(modules: list[Module]) -> str:
 
 
 def rule_violations(modules: list[Module]) -> list[str]:
-    """Every way the tree breaks the three rules in this module's docstring."""
+    """Every way the tree breaks the rule in this module's docstring."""
     problems = []
     for module in modules:
         if module.line_count > DOCSTRING_REQUIRED_OVER and not module.docstring:
@@ -207,20 +168,6 @@ def rule_violations(modules: list[Module]) -> list[str]:
                 f"{module.rel} is {module.line_count} lines and has no module docstring. "
                 f"Anything over {DOCSTRING_REQUIRED_OVER} lines has to say what it is for -- one "
                 f"paragraph at the top of the file, which is where it will be seen and kept true."
-            )
-        allowance = OVERSIZED.get(module.rel)
-        if allowance is None:
-            if module.line_count > NEW_MODULE_LINE_LIMIT:
-                problems.append(
-                    f"{module.rel} is {module.line_count} lines, over the "
-                    f"{NEW_MODULE_LINE_LIMIT}-line limit for a module not already on the "
-                    f"module_map.OVERSIZED list. Split it, or add it to that list with a reason."
-                )
-        elif module.line_count > allowance:
-            problems.append(
-                f"{module.rel} is {module.line_count} lines, past the {allowance} it is allowed in "
-                f"module_map.OVERSIZED. That list is a ratchet: split something out, rather than "
-                f"raising the number."
             )
     return problems
 

@@ -5,6 +5,7 @@ import json
 from unittest.mock import patch
 
 from django.contrib.auth.models import User
+from django.contrib.staticfiles.storage import staticfiles_storage
 from django.test import TestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
@@ -1277,16 +1278,22 @@ class ContextProcessorsTestCase(TestCase):
 
 
 class FooterIconTests(TestCase):
+    #: Asked for through the storage, not spelled out: wherever collectstatic has run the name is
+    #: content-hashed (`icon-footer.11b8414ff733.png`), so a literal passes in CI -- whose
+    #: STATIC_ROOT is empty -- and fails in the django container. See fishauctions/static_storage.py.
+    def footer_icon_url(self):
+        return staticfiles_storage.url("icon-footer.png")
+
     def test_footer_icon_shown_by_default(self):
         response = self.client.get(reverse("account_login"))
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "icon-footer.png")
+        self.assertContains(response, self.footer_icon_url())
 
     @override_settings(SHOW_FOOTER_ICON=False)
     def test_footer_icon_hidden_when_disabled(self):
         response = self.client.get(reverse("account_login"))
         self.assertEqual(response.status_code, 200)
-        self.assertNotContains(response, "icon-footer.png")
+        self.assertNotContains(response, self.footer_icon_url())
 
 
 class SiteWebmanifestTests(TestCase):
@@ -1298,9 +1305,11 @@ class SiteWebmanifestTests(TestCase):
         data = json.loads(response.content)
         self.assertEqual(data["name"], "Test Auctions")
         sources = {icon["src"] for icon in data["icons"]}
-        self.assertIn("/static/android-chrome-512x512.png", sources)
+        # Through the storage rather than spelled out: these names are hashed wherever
+        # collectstatic has run -- see fishauctions/static_storage.py.
+        self.assertIn(staticfiles_storage.url("android-chrome-512x512.png"), sources)
         # Maskable variants keep their art inside the launcher-crop safe zone
-        self.assertIn("/static/android-chrome-maskable-512x512.png", sources)
+        self.assertIn(staticfiles_storage.url("android-chrome-maskable-512x512.png"), sources)
 
 
 class GoogleLoginTemplateVisibilityTests(TestCase):

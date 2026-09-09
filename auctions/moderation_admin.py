@@ -1,7 +1,7 @@
 """The Django admin for the moderation queue: reports, copyright notices and strikes.
 
-Split out of ``admin.py`` because that file is at the size ceiling ``auctions/module_map.py``
-holds it to, and imported back into it so the registrations still happen at app load.
+Split out of ``admin.py`` because the moderation queue is its own feature and reads better on its
+own, and imported back into it so the registrations still happen at app load.
 
 The interesting one is :class:`CopyrightNoticeAdmin.take_down_material`. Everything else here is a
 changelist; that action is the compliance path in one button, and the reason it is a button is that

@@ -10,6 +10,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from django.contrib.auth.models import User
+from django.contrib.staticfiles.storage import staticfiles_storage
 from django.test import Client, RequestFactory, TestCase
 from django.urls import reverse
 
@@ -410,7 +411,9 @@ class UnsavedChangesBarTests(StandardTestCase):
         for url in ("/", reverse("preferences"), reverse("edit_auction", kwargs={"slug": self.online_auction.slug})):
             page = self.client.get(url).content.decode()
             self.assertIn('id="unsaved-changes-bar"', page, url)
-            self.assertIn("unsaved_changes.js", page, url)
+            # Through the storage: whether this name is hashed depends on whether collectstatic has
+            # run, which differs between CI and a dev container -- see fishauctions/static_storage.py.
+            self.assertIn(staticfiles_storage.url("js/unsaved_changes.js"), page, url)
             self.assertIn('id="unsaved-changes-config"', page, url)
 
     def test_an_instrumented_page_carries_a_usable_token(self):

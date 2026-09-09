@@ -19,6 +19,7 @@ import re
 from unittest.mock import patch
 
 from django.conf import settings
+from django.contrib.staticfiles.storage import staticfiles_storage
 from django.test import RequestFactory, SimpleTestCase
 from django.utils import timezone
 
@@ -1309,6 +1310,16 @@ class IconTests(SimpleTestCase):
     def setUp(self):
         self.descriptors = tools.tool_descriptors(None)
 
+    def icon_file(self, name):
+        """``read.svg``, or ``read.<hash>.svg`` where the statics have been collected.
+
+        Asked of the storage rather than spelled out, because :mod:`auctions.mcp.icons` builds
+        these with ``static()`` and that is content-hashed in production -- see
+        ``fishauctions/static_storage.py``. A literal here passes in CI, whose ``STATIC_ROOT`` is
+        empty, and fails in the container the statics really live in.
+        """
+        return staticfiles_storage.url(f"mcp/{name}.svg").rsplit("/", 1)[-1]
+
     def test_every_tool_carries_exactly_one_icon(self):
         for descriptor in self.descriptors:
             found = descriptor.get("icons")
@@ -1334,15 +1345,15 @@ class IconTests(SimpleTestCase):
     def test_the_five_are_all_that_are_used(self):
         used = {descriptor["icons"][0]["src"].rsplit("/", 1)[-1] for descriptor in self.descriptors}
         self.assertEqual(
-            used, {f"{name}.svg" for name in (icons.READ, icons.GO, icons.AUCTION, icons.CLUB, icons.EDIT)}
+            used, {self.icon_file(name) for name in (icons.READ, icons.GO, icons.AUCTION, icons.CLUB, icons.EDIT)}
         )
 
     def test_a_read_is_a_magnifier_and_a_write_is_not(self):
         by_name = {descriptor["name"]: descriptor["icons"][0]["src"] for descriptor in self.descriptors}
-        self.assertIn(f"{icons.READ}.svg", by_name["list_lots"])
-        self.assertIn(f"{icons.GO}.svg", by_name["go_to_page"])
-        self.assertIn(f"{icons.AUCTION}.svg", by_name["check_in"])
-        self.assertIn(f"{icons.CLUB}.svg", by_name["add_club_member"])
+        self.assertIn(self.icon_file(icons.READ), by_name["list_lots"])
+        self.assertIn(self.icon_file(icons.GO), by_name["go_to_page"])
+        self.assertIn(self.icon_file(icons.AUCTION), by_name["check_in"])
+        self.assertIn(self.icon_file(icons.CLUB), by_name["add_club_member"])
 
     def test_the_icon_files_are_really_there(self):
         """A broken image beside every tool is worse than no image, and it fails silently."""

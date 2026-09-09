@@ -15,8 +15,9 @@ local-file schemes with the whitespace attackers use to split them stripped firs
 ``background-color`` go because the site picks its own colours; anything with ``url()`` in it goes
 so stored content cannot fetch from elsewhere.
 
-Lives here rather than in ``models.py`` only because that file is at its size ceiling. It has no
-model dependencies, and both ``models.py`` and ``forms.py`` import it.
+Lives here rather than in ``models.py`` because it has no model dependencies and both
+``models.py`` and ``forms.py`` import it -- one small module either of them can pull in, instead of
+a sanitiser buried among eighty models.
 """
 
 import re
