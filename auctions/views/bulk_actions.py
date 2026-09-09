@@ -72,8 +72,10 @@ class GetClubs(APIView):
 
     def post(self, request):
         search = request.POST["search"]
-        result = Club.objects.filter(Q(name__icontains=search) | Q(abbreviation__icontains=search)).values(
-            "id", "name", "abbreviation"
+        result = (
+            Club.objects.listed()
+            .filter(Q(name__icontains=search) | Q(abbreviation__icontains=search))
+            .values("id", "name", "abbreviation")
         )
         return JsonResponse(list(result), safe=False)
 

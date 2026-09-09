@@ -1,4 +1,12 @@
-{# This is included in base.html. To use it, call pageView(data) from any javascript template; data should be a dict containing auction : pk and lot : pk values, or can be blank #}
+{% comment %}Included in base.html, so every page that extends it records exactly one view.
+
+A template that knows which lot or auction its page is about calls pageView with that pk from a
+parse-time script; that call *replaces* the automatic one rather than adding a second row, because
+the first call of either kind wins. That is why an enriched call has to run while the page is
+parsing. Made from a load handler it arrives after the automatic view has already gone, and the row
+lands with both FKs null -- which is invisible to every organizer-facing report, since they all
+filter on one of those two columns. auctions/test_page_view_beacon.py is the ratchet for that
+ordering.{% endcomment %}
 
 <script>
     var urlParams = new URLSearchParams(window.location.search);
@@ -9,11 +17,11 @@
     // Remove uid
     newUrl = newUrl.replace(/(\?|&)uid=[^&]*(&|$)/, '$1').replace(/(&|\?)$/, '');
     window.history.replaceState(null, document.title, newUrl)
-    var first_view = true;
+    var pageViewSent = false;
     function pageView(data) {
-        setTimeout(() => {
-            sendPageView(data);
-        }, 2000);
+        if (pageViewSent) { return; }
+        pageViewSent = true;
+        sendPageView(data);
     }
     function sendPageView(data) {
         data = data ?? {};
@@ -23,21 +31,19 @@
         data.url = window.location.pathname;
         data.title = document.title;
         data.referrer = document.referrer;
-        data.first_view = first_view;
-        if (document.hasFocus() || first_view) {
-            $.ajax({
-                type: "POST",
-                beforeSend: function (request) {
-                    request.setRequestHeader("X-CSRFTOKEN", "{{ csrf_token }}");
-                },
-                url: "{% url 'pageview' %}",
-                data: data,
-            });
-        }
-        //{# corresponding code in views.pageview() is also removed #}
-        // first_view = false;
-        // setTimeout(() => {
-        //     pageView(data);
-        // }, 10000);
+        {% comment %}The server only writes a row for first_view. The ten-second heartbeat that sent
+        the others is gone, and views/ajax.py has the matching commented-out block.{% endcomment %}
+        data.first_view = true;
+        $.ajax({
+            type: "POST",
+            beforeSend: function (request) {
+                request.setRequestHeader("X-CSRFTOKEN", "{{ csrf_token }}");
+            },
+            url: "{% url 'pageview' %}",
+            data: data,
+        });
     }
+    {% comment %}No timer. It used to wait two seconds, which deleted exactly the fast bounces --
+    the confused mis-click, the immediate back button -- that a funnel is about.{% endcomment %}
+    document.addEventListener('DOMContentLoaded', function () { pageView(); });
 </script>

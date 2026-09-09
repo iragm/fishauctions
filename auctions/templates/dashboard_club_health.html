@@ -41,7 +41,8 @@
       <tr>
         <td><a href="{{ row.club.get_absolute_url }}">{{ row.club.name }}</a></td>
         <td>
-          {% if row.stage == "trial" or row.stage == "empty" %}
+          {% comment %}The three most recoverable cases get the warning colour: somebody tried the site, or somebody from the club is already here, or the club is on the site and has done nothing.{% endcomment %}
+          {% if row.stage == "trial" or row.stage == "aware" or row.stage == "empty" %}
             <span class="badge text-bg-warning text-dark">{{ row.get_stage_display }}</span>
           {% else %}
             <span class="badge bg-secondary">{{ row.get_stage_display }}</span>
@@ -60,8 +61,14 @@
           {% endfor %}
         </td>
         <td>
-          <form method="post" action="{% url 'club_mark_contacted' pk=row.club.pk %}">
+          {% comment %}The reason goes in beside the button because that is the one moment somebody knows it -- they have just read the reply. Asked for later, on its own page, it never gets filled in.{% endcomment %}
+          <form method="post" action="{% url 'club_mark_contacted' pk=row.club.pk %}" class="d-flex gap-1">
             {% csrf_token %}
+            <select name="stall_reason" class="form-select form-select-sm" aria-label="Why this club stopped, if you know">
+              {% for value, label in stall_reason_choices %}
+              <option value="{{ value }}"{% if row.club.stall_reason == value %} selected{% endif %}>{{ label }}</option>
+              {% endfor %}
+            </select>
             <button type="submit" class="btn btn-sm btn-secondary">Mark contacted</button>
           </form>
         </td>
@@ -75,17 +82,26 @@
 </div>
 
 <h4 class="mt-4">Where every club is</h4>
+<p class="text-muted small">
+  The whole ladder, both halves. The first three rungs are set by hand on the club and are the only
+  thing that puts a club on the map; everything below them is derived from rows every night and can
+  never be typed in. A club sits on whichever of the two is further along.
+  {% if stall_reasons %}Stall reasons recorded so far:
+  {% for row in stall_reasons %}<span class="badge bg-secondary">{{ row.label }} &middot; {{ row.clubs }}</span>
+  {% endfor %}{% endif %}
+</p>
 <div class="table-responsive">
   <table class="table table-sm">
-    <thead><tr><th>Stage</th><th class="text-end">Clubs</th></tr></thead>
+    <thead><tr><th>Rung</th><th>Set by</th><th class="text-end">Clubs</th></tr></thead>
     <tbody>
-      {% for row in stages %}
+      {% for row in ladder %}
       <tr>
         <td>{{ row.label }}</td>
+        <td class="small text-muted">{% if row.source == "hand" %}hand{% else %}derived{% endif %}</td>
         <td class="text-end">{{ row.clubs }}</td>
       </tr>
       {% empty %}
-      <tr><td colspan="2" class="text-muted">Nothing computed yet.</td></tr>
+      <tr><td colspan="3" class="text-muted">Nothing computed yet.</td></tr>
       {% endfor %}
     </tbody>
   </table>

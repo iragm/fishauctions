@@ -7,7 +7,8 @@
   <div>Three questions, three sources, and they only mean anything next to each other. A page with
   reach and no failures is working. The same reach with people giving up on one field is what this
   page exists to find. A setting nobody has ever changed is a deletion candidate, not a redesign
-  candidate.</div>
+  candidate. The buyer funnel is the fourth panel and the only one about somebody who is not
+  running an auction.</div>
 </div>
 <p class="text-muted small">
   Showing the last {{ days }} days;
@@ -132,6 +133,46 @@
   </table>
 </div>
 
+<h4 class="mt-4">Buyers &mdash; how far people get</h4>
+<p class="text-muted small">
+  One row per auction, over that auction's whole life rather than the window above: people arrive
+  weeks before they pay, and a funnel cut at 30 days reports the ones who paid last month as a
+  drop-off. Every stage counts people, and somebody who never signed in counts as one &mdash; that
+  is what this phase was for. <strong>Bid</strong> is blank for an in-person auction, where the
+  bidding happens in a room and leaves no row until somebody wins. <strong>Joined</strong> includes
+  the people an organizer typed in at the door, so it can be larger than the stages above it.
+</p>
+<div class="table-responsive">
+  <table class="table table-sm">
+    <thead>
+      <tr>
+        <th>Auction</th>
+        {% for stage in funnel.0.stages %}<th class="text-end">{{ stage.stage }}</th>{% endfor %}
+        <th>Came from</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in funnel %}
+      <tr>
+        <td><a href="{{ row.auction.get_absolute_url }}">{{ row.auction }}</a></td>
+        {% for stage in row.stages %}
+        <td class="text-end">{% if stage.people == None %}<span class="text-muted">&mdash;</span>{% else %}{{ stage.people }}{% endif %}</td>
+        {% endfor %}
+        <td>
+          {% for referrer in row.referrers %}
+            <span class="badge bg-secondary">{{ referrer.referrer }} &middot; {{ referrer.views }}</span>
+          {% empty %}
+            <span class="text-muted">&mdash;</span>
+          {% endfor %}
+        </td>
+      </tr>
+      {% empty %}
+      <tr><td colspan="9" class="text-muted">No auctions have ended recently.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
 <h4 class="mt-4">Reach &mdash; which pages get opened</h4>
 <p class="text-muted small">
   Grouped by URL pattern rather than by path, so a hundred auctions' settings pages are one row.
@@ -139,9 +180,6 @@
   only one of, one per auction for a per-auction page &mdash; which is what says whether a route is
   reached by many organizers or by one enthusiastic one.
 </p>
-<ul class="text-muted small">
-  {% for caveat in reach_caveats %}<li>{{ caveat }}</li>{% endfor %}
-</ul>
 <div class="table-responsive">
   <table class="table table-sm">
     <thead>

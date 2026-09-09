@@ -512,6 +512,23 @@ class GeneralInterest(models.Model):
         return str(self.name)
 
 
+class ClubQuerySet(models.QuerySet):
+    """The one place that knows which clubs this site is willing to name in public."""
+
+    def listed(self):
+        """Approved clubs only: the map, the club search, and every dropdown a member sees.
+
+        Club discovery fills this table with clubs nobody here has spoken to yet (USABILITY.md
+        phase 8), and every pin on the club map is a claim this site is making about a real
+        organisation. So approval is a stage on the club rather than a second table, and this is
+        the gate: ``outreach_stage`` short of ``listed`` means found, not published.
+
+        ``active`` is the other half and a different question -- it is set by hand when a club
+        dissolves -- so both are asked here.
+        """
+        return self.filter(active=True, outreach_stage=Club.LISTED)
+
+
 class Club(CloudflareImageMixin, models.Model):
     """Users can self-select which club they belong to"""
 
@@ -530,6 +547,38 @@ class Club(CloudflareImageMixin, models.Model):
     )
     date_contacted = models.DateTimeField(blank=True, null=True)
     date_contacted_for_in_person_auctions = models.DateTimeField(blank=True, null=True)
+    PROSPECT = "prospect"
+    CONTACTED = "contacted"
+    LISTED = "listed"
+    OUTREACH_STAGE_CHOICES = (
+        # Found by club discovery, or typed in by hand and not approved yet. Not on the map.
+        (PROSPECT, "Found, not approved"),
+        # Somebody here has written to them. Still not on the map: an email is not an approval.
+        (CONTACTED, "Contacted, no reply yet"),
+        # Approved. This is the only value that publishes a club.
+        (LISTED, "Approved and listed"),
+    )
+    outreach_stage = models.CharField(max_length=20, choices=OUTREACH_STAGE_CHOICES, default=PROSPECT, db_index=True)
+    outreach_stage.help_text = (
+        "The half of a club's progress that no query can answer. Only 'Approved and listed' puts a "
+        "club on the map, in club search and in the dropdowns -- ClubHealth derives everything after "
+        "that from rows and never writes here."
+    )
+    STALL_REASON_CHOICES = (
+        ("", "Not known"),
+        ("no_reply", "Never replied"),
+        ("no_auction", "No auction coming up"),
+        ("uses_other", "Uses something else"),
+        ("paper", "Paper works fine"),
+        ("cost", "Cost"),
+        ("not_interested", "Not interested"),
+        ("folded", "Club has folded"),
+    )
+    stall_reason = models.CharField(max_length=20, choices=STALL_REASON_CHOICES, blank=True, default="")
+    stall_reason.help_text = (
+        "Why this club stopped where it did, in a word that can be counted. Set it when somebody "
+        "answers; notes are free text and cannot say which objection is worth fixing."
+    )
     notes = models.CharField(max_length=300, blank=True, null=True)
     notes.help_text = "Only visible in the admin site, never made public"
     interests = models.ManyToManyField(GeneralInterest, blank=True)
@@ -1038,11 +1087,18 @@ class Club(CloudflareImageMixin, models.Model):
         help_text="How long to wait for a reply before a vendor shows up as due for a follow-up.",
     )
 
+    objects = ClubQuerySet.as_manager()
+
     class Meta:
         ordering = ["name"]
 
     def __str__(self):
         return str(self.name)
+
+    @property
+    def is_listed(self):
+        """Whether this club is published here. The map gate, as a question about one club."""
+        return self.active and self.outreach_stage == self.LISTED
 
     def find_member(self, name="", email="", exclude_pk=None):
         """ClubMember analogue of Auction.find_user: duplicate check / lookup for a club member.

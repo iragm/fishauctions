@@ -1496,7 +1496,7 @@ def search(request, q, *, app_deep_links=True):
         groups.append({"label": "Lots", "items": lot_items})
 
     clubs = (
-        Club.objects.filter(active=True)
+        Club.objects.listed()
         .filter(Q(name__icontains=q) | Q(abbreviation__icontains=q))
         .order_by("name")[:RESULT_LIMIT]
     )

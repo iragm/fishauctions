@@ -39,6 +39,9 @@ Revisited in phase 7a: the goal is right and the layer is wrong. Every organizer
 `PageView` filters on the `lot_number` or `auction` FK, and only four call sites ever set those,
 so recording the admin pages cannot put a single row in front of an organizer. The timer goes too.
 
+**Done, 2026-09-09.** Both numbers above are now history rather than caveats; `usability_report.py`
+says so in the past tense and `REACH_CAVEATS` is gone.
+
 Ordered by (unblocks-other-work x value). Status: `todo` | `wip` | `done`.
 
 | # | Phase | Touches | Status |
@@ -52,11 +55,13 @@ Ordered by (unblocks-other-work x value). Status: `todo` | `wip` | `done`.
 | 4 | Contextual help in the `help-note` format, one per page | `templates/` | done (first pass) |
 | 5 | Accessibility debt: images with no `alt`, icon-only controls with no name, silent HTMx swaps | `templates/`, `template_a11y.py` | done |
 | 6 | First paint: defer the head scripts, content-hashed `/static/` cached for a year | `base.html`, `static_storage.py`, `nginx_fishauctions.conf` | done -- jQuery is the one that cannot move, and `base.html` says why |
-| 7 | Buyers and sellers: fire `pageView` on every page and drop the 2s delay, then read the funnel off rows that already exist | `base_page_view.html`, `base.html`, `usability_report.py`, `tasks.py`, `view_lot_images.html` | todo |
-| 8 | Club discovery: one stage ladder on `Club` (which is also the map gate), a link verifier, then umbrella directories and a crawl outward | `models.py`, `club_health.py`, `views/usability.py`, `management/commands/` | todo |
+| 7 | Buyers and sellers: fire `pageView` on every page and drop the 2s delay, then read the funnel off rows that already exist | `base_page_view.html`, `usability_report.py`, `views/lot_pages.py`, `view_lot_images.html` | done |
+| 8a | The stage ladder on `Club`, the map gate, the stall reason, and the `aware` rung | `models.py`, `club_health.py`, `views/usability.py`, migrations 0430-0431 | done |
+| 8b-8f | The link verifier, umbrella directories, the crawl, city search, the outreach loop | `management/commands/` | todo -- needs the network, see below |
 
 Every phase above has a test module: `test_usability_instruments.py`, `test_form_friction.py`,
-`test_usability_report.py`, `test_club_health.py`, `test_template_a11y.py`.
+`test_usability_report.py`, `test_club_health.py`, `test_template_a11y.py`,
+`test_page_view_beacon.py`.
 
 ### What Phase 3 turned on, since it was called blocked
 
@@ -118,7 +123,7 @@ otherwise propose:
   them would add a decision to a page where there wasn't one. A feature that needs announcing is a
   feature that isn't finished.
 
-### 7a. Fix `PageView` rather than build a second instrument
+### 7a. Fix `PageView` rather than build a second instrument -- done
 
 The reach numbers are biased two ways (§3), and neither reason survives contact:
 
@@ -157,7 +162,7 @@ more routes, which is an argument for a better check, not for less instrumentati
 
 The rows stay. They have already been mined once to backfill auction stats, and phase 8 wants them
 for club and user retention; a purge throws away the only record of what people did before they
-did anything countable. What growth does cost is three things, none of which is disk and none of
+did anything countable. What growth does cost is four things, none of which is disk and none of
 which is fixed by deleting rows:
 
 - **`PageViewAdmin` counted the whole table twice on every page load** -- no
@@ -174,6 +179,17 @@ which is fixed by deleting rows:
 - **Schema changes on that table are expensive.** Migration `0423_query_indexes` says so in its own
   docstring: InnoDB builds in place, budget for it, run it when the site is quiet. That is the real
   price of keeping the rows. It is paid rarely and it is worth paying.
+- **Every recorded view costs one extra indexed `SELECT`.** `PageView.save()` looks up the last
+  known location for that IP, and that runs on every insert -- so widening the beacon to ~105 more
+  pages widens that too. It is one row off `pageview_ip_recent_idx`, on a write that already
+  happened for every instrumented page; taking the beacon site-wide is a decision to pay it for the
+  quiet pages as well. It is worth paying -- those pages are the ones the funnel could not see --
+  and it is the one line to reach for if page-view writes ever become the problem.
+
+The read side is where the size of this table actually bites, and 7b is the example: matching a
+page view to an auction is `pageview.auction_id OR lot.auction_id`, an OR across a join no single
+index serves, so both funnel queries carry a `date_start` floor. Unbounded they are a full scan of
+`PageView` -- the shape behind a past production incident -- from a page an admin opens casually.
 
 The one deletion that is clearly right is the one migration `0232_delete_baiduspider_pageviews`
 already made: bots. Bot rows are not retention data.
@@ -216,7 +232,7 @@ Tests: a route that renders `base.html` records exactly one view; a template nam
 one row with the FK set, not two; an anonymous request records one; and the auction stats totals are
 unchanged by views of pages that name no lot and no auction.
 
-### 7b. The funnel is then a report, not a table
+### 7b. The funnel is then a report, not a table -- done
 
 With the beacon on every page, the buyer funnel needs no new model. `PageView` and `FormFailure`
 both already carry `session_id` for people who are not signed in, and every other stage has a row
@@ -227,7 +243,7 @@ paid, per auction, anonymous sessions included, which is the entire point.
 Test: a fabricated session walked end to end reports each stage once; one that stops after arriving
 reports only that.
 
-### 7c. The bid dialog, corrected
+### 7c. The bid dialog, corrected -- done
 
 **Preserved, because it works:** the Bid button is on the page whether or not you are signed in.
 That is deliberate -- it is what a buyer wants to click, ShopGoodwill does the same -- and the
@@ -285,12 +301,13 @@ draws is not where the real one is. The real progression is a ladder with no cle
 > made a test auction -> abandoned it -> several test auctions -> ran one real auction -> runs them
 > to a schedule
 
-`ClubHealth` already computes the right-hand half of that ladder from rows -- `empty`, `trial`,
-`new`, `active`, `slipping`, `dormant` -- nightly, and has to keep doing so: it is derived, and it
-will overwrite anything hand-set. So the left-hand half is one hand-maintained field on `Club`, the
-report shows whichever of the two is further along and says which one said so, and **that same field
-is the map gate**: a club nobody has approved is not on the map, not in `GetClubs`, not in any club
-dropdown.
+`ClubHealth` already computes the right-hand half of that ladder from rows -- `empty`, `aware`,
+`trial`, `new`, `active`, `slipping`, `dormant` -- nightly, and has to keep doing so: it is derived,
+and it will overwrite anything hand-set. So the left-hand half is one hand-maintained field on
+`Club`, the report shows whichever of the two is further along and says which one said so, and
+**that same field is the map gate**: a club nobody has approved is not on the map, not in
+`GetClubs`, not in any club dropdown. (Built in 8a: `Club.outreach_stage` and
+`Club.objects.listed()`.)
 
 Part of the middle *is* derivable, and it is the part that says a club is warm: a `UserData.club` FK
 pointing at it, `ClubMember` rows, an `AuctionTOS` belonging to one of its members in somebody
@@ -353,8 +370,8 @@ to run it. Draft per club, send by hand, record the attempt, and reuse the coold
 
 ### Order of work
 
-- **8a.** The stage field on `Club`, the map gate, and the stall reason. `/admin-club-health/` grows
-  to show the whole ladder instead of only its right-hand half.
+- **8a.** **Done.** The stage field on `Club`, the map gate, and the stall reason.
+  `/admin-club-health/` shows the whole ladder instead of only its right-hand half.
 - **8b.** The verifier, run against the clubs already on the site. Cheapest, and it is the code
   every later step reuses.
 - **8c.** Umbrella directories: one command per organisation, idempotent, dedup-ing on domain and
@@ -391,8 +408,8 @@ One pass = one phase, or one coherent piece of a phase.
 
 **Reach, then failure, then adoption.** Three questions, three sources:
 
-- **Reach** -- did anybody open this page? `PageView`, grouped by url. Works after Phase 0. Read it
-  knowing the 2-second and 38/247 caveats above.
+- **Reach** -- did anybody open this page? `PageView`, grouped by route. Works after Phase 0, and
+  unbiased after 7a: every page that extends `base.html` records one view, with no timer.
 - **Failure** -- did they give up? The Phase 1 instrument, and it has **two halves**, because on
   this site the obvious one is the rare one. A *rejection* is the server refusing a submission,
   which hardly ever happens here on purpose: nearly every field is optional and most of the rest
@@ -407,6 +424,51 @@ One pass = one phase, or one coherent piece of a phase.
 A surface with high reach and no failures is fine. High reach with repeated failures on one field
 is the whole point of this campaign. Low reach on a setting nobody has ever changed is a deletion
 candidate, not a redesign candidate.
+
+## Judgement calls waiting on the human
+
+Made to keep going, each one reversible in one place. Named here rather than buried in a docstring
+because they are decisions about what this site should do, not about how to write it.
+
+- **Only `listed` puts a club on the map, and every club already here was moved to `listed`.**
+  The alternative was to default new clubs to `listed` and mark prospects by hand, which fails
+  the other way: a club found by a crawler would be published before anybody looked at it. The
+  cost of this choice is that adding a club in the Django admin now takes one more dropdown, and
+  forgetting it means the club is invisible. `Club.objects.listed()` is the only gate, so the
+  policy is one method.
+- **A club's public page is not gated.** `/clubs/<slug>/` still renders for a prospect club.
+  Nothing links to it -- the map, the search and the dropdowns are all gated -- but a guessed URL
+  reaches it. Gating it would also hide it from the person doing the outreach, who needs to look
+  at it. Say the word and it becomes admin-only for unlisted clubs.
+- **Ladder order: `dormant` < `slipping` < `active`, and `empty` is not a rung.** A club that
+  stopped still got further than one with its first auction, so both sit above `new`; `empty` is
+  the absence of a signal rather than a rung, since every prospect starts there and ranking it
+  would report a club nobody has heard of as further along than one somebody just wrote to. The
+  order is one tuple, `club_health.LADDER`.
+- **The third "aware" signal was folded into the other two.** Phase 8 above names three: a
+  `UserData.club` FK, `ClubMember` rows, and an `AuctionTOS` belonging to one of that club's
+  members in somebody else's auction. The third is the same set of people seen *doing* something
+  rather than a wider set of people, so it says "warm", not "aware", and `people_here` counts the
+  first two. If the warm signal is worth its own rung, it is a fourth column, not a wider count.
+- **The buyer funnel lives on `/admin-usability/`, not on an organizer's stats page.** It is a
+  campaign instrument and it names arrival stages an organizer cannot act on. The same numbers per
+  auction would be a reasonable thing to show an organizer later; that is a different design.
+- **The funnel ignores the dashboard's day window** and reports each auction's whole life, because
+  a funnel cut at 30 days reports the people who paid last month as a drop-off. The window still
+  chooses which auctions appear.
+- **A single-club deployment lists its own club automatically.** `get_single_club` now forces
+  `outreach_stage` to `listed` on every call, so that one club cannot be un-listed by hand. On a
+  single-club site the club is the site; anywhere else that would be the wrong rule.
+
+## Still needs a person, not a decision
+
+- **8b-8f are network work.** The verifier, the umbrella directories, the link crawl and the city
+  search all fetch pages this repo cannot see from here, and every extraction rule is a guess until
+  somebody has looked at the real page. The right first step is 8b, the verifier, run against the
+  clubs already on the site: it needs no directory, it is the code every later source reuses, and
+  it answers "who is still out there" about the list that exists today.
+- **The outreach email itself stays hand-sent** (already settled above), so 8f cannot be finished
+  by a machine either.
 
 ## Open questions
 
@@ -432,6 +494,57 @@ candidate, not a redesign candidate.
 Newest first.
 
 <!-- PASS LOG START -->
+
+### 2026-09-09 -- review round on phase 7 and 8a
+
+Four findings, all cheap and all about the two tables that never shrink. `ladder_position` could not
+tell "no rollup" from "not looked up yet", so counting the ladder fired one `SELECT` per club
+without one -- which is every club club discovery is about to add; it takes a sentinel now and
+`assertNumQueries(2)` holds it there. Both funnel queries match an auction as `pageview.auction_id
+OR lot.auction_id`, which no single index serves, so unbounded each was a full scan of `PageView`
+from a page an admin opens casually -- they carry a `date_start` floor now, and `funnel_referrers`
+has no default for it on purpose. `club_mark_contacted` treated an *absent* `stall_reason` as the
+empty one, which is a legal value in that vocabulary ("Not known"), so a POST that said nothing
+about the reason erased one somebody had recorded. And the beacon's write-path cost -- one indexed
+`SELECT` per view, from `PageView.save()`'s location lookup -- is now written down in 7a as the
+fourth thing growth costs, rather than left implied.
+
+### 2026-09-09 -- Phase 7 whole, and phase 8a
+
+**7a.** `base_page_view.html` fires one view at `DOMContentLoaded` on every page that extends
+`base.html`, and the two-second timer is gone. The first `pageView()` call of a page wins, so the
+37 templates that name a lot or an auction keep working untouched and *replace* the automatic view
+rather than adding a second row -- except `view_lot_images.html`, whose call was inside
+`window.onload` and therefore arrived after the automatic one had already gone. It moved to parse
+time, and `test_page_view_beacon.py` is the ratchet: an enriched call that ends up behind a load
+handler fails the build, because the FK it carries is what every organizer-facing report filters on.
+`REACH_CAVEATS` came out in the same change.
+
+**7b.** `usability_report.buyer_funnel()` -- arrived, opened a lot, joined, bid, won, opened an
+invoice, paid, per auction, over that auction's whole life rather than the dashboard's window,
+because people arrive weeks before they pay. Seven `GROUP BY`s for the whole page, not seven per
+auction. Anonymous arrivals count as people, which is the entire point of 7a; **Bid** reads blank
+rather than zero for an in-person auction, where bidding leaves no row until somebody wins. Writing
+its test found a real bug: Django's `Concat` folds a NULL argument to an empty string, so the
+obvious `Coalesce(Concat("u", user_id), session_id)` counted every anonymous visitor to an auction
+as one person. It is a `Case` now, and the test that caught it says why.
+
+**7c.** The sign-in dialog is titled "Sign in to bid" instead of "Bid failed!" in red under an
+exclamation icon, and has one primary button instead of two. Every other reason in that box is a
+refusal and still looks like one.
+
+**8a.** `Club.outreach_stage` is the hand-set half of the ladder -- prospect, contacted, listed --
+and only `listed` publishes a club: the map, the club autocomplete, the palette's club search and
+`clubs_near_me` all go through `Club.objects.listed()`, which asks `active` as well. Migration 0430
+moves every club already on the site to `listed` in the same step that adds the column, because the
+field's default is `prospect` and deploying without that would empty the map. `Club.stall_reason` is
+the fixed vocabulary, set from a select beside the Mark-contacted button on the queue, and anything
+outside the vocabulary is ignored rather than stored. `ClubHealth` gained an `aware` stage and a
+`people_here` count, which is what separates a club whose members are already here from a name
+somebody typed in -- two completely different conversations that used to be one bucket. Existing
+rollup rows still say what they said until the nightly task next runs, so the `aware` rung fills in
+overnight rather than at deploy; `club_health.refresh_all()` does it now if that matters.
+
 
 ### 2026-09-08 -- review round on the above
 

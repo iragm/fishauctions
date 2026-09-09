@@ -20,7 +20,7 @@ from auctions.club_health import (
     is_test_auction,
     median_gap,
 )
-from auctions.models import Auction, Club
+from auctions.models import Auction, Club, ClubMember
 from auctions.tests import StandardTestCase
 
 
@@ -294,6 +294,197 @@ class ClubHealthDashboardTests(StandardTestCase):
         self.client.post(reverse("club_mark_contacted", kwargs={"pk": club.pk}))
         club.refresh_from_db()
         self.assertIsNone(club.date_contacted)
+
+
+class LadderTests(StandardTestCase):
+    """The two halves of a club's stage, on one order, with the furthest-along one winning."""
+
+    def test_a_club_nobody_has_approved_starts_at_the_bottom(self):
+        club = Club.objects.create(name="Found on a directory page")
+        self.assertEqual(club.outreach_stage, Club.PROSPECT)
+        self.assertEqual(club_health.ladder_position(club)["stage"], "unaware")
+
+    def test_the_hand_set_half_answers_when_nothing_is_derived(self):
+        club = Club.objects.create(name="Approved, done nothing", outreach_stage=Club.LISTED)
+        compute_club_health(club)
+        club.refresh_from_db()
+        position = club_health.ladder_position(club)
+        self.assertEqual(position["stage"], "listed")
+        self.assertEqual(position["source"], "hand")
+
+    def test_the_derived_half_wins_when_it_is_further_along(self):
+        """A club we only ever emailed can be further along than we think, and usually is."""
+        club = Club.objects.create(name="Quietly running auctions", outreach_stage=Club.CONTACTED)
+        health = ClubHealth.objects.create(club=club, stage="active")
+        position = club_health.ladder_position(club, health)
+        self.assertEqual(position["stage"], "active")
+        self.assertEqual(position["source"], "derived")
+
+    def test_an_empty_rollup_never_pushes_a_club_up_the_ladder(self):
+        """Every prospect derives "empty", so ranking it would report a club nobody has heard of as
+        further along than one somebody just wrote to."""
+        club = Club.objects.create(name="A name and a postcode")
+        health = ClubHealth.objects.create(club=club, stage="empty")
+        self.assertEqual(club_health.ladder_position(club, health)["stage"], "unaware")
+
+    def test_the_rungs_are_in_order(self):
+        order = [key for key, _label, _half in club_health.LADDER]
+        self.assertEqual(order[:3], ["unaware", "contacted", "listed"])
+        self.assertLess(club_health.LADDER_RANK["new"], club_health.LADDER_RANK["dormant"])
+        self.assertLess(club_health.LADDER_RANK["dormant"], club_health.LADDER_RANK["slipping"])
+        self.assertLess(club_health.LADDER_RANK["slipping"], club_health.LADDER_RANK["active"])
+
+    def test_the_nightly_rollup_never_writes_the_hand_set_half(self):
+        """It is rebuilt from scratch every night; anything a person decided has to survive that."""
+        club = Club.objects.create(name="Hand set", outreach_stage=Club.CONTACTED)
+        compute_club_health(club)
+        club.refresh_from_db()
+        self.assertEqual(club.outreach_stage, Club.CONTACTED)
+
+    def test_counts_add_up_to_every_club(self):
+        Club.objects.create(name="One", outreach_stage=Club.PROSPECT)
+        Club.objects.create(name="Two", outreach_stage=Club.LISTED)
+        rows = club_health.ladder_counts()
+        self.assertEqual(sum(row["clubs"] for row in rows), Club.objects.count())
+
+    def test_counting_the_ladder_is_two_queries_however_many_clubs_have_no_rollup(self):
+        """Clubs with no rollup are the ones club discovery adds in bulk, so a fetch per club here
+        is a page that gets slower every time the campaign works."""
+        for number in range(5):
+            Club.objects.create(name=f"No rollup {number}")
+        with self.assertNumQueries(2):
+            club_health.ladder_counts()
+        compute_club_health(Club.objects.create(name="With a rollup"))
+        with self.assertNumQueries(2):
+            club_health.ladder_counts()
+
+    def test_a_club_asked_about_on_its_own_still_looks_its_rollup_up(self):
+        """The sentinel default is what keeps that convenience without costing the loop above."""
+        club = Club.objects.create(name="Asked about alone", outreach_stage=Club.CONTACTED)
+        compute_club_health(club)
+        ClubHealth.objects.filter(club=club).update(stage="active")
+        self.assertEqual(club_health.ladder_position(Club.objects.get(pk=club.pk))["stage"], "active")
+
+
+class AwareStageTests(StandardTestCase):
+    """A club with members here and no auctions is not the same club as a name on a list."""
+
+    def test_a_club_with_a_member_here_is_aware_rather_than_empty(self):
+        club = Club.objects.create(name="Has a member")
+        ClubMember.objects.create(club=club, user=self.user, name="A member")
+        health = compute_club_health(club)
+        self.assertEqual(health.stage, "aware")
+        self.assertEqual(health.people_here, 1)
+
+    def test_somebody_naming_the_club_on_their_own_page_counts(self):
+        """The other link, and the one the club itself never sees: UserData.club."""
+        club = Club.objects.create(name="Named by a user")
+        userdata = self.user.userdata
+        userdata.club = club
+        userdata.save()
+        health = compute_club_health(club)
+        self.assertEqual(health.stage, "aware")
+
+    def test_one_person_with_both_links_is_one_person(self):
+        club = Club.objects.create(name="Both links")
+        ClubMember.objects.create(club=club, user=self.user, name="A member")
+        userdata = self.user.userdata
+        userdata.club = club
+        userdata.save()
+        self.assertEqual(compute_club_health(club).people_here, 1)
+
+    def test_an_aware_club_is_still_on_the_outreach_queue(self):
+        """It is the most recoverable club on the list: the members are already here."""
+        club = Club.objects.create(name="Aware and idle")
+        ClubMember.objects.create(club=club, user=self.user, name="A member")
+        self.assertTrue(compute_club_health(club).due_for_checkin)
+
+    def test_a_deleted_member_is_not_a_member(self):
+        club = Club.objects.create(name="Emptied out")
+        ClubMember.objects.create(club=club, user=self.user, name="Gone", is_deleted=True)
+        self.assertEqual(compute_club_health(club).stage, "empty")
+
+
+class MapGateTests(StandardTestCase):
+    """A club nobody has approved is not a claim this site makes anywhere."""
+
+    def setUp(self):
+        super().setUp()
+        self.listed = Club.objects.create(
+            name="Listed Aquarium Society", outreach_stage=Club.LISTED, latitude=42.0, longitude=-73.0
+        )
+        self.prospect = Club.objects.create(
+            name="Prospect Aquarium Society", outreach_stage=Club.PROSPECT, latitude=42.1, longitude=-73.1
+        )
+
+    def test_listed_is_the_gate_and_active_is_the_other_half(self):
+        self.assertIn(self.listed, Club.objects.listed())
+        self.assertNotIn(self.prospect, Club.objects.listed())
+        self.listed.active = False
+        self.listed.save()
+        self.assertNotIn(self.listed, Club.objects.listed())
+
+    def test_a_prospect_is_not_on_the_map(self):
+        response = self.client.get(reverse("clubs"))
+        if response.status_code != 200:
+            self.skipTest("the club finder is disabled in this environment")
+        self.assertContains(response, "Listed Aquarium Society")
+        self.assertNotContains(response, "Prospect Aquarium Society")
+
+    def test_a_prospect_is_not_in_the_club_autocomplete(self):
+        self.client.login(username="my_lot", password="testpassword")
+        response = self.client.post("/api/clubs/", {"search": "Aquarium Society"})
+        names = [row["name"] for row in response.json()]
+        self.assertIn("Listed Aquarium Society", names)
+        self.assertNotIn("Prospect Aquarium Society", names)
+
+    def test_a_prospect_is_not_in_the_command_palette(self):
+        self.client.login(username="my_lot", password="testpassword")
+        response = self.client.get(reverse("command_palette"), {"q": "Aquarium Society"})
+        found = [item["title"] for group in response.json()["groups"] for item in group["items"]]
+        self.assertIn("Listed Aquarium Society", found)
+        self.assertNotIn("Prospect Aquarium Society", found)
+
+
+class StallReasonTests(StandardTestCase):
+    def setUp(self):
+        super().setUp()
+        self.admin_user.is_superuser = True
+        self.admin_user.save()
+        self.client.login(username="admin_user", password="testpassword")
+
+    def test_the_queue_records_why_a_club_stopped(self):
+        club = Club.objects.create(name="Answered the email")
+        compute_club_health(club)
+        self.client.post(reverse("club_mark_contacted", kwargs={"pk": club.pk}), {"stall_reason": "paper"})
+        club.refresh_from_db()
+        self.assertEqual(club.stall_reason, "paper")
+
+    def test_a_post_that_says_nothing_about_the_reason_leaves_it_alone(self):
+        """ "" is a legal value in this vocabulary ("Not known"), so an absent field must not read
+        as one."""
+        club = Club.objects.create(name="Already answered", stall_reason="cost")
+        compute_club_health(club)
+        self.client.post(reverse("club_mark_contacted", kwargs={"pk": club.pk}))
+        club.refresh_from_db()
+        self.assertEqual(club.stall_reason, "cost")
+        self.assertIsNotNone(club.date_contacted)
+
+    def test_the_reason_can_be_cleared_on_purpose(self):
+        club = Club.objects.create(name="Answered then unanswered", stall_reason="cost")
+        compute_club_health(club)
+        self.client.post(reverse("club_mark_contacted", kwargs={"pk": club.pk}), {"stall_reason": ""})
+        club.refresh_from_db()
+        self.assertEqual(club.stall_reason, "")
+
+    def test_a_reason_outside_the_vocabulary_is_ignored(self):
+        """Free text here would be Club.notes again, which is the thing that cannot be counted."""
+        club = Club.objects.create(name="Said something else")
+        compute_club_health(club)
+        self.client.post(reverse("club_mark_contacted", kwargs={"pk": club.pk}), {"stall_reason": "they hate blue"})
+        club.refresh_from_db()
+        self.assertEqual(club.stall_reason, "")
+        self.assertIsNotNone(club.date_contacted)
 
 
 class RefreshAllTests(StandardTestCase):

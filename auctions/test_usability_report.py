@@ -8,14 +8,32 @@ break a hand-written pattern list.
 
 from datetime import timedelta
 
+from django.contrib.auth.models import User
+from django.contrib.sites.models import Site
 from django.test import TestCase
 from django.urls import reverse
 from django.utils import timezone
 
 from auctions import usability_report
-from auctions.models import FormFailure, PageView
+from auctions.models import (
+    Auction,
+    AuctionTOS,
+    Bid,
+    FormFailure,
+    Invoice,
+    Lot,
+    PageView,
+    PickupLocation,
+)
 from auctions.tests import StandardTestCase
-from auctions.usability_report import UNROUTED, friction_by_form, reach_by_route, route_name
+from auctions.usability_report import (
+    UNROUTED,
+    buyer_funnel,
+    friction_by_form,
+    funnel_referrers,
+    reach_by_route,
+    route_name,
+)
 
 
 class RouteNameTests(TestCase):
@@ -76,12 +94,6 @@ class ReachTests(StandardTestCase):
     def test_rows_with_no_url_are_skipped(self):
         self._view("")
         self.assertEqual(reach_by_route(days=30), [])
-
-    def test_the_caveats_travel_with_the_numbers(self):
-        """Every reach number on this site is biased toward pages nobody struggled with."""
-        self.assertEqual(len(usability_report.REACH_CAVEATS), 2)
-        for caveat in usability_report.REACH_CAVEATS:
-            self.assertGreater(len(caveat), 40)
 
 
 class FrictionReportTests(StandardTestCase):
@@ -159,18 +171,127 @@ class FrictionReportTests(StandardTestCase):
         self.assertEqual(friction_by_form(days=7), [])
 
 
+class BuyerFunnelTests(StandardTestCase):
+    """Where a buyer stopped, counted off rows that already existed.
+
+    The fixture's online auction ended two days ago and already has joins, a sold lot and invoices,
+    so these tests add the two stages the site could not see before this phase: an arrival, and an
+    arrival by somebody with no account at all.
+    """
+
+    def _view(self, **kwargs):
+        return PageView.objects.create(url="/lots/", title="t", **kwargs)
+
+    def _funnel(self, auction=None):
+        auction = auction or self.online_auction
+        for row in buyer_funnel():
+            if row["auction"].pk == auction.pk:
+                return {stage["stage"]: stage["people"] for stage in row["stages"]}
+        self.fail(f"{auction} is not in the funnel")
+
+    def test_one_session_walked_end_to_end_reports_each_stage_once(self):
+        """The whole ladder for one person, from a page view to a paid invoice."""
+        auction = Auction.objects.create(
+            created_by=self.user_who_does_not_join,
+            title="A funnel auction",
+            is_online=True,
+            date_start=timezone.now() - timedelta(days=3),
+            date_end=timezone.now() - timedelta(days=1),
+        )
+        location = PickupLocation.objects.create(
+            name="funnel location", auction=auction, pickup_time=timezone.now() + timedelta(days=3)
+        )
+        seller = AuctionTOS.objects.create(
+            user=self.user, auction=auction, pickup_location=location, bidder_number="801"
+        )
+        buyer_user = User.objects.create_user(username="funnel_buyer", password="x")
+        buyer = AuctionTOS.objects.create(
+            user=buyer_user, auction=auction, pickup_location=location, bidder_number="802"
+        )
+        lot = Lot.objects.create(
+            lot_name="A funnel lot",
+            auction=auction,
+            auctiontos_seller=seller,
+            quantity=1,
+            winning_price=10,
+            auctiontos_winner=buyer,
+        )
+        self._view(user=buyer_user, lot_number=lot)
+        Bid.objects.create(user=buyer_user, lot_number=lot, amount=10)
+        invoice = Invoice.objects.get_or_create(auctiontos_user=buyer)[0]
+        invoice.opened = True
+        invoice.status = "PAID"
+        invoice.save()
+
+        stages = self._funnel(auction)
+        self.assertEqual(stages["Arrived"], 1)
+        self.assertEqual(stages["Opened a lot"], 1)
+        self.assertEqual(stages["Joined"], 2)  # the seller joined too
+        self.assertEqual(stages["Bid"], 1)
+        self.assertEqual(stages["Won something"], 1)
+        self.assertEqual(stages["Opened an invoice"], 1)
+        self.assertEqual(stages["Paid"], 1)
+
+    def test_a_session_that_only_arrives_reports_only_that(self):
+        before = self._funnel()["Arrived"]
+        self._view(session_id="anonymous-session", auction=self.online_auction)
+        stages = self._funnel()
+        self.assertEqual(stages["Arrived"], before + 1)
+        self.assertEqual(stages["Opened a lot"], 0)
+
+    def test_somebody_with_no_account_is_a_person(self):
+        """The point of the whole phase: an anonymous arrival is a row with no user on it."""
+        self._view(session_id="one", auction=self.online_auction)
+        self._view(session_id="one", auction=self.online_auction)
+        self._view(session_id="two", auction=self.online_auction)
+        self.assertEqual(self._funnel()["Arrived"], 2)
+
+    def test_a_view_of_a_lot_counts_as_an_arrival_too(self):
+        """The two ways a page names an auction -- directly, or through the lot it is about."""
+        self._view(session_id="three", lot_number=self.lot)
+        stages = self._funnel()
+        self.assertEqual(stages["Arrived"], 1)
+        self.assertEqual(stages["Opened a lot"], 1)
+
+    def test_an_in_person_auction_reports_no_bid_stage_rather_than_zero(self):
+        stages = self._funnel(self.in_person_auction)
+        self.assertIsNone(stages["Bid"])
+        self.assertEqual(self._funnel()["Bid"], 0)
+
+    def test_referrers_are_reported_per_auction_and_our_own_domain_is_not_one(self):
+        PageView.objects.create(url="/lots/", title="t", auction=self.online_auction, referrer="Facebook")
+        PageView.objects.create(url="/lots/", title="t", auction=self.online_auction, referrer="Facebook")
+        PageView.objects.create(
+            url="/lots/", title="t", auction=self.online_auction, referrer=Site.objects.get_current().domain
+        )
+        found = funnel_referrers([self.online_auction.pk], timezone.now() - timedelta(days=30))
+        self.assertEqual(found[self.online_auction.pk], [{"referrer": "Facebook", "views": 2}])
+
+    def test_the_arrival_queries_are_bounded_by_date(self):
+        """Not a detail: matching an auction is `pageview.auction_id OR lot.auction_id`, which no
+        single index serves, so without the floor this is a full scan of the biggest table here."""
+        old = self._view(session_id="ancient", auction=self.online_auction)
+        long_ago = timezone.now() - timedelta(days=usability_report.FUNNEL_LOOKBACK_DAYS + 400)
+        PageView.objects.filter(pk=old.pk).update(date_start=long_ago)
+        self.assertEqual(self._funnel()["Arrived"], 0)
+        self._view(session_id="recent", auction=self.online_auction)
+        self.assertEqual(self._funnel()["Arrived"], 1)
+
+    def test_an_auction_that_ended_before_the_window_is_not_on_the_page(self):
+        Auction.objects.filter(pk=self.online_auction.pk).update(date_end=timezone.now() - timedelta(days=400))
+        self.assertNotIn(self.online_auction.pk, [row["auction"].pk for row in buyer_funnel()])
+
+
 class DashboardTests(StandardTestCase):
-    def test_a_superuser_sees_all_three_panels(self):
+    def test_a_superuser_sees_all_four_panels(self):
         self.admin_user.is_superuser = True
         self.admin_user.save()
         self.client.login(username="admin_user", password="testpassword")
         response = self.client.get(reverse("admin_usability"))
         self.assertEqual(response.status_code, 200)
         page = response.content.decode()
-        for heading in ("Failure", "Adoption", "Reach"):
+        for heading in ("Failure", "Adoption", "Reach", "Buyers"):
             self.assertIn(heading, page)
-        for caveat in usability_report.REACH_CAVEATS:
-            self.assertIn(caveat[:40], page)
 
     def test_an_ordinary_user_cannot_open_it(self):
         self.client.login(username="my_lot", password="testpassword")

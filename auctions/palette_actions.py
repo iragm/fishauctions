@@ -4021,7 +4021,7 @@ def describe_club(request, params: dict[str, Any]) -> dict[str, Any]:
         # Wider than every other club action on purpose: "what does that club do for BAP" is a
         # question asked about a club you have not joined, and every field below is on the club's
         # own public page.
-        club = Club.objects.filter(active=True).filter(Q(name__icontains=hint) | Q(abbreviation__iexact=hint)).first()
+        club = Club.objects.listed().filter(Q(name__icontains=hint) | Q(abbreviation__iexact=hint)).first()
     if club is None:
         return problem or _error("I couldn't work out which club you mean.")
     can_manage = command_palette._can_manage_members(user, club)
@@ -5797,7 +5797,8 @@ def clubs_near_me(request, params: dict[str, Any]) -> dict[str, Any]:
         return problem
     distance = max(10, min(_int(params, "distance") or 100, MAX_SEARCH_MILES))
     clubs = (
-        Club.objects.filter(active=True, latitude__isnull=False, longitude__isnull=False)
+        Club.objects.listed()
+        .filter(latitude__isnull=False, longitude__isnull=False)
         .annotate(distance=distance_to(latitude, longitude))
         .exclude(distance__gt=distance)
         .order_by("distance")[:LIST_LIMIT]

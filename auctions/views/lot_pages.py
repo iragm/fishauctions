@@ -506,7 +506,14 @@ class ViewLot(DetailView):
         context["viewer_pk"] = self.request.user.pk
         context["submitter_pk"] = getattr(lot.user, "pk", 0)
         context["user_specific_bidding_error"] = False
+        # The other reasons this dialog carries -- your own lot, you haven't joined, you aren't
+        # checked in, you need approval -- are refusals, and look like refusals. "You are not signed
+        # in yet" is not one, so it does not get the red title and the exclamation icon. Only an
+        # anonymous visitor can reach that branch (the ones below all need a pk), so this flag
+        # cannot go stale against the message beside it.
+        context["bidding_error_is_sign_in"] = False
         if not self.request.user.is_authenticated:
+            context["bidding_error_is_sign_in"] = True
             context["user_specific_bidding_error"] = format_html(
                 "You have to <a href='/login/?next={}'>sign in</a> to place bids.", lot.lot_link
             )

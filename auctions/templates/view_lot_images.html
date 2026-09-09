@@ -92,6 +92,11 @@ function deactivate_lot() {
 }
 </script>
 <script type="text/javascript">
+    {% comment %}Recorded while the page parses, not from the load handler below: base_page_view.html
+    fires an automatic view at DOMContentLoaded, and the first call wins. From window.onload this
+    would arrive second and the lot FK -- which every organizer-facing report filters on -- would be
+    missing from the row.{% endcomment %}
+    pageView({'lot':{{ lot.pk }} });
     {% if only_whole_dollar_bids %}
     function next_bid(amount) {
         console.log(amount);
@@ -157,7 +162,6 @@ function deactivate_lot() {
     });
     }, 5000);
     {% endif %}
-    pageView({'lot':{{ lot.pk }} });
      // Logic for watching lots
      $( "#watch" ).click(function() {
         var data = {};
@@ -931,16 +935,17 @@ side. They are closed after the recommended-lots strip at the bottom of the page
     <div class="modal-dialog" role="document">
         <div class="modal-content">
             <div class="modal-header">
-                <h5 class="modal-title text-danger" id="label"><i class="bi bi-exclamation-circle-fill"></i> Bid failed!</h5>
+                {% comment %}The title comes from the reason. Every other reason this box carries is a refusal and looks like one; "you are not signed in yet" is not a refusal, and the red exclamation used to greet somebody who had never bid.{% endcomment %}
+                {% if bidding_error_is_sign_in %}<h5 class="modal-title" id="label">Sign in to bid</h5>{% else %}<h5 class="modal-title text-danger" id="label"><i class="bi bi-exclamation-circle-fill"></i> Bid failed!</h5>{% endif %}
                 <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
             </div>
             <div id='confirmDialogText' class="modal-body">
                 {{ user_specific_bidding_error|safe }}
             </div>
             <div class="modal-footer">
+                {% comment %}One button, not two. The body is already one sentence with a sign-in link in it, and the sign-in page offers creating an account -- so a second primary button here said the same thing a third time.{% endcomment %}
                 {% if not user.is_authenticated %}
                     <a href="{% url 'account_login' %}?next={{ lot.lot_link }}" role="button" class="btn btn-primary">Sign in</a>
-                    <a href="{% url 'account_signup' %}?next={{ lot.lot_link }}" role="button" class="btn btn-primary">Create an account</a>
                 {% comment %}The auction test is not redundant: a standalone lot has no auction, and
                 user_tos is falsy for it too, so this used to reverse auction_main with an empty slug
                 and raise NoReverseMatch -- a 500 on any standalone lot a signed-in user opened.{% endcomment %}

@@ -809,7 +809,7 @@ class ClubAPIKeyInline(admin.TabularInline):
 
 class ClubAdmin(admin.ModelAdmin):
     model = Club
-    list_display = ("name", "is_nec_club", "contact_email", "date_contacted_for_in_person_auctions")
+    list_display = ("name", "outreach_stage", "is_nec_club", "contact_email", "date_contacted_for_in_person_auctions")
     search_fields = (
         "name",
         "abbreviation",
@@ -817,6 +817,10 @@ class ClubAdmin(admin.ModelAdmin):
         "homepage",
     )
     list_filter = (
+        # Only "Approved and listed" puts a club on the map, so this is the filter that answers
+        # "what have we found and not published yet" -- the working list for club discovery.
+        "outreach_stage",
+        "stall_reason",
         "active",
         "is_nec_club",
         "use_site_paypal_account",
@@ -831,7 +835,7 @@ class ClubAdmin(admin.ModelAdmin):
     readonly_fields = ("connected_paypal_seller", "connected_square_seller")
     # NEC membership is granted here and nowhere else (it gates the speaker directory), so make it
     # togglable straight from the list rather than one club edit page at a time.
-    list_editable = ("is_nec_club",)
+    list_editable = ("is_nec_club", "outreach_stage")
     inlines = [
         UserInline,
         ClubDiscordRoleInline,

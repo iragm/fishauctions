@@ -498,7 +498,7 @@ class ClubMap(TemplateView):
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         context["google_maps_api_key"] = settings.LOCATION_FIELD["provider.google.api_key"]
-        context["clubs"] = Club.objects.filter(active=True, latitude__isnull=False)
+        context["clubs"] = Club.objects.listed().filter(latitude__isnull=False)
         context["location_message"] = "Set your location to see clubs near you"
         latitude_cookie = self.request.COOKIES.get("latitude")
         longitude_cookie = self.request.COOKIES.get("longitude")

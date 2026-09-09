@@ -1,9 +1,13 @@
-"""The usability dashboards: the three measurements, and the club outreach queue.
+"""The usability dashboards: the measurements, the buyer funnel, and the club outreach queue.
 
-Three panels, one per question in USABILITY.md's "Measuring" section, because they are only useful
-next to each other: high reach with no failures is a page that works, the same reach with a run of
-unresolved bounces on one field is the thing the campaign exists to find, and a setting nobody has
-ever changed is a deletion candidate rather than a redesign candidate.
+Three of the four panels are one per question in USABILITY.md's "Measuring" section, because they
+are only useful next to each other: high reach with no failures is a page that works, the same reach
+with a run of unresolved bounces on one field is the thing the campaign exists to find, and a
+setting nobody has ever changed is a deletion candidate rather than a redesign candidate.
+
+The fourth is the buyer funnel, and it is the only panel here about somebody who does not run an
+auction. It is on this page rather than an organizer's stats page because it is a campaign
+instrument: it exists to say which stage of arriving, joining and paying loses people.
 
 The queries are in :mod:`auctions.usability_report` and :mod:`auctions.field_adoption` so they can
 be tested without a request.
@@ -49,7 +53,10 @@ class AdminUsability(AdminOnlyViewMixin, TemplateView):
         days = max(1, min(days, 400))
         context["days"] = days
         context["reach"] = usability_report.reach_by_route(days=days)
-        context["reach_caveats"] = usability_report.REACH_CAVEATS
+        # Not windowed by `days`: a funnel is a whole auction from arrival to payment, and cutting
+        # it at 30 days reports the people who paid last month as a drop-off. The window chooses
+        # which auctions are shown, which buyer_funnel does for itself.
+        context["funnel"] = usability_report.buyer_funnel()
         context["friction"] = usability_report.friction_by_form(days=days)
         adoption = auction_field_adoption()
         context["adoption"] = sorted(adoption, key=lambda row: (row.off_default, row.edits))
@@ -59,18 +66,20 @@ class AdminUsability(AdminOnlyViewMixin, TemplateView):
 
 
 class AdminClubHealth(AdminOnlyViewMixin, TemplateView):
-    """Which clubs have gone quiet against their own cadence, and who to contact next"""
+    """Which clubs have gone quiet against their own cadence, and who to contact next
+
+    Also the whole ladder, both halves of it: the hand-set rungs that end in approving a club for
+    the map, and the derived ones that start the moment somebody from that club turns up here.
+    """
 
     template_name = "dashboard_club_health.html"
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         context["queue"] = club_health.due_for_checkin()
-        labels = dict(club_health.STAGE_CHOICES)
-        context["stages"] = [
-            {"stage": row["stage"], "label": labels.get(row["stage"], row["stage"]), "clubs": row["clubs"]}
-            for row in ClubHealth.objects.values("stage").annotate(clubs=Count("pk")).order_by("-clubs")
-        ]
+        context["ladder"] = club_health.ladder_counts()
+        context["stall_reason_choices"] = Club.STALL_REASON_CHOICES
+        context["stall_reasons"] = _stall_reason_counts()
         context["never_computed"] = Club.objects.filter(health__isnull=True).count()
         context["stale"] = ClubHealth.objects.filter(
             computed_on__lt=timezone.now() - timezone.timedelta(days=3)
@@ -80,6 +89,26 @@ class AdminClubHealth(AdminOnlyViewMixin, TemplateView):
         context["tool_names"] = [label for label, _check in club_health.TOOL_CHECKS]
         context["tool_counts"] = _tool_counts(context["tool_names"])
         return context
+
+
+def _stall_reason_counts():
+    """``[{reason, label, clubs}]`` -- which objection actually comes back, in order.
+
+    The whole reason this is a fixed vocabulary rather than ``Club.notes``: free text cannot be
+    counted, and these counts are the only thing that will ever say which objection is worth
+    fixing. Clubs with no reason recorded are not a row here -- "not known" is most of them and
+    would drown the ones somebody answered.
+    """
+    labels = dict(Club.STALL_REASON_CHOICES)
+    rows = Club.objects.exclude(stall_reason="").values("stall_reason").annotate(clubs=Count("pk")).order_by("-clubs")
+    return [
+        {
+            "reason": row["stall_reason"],
+            "label": labels.get(row["stall_reason"], row["stall_reason"]),
+            "clubs": row["clubs"],
+        }
+        for row in rows
+    ]
 
 
 def _tool_counts(tool_names):
@@ -108,7 +137,18 @@ class ClubMarkContacted(AdminOnlyViewMixin, View):
     def post(self, request, *args, **kwargs):
         club = get_object_or_404(Club, pk=kwargs["pk"])
         club.date_contacted = timezone.now()
-        club.save(update_fields=["date_contacted"])
+        fields = ["date_contacted"]
+        # Only ever set from the fixed vocabulary: anything else posted here is ignored rather than
+        # stored, because a column of one-off strings is Club.notes again. The field has to be
+        # *present* to be written, and "" is a legal value in it ("Not known"), so a POST that omits
+        # it -- another button on this page, a script -- leaves a recorded reason alone instead of
+        # clearing it.
+        if "stall_reason" in request.POST:
+            reason = request.POST["stall_reason"]
+            if reason in dict(Club.STALL_REASON_CHOICES):
+                club.stall_reason = reason
+                fields.append("stall_reason")
+        club.save(update_fields=fields)
         club_health.compute_club_health(club)
         messages.success(request, f"{club.name} marked as contacted.")
         return redirect(reverse("admin_club_health"))

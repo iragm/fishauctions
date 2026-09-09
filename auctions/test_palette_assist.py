@@ -1681,6 +1681,9 @@ class DescribeTests(PaletteAssistTestCase):
         club = Club.objects.create(
             name="Describable Aquarium Society",
             active=True,
+            # Named rather than found by name: describe_club resolves a club nobody has joined
+            # through Club.objects.listed(), so a club that has not been approved is not describable.
+            outreach_stage=Club.LISTED,
             enable_breeder_award_program=True,
             points_per_lot=5,
             min_quantity=6,
@@ -1695,7 +1698,7 @@ class DescribeTests(PaletteAssistTestCase):
         self.assertIn(5, by_name.values())
 
     def test_describe_club_hides_member_counts_from_a_non_admin(self):
-        club = Club.objects.create(name="Private Aquarium Society", active=True)
+        club = Club.objects.create(name="Private Aquarium Society", active=True, outreach_stage=Club.LISTED)
         result = self._run("describe_club", {"club": club.name}, user=self.member)
         self.assertNotIn("_admin", result["club"])
 

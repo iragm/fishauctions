@@ -29,6 +29,7 @@ from auctions.models import (
     UserBan,
     add_price_info,
 )
+from auctions.tests import StandardTestCase
 
 
 class LotPricesTests(TestCase):
@@ -918,3 +919,70 @@ class LotRefundDialogTests(TestCase):
         updated_lot = Lot.objects.get(pk=self.lot.pk)
         assert updated_lot.partial_refund_percent == 50
         assert updated_lot.banned is False
+
+
+class BidDialogTests(StandardTestCase):
+    """The box a visitor gets when the Bid button cannot do what it says.
+
+    The button is on the page whether or not you are signed in -- deliberately, it is what a buyer
+    wants to click -- so this dialog is the answer to "why can't I bid?". Four of the five reasons
+    it carries are refusals and look like refusals. "You are not signed in yet" is not a refusal,
+    and it used to arrive titled "Bid failed!" in red under an exclamation icon, for somebody who
+    had never bid.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.live_auction = Auction.objects.create(
+            created_by=self.user,
+            title="A live online auction",
+            is_online=True,
+            date_start=timezone.now() - datetime.timedelta(days=1),
+            date_end=timezone.now() + datetime.timedelta(days=3),
+            promote_this_auction=True,
+        )
+        self.live_location = PickupLocation.objects.create(
+            name="live location",
+            auction=self.live_auction,
+            pickup_time=timezone.now() + datetime.timedelta(days=5),
+        )
+        self.live_seller = AuctionTOS.objects.create(
+            user=self.user,
+            auction=self.live_auction,
+            pickup_location=self.live_location,
+            bidder_number="601",
+        )
+        self.live_lot = Lot.objects.create(
+            lot_name="A live lot",
+            auction=self.live_auction,
+            auctiontos_seller=self.live_seller,
+            quantity=1,
+            reserve_price=5,
+            active=True,
+        )
+
+    def _lot_page(self):
+        return self.client.get(self.live_lot.lot_link).content.decode()
+
+    def test_a_visitor_who_never_bid_is_not_told_their_bid_failed(self):
+        page = self._lot_page()
+        self.assertIn("Sign in to bid", page)
+        self.assertNotIn("Bid failed", page)
+        self.assertNotIn("bi-exclamation-circle-fill", page)
+
+    def test_the_sign_in_dialog_offers_one_button_and_one_sentence(self):
+        """The body is already a sentence with a sign-in link; a second primary button beside the
+        first said the same thing a third time."""
+        page = self._lot_page()
+        self.assertIn("You have to <a href='/login/?next=", page)
+        self.assertNotIn("Create an account</a>", page)
+        footer = page.split('<div class="modal fade" id="bidError"')[1]
+        self.assertEqual(footer.count('class="btn btn-primary"'), 1)
+
+    def test_a_real_refusal_still_reads_as_one(self):
+        """Somebody signed in who has not joined the auction is being refused, and should see it."""
+        self.client.login(username="no_joins", password="testpassword")
+        page = self._lot_page()
+        self.assertIn("Bid failed", page)
+        self.assertNotIn("Sign in to bid", page)
+        self.assertIn("read the auction's rules and join the auction", page)

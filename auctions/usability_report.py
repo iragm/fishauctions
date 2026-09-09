@@ -1,4 +1,4 @@
-"""The three usability measurements, in one place a dashboard can read.
+"""The usability measurements, in one place a dashboard can read.
 
 USABILITY.md sets out three questions and says which source answers each.  This module is that
 mapping in code:
@@ -15,12 +15,17 @@ hand-written one has.
 
 **Adoption** -- did anybody change this setting, ever?  :mod:`auctions.field_adoption`.
 
-Two caveats belong on the reach numbers wherever they are shown, and
-:data:`REACH_CAVEATS` carries them so the dashboard cannot quietly drop them:
-``pageView()`` is called by 38 of 247 templates, so a page that never opted in is *absent* rather
-than *unvisited*; and it fires behind a two-second timer, so a page abandoned faster than that
-records nothing.  Both biases run the same way -- toward pages people did **not** struggle with --
-which is the opposite of what a usability pass wants, and is why the failure column exists.
+:func:`buyer_funnel` is the fourth thing here and the only one about buyers rather than organizers.
+It needs no model of its own: every stage of "arrived, looked at a lot, joined, bid, won, opened the
+invoice, paid" already has a row, and the beacon now records the arrivals of people who never signed
+in at all.
+
+The reach numbers used to carry two caveats, both of them about the beacon rather than about this
+module: it was called by 38 templates out of 247, so a page that never opted in read as *absent*
+rather than *unvisited*, and it fired behind a two-second timer, so anything abandoned faster
+recorded nothing.  Both biases ran toward pages people did **not** struggle with, which is the
+opposite of what a usability pass wants.  ``base_page_view.html`` now records one view on every page
+that extends ``base.html``, with no timer, so neither is true and neither is shown.
 """
 
 from __future__ import annotations
@@ -30,17 +35,12 @@ import logging
 import statistics
 from datetime import timedelta
 
-from django.db.models import Count, Q
+from django.db.models import Case, CharField, Count, Q, Value, When
+from django.db.models.functions import Cast, Coalesce, Concat
 from django.urls import Resolver404, resolve
 from django.utils import timezone
 
 logger = logging.getLogger(__name__)
-
-REACH_CAVEATS = (
-    "pageView() is called by 38 of 247 templates -- a page that never opted in reads as absent, not as unvisited.",
-    "The beacon fires two seconds after load, so anything abandoned faster records nothing. Both "
-    "biases run toward pages people did not struggle with.",
-)
 
 # A path nobody's URLconf claims. Kept as one bucket rather than dropped: a lot of these means the
 # beacon is posting something the resolver does not recognise, which is a bug in the beacon.
@@ -192,3 +192,173 @@ def worst_fields(since, limit=4, kind="rejected"):
         ]
         for form_name, bucket in counts.items()
     }
+
+
+# One funnel per auction, over that auction's whole life. The window picks which auctions are worth
+# looking at; it deliberately does not cut the stages, because people arrive weeks before they pay
+# and a funnel sliced by date reports that as a drop-off.
+FUNNEL_AUCTIONS = 8
+# Referrers to keep per auction. The tail of this is one visit each from a hundred link shorteners.
+FUNNEL_REFERRERS = 4
+# How far before an auction opens its page views can start. Lots are listed and links are shared
+# ahead of the start date, so the floor is the earliest auction on the page minus this. It exists to
+# bound the scan, not to describe behaviour -- see the comment on the arrived query.
+FUNNEL_LOOKBACK_DAYS = 90
+
+
+def _actor():
+    """One person, whether or not they have an account.
+
+    ``PageView`` stores a signed-in view as ``user=<id>, session_id=NULL`` and an anonymous one as
+    ``user=NULL, session_id=<key>`` (``views/ajax.py``), so neither column alone counts people. The
+    ``u`` prefix keeps a user id from colliding with a session key that happens to be digits.
+
+    Somebody who browsed anonymously and then signed in is two actors here. That is the honest
+    answer for a funnel: the site cannot tell that those two were the same person either.
+
+    ``Case`` rather than ``Coalesce(Concat(...), session_id)``: Django's ``Concat`` folds a NULL
+    argument to an empty string, so every anonymous row came out as the same ``"u"`` and a whole
+    auction's anonymous visitors counted as one person.
+    """
+    return Case(
+        When(user_id__isnull=False, then=Concat(Value("u"), Cast("user_id", CharField()))),
+        default="session_id",
+        output_field=CharField(),
+    )
+
+
+def _by_auction(rows, key):
+    return {row[key]: row["people"] for row in rows}
+
+
+def buyer_funnel(days=180, limit=FUNNEL_AUCTIONS):
+    """``[{auction, stages: [{stage, people}], referrers: [...]}]`` -- where buyers stop.
+
+    Seven queries for every auction on the page rather than seven per auction: each stage is one
+    ``GROUP BY`` over the whole set.
+
+    **Bid** is ``None`` rather than zero for an in-person auction, which is about 95% of them: the
+    bidding happens in a room, and the first row it leaves is the winner on the lot. A zero there
+    would read as nobody bidding.
+
+    **Opened an invoice** is a flag the invoice page sets, so it is low by construction for an
+    auction whose invoices were printed and handed over at the door. It is the one stage on this
+    list that can be smaller than the one after it.
+
+    ``joined`` counts ``AuctionTOS`` rows, which includes the ones an organizer typed in at the
+    door. That is a real join -- somebody turned up -- but it is not a self-service one, which is
+    why the arrival stages above it can legitimately be smaller than it.
+
+    The two ``PageView`` queries carry a date floor and it is not cosmetic. They match an auction as
+    ``pageview.auction_id OR lot.auction_id`` -- an OR across a join, which MariaDB cannot serve
+    from one index -- so unbounded, each is a full scan of the largest and least-purged table on the
+    site. A full scan of ``PageView`` is the exact shape behind a past production incident, and this
+    page is one an admin opens casually. ``date_start`` is indexed, and no view of an auction can
+    predate the auction by more than :data:`FUNNEL_LOOKBACK_DAYS`.
+    """
+    from auctions.models import Auction, AuctionTOS, Bid, Invoice, Lot, PageView
+
+    since = timezone.now() - timedelta(days=days)
+    auctions = list(Auction.objects.exclude(is_deleted=True).filter(date_end__gte=since).order_by("-date_end")[:limit])
+    if not auctions:
+        return []
+    ids = [auction.pk for auction in auctions]
+    actor = _actor()
+    auction_key = Coalesce("auction_id", "lot_number__auction_id")
+    starts = [
+        auction.date_start or auction.date_end for auction in auctions if (auction.date_start or auction.date_end)
+    ]
+    floor = (min(starts) if starts else since) - timedelta(days=FUNNEL_LOOKBACK_DAYS)
+
+    arrived = _by_auction(
+        PageView.objects.filter(date_start__gte=floor)
+        .filter(Q(auction__in=ids) | Q(lot_number__auction__in=ids))
+        .annotate(auction_key=auction_key)
+        .values("auction_key")
+        .annotate(people=Count(actor, distinct=True)),
+        "auction_key",
+    )
+    lot_pages = _by_auction(
+        PageView.objects.filter(date_start__gte=floor, lot_number__auction__in=ids)
+        .values("lot_number__auction")
+        .annotate(people=Count(actor, distinct=True)),
+        "lot_number__auction",
+    )
+    joined = _by_auction(
+        AuctionTOS.objects.filter(auction__in=ids).values("auction").annotate(people=Count("pk")),
+        "auction",
+    )
+    bid = _by_auction(
+        Bid.objects.filter(lot_number__auction__in=ids, is_deleted=False)
+        .values("lot_number__auction")
+        .annotate(people=Count("user", distinct=True)),
+        "lot_number__auction",
+    )
+    won = _by_auction(
+        Lot.objects.filter(auction__in=ids, is_deleted=False, auctiontos_winner__isnull=False)
+        .values("auction")
+        .annotate(people=Count("auctiontos_winner", distinct=True)),
+        "auction",
+    )
+    opened = _by_auction(
+        Invoice.objects.filter(auctiontos_user__auction__in=ids, opened=True)
+        .values("auctiontos_user__auction")
+        .annotate(people=Count("pk")),
+        "auctiontos_user__auction",
+    )
+    paid = _by_auction(
+        Invoice.objects.filter(auctiontos_user__auction__in=ids, status="PAID")
+        .values("auctiontos_user__auction")
+        .annotate(people=Count("pk")),
+        "auctiontos_user__auction",
+    )
+    referrers = funnel_referrers(ids, floor)
+
+    report = []
+    for auction in auctions:
+        pk = auction.pk
+        stages = [
+            {"stage": "Arrived", "people": arrived.get(pk, 0)},
+            {"stage": "Opened a lot", "people": lot_pages.get(pk, 0)},
+            {"stage": "Joined", "people": joined.get(pk, 0)},
+            {"stage": "Bid", "people": bid.get(pk, 0) if auction.is_online else None},
+            {"stage": "Won something", "people": won.get(pk, 0)},
+            {"stage": "Opened an invoice", "people": opened.get(pk, 0)},
+            {"stage": "Paid", "people": paid.get(pk, 0)},
+        ]
+        report.append({"auction": auction, "stages": stages, "referrers": referrers.get(pk, [])})
+    return report
+
+
+def funnel_referrers(auction_ids, since, limit=FUNNEL_REFERRERS):
+    """``{auction_pk: [{referrer, views}]}`` -- how the people who arrived got there.
+
+    ``referrer`` is stored already cleaned (``views/ajax.py:clean_referrer`` folds every Facebook
+    and Google host onto one name), so this is a plain ``GROUP BY``. Our own domain is excluded:
+    a link from one page of this site to another is navigation, not arrival.
+
+    ``since`` has no default on purpose: this is the same OR-across-a-join as the arrival query, and
+    the only thing standing between it and a full scan of ``PageView`` is that bound. A caller that
+    does not know its floor has not thought about the size of this table.
+    """
+    from django.contrib.sites.models import Site
+
+    from auctions.models import PageView
+
+    rows = (
+        PageView.objects.filter(date_start__gte=since)
+        .filter(Q(auction__in=auction_ids) | Q(lot_number__auction__in=auction_ids))
+        .exclude(referrer__isnull=True)
+        .exclude(referrer__exact="")
+        .exclude(referrer__startswith=Site.objects.get_current().domain)
+        .annotate(auction_key=Coalesce("auction_id", "lot_number__auction_id"))
+        .values("auction_key", "referrer")
+        .annotate(views=Count("pk"))
+        .order_by("-views")[:MAX_PATHS]
+    )
+    found: dict[int, list] = {}
+    for row in rows:
+        bucket = found.setdefault(row["auction_key"], [])
+        if len(bucket) < limit:
+            bucket.append({"referrer": row["referrer"], "views": row["views"]})
+    return found
