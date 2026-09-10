@@ -57,8 +57,8 @@ Ordered by (unblocks-other-work x value). Status: `todo` | `wip` | `done`.
 | 6 | First paint: defer the head scripts, content-hashed `/static/` cached for a year | `base.html`, `static_storage.py`, `nginx_fishauctions.conf` | done -- jQuery is the one that cannot move, and `base.html` says why |
 | 7 | Buyers and sellers: fire `pageView` on every page and drop the 2s delay, then read the funnel off rows that already exist | `base_page_view.html`, `usability_report.py`, `views/lot_pages.py`, `views/browse.py`, `views/auction_pages.py`, `mobile/services/ar.py` | done |
 | 8a | The stage ladder on `Club`, the map gate, the stall reason, and the `aware` rung | `models.py`, `club_health.py`, `views/usability.py`, migrations 0430-0431 | done |
-| 8b | The link verifier: fetch every club's links, record what answered, nominate the dead | `club_verification.py`, `verify_club_links`, migration 0434 | done |
-| 8c-8e | Umbrella directories, the two-hop crawl, city search -- one funnel, three sources | `club_discovery.py`, `find_clubs` | done -- directories run for real, see below |
+| 8b | The link verifier: fetch every club's links and nominate the dead | migrations 0434, 0435 | built, then scrapped with the rest of the outbound HTTP |
+| 8c-8e | Finding clubs that are not here yet: a curated CSV, imported and deduped | `club_import.py`, `import_clubs` | done -- scraping tried, run, and scrapped |
 | 8g | The contact info gate before creating an auction, and the unlinked-auction queue | `services.py`, `club_matching.py`, `views/usability.py` | done |
 | 9 | Everybody who is not running the auction | `docs/phase_9.md` | specced, not started |
 
@@ -541,11 +541,19 @@ natively and a `requests` + BeautifulSoup pipeline structurally cannot. The popu
 nearly static (see the club-lifespan estimate above), so this is a one-off with a long tail rather
 than a feed, and a pipeline earns its complexity by running unattended forever.
 
-The proposal on the table is to drop the automated *acquisition* and keep everything downstream:
-`ingest`, the domain-first dedup in `club_matching`, the `PROSPECT` gate and `club_verification`,
-fed by a CSV from a one-off deep research run. That pairing also covers deep research's own
-weakness -- it will hand you a confident URL that 404s, and the verifier already checks every row
-before a person sees it. **Not decided.**
+**Decided 2026-09-10: the scraping is gone.** `club_discovery.py`, `find_clubs`, the crawler, the
+city search and the LLM extraction were all deleted. What is left is `club_import.py`: the
+domain-first dedup, the `PROSPECT` gate, and a CSV read from a one-off deep research run, with
+nothing checking the rows afterwards. The verifier that would have done it was scrapped in the same
+pass, on the same rule -- **this site does not make outbound requests to other people's servers** --
+so the confident URL that 404s, which is what research done by a machine gets wrong, is caught by
+the person who has to open the link before a club can leave `PROSPECT`.
+
+Columns: `name, homepage, location, facebook_page, contact_method, contact_email`. Only `name` is
+required, because the hardest clubs to find are the ones with the least information and demanding
+more would drop exactly those. `contact_method` is one of `email`, `webform` or `facebook`, and it
+exists because outreach is a person working a queue: a club reachable only through Facebook is a
+different afternoon from one with an address.
 - **A 200 is not proof a directory is alive.** The squatter on `faas.info` serves 200 on its
   homepage and 404 on the old member-list path, so the loud per-directory error would have caught
   it only by luck. Any URL repair here needs a person to look at the page, not a green status.
@@ -555,7 +563,7 @@ before a person sees it. **Not decided.**
   the effort to `low` looked like the fix and was not: the same model then returned 54 on one run
   and 12 on the next. `gpt-5-mini` at `low` returns **117 and 114**, in about fifty seconds a page.
   So nano at its best was missing four clubs in five and was not even consistent about which.
-  `club_discovery.EXTRACTION_MODEL` now pins mini for this one job.
+  None of it survives; this is recorded because the same trap is waiting in any other page-reading job here.
 - **`medium` effort fails outright at both model sizes, for a reason the error does not name.**
   Reasoning tokens come out of `max_tokens`, so a budget that thinks harder than it can afford
   returns an *empty* reply rather than a short one, and that arrives as `LLMError`. The lever that
@@ -564,11 +572,19 @@ before a person sees it. **Not decided.**
 - **The name filter was wrong about eight clubs, found two at a time.** Each better extraction run
   surfaced more real clubs sitting in the skip list: "Enthusiasts" and "Exchange" and
   "Organization" are as ordinary a word for a club as "Society", "Aquaria" is not "aquarium", and
-  Puerto Rico and Montreal do not name themselves in English. All eight are now test cases, with
-  the umbrella names as the other half of the test. That this took four rounds is itself the
-  argument for the question below.
+  Puerto Rico and Montreal do not name themselves in English. Four rounds of widening a regex, each
+  round finding clubs the last one had silently thrown away, is what settled the question above:
+  that judgement belongs to a person reading a list, not to a pattern. The filter is deleted.
+- **The dedup would have merged clubs that share initials, and nearly shipped that way.**
+  `Club.save` auto-fills `abbreviation` with the initials of the name, so nearly every club has one
+  whether or not anybody chose it -- and the matcher scored a name against another club's
+  abbreviation as a perfect 1.0. Milwaukee, Minnesota and Missouri Aquarium Societies are all
+  `MAS`; a 300-row import would have collapsed them into one. A derived abbreviation is now ignored
+  and only one a person typed counts. **This is the worst failure this code can have** -- a
+  duplicate club is an afternoon, a merged club is one society's history attached to another -- and
+  it was found by a test fixture changing two words, not by review.
 - **Approving a prospect is a person looking at a club's website.** That is the whole point of the
-  gate and it does not get automated. `find_clubs` says so in its own output.
+  gate and it does not get automated. `import_clubs` says so in its own output.
 - **The outreach email itself stays hand-sent** (settled, twice), so 8f is a person with a queue
   and a draft, not a job.
 
@@ -612,7 +628,9 @@ because most of them are decisions somebody will be tempted to reopen.
   median life measured in decades and a long tail, and treat any directory entry older than three
   years as a coin flip.** That is what sets the two numbers phase 8 needed -- re-verify a club
   yearly, and treat an unreachable site plus no auctions plus no members as dead rather than
-  waiting. Both are `club_verification` constants, so a better number replaces them in one place.
+  waiting. Those were `club_verification` constants until that module was deleted, so the reasoning
+  lives here now and nowhere else -- which is the point of writing it down. It still applies to a
+  person working the list by hand: a club nobody has looked at in three years is a coin flip.
 
 ## Still open
 
@@ -679,8 +697,8 @@ is a fact and a name is a spelling -- and an existing club is only ever filled i
 overwritten, since what is already here was typed by somebody who knew.
 
 The interval questions had no data behind them, so they were reasoned and written down rather than
-picked: verify yearly, treat a directory entry over three years old as a coin flip. Both are
-constants in `club_verification`, so a better number replaces them in one place.
+picked: verify yearly, treat a directory entry over three years old as a coin flip. They were
+constants in `club_verification`; that module is gone and the reasoning is recorded above instead.
 
 What was *not* done at the time of writing was running any of it. That happened the same day, and
 the guesses were worse than predicted: five of seven directories were gone, and the extraction

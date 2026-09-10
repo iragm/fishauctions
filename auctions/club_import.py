@@ -28,9 +28,13 @@ That is the half that was always worth having, because it is the half that is ha
 * :func:`ingest` -- creates at ``PROSPECT``, which is the map gate, and only ever *fills in* blanks
   on a club that already exists.  What a person typed is never overwritten by a CSV.
 
-A row in the file is a claim, not a fact.  :mod:`auctions.club_verification` fetches each club's
-links afterwards and records what answered, which is the check that catches the confident-looking
-URL that 404s -- the characteristic failure of research done by a machine.
+**A row in the file is a claim, and nothing here checks it.**  There was a link verifier that
+fetched each club's homepage and recorded what answered; it went the same way as the crawler, for
+the same reason -- this site does not make outbound requests to other people's servers.  So the
+confident-looking URL that 404s, which is the characteristic failure of research done by a machine,
+is caught by a person opening the link.  That person is already in the loop: a club stays at
+``PROSPECT`` and off the map until somebody has looked at its website, which is exactly the moment
+a dead link shows itself.
 """
 
 from __future__ import annotations

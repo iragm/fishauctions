@@ -79,6 +79,19 @@ def initials(name: str) -> str:
     return "".join(word[0] for word in _WHITESPACE.split(folded) if word)
 
 
+def derived_abbreviation(name: str) -> str:
+    """The abbreviation ``Club.save`` fills in for a club nobody gave one: ``"MAS"``.
+
+    This is deliberately *not* :func:`initials`.  ``Club.save`` splits on whitespace alone, so
+    "Mid-Atlantic Aquarium Society" derives ``MAS`` while :func:`initials`, which splits on
+    punctuation too, reads it as ``maas``.  The two have to be told apart by the same rule that
+    made them or :func:`is_hand_written` calls a derived abbreviation a chosen one -- which is the
+    bug it exists to prevent, reappearing for every club with a hyphen or an ampersand in its name.
+    ``Club.save`` calls this, so there is one rule and it cannot drift.
+    """
+    return "".join(word[0].upper() for word in (name or "").split() if word)
+
+
 def similarity(left: str, right: str) -> float:
     """How alike two club names are, 0 to 1.
 
@@ -100,15 +113,45 @@ def similarity(left: str, right: str) -> float:
     return max(scores)
 
 
+def is_hand_written(club) -> bool:
+    """Whether a club's abbreviation was typed by a person rather than derived from its name.
+
+    ``Club.save`` auto-fills ``abbreviation`` with the initials of the name, so almost every row has
+    one whether or not anybody chose it -- and an auto-filled abbreviation is not independent
+    evidence, it is the name again in three letters.  Treating it as evidence is how "Boston
+    Aquarium Society" and "Bristol Aquarium Society" become one club: both derive ``BAS``, and
+    :func:`similarity` scores a name against the other's initialism as a perfect 1.0.
+
+    Aquarium society names collide like this constantly -- Milwaukee, Minnesota and Missouri
+    Aquarium Societies are all ``MAS`` -- so this is the difference between importing a club list
+    and destroying one.
+    """
+    name = getattr(club, "name", "") or ""
+    abbreviation = (getattr(club, "abbreviation", "") or "").strip()
+    if not abbreviation:
+        return False
+    # Both derivations: `derived_abbreviation` is what Club.save writes today, `initials` is the
+    # punctuation-folded form, and a row could hold either -- an abbreviation matching either one
+    # is the name again, not evidence.
+    return abbreviation.lower() not in {derived_abbreviation(name).lower(), initials(name)}
+
+
 def best_match(name: str, clubs, *, threshold: float = NAME_MATCH_THRESHOLD):
     """The club whose name is closest to ``name``, or ``(None, 0.0)`` if none is close enough.
 
     Ties go to the lower primary key, so the same input always returns the same club: a matcher
     that picks a different row on a second run makes every count computed from it unrepeatable.
+
+    The abbreviation is only consulted when a person chose it; see :func:`is_hand_written`.  An
+    acronym passed in as ``name`` still matches the full name it stands for, because
+    :func:`similarity` compares each side's initialism against the other -- so nothing is lost by
+    ignoring the derived ones.
     """
     best, best_score = None, 0.0
     for club in sorted(clubs, key=lambda candidate: candidate.pk):
-        score = max(similarity(name, club.name), similarity(name, club.abbreviation or ""))
+        score = similarity(name, club.name)
+        if is_hand_written(club):
+            score = max(score, similarity(name, club.abbreviation))
         if score > best_score:
             best, best_score = club, score
     if best_score < threshold:

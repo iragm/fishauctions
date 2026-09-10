@@ -78,19 +78,17 @@ this only quotes its opening sentence.
 - **`cloudflare_images.py`** (156 lines)
   Cloudflare Images integration.
   `CloudflareImagesError`, `enabled`, `delivery_url`, `image_url`, `upload`, `delete`, `sync_variants`
-- **`club_discovery.py`** (589 lines)
-  Finding the two hundred aquarium clubs that are not on this site, without inventing any.
 - **`club_events.py`** (534 lines)
   Keeps a club's event list, its Google Calendar, and its Discord events in step.
 - **`club_health.py`** (412 lines)
   Whether a club is still running auctions here, judged against its own cadence.
   `ClubHealth`, `is_test_auction`, `median_gap`, `classify`, `compute_club_health`, `refresh_all`, `due_for_checkin`, `ladder_position`, `ladder_counts`
-- **`club_matching.py`** (222 lines)
+- **`club_import.py`** (251 lines)
+  Getting a list of aquarium clubs onto this site from a CSV somebody curated.
+  `ImportedClub`, `IngestReport`, `domain_of`, `is_a_club_host`, `read_csv`, `find_existing`, `ingest`
+- **`club_matching.py`** (265 lines)
   Which club does this belong to?  Name normalisation, initialisms, and the auction backlog.
-  `normalize`, `initials`, `similarity`, `best_match`, `Suggestion`, `suggest_clubs`
-- **`club_verification.py`** (205 lines)
-  Is this club still out there?  Fetch its links, record what answered, and let dead ones die.
-  `FetchResult`, `fetch`, `verify_club`, `clubs_due_for_verification`, `looks_dead`, `dead_candidates`
+  `normalize`, `initials`, `derived_abbreviation`, `similarity`, `is_hand_written`, `best_match`, `Suggestion`, `suggest_clubs`
 - **`command_palette.py`** (1547 lines)
   Shared logic for the command palette.
   `resolve_page`, `app_destinations_for_prompt`, `app_deep_link_by_name`, `default_items`, `search`, `log_search`
@@ -158,7 +156,7 @@ this only quotes its opening sentence.
 - **`model_caching.py`** (101 lines)
   ``@cached_property`` on a model, and the invalidation that makes it safe.
   `InvalidatesRelatedCache`, `CachedPropertiesMixin`
-- **`models.py`** (15069 lines)
+- **`models.py`** (15075 lines)
   The database: 80 models, and the reason they are still in one file.
 - **`moderation_admin.py`** (139 lines)
   The Django admin for the moderation queue: reports, copyright notices and strikes.
@@ -290,16 +288,17 @@ this only quotes its opening sentence.
 - **`test_club_api_read.py`** (1468 lines)
   The club REST API's read side: members, BAP lots, auctions and lots.
   `ClubAPITests`, `ClubAPIKeyMemberPermissionTests`, `ClubBapLotAPITests`, `ClubAuctionReadAPITests`, `ParseBoolEnvTests`, `RequireSecureProdSecretsTests`, `ClubAuctionIntegrationTests`
-- **`test_club_discovery.py`** (512 lines)
-  Phase 8: verifying the clubs we have, and finding the ones we do not.  Network mocked throughout.
 - **`test_club_events.py`** (3051 lines)
   Tests for club events, Google Calendar sync, and the Discord events built on top of them.
 - **`test_club_health.py`** (504 lines)
   Tests for the club lifecycle rollup and the outreach queue that comes out of it.
+- **`test_club_import.py`** (200 lines)
+  Phase 8: importing a curated club list, and never publishing anything by accident.
+  `csv_text`, `HostTests`, `ReadCsvTests`, `FindExistingTests`, `IngestTests`
 - **`test_club_ledger.py`** (1226 lines)
   The club ledger on a cash basis: what a paid invoice freezes, and how dues reverse.
   `ClubMoneyLedgerCashBasisTests`, `PaidInvoiceFreezeTests`, `InvoiceDedupeLedgerTests`, `ClubMembershipDuesReversalTests`, `MakeClubAdminAssignsAuctionsTests`, `BapTop10ChartTests`, `ClubTreasurerReportViewTests`, `ClubTreasurerOutstandingInvoiceTests`
-- **`test_club_linking.py`** (381 lines)
+- **`test_club_linking.py`** (425 lines)
   The gate before creating an auction, and the repair queue for the auctions created before it.
   `MissingContactInfoTests`, `AuctionCreationGateTests`, `ClubNameMatchingTests`, `SuggestClubsTests`, `UnlinkedAuctionsPageTests`, `MakeClubAdminButtonTests`, `SuggestionShapeTests`
 - **`test_club_money.py`** (816 lines)
@@ -485,7 +484,7 @@ this only quotes its opening sentence.
 - **`tests.py`** (452 lines)
   The shared test fixture, and the helpers every other test module builds on.
   `patch_views`, `WritableMediaRoot`, `give_contact_info`, `CsvImportTestMixin`, `StandardTestCase`, `SuiteStaysFastTests`, `EveryTestStartsInTheSiteTimezoneTests`
-- **`tests_selenium.py`** (1101 lines)
+- **`tests_selenium.py`** (1173 lines)
   Selenium-based browser tests for client-side JavaScript functionality.
 - **`urls.py`** (1317 lines)
   Every URL on the site, and the one place a new one has to be declared.
@@ -546,13 +545,13 @@ this only quotes its opening sentence.
 - **`ensure_speaker_topics.py`** (20 lines)
   Create the speaker directory's fixed topic vocabulary.
   `Command`
-- **`find_clubs.py`** (138 lines)
-  Find aquarium clubs that are not on this site yet.  See auctions/club_discovery.py.
-  `Command`
 - **`find_square_reconnects.py`** (46 lines)
   `Command`
 - **`geocode_speakers.py`** (196 lines)
   Backfill speaker locations that the NEC WordPress export didn't carry.
+  `Command`
+- **`import_clubs.py`** (63 lines)
+  Import a curated CSV of aquarium clubs.  See auctions/club_import.py for why this is a CSV.
   `Command`
 - **`import_fishbase.py`** (549 lines)
   Load the species picklist from a pinned FishBase snapshot, plus the curated aquarium list.
@@ -602,9 +601,6 @@ this only quotes its opening sentence.
   `Command`
 - **`update_user_interest.py`** (32 lines)
   `updateInterest`, `Command`
-- **`verify_club_links.py`** (59 lines)
-  Fetch every club's links and record what answered.  See auctions/club_verification.py.
-  `Command`
 - **`webpush_notifications_deduplicate.py`** (19 lines)
   `Command`
 - **`weekly_promo.py`** (255 lines)

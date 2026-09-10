@@ -61,4 +61,3 @@ class Command(BaseCommand):
                 f"The {len(report.created)} new club(s) are prospects and appear nowhere public. "
                 f"Approve them in the admin (outreach stage -> '{Club.LISTED}') once you have looked."
             )
-            self.stdout.write("Run verify_club_links next: a researched URL that 404s is the usual bad row.")

@@ -154,6 +154,50 @@ class AuctionCreationGateTests(StandardTestCase):
 class ClubNameMatchingTests(TestCase):
     """Clubs write themselves down three ways and all three name the same club."""
 
+    def test_clubs_that_share_initials_are_not_the_same_club(self):
+        """``Club.save`` derives an abbreviation from the name, so almost every club has one.
+
+        Treating a derived abbreviation as evidence made every club sharing initials one club --
+        and aquarium societies collide constantly: Milwaukee, Minnesota and Missouri are all MAS.
+        A 300-row import would have quietly merged them, which is the worst outcome this matcher
+        has, because a merge attaches one society's history to another.
+        """
+        clubs = [
+            Club.objects.create(name="Milwaukee Aquarium Society"),
+            Club.objects.create(name="Minnesota Aquarium Society"),
+            Club.objects.create(name="Missouri Aquarium Society"),
+        ]
+        self.assertEqual([club.abbreviation for club in clubs], ["MAS", "MAS", "MAS"])
+        for club in clubs:
+            match, _score = best_match(club.name, clubs)
+            self.assertEqual(match, club)
+        self.assertIsNone(best_match("Motor City Aquarium Society", clubs)[0])
+
+    def test_a_derived_abbreviation_is_not_evidence_when_the_name_has_punctuation(self):
+        """The same trap one layer down: two ways to derive an abbreviation, and only one is used.
+
+        ``Club.save`` splits on whitespace, so "Mid-Atlantic Aquarium Society" derives ``MAS``.
+        :func:`initials` splits on punctuation too and reads the same name as ``maas``, so
+        comparing against that alone called ``MAS`` hand-written -- and every club with a hyphen or
+        an ampersand in its name went back to swallowing its neighbours.
+        """
+        mid_atlantic = Club.objects.create(name="Mid-Atlantic Aquarium Society")
+        michigan = Club.objects.create(name="Michigan Aquarium Society")
+        self.assertEqual([mid_atlantic.abbreviation, michigan.abbreviation], ["MAS", "MAS"])
+        clubs = [mid_atlantic, michigan]
+        self.assertEqual(best_match("Michigan Aquarium Society", clubs)[0], michigan)
+        self.assertEqual(best_match("Mid-Atlantic Aquarium Society", clubs)[0], mid_atlantic)
+
+    def test_an_acronym_still_finds_the_club_it_stands_for(self):
+        """The half that has to keep working: nothing is lost by ignoring derived abbreviations."""
+        club = Club.objects.create(name="Greater Seattle Aquarium Society")
+        self.assertEqual(best_match("GSAS", [club])[0], club)
+
+    def test_an_abbreviation_a_person_chose_is_still_evidence(self):
+        """One somebody typed says something the name does not, so it is still compared."""
+        club = Club.objects.create(name="Tropical Fish Club of Erie County", abbreviation="Erie Fish")
+        self.assertEqual(best_match("Erie Fish", [club])[0], club)
+
     def test_generic_words_are_dropped_from_the_comparison(self):
         self.assertEqual(normalize("Greater Seattle Aquarium Society"), "greater seattle")
         self.assertEqual(normalize("The Fish Club of Boston"), "boston")

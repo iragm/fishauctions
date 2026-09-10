@@ -92,6 +92,7 @@ from webpush.models import PushInformation
 
 from . import cloudflare_images, history, printer_programs, voice
 from .club_health import ClubHealth  # noqa: F401
+from .club_matching import derived_abbreviation
 from .email_routing import (
     admin_routing_email,
     build_routed_sender_address,
@@ -561,15 +562,6 @@ class Club(CloudflareImageMixin, models.Model):
     )
     date_contacted = models.DateTimeField(blank=True, null=True)
     date_contacted_for_in_person_auctions = models.DateTimeField(blank=True, null=True)
-    # Written only by auctions.club_verification, which fetches the two links above and records
-    # what answered.  Null on both booleans means "no URL on file", which is a different fact from
-    # "the URL is dead" and the one the dead-club rule turns on.
-    date_links_checked = models.DateTimeField(blank=True, null=True)
-    date_links_checked.help_text = "When club_verification last fetched this club's links"
-    homepage_reachable = models.BooleanField(blank=True, null=True)
-    facebook_reachable = models.BooleanField(blank=True, null=True)
-    link_check_note = models.CharField(max_length=200, blank=True, default="")
-    link_check_note.help_text = "What happened the last time this club's links were fetched"
     PROSPECT = "prospect"
     CONTACTED = "contacted"
     LISTED = "listed"
@@ -1245,9 +1237,9 @@ class Club(CloudflareImageMixin, models.Model):
 
     def save(self, *args, **kwargs):
         if not self.abbreviation and self.name:
-            # Auto-fill abbreviation from the initials of the club name
-            words = self.name.split()
-            self.abbreviation = "".join(w[0].upper() for w in words if w)
+            # Auto-fill abbreviation from the initials of the club name.  club_matching owns the
+            # rule so that is_hand_written() can recognise its own output; see derived_abbreviation.
+            self.abbreviation = derived_abbreviation(self.name)
             # Ensure abbreviation is included in update_fields if caller specified them
             update_fields = kwargs.get("update_fields")
             if update_fields is not None and "abbreviation" not in update_fields:
@@ -11686,7 +11678,7 @@ class PageView(CachedPropertiesMixin, models.Model):
     **Repeat views are history, not duplicates.** A ``remove_duplicate_views`` job used to merge
     them every fifteen minutes and was removed, because it could only ever reach *anonymous* rows
     (a signed-in view stores ``session_id=NULL``, and the matcher skipped those) and it had no time
-    window at all -- with ``SESSION_COOKIE_AGE`` set to about 230 years, one anonymous person's
+    window at all -- with ``SESSION_COOKIE_AGE`` set to about four years, one anonymous person's
     every visit to a page, however far apart, folded into a single row. That deleted exactly the
     return visits this table exists to record, and it left every raw-row count on the stats pages
     reading anonymous and signed-in traffic by different rules.

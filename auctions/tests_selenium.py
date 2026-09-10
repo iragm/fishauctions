@@ -50,7 +50,7 @@ except ImportError:
 
 try:
     from selenium import webdriver
-    from selenium.common.exceptions import NoSuchElementException
+    from selenium.common.exceptions import NoSuchElementException, TimeoutException
     from selenium.webdriver.chrome.options import Options as ChromeOptions
     from selenium.webdriver.common.by import By
     from selenium.webdriver.support import expected_conditions as EC
@@ -72,6 +72,9 @@ def get_selenium_driver():
     chrome_options.add_argument("--disable-dev-shm-usage")
     chrome_options.add_argument("--disable-gpu")
     chrome_options.add_argument("--window-size=1920,1080")
+    # Ask Chrome to keep the console, so a test that fails on a page whose JavaScript died can say
+    # so.  Without this capability get_log("browser") raises instead of returning an empty list.
+    chrome_options.set_capability("goog:loggingPrefs", {"browser": "ALL"})
 
     driver = webdriver.Remote(
         command_executor=f"http://{selenium_host}:{selenium_port}/wd/hub",
@@ -991,14 +994,62 @@ class LiveBiddingTestCase(ChannelsLiveServerTestCase):
             }
         )
 
+    def page_diagnosis(self, driver):
+        """Everything worth knowing about a page that did not do what the test expected.
+
+        A `TimeoutException` out of a CI browser carries no message at all, and the three things
+        that produce one here are indistinguishable without asking: the page never loaded, the
+        browser arrived **signed out** -- the whole websocket script lives inside
+        ``{% if request.user.is_authenticated %}`` in view_lot_images.html, so a lost session
+        cookie means there is no socket on the page to wait for -- or the handshake itself was
+        refused and the page is quietly reconnecting on a backoff.  Each of those wants a
+        different fix, so the failure has to say which one it was.
+        """
+        probe = """
+            return {
+                url: window.location.href,
+                title: document.title,
+                readyState: document.readyState,
+                signed_in: !!document.querySelector('#chat'),
+                socket_on_page: typeof window.lotWebSocket !== 'undefined',
+                socket_state: window.lotWebSocket ? window.lotWebSocket.readyState : null,
+                socket_url: (typeof lotWebSocketUrl !== 'undefined') ? lotWebSocketUrl : null,
+                jquery: typeof window.jQuery,
+                body_start: document.body ? document.body.innerText.slice(0, 300) : ''
+            };
+        """
+        try:
+            facts = driver.execute_script(probe)
+        except Exception as error:  # a browser that cannot even run this has its own story
+            return f"  could not probe the page: {error}"
+        lines = [f"  {key}: {value!r}" for key, value in sorted(facts.items())]
+        try:
+            # Chrome only serves this when goog:loggingPrefs was set, and answers other browsers
+            # with an error rather than an empty list.  Diagnostics never fail the test themselves.
+            console = driver.get_log("browser")
+        except Exception:
+            console = []
+        lines += [f"  console: {entry.get('level')} {entry.get('message')}" for entry in console[-10:]]
+        return "\n".join(lines)
+
     def open_lot(self, driver, lot=None):
         """Load the lot page and wait until its websocket is actually OPEN, so the
-        consumer is subscribed before any bid is broadcast."""
+        consumer is subscribed before any bid is broadcast.
+
+        Thirty seconds rather than a browser-ish five: a refused handshake reconnects on a backoff
+        that reaches 8s by the third try (view_lot_images.html), so a short wait here reports a
+        transient first failure as a permanent one.
+        """
         lot = lot or self.lot
-        driver.get(self.live_server_url + reverse("lot_by_pk", kwargs={"pk": lot.pk}))
-        WebDriverWait(driver, 20).until(
-            lambda d: d.execute_script("return !!(window.lotWebSocket && window.lotWebSocket.readyState === 1)")
-        )
+        url = self.live_server_url + reverse("lot_by_pk", kwargs={"pk": lot.pk})
+        driver.get(url)
+        try:
+            WebDriverWait(driver, 30).until(
+                lambda d: d.execute_script("return !!(window.lotWebSocket && window.lotWebSocket.readyState === 1)")
+            )
+        except TimeoutException:
+            msg = f"the lot page websocket never opened at {url}\n{self.page_diagnosis(driver)}"
+            raise AssertionError(msg) from None
 
     def place_bid(self, driver, amount):
         """Drive the real bid UI: enter amount, confirm in the modal."""
@@ -1016,7 +1067,14 @@ class LiveBiddingTestCase(ChannelsLiveServerTestCase):
 
     def wait_chat_contains(self, driver, needle, timeout=20):
         needle = needle.lower()
-        WebDriverWait(driver, timeout).until(lambda d: needle in self.text_of(d, "chat").lower())
+        try:
+            WebDriverWait(driver, timeout).until(lambda d: needle in self.text_of(d, "chat").lower())
+        except TimeoutException:
+            msg = (
+                f"{needle!r} never arrived over the websocket; the chat panel holds "
+                f"{self.text_of(driver, 'chat')!r}\n{self.page_diagnosis(driver)}"
+            )
+            raise AssertionError(msg) from None
 
 
 @unittest.skipUnless(SELENIUM_AVAILABLE and selenium_available(), "Selenium not available")
@@ -1024,6 +1082,20 @@ class LiveBiddingTestCase(ChannelsLiveServerTestCase):
 class BidPlacementE2ETests(LiveBiddingTestCase):
     """The crux: place a bid in the browser and confirm the websocket round-trips,
     and that one bidder's secret max proxy bid never leaks to anyone else."""
+
+    def test_a_signed_out_browser_is_reported_as_signed_out(self):
+        """The failure message has to tell "no socket on the page" from "the socket never opened".
+
+        Everything the bid tests wait for lives inside ``{% if request.user.is_authenticated %}``
+        in view_lot_images.html, so a session cookie that does not survive -- the CI-only failure
+        this diagnosis was written for -- leaves a page with no websocket on it at all, which times
+        out looking exactly like a refused handshake.
+        """
+        driver = self.new_browser()
+        driver.get(self.live_server_url + reverse("lot_by_pk", kwargs={"pk": self.lot.pk}))
+        diagnosis = self.page_diagnosis(driver)
+        self.assertIn("signed_in: False", diagnosis)
+        self.assertIn("socket_on_page: False", diagnosis)
 
     def test_placing_a_bid_makes_you_the_high_bidder(self):
         """Bid in the UI -> the websocket broadcast comes back and you're shown as the
