@@ -124,7 +124,7 @@ this only quotes its opening sentence.
 - **`form_friction.py`** (180 lines)
   The view mixin that writes :class:`auctions.friction_models.FormFailure` rows.
   `error_codes`, `abandon_token`, `read_abandon_token`, `FormFrictionMixin`
-- **`forms.py`** (6826 lines)
+- **`forms.py`** (6833 lines)
   Every form on the site: what a person is allowed to type, and what it means when they do.
 - **`friction_models.py`** (98 lines)
   Where people get stuck: one row per rejected form submission.
@@ -173,7 +173,7 @@ this only quotes its opening sentence.
 - **`notifications.py`** (265 lines)
   Email → mobile-push routing.
   `push_configured`, `user_prefers_push`, `user_has_app_push`, `notify_user`, `send_fcm_message`, `send_fcm_data_message`
-- **`palette_actions.py`** (15304 lines)
+- **`palette_actions.py`** (15454 lines)
   The things the command palette's natural-language assist is allowed to do.
 - **`palette_assist.py`** (1518 lines)
   Natural-language orchestration for the command palette.
@@ -249,7 +249,7 @@ this only quotes its opening sentence.
   `AppleNotificationTestCase`, `AppleNotificationVerificationTests`, `AppleNotificationForgeryTests`, `AppleNotificationEventParsingTests`, `AppleConsentRevokedTests`, `AppleAccountDeleteTests`, `AppleEmailForwardingTests`, `AppleNotificationRetryTests`, `AppleNotificationErrorTypeTests`, `AppleNotificationChecklistTests`
 - **`test_ar.py`** (1813 lines)
   Tests for Part 3 — AR lot scanning & location mapping, plus the two Part 1/2 follow-up fixes.
-- **`test_assistant_context.py`** (595 lines)
+- **`test_assistant_context.py`** (633 lines)
   What the assistant does when nobody is looking at a page.
 - **`test_auction_links.py`** (591 lines)
   Auction join links, the lot list's behaviour, and the Cloudflare image pipeline.
@@ -267,9 +267,9 @@ this only quotes its opening sentence.
   `LotAdminFilterTests`, `FeedbackTestCase`, `AuctionHistoryTestCase`, `MergeAuctionTOSTests`, `AuctionTOSMergeViewTests`
 - **`test_bap_lots.py`** (1417 lines)
   The breeder award program: which lots are eligible, and the pages that award points.
-- **`test_bidding.py`** (988 lines)
+- **`test_bidding.py`** (1138 lines)
   Bidding: what a bid is worth, who is allowed to place one, and the refund dialog.
-  `LotPricesTests`, `DecimalBidValidationTests`, `BiddingPermissionsHardeningTests`, `AuctionEditFormMinimumBidTests`, `CreateLotFormWholeDollarValidationTests`, `LotRefundDialogTests`, `BidDialogTests`
+  `LotPricesTests`, `DecimalBidValidationTests`, `BiddingPermissionsHardeningTests`, `AuctionEditFormMinimumBidTests`, `IntegerMoneyColumnRepairTests`, `CreateLotFormWholeDollarValidationTests`, `LotRefundDialogTests`, `BidDialogTests`
 - **`test_bulk_add_lots.py`** (1269 lines)
   The bulk add-lots table, its per-row save, and the CSV import view.
   `BulkAddLotsAutoTests`, `UpdateAuctionStatsCommandTestCase`, `LotsByUserViewTest`, `ImportLotsFromCSVViewTests`
@@ -402,7 +402,7 @@ this only quotes its opening sentence.
   `PageViewPathTests`, `MigrationHostListTests`, `PageViewCreateStoresAPathTests`
 - **`test_palette_account.py`** (866 lines)
   The rest of the account, and the auction and club setup pages behind it.
-- **`test_palette_assist.py`** (3898 lines)
+- **`test_palette_assist.py`** (4184 lines)
   Tests for the command palette's natural-language assist.
 - **`test_palette_core.py`** (1238 lines)
   The command palette itself, and the mobile surfaces that call into it.

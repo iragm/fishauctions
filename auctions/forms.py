@@ -3086,7 +3086,14 @@ class AuctionEditForm(forms.ModelForm):
                 lot_changed = False
                 for field_name in ("reserve_price", "buy_now_price", "winning_price"):
                     value = getattr(lot, field_name)
-                    if value is not None and value != value.to_integral_value():
+                    if value is None:
+                        continue
+                    # A price whose column never got migration 0227's DECIMAL type reads back as
+                    # an int, whatever the field says; migration 0437 repairs the column, and an
+                    # int is a whole number of dollars already.
+                    if not isinstance(value, Decimal):
+                        value = Decimal(str(value))
+                    if value != value.to_integral_value():
                         setattr(lot, field_name, round_to_whole_dollar(value))
                         lot_changed = True
                 if lot_changed:

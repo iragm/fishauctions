@@ -310,7 +310,7 @@ def live_auctions(user, limit: int = AMBIGUOUS_LIMIT + 1) -> list:
     return [auction for auction in candidates if not auction.pretty_much_over][:limit]
 
 
-def resolve_auction(user, hint: str = "", page: dict[str, Any] | None = None):
+def resolve_auction(user, hint: str = "", page: dict[str, Any] | None = None, ignore_current: bool = False):
     """Find the auction the user means: what they said, what they're looking at, what's running.
 
     Scoped to auctions the user has a relationship with (``_joined_auctions``: created, joined, or
@@ -322,12 +322,30 @@ def resolve_auction(user, hint: str = "", page: dict[str, Any] | None = None):
     Returns ``(auction, problem)``. ``problem`` is ``None``, a plain string, or one of the JSON
     result shapes when the honest answer is a question rather than a refusal.
 
-    **The no-hint path is the one that matters**, because an agent has no page. It resolves to what
-    is *running*, never to ``last_auction_used`` on its own: that column is written by browsing, so
-    on its own it means "whatever this person last clicked", which at the start of a new season is
-    last season's auction. It is still consulted -- as the tie-break between several live auctions,
-    and as the last resort when nothing is live at all, since invoices and labels outlive the
-    auction -- but it can no longer beat an auction that is actually happening.
+    **The no-hint path is the one that matters**, because an agent has no page. It is
+    ``last_auction_used`` -- the auction this person is working on -- for as long as that auction is
+    still worth acting on, and only then what is *running*.
+
+    That order was the other way round, on the argument that the column is written by browsing and
+    so means "whatever this person last clicked", which at the start of a new season is last
+    season's auction. The guard against that is ``pretty_much_over``, not ``live_auctions``: last
+    season's auction is over, so it is skipped here anyway. What putting ``live_auctions`` first
+    actually did was silently overrule the auction somebody had just *named*. ``live_auctions``
+    takes the twenty-eight oldest auctions inside a ``RECENT_AUCTION_DAYS`` window and filters them
+    down to seven, so this user's own auction can easily not be in the list at all -- and when
+    exactly one thing survived that funnel, the branch below returned it without ever consulting
+    the column. ``set_my_auction`` answered "ok" and the next command added a lot to a different
+    auction, which is what "you can't add lots until you join this auction" was about.
+
+    It is still re-scoped through ``joined`` rather than trusted: the pointer outlives the
+    relationship, so a deleted participant row would otherwise leave it naming something this
+    function promises it will never return. Once nothing is live and nothing is current it is
+    consulted a second time *without* the ``pretty_much_over`` guard, because invoices and labels
+    outlive the auction.
+
+    ``ignore_current`` is for the one caller that is *rewriting* the column
+    (:func:`set_my_auction` with no name, which means "whatever is running"): without it that tool
+    would answer with the value it was being asked to replace, and could never move.
     """
     joined = command_palette._joined_auctions(user)
     if hint:
@@ -365,14 +383,19 @@ def resolve_auction(user, hint: str = "", page: dict[str, Any] | None = None):
             f"You haven't joined {title} yet, so I can't do that there. "
             "Open its page to join, or tell me which auction you meant."
         )
+    # The auction they are working on. ``_last_auction_active`` is ``last_auction_used`` minus the
+    # ones that are ``pretty_much_over``, which is the whole of the "last season's auction" worry
+    # this used to sit below ``live_auctions`` to avoid.
+    if not ignore_current:
+        current = joined.filter(pk=getattr(command_palette._last_auction_active(user), "pk", None)).first()
+        if current:
+            return current, None
     live = live_auctions(user)
     if len(live) == 1:
         return live[0], None
     if len(live) > 1:
-        last_pk = getattr(command_palette._last_auction(user), "pk", None)
-        for auction in live:
-            if auction.pk == last_pk:
-                return auction, None
+        # No tie-break to apply: an active ``last_auction_used`` has already answered above, so
+        # anything reaching here has nothing current to prefer and the honest answer is a question.
         return None, _need(
             "Which auction? You've got more than one running.",
             [
@@ -380,9 +403,8 @@ def resolve_auction(user, hint: str = "", page: dict[str, Any] | None = None):
                 for auction in live
             ],
         )
-    # Nothing running. ``last_auction_used`` is re-scoped rather than trusted: the pointer outlives
-    # the relationship, so a deleted participant row or a deleted auction would otherwise leave it
-    # naming something this function promises it will never return.
+    # Nothing running and nothing current, so the pointer again -- this time without the
+    # ``pretty_much_over`` guard, since an invoice or a sheet of labels outlives the auction.
     auction = joined.filter(pk=getattr(command_palette._last_auction(user), "pk", None)).first()
     if not auction:
         return None, (
@@ -412,13 +434,13 @@ def remember_auction(request, auction) -> None:
     userdata.save(update_fields=["last_auction_used"])
 
 
-def _auction_or_problem(request, params: dict[str, Any], key: str = "auction"):
+def _auction_or_problem(request, params: dict[str, Any], key: str = "auction", ignore_current: bool = False):
     """The auction an action should act on, or a ready-made result to hand back.
 
     One entry point for every action that takes an optional ``auction``, so the ambiguity question
     is asked the same way everywhere and so ``remember_auction`` cannot be forgotten at a call site.
     """
-    auction, problem = resolve_auction(request.user, _str(params, key), _page(request))
+    auction, problem = resolve_auction(request.user, _str(params, key), _page(request), ignore_current=ignore_current)
     if problem is not None:
         return None, (problem if isinstance(problem, dict) else _error(problem))
     remember_auction(request, auction)
@@ -1210,6 +1232,16 @@ def add_lots(request, params: dict[str, Any]) -> dict[str, Any]:
     summary = f"Added {len(added)} lot{'s' if len(added) != 1 else ''} to {auction.title} for {who}: {names}."
     if failed:
         summary += " I couldn't add: " + "; ".join(failed) + "."
+    # Copying somebody's old photos and description onto a new lot is a decision they get to see,
+    # and ``_create_one_lot`` says so once per lot. A batch used to drop every one of those on the
+    # floor -- forty lots could each quietly inherit a previous listing and the answer named none
+    # of them -- so the count goes in the sentence and the detail stays on the row it belongs to.
+    reused = [item for item in added if item.get("reused_a_previous_lot")]
+    if reused:
+        summary += (
+            f" {len(reused)} of them reused the description and photos from a previous lot of the "
+            "same name; 'reused_a_previous_lot' on each says which."
+        )
     return _ok(
         summary,
         auction=auction.slug,
@@ -1220,7 +1252,17 @@ def add_lots(request, params: dict[str, Any]) -> dict[str, Any]:
         lot_number=added[-1]["lot_number"],
         lot_name=added[-1]["lot_name"],
         url=added[-1]["url"],
-        lots=[{key: item[key] for key in ("lot_id", "lot_number", "lot_name", "url")} for item in added],
+        lots=[
+            {
+                **{key: item[key] for key in ("lot_id", "lot_number", "lot_name", "url")},
+                **(
+                    {"reused_a_previous_lot": item["reused_a_previous_lot"]}
+                    if item.get("reused_a_previous_lot")
+                    else {}
+                ),
+            }
+            for item in added
+        ],
         followups=[
             {
                 "label": f"Print {'these labels' if len(added) > 1 else 'this label'}",
@@ -2304,10 +2346,10 @@ def user_context(user, page: dict[str, Any] | None = None) -> dict[str, Any]:
             data["looking_at_right_now"]["this_auction"] = facts
     if auction:
         tos = _own_tos(user, auction)
-        # A pointer, not a second fact sheet. This is whichever auction they last touched, which is
-        # not necessarily one that is running, and every fact that belongs to an auction now lives
-        # on the row in ``auctions`` above (or in describe_auction) where it can only be read about
-        # the auction it is actually about.
+        # A pointer, not a second fact sheet. Every fact that belongs to an auction lives on the row
+        # in ``auctions`` above (or in describe_auction) where it can only be read about the auction
+        # it is actually about.
+        over = bool(auction.pretty_much_over)
         data["last_auction"] = {
             "title": auction.title,
             "slug": auction.slug,
@@ -2315,11 +2357,24 @@ def user_context(user, page: dict[str, Any] | None = None) -> dict[str, Any]:
             "is_admin": _is_auction_admin(user, auction),
             "joined": bool(tos),
             "bidder_number": tos.bidder_number if tos else None,
-            "over": bool(auction.pretty_much_over),
+            "over": over,
+            # Said differently depending on ``over``, because the two states mean genuinely
+            # different things to a caller: while it is live this is what every tool acts on when
+            # no auction is named -- which is what set_my_auction sets -- and once it is over it
+            # goes back to being nothing more than the last thing they touched.
             "note": (
-                "This is the auction they last used, which may not be the one they mean now. "
-                "Anything else about it: call describe_auction with this slug."
-            ),
+                (
+                    "This one is over. It is only the last auction they used, so it is no longer "
+                    "what a tool acts on when no auction is named."
+                )
+                if over
+                else (
+                    "This is the auction they're working on: it is what every tool acts on when no "
+                    "auction is named, and what set_my_auction changes. Pass a different slug to "
+                    "act on a different auction."
+                )
+            )
+            + " Anything else about it: call describe_auction with this slug.",
         }
     else:
         data["last_auction"] = None
@@ -3171,8 +3226,15 @@ def set_my_auction(request, params: dict[str, Any]) -> dict[str, Any]:
     with would be a pointer that every subsequent action then refuses.
 
     With no auction named it means "whatever is running" -- which is a real request ("we're on
-    tonight's auction now") and is exactly what ``resolve_auction`` answers with no hint. Several
-    running and no tie-break is a question, as everywhere else.
+    tonight's auction now") and is exactly what ``resolve_auction`` answers with no hint, resolved
+    with ``ignore_current`` so the column being rewritten cannot answer the question that is
+    replacing it. Several running is a question, as everywhere else.
+
+    What it writes is ``last_auction_used``, through ``_auction_or_problem`` like every other
+    action; there is no second column. That is only worth saying because it used not to be enough:
+    ``resolve_auction`` ranked the column below ``live_auctions``, so this tool could say "ok" and
+    then be overruled by an auction the user had not named. The fix belongs there, not here -- and
+    it is why the sentence this returns is now true.
     """
     userdata = getattr(request.user, "userdata", None)
     if userdata is None:
@@ -3183,7 +3245,7 @@ def set_my_auction(request, params: dict[str, Any]) -> dict[str, Any]:
     # exactly like success.
     named = dict(params)
     named["auction"] = _str(params, "auction") or _str(params, "name") or _str(params, "slug") or _str(params, "query")
-    auction, problem = _auction_or_problem(request, named)
+    auction, problem = _auction_or_problem(request, named, ignore_current=True)
     if problem:
         return problem
     if was and was.pk == auction.pk:
@@ -3717,14 +3779,68 @@ def go_to_page(request, params: dict[str, Any]) -> dict[str, Any]:
 # --- lookups over lots and pages ---------------------------------------------
 
 
+def _lots_matching(lots, query: str) -> list:
+    """The lots in ``lots`` that a person means by ``query``. A number first, then a name.
+
+    **The number has to be the number they can see**, which is ``Lot.lot_number_display``:
+    ``custom_lot_number`` only while the auction is in seller-dash numbering, and ``lot_number_int``
+    everywhere else. Only ``custom_lot_number`` was ever searched, so in a standard auction -- which
+    is nearly all of them -- no lot could be found by its number at all. "63" fell through to the
+    name search and matched nothing; "58" fell through and matched every past lot whose *name*
+    happened to contain 58, so the failure looked like ambiguity rather than like a lookup that was
+    never done. It reached every tool that resolves a lot through ``_resolve_lot`` (edit_lot,
+    describe_lot, remove_lot, add_lot_image and the rest) and it is why the number offered in a
+    disambiguation question could not be sent back: the answer to "61 or 62?" was resolved down the
+    same broken path as the question.
+
+    Number before name, and never both: with a lot 58 in front of them, somebody who types 58 means
+    that lot, not a lot with 58 in its title.
+    """
+    number = (query or "").strip()
+    number_q = Q(auction__use_seller_dash_lot_numbering=True, custom_lot_number__iexact=number)
+    if number.isdigit():
+        # Bounded before it reaches the database: ``lot_number_int`` is an IntegerField, and a
+        # thirty-digit "lot number" from a model that has miscounted is a DataError, not a miss.
+        value = int(number)
+        if -(2**31) < value < 2**31:
+            number_q |= Q(lot_number_int=value)
+    by_number = list(lots.filter(number_q).select_related("auction")[: AMBIGUOUS_LIMIT + 1])
+    if by_number:
+        return by_number
+    return list(lots.filter(lot_name__icontains=query).select_related("auction")[: AMBIGUOUS_LIMIT + 1])
+
+
+def _lots_matching_here_first(request, lots, query: str):
+    """``(matches, auction_or_None)`` when the caller named no auction.
+
+    Lot numbers repeat: every auction has a lot 58, so searching all of them for "58" is a question
+    with six answers and no way to pick one -- and the one lot the person actually meant was as
+    likely as not below the cut. The auction they are working on is not a guess, it is the same
+    answer ``resolve_auction`` gives every write that names no auction, so a lookup that ignored it
+    disagreed with the tool it was feeding.
+
+    It is a *preference*, not a filter. "What did I pay for the frogbit last year" is a real
+    question about a finished auction, so when the current one has nothing the search widens to
+    everything they can see, and the auction it settled on comes back so the summary can say which
+    one it searched.
+    """
+    current, _problem = resolve_auction(request.user, "", _page(request))
+    if current:
+        matches = _lots_matching(lots.filter(auction=current), query)
+        if matches:
+            return matches, current
+    return _lots_matching(lots, query), None
+
+
 def find_lot(request, params: dict[str, Any]) -> dict[str, Any]:
     """Look a lot up by number or name, within the auctions the user is part of.
 
     The counterpart to ``find_person``: turns "the blue shrimp lot" into a lot id the other
     actions can use, without the model ever guessing a primary key.
-    """
-    from django.db.models import Q
 
+    The matching itself is :func:`_lots_matching`; which auction it happens in is
+    :func:`_lots_matching_here_first` when the caller named none.
+    """
     user = request.user
     query = _str(params, "lot") or _str(params, "query") or _str(params, "name")
     if not query:
@@ -3739,14 +3855,16 @@ def find_lot(request, params: dict[str, Any]) -> dict[str, Any]:
     if not user.is_superuser:
         lots = lots.filter(Q(user=user) | Q(auction__in=command_palette._joined_auctions(user)))
     if auction:
-        lots = lots.filter(auction=auction)
-    matches = list(
-        lots.filter(Q(custom_lot_number__iexact=query) | Q(lot_name__icontains=query)).select_related("auction")[
-            : AMBIGUOUS_LIMIT + 1
-        ]
-    )
+        matches = _lots_matching(lots.filter(auction=auction), query)
+        where = auction
+    else:
+        matches, where = _lots_matching_here_first(request, lots, query)
     if not matches:
-        return {"found": False, "lots": [], "summary": f"No lot matching “{query}”."}
+        return {
+            "found": False,
+            "lots": [],
+            "summary": (f"No lot matching “{query}” in {where.title}." if where else f"No lot matching “{query}”."),
+        }
     return {
         "found": True,
         "lots": [
@@ -3763,7 +3881,10 @@ def find_lot(request, params: dict[str, Any]) -> dict[str, Any]:
             }
             for lot in matches[:AMBIGUOUS_LIMIT]
         ],
-        "summary": f"{len(matches)} lot(s) matching “{query}”.",
+        "summary": (
+            f"{len(matches)} lot(s) matching “{query}”"
+            + (f" in {where.title}." if where else " across the auctions you're in.")
+        ),
     }
 
 
@@ -3916,16 +4037,15 @@ def _resolve_described_auction(user, hint: str, page: dict[str, Any] | None):
         if current:
             return current, None
     # Same order as ``resolve_auction`` from here down, and for the same reason: with no page this
-    # is an agent, and the stored pointer means "whatever they last clicked in a browser". Running
-    # first, the pointer only as a tie-break, and a question rather than a guess.
+    # is an agent. The auction they are working on first, then what is running, then a question
+    # rather than a guess.
+    current = visible.filter(pk=getattr(command_palette._last_auction_active(user), "pk", None)).first()
+    if current:
+        return current, None
     live = live_auctions(user)
     if len(live) == 1:
         return live[0], None
     if len(live) > 1:
-        last_pk = getattr(command_palette._last_auction(user), "pk", None)
-        for auction in live:
-            if auction.pk == last_pk:
-                return auction, None
         return None, _need(
             "Which auction? You've got more than one running.",
             [
@@ -6296,6 +6416,12 @@ def _resolve_lot(request, params):
     Three ways in, in the order they should win: the lot they named, the lot whose page they are
     standing on, and -- when the name matched several -- a question listing them. ``find_lot`` does
     the searching and the scoping; this turns its answer into something an action can write to.
+
+    The question has to be answerable *with the answer it offers*. Its options carry a lot number,
+    so the caller sends that number back as ``lot`` -- which only resolves if the number search
+    works (see :func:`_lots_matching`) and if the second call lands in the same auction as the
+    first. When the candidates span auctions the number alone cannot say which, so the question
+    names the auction in every label and says to send it too.
     """
     hint = _str(params, "lot") or _str(params, "query") or _str(params, "name")
     if not hint:
@@ -6314,9 +6440,23 @@ def _resolve_lot(request, params):
         return None, _error(f"I couldn't find a lot called “{hint}”.")
     matches = found["lots"]
     if len(matches) > 1:
+        spans_auctions = len({lot["auction"] for lot in matches}) > 1
+        question = f"There's more than one lot matching “{hint}”. Which one?"
+        if spans_auctions:
+            question += " Send the lot number and the auction it's in."
         return None, _need(
-            f"There's more than one lot matching “{hint}”. Which one?",
-            [{"label": f"{lot['name']} (lot {lot['lot_number']})", "value": lot["lot_number"]} for lot in matches],
+            question,
+            [
+                {
+                    "label": (
+                        f"{lot['name']} (lot {lot['lot_number']} in {lot['auction']})"
+                        if spans_auctions
+                        else f"{lot['name']} (lot {lot['lot_number']})"
+                    ),
+                    "value": lot["lot_number"],
+                }
+                for lot in matches
+            ],
         )
     lot = Lot.objects.filter(pk=matches[0]["lot_id"], is_deleted=False).select_related("auction").first()
     if not lot:
@@ -11978,6 +12118,7 @@ register(
         ),
         params={
             "lot": "string, optional. Lot number or name. Required unless the user is on that lot's page.",
+            "auction": "string, optional. Auction slug or title, to say which auction the lot is in. See my_context.",
             "url": "string, required. Direct link to the image file, e.g. https://example.com/betta.jpg",
             "caption": "string, optional. A few words shown under it, 60 characters at most.",
             "image_source": (
@@ -12005,6 +12146,7 @@ register(
         ),
         params={
             "lot": "string, optional. Lot number or name. Required unless the user is on that lot's page.",
+            "auction": "string, optional. Auction slug or title, to say which auction the lot is in. See my_context.",
             "image_id": "integer, optional. Which picture, from describe_lot. Not needed when the lot has one.",
         },
         danger=DANGER_CONFIRM,
@@ -12056,7 +12198,11 @@ register(
             "auction and to the user themselves as the seller. Only auction admins may pass "
             "'bidder' to add a lot for someone else. A lot is a thing: fish, plants, shrimp, food, "
             "equipment. If what they want to add is a PERSON (a first name and a surname, 'add "
-            "mike smith'), they mean add_person, not a lot called Mike Smith."
+            "mike smith'), they mean add_person, not a lot called Mike Smith. "
+            "If this seller has listed a lot of the same name before, that lot's description and "
+            "photos are copied onto the new one — and its exact spelling of the name too, when the "
+            "name given matches it exactly. The reply says so in 'reused_a_previous_lot'; tell the "
+            "user, because edit_lot and remove_lot_image are how they undo it."
         ),
         params={
             "name": "string, required. What the item is, e.g. 'blue shrimp'. Never a person's name.",
@@ -12117,7 +12263,9 @@ register(
             "a name plus any of the per-lot fields add_lot takes, plus its own 'count'. Anything "
             "set at the top level (bidder, donation, i_bred_this_fish, count) applies to every lot "
             "that doesn't set it itself. This is also the tool for a list somebody has read off a "
-            "photograph or a sheet of paper: one call, one name per entry."
+            "photograph or a sheet of paper: one call, one name per entry. Every lot goes through "
+            "add_lot's rules, including reusing the description and photos from the seller's own "
+            "last lot of that name — 'reused_a_previous_lot' on the reply says which ones did."
         ),
         params={
             "lots": (
@@ -12575,6 +12723,7 @@ register(
         ),
         params={
             "lot": "string, optional. Lot number or name. Required unless the user is on that lot's page.",
+            "auction": "string, optional. Auction slug or title, to say which auction the lot is in. See my_context.",
             "new_name": "string, optional. A new name for the lot.",
             "quantity": "integer, optional.",
             "reserve_price": "number, optional. The minimum bid.",
@@ -12622,6 +12771,7 @@ register(
         ),
         params={
             "lot": "string, optional. Lot number or name. Required unless the user is on that lot's page.",
+            "auction": "string, optional. Auction slug or title, to say which auction the lot is in. See my_context.",
             "watching": "boolean, optional, default true. False to remove it from the watch list.",
             "notify": (
                 "boolean, optional. True when they also want telling as it sells — 'watch this and "

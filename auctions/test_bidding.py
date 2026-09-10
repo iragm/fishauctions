@@ -9,7 +9,7 @@ from decimal import Decimal
 from unittest.mock import patch
 
 from django.contrib.auth.models import User
-from django.test import TestCase
+from django.test import TestCase, TransactionTestCase
 from django.test.client import Client
 from django.urls import reverse
 from django.utils import timezone
@@ -798,6 +798,156 @@ class AuctionEditFormMinimumBidTests(TestCase):
         self.assertFalse(fractional_lot_form.is_valid())
         self.assertIn("reserve_price", fractional_lot_form.errors)
         self.assertIn("buy_now_price", fractional_lot_form.errors)
+
+
+class IntegerMoneyColumnRepairTests(TransactionTestCase):
+    """A money column that is still an integer, on a database Django believes is migrated.
+
+    Migration 0227 converted the money columns to ``DECIMAL(10, 2)``; where one of those
+    ``AlterField``s did not take, the field still says DecimalField and the migration is still
+    recorded as applied, so nothing in Django ever looks again.  mysqlclient hands back the type
+    the column actually is, so every price read out of it is an ``int``: turning on whole-dollar
+    bids reached ``.to_integral_value()`` on one and 500'd the auction edit page.  Migration 0437
+    converts the column, and does it for any DecimalField whose column is an integer type rather
+    than for a list of names.
+    """
+
+    TABLE = "auctions_lot"
+    #: What production had: unsigned integers, and one of them NOT NULL.
+    DRIFTED = {"reserve_price": "int(10) unsigned NOT NULL", "winning_price": "int(10) unsigned NULL"}
+    REPAIRED = {"reserve_price": "decimal(10, 2) NOT NULL", "winning_price": "decimal(10, 2) NULL"}
+
+    def setUp(self):
+        self.user = User.objects.create_user(username="money_column_user", password="testpassword")
+        self.auction = Auction.objects.create(
+            created_by=self.user,
+            title="Money column auction",
+            date_end=timezone.now() + datetime.timedelta(days=7),
+            date_start=timezone.now() - datetime.timedelta(days=1),
+            only_whole_dollar_bids=False,
+            reserve_price="allow",
+            buy_now="allow",
+        )
+        self.location = PickupLocation.objects.create(
+            name="money column pickup",
+            auction=self.auction,
+            pickup_time=timezone.now() + datetime.timedelta(days=8),
+        )
+        self.tos = AuctionTOS.objects.create(user=self.user, auction=self.auction, pickup_location=self.location)
+        self.lot = Lot.objects.create(
+            lot_name="Money column lot",
+            auction=self.auction,
+            auctiontos_seller=self.tos,
+            reserve_price=Decimal("2.00"),
+            winning_price=Decimal("8.00"),
+            quantity=1,
+        )
+
+    def _column_types(self):
+        from django.db import connection
+
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT COLUMN_NAME, DATA_TYPE FROM information_schema.COLUMNS "
+                "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = %s",
+                [self.TABLE],
+            )
+            types = {column: data_type.lower() for column, data_type in cursor.fetchall()}
+        return {column: types[column] for column in self.DRIFTED}
+
+    def _set_column_types(self, definitions):
+        from django.db import connection
+
+        for column, definition in definitions.items():
+            with connection.cursor() as cursor:
+                cursor.execute(f"ALTER TABLE {self.TABLE} MODIFY COLUMN {column} {definition}")
+
+    def _repair(self):
+        import importlib
+
+        from django.apps import apps
+        from django.db import connection
+
+        module = importlib.import_module("auctions.migrations.0437_fix_integer_money_columns")
+        with connection.schema_editor() as schema_editor:
+            module.fix_integer_money_columns(apps, schema_editor)
+
+    def _toggle_whole_dollar_bids(self):
+        data = {
+            "title": self.auction.title,
+            "summernote_description": self.auction.summernote_description or "",
+            "lot_entry_fee": "0",
+            "unsold_lot_fee": "0",
+            "winning_bid_percent_to_club": "0",
+            "winning_bid_percent_to_club_for_club_members": "0",
+            "lot_entry_fee_for_club_members": "0",
+            "pre_register_lot_discount_percent": "0",
+            "alternate_split_mode": self.auction.alternate_split_mode,
+            "alternative_split_label": self.auction.alternative_split_label or "",
+            "reserve_price": self.auction.reserve_price,
+            "buy_now": self.auction.buy_now,
+            "tax": "0",
+            "online_bidding": self.auction.online_bidding,
+            "custom_field_1": self.auction.custom_field_1,
+            "date_start": self.auction.date_start.strftime("%Y-%m-%d %H:%M:%S"),
+            "date_end": self.auction.date_end.strftime("%Y-%m-%d %H:%M:%S"),
+            "invoice_rounding": str(self.auction.invoice_rounding),
+            "only_whole_dollar_bids": True,
+            "minimum_bid": "2",
+        }
+        form = AuctionEditForm(data=data, instance=self.auction, user=self.user, cloned_from=None, user_timezone="UTC")
+        self.assertTrue(form.is_valid(), form.errors)
+        form.save()
+
+    def test_an_integer_money_column_is_converted_and_holds_cents_again(self):
+        self._set_column_types(self.DRIFTED)
+        try:
+            drifted_lot = Lot.objects.get(pk=self.lot.pk)
+            self.assertIsInstance(drifted_lot.winning_price, int)
+            self.assertIsInstance(drifted_lot.reserve_price, int)
+            # Writing is the quiet half: the column rounds 8.50 to 9 and says nothing.
+            drifted_lot.winning_price = Decimal("8.50")
+            drifted_lot.save()
+            self.assertEqual(Lot.objects.get(pk=self.lot.pk).winning_price, 9)
+            # The 500: every price out of this column is an int, whatever the field says.
+            self._toggle_whole_dollar_bids()
+            self._repair()
+            self.assertEqual(self._column_types(), dict.fromkeys(self.DRIFTED, "decimal"))
+        finally:
+            if self._column_types() != dict.fromkeys(self.DRIFTED, "decimal"):
+                self._set_column_types(self.REPAIRED)
+        lot = Lot.objects.get(pk=self.lot.pk)
+        self.assertEqual(lot.reserve_price, Decimal("2.00"))
+        lot.winning_price = Decimal("8.50")
+        lot.save()
+        self.assertEqual(Lot.objects.get(pk=self.lot.pk).winning_price, Decimal("8.50"))
+
+    def test_the_repaired_column_keeps_its_nullability(self):
+        """``reserve_price`` is NOT NULL and ``winning_price`` is not; the conversion is not the
+        place to lose that."""
+        from django.db import connection
+
+        self._set_column_types(self.DRIFTED)
+        try:
+            self._repair()
+        finally:
+            if self._column_types() != dict.fromkeys(self.DRIFTED, "decimal"):
+                self._set_column_types(self.REPAIRED)
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT COLUMN_NAME, IS_NULLABLE FROM information_schema.COLUMNS "
+                "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = %s",
+                [self.TABLE],
+            )
+            nullable = dict(cursor.fetchall())
+        self.assertEqual(nullable["reserve_price"], "NO")
+        self.assertEqual(nullable["winning_price"], "YES")
+
+    def test_a_decimal_money_column_is_left_alone(self):
+        """On a database built from these migrations there is nothing to find."""
+        self._repair()
+        self.assertEqual(self._column_types(), dict.fromkeys(self.DRIFTED, "decimal"))
+        self.assertEqual(Lot.objects.get(pk=self.lot.pk).winning_price, Decimal("8.00"))
 
 
 class CreateLotFormWholeDollarValidationTests(TestCase):
