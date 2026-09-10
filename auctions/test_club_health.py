@@ -7,7 +7,8 @@ one being caught quickly. See auctions/club_health.py.
 
 import datetime
 
-from django.test import TestCase
+from django.conf import settings
+from django.test import TestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
 
@@ -424,7 +425,14 @@ class MapGateTests(StandardTestCase):
         self.listed.save()
         self.assertNotIn(self.listed, Club.objects.listed())
 
+    @override_settings(LOCATION_FIELD={**settings.LOCATION_FIELD, "provider.google.api_key": "test-key"})
     def test_a_prospect_is_not_on_the_map(self):
+        """The key is pinned because the pins only exist when there is a map to put them on.
+
+        clubs.html renders every club name inside ``{% if google_maps_api_key %}``, and CI runs with
+        an empty ``GOOGLE_MAPS_API_KEY`` while a dev .env has a real one -- so without this the test
+        asserts against an empty page in CI and a full one here.
+        """
         response = self.client.get(reverse("clubs"))
         if response.status_code != 200:
             self.skipTest("the club finder is disabled in this environment")
