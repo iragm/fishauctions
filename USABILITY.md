@@ -57,7 +57,10 @@ Ordered by (unblocks-other-work x value). Status: `todo` | `wip` | `done`.
 | 6 | First paint: defer the head scripts, content-hashed `/static/` cached for a year | `base.html`, `static_storage.py`, `nginx_fishauctions.conf` | done -- jQuery is the one that cannot move, and `base.html` says why |
 | 7 | Buyers and sellers: fire `pageView` on every page and drop the 2s delay, then read the funnel off rows that already exist | `base_page_view.html`, `usability_report.py`, `views/lot_pages.py`, `views/browse.py`, `views/auction_pages.py`, `mobile/services/ar.py` | done |
 | 8a | The stage ladder on `Club`, the map gate, the stall reason, and the `aware` rung | `models.py`, `club_health.py`, `views/usability.py`, migrations 0430-0431 | done |
-| 8b-8f | The link verifier, umbrella directories, the crawl, city search, the outreach loop | `management/commands/` | todo -- needs the network, see below |
+| 8b | The link verifier: fetch every club's links, record what answered, nominate the dead | `club_verification.py`, `verify_club_links`, migration 0434 | done |
+| 8c-8e | Umbrella directories, the two-hop crawl, city search -- one funnel, three sources | `club_discovery.py`, `find_clubs` | done -- directories run for real, see below |
+| 8g | The contact info gate before creating an auction, and the unlinked-auction queue | `services.py`, `club_matching.py`, `views/usability.py` | done |
+| 9 | Everybody who is not running the auction | `docs/phase_9.md` | specced, not started |
 
 Every phase above has a test module: `test_usability_instruments.py`, `test_form_friction.py`,
 `test_usability_report.py`, `test_club_health.py`, `test_template_a11y.py`,
@@ -512,38 +515,196 @@ because they are decisions about what this site should do, not about how to writ
 
 ## Still needs a person, not a decision
 
-- **8b-8f are network work.** The verifier, the umbrella directories, the link crawl and the city
-  search all fetch pages this repo cannot see from here, and every extraction rule is a guess until
-  somebody has looked at the real page. The right first step is 8b, the verifier, run against the
-  clubs already on the site: it needs no directory, it is the code every later source reuses, and
-  it answers "who is still out there" about the list that exists today.
-- **The outreach email itself stays hand-sent** (already settled above), so 8f cannot be finished
-  by a machine either.
+- **8c-8e have now been run against the real internet, and the directory list did not survive it.**
+  Of the original seven umbrella directories, **five were dead or useless**: FAAS had folded and
+  `faas.info` now belongs to a gambling site, the ACA's rebuilt site has no affiliates page at all,
+  NEC is a React app whose club list exists only inside a hashed JS bundle, the ALA 403s any
+  honest User-Agent, and the AKA and AGA had simply moved. The registry is now four entries: ACA,
+  AKA, AGA, NANFA. NEC and the ALA were dropped on the human's word -- every NEC club is already on
+  this site, and the ALA does not publish a club list -- which also settled the question of whether
+  to defeat the ALA's bot block. We do not. FAAS's successor, the Alliance of American Fish Clubs,
+  is a mailing list and a Facebook page with no public club list and appears defunct itself.
+- **There is no longer a general-interest directory to read, and that is the real loss here.**
+  What remains are four specialist societies. The breadth this phase was designed around has to
+  come from the crawl and from city search instead, which are the two weaker sources -- so 8d and
+  8e matter more than they did when they were written as the follow-ups to 8c.
+- **The one directory that did work is worth the whole phase.** The AGA's links page yields 119
+  clubs, 85 of them kept after filtering. The skips are almost entirely European and South American
+  clubs plus the umbrella bodies, which is the filter working as intended for a North American
+  site.
 
-## Open questions
+## Open, 2026-09-09: should discovery be code at all?
 
-- Roughly how many active organizers per year? Decides whether any organizer-facing metric can ever
-  be more than anecdote.
-- Is the `weekly_promo` 6-day exclusion deliberate? Phase 2's re-engagement half assumes it is.
-- **Answered:** `PageView` retention. Nothing purges it and nothing will; the rows are worth more
-  than the space, and the three costs that do grow with them have fixes that are not deletion
-  (7a). `FormFailure` inherits the same answer. Still open: how far back the rows actually go,
-  because that is the longest window a "nobody has ever used this" claim can honestly cover.
-- **Answered:** nothing new gets emailed to somebody who never signed up. `weekly_promo` keeps
-  its `User` + opt-in + location requirement. Still open for phase 8 only: whether an
-  unsolicited email to a club's *published* contact address is acceptable, and under what
-  footer.
-- How long does a fish club last? It decides how stale an umbrella directory has to be before
-  reading it costs more than it returns, and how fast a found club should be re-verified.
-- The Phase 4 pass added five help notes on the pages a first-timer hits. The other ~50 templates
-  with a form have not been looked at. There is no quota either way -- most forms need no note at
-  all, and a page that genuinely has three or four things worth saying should say them.
+Every failure in the first live run was in *acquisition* -- a JS-only club list, a User-Agent
+block, a chain of dead successors -- and each is something a browsing research agent handles
+natively and a `requests` + BeautifulSoup pipeline structurally cannot. The population is also
+nearly static (see the club-lifespan estimate above), so this is a one-off with a long tail rather
+than a feed, and a pipeline earns its complexity by running unattended forever.
+
+The proposal on the table is to drop the automated *acquisition* and keep everything downstream:
+`ingest`, the domain-first dedup in `club_matching`, the `PROSPECT` gate and `club_verification`,
+fed by a CSV from a one-off deep research run. That pairing also covers deep research's own
+weakness -- it will hand you a confident URL that 404s, and the verifier already checks every row
+before a person sees it. **Not decided.**
+- **A 200 is not proof a directory is alive.** The squatter on `faas.info` serves 200 on its
+  homepage and 404 on the old member-list path, so the loud per-directory error would have caught
+  it only by luck. Any URL repair here needs a person to look at the page, not a green status.
+- **The extractor was using the wrong model, and the effort setting was a red herring.** The site
+  runs `gpt-5-nano` at `minimal` effort, tuned for the palette: one sentence, a person waiting. On
+  the AGA's list -- which really holds about 115 clubs -- `minimal` returned 3, 0, 0 and 0. Raising
+  the effort to `low` looked like the fix and was not: the same model then returned 54 on one run
+  and 12 on the next. `gpt-5-mini` at `low` returns **117 and 114**, in about fifty seconds a page.
+  So nano at its best was missing four clubs in five and was not even consistent about which.
+  `club_discovery.EXTRACTION_MODEL` now pins mini for this one job.
+- **`medium` effort fails outright at both model sizes, for a reason the error does not name.**
+  Reasoning tokens come out of `max_tokens`, so a budget that thinks harder than it can afford
+  returns an *empty* reply rather than a short one, and that arrives as `LLMError`. The lever that
+  works is the token budget, not the effort. Written down in the constant, because the obvious
+  reaction to a thin result is to turn the effort up.
+- **The name filter was wrong about eight clubs, found two at a time.** Each better extraction run
+  surfaced more real clubs sitting in the skip list: "Enthusiasts" and "Exchange" and
+  "Organization" are as ordinary a word for a club as "Society", "Aquaria" is not "aquarium", and
+  Puerto Rico and Montreal do not name themselves in English. All eight are now test cases, with
+  the umbrella names as the other half of the test. That this took four rounds is itself the
+  argument for the question below.
+- **Approving a prospect is a person looking at a club's website.** That is the whole point of the
+  gate and it does not get automated. `find_clubs` says so in its own output.
+- **The outreach email itself stays hand-sent** (settled, twice), so 8f is a person with a queue
+  and a draft, not a job.
+
+## Answered, 2026-09-09
+
+Everything below was a question in this file until the human answered it. Kept rather than deleted,
+because most of them are decisions somebody will be tempted to reopen.
+
+- **Nothing self-serve about clubs.** No club creation by users, no dropping the permission
+  requirement on `Auction.club`, no club question in the auction creation flow. The fix is the
+  contact info gate below, and the backlog is a GUI over the command that already existed. Revisit
+  later if the gate does not move the number.
+- **How many active organizers a year: dozens.** So every organizer-facing metric in this file is
+  an anecdote with a denominator, and nothing here should ever be A/B tested. Two clubs behaving
+  differently is not a signal.
+- **Around 20% of auctions have a club, and the unlinked ones are in the low hundreds.** This is
+  the single largest caveat in the campaign and it was not written down anywhere: `club_health`,
+  the ladder, the check-in queue and every count on `/admin-club-health/` are computed from a fifth
+  of the auctions on the site. The page says so now, and links to the queue that fixes it.
+- **No unsolicited email to clubs, at any volume, under any footer.** It is spam. Phase 8f drafts
+  per club and a person sends it, and that is the whole of the sending story.
+- **The `weekly_promo` 6-day exclusion is deliberate.** Somebody who has been on the site this week
+  knows what auctions are running; the email exists for the people who have not. Phase 2's
+  re-engagement half can build on it.
+- **`PageView` goes back to 2020** and is one of the oldest tables here. So "nobody has ever used
+  this" is a claim that can honestly cover five years, which is longer than any feature on the site
+  has existed -- a zero in the adoption table is a real zero, not a short window.
+- **The four inert `PageView` columns stay for ever.** `duplicate_check_completed`, `counter`,
+  `notification_sent` and `total_time` are unread and cost nothing; an `ALTER` on the biggest table
+  on the site to remove them buys nothing. Do not propose this again.
+- **Prospect club pages stay ungated.** `/clubs/<slug>/` renders for an unapproved club, nothing
+  links to it, and the person doing outreach needs to be able to look at it.
+- **The phase 4 help-note sweep is scrapped.** Not deferred -- dropped. The human is reviewing the
+  site page by page and will write the notes that are worth writing. A sweep by anybody else would
+  be prose about pages nobody had a complaint about, which is what this campaign is against.
+- **How long does a fish club last: nobody knows, so here is the working number.** No census of
+  aquarium societies exists. What is observable is that the clubs on umbrella directories skew old
+  -- the FAAS and NEC member lists are full of clubs founded in the 1950s-70s -- and that the
+  failures are front-loaded: a club that survives its first few years tends to run for decades on a
+  small committee, and dies when that committee ages out rather than on a schedule. So: **assume a
+  median life measured in decades and a long tail, and treat any directory entry older than three
+  years as a coin flip.** That is what sets the two numbers phase 8 needed -- re-verify a club
+  yearly, and treat an unreachable site plus no auctions plus no members as dead rather than
+  waiting. Both are `club_verification` constants, so a better number replaces them in one place.
+
+## Still open
+
+- **Phase 9 needs specifying, and it is the one thing here nobody can answer from the rows.** The
+  human wanted to A/B test and the site is too small for it -- dozens of organizers means no arm of
+  any split will ever reach significance. Phase 9 has to be built out of things that work at n=40:
+  session replay of one funnel, before-and-after on a single change, and asking people. Specced in
+  `docs/phase_9.md`.
 
 ## Pass log
 
 Newest first.
 
 <!-- PASS LOG START -->
+
+### 2026-09-09 -- the club link, both ends of it
+
+Asked how an auction comes to belong to a club, and the answer was worse than the question assumed.
+`Auction.club` is set at creation by `finish_new_auction` from `UserData.club`, but only when the
+creator *also* holds a permission in that club -- and the only surface that has ever asked anybody
+for `UserData.club` is an optional free-text box on the contact info page whose hidden FK is filled
+in only if you click an autocomplete suggestion. Three prerequisites, and a new organizer has none
+of them: no club row exists until somebody adds one by hand, no `ClubMember` row until an existing
+club admin makes one, and no affiliation until they visit a page nothing sends them to. **About 20%
+of auctions have a club.** Every number in `club_health` -- the cadence, the ladder, the check-in
+queue -- has been computed from a fifth of the site, and nothing said so.
+
+Both halves are fixed. **Creating an auction now goes through the contact info page** the way
+adding a lot already did, asking for a phone number as well because an organizer is somebody their
+participants have to be able to reach. The gate is not really about the address: it is the one
+moment the club picker is in front of the one person who knows the answer. The two gates now ask
+one function, `services.missing_contact_info`, which is where they differ on the phone number, and
+the page requires that field when the gate sent somebody there -- in the session, not the
+querystring, because a parameter you can strip is a redirect loop.
+
+Writing that found a live authorization bug in the same six lines. `AuctionCreateView.dispatch`
+called `super().dispatch()` *first* and checked `can_create_club_auctions` afterwards, so a POST
+from somebody without the permission created the auction and then threw away the response in favour
+of a redirect to the home page. The auction stayed. Both checks now run before the view does, and
+there is a test for each that fails on the ordering rather than on the redirect.
+
+The backlog is `/admin-unlinked-auctions/`, which is `assign_auction_to_club` with a page in front
+of it -- the same `services.link_auction_to_club` underneath, so the command and the button cannot
+drift. It groups by the club an auction probably belongs to, because that is the shape of the work:
+an organizer who ran eleven auctions before their club was here has eleven rows with one answer
+between them. The four signals behind the guess are ranked by what they are worth
+(`club_matching.suggest_clubs`) and the weakest -- two names looking alike -- is labelled as a guess
+on the page, because it is the one that wants reading before it is approved.
+
+### 2026-09-09 -- phase 8b-8e, built and unrun
+
+The verifier first, because it is the code every later source reuses: one polite, budgeted
+`fetch`, and a rule about what a failure is allowed to mean. Only a resolved "nothing is here" -- a
+dead domain, a 404 -- is recorded as unreachable. A timeout is a slow host and a 403 is a bot
+filter, and a club that got one of those on a Tuesday must not end up nominated as folded. Death is
+unanimous: no reachable links, no auctions here, no members here, and even then the code only
+nominates. `active` is hand-set and takes a club off the public map; a false positive is this site
+forgetting a club that exists.
+
+The three discovery sources share one funnel and the funnel is the part that matters. Everything
+lands at `outreach_stage=PROSPECT`, which is the map gate, so nothing a crawler believes is visible
+anywhere until a person moves it. Deduplication is **domain first, name second**, because a domain
+is a fact and a name is a spelling -- and an existing club is only ever filled in, never
+overwritten, since what is already here was typed by somebody who knew.
+
+The interval questions had no data behind them, so they were reasoned and written down rather than
+picked: verify yearly, treat a directory entry over three years old as a coin flip. Both are
+constants in `club_verification`, so a better number replaces them in one place.
+
+What was *not* done at the time of writing was running any of it. That happened the same day, and
+the guesses were worse than predicted: five of seven directories were gone, and the extraction
+returned nothing at all on most runs until its reasoning effort was raised. Both are written up
+under "Still needs a person" above. The design held -- nothing public was created by any of it,
+because prospects are not public -- but "built and tested" and "known to work" stayed a long way
+apart, and the gap was only visible from outside the test suite.
+
+### 2026-09-09 -- the questions got answered
+
+Nine open questions and judgement calls closed by the human in one pass, and they are recorded under
+"Answered" above rather than deleted, because several of them are the kind somebody re-proposes a
+year later. The two that change how the rest of this file should be read: **there are dozens of
+active organizers a year**, so no organizer-facing metric here will ever be more than an anecdote
+with a denominator; and **`PageView` goes back to 2020**, so a zero in the adoption table is a real
+five-year zero rather than a short window.
+
+Phase 9 was the one with no answer in it. It is specced now in `docs/phase_9.md`, and the spec
+starts by writing down why the A/B test the human wanted cannot work here -- not because dozens of
+organizers is a small sample, which is obvious, but because bidders cluster inside auctions, so
+even a buyer-facing test has an effective n closer to the number of auctions than the number of
+people. What replaces it is reading the funnel that shipped this week, reconstructing single
+sessions out of `PageView` rows that already exist, and paired before-and-after on one change at a
+time.
 
 ### 2026-09-09 -- the backfill runs itself
 

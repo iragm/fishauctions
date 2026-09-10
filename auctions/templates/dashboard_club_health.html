@@ -9,6 +9,9 @@
   eight months. One threshold gets both wrong, which is probably why nobody trusted
   <code>Club.active</code> enough to maintain it. Rebuilt nightly.</div>
 </div>
+{% if unlinked_auctions %}<p class="text-muted small"><span class="text-warning">{{ unlinked_auctions }}
+  auction(s) belong to no club and are counted nowhere on this page.</span>
+  <a href="{% url 'admin_unlinked_auctions' %}">Link them up</a>.</p>{% endif %}
 {% if never_computed %}<p class="text-muted small"><span class="text-warning">{{ never_computed }}
   club(s) have never been computed &mdash; the nightly task has not run since they were
   created.</span></p>{% endif %}

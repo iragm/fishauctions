@@ -3836,6 +3836,11 @@ class UserLocation(forms.ModelForm):
         )
 
     def __init__(self, *args, **kwargs):
+        # Set by the gate on creating an auction, which refuses a blank phone number where the one
+        # on adding a lot does not: an organizer is somebody their participants have to be able to
+        # reach.  Required here as well as there, or saving the page sends them straight back to
+        # the gate that sent them.  See ``services.missing_contact_info``.
+        self.require_phone = kwargs.pop("require_phone", False)
         super().__init__(*args, **kwargs)
         self.fields["address"].widget = forms.Textarea()
         self.fields["address"].widget.attrs = {"rows": 3}
@@ -3844,6 +3849,9 @@ class UserLocation(forms.ModelForm):
             "location"
         ].help_text = "Optional. You'll be notified about new lots that can ship to this location."
         self.fields["phone_number"].help_text = "Optional"
+        if self.require_phone:
+            self.fields["phone_number"].required = True
+            self.fields["phone_number"].help_text = "Needed before you can create an auction"
         self.helper = FormHelper()
         self.helper.form_method = "post"
         self.helper.form_id = "user-form"

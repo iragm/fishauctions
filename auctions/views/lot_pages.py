@@ -69,6 +69,8 @@ from auctions.models import (
 from auctions.notifications import user_has_app_push
 from auctions.services import (
     copy_lot_images,
+    missing_contact_info,
+    readable_list,
     user_can_clone_lot,
 )
 from auctions.species_matching import record_choice as record_species_choice
@@ -868,10 +870,11 @@ class LotValidation(LoginRequiredMixin):
     auction = None  # used for specifying which auction via GET param
 
     def dispatch(self, request, *args, **kwargs):
-        # if the user hasn't filled out their address, redirect:
-        userData = request.user.userdata
-        if not userData.address or not request.user.first_name or not request.user.last_name:
-            messages.error(self.request, "Please fill out your contact info before creating a lot")
+        # Somewhere to send the cheque.  No phone number: a seller is reached through the auction,
+        # and ``services.missing_contact_info`` is where the two gates differ on that.
+        missing = missing_contact_info(request.user)
+        if missing:
+            messages.error(self.request, f"Please add your {readable_list(missing)} before creating a lot")
             return redirect(f"{reverse('contact_info')}?{urlencode({'next': request.get_full_path()})}")
         return super().dispatch(request, *args, **kwargs)
 

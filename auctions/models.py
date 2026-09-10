@@ -518,10 +518,10 @@ class ClubQuerySet(models.QuerySet):
     def listed(self):
         """Approved clubs only: the map, the club search, and every dropdown a member sees.
 
-        Club discovery fills this table with clubs nobody here has spoken to yet (USABILITY.md
-        phase 8), and every pin on the club map is a claim this site is making about a real
-        organisation. So approval is a stage on the club rather than a second table, and this is
-        the gate: ``outreach_stage`` short of ``listed`` means found, not published.
+        Imports fill this table with clubs nobody here has spoken to yet (USABILITY.md phase 8),
+        and every pin on the club map is a claim this site is making about a real organisation. So
+        approval is a stage on the club rather than a second table, and this is the gate:
+        ``outreach_stage`` short of ``listed`` means found, not published.
 
         ``active`` is the other half and a different question -- it is set by hand when a club
         dissolves -- so both are asked here.
@@ -545,13 +545,36 @@ class Club(CloudflareImageMixin, models.Model):
         verbose_name="Membership email address",
         help_text="Replies to membership inquiries will be sent to this email",
     )
+    EMAIL = "email"
+    WEBFORM = "webform"
+    FACEBOOK = "facebook"
+    CONTACT_METHOD_CHOICES = (
+        ("", "Not known"),
+        (EMAIL, "Email"),
+        (WEBFORM, "Form on their website"),
+        (FACEBOOK, "Facebook only"),
+    )
+    contact_method = models.CharField(max_length=20, choices=CONTACT_METHOD_CHOICES, blank=True, default="")
+    contact_method.help_text = (
+        "Which door to knock on. Outreach is a person working a queue one club at a time, and a "
+        "club reachable only through Facebook takes a different afternoon from one with an address."
+    )
     date_contacted = models.DateTimeField(blank=True, null=True)
     date_contacted_for_in_person_auctions = models.DateTimeField(blank=True, null=True)
+    # Written only by auctions.club_verification, which fetches the two links above and records
+    # what answered.  Null on both booleans means "no URL on file", which is a different fact from
+    # "the URL is dead" and the one the dead-club rule turns on.
+    date_links_checked = models.DateTimeField(blank=True, null=True)
+    date_links_checked.help_text = "When club_verification last fetched this club's links"
+    homepage_reachable = models.BooleanField(blank=True, null=True)
+    facebook_reachable = models.BooleanField(blank=True, null=True)
+    link_check_note = models.CharField(max_length=200, blank=True, default="")
+    link_check_note.help_text = "What happened the last time this club's links were fetched"
     PROSPECT = "prospect"
     CONTACTED = "contacted"
     LISTED = "listed"
     OUTREACH_STAGE_CHOICES = (
-        # Found by club discovery, or typed in by hand and not approved yet. Not on the map.
+        # Imported from a curated list, or typed in by hand, and not approved yet. Not on the map.
         (PROSPECT, "Found, not approved"),
         # Somebody here has written to them. Still not on the map: an email is not an approval.
         (CONTACTED, "Contacted, no reply yet"),

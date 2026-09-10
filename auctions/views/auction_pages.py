@@ -5,6 +5,7 @@
 """
 
 import logging
+from urllib.parse import urlencode
 
 from django.conf import settings
 from django.contrib import messages
@@ -44,7 +45,6 @@ from auctions.forms import (
 from auctions.models import (
     Auction,
     AuctionTOS,
-    ClubHistory,
     ClubMember,
     Invoice,
     Lot,
@@ -53,10 +53,15 @@ from auctions.models import (
 )
 from auctions.services import (
     AUCTION_FIELDS_TO_CLONE,
+    CONTACT_GATE_NEEDS_PHONE,
     DEFAULT_AUCTION_DESCRIPTION,
     clone_auction,
+    ensure_club_admin,
     finish_new_auction,
     join_auction,
+    link_auction_to_club,
+    missing_contact_info,
+    readable_list,
 )
 
 from .base import AuctionViewMixin, _ensure_invoice_renewal_state, _find_club_member, close_modal_response
@@ -643,7 +648,22 @@ class AuctionCreateView(FormFrictionMixin, CreateView, LoginRequiredMixin):
     fields_to_clone = AUCTION_FIELDS_TO_CLONE
 
     def dispatch(self, request, *args, **kwargs):
-        original_dispatch = super().dispatch(request, *args, **kwargs)
+        """Both gates run *before* the view does, which is the whole of the fix here.
+
+        This used to call ``super().dispatch()`` first and check permission afterwards, so a POST
+        from somebody without ``can_create_club_auctions`` created the auction and then threw the
+        response away in favour of a redirect to the home page.  The auction stayed.  A gate that
+        runs after the thing it gates is not a gate, and the contact-info one below has exactly the
+        same shape.
+
+        The contact-info gate is the answer to auctions that belong to no club.  ``Auction.club``
+        is filled in from ``UserData.club`` (:func:`~auctions.services.finish_new_auction`), and
+        nothing else on the way to creating an auction asks for it -- so an organizer who has never
+        opened the contact info page creates auction after auction that ``club_health`` cannot see.
+        Sending them there first is not about the address: it is the one moment the club picker is
+        in front of the one person who knows the answer.  The picker itself stays optional, because
+        plenty of auctions genuinely have no club.
+        """
         auction_creation_allowed = False
         if self.request.user.is_authenticated and self.request.user.userdata.can_create_club_auctions:
             auction_creation_allowed = True
@@ -651,7 +671,15 @@ class AuctionCreateView(FormFrictionMixin, CreateView, LoginRequiredMixin):
             auction_creation_allowed = True
         if not auction_creation_allowed:
             return redirect(reverse("home"))
-        return original_dispatch
+        missing = missing_contact_info(request.user, require_phone=True)
+        if missing:
+            # The page has to ask for the phone number this gate just refused them for, and it only
+            # asks when it is told to.  See services.CONTACT_GATE_NEEDS_PHONE for why that is a
+            # session flag rather than something in the URL.
+            request.session[CONTACT_GATE_NEEDS_PHONE] = True
+            messages.error(request, f"Please add your {readable_list(missing)} before creating an auction")
+            return redirect(f"{reverse('contact_info')}?{urlencode({'next': request.get_full_path()})}")
+        return super().dispatch(request, *args, **kwargs)
 
     def get_success_url(self):
         if self.redirect_url:
@@ -788,22 +816,6 @@ class AuctionInfo(FormFrictionMixin, FormMixin, DetailView, AuctionViewMixin):
                     creator = self.auction.created_by
                     creator_club = getattr(creator.userdata, "club", None)
                     if creator_club:
-                        # Fill contact info from user account; get_or_create won't duplicate.
-                        member = ClubMember.objects.filter(club=creator_club, user=creator).first()
-                        if not member:
-                            member = ClubMember(
-                                club=creator_club,
-                                user=creator,
-                                source="manually_added",
-                            )
-                        # Always populate contact fields from user data (safe to overwrite blanks).
-                        member.name = member.name or creator.get_full_name() or creator.username
-                        if not member.email:
-                            member.email = creator.email or None
-                        if not member.phone_number:
-                            member.phone_number = getattr(creator.userdata, "phone_number", None) or None
-                        if not member.address:
-                            member.address = getattr(creator.userdata, "address", None) or ""
                         # Count the creator's clubless auctions before saving: granting
                         # permission_admin fires the on_club_member_saved signal, which associates
                         # those auctions with the club and books their club ledger. Capturing the
@@ -811,15 +823,26 @@ class AuctionInfo(FormFrictionMixin, FormMixin, DetailView, AuctionViewMixin):
                         assigned_count = Auction.objects.filter(
                             created_by=creator, club__isnull=True, is_deleted=False
                         ).count()
-                        member.permission_admin = True
-                        member.save()
-                        ClubHistory.objects.create(
-                            club=creator_club,
-                            user=request.user,
-                            action=f"Granted admin permissions to {creator.get_full_name() or creator.username} via auction admin panel"
-                            + (f"; assigned {assigned_count} auction(s) to club" if assigned_count else ""),
-                            applies_to="MEMBERS",
+                        # One implementation of "make this person an admin of that club", shared
+                        # with assign_auction_to_club and the unlinked auctions page. This button
+                        # was a third copy of it; the club's own contact fields are filled in from
+                        # the account there, without overwriting anything the club already has.
+                        note = "via the auction admin panel" + (
+                            f", assigning {assigned_count} auction(s) to the club" if assigned_count else ""
                         )
+                        newly_admin = ensure_club_admin(creator_club, creator, note=note, actor=request.user)
+                        if not newly_admin and assigned_count:
+                            # The button is also offered to file a clubless auction for somebody who
+                            # is *already* an admin (see can_make_club_admin, which is an OR). Saving
+                            # a ClubMember is what normally files those auctions -- the
+                            # `_associate_auctions_for_member` signal -- and there is no save to make
+                            # when the permission is already there, so nothing would happen at all.
+                            for clubless in Auction.objects.filter(
+                                created_by=creator, club__isnull=True, is_deleted=False
+                            ):
+                                link_auction_to_club(
+                                    clubless, creator_club, note=note, actor=request.user, grant_admin=False
+                                )
                         messages.success(
                             request,
                             f"{creator.username} is now an admin of {creator_club.name}"

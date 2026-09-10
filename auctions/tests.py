@@ -140,6 +140,29 @@ class WritableMediaRoot:
         super().tearDownClass()
 
 
+def give_contact_info(user, *, phone="555-0100"):
+    """Fill in enough contact info to get this user past the gates on lots and auctions.
+
+    ``services.missing_contact_info`` is what both gates ask, so a test that wants to exercise
+    anything *behind* one of them says so in a line rather than by setting four fields by hand and
+    getting a redirect it did not expect.  Pass ``phone=""`` for a user who should still be stopped
+    by the auction gate but not the lot one.
+    """
+    from auctions.models import UserData
+
+    user.first_name = user.first_name or "Test"
+    user.last_name = user.last_name or "User"
+    user.save()
+    # Through the user, not through the manager: ``user.userdata`` is cached on the instance the
+    # caller is holding, and a second copy fetched from the manager would leave that cache stale --
+    # so the gate would still see the blank account this just filled in.
+    userdata = getattr(user, "userdata", None) or UserData.objects.create(user=user)
+    userdata.address = userdata.address or "123 Test St"
+    userdata.phone_number = phone
+    userdata.save()
+    return userdata
+
+
 class CsvImportTestMixin:
     """Shared helper for driving the two-phase CSV importer in tests (used by StandardTestCase and any
     plain TestCase that exercises an importer)."""

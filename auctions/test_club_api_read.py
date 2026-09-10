@@ -33,7 +33,7 @@ from auctions.models import (
     PickupLocation,
     Species,
 )
-from auctions.tests import WritableMediaRoot
+from auctions.tests import WritableMediaRoot, give_contact_info
 from fishauctions._env import parse_bool_env, require_secure_prod_secrets
 
 
@@ -1239,6 +1239,7 @@ class ClubAuctionIntegrationTests(TestCase):
 
     def _create_auction_via_view(self, user):
         """Helper to create an auction via the create auction view."""
+        give_contact_info(user)  # AuctionCreateView refuses somebody with no contact info
         self.client.login(username=user.username, password="testpass")
         from django.utils import timezone
 

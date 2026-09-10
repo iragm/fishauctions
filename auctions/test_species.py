@@ -52,7 +52,7 @@ from auctions.species_matching import (
     visible_species,
 )
 from auctions.test_support import isolated_cache
-from auctions.tests import StandardTestCase
+from auctions.tests import StandardTestCase, give_contact_info
 
 
 class FakeProvider(LLMProvider):
@@ -776,6 +776,7 @@ class AuctionScientificNameSettingTests(StandardTestCase):
         """Copying an auction has to bring this with it, or a club re-opts-in every year."""
         self.online_auction.use_scientific_name = False
         self.online_auction.save()
+        give_contact_info(self.user)  # AuctionCreateView refuses somebody with no contact info
         self.client.login(username="my_lot", password="testpassword")
         self.client.post(
             f"{reverse('create_auction')}?clone={self.online_auction.slug}",
@@ -3257,6 +3258,7 @@ class ScientificNameStaysOnForFutureAuctionsTests(StandardTestCase):
     def test_a_clone_of_an_auction_that_has_it_keeps_it(self):
         """The setting is in fields_to_clone, so whatever the source says propagates forward."""
         self.assertTrue(self.online_auction.use_scientific_name)
+        give_contact_info(self.user)  # AuctionCreateView refuses somebody with no contact info
         self.client.login(username="my_lot", password="testpassword")
         self.client.post(
             f"{reverse('create_auction')}?clone={self.online_auction.slug}",

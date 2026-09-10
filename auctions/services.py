@@ -893,6 +893,63 @@ def finish_new_auction(auction, created_by, *, copied_from=None, note=""):
     _add_club_admins_as_auction_tos(auction, created_by)
 
 
+def link_auction_to_club(auction, club, *, note, actor=None, grant_admin=True):
+    """Attach an auction to a club after the fact, and give its creator the run of that club.
+
+    The backlog this exists for is most of the auctions on the site: ``finish_new_auction`` links
+    one only when the creator had already declared a club *and* held a permission in it, so an
+    organizer who set the site up before their club was on it -- which is nearly all of them -- has
+    auctions belonging to nothing.  Two callers do the repair, the ``assign_auction_to_club``
+    command and ``views.usability.LinkAuctionToClub``, and they have to do the same three things or
+    the two routes leave the site in different states.
+
+    ``save()`` rather than a queryset update on purpose: attaching a club books the club ledger for
+    invoices that were already settled, and an ``update()`` skips the model and silently doesn't.
+
+    ``grant_admin`` is what makes the link worth anything to the organizer rather than only to the
+    reports.  Somebody who has been running auctions here is already the person who runs them; what
+    they lack is any way to say so, and without a permission in the club they still cannot pick it
+    on their next auction.  Returns ``True`` when a new admin was granted.
+    """
+    auction.club = club
+    auction.save(update_fields=["club"])
+    auction.create_history(applies_to="RULES", action=f"Assigned to club '{club}' {note}.", user=actor)
+    if grant_admin and auction.created_by:
+        return ensure_club_admin(club, auction.created_by, note=note, actor=actor)
+    return False
+
+
+def ensure_club_admin(club, user, *, note, actor=None):
+    """Make ``user`` an admin of ``club``, reusing their membership row if they have one.
+
+    Returns ``True`` only when admin was newly granted, so a caller can report how many people it
+    actually changed something for.  Contact fields are filled in from the account without
+    overwriting anything the club has already recorded: the club's copy is the club's.
+    """
+    member = ClubMember.objects.filter(club=club, user=user, is_deleted=False).first()
+    if member and member.permission_admin:
+        return False
+    if not member:
+        member = ClubMember(club=club, user=user, source="manually_added")
+    userdata = getattr(user, "userdata", None)
+    member.name = member.name or user.get_full_name() or user.username
+    if not member.email:
+        member.email = user.email or None
+    if not member.phone_number:
+        member.phone_number = getattr(userdata, "phone_number", None) or None
+    if not member.address:
+        member.address = getattr(userdata, "address", None) or ""
+    member.permission_admin = True
+    member.save()
+    ClubHistory.objects.create(
+        club=club,
+        user=actor,
+        action=f"Granted admin permissions to {member.name} {note}.",
+        applies_to="MEMBERS",
+    )
+    return True
+
+
 # --- breeder award points ----------------------------------------------------
 #
 # The club's BAP/HAP/CAP review desk: which lots are waiting for a decision, and what taking one
@@ -1086,6 +1143,49 @@ def recent_auctiontos_for(user):
         manually_added=False,
         createdon__gte=cutoff,
     ).select_related("auction")
+
+
+#: Session flag set by a gate that turned somebody away for having no phone number on file.
+#: Deliberately not a querystring parameter.  The contact info page has to require the same field
+#: the gate asked for, and a parameter somebody can strip is a parameter that sends them straight
+#: back to the gate they just came from -- a redirect loop is worse than either policy.
+CONTACT_GATE_NEEDS_PHONE = "contact_gate_needs_phone"
+
+
+def missing_contact_info(user, *, require_phone=False):
+    """Which contact fields this person has left blank, in the order the page asks for them.
+
+    Two gates read this and they want different answers, which is why it takes an argument.
+    *Adding a lot* needs somewhere to send the cheque, so it asks for a name and an address
+    (``views.lot_pages.LotValidation``).  *Creating an auction* makes somebody an organizer their
+    participants and this site both have to be able to reach, so it asks for a phone number too
+    (``views.auction_pages.AuctionCreateView``).
+
+    The auction gate is also the only thing that ever puts the club picker in front of an organizer,
+    which is half the reason it exists.  ``Auction.club`` is filled in from ``UserData.club`` by
+    :func:`finish_new_auction`, and somebody who has never opened the contact info page has no
+    ``UserData.club`` -- so their auction is filed under no club, and every number in
+    ``club_health`` is computed as though it never happened.
+
+    Returns a list of labels, empty when there is nothing left to ask for.
+    """
+    userdata = getattr(user, "userdata", None)
+    asked_for = {
+        "first name": user.first_name,
+        "last name": user.last_name,
+        "address": getattr(userdata, "address", ""),
+    }
+    if require_phone:
+        asked_for["phone number"] = getattr(userdata, "phone_number", "")
+    return [label for label, value in asked_for.items() if not (value or "").strip()]
+
+
+def readable_list(items):
+    """``["a", "b", "c"]`` -> ``"a, b and c"``.  For putting a list inside a sentence."""
+    items = list(items)
+    if len(items) < 2:
+        return "".join(items)
+    return f"{', '.join(items[:-1])} and {items[-1]}"
 
 
 def propagate_contact_info(user, userdata, *, acting_user=None):

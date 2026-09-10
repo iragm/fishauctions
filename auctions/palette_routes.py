@@ -1060,6 +1060,13 @@ ROUTE_LIST: list[Route] = [
     _r("admin_referrers", "Where visitors come from", "Site admin", admin=ADMIN_SUPERUSER, keywords=["referrers"]),
     _r("admin_usability", "Usability report", "Site admin", admin=ADMIN_SUPERUSER, keywords=["usability", "friction"]),
     _r("admin_club_health", "Club health", "Site admin", admin=ADMIN_SUPERUSER, keywords=["dormant clubs", "outreach"]),
+    _r(
+        "admin_unlinked_auctions",
+        "Auctions with no club",
+        "Site admin",
+        admin=ADMIN_SUPERUSER,
+        keywords=["unlinked auctions", "assign auction to club"],
+    ),
     _r("admin_user_map", "Map of users", "Site admin", admin=ADMIN_SUPERUSER, keywords=["user map", "where users are"]),
     _r("admin_user_signups", "New signups", "Site admin", admin=ADMIN_SUPERUSER, keywords=["signups", "new users"]),
     _r("admin_error", "Trigger a test error", "Site admin", admin=ADMIN_SUPERUSER, keywords=["test error", "500"]),
@@ -1249,6 +1256,9 @@ EXCLUDED: dict[str, str] = {
     "auction_stats_referrers": _API,
     "form_abandoned": "A beacon the page fires on its way out. There is no page here to send anybody to.",
     "club_mark_contacted": "POST-only button on the club health queue; the page it sits on is admin_club_health.",
+    "link_auctions_to_club": (
+        "POST-only button on the unlinked auctions page; the page it sits on is admin_unlinked_auctions."
+    ),
     "admin_traffic_json": _API,
     "admin_traffic_time_of_day_json": _API,
     "admin_user_signups_json": _API,

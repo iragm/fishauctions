@@ -16,6 +16,13 @@ be tested without a request.
 is a **worklist**. :mod:`auctions.club_health` decides which clubs are overdue against their own
 cadence, and this page is where somebody works down that list and marks each one contacted, which
 writes ``Club.date_contacted`` -- the outreach field that already existed with nothing feeding it.
+
+:class:`UnlinkedAuctions` is the repair job underneath both of them.  Only about one auction in
+five has a ``club``, because ``services.finish_new_auction`` sets it from a declared affiliation
+the creator almost never has -- so every club number on this site is computed from a fifth of the
+auctions that exist.  ``assign_auction_to_club`` could already fix that one substring at a time
+from a terminal; this page proposes the links (:mod:`auctions.club_matching`) and takes them in
+batches, which is the difference between a job somebody does and a job somebody means to do.
 """
 
 import logging
@@ -28,9 +35,10 @@ from django.utils import timezone
 from django.views import View
 from django.views.generic import TemplateView
 
-from auctions import club_health, usability_report
+from auctions import club_health, club_matching, usability_report
 from auctions.field_adoption import auction_field_adoption
-from auctions.models import Club, ClubHealth
+from auctions.models import Auction, Club, ClubHealth
+from auctions.services import link_auction_to_club
 
 from .base import AdminOnlyViewMixin
 
@@ -81,6 +89,10 @@ class AdminClubHealth(AdminOnlyViewMixin, TemplateView):
         context["stall_reason_choices"] = Club.STALL_REASON_CHOICES
         context["stall_reasons"] = _stall_reason_counts()
         context["never_computed"] = Club.objects.filter(health__isnull=True).count()
+        # Every number on this page is computed from auctions that have a club, and most do not.
+        # Without this the page reads as a measurement rather than as a measurement of the fifth of
+        # the site it can see -- and the fix for that is a link, not a footnote.
+        context["unlinked_auctions"] = Auction.objects.filter(club__isnull=True, is_deleted=False).count()
         context["stale"] = ClubHealth.objects.filter(
             computed_on__lt=timezone.now() - timezone.timedelta(days=3)
         ).count()
@@ -152,3 +164,81 @@ class ClubMarkContacted(AdminOnlyViewMixin, View):
         club_health.compute_club_health(club)
         messages.success(request, f"{club.name} marked as contacted.")
         return redirect(reverse("admin_club_health"))
+
+
+#: How many unlinked auctions one page of the repair queue holds.  The backlog is in the hundreds
+#: and every group on the page renders a full list of clubs to pick from, so the page is bounded by
+#: what it costs to render rather than by what anybody wants to read at once.
+UNLINKED_PAGE_SIZE = 100
+
+
+class UnlinkedAuctions(AdminOnlyViewMixin, TemplateView):
+    """The auctions belonging to no club, grouped by the club they probably belong to
+
+    Grouped rather than listed because that is the shape of the work: an organizer who ran eleven
+    auctions before their club was on the site has eleven rows with one answer between them, and
+    the club picker is rendered once per group instead of once per row.
+    """
+
+    template_name = "dashboard_unlinked_auctions.html"
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        unlinked = Auction.objects.filter(club__isnull=True, is_deleted=False).select_related("created_by")
+        context["unlinked_total"] = unlinked.count()
+        context["linked_total"] = Auction.objects.filter(club__isnull=False, is_deleted=False).count()
+        page = list(unlinked.order_by("-date_start", "-pk")[:UNLINKED_PAGE_SIZE])
+        clubs = list(Club.objects.all().order_by("name"))
+        suggestions = club_matching.suggest_clubs(page, clubs)
+        groups: dict[int, dict] = {}
+        unmatched: list = []
+        for auction in page:
+            suggestion = suggestions.get(auction.pk)
+            if not suggestion:
+                unmatched.append(auction)
+                continue
+            group = groups.setdefault(
+                suggestion.club.pk,
+                {"club": suggestion.club, "reason": suggestion.reason, "confidence": suggestion.confidence, "rows": []},
+            )
+            group["rows"].append({"auction": auction, "reason": suggestion.reason})
+        context["groups"] = sorted(groups.values(), key=lambda group: -len(group["rows"]))
+        context["unmatched"] = unmatched
+        context["clubs"] = clubs
+        context["page_size"] = UNLINKED_PAGE_SIZE
+        context["shown"] = len(page)
+        return context
+
+
+class LinkAuctionsToClub(AdminOnlyViewMixin, View):
+    """Attach the ticked auctions to one club, and hand their creators the run of it
+
+    The write is :func:`auctions.services.link_auction_to_club`, shared with the
+    ``assign_auction_to_club`` command so the two routes cannot drift.  Nothing here is a
+    suggestion: a suggestion is what the page showed, and this is somebody agreeing with it.
+    """
+
+    http_method_names = ["post"]
+
+    def post(self, request, *args, **kwargs):
+        club = get_object_or_404(Club, pk=request.POST.get("club") or 0)
+        # Only ever auctions that still have no club.  Two admins working the same page, or a
+        # double submit, would otherwise re-file an auction somebody has already answered for.
+        auctions = Auction.objects.filter(
+            pk__in=request.POST.getlist("auction"), club__isnull=True, is_deleted=False
+        ).select_related("created_by")
+        grant_admin = "grant_admin" in request.POST
+        linked = admins = 0
+        for auction in auctions:
+            if link_auction_to_club(
+                auction, club, note="from the unlinked auctions page", actor=request.user, grant_admin=grant_admin
+            ):
+                admins += 1
+            linked += 1
+        if linked:
+            club_health.compute_club_health(club)
+            granted = f", and made {admins} of their organizers a club admin" if admins else ""
+            messages.success(request, f"Linked {linked} auction(s) to {club.name}{granted}.")
+        else:
+            messages.info(request, "Nothing to link -- those auctions already have a club.")
+        return redirect(reverse("admin_unlinked_auctions"))

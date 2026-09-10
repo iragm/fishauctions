@@ -14996,6 +14996,13 @@ NOT_A_SKILL: dict[str, str] = {
         "recorded is the giving up."
     ),
     # The outreach queue
+    "LinkAuctionsToClub": (
+        "Approves a guess about which club an auction belongs to, and hands that club's admin "
+        "permissions to whoever created it. The page exists because the guess needs looking at: "
+        "the weakest of the four signals behind it is two names resembling each other, and "
+        "agreeing to one from a sentence would be agreeing to something nobody read. The whole "
+        "batch is one button once somebody has."
+    ),
     "ClubMarkContacted": (
         "Records that a real person wrote to a club that has gone quiet -- it is the note saying "
         "the conversation happened, not the conversation. Marking it from a sentence would take "

@@ -26,7 +26,9 @@ import unittest
 
 from django.conf import settings
 from django.contrib.auth.models import User
-from django.test import Client, TestCase, tag
+from django.contrib.staticfiles import finders
+from django.contrib.staticfiles.storage import staticfiles_storage
+from django.test import Client, SimpleTestCase, TestCase, override_settings, tag
 from django.urls import reverse
 from django.utils import timezone
 
@@ -832,11 +834,65 @@ class GenericAdminFormTests(SeleniumTestCase):
 # ---------------------------------------------------------------------------
 
 
+#: What the live ASGI server below needs that a production-shaped configuration will not give it.
+#:
+#: Both of these are settings that follow `DEBUG`, and **a test run always has `DEBUG` off** --
+#: `setup_test_environment` forces it, whatever `.env` says -- so neither can be left to chance:
+#:
+#: - `STORAGES`. `serve_static` wraps the application in `ASGIStaticFilesHandler`, which resolves
+#:   a URL through the staticfiles **finders**: the source trees, which hold only plain names.
+#:   `{% static %}` meanwhile renders a *hashed* name wherever `collectstatic` has run, and in a
+#:   test run that is decided by `STATIC_ROOT` rather than by `DEBUG` (fishauctions/
+#:   static_storage.py explains why). The django container's `STATIC_ROOT` is a collected volume,
+#:   so every asset on the page 404s there and the lot page arrives with no jQuery and no bid
+#:   modal; CI's empty `STATIC_ROOT` renders plain names and hides the whole thing.
+#: - The `Secure` cookie flags, which settings.py sets to `not DEBUG` at import time. A checkout
+#:   configured like a deployment therefore marks them Secure, and `live_server_url` is plain
+#:   `http://`, so the browser stores neither cookie: every bid POST comes back
+#:   `403 CSRF Failed: CSRF cookie not set` and the test times out on a chat message that was
+#:   never going to arrive.
+#:
+#: Test-only, and scoped to the one class that runs a live server: production still hashes its
+#: static names and still marks its cookies Secure.
+LIVE_SERVER_SETTINGS = {
+    "STORAGES": {
+        **settings.STORAGES,
+        "staticfiles": {"BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage"},
+    },
+    "CSRF_COOKIE_SECURE": False,
+    "SESSION_COOKIE_SECURE": False,
+}
+
+
+class LiveServerSettingsTests(SimpleTestCase):
+    """`LIVE_SERVER_SETTINGS` really does undo the two production settings that break the browser.
+
+    Deliberately not skipped with the rest of this module, and it needs no browser: every test
+    that would notice either problem requires Chrome, so wherever Chrome is unreachable -- CI
+    included -- this is the only thing standing between a deployment-shaped `.env` and a live
+    server that serves a lot page with no JavaScript on it and refuses every bid.
+    """
+
+    @override_settings(**LIVE_SERVER_SETTINGS)
+    def test_static_urls_are_names_the_finders_can_serve(self):
+        for name in ("css/auction_site.css", "js/vendor/jquery.min.js", "js/ws.js"):
+            with self.subTest(name=name):
+                self.assertEqual(staticfiles_storage.url(name), f"{settings.STATIC_URL}{name}")
+                self.assertIsNotNone(finders.find(name), "ASGIStaticFilesHandler resolves through the finders")
+
+    @override_settings(**LIVE_SERVER_SETTINGS)
+    def test_cookies_are_not_marked_secure_for_a_plain_http_live_server(self):
+        """Secure cookies plus an `http://` origin means no csrftoken, which DRF answers with a 403."""
+        self.assertFalse(settings.CSRF_COOKIE_SECURE)
+        self.assertFalse(settings.SESSION_COOKIE_SECURE)
+
+
 @unittest.skipUnless(
     SELENIUM_AVAILABLE and selenium_available() and CHANNELS_LIVE_AVAILABLE,
     "Selenium and channels live server (daphne) required",
 )
 @tag("selenium")
+@override_settings(**LIVE_SERVER_SETTINGS)
 class LiveBiddingTestCase(ChannelsLiveServerTestCase):
     """Base class for browser bid tests that need real websockets + test data.
 

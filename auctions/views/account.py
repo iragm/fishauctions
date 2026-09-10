@@ -55,6 +55,7 @@ from auctions.models import (
     UserLabelPrefs,
 )
 from auctions.notifications import push_configured
+from auctions.services import CONTACT_GATE_NEEDS_PHONE
 
 logger = logging.getLogger(__name__)
 
@@ -382,6 +383,13 @@ class UserLocationUpdate(UpdateView, SuccessMessageMixin):
     def get_object(self, *args, **kwargs):
         return UserData.objects.get(user__pk=self.user_pk)  # get the hack
 
+    def get_form_kwargs(self):
+        kwargs = super().get_form_kwargs()
+        # Only the auction gate sets this, and only until they save once.  See
+        # ``services.CONTACT_GATE_NEEDS_PHONE`` for why it travels in the session.
+        kwargs["require_phone"] = bool(self.request.session.get(CONTACT_GATE_NEEDS_PHONE))
+        return kwargs
+
     def get_initial(self):
         user = User.objects.get(pk=self.get_object().user.pk)
         return {"first_name": user.first_name, "last_name": user.last_name}
@@ -406,6 +414,9 @@ class UserLocationUpdate(UpdateView, SuccessMessageMixin):
         # assistant's update_contact_info so both routes touch the same rows and write the same
         # history lines.
         propagate_contact_info(user, userData)
+        # They have answered the question the gate asked.  Leaving the flag set would keep the
+        # phone number required for ever afterwards, on a page most people reach for other reasons.
+        self.request.session.pop(CONTACT_GATE_NEEDS_PHONE, None)
         return super().form_valid(form)
 
     def get_context_data(self, **kwargs):
