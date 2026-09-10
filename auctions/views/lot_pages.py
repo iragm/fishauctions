@@ -994,7 +994,11 @@ class LotValidation(LoginRequiredMixin):
         # lot, and that is evidence worth keeping.  See species_matching.record_choice.
         if lot.auction and lot.auction.use_scientific_name and lot.lot_name:
             record_species_choice(
-                lot.lot_name, lot.species, first_save=lot_is_new, changed="species" in form.changed_data
+                lot.lot_name,
+                lot.species,
+                first_save=lot_is_new,
+                changed="species" in form.changed_data,
+                user=self.request.user,
             )
         return super().form_valid(form)
 
@@ -1450,7 +1454,7 @@ class LotAdmin(LoginRequiredMixin, TemplateView, FormMixin, AuctionViewMixin):
                 # there is of whatever the matcher remembered for this name.  Never an *accept*:
                 # this form is only ever a later edit, and re-saving a lot to set its winner is
                 # not somebody confirming the species.  See species_matching.record_choice.
-                record_species_choice(obj.lot_name, species, first_save=False, changed=True)
+                record_species_choice(obj.lot_name, species, first_save=False, changed=True, user=self.request.user)
             if species_changed and species and obj.lot_name:
                 remember_species(obj.lot_name, species, source="user", user=self.request.user)
             # add message if the winner changed

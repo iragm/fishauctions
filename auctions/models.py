@@ -3873,6 +3873,14 @@ class SpeciesSearchCache(models.Model):
     same language-model call to work out that "blue dream shrimp" is *Neocaridina davidi* again.
     A row with ``species`` set to null is a real answer too: this name is hardware, or plants, or
     a mixed bag, and there is no point asking again.
+
+    ``scientific_name`` is the third state, and the reason the second one is safe.  A row with no
+    species *and* a name in it says "we know what this lot is, and the list does not hold it" --
+    which is a gap in the species list, not a verdict about the name.  Without somewhere to put
+    that, a correct identification of a fish we happen not to stock was written down as "not a
+    species" for every club forever, and adding the fish later could not undo it; now the next
+    lookup re-resolves the name and the row heals itself.  See :attr:`is_a_gap` and
+    :func:`~auctions.species_matching.suggest_species`.
     """
 
     SOURCE_CHOICES = (
@@ -3883,6 +3891,12 @@ class SpeciesSearchCache(models.Model):
     search_text = models.CharField(max_length=120, unique=True)
     search_text.help_text = "Normalised lot name: lowercased, punctuation stripped."
     species = models.ForeignKey(Species, null=True, blank=True, on_delete=models.CASCADE)
+    scientific_name = models.CharField(max_length=120, blank=True, default="")
+    scientific_name.help_text = (
+        "What this lot name was identified as, whether or not the species list holds it.  A row "
+        "with no species and a name filled in here is a gap in the list rather than a verdict "
+        "about the name -- see SpeciesSearchCache.is_a_gap."
+    )
     source = models.CharField(max_length=20, choices=SOURCE_CHOICES, default="llm")
     created_by = models.ForeignKey(
         User, null=True, blank=True, on_delete=models.SET_NULL, related_name="species_names_taught"
@@ -3920,6 +3934,15 @@ class SpeciesSearchCache(models.Model):
     #: bag is not evidence about the name, and throwing the answer away on it means the next
     #: hundred sellers of that name get nothing.  Three lots is disagreement; one is a Tuesday.
     MIN_REJECTS_TO_RETIRE = 3
+
+    @property
+    def is_a_gap(self):
+        """True when this row identified the lot and the species list could not supply it.
+
+        The distinction the gaps page reads: "sponge filter" is not a species, and *Yssichromis
+        piceatus* is a species we don't have, and only one of those is somebody's job.
+        """
+        return self.species_id is None and bool(self.scientific_name)
 
     @property
     def is_discredited(self):

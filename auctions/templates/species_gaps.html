@@ -90,21 +90,23 @@
 {% endif %}
 
 {% if rejected %}
-<h4 class="mt-4">Names the matcher decided were not a species</h4>
+<h4 class="mt-4">Names the matcher could not turn into a species</h4>
 <p class="text-muted small">
-  {% comment %}The direct analogue of the command palette's bounce list: a remembered "no" that keeps being served is either right (it is a sponge filter) or a species missing from the list.{% endcomment %}
+  {% comment %}The direct analogue of the command palette's bounce list: a remembered "no" that keeps being served is either right (it is a sponge filter) or a species missing from the list.  The Identified as column is which of the two: a name in it means the matcher knows what the lot is and the species list does not have it, and the row answers by itself once it does.{% endcomment %}
   Each of these is remembered and served without asking again, so a wrong one stays wrong until somebody
-  fixes it. Adding the species clears the answer for every club at once.
+  fixes it. Adding the species clears the answer for every club at once &mdash; and a row with an
+  <b>Identified as</b> name is one the matcher already worked out, so adding that species is all it needs.
 </p>
 <div class="table-responsive">
   <table class="table table-sm align-middle">
     <thead>
-      <tr><th>Name</th><th class="text-end">Times served</th><th>Decided by</th><th></th></tr>
+      <tr><th>Name</th><th>Identified as</th><th class="text-end">Times served</th><th>Decided by</th><th></th></tr>
     </thead>
     <tbody>
       {% for row in rejected %}
       <tr>
         <td>{{ row.search_text }}</td>
+        <td class="small"><i>{{ row.scientific_name }}</i></td>
         <td class="text-end">{{ row.hits }}</td>
         <td class="small text-muted">{{ row.get_source_display }}</td>
         <td class="text-end">

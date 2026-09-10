@@ -10057,7 +10057,7 @@ def _teach_the_lot_name(lot, species, user, is_admin) -> bool:
 
     if not lot.lot_name:
         return False
-    record_choice(lot.lot_name, species, first_save=False, changed=True)
+    record_choice(lot.lot_name, species, first_save=False, changed=True, user=user)
     if not is_admin or species is None:
         return False
     remember(lot.lot_name, species, source="user", user=user)

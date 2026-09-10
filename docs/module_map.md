@@ -156,7 +156,7 @@ this only quotes its opening sentence.
 - **`model_caching.py`** (101 lines)
   ``@cached_property`` on a model, and the invalidation that makes it safe.
   `InvalidatesRelatedCache`, `CachedPropertiesMixin`
-- **`models.py`** (15075 lines)
+- **`models.py`** (15098 lines)
   The database: 80 models, and the reason they are still in one file.
 - **`moderation_admin.py`** (139 lines)
   The Django admin for the moderation queue: reports, copyright notices and strikes.
@@ -218,7 +218,7 @@ this only quotes its opening sentence.
 - **`species_categories.py`** (501 lines)
   Turn a species' taxonomy into one of the site's :class:`~auctions.models.Category` rows.
   `normalize_category_name`, `CategoryResolver`, `hint_for`, `assign_categories`
-- **`species_matching.py`** (1185 lines)
+- **`species_matching.py`** (1608 lines)
   Turn a lot name someone typed into a short list of species to pick from.
 - **`tables.py`** (1424 lines)
   The ``django_tables2`` tables behind every list on the site.
@@ -434,7 +434,7 @@ this only quotes its opening sentence.
   `FakeResponse`, `fake_get`, `SourceTestCase`, `RepositorySettingTests`, `TheArchiveIsTheAllowlistTests`, `ReadingTests`, `ContentSearchTests`, `ReadSourceToolTests`
 - **`test_speakers.py`** (1380 lines)
   Tests for the speaker directory: the NEC WordPress import, NEC-only scoping, the
-- **`test_species.py`** (5063 lines)
+- **`test_species.py`** (5560 lines)
   Tests for scientific names on lots: matching, the picker, labels, and genus BAP points.
 - **`test_square.py`** (946 lines)
   Square: taking a payment, refunding one, the OAuth grant, and webhook signatures.
@@ -746,12 +746,12 @@ Every view on the site, split by what part of it the view belongs to.
 - **`bulk_add.py`** (939 lines)
   Getting people in at once: bulk add users, and a club's shared spreadsheet.
   `CSVContactImportMixin`, `BulkAddUsers`, `ImportFromGoogleDrive`
-- **`bulk_add_lots.py`** (972 lines)
+- **`bulk_add_lots.py`** (980 lines)
   Getting lots in at once: the bulk table, the quick-add page, and the CSV importer.
   `BulkAddLots`, `BulkAddLotsAuto`, `SaveLotAjax`, `ImportLotsFromCSV`
 - **`club_admin.py`** (1054 lines)
   Setting a club up: its details, membership settings, payment accounts, email.
-- **`club_api.py`** (1342 lines)
+- **`club_api.py`** (1343 lines)
   The club REST API: ``/api/v1/clubs/<slug>/…``.
 - **`club_api_keys.py`** (424 lines)
   Club API keys, and the page that documents the API they open.
@@ -776,7 +776,7 @@ Every view on the site, split by what part of it the view belongs to.
 - **`invoices.py`** (391 lines)
   Invoices as a person reads them: the list, one invoice, and the no-login link.
   `Invoices`, `InvoiceCreateView`, `InvoiceView`, `InvoiceNoLoginView`, `SquarePaymentSuccessView`
-- **`lot_pages.py`** (1474 lines)
+- **`lot_pages.py`** (1478 lines)
   One lot: its page, its photos, and creating or editing it.
 - **`moderation.py`** (227 lines)
   The copyright policy page, the notice form, and the report button on a lot.
@@ -797,7 +797,7 @@ Every view on the site, split by what part of it the view belongs to.
 - **`speakers.py`** (517 lines)
   The speaker directory: who will come and talk to a club, and what about.
   `NECSpeakerAccessMixin`, `SpeakerListView`, `SpeakerPanelView`, `SpeakerDetailView`, `SpeakerCreateView`, `SpeakerUpdateView`, `SpeakerDeleteView`, `SpeakerTagView`, `SpeakerCommentView`, `SpeakerCommentDeleteView`
-- **`species.py`** (616 lines)
+- **`species.py`** (631 lines)
   Adding species and common names, and the superuser's queue for cleaning them up.
 - **`usability.py`** (244 lines)
   The usability dashboards: the measurements, the buyer funnel, and the club outreach queue.
