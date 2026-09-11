@@ -107,7 +107,7 @@ this only quotes its opening sentence.
   `DonationPermissionMixin`, `ClubDonationVendorsView`, `ClubDonationSettingsView`, `DonationVendorPanelView`, `DonationVendorDeleteView`, `DonationContactView`, `DonationEmailPreviewView`, `DonationUnsubscribeView`, `InboundDonationEmailView`
 - **`donations.py`** (957 lines)
   Donation tracking: asking vendors for donations, and reading what they write back.
-- **`email_routing.py`** (174 lines)
+- **`email_routing.py`** (188 lines)
   `email_routing_enabled`, `email_routing_domain`, `build_routed_sender_address`, `sender_with_display_name`, `admin_routing_email`, `resolve_donation_alias`, `resolve_routing_info`, `resolve_routed_recipient`
 - **`error_views.py`** (35 lines)
   Error handlers that surface otherwise-swallowed tracebacks.
@@ -308,7 +308,7 @@ this only quotes its opening sentence.
 - **`test_club_permissions.py`** (960 lines)
   Club permissions in the awkward cases: wildcards, dialogs, Discord admin, view-only.
   `ClubPermissionWildcardTests`, `ClubPermissionsDialogTests`, `ClubMemberDiscordAdminViewTests`, `ClubMemberManagementViewTests`, `ClubViewOnlyAccessTests`, `ClubMembershipInvoiceTests`, `ClubMembershipSettingsFormFieldsTests`, `PaymentSellerClubLinkTests`
-- **`test_club_settings.py`** (695 lines)
+- **`test_club_settings.py`** (696 lines)
   A club's own settings pages: BAP, general settings and email routing.
   `ClubBapSettingsViewTests`, `ClubSettingsViewTests`, `ClubEmailRoutingTests`, `RoutedSenderDisplayNameTests`, `SesSendsTheMessagesOwnFromAddressTests`, `InboundEmailRoutingAPITests`, `AuctionSlugSanitizationTests`, `AuctionEmailSenderTests`, `ClubEmailSettingsFormTests`
 - **`test_club_users.py`** (1496 lines)
@@ -323,7 +323,7 @@ this only quotes its opening sentence.
 - **`test_data_leak_penetration.py`** (267 lines)
   Penetration tests to verify no data leaks from public endpoints.
   `DataLeakPenetrationTests`
-- **`test_dmca.py`** (447 lines)
+- **`test_dmca.py`** (461 lines)
   What the DMCA safe harbour needs to be true, checked.
   `AgentConfigurationTests`, `DmcaPageTests`, `NoticeIntakeTests`, `NoticeRoutingTests`, `ReportContentTests`, `StrikeTests`, `TakedownRemovesTheMaterialTests`, `MobileConfigTests`, `ImageSourceLabelTests`, `AccountDeletionTests`
 - **`test_donations.py`** (1679 lines)

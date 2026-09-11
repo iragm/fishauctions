@@ -54,6 +54,12 @@ def admin_routing_email():
     return getattr(settings, "DEFAULT_FROM_EMAIL", "")
 
 
+def _is_on_routing_domain(address):
+    """Whether mail to *address* would come straight back in through the inbound Lambda."""
+    domain = email_routing_domain()
+    return bool(domain) and address.rsplit("@", 1)[-1].strip().lower() == domain
+
+
 #: ``<club-slug>-donations-<10 digits>``. The club slug is carried for readability only -- the
 #: digits are what identify the vendor, so a club rename doesn't strand replies in flight.
 DONATION_ALIAS_RE = re.compile(r"^(?P<club_slug>.+)-donations-(?P<key>\d{10})$")
@@ -82,8 +88,9 @@ def resolve_routing_info(local_part):
     """Return forwarding info for the given alias local-part as a dict, or None.
 
     Recognised aliases:
-    - ``info`` → site admin email
-    - ``dmca`` → the designated copyright agent (see :mod:`auctions.dmca`)
+    - ``info``, ``support`` → site admin email
+    - ``dmca`` → the designated copyright agent (see :mod:`auctions.dmca`), or the site admin when
+      the agent address is itself on this domain
     - ``<club-slug>-auctions`` → oldest non-admin auction manager → oldest admin → site admin
     - ``<club-slug>-contact`` → oldest non-admin membership manager → oldest admin → **drop**
     - ``<club-slug>-donations-<10 digits>`` → the club's donation contact, **or nobody**
@@ -102,18 +109,25 @@ def resolve_routing_info(local_part):
     local_part = (local_part or "").strip().lower()
     if not local_part:
         return None
-    if local_part == "info":
-        return {"recipient": admin_routing_email(), "display_name": "Info"}
+    if local_part in ("info", "support"):
+        return {"recipient": admin_routing_email(), "display_name": local_part.capitalize()}
     if local_part == "dmca":
         # The address published in the Copyright Office's directory, which is a public federal
         # database and gets scraped -- so it is an alias rather than somebody's real mailbox, and
         # re-pointing it is an .env edit rather than a $6 amendment filing and a window of being
-        # out of date.  It resolves to the site admin when DMCA_AGENT_EMAIL is unset, which is the
-        # same address ``info`` goes to.  It must resolve to *something*: an agent address that
-        # silently drops mail is how AOL lost the safe harbour in Ellison v. Robertson.
+        # out of date.  It must resolve to *something*: an agent address that silently drops mail
+        # is how AOL lost the safe harbour in Ellison v. Robertson.
+        #
+        # So DMCA_AGENT_EMAIL is normally this very alias, and forwarding to it would forward the
+        # alias to itself: the copy comes back in through SES from the relay address, and the
+        # Lambda's loop guard drops it -- every notice, silently.  Anything on this domain comes
+        # back through the Lambda, so a published address here means "the site admin".
         from auctions.dmca import agent_email
 
-        return {"recipient": agent_email() or admin_routing_email(), "display_name": "Copyright agent"}
+        recipient = agent_email()
+        if not recipient or _is_on_routing_domain(recipient):
+            recipient = admin_routing_email()
+        return {"recipient": recipient, "display_name": "Copyright agent"}
 
     Club = apps.get_model("auctions", "Club")
     Auction = apps.get_model("auctions", "Auction")

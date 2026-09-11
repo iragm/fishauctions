@@ -409,6 +409,7 @@ class ClubEmailRoutingTests(TestCase):
         )
 
         self.assertEqual(resolve_routed_recipient("info"), "admin@example.com")
+        self.assertEqual(resolve_routed_recipient("support"), "admin@example.com")
         self.assertEqual(resolve_routed_recipient(f"{club.slug}-auctions"), "auction@example.com")
         self.assertEqual(resolve_routed_recipient(f"{club.slug}-contact"), "membership@example.com")
         self.assertEqual(resolve_routed_recipient(auction.slug), "creator@example.com")

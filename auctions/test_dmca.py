@@ -228,6 +228,20 @@ class NoticeRoutingTests(SimpleTestCase):
         """Before this existed the alias fell through every branch and the Lambda dropped the mail."""
         self.assertEqual(resolve_routed_recipient("dmca"), "admin@example.com")
 
+    @override_settings(
+        **{**AGENT, "DMCA_AGENT_EMAIL": "DMCA@Auction.Example"},
+        EMAIL_ROUTING_DOMAIN="auction.example",
+        ADMINS=[("Admin", "admin@example.com")],
+    )
+    def test_publishing_the_alias_itself_does_not_route_it_to_itself(self):
+        """The setup checklist suggests dmca@yourdomain.com, and that address is the alias.
+
+        Forwarding the alias to itself sends the copy back in through SES from the relay address,
+        where the Lambda's loop guard drops it: every notice lost, with nothing bouncing.
+        """
+        self.assertEqual(dmca.agent()["email"], "DMCA@Auction.Example")
+        self.assertEqual(resolve_routed_recipient("dmca"), "admin@example.com")
+
 
 class ReportContentTests(StandardTestCase):
     """The report button. App Store Review Guideline 1.2 asks for one; so does common sense."""
