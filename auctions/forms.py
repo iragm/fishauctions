@@ -4415,7 +4415,8 @@ class LabelPrintFieldsForm(forms.Form):
         self.available_fields = [
             # if updating this:
             # also update models.Auction.label_print_fields if a new field should be enabled by default
-            # update views.LotLabelView.get_context_data and put the field in either the first or second column
+            # a short one-line fact goes in printing.LABEL_TAG_FIELDS; anything else needs a band in
+            # label_template.html -- the layout rules are in auctions/printing.py's docstring
             {
                 "value": "qr_code",
                 "description": "QR Code",

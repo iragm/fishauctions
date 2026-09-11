@@ -123,7 +123,7 @@ this only quotes its opening sentence.
 - **`form_friction.py`** (180 lines)
   The view mixin that writes :class:`auctions.friction_models.FormFailure` rows.
   `error_codes`, `abandon_token`, `read_abandon_token`, `FormFrictionMixin`
-- **`forms.py`** (6868 lines)
+- **`forms.py`** (6869 lines)
   Every form on the site: what a person is allowed to type, and what it means when they do.
 - **`friction_models.py`** (98 lines)
   Where people get stuck: one row per rejected form submission.
@@ -190,9 +190,9 @@ this only quotes its opening sentence.
 - **`printer_programs.py`** (756 lines)
   Validation + seed data for :class:`ThermalPrinterProfile` command programs.
   `ProgramValidationError`, `validate_program`, `validate_match_patterns`, `validate_profile_programs`, `serialize_profile`
-- **`printing.py`** (89 lines)
+- **`printing.py`** (355 lines)
   Shared label-printing helpers.
-  `deterministic_warnings`, `label_prefs_warnings`, `warning_matrix`
+  `text_width_pt`, `split_label_tags`, `wrapped_lines`, `plan_label`, `inches_per_unit`, `deterministic_warnings`, `label_prefs_warnings`, `warning_matrix`
 - **`queryset_annotations.py`** (226 lines)
   Queryset builders that answer a question about many rows at once.
   `nearby_auctions`, `add_tos_info`, `add_tos_distance_info`
@@ -339,6 +339,9 @@ this only quotes its opening sentence.
 - **`test_invoice_models.py`** (220 lines)
   Invoice models: what an invoice contains, when it is created, and when it notifies.
   `InvoiceModelTests`, `InvoiceCreateViewTests`, `InvoiceNotificationDueTests`
+- **`test_label_layout.py`** (336 lines)
+  Every lot label preset, rendered with worst-case lots and held to the layout rules.
+  `PlacedText`, `laid_out_text`, `squeezed`, `LabelLayoutTests`, `LabelUnitTests`, `LabelMeasurementTests`
 - **`test_lifecycle.py`** (477 lines)
   Tests for phase 9: the milestones, the lapsing definition, the session replay and the cohorts.
   `ClubHistoryFixture`, `LapsingTests`, `CohortTests`, `SignInStitchTests`, `SessionTimelineTests`, `MedianMemberTests`, `UnreachedShareTests`, `MilestoneReachTests`, `LifecyclePageTests`
@@ -755,7 +758,7 @@ Every view on the site, split by what part of it the view belongs to.
 - **`bulk_add_lots.py`** (980 lines)
   Getting lots in at once: the bulk table, the quick-add page, and the CSV importer.
   `BulkAddLots`, `BulkAddLotsAuto`, `SaveLotAjax`, `ImportLotsFromCSV`
-- **`club_admin.py`** (1054 lines)
+- **`club_admin.py`** (1056 lines)
   Setting a club up: its details, membership settings, payment accounts, email.
 - **`club_api.py`** (1343 lines)
   The club REST API: ``/api/v1/clubs/<slug>/…``.
@@ -791,7 +794,7 @@ Every view on the site, split by what part of it the view belongs to.
   The command palette and the assistant surface behind it.
 - **`payments.py`** (1149 lines)
   Connecting a club's PayPal and Square accounts, and taking a payment through them.
-- **`printing.py`** (629 lines)
+- **`printing.py`** (606 lines)
   Labels: what gets drawn on them, and getting them to a printer.
   `LotLabelView`, `UnprintedLotLabelsView`, `SingleLotLabelView`, `RemotePrintJobMixin`, `RemotePrintJobStatusView`, `RemotePrintJobRetryView`, `RemotePrintJobCancelView`
 - **`selling.py`** (1053 lines)

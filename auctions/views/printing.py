@@ -35,6 +35,7 @@ from auctions.models import (
     RemotePrintJob,
     UserLabelPrefs,
 )
+from auctions.printing import LABEL_LINE_HEIGHT, inches_per_unit, plan_label
 
 from .base import AuctionViewMixin
 
@@ -288,6 +289,11 @@ class LotLabelView(TemplateView, WeasyTemplateResponseMixin, AuctionViewMixin):
         context["empty_labels"] = 0 if self.single_label_page else user_label_prefs.empty_labels
         context["print_border"] = user_label_prefs.print_border
         context["first_column_width"] = 0.62
+        # The QR code is drawn at a fixed size rather than a fixed module size, so a longer lot URL
+        # makes denser modules instead of a bigger code that pushes the tags off the label.
+        context["qr_size"] = 0.5
+        # Lines of lot name before it is cut off with an ellipsis.
+        context["name_lines"] = 2
         if user_label_prefs.preset == "sm":
             # Avery 5160 labels
             context["page_width"] = 8.5
@@ -331,6 +337,9 @@ class LotLabelView(TemplateView, WeasyTemplateResponseMixin, AuctionViewMixin):
             context["page_margin_right"] = 0.04
             context["font_size"] = 13
             context["first_column_width"] = 0.75
+            # The whole width of the column: at 0.5in the code sat in a column half again as wide.
+            context["qr_size"] = 0.75
+            context["name_lines"] = 3
             context["unit"] = "in"
             # override the user selected setting for thermal labels
             context["print_border"] = False
@@ -354,7 +363,8 @@ class LotLabelView(TemplateView, WeasyTemplateResponseMixin, AuctionViewMixin):
             context.update(
                 {f"{field.name}": getattr(user_label_prefs, field.name) for field in UserLabelPrefs._meta.get_fields()}
             )
-        unit = 2.54 if context.get("unit") == "cm" else 1
+        # Sizes are saved in the unit the user picked; the template writes inches.
+        unit = inches_per_unit(context.get("unit"))
 
         context["label_width"] = context.get("label_width") * unit
         context["label_height"] = context.get("label_height") * unit
@@ -446,53 +456,20 @@ class LotLabelView(TemplateView, WeasyTemplateResponseMixin, AuctionViewMixin):
                 label.label_needs_reprinting = False
             Lot.objects.bulk_update(labels, ["label_printed", "label_needs_reprinting"])
 
-        # First column width is fixed at 0.63 for most labels and overridden for large and thermal
-        # context['first_column_width'] = (context['label_width'] / 4)
-        # let's keep the QR code a fixed size regardless of the label size
-        # context['qr_code_height'] = min(context['first_column_width'], context['label_height'] / 2)
-        context["qr_code_height"] = 0.5 * 72
-        height_for_text = context["label_height"] * 72
-        if "qr_code" in self.auction.label_print_fields:
-            height_for_text = height_for_text - context["qr_code_height"]
-        leading_ratio = 1.3
-        line_height = context["font_size"] * leading_ratio
-        lines_that_fit = int(height_for_text / line_height * 1.2)
-        lines_that_fit -= 1  # for the lot number
-        first_column_fields = [
-            "quantity_label",
-            "donation_label",
-            "min_bid_label",
-            "buy_now_label",
-            "custom_checkbox_label",
-            "custom_dropdown_label",
-            "i_bred_this_fish_label",
-            "auction_date",
-        ]
-        first_column_fields_to_print = [
-            field for field in first_column_fields if field in self.auction.label_print_fields
-        ]
-        # Split the fields: first column and overflow to second column
-        first_column_fields = first_column_fields_to_print[:lines_that_fit]
-        first_column_fields_to_put_in_second_column = first_column_fields_to_print[lines_that_fit:]
-
+        # plan_label decides what fits where; the rules it applies are in auctions/printing.py.
+        print_fields = set(self.auction.label_print_fields.split(","))
+        context["print_qr"] = "qr_code" in print_fields
+        context["line_height"] = LABEL_LINE_HEIGHT
+        context["tag_font_size"] = int(context["font_size"] * 0.8)
+        context["description_font_size"] = int(context["font_size"] * 0.7)
         for label in labels:
-            label_first_column_fields = []
-            label_second_column_fields = []
-            for field in first_column_fields:
-                label_first_column_fields.append(getattr(label, field))
-            for field in first_column_fields_to_put_in_second_column:
-                label_second_column_fields.append(getattr(label, field))
-            label.first_column_fields = label_first_column_fields
-            label.second_column_fields = label_second_column_fields
             label.seller_email_font_size = self.get_seller_email_font_size(label.seller_email, user_label_prefs.preset)
             label.lot_number_font_size = self.get_lot_number_font_size(
                 label.lot_number_display, user_label_prefs.preset
             )
+            plan_label(label, print_fields=print_fields, geometry=context)
         context["labels"] = (["empty"] * context["empty_labels"]) + list(labels)
-        context["text_area_width"] = context["label_width"] - context["first_column_width"]
-        context["description_font_size"] = int(context["font_size"] * 0.7)
-        context["first_column_font_size"] = int(context["font_size"] * 0.8)
-        # for sizing
+        # Outline every column, for tuning a preset by eye.
         context["all_borders"] = False
         return context
 

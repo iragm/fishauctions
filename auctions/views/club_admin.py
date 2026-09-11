@@ -59,6 +59,7 @@ from auctions.models import (
     SquareSeller,
     UserLabelPrefs,
 )
+from auctions.printing import inches_per_unit
 
 from .base import ClubViewMixin, check_club_permission, close_modal_response
 from .club_pages import _membership_renewal_state, _process_pending_membership_renewal_for_member
@@ -168,7 +169,8 @@ class ClubBarcodeLabelsView(LoginRequiredMixin, ClubViewMixin, TemplateView):
                 for f in UserLabelPrefs._meta.get_fields()
                 if f.name not in ("id", "user", "preset", "empty_labels", "print_border") and hasattr(prefs, f.name)
             }
-        unit_factor = 2.54 if d.get("unit") == "cm" else 1
+        # Sizes are saved in the unit the user picked; the template writes inches.
+        unit_factor = inches_per_unit(d.get("unit"))
         for k in (
             "label_width",
             "label_height",
