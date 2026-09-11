@@ -405,6 +405,93 @@ def ladder_counts():
     return [{"stage": key, "label": label, "source": half, "clubs": counts[key]} for key, label, half in LADDER]
 
 
+#: How many months of ladder history the dashboard reads back.  Twelve, because the question 8f
+#: exists to answer -- is the outreach working -- is a year-over-year one, and a longer window on a
+#: chart of a few dozen clubs is a wider chart rather than a better answer.
+LADDER_HISTORY_MONTHS = 12
+
+
+class ClubLadderSnapshot(models.Model):
+    """How many clubs stood on each rung, on the first of one month.
+
+    The one part of phase 8f that is code.  Everything else in the outreach loop is a person with a
+    queue: the email is drafted per club and sent by hand (settled twice), and marking a club
+    contacted already writes ``Club.date_contacted`` and a stall reason.  What was missing is the
+    only way to tell whether any of that is working, which is the ladder **as a trend** --
+    "unaware -> aware -> trial -> ran a real auction" is a story about movement and a single column
+    of counts cannot show movement at all.
+
+    It needs its own table because :class:`ClubHealth` cannot answer it.  That rollup is a
+    ``OneToOneField`` recomputed nightly from scratch, so it holds only today: the moment a club
+    moves up a rung, every trace of where it used to be is gone.  This is the cheapest possible fix
+    -- one row per rung per month, so about a hundred rows a year whatever happens to the number of
+    clubs, and nothing recomputes or purges it.
+
+    Monthly rather than nightly for the same reason ``ClubHealth`` is nightly: nothing this
+    measures moves faster.  Outreach is somebody writing letters, and a club replies in weeks.
+    """
+
+    #: Midnight on the first of the month this snapshot describes -- the key, so a task that runs
+    #: every night writes the month's row once and then updates it in place.
+    month = models.DateField(db_index=True)
+    stage = models.CharField(max_length=20, db_index=True)
+    clubs = models.PositiveIntegerField(default=0)
+    computed_on = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=["month", "stage"], name="one_ladder_snapshot_per_month_stage")]
+        ordering = ["-month", "stage"]
+        verbose_name = "Club ladder snapshot"
+
+    def __str__(self):
+        return f"{self.month:%b %Y}: {self.clubs} on {self.stage}"
+
+
+def snapshot_ladder(when=None):
+    """Record this month's ladder counts, replacing the month's row if it is already there.
+
+    Idempotent on purpose, and keyed on the month rather than on the day, so the nightly task can
+    call it unconditionally: every run after the first in a month overwrites that month's row with
+    a fresher count, and the row is final once the month is over.  A task that had to know whether
+    it was the first of the month would silently record nothing on the month it was deployed.
+    """
+    from auctions.models import ClubLadderSnapshot as Snapshot
+
+    now = when or timezone.now()
+    month = now.date().replace(day=1)
+    for row in ladder_counts():
+        Snapshot.objects.update_or_create(month=month, stage=row["stage"], defaults={"clubs": row["clubs"]})
+    return month
+
+
+def ladder_history(months=LADDER_HISTORY_MONTHS):
+    """``{"months": [...], "rows": [{stage, label, source, counts: [...]}]}`` -- the ladder as a trend.
+
+    Shaped for a table rather than returned raw: a rung is a row and a month is a column, and a
+    month with no snapshot is a gap in that row rather than a zero.  A zero would say every club
+    left that rung; the truth is that nobody was looking.
+    """
+    from auctions.models import ClubLadderSnapshot as Snapshot
+
+    found = sorted({row.month for row in Snapshot.objects.only("month")}, reverse=True)[:months]
+    if not found:
+        return {"months": [], "rows": []}
+    found = sorted(found)
+    counts = {(row.month, row.stage): row.clubs for row in Snapshot.objects.filter(month__in=found)}
+    return {
+        "months": found,
+        "rows": [
+            {
+                "stage": key,
+                "label": label,
+                "source": half,
+                "counts": [counts.get((month, key)) for month in found],
+            }
+            for key, label, half in LADDER
+        ],
+    }
+
+
 class _StageOnly:
     """Just enough of a ClubHealth for ladder_position, so ladder_counts needs no second fetch."""
 

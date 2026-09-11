@@ -61,7 +61,49 @@ except ImportError:
     SELENIUM_AVAILABLE = False
 
 
-def get_selenium_driver():
+def site_origin():
+    """The URL the browser has to use to reach *this* stack, and the DNS override that gets there.
+
+    Returns ``(origin, host_map)``. Two stacks serve this site and they are not reachable the same
+    way, which is the whole point of being able to test both:
+
+    * CI, and any box left on the defaults, runs the plain ``nginx`` image with ``nginx.dev.conf``:
+      one ``default_server`` on port 80 that answers to any name, so ``http://nginx`` is the site.
+    * Production runs **swag** with ``nginx.prod.conf``, and so does a dev box mirroring it
+      (``NGINX_IMAGE``/``NGINX_CONF`` in ``.env``). There port 80 redirects to https and 443 answers
+      only to ``SITE_DOMAIN`` -- ``http://nginx`` lands on swag's catch-all 404, with no jQuery and
+      no htmx on the page, which is what every vendor-library test reported as a failure.
+
+    The second case needs the real hostname, and that name resolves to the *public* site through
+    DNS, so it is pinned to the container's own address with ``--host-resolver-rules``. Nothing here
+    may ever leave the machine.
+    """
+    host = os.environ.get("TEST_SERVER_HOST", "nginx")
+    port = os.environ.get("TEST_SERVER_PORT", "80")
+    plain = f"http://{host}:{port}"
+    if os.environ.get("TEST_SERVER_ORIGIN"):
+        return os.environ["TEST_SERVER_ORIGIN"], os.environ.get("TEST_SERVER_HOST_MAP", "")
+    try:
+        import socket
+        import urllib.request
+
+        request = urllib.request.Request(plain + "/", method="HEAD")
+        with urllib.request.urlopen(request, timeout=5) as response:  # noqa: S310 -- fixed internal URL
+            if response.status < 400 and response.geturl().startswith(plain):
+                return plain, ""
+    except Exception:
+        pass
+    domain = getattr(settings, "SITE_DOMAIN", "") or os.environ.get("SITE_DOMAIN", "")
+    if not domain:
+        return plain, ""
+    try:
+        address = socket.gethostbyname(host)
+    except Exception:
+        return plain, ""
+    return f"https://{domain}", f"MAP {domain} {address}"
+
+
+def get_selenium_driver(host_map=""):
     """Create and return a Selenium WebDriver connected to the remote Chrome instance."""
     selenium_host = os.environ.get("SELENIUM_HOST", "selenium")
     selenium_port = os.environ.get("SELENIUM_PORT", "4444")
@@ -72,6 +114,13 @@ def get_selenium_driver():
     chrome_options.add_argument("--disable-dev-shm-usage")
     chrome_options.add_argument("--disable-gpu")
     chrome_options.add_argument("--window-size=1920,1080")
+    if host_map:
+        # Send the vhost name to this machine's own nginx, never to whatever DNS says, and accept
+        # the certificate it answers with -- a dev box mirroring production has a real domain in
+        # SITE_DOMAIN and a certificate that does not match an internal address.
+        chrome_options.add_argument(f"--host-resolver-rules={host_map}")
+        chrome_options.add_argument("--ignore-certificate-errors")
+        chrome_options.set_capability("acceptInsecureCerts", True)
     # Ask Chrome to keep the console, so a test that fails on a page whose JavaScript died can say
     # so.  Without this capability get_log("browser") raises instead of returning an empty list.
     chrome_options.set_capability("goog:loggingPrefs", {"browser": "ALL"})
@@ -147,14 +196,13 @@ class SeleniumTestCase(TestCase):
         finally:
             sys.stdout = stdout_backup
 
-        # Get the server URL that's accessible from the Selenium container
-        # When running in Docker, we need to use the service name 'web' or nginx
+        # Whichever of the two nginx configurations this box runs -- see site_origin().
         cls.test_server_host = os.environ.get("TEST_SERVER_HOST", "nginx")
         cls.test_server_port = os.environ.get("TEST_SERVER_PORT", "80")
-        cls.base_url = f"http://{cls.test_server_host}:{cls.test_server_port}"
+        cls.base_url, cls.host_map = site_origin()
 
         # Create WebDriver
-        cls.driver = get_selenium_driver()
+        cls.driver = get_selenium_driver(cls.host_map)
         cls.driver.maximize_window()
 
     @classmethod
@@ -1171,3 +1219,67 @@ class BidPlacementE2ETests(LiveBiddingTestCase):
         self.assertIn(bob.username, self.text_of(alice_browser, "high_bidder_name"))
         self.assertNotIn("30", self.text_of(alice_browser, "price"))
         self.assertNotIn("30", self.text_of(alice_browser, "high_bidder_name"))
+
+
+@unittest.skipUnless(
+    CHANNELS_LIVE_AVAILABLE and SELENIUM_AVAILABLE and selenium_available(),
+    "Selenium and channels' live server are both needed",
+)
+@tag("selenium")
+class ModalReopenTests(LiveBiddingTestCase):
+    """A modal has to open, close, and open again -- indefinitely, not twice.
+
+    The bug this exists to prevent had been reported three times as "the third click does nothing".
+    Two things had to be true at once, and each on its own was invisible:
+
+    * ``hx-swap`` is an inherited attribute. The table wrapper on this page refreshes itself with
+      ``hx-swap="outerHTML"``, so every modal link inside it inherited outerHTML and *replaced*
+      ``#modals-here`` with the modal instead of filling it. The modal appeared, so it looked fine.
+    * Two elements claimed that id -- base.html's and one in a page template -- so the first two
+      clicks each destroyed one of them and the third had no target left, failing silently with
+      ``htmx:targetError``.
+
+    Asserting the container is still there after each cycle is the point: a test that only checked
+    the modal opened would have passed on the broken code for two of these three rounds.
+    """
+
+    def test_a_modal_opens_again_after_being_cancelled(self):
+        driver = self.new_browser(self.seller)
+        driver.get(self.live_server_url + reverse("auction_tos_list", kwargs={"slug": self.auction.slug}))
+        WebDriverWait(driver, 10).until(lambda d: d.execute_script("return typeof htmx") == "object")
+        self.assertEqual(
+            driver.execute_script("return document.querySelectorAll('#modals-here').length"),
+            1,
+            f"the page must render exactly one modal container: {self.page_diagnosis(driver)}",
+        )
+
+        for attempt in (1, 2, 3):
+            link = WebDriverWait(driver, 10).until(
+                EC.element_to_be_clickable((By.CSS_SELECTOR, "tbody a[hx-get*='/api/auctiontos/']"))
+            )
+            driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", link)
+            link.click()
+            try:
+                WebDriverWait(driver, 10).until(
+                    EC.visibility_of_element_located((By.CSS_SELECTOR, "[data-htmx-modal-root]"))
+                )
+            except TimeoutException:
+                self.fail(f"the modal did not open on attempt {attempt}: {self.page_diagnosis(driver)}")
+            self.assertEqual(
+                driver.execute_script("return document.querySelectorAll('#modals-here').length"),
+                1,
+                f"opening the modal must fill the container, not replace it (attempt {attempt})",
+            )
+
+            cancel = WebDriverWait(driver, 10).until(
+                EC.element_to_be_clickable((By.XPATH, "//*[@data-htmx-modal-root]//button[normalize-space()='Cancel']"))
+            )
+            cancel.click()
+            WebDriverWait(driver, 10).until_not(
+                EC.presence_of_element_located((By.CSS_SELECTOR, "[data-htmx-modal-root]"))
+            )
+            self.assertEqual(
+                driver.execute_script("return document.querySelectorAll('#modals-here').length"),
+                1,
+                f"closing the modal must leave the container behind (attempt {attempt})",
+            )

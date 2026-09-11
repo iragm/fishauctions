@@ -15,6 +15,7 @@ Part PALETTE — the website's command palette inside the app: that it is render
 two native destinations (lot scanning, Tap to Pay) it emits as fishauctions:// deep links.
 """
 
+import base64
 import datetime
 import io
 import json
@@ -53,11 +54,13 @@ from auctions.printer_drafts import (
 from auctions.printer_programs import (
     LANGUAGE_TEMPLATES,
     PROGRAM_SCHEMA_VERSION,
+    STATUS_CONDITIONS,
     ProgramValidationError,
     validate_match_patterns,
     validate_profile_programs,
 )
 from auctions.printing import label_prefs_warnings, warning_matrix
+from auctions.test_support import isolated_cache
 from auctions.tests import StandardTestCase, patch_views
 
 # A plausible-looking inline service-account JSON; push_configured() only checks it's non-empty and
@@ -401,6 +404,98 @@ class MobileLabelPrefsApiTests(StandardTestCase):
         self.assertIn(self.client.get(self.url).status_code, (401, 403))
 
 
+class PrintMethodDropdownOnTheWebTests(StandardTestCase):
+    """Saving /printing/ from a computer, with an app-only print method already selected.
+
+    The bug: the first save failed validation ("this field is required" on a dropdown plainly
+    showing a value) and the second one worked. Both halves were the same cause. On the web the
+    print-method dropdown renders System printer and Bluetooth as ``<option disabled>``, and HTML's
+    form-submission algorithm appends a ``<select>``'s selected option to the form data *only if
+    that option is not disabled* -- so an account set to Bluetooth submitted no print_method at all.
+    The re-rendered page then had nothing selected, the browser showed the first option instead, and
+    the "successful" second save quietly rewrote the setting to PDF.
+    """
+
+    WEB_UA = "Mozilla/5.0"
+
+    def setUp(self):
+        super().setUp()
+        self.prefs, _ = UserLabelPrefs.objects.get_or_create(user=self.user)
+        self.prefs.print_method = "bluetooth"
+        self.prefs.save()
+        # The dropdown is only shown to an account that has an app to print from.
+        MobileDevice.objects.create(user=self.user, device_uuid=uuid.uuid4())
+        self.client.force_login(self.user)
+
+    def _options(self, html):
+        """The print-method ``<option>`` tags, one string each."""
+        select = html.split('id="id_print_method"')[1].split("</select>")[0]
+        return ["<option" + one.split(">")[0] + ">" for one in select.split("<option")[1:]]
+
+    def _option(self, html, value):
+        return [one for one in self._options(html) if f'value="{value}"' in one][0]
+
+    def _form_data(self, **overrides):
+        """Every field the page renders, the way a browser would send them back.
+
+        The custom-geometry fields are all required (JS only *hides* them behind the preset), so a
+        POST of two fields is a form error for reasons that have nothing to do with what is being
+        tested here.
+        """
+        data = {}
+        for field in UserLabelPrefs._meta.get_fields():
+            if not hasattr(field, "attname") or field.name in ("id", "user"):
+                continue
+            value = getattr(self.prefs, field.name)
+            if isinstance(value, bool):
+                if value:
+                    data[field.name] = "on"
+            elif value is not None:
+                data[field.name] = value
+        data.update(overrides)
+        return {name: value for name, value in data.items() if value is not None}
+
+    def _save(self, **overrides):
+        return self.client.post(
+            reverse("printing") + "?next=/", self._form_data(**overrides), HTTP_USER_AGENT=self.WEB_UA
+        )
+
+    def test_the_selected_app_only_option_is_not_rendered_disabled(self):
+        html = self.client.get(reverse("printing"), HTTP_USER_AGENT=self.WEB_UA).content.decode()
+        bluetooth = self._option(html, "bluetooth")
+        self.assertIn("selected", bluetooth)
+        self.assertNotIn("disabled", bluetooth)
+
+    def test_the_app_only_options_you_have_not_chosen_are_still_disabled(self):
+        html = self.client.get(reverse("printing"), HTTP_USER_AGENT=self.WEB_UA).content.decode()
+        self.assertIn("disabled", self._option(html, "system"))
+
+    def test_enabling_print_from_computer_saves_first_time(self):
+        MobileDevice.objects.filter(user=self.user).update(ever_print_ready=True)
+        response = self._save(print_from_computer="on")
+        self.assertEqual(
+            response.status_code, 302, getattr(response, "context", None) and response.context["form"].errors
+        )
+        self.prefs.refresh_from_db()
+        self.assertTrue(self.prefs.print_from_computer)
+        self.assertEqual(self.prefs.print_method, "bluetooth")
+
+    def test_a_post_with_no_print_method_keeps_the_stored_one(self):
+        """Belt and braces for the same failure: an omitted value means "leave it", never "blank"."""
+        data = self._form_data()
+        data.pop("print_method")
+        response = self.client.post(reverse("printing") + "?next=/", data, HTTP_USER_AGENT=self.WEB_UA)
+        self.assertEqual(response.status_code, 302)
+        self.prefs.refresh_from_db()
+        self.assertEqual(self.prefs.print_method, "bluetooth")
+
+    def test_pdf_is_still_selectable_from_the_web(self):
+        response = self._save(print_method="pdf")
+        self.assertEqual(response.status_code, 302)
+        self.prefs.refresh_from_db()
+        self.assertEqual(self.prefs.print_method, "pdf")
+
+
 class MobileLabelPdfTests(StandardTestCase):
     def setUp(self):
         super().setUp()
@@ -415,6 +510,122 @@ class MobileLabelPdfTests(StandardTestCase):
     def test_pdf_forbidden_for_non_owner(self):
         resp = self.client.get(self.url, {"fmt": "pdf"}, **_bearer(self.userB))
         self.assertEqual(resp.status_code, 403)
+
+
+class _FakeLot:
+    """Just a pk. The batch loop's own behaviour -- the count cap and the time budget -- is about
+    the list, not about what a label looks like, and rendering real ones to prove it would make
+    this test a hundred WeasyPrint runs."""
+
+    def __init__(self, pk):
+        self.pk = pk
+
+
+@isolated_cache("label-batch")
+class MobileLabelBatchTests(StandardTestCase):
+    """POST labels/batch/ — a whole print run in one request instead of one request per label.
+
+    A label costs about 110 ms to render and the app was paying a round trip for each of them, on
+    hall wifi, while somebody stood at a table. Batching is about the round trips: the renders are
+    still one at a time, which is what makes each one cacheable.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.url = reverse("mobile-labels-batch")
+        UserLabelPrefs.objects.get_or_create(user=self.user)
+        self.lots = [self.lot] + [
+            Lot.objects.create(
+                lot_name=f"batch label {i}",
+                auction=self.lot.auction,
+                auctiontos_seller=self.lot.auctiontos_seller,
+                user=self.lot.user,
+                quantity=1,
+            )
+            for i in range(2)
+        ]
+
+    def _post(self, body, user=None):
+        return self.client.post(self.url, body, content_type="application/json", **_bearer(user or self.user))
+
+    def test_one_request_returns_every_label_in_the_order_asked_for(self):
+        pks = [lot.pk for lot in self.lots]
+        body = self._post({"lots": pks}).json()
+        self.assertEqual([entry["lot"] for entry in body["labels"]], pks)
+        self.assertEqual(body["remaining"], [])
+
+    def test_each_entry_is_a_png(self):
+        entry = self._post({"lots": [self.lot.pk]}).json()["labels"][0]
+        self.assertEqual(entry["content_type"], "image/png")
+        self.assertEqual(base64.b64decode(entry["png"])[:8], b"\x89PNG\r\n\x1a\n")
+
+    def test_a_lot_you_cannot_print_is_skipped_rather_than_failing_the_run(self):
+        """One bad pk in a run of forty must not cost the other thirty-nine."""
+        other = Lot.objects.create(lot_name="not yours", user=self.userB, quantity=1)
+        body = self._post({"lots": [self.lot.pk, other.pk, 9999999]}).json()
+        self.assertEqual([entry["lot"] for entry in body["labels"]], [self.lot.pk])
+        self.assertEqual(sorted(entry["lot"] for entry in body["skipped"]), sorted([other.pk, 9999999]))
+
+    def test_a_lot_that_does_not_exist_is_skipped_not_left_pending(self):
+        body = self._post({"lots": [self.lot.pk, 9000001]}).json()
+        self.assertEqual(body["remaining"], [])
+        self.assertEqual([entry["lot"] for entry in body["skipped"]], [9000001])
+
+    def test_a_run_longer_than_a_chunk_hands_the_rest_back(self):
+        """The app's loop is "post what is left, print what comes back", so the server picks the
+        chunk size -- and a slow server picks a smaller one without the phone having to know."""
+        from auctions.mobile.services import label_raster
+
+        lots = [_FakeLot(pk) for pk in range(1, label_raster.MAX_LABELS_PER_BATCH + 3)]
+        with patch.object(label_raster, "render_lot_label_png", return_value=b"png"):
+            rendered, remaining = label_raster.render_lot_labels_png(lots, None, width=600, height=400, dpi=203)
+        self.assertEqual(len(rendered), label_raster.MAX_LABELS_PER_BATCH)
+        self.assertEqual([lot.pk for lot in remaining], [lot.pk for lot in lots[label_raster.MAX_LABELS_PER_BATCH :]])
+
+    def test_a_slow_render_stops_at_the_time_budget_but_never_returns_nothing(self):
+        from auctions.mobile.services import label_raster
+
+        lots = [_FakeLot(pk) for pk in range(1, 6)]
+        slow = iter([0.0] + [label_raster.BATCH_TIME_BUDGET_SECONDS + 1] * 10)
+        with (
+            patch.object(label_raster, "render_lot_label_png", return_value=b"png"),
+            patch.object(label_raster.time, "monotonic", lambda: next(slow)),
+        ):
+            rendered, remaining = label_raster.render_lot_labels_png(lots, None, width=600, height=400, dpi=203)
+        self.assertEqual(len(rendered), 1)
+        self.assertEqual(len(remaining), 4)
+
+    def test_rendering_a_label_does_not_mark_it_printed(self):
+        """Nothing has printed yet — the app posts labels/printed/ for what actually comes out."""
+        self._post({"lots": [self.lot.pk]})
+        self.lot.refresh_from_db()
+        self.assertFalse(self.lot.label_printed)
+
+    def test_the_same_label_twice_is_rendered_once(self):
+        """The reprint, the retry after a jam, and the overlap between "all" and "unprinted"."""
+        with patch(
+            "auctions.mobile.services.label_raster.rasterize_pdf", return_value=b"\x89PNG\r\n\x1a\nfake"
+        ) as raster:
+            self._post({"lots": [self.lot.pk]})
+            self._post({"lots": [self.lot.pk]})
+        self.assertEqual(raster.call_count, 1)
+
+    def test_editing_the_lot_renders_it_again(self):
+        """The cache key is a hash of the label's own HTML, so it cannot serve a stale label."""
+        with patch(
+            "auctions.mobile.services.label_raster.rasterize_pdf", return_value=b"\x89PNG\r\n\x1a\nfake"
+        ) as raster:
+            self._post({"lots": [self.lot.pk]})
+            self.lot.lot_name = "a different name on the label"
+            self.lot.save()
+            self._post({"lots": [self.lot.pk]})
+        self.assertEqual(raster.call_count, 2)
+
+    def test_a_bad_resolution_is_a_400(self):
+        self.assertEqual(self._post({"lots": [self.lot.pk], "resolution": "huge"}).status_code, 400)
+
+    def test_requires_jwt(self):
+        self.assertIn(self.client.post(self.url, {"lots": [self.lot.pk]}).status_code, (401, 403))
 
 
 class MobileLabelAcceptHeaderTests(StandardTestCase):
@@ -1240,7 +1451,7 @@ class MobileLabelsPrintedApiTests(StandardTestCase):
     def test_marks_labels_printed(self):
         resp = self._post([self.lot.pk, self.lotB.pk])
         self.assertEqual(resp.status_code, 200)
-        self.assertEqual(resp.json(), {"marked": 2})
+        self.assertEqual(resp.json(), {"marked": 2, "failed": 0})
         self.lot.refresh_from_db()
         self.assertTrue(self.lot.label_printed)
         self.assertFalse(self.lot.label_needs_reprinting)
@@ -1253,7 +1464,7 @@ class MobileLabelsPrintedApiTests(StandardTestCase):
 
     def test_is_idempotent(self):
         self._post([self.lot.pk])
-        self.assertEqual(self._post([self.lot.pk]).json(), {"marked": 1})
+        self.assertEqual(self._post([self.lot.pk]).json(), {"marked": 1, "failed": 0})
 
     def test_shrinks_the_unprinted_queryset(self):
         """The whole point: without this, "print unprinted labels" never shrinks for a Bluetooth
@@ -1271,29 +1482,29 @@ class MobileLabelsPrintedApiTests(StandardTestCase):
         stranger = User.objects.create_user(username="stranger", password="x")
         resp = self._post([self.lot.pk], user=stranger)
         self.assertEqual(resp.status_code, 200)
-        self.assertEqual(resp.json(), {"marked": 0})
+        self.assertEqual(resp.json(), {"marked": 0, "failed": 0})
         self.lot.refresh_from_db()
         self.assertFalse(self.lot.label_printed)
 
     def test_a_mixed_batch_marks_what_it_may(self):
         stranger_lot = Lot.objects.create(lot_name="not yours", user=self.userB, quantity=1)
         resp = self._post([self.lot.pk, stranger_lot.pk])
-        self.assertEqual(resp.json(), {"marked": 1})
+        self.assertEqual(resp.json(), {"marked": 1, "failed": 0})
         stranger_lot.refresh_from_db()
         self.assertFalse(stranger_lot.label_printed)
 
     def test_auction_admin_may_mark_a_sellers_labels(self):
         resp = self._post([self.lot.pk], user=self.admin_user)
-        self.assertEqual(resp.json(), {"marked": 1})
+        self.assertEqual(resp.json(), {"marked": 1, "failed": 0})
 
     def test_unknown_and_deleted_pks_are_ignored(self):
         self.lotB.is_deleted = True
         self.lotB.save()
         resp = self._post([self.lot.pk, self.lotB.pk, 99999999])
-        self.assertEqual(resp.json(), {"marked": 1})
+        self.assertEqual(resp.json(), {"marked": 1, "failed": 0})
 
     def test_empty_batch_is_fine(self):
-        self.assertEqual(self._post([]).json(), {"marked": 0})
+        self.assertEqual(self._post([]).json(), {"marked": 0, "failed": 0})
 
     def test_malformed_body_is_a_400(self):
         resp = self.client.post(self.url, {"lots": ["nope"]}, content_type="application/json", **_bearer(self.user))
@@ -1306,6 +1517,73 @@ class MobileLabelsPrintedApiTests(StandardTestCase):
 # ---------------------------------------------------------------------------
 # Part W1 — bulk label printing hands a Bluetooth app user the lot set
 # ---------------------------------------------------------------------------
+
+
+class LabelPrintFailureReportTests(StandardTestCase):
+    """A paper jam reported as "printed OK".
+
+    The server cannot see the printer -- every byte goes phone, Bluetooth, printhead, and none of
+    that passes through here -- so the fix is not a server-side check but a channel for the app to
+    say which labels did not come out. The vocabulary is already the server's: each printer profile
+    carries a status_flags table that decodes a status byte into these condition names.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.url = reverse("mobile-labels-printed")
+
+    def _post(self, body, user=None):
+        return self.client.post(self.url, body, content_type="application/json", **_bearer(user or self.user))
+
+    def test_a_failed_label_stays_unprinted_and_is_flagged_for_reprinting(self):
+        resp = self._post({"lots": [self.lotB.pk], "failed": [self.lot.pk], "conditions": ["paper_jam"]})
+        self.assertEqual(resp.json(), {"marked": 1, "failed": 1})
+        self.lot.refresh_from_db()
+        self.assertFalse(self.lot.label_printed)
+        self.assertTrue(self.lot.label_needs_reprinting)
+
+    def test_a_jam_on_a_reprint_puts_the_label_back_to_unprinted(self):
+        """It had printed before; what the person is holding now is a jam."""
+        Lot.objects.filter(pk=self.lot.pk).update(label_printed=True, label_needs_reprinting=False)
+        self._post({"lots": [], "failed": [self.lot.pk], "conditions": ["out_of_paper"]})
+        self.lot.refresh_from_db()
+        self.assertFalse(self.lot.label_printed)
+
+    def test_the_failed_label_comes_back_in_print_unprinted_labels(self):
+        """The point of the whole exchange: clear the jam, press the button, get what is missing."""
+        self._post({"lots": [self.lot.pk]})
+        self.assertNotIn(self.lot.pk, self.online_tos.unprinted_labels_qs.values_list("pk", flat=True))
+        self._post({"lots": [], "failed": [self.lot.pk], "conditions": ["paper_jam"]})
+        self.assertIn(self.lot.pk, self.online_tos.unprinted_labels_qs.values_list("pk", flat=True))
+
+    def test_a_lot_in_both_lists_counts_as_failed(self):
+        """ "It did not come out" is the report that leaves a label to print."""
+        self._post({"lots": [self.lot.pk], "failed": [self.lot.pk]})
+        self.lot.refresh_from_db()
+        self.assertFalse(self.lot.label_printed)
+
+    def test_a_condition_outside_the_profiles_vocabulary_is_rejected(self):
+        """One list, or the profile that says "02 means paper_jam" and the report drift apart."""
+        resp = self._post({"lots": [], "failed": [self.lot.pk], "conditions": ["printer_on_fire"]})
+        self.assertEqual(resp.status_code, 400)
+        self.lot.refresh_from_db()
+        self.assertFalse(self.lot.label_needs_reprinting)
+
+    def test_every_condition_a_profile_can_decode_is_accepted(self):
+        for condition in sorted(STATUS_CONDITIONS):
+            resp = self._post({"lots": [], "failed": [self.lot.pk], "conditions": [condition]})
+            self.assertEqual(resp.status_code, 200, condition)
+
+    def test_an_app_that_reports_no_failures_behaves_exactly_as_before(self):
+        resp = self._post({"lots": [self.lot.pk]})
+        self.assertEqual(resp.json(), {"marked": 1, "failed": 0})
+        self.lot.refresh_from_db()
+        self.assertTrue(self.lot.label_printed)
+
+    def test_a_failed_lot_the_caller_cannot_touch_is_skipped(self):
+        stranger_lot = Lot.objects.create(lot_name="not yours", user=self.userB, quantity=1)
+        resp = self._post({"lots": [], "failed": [stranger_lot.pk]})
+        self.assertEqual(resp.json(), {"marked": 0, "failed": 0})
 
 
 class BulkBluetoothPrintLinkTests(StandardTestCase):

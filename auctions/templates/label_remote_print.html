@@ -9,6 +9,11 @@ the three buttons on any failure — try again, print a PDF here, cancel — and
 being the app's own words, shown verbatim: the app already distinguishes no-printer-paired from
 couldn't-connect from lost-the-link-mid-print, and a second copy of that vocabulary here would drift.
 
+This is also the page somebody gets when the phone is *known* to be asleep before anything is sent.
+It used to be a silent fall back to a PDF download, which answered a request for labels on a printer
+with a file in the downloads folder and no explanation. The job is created either way, dispatch
+marks it unreachable at once, and initial_state paints that on the first frame.
+
 The 20-second silence rule lives on the server (remote_print.job_state), not in this JS, so two tabs
 watching one job agree.
 {% endcomment %}
@@ -52,6 +57,8 @@ watching one job agree.
 </div>
 
 {{ job.uuid|json_script:"remote-print-job-id" }}
+{% comment %}The job's state as the server already knows it, so a job that is answered before the page exists -- no phone heartbeating, no push token -- opens on its error rather than showing a second of "Sending..." that was never true.{% endcomment %}
+{{ initial_state|json_script:"remote-print-initial-state" }}
 <script>
 (function () {
   var jobId = JSON.parse(document.getElementById('remote-print-job-id').textContent);
@@ -82,6 +89,7 @@ watching one job agree.
 
   function showFailure(text) {
     stopPolling();
+    heading.textContent = 'Your labels have not printed';
     progress.style.display = 'none';
     messageText.textContent = text;
     messageBox.style.display = '';
@@ -109,7 +117,9 @@ watching one job agree.
       // The app's own words, unedited — see the comment at the top of this file.
       showFailure(state.message || 'Printing failed on your phone.');
     } else if (state.status === 'unreachable') {
-      showFailure("Couldn't reach your phone. Make sure the app is open.");
+      // The app cannot be woken from here, so this is an instruction, not a status: the one thing
+      // that fixes it is the user picking up the phone. Try again is right beside it.
+      showFailure('Open the app on your phone, then press Try again.');
     } else if (state.status === 'cancelled') {
       stopPolling();
       window.location.href = backUrl;
@@ -165,8 +175,16 @@ watching one job agree.
       .catch(function () { window.location.href = backUrl; });
   });
 
-  timer = window.setInterval(poll, 1000);
-  poll();
+  // Paint what the server already knows, then only poll if there is anything left to wait for.
+  var initialState = null;
+  var initialEl = document.getElementById('remote-print-initial-state');
+  if (initialEl) { try { initialState = JSON.parse(initialEl.textContent); } catch (e) { initialState = null; } }
+  var settled = ['printed', 'failed', 'unreachable', 'cancelled'];
+  if (initialState) { render(initialState); }
+  if (!initialState || settled.indexOf(initialState.status) === -1) {
+    timer = window.setInterval(poll, 1000);
+    poll();
+  }
 })();
 </script>
 {% endblock %}

@@ -1,0 +1,177 @@
+{% extends "base.html" %}
+{% block title %}Lifecycle{% endblock %}
+{% block content %}
+<h3>Lifecycle</h3>
+<div class="help-note">
+  <i class="bi bi-lightbulb-fill" aria-hidden="true"></i>
+  <div>Everybody who is <em>not</em> running the auction: the buyer with no account, the seller who
+  never opens a lot page, and the person whose first contact with this site is an invoice email.
+  These are <strong>milestones, not a funnel</strong> &mdash; most of them have no order, so a
+  person who did it differently is not a drop-out. Bidding is left out on purpose: it happens in
+  about 5% of auctions. The last milestone is a paid invoice, which every auction has.</div>
+</div>
+
+<p class="text-muted small">
+  Every number below is grouped by club, and only {{ coverage.linked }} of
+  {{ coverage.total }} auctions ({{ coverage.percent }}%) have one.
+  {% if coverage.percent < 90 %}<span class="text-warning">This page can see that fraction of the
+  site and no more.</span> <a href="{% url 'admin_unlinked_auctions' %}">Link the rest up</a>.{% endif %}
+</p>
+
+<form method="get" class="row g-2 align-items-end mb-3">
+  <div class="col-auto">
+    <label class="form-label" for="club">Club</label>
+    <select class="form-select form-select-sm" name="club" id="club" onchange="this.form.submit()">
+      {% for row in clubs %}
+      <option value="{{ row.pk }}"{% if club and row.pk == club.pk %} selected{% endif %}>{{ row.name }} ({{ row.auction_count }})</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div class="col-auto"><button type="submit" class="btn btn-sm btn-primary">Show</button></div>
+</form>
+
+{% if not club %}
+<p class="text-muted">No club on this site has an auction attached to it yet, so there is nothing
+  here to read. <a href="{% url 'admin_unlinked_auctions' %}">Link some auctions to a club</a>.</p>
+{% else %}
+
+<h4 class="mt-4">Milestones reached</h4>
+<p class="text-muted small">
+  Reach, not conversion. Where one milestone really does require another it says so in the
+  <em>after</em> column, and only those pairs are a rate worth reading downwards.
+</p>
+<div class="table-responsive">
+  <table class="table table-sm">
+    <thead>
+      <tr>
+        <th>Milestone</th>
+        <th>After</th>
+        {% for auction in auctions %}<th class="text-end">{{ auction.date_start|date:"M Y" }}</th>{% endfor %}
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in milestone_rows %}
+      <tr>
+        <td>{{ row.milestone.label }}{% if row.milestone.note %}<div class="text-muted small">{{ row.milestone.note }}</div>{% endif %}</td>
+        <td class="text-muted small">{% if row.milestone.after %}{{ row.milestone.after }}{% else %}&mdash;{% endif %}</td>
+        {% for cell in row.cells %}<td class="text-end">{{ cell }}</td>{% endfor %}
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<h4 class="mt-4">Cohorts, one auction to the next</h4>
+<p class="text-muted small">
+  The club is its own control here: same members, same venue, same rules. <em>Participated</em>
+  means bought or sold something &mdash; never "logged in". <em>Lapsed</em> is somebody who took
+  part in this auction and had not come back {{ lapsed_after }} auctions later; for the most recent
+  auctions that is not yet knowable, and those rows say so rather than counting everybody as
+  retained.
+</p>
+<div class="table-responsive">
+  <table class="table table-sm">
+    <thead>
+      <tr>
+        <th>Auction</th>
+        <th class="text-end">New</th>
+        <th class="text-end">Returning</th>
+        <th class="text-end">New who took part</th>
+        <th class="text-end">Lapsed</th>
+        <th>Where the new ones came from</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for cohort in cohorts %}
+      <tr>
+        <td><a href="{{ cohort.auction.get_absolute_url }}">{{ cohort.auction }}</a>
+          <div class="text-muted small">{{ cohort.auction.date_start|date:"j M Y" }}</div></td>
+        <td class="text-end">{{ cohort.new_people }}</td>
+        <td class="text-end">{{ cohort.returning }}</td>
+        <td class="text-end">{{ cohort.new_who_participated }}{% if cohort.new_people %}
+          <div class="text-muted small">{{ cohort.participation_rate }}%</div>{% endif %}</td>
+        <td class="text-end">{% if cohort.lapsed_is_measurable %}{{ cohort.lapsed }}{% else %}
+          <span class="text-muted" title="Not enough auctions have happened since this one to know">not yet</span>{% endif %}</td>
+        <td>{% for referrer in cohort.referrers %}<span class="badge bg-secondary">{{ referrer.referrer }} {{ referrer.people }}</span>
+          {% empty %}<span class="text-muted small">&mdash;</span>{% endfor %}</td>
+      </tr>
+      {% empty %}
+      <tr><td colspan="6" class="text-muted">This club has no auctions on the site yet.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<h4 class="mt-4">The median member{% if auction %} of {{ auction }}{% endif %}</h4>
+<p class="text-muted small">
+  A real person at the 50th percentile by lots bought plus lots sold, not an average of everybody.
+  The mean of this distribution is meaningless &mdash; a handful of power users dominate every
+  total &mdash; and an averaged journey is nobody's journey.
+</p>
+<form method="get" class="row g-2 align-items-end mb-3">
+  <input type="hidden" name="club" value="{{ club.pk }}">
+  <div class="col-auto">
+    <label class="form-label" for="auction">Auction</label>
+    <select class="form-select form-select-sm" name="auction" id="auction" onchange="this.form.submit()">
+      {% for row in auctions %}
+      <option value="{{ row.pk }}"{% if auction and row.pk == auction.pk %} selected{% endif %}>{{ row }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div class="col-auto"><button type="submit" class="btn btn-sm btn-primary">Show</button></div>
+</form>
+
+{% if unreached %}
+<p class="text-muted small">
+  {{ unreached.silent }} of {{ unreached.joined }} people ({{ unreached.percent }}%) have no
+  account and never opened their invoice &mdash; the honest floor on the share of the room this
+  site never spoke to. Somebody who does not use a computer is invisible to every number above.
+</p>
+{% endif %}
+
+{% if median %}
+<p><strong>{{ median.tos.name|default:median.tos.bidder_number }}</strong>
+  sold {{ median.sold }} and bought {{ median.bought }}.
+  {% if median.tos.user %}<a href="{% url 'admin_session_replay' %}?user={{ median.tos.user_id }}">Read their session</a>.{% endif %}
+</p>
+{% if median.tos.user %}
+<div class="table-responsive">
+  <table class="table table-sm">
+    <thead><tr><th>When</th><th>Gap</th><th>Page</th><th>Route</th></tr></thead>
+    <tbody>
+      {% for step in median.timeline|slice:":40" %}
+      <tr{% if step.new_visit %} class="table-active"{% endif %}>
+        <td class="text-muted small">{{ step.view.date_start|date:"j M Y H:i" }}</td>
+        <td class="text-muted small">{% if step.gap %}{{ step.gap }}{% else %}&mdash;{% endif %}</td>
+        <td><code>{{ step.view.url }}</code></td>
+        <td class="text-muted small">{{ step.route }}</td>
+      </tr>
+      {% empty %}
+      <tr><td colspan="4" class="text-muted">No page views recorded for this person.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+<p class="text-muted">This person has no account, so there is no session to read. That is the
+  finding rather than a gap in the data: their whole contact with the site was an invoice.</p>
+{% endif %}
+{% else %}
+<p class="text-muted">Nobody joined this auction.</p>
+{% endif %}
+
+{% endif %}
+
+{% if stitching_began %}
+<p class="text-muted small mt-4">
+  Anonymous browsing has been attributable to the person who later signed in since
+  {{ stitching_began|date:"j M Y" }}. Any before-and-after comparison crossing that date compares a
+  stitched period against an unstitched one, which is a fake improvement.
+</p>
+{% else %}
+<p class="text-muted small mt-4">
+  Nobody has signed in since sign-in stitching shipped, so every anonymous visit above is still a
+  separate person from the account that visit may have become.
+</p>
+{% endif %}
+{% endblock %}

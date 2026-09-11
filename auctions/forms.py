@@ -3949,6 +3949,16 @@ class DisabledOptionSelect(forms.Select):
 
     The options are still shown (so the user can see the choice exists) but can't be picked. Used for
     print methods that only work in the native app when the page is viewed on the web.
+
+    **The option that is currently selected is never disabled**, whatever ``disabled_values`` says.
+    That is not a nicety: HTML's form-submission algorithm appends an entry for a ``<select>``'s
+    selected option *only if that option is not disabled*, so a field whose stored value is one of
+    the disabled ones submits **nothing at all**. On a required field that is a validation error the
+    user cannot see the cause of ("this field is required" on a dropdown that is plainly showing a
+    value), and re-rendering the page then leaves no option selected -- so the browser shows the
+    first one instead, and the second attempt "works" by silently overwriting the setting the user
+    never touched. Leaving the selected option enabled keeps the value round-tripping; it still
+    can't be *chosen* here, because it is only ever enabled when it is already the answer.
     """
 
     def __init__(self, *args, disabled_values=(), **kwargs):
@@ -3957,7 +3967,7 @@ class DisabledOptionSelect(forms.Select):
 
     def create_option(self, name, value, *args, **kwargs):
         option = super().create_option(name, value, *args, **kwargs)
-        if str(option["value"]) in self.disabled_values:
+        if str(option["value"]) in self.disabled_values and not option["selected"]:
             option["attrs"]["disabled"] = True
         return option
 
@@ -3991,6 +4001,13 @@ class UserLabelPrefsForm(forms.ModelForm):
                     "System printer and Bluetooth printing only work in the app. "
                     "Only PDF labels are available from the web."
                 )
+                # Belt and braces for the same problem the widget fixes: a POST that carries no
+                # print_method at all must leave the stored one alone rather than fail validation.
+                # Anything that can produce that -- an older cached page rendered before the widget
+                # fix, a browser that drops the value for its own reasons, a script posting only the
+                # fields it means to change -- would otherwise put a required-field error on a
+                # dropdown the user never touched. See clean_print_method.
+                self.fields["print_method"].required = False
             print_method_layout = [
                 Div(
                     Div("print_method", css_class="col-sm-7"),
@@ -4106,6 +4123,18 @@ class UserLabelPrefsForm(forms.ModelForm):
             ),
             Submit("submit", "Save", css_class="btn-success"),
         )
+
+    def clean_print_method(self):
+        """An omitted print method means "leave it as it is", never "set it to blank".
+
+        The field is only optional on the web (see ``__init__``), where the app-only methods can't
+        be chosen anyway. Falling back to the instance keeps a Bluetooth user's setting through a
+        save made from a computer -- which is the whole point of showing them the value at all.
+        """
+        method = self.cleaned_data.get("print_method")
+        if not method:
+            return self.instance.print_method or "pdf"
+        return method
 
 
 class ChangeUserPreferencesForm(forms.ModelForm):
@@ -6094,6 +6123,12 @@ class ClubMemberAdminForm(MarksClubMemberAdminEditedMixin, forms.ModelForm):
         if clash:
             msg = f"Bidder number '{bidder_number}' is already used by another member in this club."
             raise forms.ValidationError(msg)
+        # Deliberately no check against the club's auctions. A member's number is one number, in
+        # the club and in every auction they are in, so saving it here takes it from whoever is
+        # holding it there and gives them another -- ``services.set_member_bidder_number``, the same
+        # thing the check-in dialog does and says it does. The live validation on this field names
+        # that person before you save; refusing instead would leave the member's page showing one
+        # number and the auction another, which is the bug this mode exists to not have.
         return bidder_number
 
 

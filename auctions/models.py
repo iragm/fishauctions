@@ -91,7 +91,7 @@ from pytz import timezone as pytz_timezone
 from webpush.models import PushInformation
 
 from . import cloudflare_images, history, printer_programs, voice
-from .club_health import ClubHealth  # noqa: F401
+from .club_health import ClubHealth, ClubLadderSnapshot  # noqa: F401
 from .club_matching import derived_abbreviation
 from .email_routing import (
     admin_routing_email,
@@ -15096,3 +15096,47 @@ class AssistantSkillRequest(CachedPropertiesMixin, models.Model):
             .distinct()
             .count()
         )
+
+
+class SignInStitch(models.Model):
+    """The anonymous session somebody was holding at the moment they signed in.
+
+    ``PageView`` stores a signed-in view as ``user=<id>, session_id=NULL`` and an anonymous one as
+    ``user=NULL, session_id=<key>``, so the same person browsing and then signing in is two actors
+    to every query that reads that table (``usability_report._actor``). For a buyer that seam falls
+    in the middle of their story: they arrive from a club's Facebook page anonymously, browse, and
+    only become a user -- if ever -- at the point of paying.
+
+    This is the exact key that closes it, and the only new row ``docs/phase_9.md`` asks for. It is
+    not a fingerprint and deliberately not one: an IP-and-user-agent match is least reliable exactly
+    where the seam is widest (fifty people on a venue's one wifi holding the same phone), it
+    over-merges and under-merges within a single evening on carrier CGNAT, and its error is
+    correlated with the number being measured. This is a session key the site already issued.
+
+    **It only works forwards.** A stitch cannot be reconstructed for a sign-in that has already
+    happened, so any before-and-after comparison that crosses the day this shipped is comparing a
+    stitched year against an unstitched one -- which is a fake improvement, not a real one.
+    :func:`auctions.lifecycle.stitching_began` is the date to mark on any such chart, and the
+    unstitched number stays available beside it.
+
+    The key comes from ``request.COOKIES``, not from ``request.session.session_key``:
+    ``django.contrib.auth.login`` calls ``cycle_key()`` *before* it sends ``user_logged_in``, so by
+    the time a receiver runs the session already has its new key and the anonymous one is gone. The
+    cookie the browser sent with the request still holds it.
+    """
+
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="sign_in_stitches")
+    session_id = models.CharField(max_length=600, db_index=True)
+    session_id.help_text = "The session key the browser was holding before this sign-in."
+    createdon = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        # One row per person per session, not one per sign-in: somebody who signs in every week
+        # from the same browser is the same stitch each time, and the first one is the one that
+        # says when the anonymous half ended.
+        constraints = [models.UniqueConstraint(fields=["user", "session_id"], name="one_stitch_per_user_session")]
+        verbose_name = "Sign-in stitch"
+        verbose_name_plural = "Sign-in stitches"
+
+    def __str__(self):
+        return f"{self.user} signed in holding {self.session_id[:12]}"

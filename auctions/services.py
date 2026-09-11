@@ -276,43 +276,189 @@ def existing_tos_for_club_member(auction, member):
     return AuctionTOS.objects.filter(auction=auction, clubmember=member).order_by("createdon").first()
 
 
-def club_bidder_number_free_in(auction, member, tos=None):
-    """*member*'s club bidder number, or ``""`` if somebody else in *auction* already holds it.
+CLUB_MANAGED_MODES = ("all", "checkin")
 
-    The club and the auction are two different scopes. ``ClubMember.generate_bidder_number`` only
-    avoids numbers other *club members* hold, so a member joining a club-managed auction that also
-    contains people who joined it directly -- anyone who was there before it was switched to
-    club-managed -- can be handed a number that is already somebody else's here. It happens at
-    random, roughly one row in a few hundred, and it is not cosmetic: every lookup by number after
-    that (check-in, setting a winner, ``update_person``) has two rows to choose from and silently
-    picks one, so one person's new email address lands on another person's record.
 
-    Returning ``""`` lets ``AuctionTOS.save()`` pick a number that is free in this auction. The
-    member keeps the club number they were given -- it is the club's, and it is still unique there.
+def club_managed_shadows_for(member):
+    """Every ``AuctionTOS`` that is *member*, in every club-managed auction they are in.
+
+    A club member and their participant rows are one person with one set of details -- that is what
+    "manage members through the club" means. There is no per-auction copy of a name, an email, an
+    address or a bidder number to keep: a change to any of them is a change to all of these rows,
+    finished auctions included, and :func:`sync_member_to_shadows` is what makes that true.
+
+    Only ``checked_in``, the invoice and the reminder-email flags belong to one auction, and none of
+    those is a field anybody types into.
     """
-    number = (member.bidder_number or "").strip()
-    if not number:
-        return ""
-    others = AuctionTOS.objects.filter(auction=auction, bidder_number=number).exclude(clubmember=member)
-    if tos is not None and tos.pk:
-        others = others.exclude(pk=tos.pk)
-    # Joining creates the participant row first and the club member second, so the row already
-    # holding this number is often the same person's. AuctionTOS.save() merges those two anyway.
-    if member.user_id:
-        others = others.exclude(user_id=member.user_id)
-    if member.email:
-        others = others.exclude(email__iexact=member.email)
-    if not others.exists():
-        return number
-    logger.warning(
-        "Club %s member pk=%s has bidder number '%s', which auction pk=%s already gave to somebody "
-        "else; their record there gets its own number.",
-        member.club_id,
-        member.pk,
-        number,
-        auction.pk,
+    return AuctionTOS.objects.filter(
+        clubmember=member,
+        auction__manage_users_through_club__in=CLUB_MANAGED_MODES,
+    ).select_related("auction", "clubmember")
+
+
+def _member_auction_ids(member):
+    return list(club_managed_shadows_for(member).values_list("auction_id", flat=True))
+
+
+def free_bidder_number_for(member, *, avoid=()):
+    """A bidder number nobody else holds, in *member*'s club or in any auction they are in.
+
+    Both scopes, because a member's number is one number. Anything in *avoid* is treated as taken --
+    callers pass the number that is being handed to somebody else, which is not on any row yet and
+    would otherwise look free.
+    """
+    from .models import _generate_unique_bidder_number
+
+    avoid = {str(value).strip() for value in avoid if str(value).strip()}
+    auction_ids = _member_auction_ids(member)
+
+    def is_taken(candidate):
+        if candidate in avoid:
+            return True
+        if (
+            ClubMember.objects.filter(club_id=member.club_id, bidder_number=candidate)
+            .exclude(pk=member.pk or 0)
+            .exists()
+        ):
+            return True
+        return (
+            AuctionTOS.objects.filter(auction_id__in=auction_ids, bidder_number=candidate)
+            .exclude(clubmember_id=member.pk)
+            .exists()
+        )
+
+    return _generate_unique_bidder_number(
+        is_taken=is_taken,
+        # The number they already have, when it is still free. Displacing somebody should move them
+        # as little as possible: a member whose row drifted off their club number is put back on it
+        # rather than handed a third number nobody has ever seen.
+        preferred=(member.bidder_number or "").strip() or None,
+        phone=member.phone_number,
+        address=member.address,
     )
-    return ""
+
+
+def clear_bidder_number_in(auction, number, *, keep_tos=None, acting_user=None, _seen=None):
+    """Move everyone except *keep_tos* off bidder *number* in *auction*.
+
+    The number is about to be given to somebody, and in this mode a number belongs to exactly one
+    person. A displaced row that belongs to a club member is renumbered in the club and in every
+    auction along with it, because those are the same number; a row with no club member is recorded
+    nowhere else, so it is renumbered here alone. Either way the auction's history says what
+    happened, which is what an admin holding a printed card needs to be able to find.
+    """
+    from .models import _generate_unique_bidder_number
+
+    number = (number or "").strip()
+    if not number:
+        return
+    _seen = set() if _seen is None else _seen
+    rows = AuctionTOS.objects.filter(auction=auction, bidder_number=number).select_related("clubmember")
+    if keep_tos is not None and keep_tos.pk:
+        rows = rows.exclude(pk=keep_tos.pk)
+    for row in rows:
+        if row.clubmember_id and row.clubmember_id not in _seen:
+            replacement = free_bidder_number_for(row.clubmember, avoid=[number])
+            set_member_bidder_number(row.clubmember, replacement, acting_user=acting_user, _seen=_seen)
+        else:
+            replacement = _generate_unique_bidder_number(
+                is_taken=lambda candidate, row=row: (
+                    candidate == number
+                    or AuctionTOS.objects.filter(auction=auction, bidder_number=candidate).exclude(pk=row.pk).exists()
+                ),
+                phone=row.phone_number,
+                address=row.address,
+            )
+            AuctionTOS.objects.filter(pk=row.pk).update(bidder_number=replacement)
+        auction.create_history(
+            applies_to="USERS",
+            action=f"Bidder number {number} was given to somebody else, so {row.name} is now {replacement}",
+            user=acting_user,
+        )
+
+
+def set_member_bidder_number(member, number, *, acting_user=None, _seen=None):
+    """Give *member* bidder number *number* in the club and in every auction they are in.
+
+    The one place a bidder number is written in club-managed mode. Whoever else is holding it is
+    moved off first -- see :func:`clear_bidder_number_in` -- so the answer to "who is bidder 42"
+    is the same in the club, on the users page, on the invoice and when a lot is knocked down.
+
+    Writes with ``update()`` rather than ``save()`` and drives the propagation itself: going back
+    through ``ClubMember.save()`` would re-enter the post_save signal that called this. ``_seen``
+    guards the other direction -- displacing somebody renumbers *them*, which can displace a third
+    person, and a member already being moved is not moved twice.
+    """
+    number = (number or "").strip()
+    if not number or member is None:
+        return
+    _seen = set() if _seen is None else _seen
+    if member.pk in _seen:
+        return
+    _seen.add(member.pk)
+    # The club scope first: the unique constraint on (club, bidder_number) is a database error,
+    # not a validation message, so nobody may still be holding it when this row is written.
+    for other in ClubMember.objects.filter(club_id=member.club_id, bidder_number=number).exclude(pk=member.pk):
+        set_member_bidder_number(
+            other, free_bidder_number_for(other, avoid=[number]), acting_user=acting_user, _seen=_seen
+        )
+    ClubMember.objects.filter(pk=member.pk).update(bidder_number=number)
+    member.bidder_number = number
+    for shadow in club_managed_shadows_for(member):
+        clear_bidder_number_in(shadow.auction, number, keep_tos=shadow, acting_user=acting_user, _seen=_seen)
+        AuctionTOS.objects.filter(pk=shadow.pk).update(bidder_number=number)
+
+
+def bidder_number_holder_in(auction, number, *, exclude_tos=None):
+    """Whoever currently holds bidder *number* in *auction*, or ``None``.
+
+    Only for telling somebody what is about to happen -- the member form warns that this person
+    will be renumbered. Nothing decides anything by it: in this mode the number always goes where
+    the admin sent it.
+    """
+    number = (number or "").strip()
+    if not number:
+        return None
+    others = AuctionTOS.objects.filter(auction=auction, bidder_number=number).select_related("clubmember")
+    if exclude_tos is not None and exclude_tos.pk:
+        others = others.exclude(pk=exclude_tos.pk)
+    return others.first()
+
+
+#: The fields a club member and their participant rows share. Everything a human types is here;
+#: what stays behind on the AuctionTOS is what the auction did to them rather than who they are --
+#: ``checked_in``, the invoice, the reminder flags.
+SHARED_MEMBER_FIELDS = ("name", "email", "phone_number", "address")
+
+
+def sync_member_to_shadows(member, *, acting_user=None):
+    """Push *member*'s shared details onto every one of their participant rows.
+
+    ``update()`` rather than ``save()``: ``AuctionTOS.save()`` merges two rows in one auction that
+    share an email, and a merge is not what correcting somebody's address asks for. The email
+    status is cleared alongside the address because save() is what normally does that, and a bounce
+    recorded against the old address must not go on suppressing mail to the new one.
+    """
+    values = {field: getattr(member, field, None) or "" for field in SHARED_MEMBER_FIELDS}
+    for shadow in club_managed_shadows_for(member):
+        update = {field: value for field, value in values.items() if (getattr(shadow, field, None) or "") != value}
+        if not update:
+            continue
+        if "email" in update:
+            update["email_address_status"] = "UNKNOWN"
+            clash = (
+                AuctionTOS.objects.filter(auction_id=shadow.auction_id, email__iexact=update["email"])
+                .exclude(pk=shadow.pk)
+                .exists()
+            )
+            if clash:
+                logger.warning(
+                    "AuctionTOS pk=%s now shares email '%s' with another row in auction pk=%s",
+                    shadow.pk,
+                    update["email"],
+                    shadow.auction_id,
+                )
+        AuctionTOS.objects.filter(pk=shadow.pk).update(**update)
 
 
 def apply_club_member_to_tos(auction, tos, member):
@@ -324,11 +470,14 @@ def apply_club_member_to_tos(auction, tos, member):
     if member is None or not auction.is_club_managed:
         return tos
     tos.clubmember = member
-    free = club_bidder_number_free_in(auction, member, tos)
-    if free or tos.bidder_number == member.bidder_number:
-        # Blank when the club's number is taken here and this row is what is holding the duplicate:
-        # save() then picks one that is free. A row already carrying its own good number keeps it.
-        tos.bidder_number = free
+    number = (member.bidder_number or "").strip()
+    if number:
+        clear_bidder_number_in(auction, number, keep_tos=tos)
+        tos.bidder_number = number
+    # Deliberately not the contact details. Callers set those first, from what the admin just
+    # typed, and copying the member's over the top is how "add Jane Doe" used to save a row still
+    # named after whoever the email matched. They reach the member the other way instead, through
+    # ``signals.sync_auctiontos_up_to_clubmember`` once this row is saved.
     if auction.use_check_in_mode and not tos.checked_in:
         # Check-in mode: joining never grants bidding on its own. The member has to check in at the
         # event, which sets checked_in + bidding_allowed (mirrors the auto-add path in

@@ -15,7 +15,7 @@ lives next to the thing it describes, and is loaded when you go there:
 | `auctions/mcp/CLAUDE.md` | The MCP endpoint, the command palette and the one registry behind both. |
 | `auctions/templates/CLAUDE.md` | Templates, styles, and the three navigation surfaces. |
 | `.claude/skills/` | Species list, club API, announcements, Celery, voice, the mobile app. Loaded on demand. |
-| `docs/` | `mcp_skills.md`, `mcp_next.md`, `club_announcements.md`, `club_event_details.md`, `app_oauth_connect_flows.md`, `style_migration.md` |
+| `docs/` | `mcp_skills.md`, `mcp_next.md`, `club_announcements.md`, `club_event_details.md`, `app_oauth_connect_flows.md`, `app_printing_contract.md`, `style_migration.md` |
 | `style_reference.md` | Read before **any** visual change. Palette, the six permitted button classes, message taxonomy. |
 
 Slash commands: `/test`, `/ci`, `/map`, `/migrate`, `/fishbase`, `/mcp`.

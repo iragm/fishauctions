@@ -1,6 +1,13 @@
 # Phase 9 -- everybody who is not running the auction
 
 Rewritten 2026-09-10 to the human's outline, replacing a first draft that measured the wrong thing.
+
+**Built 2026-09-10.**  `auctions/lifecycle.py` is 9a-9d; `/admin-lifecycle/` and
+`/admin-session-replay/` are the two pages; `SignInStitch` (migration 0438) is the single row this
+phase adds; `auctions/test_lifecycle.py` is the ratchet.  What each section below settled is now
+code, and where the code had to choose something this document left open, the choice is recorded at
+the end under **Waiting on a decision** rather than buried in a docstring.
+
 Phases 0-8 were about the person running an auction. This is about the other several thousand
 people, and it starts from one sentence at the top of `USABILITY.md`:
 
@@ -272,3 +279,61 @@ Two smaller ones:
   the auction was worth attending, and a badge cannot answer it.
 - **No survey instrument beyond one question.** If anything is asked at all, ask it once, after an
   invoice is paid, when the person has just finished something and knows whether it went well.
+
+---
+
+## What shipped, section by section
+
+| Section | Where it lives |
+|---|---|
+| 9a milestones | `lifecycle.MILESTONES`, `lifecycle.milestone_reach` |
+| 9a lapsing | `lifecycle.LAPSED_AFTER_AUCTIONS`, `lifecycle.lapsed_participants` |
+| 9b session replay | `lifecycle.session_timeline`, `/admin-session-replay/` |
+| 9b the sign-in stitch | `SignInStitch`, `signals.record_sign_in_stitch`, `lifecycle.stitched_sessions` |
+| 9c the median member | `lifecycle.median_member`, `lifecycle.median_member_story` |
+| 9c the share never spoken to | `lifecycle.unreached_share` |
+| 9d club cohorts | `lifecycle.club_cohorts`, `lifecycle.club_coverage` |
+
+Three implementation notes that are not obvious from the code and are expensive to rediscover:
+
+- **The stitch reads the cookie, not the session.**  `django.contrib.auth.login` calls
+  `request.session.cycle_key()` *before* it sends `user_logged_in`, so a receiver reading
+  `request.session.session_key` records the key issued a moment ago and stitches a sign-in to
+  itself.  `request.COOKIES[SESSION_COOKIE_NAME]` is what the browser sent, which is the key every
+  anonymous `PageView` in that visit carries.  `test_the_stitch_records_the_key_the_browser_sent`
+  fails on the simplification.
+- **"Read the auction rules" cannot be answered from `PageView.auction` alone.**  Since 7a.2 a lot
+  page carries its auction's FK too, so the milestone is `lot_number IS NULL` *and* the route
+  `auction_main`, classified with `usability_report.route_name` -- Django's own resolver, so a
+  rename in `urls.py` cannot leave a stale classifier behind.
+- **Identity for somebody with no account is their `AuctionTOS` email, lowercased.**  That is what
+  makes the non-user persona the same person at two auctions.  A row with neither a user nor an
+  email is its own auction's bidder number and therefore never matches across two -- correct, and
+  deliberate: there is nothing there to match on.
+
+## Waiting on a decision
+
+Neither of these blocks anything that shipped.  Both are choices about what this site should do,
+which is why they are here rather than settled in a docstring.
+
+1. **The anonymous seam: this shipped as option (2) plus (1), which is what the section above
+   recommends -- stitch going forward, keep reporting unstitched history, mark the date.**  If the
+   preference is the safer option (1) alone, deleting the `record_sign_in_stitch` call in
+   `signals.py` is the whole of the reversal and the model can stay unread.  Say the word.
+2. **`LAPSED_AFTER_AUCTIONS = 2` is a judgement, not a derivation.**  The *unit* is the argument
+   and it is settled; the number is not.  Two of a club's own auctions is roughly a season for a
+   monthly club and roughly two years for an annual one, which is the intended behaviour, but the
+   right number is the one an organizer would recognise as "they have stopped coming" and nobody
+   has been asked.  One constant, one place.
+
+## Not built, on purpose
+
+- **The one survey question.**  Allowed above -- once, after an invoice is paid -- and nothing has
+  been written for it.  It needs the human to decide whether to ask at all, and what; a question
+  chosen by anybody else is the thing this campaign is against.
+- **The IP-and-user-agent bound.**  The section above describes it as "a script somebody runs once"
+  that reports an interval rather than a number, and it stays that: not a column, and nothing reads
+  it afterwards.  It is worth writing only when somebody actually wants a historical figure.
+- **A per-organizer version of any of this.**  `/admin-lifecycle/` is a campaign instrument and it
+  names things an organizer cannot act on.  The same numbers shown to a club would be a different
+  design, and 9c is the part of it that is ready to be that.

@@ -517,7 +517,11 @@ def refresh_club_health(self):
     from auctions import club_health
 
     written = club_health.refresh_all()
-    logger.info("refreshed club health for %s clubs", written)
+    # The ladder snapshot rides on the same nightly run and is keyed on the month, so it writes
+    # this month's row the first time it runs and refreshes it every night after. A task that had
+    # to notice the first of the month would record nothing at all in the month it was deployed.
+    month = club_health.snapshot_ladder()
+    logger.info("refreshed club health for %s clubs, ladder snapshot for %s", written, month)
 
 
 def _switch_off_beat_entry(name):

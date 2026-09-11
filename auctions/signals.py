@@ -12,7 +12,14 @@ from django.dispatch import receiver
 from django.utils import timezone
 from django_ses.signals import bounce_received, complaint_received
 
-from .services import club_bidder_number_free_in
+from .services import (
+    CLUB_MANAGED_MODES,
+    SHARED_MEMBER_FIELDS,
+    clear_bidder_number_in,
+    club_managed_shadows_for,
+    set_member_bidder_number,
+    sync_member_to_shadows,
+)
 from .site_setup import ensure_single_club_membership_for_user
 
 logger = logging.getLogger(__name__)
@@ -340,6 +347,7 @@ def stash_previous_clubmember_state(sender, instance, **kwargs):
                 "bidding_allowed",
                 "selling_allowed",
                 "name",
+                "phone_number",
                 "membership_number",
                 "membership_expiration_date",
                 "membership_last_paid",
@@ -354,6 +362,7 @@ def stash_previous_clubmember_state(sender, instance, **kwargs):
         instance._previous_bidding_allowed = prev.get("bidding_allowed")
         instance._previous_selling_allowed = prev.get("selling_allowed")
         instance._previous_name = prev.get("name") or ""
+        instance._previous_phone_number = prev.get("phone_number") or ""
         instance._previous_membership_number = prev.get("membership_number")
         instance._previous_membership_expiration_date = prev.get("membership_expiration_date")
         instance._previous_membership_last_paid = prev.get("membership_last_paid")
@@ -365,6 +374,7 @@ def stash_previous_clubmember_state(sender, instance, **kwargs):
         instance._previous_bidding_allowed = None
         instance._previous_selling_allowed = None
         instance._previous_name = ""
+        instance._previous_phone_number = ""
         instance._previous_membership_number = None
         instance._previous_membership_expiration_date = None
         instance._previous_membership_last_paid = None
@@ -375,10 +385,17 @@ def stash_previous_clubmember_state(sender, instance, **kwargs):
 
 @receiver(post_save, sender="auctions.ClubMember")
 def propagate_clubmember_to_shadow_tos(sender, instance, created, **kwargs):
-    """When a ClubMember's bidder_number / bidding_allowed / selling_allowed change,
-    push the new values to linked shadow AuctionTOS records for club-managed auctions
-    that have not yet been invoiced. Bidder-number collisions are skipped per-row
-    (warning logged) rather than letting a unique-constraint violation crash the save.
+    """Push a changed ClubMember onto every participant row that is the same person.
+
+    Managing members through the club means there is one record of a person, not one per auction:
+    their name, email, phone, address and bidder number are the same everywhere, in auctions that
+    are over as well as the one running tonight. Anything a human types is pushed; what stays with
+    the auction is what the auction did to them -- checked_in, the invoice, the reminder flags.
+
+    A bidder number takes whoever is holding it off it first (``services.clear_bidder_number_in``),
+    with a history entry in that auction, rather than being skipped: a skip is invisible, and what
+    it looks like from the floor is the member's page showing the new number, the users table
+    showing the old one, and a lot knocked down to whoever still holds it.
 
     When a new member is created, auto-create shadow TOS records in any active
     club-managed auctions that auto-add members ("all" or "checkin" mode). Both paths check the
@@ -388,12 +405,15 @@ def propagate_clubmember_to_shadow_tos(sender, instance, created, **kwargs):
     from .models import Auction, AuctionTOS, PickupLocation
 
     if created:
-        # Auto-create shadow TOS records in club-managed auctions for new members
+        # Every club-managed auction, finished ones included: joining the club makes somebody
+        # manageable from any of the club's auctions, which is the promise the mode makes. Rows in
+        # an auction that is over carry no checked_in and no invoice, so they are a person the
+        # admin can find there, not an attendee -- check-in auctions count attendance off
+        # checked_in, not off the row existing.
         managed_auctions = Auction.objects.filter(
             club=instance.club,
             is_deleted=False,
-            invoiced=False,
-            manage_users_through_club__in=["all", "checkin"],
+            manage_users_through_club__in=CLUB_MANAGED_MODES,
         )
         for auction in managed_auctions:
             default_location = PickupLocation.objects.filter(auction=auction).order_by("-is_default", "pk").first()
@@ -405,12 +425,13 @@ def propagate_clubmember_to_shadow_tos(sender, instance, created, **kwargs):
             if not instance.bidder_number:
                 instance.generate_bidder_number(save=True)
             bidding = False if auction.manage_users_through_club == "checkin" else instance.bidding_allowed
+            clear_bidder_number_in(auction, instance.bidder_number)
             AuctionTOS.objects.create(
                 user=instance.user,
                 auction=auction,
                 pickup_location=default_location,
                 clubmember=instance,
-                bidder_number=club_bidder_number_free_in(auction, instance),
+                bidder_number=instance.bidder_number,
                 bidding_allowed=bidding,
                 selling_allowed=instance.selling_allowed,
                 name=instance.name or "",
@@ -425,32 +446,26 @@ def propagate_clubmember_to_shadow_tos(sender, instance, created, **kwargs):
     prev_bidding = getattr(instance, "_previous_bidding_allowed", None)
     prev_selling = getattr(instance, "_previous_selling_allowed", None)
 
-    shadows = AuctionTOS.objects.filter(
-        clubmember=instance,
-        auction__manage_users_through_club__in=["all", "checkin"],
-        auction__invoiced=False,
-    )
+    shadows = club_managed_shadows_for(instance)
 
     if prev_bidding is not None and prev_bidding != instance.bidding_allowed:
-        shadows.update(bidding_allowed=instance.bidding_allowed)
+        if instance.bidding_allowed:
+            # Check-in mode hands out the right to bid at the door and nowhere else. A member who
+            # has not checked in yet has to stay unable to bid however their club record changes --
+            # the same rule the auto-add path above and ``services.apply_club_member_to_tos``
+            # already enforce, and the one thing the mode is for.
+            shadows.exclude(
+                auction__manage_users_through_club="checkin",
+                auction__club__isnull=False,
+                checked_in__isnull=True,
+            ).update(bidding_allowed=True)
+        else:
+            shadows.update(bidding_allowed=False)
     if prev_selling is not None and prev_selling != instance.selling_allowed:
         shadows.update(selling_allowed=instance.selling_allowed)
+    sync_member_to_shadows(instance)
     if prev_bidder is not None and prev_bidder != instance.bidder_number and instance.bidder_number:
-        for shadow in shadows:
-            collision = (
-                AuctionTOS.objects.filter(auction_id=shadow.auction_id, bidder_number=instance.bidder_number)
-                .exclude(pk=shadow.pk)
-                .exists()
-            )
-            if collision:
-                logging.getLogger(__name__).warning(
-                    "Skipped bidder_number sync for AuctionTOS pk=%s: '%s' already taken in auction pk=%s",
-                    shadow.pk,
-                    instance.bidder_number,
-                    shadow.auction_id,
-                )
-                continue
-            AuctionTOS.objects.filter(pk=shadow.pk).update(bidder_number=instance.bidder_number)
+        set_member_bidder_number(instance, instance.bidder_number)
 
 
 @receiver(post_save, sender="auctions.ClubMember")
@@ -563,6 +578,55 @@ def sync_clubmember_to_brevo(sender, instance, created, **kwargs):
         transaction.on_commit(lambda old=prev_email: sync_club_member_email_change_brevo.delay(pk, old))
     else:
         transaction.on_commit(lambda: sync_club_member_to_brevo.delay(pk))
+
+
+#: What ``AuctionTOS.save()`` writes into a field that was left blank. These are the absence of an
+#: answer rather than an answer, and carrying one up would overwrite the member's real name with it.
+BLANK_MARKERS = {"name": {"", "Unknown"}, "bidder_number": {"", "ERROR"}}
+
+
+def _worth_carrying_up(field, value):
+    value = (value or "").strip()
+    return bool(value) and value not in BLANK_MARKERS.get(field, set())
+
+
+@receiver(post_save, sender="auctions.AuctionTOS")
+def sync_auctiontos_up_to_clubmember(sender, instance, **kwargs):
+    """The other direction: an edit made in an auction is an edit to the club member.
+
+    ``propagate_clubmember_to_shadow_tos`` carries a change down from the club page. This carries
+    one up, so it does not matter where the admin happened to be standing when they fixed somebody's
+    email -- the CSV import, the bulk-add form, ``update_person``, the app's offline queue and the
+    plain participant form all reach the same record. Writing the member then pushes it back down to
+    every other auction, which is what makes "there is one of each person" true rather than aspirational.
+
+    Only when something actually differs, because this runs on every AuctionTOS save -- including
+    the ones the downward propagation and check-in make.
+    """
+    from .models import ClubMember
+
+    member = instance.clubmember
+    if member is None or not instance.auction.is_club_managed:
+        return
+    changed = [
+        field
+        for field in SHARED_MEMBER_FIELDS
+        if _worth_carrying_up(field, getattr(instance, field, None))
+        and (getattr(instance, field, None) or "") != (getattr(member, field, None) or "")
+    ]
+    number = (instance.bidder_number or "").strip()
+    number_changed = _worth_carrying_up("bidder_number", number) and number != (member.bidder_number or "").strip()
+    if not changed and not number_changed:
+        return
+    if changed:
+        for field in changed:
+            setattr(member, field, getattr(instance, field) or "")
+        # update() rather than save(): the member's own post_save would push these straight back
+        # down, and this row already has them. sync_member_to_shadows reaches the other auctions.
+        ClubMember.objects.filter(pk=member.pk).update(**{field: getattr(member, field) for field in changed})
+        sync_member_to_shadows(member)
+    if number_changed:
+        set_member_bidder_number(member, number)
 
 
 @receiver(post_save, sender="auctions.AuctionTOS")
@@ -726,6 +790,7 @@ def user_logged_in_callback(sender, user, request, **kwargs):
         )
 
     link_unattached_tos_for_user(user)
+    record_sign_in_stitch(user, request)
 
     from auctions.models import ClubMember
 
@@ -733,6 +798,37 @@ def user_logged_in_callback(sender, user, request, **kwargs):
     # and there is no meaningful "who did this" actor to record.
     ClubMember.objects.filter(user__isnull=True, email=user.email, is_deleted=False).update(user=user)
     ensure_single_club_membership_for_user(user)
+
+
+def record_sign_in_stitch(user, request):
+    """Remember which anonymous session this person was holding when they signed in.
+
+    The one row ``docs/phase_9.md`` asks anybody to add, and the whole of its argument is in
+    ``SignInStitch``'s docstring: it closes the anonymous-to-identified seam with a key the site
+    issued itself, rather than with an IP-and-user-agent guess that is least reliable in exactly the
+    room this site's buyers are standing in.
+
+    **From the cookie, not from the session.** ``django.contrib.auth.login`` calls
+    ``request.session.cycle_key()`` before it sends ``user_logged_in``, so a receiver reading
+    ``request.session.session_key`` gets the key issued a moment ago and stitches the sign-in to
+    itself. ``request.COOKIES`` is what the browser sent, which is the key every anonymous
+    ``PageView`` in this visit was written under.
+
+    Silent on every path that has no session cookie at all -- the mobile API's JWT logins, the
+    WebView handoff, a management command -- because there is no anonymous half to attach.
+    """
+    from django.conf import settings
+
+    from auctions.models import SignInStitch
+
+    if request is None:
+        return
+    key = (request.COOKIES or {}).get(settings.SESSION_COOKIE_NAME)
+    if not key:
+        return
+    # get_or_create rather than create: signing in again from the same browser is the same stitch,
+    # and the row already there is the one that says when the anonymous half ended.
+    SignInStitch.objects.get_or_create(user=user, session_id=key[:600])
 
 
 @receiver(post_save, sender=User)

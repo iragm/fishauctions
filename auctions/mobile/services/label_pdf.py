@@ -13,16 +13,15 @@ import logging
 logger = logging.getLogger(__name__)
 
 
-def render_single_lot_pdf(lot, request, *, single_label_page=False, mark_printed=True):
-    """Render *lot*'s label as a one-lot PDF using the caller's saved label prefs.
+def build_label_view(lot, request, *, single_label_page=False, mark_printed=True):
+    """The configured ``SingleLotLabelView`` for *lot*, ready to render.
 
-    ``request`` is the DRF request (its ``user`` is the JWT-authenticated user). Returns
-    ``(pdf_bytes, "application/pdf")``. Raises ``ValueError`` if the lot has no auction to render
-    against (mirrors the web view, which drives labels off the auction's print-field config).
+    Split out of :func:`render_single_lot_pdf` so a caller that wants the label's HTML *and* its PDF
+    -- the raster cache does, because the HTML is the cache key -- can build the context once
+    instead of doing every query and every layout calculation twice.
 
-    ``single_label_page`` sizes the page to one label rather than a sheet, and ``mark_printed=False``
-    suppresses the "rendering a sheet marks it printed" side effect — both for the raster path,
-    where the label is being drawn rather than sent to a printer.
+    Raises ``ValueError`` if the lot has no auction to render against (mirrors the web view, which
+    drives labels off the auction's print-field config).
     """
     from auctions.views import SingleLotLabelView
 
@@ -44,8 +43,30 @@ def render_single_lot_pdf(lot, request, *, single_label_page=False, mark_printed
     view.auction = auction
     view.single_label_page = single_label_page
     view.mark_labels_printed = mark_printed
+    return view
 
-    context = view.get_context_data()
+
+def render_view_pdf(view, context):
+    """*view*'s already-built *context*, through WeasyPrint, as PDF bytes.
+
+    Takes the context rather than building it: ``get_context_data`` is also what marks labels
+    printed, so calling it twice for one label would be a second write as well as a second layout.
+    """
     response = view.render_to_response(context)
     response.render()
-    return bytes(response.content), "application/pdf"
+    return bytes(response.content)
+
+
+def render_single_lot_pdf(lot, request, *, single_label_page=False, mark_printed=True):
+    """Render *lot*'s label as a one-lot PDF using the caller's saved label prefs.
+
+    ``request`` is the DRF request (its ``user`` is the JWT-authenticated user). Returns
+    ``(pdf_bytes, "application/pdf")``. Raises ``ValueError`` if the lot has no auction to render
+    against (mirrors the web view, which drives labels off the auction's print-field config).
+
+    ``single_label_page`` sizes the page to one label rather than a sheet, and ``mark_printed=False``
+    suppresses the "rendering a sheet marks it printed" side effect — both for the raster path,
+    where the label is being drawn rather than sent to a printer.
+    """
+    view = build_label_view(lot, request, single_label_page=single_label_page, mark_printed=mark_printed)
+    return render_view_pdf(view, view.get_context_data()), "application/pdf"

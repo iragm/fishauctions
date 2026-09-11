@@ -49,6 +49,10 @@ from auctions.models import (
     ClubMember,
     ClubMoney,
 )
+from auctions.services import (
+    bidder_number_holder_in,
+    club_managed_shadows_for,
+)
 from auctions.tasks import (
     maybe_send_membership_renewal_confirmation,
 )
@@ -103,6 +107,7 @@ class ClubMemberValidation(ClubViewMixin, APIPostView):
             "name_tooltip": "",
             "email_tooltip": "",
             "bidder_number_tooltip": "",
+            "bidder_number_note": "",
         }
         bidder_number = request.POST.get("bidder_number", "").strip()
         base_qs = ClubMember.objects.filter(club=self.club, is_deleted=False)
@@ -171,6 +176,19 @@ class ClubMemberValidation(ClubViewMixin, APIPostView):
                 result["bidder_number_tooltip"] = "Bidder number is already in this club"
             elif contact_deactivated_qs.filter(bidder_number=bidder_number).exists():
                 result["bidder_number_tooltip"] = "Bidder number matches a deactivated member"
+        if bidder_number and pk and not result["bidder_number_tooltip"]:
+            # Not an error: saving this takes the number off whoever has it in the club's auctions
+            # and gives them another (services.set_member_bidder_number). Say whose card is about to
+            # stop matching, before the save rather than after it.
+            member = ClubMember.objects.filter(pk=pk, club=self.club).first()
+            for shadow in club_managed_shadows_for(member) if member else []:
+                holder = bidder_number_holder_in(shadow.auction, bidder_number, exclude_tos=shadow)
+                if holder is not None:
+                    result["bidder_number_note"] = (
+                        f"{holder.name} is bidder number {bidder_number} in {shadow.auction} "
+                        f"and will be given a new one"
+                    )
+                    break
         return JsonResponse(result)
 
 
@@ -391,6 +409,7 @@ function cmValidateField() {{
             }}
             cmSetFieldInvalid("id_email", response.email_tooltip, !!response.email_tooltip);
             cmSetFieldInvalid("id_bidder_number", response.bidder_number_tooltip, !!response.bidder_number_tooltip);
+            cmSetFieldNote("id_bidder_number", response.bidder_number_note || "");
         }}
     }});
 }}

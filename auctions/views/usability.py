@@ -28,14 +28,15 @@ batches, which is the difference between a job somebody does and a job somebody 
 import logging
 
 from django.contrib import messages
-from django.db.models import Count
+from django.contrib.auth.models import User
+from django.db.models import Count, Q
 from django.shortcuts import get_object_or_404, redirect
 from django.urls import reverse
 from django.utils import timezone
 from django.views import View
 from django.views.generic import TemplateView
 
-from auctions import club_health, club_matching, usability_report
+from auctions import club_health, club_matching, lifecycle, usability_report
 from auctions.field_adoption import auction_field_adoption
 from auctions.models import Auction, Club, ClubHealth
 from auctions.services import link_auction_to_club
@@ -86,6 +87,10 @@ class AdminClubHealth(AdminOnlyViewMixin, TemplateView):
         context = super().get_context_data(**kwargs)
         context["queue"] = club_health.due_for_checkin()
         context["ladder"] = club_health.ladder_counts()
+        # The ladder as a trend, which is the only part of phase 8f that is code: the outreach
+        # email is drafted per club and sent by hand, and a single column of counts cannot show
+        # the one thing outreach produces, which is movement between rungs.
+        context["ladder_history"] = club_health.ladder_history()
         context["stall_reason_choices"] = Club.STALL_REASON_CHOICES
         context["stall_reasons"] = _stall_reason_counts()
         context["never_computed"] = Club.objects.filter(health__isnull=True).count()
@@ -242,3 +247,114 @@ class LinkAuctionsToClub(AdminOnlyViewMixin, View):
         else:
             messages.info(request, "Nothing to link -- those auctions already have a club.")
         return redirect(reverse("admin_unlinked_auctions"))
+
+
+class AdminLifecycle(AdminOnlyViewMixin, TemplateView):
+    """Milestones, one club's cohorts, and the median member of one of its auctions
+
+    Phase 9's report page, and the first one here that is not about the person running the auction.
+    Three panels because ``docs/phase_9.md`` argues they are only worth anything next to each
+    other: a milestone table says what share of a room got to each thing, the cohort table says
+    whether that share is moving between one auction and the next, and the median member says who
+    those numbers were actually about.
+
+    **Not a funnel, and the difference is not cosmetic.**  ``AdminUsability`` shows
+    ``buyer_funnel``, which is seven stages in a fixed order; a seller adds lots and never opens
+    one, and a strict funnel reports that as a drop-out.  This page reports reach.
+
+    The club selector defaults to the club with the most auctions rather than to the most recent
+    one, because a cohort table needs a history to be a table at all, and the club with one auction
+    renders a row that cannot say anything.
+    """
+
+    template_name = "dashboard_lifecycle.html"
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["milestones"] = lifecycle.MILESTONES
+        context["coverage"] = lifecycle.club_coverage()
+        context["stitching_began"] = lifecycle.stitching_began()
+        context["lapsed_after"] = lifecycle.LAPSED_AFTER_AUCTIONS
+
+        clubs = list(
+            # ``auctions`` is the reverse accessor, so it is what the filter traverses -- and it
+            # is also why the annotation cannot be called that: Django refuses one that shadows a
+            # field rather than quietly winning.
+            Club.objects.annotate(auction_count=Count("auctions", filter=Q(auctions__is_deleted=False)))
+            .filter(auction_count__gt=0)
+            .order_by("-auction_count", "name")
+        )
+        context["clubs"] = clubs
+        club = None
+        if self.request.GET.get("club"):
+            club = next((item for item in clubs if str(item.pk) == self.request.GET["club"]), None)
+        club = club or (clubs[0] if clubs else None)
+        context["club"] = club
+
+        auctions = lifecycle.club_auctions(club, limit=None)[-lifecycle.COHORT_AUCTIONS :] if club else []
+        # Newest first for the milestone table, which is read as "how did the last one go"; the
+        # cohort table keeps the oldest-first order it is computed in, because a trend read
+        # backwards is a different trend.
+        shown = list(reversed(auctions))
+        context["auctions"] = shown
+        reach = lifecycle.milestone_reach(auctions)
+        # Pivoted here rather than in the template: a milestone is a row and an auction is a
+        # column, and Django's template language cannot index a dict by a variable key at all --
+        # the alternative is a filter that exists only to make one table render.
+        context["milestone_rows"] = [
+            {
+                "milestone": milestone,
+                "cells": [reach.get(auction.pk, {}).get(milestone.key, 0) for auction in shown],
+            }
+            for milestone in lifecycle.MILESTONES
+        ]
+        context["cohorts"] = lifecycle.club_cohorts(club) if club else []
+
+        auction = context["auctions"][0] if context["auctions"] else None
+        if self.request.GET.get("auction"):
+            auction = next((item for item in auctions if str(item.pk) == self.request.GET["auction"]), auction)
+        context["auction"] = auction
+        context["median"] = lifecycle.median_member_story(auction) if auction else None
+        context["unreached"] = lifecycle.unreached_share(auction) if auction else None
+        return context
+
+
+class AdminSessionReplay(AdminOnlyViewMixin, TemplateView):
+    """One person's pages, in the order they opened them, with the gaps
+
+    ``docs/phase_9.md`` calls this the highest-value item in the phase, and the argument is about
+    sample size rather than about features: with dozens of active organizers and no split that
+    could ever reach significance, twenty real sessions read end to end teach more than any
+    aggregate.  It needs no new table -- ``PageView`` has carried a session key, a path and a
+    timestamp for five years.
+
+    A page and a limit, not a chart.  ``?session=`` reads one anonymous session; ``?user=`` reads
+    somebody's signed-in rows **plus** the anonymous rows from every session they were holding when
+    they signed in, which for a buyer is the half of the visit that matters.  Before the first
+    ``SignInStitch`` there are none of those to find, and the page says so rather than presenting a
+    short timeline as a complete one.
+    """
+
+    template_name = "dashboard_session_replay.html"
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        session_id = (self.request.GET.get("session") or "").strip()
+        user = None
+        if self.request.GET.get("user"):
+            user = User.objects.filter(pk=self.request.GET["user"]).first()
+        context["session_id"] = session_id
+        context["subject"] = user
+        context["visit_gap_minutes"] = int(lifecycle.VISIT_GAP.total_seconds() // 60)
+        context["stitching_began"] = lifecycle.stitching_began()
+        if user is not None:
+            context["timeline"] = lifecycle.session_timeline(user=user)
+            context["stitched"] = lifecycle.stitched_sessions(user)
+        elif session_id:
+            context["timeline"] = lifecycle.session_timeline(session_id=session_id)
+            context["stitched"] = []
+        else:
+            context["timeline"] = []
+            context["stitched"] = []
+            context["recent"] = lifecycle.busiest_sessions()
+        return context

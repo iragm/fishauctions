@@ -548,5 +548,4 @@ document.addEventListener("DOMContentLoaded", function() {
 {% if request.user.is_superuser and show_links %}
   <a href="/admin/auctions/invoice/{{invoice.pk}}/change/" class="btn btn-info">Admin</a>
 {% endif %}
-<div id="modals-here"></div>
 {% endblock %}

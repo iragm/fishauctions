@@ -672,6 +672,7 @@ POST /api/mobile/command-palette/log/
         { "id": 7 }
 """
 
+import base64
 import hashlib
 import json
 import logging
@@ -725,6 +726,7 @@ from .serializers import (
     MobileDeviceSerializer,
     MobileDeviceUnregisterSerializer,
     MobileGoogleAuthSerializer,
+    MobileLabelBatchSerializer,
     MobileLabelPrefsSerializer,
     MobileLabelsPrintedSerializer,
     MobileLoginSerializer,
@@ -1638,13 +1640,102 @@ class MobileLotLabelView(APIView):
         return HttpResponse(content, content_type=content_type)
 
 
+class MobileLotLabelBatchView(APIView):
+    """POST /api/mobile/labels/batch/ — a whole print run's PNGs in one request.
+
+    Printing forty labels used to be forty GETs of ``labels/<pk>/``, and the cost the user feels is
+    not the render (about 110 ms a label, and now cached on the label's own HTML) but the forty
+    round trips carrying it: TLS, auth, throttle and scheduling, over the wifi of an auction hall,
+    while somebody stands at a table waiting. This is the same labels in one request.
+
+    The response is deliberately not "all of them". ``labels`` is what got rendered, ``remaining``
+    is what did not, and the app's loop is *post what is left, print what comes back* — so a run of
+    three hundred starts printing after the first chunk instead of after the last, and a slow server
+    returns a smaller chunk on its own (see ``render_lot_labels_png``'s budget) rather than making
+    the phone wait for a minute-long response it can't begin.
+
+    Lots the caller can't print are skipped rather than refusing the batch, the same rule as
+    ``labels/printed/``: one bad pk in a run of forty must not cost the other thirty-nine.
+    Nothing here marks anything printed — that is what the printer decides, and the app reports it.
+    """
+
+    permission_classes = [IsMobileAuthenticated]
+    throttle_scope = "mobile_api"
+    throttle_classes = [ScopedRateThrottle]
+
+    def post(self, request):
+        from .services.label_raster import render_lot_labels_png
+
+        serializer = MobileLabelBatchSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        data = serializer.validated_data
+        try:
+            width, height, dpi = LabelService.parse_dimensions(data.get("resolution"), data.get("dpi"))
+        except ValueError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
+        pks = list(dict.fromkeys(data["lots"]))  # de-duped, order kept: it is the print order
+        by_pk = Lot.objects.filter(pk__in=pks, is_deleted=False).select_related(
+            "user",
+            "auction",
+            "species_category",
+            "auctiontos_seller",
+            "auctiontos_seller__auction",
+            "auctiontos_seller__user",
+        )
+        by_pk = {lot.pk: lot for lot in by_pk}
+        wanted, skipped = [], []
+        for pk in pks:
+            lot = by_pk.get(pk)
+            if lot is None:
+                skipped.append({"lot": pk, "detail": "Lot not found."})
+            elif not MobileLotLabelView._can_access(request.user, lot):
+                skipped.append({"lot": pk, "detail": "You do not have permission to print this lot's label."})
+            else:
+                wanted.append(lot)
+
+        rendered, remaining = render_lot_labels_png(wanted, request, width=width, height=height, dpi=dpi)
+        labels = []
+        for lot, png in rendered:
+            if png is None:
+                # Same fallback as the single-lot endpoint: a lot with no auction has no label
+                # configuration to render against, and the standalone renderer draws it instead.
+                png, _content_type = LabelService.render_label(
+                    lot, "png", resolution=data.get("resolution") or None, dpi=dpi
+                )
+            labels.append({"lot": lot.pk, "content_type": "image/png", "png": base64.b64encode(png).decode("ascii")})
+        return Response(
+            {
+                "labels": labels,
+                "remaining": [lot.pk for lot in remaining],
+                "skipped": skipped,
+                "resolution": f"{width}x{height}",
+                "dpi": dpi,
+            }
+        )
+
+
 class MobileLabelsPrintedView(APIView):
-    """POST /api/mobile/labels/printed/ — mark a batch of lot labels as printed.
+    """POST /api/mobile/labels/printed/ — what came out of the printer, and what didn't.
 
     The PDF views set ``label_printed`` as a side effect of rendering
     (``LotLabelView.get_context_data`` → ``bulk_update``), and neither ``labels/<pk>/`` nor the
     ``fishauctions://print/`` deep-link path goes through them — so "print unprinted labels" would
     never shrink for anyone printing natively over Bluetooth. This closes that.
+
+    **``failed`` is the half that was missing, and it is the only cure for a jam reported as a
+    success.** The server cannot see the printer: every byte goes phone → Bluetooth → printhead, and
+    nothing on that path passes through here. What the server *does* own is the vocabulary — each
+    ``ThermalPrinterProfile`` carries a ``status_program`` and a ``status_flags`` table that decodes
+    a status byte into ``paper_jam`` / ``out_of_paper`` / ``cover_open`` / … (see
+    ``auctions.printer_programs.STATUS_CONDITIONS``), and the app already downloads both. So the
+    division is: the app reads the status and says which labels did not come out; this endpoint puts
+    those lots back to unprinted and flags them for reprinting, so clearing the jam and pressing
+    "print unprinted labels" prints exactly what is missing. An app that reports every label as
+    printed regardless — which is what a printer with a red light on it used to produce — is a bug
+    in the app, not something this endpoint can second-guess, and inventing a server-side check
+    would only mean inventing an answer.
 
     Fire-and-forget from the app, and self-disabling: a 404 turns it off for the process, so a
     deployment without this endpoint behaves exactly as before.
@@ -1659,19 +1750,49 @@ class MobileLabelsPrintedView(APIView):
         if not serializer.is_valid():
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
-        pks = serializer.validated_data["lots"]
-        lots = Lot.objects.filter(pk__in=pks, is_deleted=False).select_related(
+        data = serializer.validated_data
+        # A lot named in both lists is a contradiction; "it did not come out" wins, because that is
+        # the report that leaves a label to print and the other one only leaves it printed.
+        failed_pks = set(data["failed"])
+        printed_pks = [pk for pk in data["lots"] if pk not in failed_pks]
+        lots = Lot.objects.filter(pk__in=set(printed_pks) | failed_pks, is_deleted=False).select_related(
             "auctiontos_seller", "auctiontos_seller__auction"
         )
         # Lots the caller can't touch are skipped, not refused: a batch of forty is one print run,
         # and most of it printed fine. Same per-lot rule as GET labels/<pk>/.
-        allowed = [lot for lot in lots if MobileLotLabelView._can_access(request.user, lot)]
-        for lot in allowed:
+        allowed = {lot.pk: lot for lot in lots if MobileLotLabelView._can_access(request.user, lot)}
+        marked = []
+        for pk in printed_pks:
+            lot = allowed.get(pk)
+            if lot is None:
+                continue
             lot.label_printed = True
             lot.label_needs_reprinting = False
+            marked.append(lot)
+        failed = []
+        for pk in failed_pks:
+            lot = allowed.get(pk)
+            if lot is None:
+                continue
+            # Back to unprinted even if an earlier run had marked it printed: the label the person
+            # is holding is a jam, and unprinted_labels_qs is what "print unprinted labels" reads.
+            lot.label_printed = False
+            lot.label_needs_reprinting = True
+            failed.append(lot)
         # Matches what the PDF views write, so the two paths agree on what "printed" means.
-        Lot.objects.bulk_update(allowed, ["label_printed", "label_needs_reprinting"])
-        return Response({"marked": len(allowed)})
+        Lot.objects.bulk_update(marked + failed, ["label_printed", "label_needs_reprinting"])
+        if failed:
+            # No model for this: the durable record is the lots left unprinted, and a row per jam
+            # would be a table nobody reads. The log is for the case where somebody asks why a
+            # printer keeps failing, and it carries the app's own words and its decoded conditions.
+            logger.warning(
+                "User %s reported %s label(s) that did not print (conditions=%s): %s",
+                request.user.pk,
+                len(failed),
+                ",".join(data["conditions"]) or "none reported",
+                data["message"] or "no message",
+            )
+        return Response({"marked": len(marked), "failed": len(failed)})
 
 
 # ---------------------------------------------------------------------------

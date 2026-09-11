@@ -21,7 +21,7 @@ from auctions.club_health import (
     is_test_auction,
     median_gap,
 )
-from auctions.models import Auction, Club, ClubMember
+from auctions.models import Auction, Club, ClubLadderSnapshot, ClubMember
 from auctions.tests import StandardTestCase
 
 
@@ -510,3 +510,44 @@ class RefreshAllTests(StandardTestCase):
             # Nothing is actually broken here; assertLogs needs at least one record, so provoke one.
             club_health.logger.error("provoked")
         self.assertGreater(written, 0)
+
+
+class LadderSnapshotTests(TestCase):
+    """The ladder as a trend, which is the only part of phase 8f that is code.
+
+    ``ClubHealth`` is a ``OneToOneField`` rewritten nightly, so it holds only today: the moment a
+    club moves up a rung, where it used to be is gone.  These tests are about the two properties
+    that makes the snapshot worth a table at all -- it is idempotent within a month, and a month
+    nobody recorded reads as a gap rather than as zero clubs.
+    """
+
+    def test_a_month_is_recorded_once_and_then_refreshed_in_place(self):
+        """The nightly task calls this unconditionally; it must not write thirty rows a month."""
+        Club.objects.create(name="Snapshot club one")
+        club_health.snapshot_ladder()
+        first = ClubLadderSnapshot.objects.count()
+        self.assertGreater(first, 0)
+        Club.objects.create(name="Snapshot club two")
+        club_health.snapshot_ladder()
+        self.assertEqual(ClubLadderSnapshot.objects.count(), first)
+        self.assertEqual(sum(ClubLadderSnapshot.objects.values_list("clubs", flat=True)), 2)
+
+    def test_two_months_are_two_columns(self):
+        Club.objects.create(name="Snapshot club three")
+        club_health.snapshot_ladder(when=timezone.now() - timezone.timedelta(days=40))
+        club_health.snapshot_ladder()
+        history = club_health.ladder_history()
+        self.assertEqual(len(history["months"]), 2)
+        self.assertEqual(history["months"], sorted(history["months"]))
+
+    def test_a_month_nobody_recorded_is_a_gap_and_not_a_zero(self):
+        """A zero would say every club left that rung.  The truth is that nobody was looking."""
+        Club.objects.create(name="Snapshot club four")
+        club_health.snapshot_ladder()
+        ClubLadderSnapshot.objects.filter(stage="listed").delete()
+        history = club_health.ladder_history()
+        listed = next(row for row in history["rows"] if row["stage"] == "listed")
+        self.assertEqual(listed["counts"], [None])
+
+    def test_no_snapshots_is_an_empty_report_rather_than_a_row_of_zeroes(self):
+        self.assertEqual(club_health.ladder_history(), {"months": [], "rows": []})

@@ -1,4 +1,7 @@
-"""Catches Django template tags that silently render as text instead of being parsed.
+"""Catches template mistakes that are silent -- no error, no warning, just a wrong page.
+
+Two of them so far: a template tag that never renders as a tag, and a second element claiming the
+one id every modal is swapped into.
 
 Django's lexer is ``({%.*?%}|{{.*?}}|{#.*?#})`` with no ``re.DOTALL``, so **every** template
 tag has to open and close on the same line. A tag spread over two lines isn't a syntax error and
@@ -10,6 +13,13 @@ members read it. The usual way this happens is a comment that grew too long for 
 
 which puts that entire note, ``#}`` and all, on the club page. Use ``{% comment %} … {% endcomment %}``
 for anything that needs more than one line.
+
+The second is ``id="modals-here"``. base.html renders that container once, on every page; a
+template that declares its own puts two elements with one id on the page, and htmx and
+``document.querySelector`` both take the first in document order. The two then take turns being
+destroyed, which reads as "the modal opens twice and then stops" and had been chased three times as
+a bug in the modal code. (print.html, the other base, deliberately has none -- it loads neither htmx
+nor htmx_modal.js, so nothing there can open a modal in the first place.)
 
 Pure stdlib and no Django import, so this runs three ways off one implementation: as a unit test
 (``auctions/test_template_hygiene.py``), from the lint script, and as a pre-commit hook —
@@ -34,6 +44,11 @@ BALANCED_TAG = re.compile(r"\{%.*?%\}|\{\{.*?\}\}|\{#.*?#\}")
 ORPHAN_CLOSERS = ("%}", "#}")
 
 TEMPLATE_SUFFIXES = (".html", ".txt")
+
+# The modal container, and the one template allowed to declare it: everything else inherits
+# base.html's -- see the module docstring.
+MODAL_CONTAINER = 'id="modals-here"'
+MODAL_CONTAINER_OWNERS = ("templates/base.html",)
 
 
 def iter_template_files(root):
@@ -110,11 +125,31 @@ def check_text(text):
     return problems
 
 
+def check_modal_container(path, text):
+    """Return ``[(line_number, message)]`` for a template that declares a second modal container."""
+    posix = Path(path).as_posix()
+    if any(posix.endswith(owner) for owner in MODAL_CONTAINER_OWNERS):
+        return []
+    return [
+        (
+            number,
+            f"{MODAL_CONTAINER} is already rendered by base.html. A second element with that id "
+            f"makes htmx swap into whichever comes first, and modals stop opening once that one has "
+            f"been swapped away. Delete this and use the inherited container.",
+        )
+        for number, line in enumerate(text.splitlines(), 1)
+        if MODAL_CONTAINER in line
+    ]
+
+
 def check_templates(root):
     """Return ``[(path, line_number, message)]`` for every template under ``root``."""
     findings = []
     for path in iter_template_files(root):
-        for number, message in check_text(path.read_text(encoding="utf-8", errors="replace")):
+        text = path.read_text(encoding="utf-8", errors="replace")
+        for number, message in check_text(text):
+            findings.append((path, number, message))
+        for number, message in check_modal_container(path, text):
             findings.append((path, number, message))
     return findings
 
@@ -130,7 +165,7 @@ def main(argv=None):
     for path, number, message in findings:
         sys.stderr.write(f"{path}:{number}: {message}\n")
     if findings:
-        sys.stderr.write(f"\n{len(findings)} unparsed template tag(s) would render as text.\n")
+        sys.stderr.write(f"\n{len(findings)} template problem(s) that would render a wrong page.\n")
         return 1
     return 0
 

@@ -191,17 +191,22 @@ class LotLabelView(TemplateView, WeasyTemplateResponseMixin, AuctionViewMixin):
         """The waiting page for a job pushed to the user's phone, or None to render the PDF.
 
         Only from a *computer*: in the app, arm 2 above has already had its say, and a phone that
-        prints its own labels needs no job. ``can_print_from_computer`` is both halves of the
-        question -- the preference is on, and a phone is heartbeating with a printer paired -- because
-        a page that promises a print the phone cannot deliver is exactly what this feature is built to
-        avoid.
+        prints its own labels needs no job.
+
+        The branch is the **preference**, not whether the phone is answering. It used to be both, so
+        a print made while the app was closed fell through to a PDF download with nothing said --
+        the user asked for labels on the printer beside their phone and got a file in their
+        downloads folder, and the only way to find out why was to work it out. Now the page is the
+        same page either way: the job is created, ``dispatch`` marks it unreachable at once because
+        there is no phone to push to, and the page opens on "open the app on your phone" with Try
+        again beside it. The PDF is still there, as a button somebody chooses.
         """
         from auctions.mobile.services import remote_print
 
         request = self.request
         if getattr(request, "is_mobile_app", False) or not request.user.is_authenticated:
             return None
-        if not remote_print.can_print_from_computer(request.user):
+        if not remote_print.wants_print_from_computer(request.user):
             return None
         # Same queryset and order as the PDF, which is the order they come out of the printer.
         pks = list(self.get_queryset().values_list("pk", flat=True))
@@ -217,6 +222,9 @@ class LotLabelView(TemplateView, WeasyTemplateResponseMixin, AuctionViewMixin):
             "printer_name": job.device.printer_name if job.device else "",
             "pdf_url": self.request.get_full_path() + ("&" if self.request.GET else "?") + "pdf=1",
             "back_url": self.auction.get_absolute_url() if self.auction else reverse("selling"),
+            # Painted before the first poll so an already-answered job (no phone, no push token)
+            # opens on its error instead of a second of "Sending..." that was never true.
+            "initial_state": remote_print.job_state(job),
         }
         return render(self.request, "label_remote_print.html", context)
 
@@ -272,7 +280,12 @@ class LotLabelView(TemplateView, WeasyTemplateResponseMixin, AuctionViewMixin):
     def get_context_data(self, **kwargs):
         user_label_prefs, created = UserLabelPrefs.objects.get_or_create(user=self.request.user)
         context = {}
-        context["empty_labels"] = user_label_prefs.empty_labels
+        # Blank labels are for skipping the used corner of a part-used Avery sheet, and there is no
+        # such thing on a roll -- so a single-label page never gets them. It matters more than it
+        # sounds: single_label_page is the Bluetooth raster path, page one is the picture the printer
+        # is handed, and with empty_labels set that picture was a blank label. Anyone who had ever
+        # printed onto a part-used sheet got blanks out of their thermal printer.
+        context["empty_labels"] = 0 if self.single_label_page else user_label_prefs.empty_labels
         context["print_border"] = user_label_prefs.print_border
         context["first_column_width"] = 0.62
         if user_label_prefs.preset == "sm":

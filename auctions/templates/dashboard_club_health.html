@@ -110,6 +110,38 @@
   </table>
 </div>
 
+<h4 class="mt-4">Is the outreach working</h4>
+<p class="text-muted small">
+  The same ladder, month by month. A column of counts cannot show movement, and movement is the
+  only thing outreach produces &mdash; a club that goes from <em>aware</em> to <em>trial</em> is the
+  whole return on somebody&rsquo;s afternoon. Recorded once a month because nothing here moves
+  faster than that; a blank cell is a month nobody recorded, not a month with no clubs on that rung.
+</p>
+{% if ladder_history.months %}
+<div class="table-responsive">
+  <table class="table table-sm">
+    <thead>
+      <tr>
+        <th>Rung</th>
+        {% for month in ladder_history.months %}<th class="text-end">{{ month|date:"M y" }}</th>{% endfor %}
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in ladder_history.rows %}
+      <tr>
+        <td>{{ row.label }}</td>
+        {% comment %}default_if_none, not an {% templatetag openblock %} if {% templatetag closeblock %}: the template language has no None literal, so a comparison against it silently tests the empty string and a real zero would render as the gap.{% endcomment %}
+        {% for count in row.counts %}<td class="text-end">{{ count|default_if_none:"—" }}</td>{% endfor %}
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+<p class="text-muted">No month has been recorded yet. The nightly club health task writes the first
+  one the next time it runs.</p>
+{% endif %}
+
 <h4 class="mt-4">Which club management tools anybody actually uses</h4>
 <p class="text-muted small">
   The same question the auction settings adoption table asks, at the level of whole features: a

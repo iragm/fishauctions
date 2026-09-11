@@ -60,11 +60,11 @@ Ordered by (unblocks-other-work x value). Status: `todo` | `wip` | `done`.
 | 8b | The link verifier: fetch every club's links and nominate the dead | migrations 0434, 0435 | built, then scrapped with the rest of the outbound HTTP |
 | 8c-8e | Finding clubs that are not here yet: a curated CSV, imported and deduped | `club_import.py`, `import_clubs` | done -- scraping tried, run, and scrapped |
 | 8g | The contact info gate before creating an auction, and the unlinked-auction queue | `services.py`, `club_matching.py`, `views/usability.py` | done |
-| 9 | Everybody who is not running the auction | `docs/phase_9.md` | specced, not started |
+| 9 | Everybody who is not running the auction | `lifecycle.py`, `views/usability.py`, migration 0438 | built -- 9a-9d, see below |
 
 Every phase above has a test module: `test_usability_instruments.py`, `test_form_friction.py`,
 `test_usability_report.py`, `test_club_health.py`, `test_template_a11y.py`,
-`test_page_view_beacon.py`.
+`test_page_view_beacon.py`, `test_lifecycle.py`.
 
 ### What Phase 3 turned on, since it was called blocked
 
@@ -417,14 +417,15 @@ to run it. Draft per club, send by hand, record the attempt, and reuse the coold
 
 - **8a.** **Done.** The stage field on `Club`, the map gate, and the stall reason.
   `/admin-club-health/` shows the whole ladder instead of only its right-hand half.
-- **8b.** The verifier, run against the clubs already on the site. Cheapest, and it is the code
-  every later step reuses.
-- **8c.** Umbrella directories: one command per organisation, idempotent, dedup-ing on domain and
-  fuzzy name.
-- **8d.** The link-page crawl, budgeted, two hops.
-- **8e.** City search, then Facebook and Places by hand.
+- **8b-8e.** Built, run against the real internet, and **scrapped** on 2026-09-10 with the rest of
+  the outbound HTTP -- see "should discovery be code at all?" below. What survives is
+  `club_import.py`: the domain-first dedup, the `PROSPECT` gate, and a CSV from a one-off deep
+  research run. The list above is kept because it records what was tried and what it cost.
 - **8f.** The outreach loop: draft per club, send by hand, record the attempt and the stall reason,
-  and report the ladder as counts month over month.
+  and report the ladder as counts month over month. **The only code half is the last clause and it
+  is done** -- `ClubLadderSnapshot` (migration 0439) records the ladder once a month on the back of
+  the nightly `refresh_club_health`, and `/admin-club-health/` shows it as a trend. The rest is a
+  person with a queue and a draft, and stays that way.
 
 Tests: dedup by domain and by fuzzy name against an existing club; an unapproved club appears on no
 map, in no `GetClubs` result and in no dropdown; the ladder orders correctly and the derived half
@@ -634,17 +635,83 @@ because most of them are decisions somebody will be tempted to reopen.
 
 ## Still open
 
-- **Phase 9 needs specifying, and it is the one thing here nobody can answer from the rows.** The
-  human wanted to A/B test and the site is too small for it -- dozens of organizers means no arm of
-  any split will ever reach significance. Phase 9 has to be built out of things that work at n=40:
-  session replay of one funnel, before-and-after on a single change, and asking people. Specced in
-  `docs/phase_9.md`.
+- **Phase 9 is built; two of its judgement calls are the human's and are named in `docs/phase_9.md`
+  under "Waiting on a decision".** Neither blocks anything that shipped.
+- **Working `/admin-unlinked-auctions/` down is now a prerequisite, not a nice-to-have.** Every
+  number on `/admin-lifecycle/` groups by club and about one auction in five has one, so the page
+  reports its own coverage at the top rather than presenting a fifth of the site as the site. This
+  is a person with a queue, and it is the cheapest high-value work left in the campaign.
+- **The one survey question has not been asked.** `docs/phase_9.md` allows exactly one, after an
+  invoice is paid. Nothing has been built for it, deliberately -- it needs the human to decide
+  whether to ask at all, and what.
 
 ## Pass log
 
 Newest first.
 
 <!-- PASS LOG START -->
+
+### 2026-09-10 -- phase 9, and the seam it could not close before
+
+`auctions/lifecycle.py` is all four instruments. The interesting parts are the three places the
+obvious implementation is wrong.
+
+**Milestones rather than a funnel, and the difference is not a rename.** `buyer_funnel` reports
+seven stages in a fixed order and most of them do not have one: a seller adds lots and never opens
+a lot page, and in a funnel that reads as somebody who dropped out at the lot page. They did not --
+they never needed one. So `MILESTONES` carries the handful of real prerequisites in an `after`
+field and everything else is reported as reach. Bidding is out: about 5% of auctions, two clubs
+doing most of it, nothing to fix. The terminal milestone is a paid invoice, which every auction
+type has.
+
+**Lapsing is counted in the club's own auctions, and the unit is the whole of the normalisation.**
+An ending cannot be observed, only an absence, and no query separates "left the hobby" from
+"waiting for the spring auction". Measured in days, a two-month gap means opposite things at a club
+that runs six auctions a year and one that runs one. Measured in *that club's auctions*, missing
+two means the same thing at both -- which is why `LAPSED_AFTER_AUCTIONS = 2` can be a constant
+without being a global cutoff wearing a disguise. Anyone whose last auction is the club's most
+recent one is **right-censored** and is excluded rather than counted as retained; that mistake is
+the one that makes every retention number look better than it is, and
+`test_the_last_auction_cannot_report_lapsing` is the ratchet on it.
+
+**The sign-in stitch, and the mechanic it turns on.** `SignInStitch` is the one row this phase
+adds and the only honest key across the anonymous-to-identified seam. It is written from
+`request.COOKIES`, **not** from `request.session.session_key`: `django.contrib.auth.login` calls
+`cycle_key()` *before* it sends `user_logged_in`, so a receiver reading the session gets the key
+issued a moment earlier and stitches a sign-in to itself, recording a row that joins nothing. There
+is a test that fails on exactly that simplification. It only works forwards, so
+`stitching_began()` is on both pages: a stitched year compared against an unstitched one is a fake
+improvement.
+
+**Why not IP and user agent**, which is the third option everybody reaches for and which this site
+already stores on every row: it is least reliable exactly where the seam is widest. Fifty people on
+a venue's one wifi holding the same handset merge into one very engaged visitor; carrier CGNAT and
+a walk through the door over-merge and under-merge the same evening; and the error is correlated
+with the number being measured, so it does not cancel when a club is compared against itself.
+Deleting an account also nulls `PageView.ip_address`, and a stitched identity stored as data
+outlives the column it came from.
+
+Two pages, both GET-only and both `AdminOnlyViewMixin`, so neither needs a `palette_actions` entry:
+`/admin-lifecycle/` (milestones, the club cohort table, the median member) and
+`/admin-session-replay/` (one person's pages in order, with the gaps). The median member is a real
+person at the 50th percentile by lots bought plus sold -- an averaged journey is nobody's journey
+and reads as fiction to an organizer who knows their own members -- and `unreached_share` sits
+beside it as the honest floor on the share of the room the site never spoke to.
+
+**What blocks the club half is data, not code.** About one auction in five has a club, so
+`club_coverage()` is at the top of the page saying so. `/admin-unlinked-auctions/` is the fix and
+it is a person working a queue.
+
+**And 8f's one code clause, in the same pass.** "Report the ladder as counts month over month" was
+the last unbuilt thing in phase 8, and it could not be answered from what existed: `ClubHealth` is
+a `OneToOneField` recomputed nightly from scratch, so the moment a club moves up a rung every trace
+of where it was is gone. `ClubLadderSnapshot` is one row per rung per month -- about a hundred rows
+a year whatever happens to the number of clubs -- written by the nightly task and keyed on the
+month, so it records this month's row the first time it runs and refreshes it every night after. A
+task that had to notice the first of the month would have recorded nothing in the month it shipped.
+A month nobody recorded reads as a gap on the page and not as a zero, because a zero would say
+every club left that rung.
+
 
 ### 2026-09-09 -- the club link, both ends of it
 
