@@ -174,7 +174,7 @@ this only quotes its opening sentence.
 - **`notifications.py`** (265 lines)
   Email → mobile-push routing.
   `push_configured`, `user_prefers_push`, `user_has_app_push`, `notify_user`, `send_fcm_message`, `send_fcm_data_message`
-- **`palette_actions.py`** (15454 lines)
+- **`palette_actions.py`** (15451 lines)
   The things the command palette's natural-language assist is allowed to do.
 - **`palette_assist.py`** (1518 lines)
   Natural-language orchestration for the command palette.
@@ -289,7 +289,7 @@ this only quotes its opening sentence.
 - **`test_club_api_read.py`** (1468 lines)
   The club REST API's read side: members, BAP lots, auctions and lots.
   `ClubAPITests`, `ClubAPIKeyMemberPermissionTests`, `ClubBapLotAPITests`, `ClubAuctionReadAPITests`, `ParseBoolEnvTests`, `RequireSecureProdSecretsTests`, `ClubAuctionIntegrationTests`
-- **`test_club_events.py`** (3051 lines)
+- **`test_club_events.py`** (3086 lines)
   Tests for club events, Google Calendar sync, and the Discord events built on top of them.
 - **`test_club_health.py`** (553 lines)
   Tests for the club lifecycle rollup and the outreach queue that comes out of it.
@@ -404,7 +404,7 @@ this only quotes its opening sentence.
 - **`test_page_view_url.py`** (116 lines)
   The shape of ``PageView.url``: a site-relative path, on the way in and on the rows already there.
   `PageViewPathTests`, `MigrationHostListTests`, `PageViewCreateStoresAPathTests`
-- **`test_palette_account.py`** (866 lines)
+- **`test_palette_account.py`** (872 lines)
   The rest of the account, and the auction and club setup pages behind it.
 - **`test_palette_assist.py`** (4184 lines)
   Tests for the command palette's natural-language assist.
@@ -775,7 +775,7 @@ Every view on the site, split by what part of it the view belongs to.
 - **`discord.py`** (978 lines)
   Discord: verifying its signatures, answering its interactions, and syncing roles.
   `InboundEmailRoutingView`, `verify_discord_signature`, `assign_discord_role`, `DiscordInteractionsView`, `LotBapPointsView`, `ClubDiscordConfigView`, `ClubDiscordFetchRolesView`, `ClubDiscordEditRoleView`, `ClubDiscordSetDefaultRoleView`, `ClubDiscordSendJoinMessageView`
-- **`embeds.py`** (693 lines)
+- **`embeds.py`** (745 lines)
   The snippets a club puts on its own website, and the pages behind them.
 - **`exports.py`** (1004 lines)
   Taking data back out: the CSV exports, the reports, and the mailing list.

@@ -38,11 +38,12 @@ card. Snippets are listed whether or not the feature behind them is switched on,
   the one reader of `?format=`.
 - `ClubPastEventsEmbedView` subclasses `ClubEventsEmbedView` and changes three class attributes —
   deliberately the same `events.html`, row shape and `_club_events_embed_rows`.
-- **The embed measures itself and the snippet listens.** Every styled embed posts
-  `{clubEmbed: "height", height: N}` to `window.parent` (on load, on resize, through a
-  `ResizeObserver`); `website_snippet.html` hands over the listener *inside the same `<pre>`*. The
-  listener checks `event.origin` against this site and matches frames on `event.source`. The
-  `height` in the snippet is only the starting size.
+- **The snippet is a bare `<script src="…?format=js">`.** `embed_response` wraps the `_unstyled`
+  markup in `<div class="club-embed">` with `SCRIPT_EMBED_CSS` (layout only, so the host site's
+  fonts and colours win) and returns JS that inserts it before its own tag. It replaced iframe +
+  inline height listener because WordPress rewrites `&&` in pasted scripts to `&#038;&#038;` (a
+  SyntaxError). The iframe formats are still served, and still post
+  `{clubEmbed: "height", height: N}`, for snippets pasted before; the page no longer offers them.
 - Calendar links is **not** an embed: two plain addresses following `Club.calendar_subscribe_url` /
   `.calendar_feed_url` — **the club's Google calendar when it is shared, ours when it isn't**. The
   same rule picks the Google button on the club page and the "Add our calendar" link in membership

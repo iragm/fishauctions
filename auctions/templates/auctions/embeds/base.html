@@ -20,9 +20,9 @@ Four rules this file exists to enforce:
   * **It measures itself and says so.** An iframe is the one box on a page that cannot size itself
     to its contents, so a snippet pasted with height:880px for ten events shows two events and 700
     pixels of nothing. The script at the bottom posts this document's real height to whoever framed
-    it, and the snippet on the website-integration page pastes a two-line listener alongside the
-    iframe. Both halves are optional in the sense that matters: no parent, no message; a listener
-    stripped by a CMS leaves the fixed height, which is exactly what a club has today.
+    it, for the two-line listener the website-integration page used to hand out with the iframe.
+    The page now hands out ?format=js instead (see views/embeds.py), which needs none of this; these
+    iframe formats stay for the snippets already pasted.
 
 `embed_mode` is "light" or "dark" and is picked by the ?format= the club chose, not by the
 visitor's system setting — the club knows what colour its own website is and we do not.

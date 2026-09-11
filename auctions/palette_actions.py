@@ -9235,10 +9235,8 @@ def club_website_snippets(request, params: dict[str, Any]) -> dict[str, Any]:
     with more force here: an assistant asked "what can we put on our website" had nothing to answer
     with, and the snippets are the answer.
 
-    The iframe HTML is not built here. ``website_snippet.html`` is one copy-paste that carries the
-    frame *and* the two-line listener that lets the embed size itself, and a second hand-written
-    copy of it in Python would drift from the one clubs are actually given. This hands over the
-    addresses and says which page to copy the code from.
+    ``script_tag`` is the same one line ``website_snippet.html`` hands out -- a ``<script src>``
+    with ``?format=js`` -- because there is nothing in it to drift: the code lives behind the URL.
     """
     from .views import check_club_permission
 
@@ -9268,7 +9266,8 @@ def club_website_snippets(request, params: dict[str, Any]) -> dict[str, Any]:
                 "snippet": key,
                 "title": title,
                 "url": address,
-                "unstyled_url": f"{address}?format=unstyled",
+                "script_tag": f'<script src="{request.build_absolute_uri(address)}?format=js"></script>',
+                "unstyled_url": f"{address}?format=unstyledhtml",
                 "would_show_something_now": bool(live),
             }
         )
@@ -9281,9 +9280,8 @@ def club_website_snippets(request, params: dict[str, Any]) -> dict[str, Any]:
         "copy_the_code_from_url": reverse("club_website_integration", kwargs={"slug": club.slug}),
         "summary": (
             f"{club.name} can embed {len(snippets)} things on its own website, and hand out a "
-            "calendar members can subscribe to. The page linked here has the exact code to paste — "
-            "it carries a listener that lets each embed size itself, so copy it from there rather "
-            "than writing an iframe by hand."
+            "calendar members can subscribe to. Each embed is its script_tag, pasted where it should "
+            "appear; add &count=N to the events ones. The page linked here lists them all."
         ),
     }
 
@@ -13304,9 +13302,8 @@ register(
         description=(
             "What a club can put on its OWN website: embeds for its events, past events, current "
             "auction, latest announcement and breeder award leaderboard, plus a calendar members "
-            "can subscribe to. Each says whether it would show anything right now. Read-only — the "
-            "exact code to paste is on the page this links to, because that snippet carries a "
-            "listener that lets the embed size itself and hand-writing an iframe loses it."
+            "can subscribe to. Each says whether it would show anything right now, and comes with "
+            "the one-line script tag to paste. Read-only."
         ),
         params={"club": "string, optional. Club name. See my_context."},
         danger=DANGER_SAFE,

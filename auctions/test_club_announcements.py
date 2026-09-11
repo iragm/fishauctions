@@ -508,10 +508,10 @@ class WebsiteIntegrationPageTests(TestCase):
         self.assertContains(response, "Breeder Award Program is turned off")
         self.assertContains(response, reverse("bap_embed", kwargs={"slug": self.club.slug}))
 
-    def test_it_offers_both_themes_and_the_developer_formats(self):
+    def test_it_offers_the_script_tag_and_the_developer_formats(self):
         self.client.force_login(self.admin)
         body = self.client.get(self.url).content.decode()
-        for fmt in ("iframelight", "iframedark", "unstyledhtml", "format=json"):
+        for fmt in ("format=js", "unstyledhtml", "format=json"):
             self.assertIn(fmt, body)
 
 
