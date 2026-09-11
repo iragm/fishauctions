@@ -132,6 +132,14 @@ class DmcaPageTests(StandardTestCase):
         response = self.client.get(reverse("dmca"))
         self.assertContains(response, f"closed at {dmca.STRIKES_BEFORE_TERMINATION} strikes")
 
+    @override_settings(**AGENT)
+    def test_the_page_says_how_to_send_a_counter_notice(self):
+        """The terms send uploaders here for this, so the four parts of 512(g)(3) have to be here."""
+        response = self.client.get(reverse("dmca"))
+        for part in ("signature", "where it appeared", "mistake or misidentification", "service of process"):
+            self.assertContains(response, part)
+        self.assertContains(response, reverse("tos"))
+
     @override_settings(
         DMCA_SERVICE_PROVIDER_NAME="",
         DMCA_AGENT_NAME="",

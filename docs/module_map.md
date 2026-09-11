@@ -323,7 +323,7 @@ this only quotes its opening sentence.
 - **`test_data_leak_penetration.py`** (267 lines)
   Penetration tests to verify no data leaks from public endpoints.
   `DataLeakPenetrationTests`
-- **`test_dmca.py`** (461 lines)
+- **`test_dmca.py`** (469 lines)
   What the DMCA safe harbour needs to be true, checked.
   `AgentConfigurationTests`, `DmcaPageTests`, `NoticeIntakeTests`, `NoticeRoutingTests`, `ReportContentTests`, `StrikeTests`, `TakedownRemovesTheMaterialTests`, `MobileConfigTests`, `ImageSourceLabelTests`, `AccountDeletionTests`
 - **`test_donations.py`** (1679 lines)
