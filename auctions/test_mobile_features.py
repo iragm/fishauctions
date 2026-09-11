@@ -470,7 +470,14 @@ class PrintMethodDropdownOnTheWebTests(StandardTestCase):
         html = self.client.get(reverse("printing"), HTTP_USER_AGENT=self.WEB_UA).content.decode()
         self.assertIn("disabled", self._option(html, "system"))
 
+    @override_settings(FIREBASE_CREDENTIALS_JSON=FAKE_FIREBASE)
     def test_enabling_print_from_computer_saves_first_time(self):
+        """The checkbox is only offered where push is configured (``_show_print_from_computer``).
+
+        Without the override this passes or fails on whether the *developer's* ``.env`` exports
+        FIREBASE_CREDENTIALS_JSON: unset, the field is dropped from the form, the POST leaves the
+        stored False alone, and the failure looks like the save bug this class is about.
+        """
         MobileDevice.objects.filter(user=self.user).update(ever_print_ready=True)
         response = self._save(print_from_computer="on")
         self.assertEqual(

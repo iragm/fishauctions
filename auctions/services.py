@@ -14,7 +14,7 @@ import logging
 
 from django.utils import timezone
 
-from .models import AuctionTOS, ClubHistory, ClubMember
+from .models import Auction, AuctionTOS, ClubHistory, ClubMember
 
 logger = logging.getLogger(__name__)
 
@@ -279,6 +279,21 @@ def existing_tos_for_club_member(auction, member):
 CLUB_MANAGED_MODES = ("all", "checkin")
 
 
+def club_managed_auctions_for(club):
+    """Every auction of *club* whose people are managed through the club, finished ones included.
+
+    The set a new member gets a participant row in (``signals.propagate_clubmember_to_shadow_tos``)
+    and therefore the set their bidder number has to be free in. One definition rather than two:
+    the form that warns about displacing somebody has to be asking about the same auctions the
+    save is about to write to.
+    """
+    return Auction.objects.filter(
+        club=club,
+        is_deleted=False,
+        manage_users_through_club__in=CLUB_MANAGED_MODES,
+    )
+
+
 def club_managed_shadows_for(member):
     """Every ``AuctionTOS`` that is *member*, in every club-managed auction they are in.
 
@@ -431,6 +446,22 @@ def bidder_number_holder_in(auction, number, *, exclude_tos=None):
 SHARED_MEMBER_FIELDS = ("name", "email", "phone_number", "address")
 
 
+def shared_member_values(member):
+    """*member*'s shared details, each cut to what the ``AuctionTOS`` column can hold.
+
+    The two models do not agree on width -- ``ClubMember.name`` is 200 characters and
+    ``AuctionTOS.name`` is 181 -- and every write below this is an ``update()``, which is not
+    validated. A name imported at full length would otherwise make every later save of that member
+    raise ``DataError 1406`` from the shadow write, with nothing on the club page to explain it.
+    """
+    values = {}
+    for field in SHARED_MEMBER_FIELDS:
+        limit = AuctionTOS._meta.get_field(field).max_length
+        value = getattr(member, field, None) or ""
+        values[field] = value[:limit] if limit else value
+    return values
+
+
 def sync_member_to_shadows(member, *, acting_user=None):
     """Push *member*'s shared details onto every one of their participant rows.
 
@@ -439,7 +470,7 @@ def sync_member_to_shadows(member, *, acting_user=None):
     status is cleared alongside the address because save() is what normally does that, and a bounce
     recorded against the old address must not go on suppressing mail to the new one.
     """
-    values = {field: getattr(member, field, None) or "" for field in SHARED_MEMBER_FIELDS}
+    values = shared_member_values(member)
     for shadow in club_managed_shadows_for(member):
         update = {field: value for field, value in values.items() if (getattr(shadow, field, None) or "") != value}
         if not update:

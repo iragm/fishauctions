@@ -126,6 +126,21 @@ TIMELINE_LIMIT = 300
 #: mark the break when the timeline is read; nothing splits a session on it.
 VISIT_GAP = datetime.timedelta(minutes=30)
 
+#: How far back the "somewhere to start" index looks.  ``busiest_sessions`` is a ``GROUP BY`` over
+#: ``PageView``, which is never purged and goes back to 2020, and it is the *default* render of
+#: ``/admin-session-replay/`` -- so unbounded it is a full scan of the largest table on the site
+#: every time an admin opens the page, the shape :func:`milestone_reach` names as a past production
+#: incident.  A fortnight is also what the page is for: the sessions worth reading are the recent
+#: ones, and a session from 2021 cannot be asked about.
+SESSION_INDEX_DAYS = 14
+
+#: How much of a session key ever leaves this module.  For an anonymous visitor ``PageView``
+#: stores the live Django session key, so printing one on the index and putting it in ``?session=``
+#: would post a session credential into the access log, the admin's browser history and the
+#: ``Referer`` of everything that page links out to.  A prefix picks a session out of ``PageView``
+#: just as well and is not a cookie anybody can paste back.
+SESSION_KEY_PREFIX = 12
+
 
 def stitching_began():
     """The datetime before which no anonymous half of anybody's visit can be attributed.
@@ -551,7 +566,11 @@ def session_timeline(session_id=None, user=None, limit=TIMELINE_LIMIT):
         keys = stitched_sessions(user)
         query = query.filter(Q(user=user) | Q(session_id__in=keys)) if keys else query.filter(user=user)
     elif session_id:
-        query = query.filter(session_id=session_id)
+        # A prefix, not the key: see SESSION_KEY_PREFIX. Anything shorter is not specific enough to
+        # be one person's session, and a full key pasted from an old link is cut to the same prefix.
+        if len(session_id) < SESSION_KEY_PREFIX:
+            return []
+        query = query.filter(session_id__startswith=session_id[:SESSION_KEY_PREFIX])
     else:
         return []
     steps: list[Step] = []
@@ -570,7 +589,7 @@ def session_timeline(session_id=None, user=None, limit=TIMELINE_LIMIT):
     return steps
 
 
-def busiest_sessions(limit=25):
+def busiest_sessions(limit=25, days=SESSION_INDEX_DAYS):
     """``[{session_id, user_id, pages}]`` -- somewhere to start reading.
 
     The index in front of :func:`session_timeline`, because that instrument is useless without a
@@ -579,15 +598,31 @@ def busiest_sessions(limit=25):
     to click, not an answer.
 
     Rows with neither a user nor a session key are dropped -- there is nothing to open them by.
+
+    Bounded to the last :data:`SESSION_INDEX_DAYS` on the indexed ``date_start``, because the
+    ungrouped version of this is a scan of every ``PageView`` ever written, and the session keys
+    are cut to :data:`SESSION_KEY_PREFIX` before they leave here.
     """
     from auctions.models import PageView
 
-    rows = PageView.objects.values("session_id", "user_id").annotate(pages=Count("pk")).order_by("-pages")[: limit * 4]
+    floor = timezone.now() - datetime.timedelta(days=days)
+    rows = (
+        PageView.objects.filter(date_start__gte=floor)
+        .values("session_id", "user_id")
+        .annotate(pages=Count("pk"))
+        .order_by("-pages")[: limit * 4]
+    )
     found = []
     for row in rows:
         if not row["session_id"] and not row["user_id"]:
             continue
-        found.append({"session_id": row["session_id"], "user_id": row["user_id"], "pages": row["pages"]})
+        found.append(
+            {
+                "session_id": (row["session_id"] or "")[:SESSION_KEY_PREFIX],
+                "user_id": row["user_id"],
+                "pages": row["pages"],
+            }
+        )
         if len(found) >= limit:
             break
     return found

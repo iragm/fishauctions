@@ -7576,11 +7576,30 @@ class AuctionTOS(InvalidatesRelatedCache, CachedPropertiesMixin, models.Model):
         generated unique number first. An AuctionHistory entry is created. The record is
         saved via update_fields so no full-model side-effects (e.g. bidder-number
         auto-generation) are triggered.
+
+        In club-managed mode the number belongs to the *member*, not to this row, so this hands off
+        to ``services.set_member_bidder_number`` -- the one place a bidder number is written in that
+        mode. Writing only this row would leave the club page, the member's card and every other
+        auction they are in on the old number, which is the same divergence the mode exists to
+        prevent. Check-in, the barcode scanner and the app's offline queue all arrive here.
         """
         from django.db import transaction as _tx
 
         number = str(number).strip()
         if not number:
+            return
+        if self.clubmember_id and self.auction.is_club_managed:
+            from .services import set_member_bidder_number
+
+            with _tx.atomic():
+                set_member_bidder_number(self.clubmember, number, acting_user=acting_user)
+                self.bidder_number = number
+                source = " via barcode" if via_barcode else ""
+                self.auction.create_history(
+                    applies_to="USERS",
+                    action=f"Assigned bidder number {number} to {self.name}{source}",
+                    user=acting_user,
+                )
             return
         with _tx.atomic():
             conflicting = (

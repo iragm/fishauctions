@@ -76,7 +76,7 @@
     <tbody>
       {% for row in recent %}
       <tr>
-        <td>{% if row.user_id %}user {{ row.user_id }}{% else %}<code>{{ row.session_id|truncatechars:20 }}</code>{% endif %}</td>
+        <td>{% if row.user_id %}user {{ row.user_id }}{% else %}<code>{{ row.session_id }}</code>{% endif %}</td>
         <td class="text-end">{{ row.pages }}</td>
         <td>{% if row.user_id %}<a href="?user={{ row.user_id }}">Read it</a>{% else %}<a href="?session={{ row.session_id }}">Read it</a>{% endif %}</td>
       </tr>

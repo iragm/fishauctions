@@ -13,11 +13,12 @@ from django.utils import timezone
 from django_ses.signals import bounce_received, complaint_received
 
 from .services import (
-    CLUB_MANAGED_MODES,
     SHARED_MEMBER_FIELDS,
     clear_bidder_number_in,
+    club_managed_auctions_for,
     club_managed_shadows_for,
     set_member_bidder_number,
+    shared_member_values,
     sync_member_to_shadows,
 )
 from .site_setup import ensure_single_club_membership_for_user
@@ -402,7 +403,7 @@ def propagate_clubmember_to_shadow_tos(sender, instance, created, **kwargs):
     number against the auction as well as the club, because those are two different scopes and a
     club-managed auction can still hold people who joined it directly.
     """
-    from .models import Auction, AuctionTOS, PickupLocation
+    from .models import AuctionTOS, PickupLocation
 
     if created:
         # Every club-managed auction, finished ones included: joining the club makes somebody
@@ -410,12 +411,7 @@ def propagate_clubmember_to_shadow_tos(sender, instance, created, **kwargs):
         # an auction that is over carry no checked_in and no invoice, so they are a person the
         # admin can find there, not an attendee -- check-in auctions count attendance off
         # checked_in, not off the row existing.
-        managed_auctions = Auction.objects.filter(
-            club=instance.club,
-            is_deleted=False,
-            manage_users_through_club__in=CLUB_MANAGED_MODES,
-        )
-        for auction in managed_auctions:
+        for auction in club_managed_auctions_for(instance.club):
             default_location = PickupLocation.objects.filter(auction=auction).order_by("-is_default", "pk").first()
             if not default_location:
                 continue
@@ -434,11 +430,9 @@ def propagate_clubmember_to_shadow_tos(sender, instance, created, **kwargs):
                 bidder_number=instance.bidder_number,
                 bidding_allowed=bidding,
                 selling_allowed=instance.selling_allowed,
-                name=instance.name or "",
-                email=instance.email or "",
-                phone_number=instance.phone_number or "",
-                address=instance.address or "",
                 manually_added=True,
+                # Cut to the AuctionTOS widths, which are narrower than the ClubMember ones.
+                **shared_member_values(instance),
             )
         return
 
@@ -602,11 +596,22 @@ def sync_auctiontos_up_to_clubmember(sender, instance, **kwargs):
 
     Only when something actually differs, because this runs on every AuctionTOS save -- including
     the ones the downward propagation and check-in make.
+
+    ``update_fields`` is honoured, and not as an optimisation. A save that names its fields is
+    saying what changed, while the rest of the in-memory row is whatever it held when it was loaded
+    -- which the club member form makes stale on purpose: it loads the participant row, saves the
+    member (propagating the new details down with ``update()``, which cannot refresh an object
+    somebody else is holding), and then saves the row for ``is_club_member`` and the pickup
+    location. Carrying that row's fields up would push the *pre-edit* name and email back onto the
+    member and from there onto every other auction, silently undoing the edit that request was for.
     """
     from .models import ClubMember
 
     member = instance.clubmember
     if member is None or not instance.auction.is_club_managed:
+        return
+    update_fields = kwargs.get("update_fields")
+    if update_fields is not None and not set(update_fields) & {*SHARED_MEMBER_FIELDS, "bidder_number"}:
         return
     changed = [
         field

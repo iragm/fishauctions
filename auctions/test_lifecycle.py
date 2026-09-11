@@ -204,6 +204,15 @@ class SignInStitchTests(TestCase):
         self.assertIsNone(lifecycle.stitching_began())
 
 
+def _session_key(name):
+    """A session key the shape of a real one: 32 characters, of which only the first 12 are used.
+
+    ``lifecycle.SESSION_KEY_PREFIX`` means a key shorter than 12 characters resolves to nothing, so
+    a made-up "tl-session" here would pass or fail for a reason production never sees.
+    """
+    return name.ljust(32, "0")[:32]
+
+
 class SessionTimelineTests(TestCase):
     @classmethod
     def setUpTestData(cls):
@@ -220,34 +229,58 @@ class SessionTimelineTests(TestCase):
         return view
 
     def test_the_timeline_is_in_order_with_the_gaps(self):
-        self._view(0, session_id="tl-session", url="/lots/")
-        self._view(3, session_id="tl-session", url="/auctions/")
-        steps = lifecycle.session_timeline(session_id="tl-session")
+        self._view(0, session_id=_session_key("tl-session"), url="/lots/")
+        self._view(3, session_id=_session_key("tl-session"), url="/auctions/")
+        steps = lifecycle.session_timeline(session_id=_session_key("tl-session"))
         self.assertEqual([step.view.url for step in steps], ["/lots/", "/auctions/"])
         self.assertIsNone(steps[0].gap)
         self.assertEqual(steps[1].gap, timedelta(minutes=3))
 
     def test_a_long_gap_marks_a_new_visit(self):
-        self._view(0, session_id="tl-gap")
-        self._view(90, session_id="tl-gap")
-        steps = lifecycle.session_timeline(session_id="tl-gap")
+        self._view(0, session_id=_session_key("tl-gap"))
+        self._view(90, session_id=_session_key("tl-gap"))
+        steps = lifecycle.session_timeline(session_id=_session_key("tl-gap"))
         self.assertFalse(steps[0].new_visit)
         self.assertTrue(steps[1].new_visit)
 
     def test_a_users_timeline_includes_the_anonymous_half_once_it_is_stitched(self):
         """The seam this phase exists to close, and the only honest key across it."""
-        self._view(0, session_id="tl-anon")
+        self._view(0, session_id=_session_key("tl-anon"))
         self._view(10, user=self.person)
         unstitched = lifecycle.session_timeline(user=self.person)
         self.assertEqual(len(unstitched), 1)
-        SignInStitch.objects.create(user=self.person, session_id="tl-anon")
+        SignInStitch.objects.create(user=self.person, session_id=_session_key("tl-anon"))
         stitched = lifecycle.session_timeline(user=self.person)
         self.assertEqual(len(stitched), 2)
-        self.assertEqual(stitched[0].view.session_id, "tl-anon")
+        self.assertEqual(stitched[0].view.session_id, _session_key("tl-anon"))
 
     def test_no_subject_returns_nothing_rather_than_the_whole_table(self):
-        self._view(0, session_id="tl-anon")
+        self._view(0, session_id=_session_key("tl-anon"))
         self.assertEqual(lifecycle.session_timeline(), [])
+
+    def test_a_key_shorter_than_the_prefix_resolves_to_nothing(self):
+        """Not "match everything that starts with t": a prefix that short is not one person."""
+        self._view(0, session_id=_session_key("tl-anon"))
+        self.assertEqual(lifecycle.session_timeline(session_id="tl"), [])
+
+    def test_the_index_is_bounded_to_recent_history_and_hands_back_a_prefix_only(self):
+        """``PageView`` is never purged and goes back to 2020; this is the page's default render.
+
+        Unbounded, opening ``/admin-session-replay/`` is a ``GROUP BY`` over every row on the site
+        -- the shape ``milestone_reach``'s docstring names as a past production incident.
+        """
+        recent = _session_key("recent-one")
+        ancient = _session_key("ancient-one")
+        self._view(0, session_id=recent)
+        old_view = self._view(0, session_id=ancient)
+        PageView.objects.filter(pk=old_view.pk).update(
+            date_start=timezone.now() - timedelta(days=lifecycle.SESSION_INDEX_DAYS + 1)
+        )
+        rows = lifecycle.busiest_sessions()
+        keys = [row["session_id"] for row in rows]
+        self.assertIn(recent[: lifecycle.SESSION_KEY_PREFIX], keys)
+        self.assertNotIn(ancient[: lifecycle.SESSION_KEY_PREFIX], keys, "an old session cannot be asked about")
+        self.assertTrue(all(len(key) <= lifecycle.SESSION_KEY_PREFIX for key in keys if key))
 
 
 class MedianMemberTests(ClubHistoryFixture):
@@ -410,11 +443,33 @@ class LifecyclePageTests(StandardTestCase):
         self.assertContains(response, "Busiest sessions")
 
     def test_the_session_replay_page_reads_one_session(self):
-        PageView.objects.create(url="/lots/", title="t", session_id="replay-me")
+        key = _session_key("replay-me")
+        PageView.objects.create(url="/lots/", title="t", session_id=key)
         self._as_site_admin()
-        response = self.client.get(reverse("admin_session_replay"), {"session": "replay-me"})
+        response = self.client.get(reverse("admin_session_replay"), {"session": key[: lifecycle.SESSION_KEY_PREFIX]})
         self.assertEqual(response.status_code, 200)
         self.assertEqual(len(response.context["timeline"]), 1)
+
+    def test_the_index_never_prints_a_whole_session_key(self):
+        """``PageView.session_id`` is the live session cookie of an anonymous visitor.
+
+        Rendering one and posting it back in ``?session=`` puts a usable credential into the access
+        log, the admin's browser history and the ``Referer`` of every link on the page. A prefix
+        finds the session just as well and is not a cookie anybody can paste back.
+        """
+        key = _session_key("wholekeyleak")
+        PageView.objects.create(url="/lots/", title="t", session_id=key)
+        self._as_site_admin()
+        response = self.client.get(reverse("admin_session_replay"))
+        self.assertNotContains(response, key)
+        self.assertContains(response, key[: lifecycle.SESSION_KEY_PREFIX])
+
+    def test_a_user_that_is_not_a_number_is_not_a_500(self):
+        """``filter(pk="abc")`` raises ValueError; this page exists to be poked at by hand."""
+        self._as_site_admin()
+        response = self.client.get(reverse("admin_session_replay"), {"user": "abc"})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context["timeline"], [])
 
     def test_the_session_replay_page_needs_an_admin(self):
         self.client.force_login(self.user)

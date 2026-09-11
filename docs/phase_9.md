@@ -306,6 +306,15 @@ Three implementation notes that are not obvious from the code and are expensive 
   page carries its auction's FK too, so the milestone is `lot_number IS NULL` *and* the route
   `auction_main`, classified with `usability_report.route_name` -- Django's own resolver, so a
   rename in `urls.py` cannot leave a stale classifier behind.
+- **A session key is a credential, so only a prefix ever leaves `lifecycle`.**  For an anonymous
+  visitor `PageView.session_id` is the live session cookie; printing one on the replay index and
+  posting it back in `?session=` would put it in the access log, the admin's browser history and the
+  `Referer` of every link on the page.  `SESSION_KEY_PREFIX` characters identify the session inside
+  `PageView` and are not a cookie anybody can paste back, and `busiest_sessions` is bounded to
+  `SESSION_INDEX_DAYS` besides -- ungrouped it is a scan of the whole never-purged table on every
+  render of the page's default view.  `test_the_index_never_prints_a_whole_session_key` and
+  `test_the_index_is_bounded_to_recent_history_and_hands_back_a_prefix_only` fail on the
+  simplification.
 - **Identity for somebody with no account is their `AuctionTOS` email, lowercased.**  That is what
   makes the non-user persona the same person at two auctions.  A row with neither a user nor an
   email is its own auction's bidder number and therefore never matches across two -- correct, and

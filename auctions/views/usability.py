@@ -328,7 +328,10 @@ class AdminSessionReplay(AdminOnlyViewMixin, TemplateView):
     aggregate.  It needs no new table -- ``PageView`` has carried a session key, a path and a
     timestamp for five years.
 
-    A page and a limit, not a chart.  ``?session=`` reads one anonymous session; ``?user=`` reads
+    A page and a limit, not a chart.  ``?session=`` reads one anonymous session -- by the first
+    :data:`~auctions.lifecycle.SESSION_KEY_PREFIX` characters of its key, never the whole thing,
+    which for an anonymous visitor is a live session cookie and has no business in an access log or
+    a browser history.  ``?user=`` reads
     somebody's signed-in rows **plus** the anonymous rows from every session they were holding when
     they signed in, which for a buyer is the half of the visit that matters.  Before the first
     ``SignInStitch`` there are none of those to find, and the page says so rather than presenting a
@@ -341,8 +344,11 @@ class AdminSessionReplay(AdminOnlyViewMixin, TemplateView):
         context = super().get_context_data(**kwargs)
         session_id = (self.request.GET.get("session") or "").strip()
         user = None
-        if self.request.GET.get("user"):
-            user = User.objects.filter(pk=self.request.GET["user"]).first()
+        # A hand-edited ?user= is a string, and filter(pk=<not an int>) raises ValueError rather
+        # than returning nothing, which is a 500 on a page whose whole job is being poked at by hand.
+        requested_user = (self.request.GET.get("user") or "").strip()
+        if requested_user.isdigit():
+            user = User.objects.filter(pk=int(requested_user)).first()
         context["session_id"] = session_id
         context["subject"] = user
         context["visit_gap_minutes"] = int(lifecycle.VISIT_GAP.total_seconds() // 60)

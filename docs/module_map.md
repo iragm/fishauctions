@@ -145,7 +145,7 @@ this only quotes its opening sentence.
 - **`html_sanitize.py`** (135 lines)
   Sanitizing the rich text people paste into Summernote.
   `sanitize_summernote_html`, `remove_html_color_tags`
-- **`lifecycle.py`** (675 lines)
+- **`lifecycle.py`** (710 lines)
   Phase 9: the people who are not running the auction.
 - **`llm.py`** (453 lines)
   Provider abstraction for everything on this site that talks to a language model.
@@ -157,7 +157,7 @@ this only quotes its opening sentence.
 - **`model_caching.py`** (101 lines)
   ``@cached_property`` on a model, and the invalidation that makes it safe.
   `InvalidatesRelatedCache`, `CachedPropertiesMixin`
-- **`models.py`** (15142 lines)
+- **`models.py`** (15161 lines)
   The database: 80 models, and the reason they are still in one file.
 - **`moderation_admin.py`** (139 lines)
   The Django admin for the moderation queue: reports, copyright notices and strikes.
@@ -202,9 +202,9 @@ this only quotes its opening sentence.
 - **`routing.py`** (9 lines)
 - **`serializers.py`** (978 lines)
   DRF serializers for the club API: the shape of what a key gets back.
-- **`services.py`** (1402 lines)
+- **`services.py`** (1433 lines)
   The operations that are the same whoever asked: web page, API, app or assistant.
-- **`signals.py`** (1125 lines)
+- **`signals.py`** (1130 lines)
   Signal handlers for the auctions app.
 - **`site_setup.py`** (146 lines)
   `single_club_mode_enabled`, `single_club_name`, `site_paypal_configured`, `get_server_public_ip`, `get_single_club`, `ensure_single_club_membership_for_user`
@@ -311,7 +311,7 @@ this only quotes its opening sentence.
 - **`test_club_settings.py`** (695 lines)
   A club's own settings pages: BAP, general settings and email routing.
   `ClubBapSettingsViewTests`, `ClubSettingsViewTests`, `ClubEmailRoutingTests`, `RoutedSenderDisplayNameTests`, `SesSendsTheMessagesOwnFromAddressTests`, `InboundEmailRoutingAPITests`, `AuctionSlugSanitizationTests`, `AuctionEmailSenderTests`, `ClubEmailSettingsFormTests`
-- **`test_club_users.py`** (1343 lines)
+- **`test_club_users.py`** (1496 lines)
   Managing people through a club rather than through an auction, and the bid API.
   `ManageUsersThroughClubTests`, `PlaceBidApiTests`
 - **`test_clubs.py`** (1378 lines)
@@ -339,7 +339,7 @@ this only quotes its opening sentence.
 - **`test_invoice_models.py`** (220 lines)
   Invoice models: what an invoice contains, when it is created, and when it notifies.
   `InvoiceModelTests`, `InvoiceCreateViewTests`, `InvoiceNotificationDueTests`
-- **`test_lifecycle.py`** (422 lines)
+- **`test_lifecycle.py`** (477 lines)
   Tests for phase 9: the milestones, the lapsing definition, the session replay and the cohorts.
   `ClubHistoryFixture`, `LapsingTests`, `CohortTests`, `SignInStitchTests`, `SessionTimelineTests`, `MedianMemberTests`, `UnreachedShareTests`, `MilestoneReachTests`, `LifecyclePageTests`
 - **`test_lot_create.py`** (542 lines)
@@ -373,7 +373,7 @@ this only quotes its opening sentence.
 - **`test_membership_flow.py`** (1339 lines)
   Club membership as money: invoices, discounts, renewals and the confirmation emails.
   `InvoiceStatusButtonTests`, `ClubMembershipRenewalFlowTests`, `PayPalSubscriptionWebhookTests`, `ClubMemberDiscountTests`, `ClubMoneyRenewalConsistencyTests`, `ClubMembershipEmailTaskTests`, `ClubBarcodeViewTests`, `QuickCheckoutHTMXTests`
-- **`test_mobile_features.py`** (2932 lines)
+- **`test_mobile_features.py`** (2939 lines)
   Tests for the mobile-app web-side features.
 - **`test_mobile_last_used.py`** (156 lines)
   Tests for GET /api/mobile/auctions/last-used/ — the command palette's AR-gating lookup.
@@ -381,7 +381,7 @@ this only quotes its opening sentence.
 - **`test_mobile_menu.py`** (325 lines)
   The app's navigation drawer: /api/mobile/config/ -> "menu".
   `MenuPayloadTests`, `RowSanitizerTests`, `NavbarDriftTests`, `ConfigEndpointTests`
-- **`test_mobile_offline.py`** (591 lines)
+- **`test_mobile_offline.py`** (599 lines)
   Tests for the mobile offline-mode backend (in-person sale).
   `MobileOfflineSnapshotTests`, `MobileOfflineSyncTests`
 - **`test_mobile_payments.py`** (693 lines)
@@ -658,7 +658,7 @@ The site's Model Context Protocol server, and the tool catalogue behind it.
 - **`serializers.py`** (641 lines)
   Request and response shapes for the mobile app's own API.
 - **`urls.py`** (138 lines)
-- **`views.py`** (2571 lines)
+- **`views.py`** (2575 lines)
   Mobile API views.
 
 ## `auctions/mobile/services/`
@@ -684,7 +684,7 @@ The site's Model Context Protocol server, and the tool catalogue behind it.
   `LabelRenderer`, `PngLabelRenderer`, `get_renderer`, `supported_formats`
 - **`labels.py`** (109 lines)
   `LabelService`
-- **`offline.py`** (552 lines)
+- **`offline.py`** (557 lines)
   Offline-mode service for the mobile app's in-person sale screens.
   `get_last_admin_auction`, `build_snapshot`, `apply_ops`
 - **`payments.py`** (758 lines)
@@ -764,7 +764,7 @@ Every view on the site, split by what part of it the view belongs to.
   `ClubAPIKeyListView`, `ClubAPIKeyCreateView`, `club_api_documentation_context`, `ClubAPIKeyDetailView`, `ClubAPIKeyRevokeView`, `ClubAPIKeyFieldMapCreateView`, `ClubAPIKeyFieldMapDeleteView`, `ClubMemberMapView`, `SelfServeContactLinkView`
 - **`club_integrations.py`** (1321 lines)
   The outside accounts a club connects: Mailchimp, Brevo, Google Calendar, Square links.
-- **`club_members.py`** (1082 lines)
+- **`club_members.py`** (1092 lines)
   The club's list of people: joining, renewing, permissions, cards.
 - **`club_pages.py`** (592 lines)
   A club's public page, and the two links that identify a member on it.
@@ -805,7 +805,7 @@ Every view on the site, split by what part of it the view belongs to.
   `NECSpeakerAccessMixin`, `SpeakerListView`, `SpeakerPanelView`, `SpeakerDetailView`, `SpeakerCreateView`, `SpeakerUpdateView`, `SpeakerDeleteView`, `SpeakerTagView`, `SpeakerCommentView`, `SpeakerCommentDeleteView`
 - **`species.py`** (631 lines)
   Adding species and common names, and the superuser's queue for cleaning them up.
-- **`usability.py`** (360 lines)
+- **`usability.py`** (366 lines)
   The usability dashboards: the measurements, the buyer funnel, and the club outreach queue.
   `AdminUsability`, `AdminClubHealth`, `ClubMarkContacted`, `UnlinkedAuctions`, `LinkAuctionsToClub`, `AdminLifecycle`, `AdminSessionReplay`
 - **`webhooks.py`** (1016 lines)

@@ -500,6 +500,134 @@ class ManageUsersThroughClubTests(TestCase):
         self.assertEqual(borrowing_row.bidder_number, "10")
         self.assertEqual(AuctionTOS.objects.filter(auction=self.auction, bidder_number="20").count(), 1)
 
+    def _second_club_managed_auction(self):
+        """A second auction of the same club, in the same mode, with a pickup location.
+
+        The propagation is only observable across two of them: one auction cannot show the
+        difference between "wrote the row in front of it" and "wrote the person".
+        """
+        now = timezone.now()
+        other = Auction.objects.create(
+            created_by=self.creator,
+            title="Second Auction",
+            is_online=False,
+            date_start=now - datetime.timedelta(days=1),
+            date_end=now + datetime.timedelta(days=10),
+            club=self.club,
+        )
+        PickupLocation.objects.create(name="loc2", auction=other, pickup_time=now + datetime.timedelta(days=5))
+        other.manage_users_through_club = self.auction.manage_users_through_club
+        other.save()
+        return other
+
+    def test_editing_a_member_from_inside_an_auction_is_not_undone_by_the_row_save(self):
+        """The member form's own save used to revert the edit it had just made.
+
+        It loads the participant row, saves the member (which propagates the new details down with
+        ``update()``, invisible to the row object already in memory), then saves that row for
+        ``is_club_member`` and the pickup location. The upward sync ignored ``update_fields`` and so
+        carried the stale name and email back up to the member -- and from there to every other
+        auction the member is in.
+        """
+        self._enable_club_managed()
+        member = ClubMember.objects.create(club=self.club, user=self.joiner, name="Old Name", email="old@example.com")
+        shadow = AuctionTOS.objects.get(auction=self.auction, clubmember=member)
+        stale = AuctionTOS.objects.get(pk=shadow.pk)  # loaded before the edit, as the view does
+
+        member.name = "New Name"
+        member.email = "new@example.com"
+        member.save()
+
+        stale.is_club_member = True
+        stale.save(update_fields=["is_club_member"])
+
+        member.refresh_from_db()
+        shadow.refresh_from_db()
+        self.assertEqual(member.name, "New Name")
+        self.assertEqual(member.email, "new@example.com")
+        self.assertEqual(shadow.name, "New Name")
+        self.assertEqual(shadow.email, "new@example.com")
+
+    def test_a_full_save_of_a_participant_row_still_reaches_the_member(self):
+        """The other half: an edit made in the auction is still an edit to the person."""
+        self._enable_club_managed()
+        member = ClubMember.objects.create(club=self.club, user=self.joiner, name="Joiner")
+        shadow = AuctionTOS.objects.get(auction=self.auction, clubmember=member)
+
+        shadow.phone_number = "555-0123"
+        shadow.save()
+
+        member.refresh_from_db()
+        self.assertEqual(member.phone_number, "555-0123")
+
+    def test_check_in_with_a_number_renumbers_the_member_everywhere(self):
+        """Check-in writes a bidder number, and in this mode that number belongs to the person.
+
+        ``force_set_bidder_number`` used to write the one row in front of it with ``update()``,
+        which is invisible to the propagation signal: the club page, the member's card and every
+        other auction they were in stayed on the old number, which is the exact divergence this
+        mode exists to prevent. The barcode scanner and the app's offline queue arrive the same way.
+        """
+        from auctions.services import check_in_auctiontos
+
+        self._enable_checkin_mode()
+        other_auction = self._second_club_managed_auction()
+        member = ClubMember.objects.create(club=self.club, user=self.joiner, name="Joiner", bidder_number="41")
+        here = AuctionTOS.objects.get(auction=self.auction, clubmember=member)
+        there = AuctionTOS.objects.get(auction=other_auction, clubmember=member)
+
+        check_in_auctiontos(here, bidder_number="86", acting_user=self.club_admin_user)
+
+        here.refresh_from_db()
+        there.refresh_from_db()
+        member.refresh_from_db()
+        self.assertEqual(here.bidder_number, "86")
+        self.assertEqual(member.bidder_number, "86", "the club is where the number lives in this mode")
+        self.assertEqual(there.bidder_number, "86", "every other auction they are in follows")
+
+    def test_a_number_assigned_at_check_in_still_moves_whoever_had_it(self):
+        """The displacement the club-scoped writer does, reached through check-in."""
+        from auctions.services import check_in_auctiontos
+
+        self._enable_checkin_mode()
+        stranger = AuctionTOS.objects.create(
+            auction=self.auction,
+            pickup_location=self.location,
+            name="Joined directly",
+            bidder_number="64",
+        )
+        member = ClubMember.objects.create(club=self.club, user=self.joiner, name="Joiner", bidder_number="15")
+        shadow = AuctionTOS.objects.get(auction=self.auction, clubmember=member)
+
+        check_in_auctiontos(shadow, bidder_number="64", acting_user=self.club_admin_user)
+
+        shadow.refresh_from_db()
+        stranger.refresh_from_db()
+        self.assertEqual(shadow.bidder_number, "64")
+        self.assertNotEqual(stranger.bidder_number, "64")
+        self.assertEqual(AuctionTOS.objects.filter(auction=self.auction, bidder_number="64").count(), 1)
+
+    def test_a_name_too_long_for_the_participant_row_is_cut_rather_than_raising(self):
+        """ClubMember.name holds 200 characters and AuctionTOS.name holds 181.
+
+        Every write down to the participant rows is an ``update()``, which is not validated, so a
+        name imported at full length made every later save of that member raise ``DataError 1406``
+        -- from a save that had nothing to do with the name.
+        """
+        self._enable_club_managed()
+        long_name = "Bartholomew " * 20
+        member = ClubMember.objects.create(club=self.club, user=self.joiner, name=long_name[:200])
+        shadow = AuctionTOS.objects.get(auction=self.auction, clubmember=member)
+        limit = AuctionTOS._meta.get_field("name").max_length
+        self.assertEqual(shadow.name, long_name[:limit])
+
+        member.phone_number = "555-0100"
+        member.save()  # the save that used to raise
+
+        shadow.refresh_from_db()
+        self.assertEqual(shadow.phone_number, "555-0100")
+        self.assertEqual(shadow.name, long_name[:limit])
+
     def test_renumbering_a_member_takes_the_number_off_whoever_had_it(self):
         """The number goes where the admin sent it, and the person who had it is given another.
 
@@ -582,6 +710,31 @@ class ManageUsersThroughClubTests(TestCase):
         self.assertIn("Joined directly", note)
         self.assertIn("new one", note)
         self.assertEqual(response.json()["bidder_number_tooltip"], "", "not an error -- it will be applied")
+
+    def test_the_live_validation_warns_when_creating_a_member_too(self):
+        """Creating displaces exactly as editing does, so the warning cannot be for edits only.
+
+        The note was gated on ``pk``, so typing a number that a walk-in already held into the
+        *create* form said nothing at all -- and the save then took it off them silently, which is
+        the case where the admin is least likely to know who they just renumbered.
+        """
+        self._enable_checkin_mode()
+        AuctionTOS.objects.create(
+            auction=self.auction,
+            pickup_location=self.location,
+            name="Joined directly",
+            bidder_number="77",
+        )
+        ClubMember.objects.filter(user=self.club_admin_user, club=self.club).update(permission_add_edit=True)
+        self.client.force_login(self.club_admin_user)
+        response = self.client.post(
+            reverse("clubmember_validation", kwargs={"slug": self.club.slug}),
+            {"name": "Brand New", "bidder_number": "77"},
+        )
+        self.assertEqual(response.status_code, 200)
+        note = response.json()["bidder_number_note"]
+        self.assertIn("Joined directly", note)
+        self.assertIn("new one", note)
 
     def test_setting_a_lot_winner_follows_a_renumbered_member(self):
         """The symptom that made this worth chasing: the lot went to the wrong person."""

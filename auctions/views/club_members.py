@@ -51,6 +51,7 @@ from auctions.models import (
 )
 from auctions.services import (
     bidder_number_holder_in,
+    club_managed_auctions_for,
     club_managed_shadows_for,
 )
 from auctions.tasks import (
@@ -176,17 +177,26 @@ class ClubMemberValidation(ClubViewMixin, APIPostView):
                 result["bidder_number_tooltip"] = "Bidder number is already in this club"
             elif contact_deactivated_qs.filter(bidder_number=bidder_number).exists():
                 result["bidder_number_tooltip"] = "Bidder number matches a deactivated member"
-        if bidder_number and pk and not result["bidder_number_tooltip"]:
+        if bidder_number and not result["bidder_number_tooltip"]:
             # Not an error: saving this takes the number off whoever has it in the club's auctions
             # and gives them another (services.set_member_bidder_number). Say whose card is about to
             # stop matching, before the save rather than after it.
-            member = ClubMember.objects.filter(pk=pk, club=self.club).first()
-            for shadow in club_managed_shadows_for(member) if member else []:
-                holder = bidder_number_holder_in(shadow.auction, bidder_number, exclude_tos=shadow)
+            #
+            # Creating a member displaces people exactly as editing one does -- the new member gets
+            # a row in every club-managed auction (signals.propagate_clubmember_to_shadow_tos) and
+            # the number is cleared in each -- so the warning cannot be for edits only. With no pk
+            # there is no row of this person's to exclude, which is right: they are not in any of
+            # these auctions yet.
+            member = ClubMember.objects.filter(pk=pk, club=self.club).first() if pk else None
+            if member is not None:
+                candidates = [(shadow.auction, shadow) for shadow in club_managed_shadows_for(member)]
+            else:
+                candidates = [(auction, None) for auction in club_managed_auctions_for(self.club)]
+            for auction, shadow in candidates:
+                holder = bidder_number_holder_in(auction, bidder_number, exclude_tos=shadow)
                 if holder is not None:
                     result["bidder_number_note"] = (
-                        f"{holder.name} is bidder number {bidder_number} in {shadow.auction} "
-                        f"and will be given a new one"
+                        f"{holder.name} is bidder number {bidder_number} in {auction} and will be given a new one"
                     )
                     break
         return JsonResponse(result)

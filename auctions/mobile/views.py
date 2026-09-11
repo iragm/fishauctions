@@ -1672,8 +1672,12 @@ class MobileLotLabelBatchView(APIView):
         data = serializer.validated_data
         try:
             width, height, dpi = LabelService.parse_dimensions(data.get("resolution"), data.get("dpi"))
-        except ValueError as exc:
-            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        except ValueError:
+            # The message is logged, not returned: every other handler in this module answers a bad
+            # request with a fixed string, and echoing an exception back to a caller is what CodeQL
+            # flags here whether or not this particular one is safe to show.
+            logger.warning("Invalid label batch request.", exc_info=True)
+            return Response({"detail": "Invalid label request."}, status=status.HTTP_400_BAD_REQUEST)
 
         pks = list(dict.fromkeys(data["lots"]))  # de-duped, order kept: it is the print order
         by_pk = Lot.objects.filter(pk__in=pks, is_deleted=False).select_related(
