@@ -123,7 +123,7 @@ this only quotes its opening sentence.
 - **`form_friction.py`** (180 lines)
   The view mixin that writes :class:`auctions.friction_models.FormFailure` rows.
   `error_codes`, `abandon_token`, `read_abandon_token`, `FormFrictionMixin`
-- **`forms.py`** (6869 lines)
+- **`forms.py`** (6856 lines)
   Every form on the site: what a person is allowed to type, and what it means when they do.
 - **`friction_models.py`** (98 lines)
   Where people get stuck: one row per rejected form submission.
@@ -289,7 +289,7 @@ this only quotes its opening sentence.
 - **`test_club_api_read.py`** (1468 lines)
   The club REST API's read side: members, BAP lots, auctions and lots.
   `ClubAPITests`, `ClubAPIKeyMemberPermissionTests`, `ClubBapLotAPITests`, `ClubAuctionReadAPITests`, `ParseBoolEnvTests`, `RequireSecureProdSecretsTests`, `ClubAuctionIntegrationTests`
-- **`test_club_events.py`** (3086 lines)
+- **`test_club_events.py`** (3088 lines)
   Tests for club events, Google Calendar sync, and the Discord events built on top of them.
 - **`test_club_health.py`** (553 lines)
   Tests for the club lifecycle rollup and the outreach queue that comes out of it.

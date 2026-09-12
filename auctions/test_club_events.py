@@ -599,7 +599,7 @@ class ClubEventViewTests(TestCase):
         response = self.client.get(reverse("club_event_edit", kwargs={"slug": self.club.slug, "pk": event.pk}))
         self.assertEqual(response.status_code, 200)
         form = response.context["form"]
-        self.assertEqual(sorted(form.fields), ["description", "reset_description", "reset_title", "title"])
+        self.assertEqual(sorted(form.fields), ["description", "title"])
         self.assertContains(response, "Edit event details")
         self.assertNotContains(response, "Delete event")
 
@@ -635,16 +635,18 @@ class ClubEventViewTests(TestCase):
         self.assertFalse(event.title_is_custom)
         self.assertFalse(event.description_is_custom)
 
-    def test_the_reset_box_puts_the_auctions_wording_back(self):
+    def test_retyping_the_auctions_wording_in_one_field_releases_only_that_field(self):
+        """There is no reset box: retyping the generated wording is the way back, and it has to
+        leave the field the club still owns alone."""
         self.client.force_login(self.admin)
         _auction, event = self._auction_event()
         url = reverse("club_event_edit", kwargs={"slug": self.club.slug, "pk": event.pk})
+        generated_title, _generated_description = club_events.generated_wording(event)
         self.client.post(url, {"title": "April meeting", "description": "Doors at 6:30."})
 
-        # Ticked alongside a typed value, reset wins — it is the only way back.
-        self.client.post(url, {"title": "Something else", "description": "Doors at 6:30.", "reset_title": "on"})
+        self.client.post(url, {"title": generated_title, "description": "Doors at 6:30."})
         event.refresh_from_db()
-        self.assertEqual(event.title, "Auction")
+        self.assertEqual(event.title, generated_title)
         self.assertFalse(event.title_is_custom)
         self.assertTrue(event.description_is_custom)
 
@@ -1214,7 +1216,7 @@ class CustomizeEventPromptTests(TestCase):
     def test_the_banner_is_on_the_auction_page_for_an_admin(self):
         self.client.force_login(self.admin)
         response = self.client.get(reverse("auction_main", kwargs={"slug": self.auction.slug}))
-        self.assertContains(response, "website is showing this auction")
+        self.assertContains(response, "This auction has been added to your calendar")
         self.assertContains(response, "Customize this event")
         self.assertContains(response, reverse("club_event_edit", kwargs={"slug": self.club.slug, "pk": self.event.pk}))
 
@@ -1222,7 +1224,7 @@ class CustomizeEventPromptTests(TestCase):
         other = User.objects.create_user(username="pr_other", password="pw", email="pro@example.com")
         self.client.force_login(other)
         response = self.client.get(reverse("auction_main", kwargs={"slug": self.auction.slug}))
-        self.assertNotContains(response, "website is showing this auction")
+        self.assertNotContains(response, "This auction has been added to your calendar")
 
     def test_dismissing_it_sticks(self):
         self.client.force_login(self.admin)
@@ -1231,7 +1233,7 @@ class CustomizeEventPromptTests(TestCase):
         self.auction.refresh_from_db()
         self.assertTrue(self.auction.dismissed_customize_event_banner)
         self.assertIsNone(self.auction.event_needing_custom_wording)
-        self.assertNotContains(self.client.get(url), "website is showing this auction")
+        self.assertNotContains(self.client.get(url), "This auction has been added to your calendar")
 
     def test_the_customize_link_works_for_an_auction_admin_with_no_club_role(self):
         """The banner is written for the auction's creator, who often holds no club permission."""

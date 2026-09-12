@@ -4571,12 +4571,9 @@ class ClubEventForm(forms.ModelForm):
     members reading on their phone — but the dates, the location and whether the event exists at
     all belong to the auction, and an event whose date disagrees with its auction is worse than no
     feature at all. Typing either field sets the matching ``*_is_custom`` flag, which is what stops
-    ``club_events.sync_one_auction_event`` writing over it on the auction's next save; the reset
-    box clears the flag and puts the generated wording straight back.
+    ``club_events.sync_one_auction_event`` writing over it on the auction's next save; typing the
+    generated wording back in clears the flag again.
     """
-
-    reset_title = forms.BooleanField(required=False, label="Use the auction's title instead")
-    reset_description = forms.BooleanField(required=False, label="Use the auction's description instead")
 
     class Meta:
         model = ClubEvent
@@ -4633,14 +4630,12 @@ class ClubEventForm(forms.ModelForm):
                 layout_fields.append("cancelled")
             else:
                 del self.fields["cancelled"]
-            del self.fields["reset_title"]
-            del self.fields["reset_description"]
         self.helper.layout = Layout(*layout_fields)
         self.helper.add_input(Submit("submit", "Save event", css_class="btn-primary"))
 
     def _narrow_to_the_wording(self):
         """Drop every field the auction owns, and label the two that are left."""
-        for name in ("date_start", "date_end", "location", "cancelled", "reset_title", "reset_description"):
+        for name in ("date_start", "date_end", "location", "cancelled"):
             del self.fields[name]
         # Both stay required exactly as the model has them — a generated event with a blank title
         # would show up blank in every member's calendar.
@@ -4666,20 +4661,14 @@ class ClubEventForm(forms.ModelForm):
         """Record which of the two fields the club typed, so the next sync leaves them alone."""
         event = super().save(commit=False)
         if self.is_generated:
-            for field, reset, generated in (
-                ("title", "reset_title", self.generated_title),
-                ("description", "reset_description", self.generated_description),
+            for field, generated in (
+                ("title", self.generated_title),
+                ("description", self.generated_description),
             ):
-                if self.cleaned_data.get(reset):
-                    # Reset wins over anything typed in the box above it: somebody who ticks it and
-                    # edits the text in the same save has said two things, and this is the one they
-                    # can't get back to any other way.
-                    setattr(event, field, generated)
-                    setattr(event, f"{field}_is_custom", False)
-                else:
-                    # Typing the generated wording back in by hand is not a custom value — there
-                    # would be nothing for the flag to protect.
-                    setattr(event, f"{field}_is_custom", getattr(event, field) != generated)
+                # Typing the generated wording back in by hand is not a custom value — there
+                # would be nothing for the flag to protect, and a flag set here would quietly stop
+                # the event following a later rename.
+                setattr(event, f"{field}_is_custom", getattr(event, field) != generated)
         if commit:
             event.save()
         return event
