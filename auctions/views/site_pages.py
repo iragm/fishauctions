@@ -88,7 +88,6 @@ class FAQ(ListView):
         context = super().get_context_data(**kwargs)
         current_site = Site.objects.get_current()
         context["domain"] = current_site.domain
-        context["hide_google_login"] = True
         return context
 
 
@@ -207,7 +206,6 @@ class PromoSite(TemplateView):
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
-        context["hide_google_login"] = True
         context["online_tutorial"] = settings.ONLINE_TUTORIAL_YOUTUBE_ID
         context["in_person_tutorial"] = settings.IN_PERSON_TUTORIAL_YOUTUBE_ID
         context["in_person_tutorial_chapters"] = settings.IN_PERSON_TUTORIAL_CHAPTERS
@@ -426,7 +424,6 @@ class AllAuctions(LocationMixin, HTMxTableView):
                         self.nearby_filter_active = False
                         nearby_filter_auto_removed = "No nearby auctions match your search \u2014 showing all results."
         context = super().get_context_data(**kwargs)
-        context["hide_google_login"] = True
         if not self.object_list.exists():
             context["no_results"] = (
                 f"<span class='text-danger'>No auctions found.</span>  This only searches club auctions, if you're looking for {settings.WEBSITE_FOCUS} to buy, check out <a href='/lots/'>the list of lots for sale</a>"
@@ -554,7 +551,6 @@ class AllLots(LotListView, AuctionViewMixin):
             if self.request.user.is_authenticated:
                 recent_lots = recent_lots.exclude(user=self.request.user)
             context["recently_added_lots_hidden"] = recent_lots.exists()
-        context["hide_google_login"] = True
         return context
 
 

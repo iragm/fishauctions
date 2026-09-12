@@ -17,16 +17,17 @@
 {% if no_results %}
   {{ block.super }}
 {% else %}
+  {% comment %}hx-disinherit="hx-swap": outerHTML is for this wrapper's own refresh and must not be
+  inherited. Every row in the table opens a modal aimed at #modals-here, and an inherited outerHTML
+  makes those links replace that container instead of filling it -- after which no modal on the page
+  can open again. htmx_modal.js forces innerHTML for that target as well; this is the half that keeps
+  every other target in the table honest too.{% endcomment %}
   <div class="table-container"
        hx-get=""
        hx-trigger="clubMemberListChanged from:body"
-       hx-swap="outerHTML">
+       hx-swap="outerHTML"
+       hx-disinherit="hx-swap">
     {% render_table table %}
   </div>
 {% endif %}
-{% endblock %}
-
-{% block extra_js %}
-  {{ block.super }}
-  <script type="text/javascript">pageView();</script>
 {% endblock %}

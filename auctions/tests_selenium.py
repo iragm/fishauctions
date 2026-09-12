@@ -26,7 +26,9 @@ import unittest
 
 from django.conf import settings
 from django.contrib.auth.models import User
-from django.test import Client, TestCase, tag
+from django.contrib.staticfiles import finders
+from django.contrib.staticfiles.storage import staticfiles_storage
+from django.test import Client, SimpleTestCase, TestCase, override_settings, tag
 from django.urls import reverse
 from django.utils import timezone
 
@@ -48,7 +50,7 @@ except ImportError:
 
 try:
     from selenium import webdriver
-    from selenium.common.exceptions import NoSuchElementException
+    from selenium.common.exceptions import NoSuchElementException, TimeoutException
     from selenium.webdriver.chrome.options import Options as ChromeOptions
     from selenium.webdriver.common.by import By
     from selenium.webdriver.support import expected_conditions as EC
@@ -59,7 +61,49 @@ except ImportError:
     SELENIUM_AVAILABLE = False
 
 
-def get_selenium_driver():
+def site_origin():
+    """The URL the browser has to use to reach *this* stack, and the DNS override that gets there.
+
+    Returns ``(origin, host_map)``. Two stacks serve this site and they are not reachable the same
+    way, which is the whole point of being able to test both:
+
+    * CI, and any box left on the defaults, runs the plain ``nginx`` image with ``nginx.dev.conf``:
+      one ``default_server`` on port 80 that answers to any name, so ``http://nginx`` is the site.
+    * Production runs **swag** with ``nginx.prod.conf``, and so does a dev box mirroring it
+      (``NGINX_IMAGE``/``NGINX_CONF`` in ``.env``). There port 80 redirects to https and 443 answers
+      only to ``SITE_DOMAIN`` -- ``http://nginx`` lands on swag's catch-all 404, with no jQuery and
+      no htmx on the page, which is what every vendor-library test reported as a failure.
+
+    The second case needs the real hostname, and that name resolves to the *public* site through
+    DNS, so it is pinned to the container's own address with ``--host-resolver-rules``. Nothing here
+    may ever leave the machine.
+    """
+    host = os.environ.get("TEST_SERVER_HOST", "nginx")
+    port = os.environ.get("TEST_SERVER_PORT", "80")
+    plain = f"http://{host}:{port}"
+    if os.environ.get("TEST_SERVER_ORIGIN"):
+        return os.environ["TEST_SERVER_ORIGIN"], os.environ.get("TEST_SERVER_HOST_MAP", "")
+    try:
+        import socket
+        import urllib.request
+
+        request = urllib.request.Request(plain + "/", method="HEAD")
+        with urllib.request.urlopen(request, timeout=5) as response:  # noqa: S310 -- fixed internal URL
+            if response.status < 400 and response.geturl().startswith(plain):
+                return plain, ""
+    except Exception:
+        pass
+    domain = getattr(settings, "SITE_DOMAIN", "") or os.environ.get("SITE_DOMAIN", "")
+    if not domain:
+        return plain, ""
+    try:
+        address = socket.gethostbyname(host)
+    except Exception:
+        return plain, ""
+    return f"https://{domain}", f"MAP {domain} {address}"
+
+
+def get_selenium_driver(host_map=""):
     """Create and return a Selenium WebDriver connected to the remote Chrome instance."""
     selenium_host = os.environ.get("SELENIUM_HOST", "selenium")
     selenium_port = os.environ.get("SELENIUM_PORT", "4444")
@@ -70,6 +114,16 @@ def get_selenium_driver():
     chrome_options.add_argument("--disable-dev-shm-usage")
     chrome_options.add_argument("--disable-gpu")
     chrome_options.add_argument("--window-size=1920,1080")
+    if host_map:
+        # Send the vhost name to this machine's own nginx, never to whatever DNS says, and accept
+        # the certificate it answers with -- a dev box mirroring production has a real domain in
+        # SITE_DOMAIN and a certificate that does not match an internal address.
+        chrome_options.add_argument(f"--host-resolver-rules={host_map}")
+        chrome_options.add_argument("--ignore-certificate-errors")
+        chrome_options.set_capability("acceptInsecureCerts", True)
+    # Ask Chrome to keep the console, so a test that fails on a page whose JavaScript died can say
+    # so.  Without this capability get_log("browser") raises instead of returning an empty list.
+    chrome_options.set_capability("goog:loggingPrefs", {"browser": "ALL"})
 
     driver = webdriver.Remote(
         command_executor=f"http://{selenium_host}:{selenium_port}/wd/hub",
@@ -142,14 +196,13 @@ class SeleniumTestCase(TestCase):
         finally:
             sys.stdout = stdout_backup
 
-        # Get the server URL that's accessible from the Selenium container
-        # When running in Docker, we need to use the service name 'web' or nginx
+        # Whichever of the two nginx configurations this box runs -- see site_origin().
         cls.test_server_host = os.environ.get("TEST_SERVER_HOST", "nginx")
         cls.test_server_port = os.environ.get("TEST_SERVER_PORT", "80")
-        cls.base_url = f"http://{cls.test_server_host}:{cls.test_server_port}"
+        cls.base_url, cls.host_map = site_origin()
 
         # Create WebDriver
-        cls.driver = get_selenium_driver()
+        cls.driver = get_selenium_driver(cls.host_map)
         cls.driver.maximize_window()
 
     @classmethod
@@ -832,11 +885,65 @@ class GenericAdminFormTests(SeleniumTestCase):
 # ---------------------------------------------------------------------------
 
 
+#: What the live ASGI server below needs that a production-shaped configuration will not give it.
+#:
+#: Both of these are settings that follow `DEBUG`, and **a test run always has `DEBUG` off** --
+#: `setup_test_environment` forces it, whatever `.env` says -- so neither can be left to chance:
+#:
+#: - `STORAGES`. `serve_static` wraps the application in `ASGIStaticFilesHandler`, which resolves
+#:   a URL through the staticfiles **finders**: the source trees, which hold only plain names.
+#:   `{% static %}` meanwhile renders a *hashed* name wherever `collectstatic` has run, and in a
+#:   test run that is decided by `STATIC_ROOT` rather than by `DEBUG` (fishauctions/
+#:   static_storage.py explains why). The django container's `STATIC_ROOT` is a collected volume,
+#:   so every asset on the page 404s there and the lot page arrives with no jQuery and no bid
+#:   modal; CI's empty `STATIC_ROOT` renders plain names and hides the whole thing.
+#: - The `Secure` cookie flags, which settings.py sets to `not DEBUG` at import time. A checkout
+#:   configured like a deployment therefore marks them Secure, and `live_server_url` is plain
+#:   `http://`, so the browser stores neither cookie: every bid POST comes back
+#:   `403 CSRF Failed: CSRF cookie not set` and the test times out on a chat message that was
+#:   never going to arrive.
+#:
+#: Test-only, and scoped to the one class that runs a live server: production still hashes its
+#: static names and still marks its cookies Secure.
+LIVE_SERVER_SETTINGS = {
+    "STORAGES": {
+        **settings.STORAGES,
+        "staticfiles": {"BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage"},
+    },
+    "CSRF_COOKIE_SECURE": False,
+    "SESSION_COOKIE_SECURE": False,
+}
+
+
+class LiveServerSettingsTests(SimpleTestCase):
+    """`LIVE_SERVER_SETTINGS` really does undo the two production settings that break the browser.
+
+    Deliberately not skipped with the rest of this module, and it needs no browser: every test
+    that would notice either problem requires Chrome, so wherever Chrome is unreachable -- CI
+    included -- this is the only thing standing between a deployment-shaped `.env` and a live
+    server that serves a lot page with no JavaScript on it and refuses every bid.
+    """
+
+    @override_settings(**LIVE_SERVER_SETTINGS)
+    def test_static_urls_are_names_the_finders_can_serve(self):
+        for name in ("css/auction_site.css", "js/vendor/jquery.min.js", "js/ws.js"):
+            with self.subTest(name=name):
+                self.assertEqual(staticfiles_storage.url(name), f"{settings.STATIC_URL}{name}")
+                self.assertIsNotNone(finders.find(name), "ASGIStaticFilesHandler resolves through the finders")
+
+    @override_settings(**LIVE_SERVER_SETTINGS)
+    def test_cookies_are_not_marked_secure_for_a_plain_http_live_server(self):
+        """Secure cookies plus an `http://` origin means no csrftoken, which DRF answers with a 403."""
+        self.assertFalse(settings.CSRF_COOKIE_SECURE)
+        self.assertFalse(settings.SESSION_COOKIE_SECURE)
+
+
 @unittest.skipUnless(
     SELENIUM_AVAILABLE and selenium_available() and CHANNELS_LIVE_AVAILABLE,
     "Selenium and channels live server (daphne) required",
 )
 @tag("selenium")
+@override_settings(**LIVE_SERVER_SETTINGS)
 class LiveBiddingTestCase(ChannelsLiveServerTestCase):
     """Base class for browser bid tests that need real websockets + test data.
 
@@ -935,14 +1042,62 @@ class LiveBiddingTestCase(ChannelsLiveServerTestCase):
             }
         )
 
+    def page_diagnosis(self, driver):
+        """Everything worth knowing about a page that did not do what the test expected.
+
+        A `TimeoutException` out of a CI browser carries no message at all, and the three things
+        that produce one here are indistinguishable without asking: the page never loaded, the
+        browser arrived **signed out** -- the whole websocket script lives inside
+        ``{% if request.user.is_authenticated %}`` in view_lot_images.html, so a lost session
+        cookie means there is no socket on the page to wait for -- or the handshake itself was
+        refused and the page is quietly reconnecting on a backoff.  Each of those wants a
+        different fix, so the failure has to say which one it was.
+        """
+        probe = """
+            return {
+                url: window.location.href,
+                title: document.title,
+                readyState: document.readyState,
+                signed_in: !!document.querySelector('#chat'),
+                socket_on_page: typeof window.lotWebSocket !== 'undefined',
+                socket_state: window.lotWebSocket ? window.lotWebSocket.readyState : null,
+                socket_url: (typeof lotWebSocketUrl !== 'undefined') ? lotWebSocketUrl : null,
+                jquery: typeof window.jQuery,
+                body_start: document.body ? document.body.innerText.slice(0, 300) : ''
+            };
+        """
+        try:
+            facts = driver.execute_script(probe)
+        except Exception as error:  # a browser that cannot even run this has its own story
+            return f"  could not probe the page: {error}"
+        lines = [f"  {key}: {value!r}" for key, value in sorted(facts.items())]
+        try:
+            # Chrome only serves this when goog:loggingPrefs was set, and answers other browsers
+            # with an error rather than an empty list.  Diagnostics never fail the test themselves.
+            console = driver.get_log("browser")
+        except Exception:
+            console = []
+        lines += [f"  console: {entry.get('level')} {entry.get('message')}" for entry in console[-10:]]
+        return "\n".join(lines)
+
     def open_lot(self, driver, lot=None):
         """Load the lot page and wait until its websocket is actually OPEN, so the
-        consumer is subscribed before any bid is broadcast."""
+        consumer is subscribed before any bid is broadcast.
+
+        Thirty seconds rather than a browser-ish five: a refused handshake reconnects on a backoff
+        that reaches 8s by the third try (view_lot_images.html), so a short wait here reports a
+        transient first failure as a permanent one.
+        """
         lot = lot or self.lot
-        driver.get(self.live_server_url + reverse("lot_by_pk", kwargs={"pk": lot.pk}))
-        WebDriverWait(driver, 20).until(
-            lambda d: d.execute_script("return !!(window.lotWebSocket && window.lotWebSocket.readyState === 1)")
-        )
+        url = self.live_server_url + reverse("lot_by_pk", kwargs={"pk": lot.pk})
+        driver.get(url)
+        try:
+            WebDriverWait(driver, 30).until(
+                lambda d: d.execute_script("return !!(window.lotWebSocket && window.lotWebSocket.readyState === 1)")
+            )
+        except TimeoutException:
+            msg = f"the lot page websocket never opened at {url}\n{self.page_diagnosis(driver)}"
+            raise AssertionError(msg) from None
 
     def place_bid(self, driver, amount):
         """Drive the real bid UI: enter amount, confirm in the modal."""
@@ -960,7 +1115,14 @@ class LiveBiddingTestCase(ChannelsLiveServerTestCase):
 
     def wait_chat_contains(self, driver, needle, timeout=20):
         needle = needle.lower()
-        WebDriverWait(driver, timeout).until(lambda d: needle in self.text_of(d, "chat").lower())
+        try:
+            WebDriverWait(driver, timeout).until(lambda d: needle in self.text_of(d, "chat").lower())
+        except TimeoutException:
+            msg = (
+                f"{needle!r} never arrived over the websocket; the chat panel holds "
+                f"{self.text_of(driver, 'chat')!r}\n{self.page_diagnosis(driver)}"
+            )
+            raise AssertionError(msg) from None
 
 
 @unittest.skipUnless(SELENIUM_AVAILABLE and selenium_available(), "Selenium not available")
@@ -968,6 +1130,20 @@ class LiveBiddingTestCase(ChannelsLiveServerTestCase):
 class BidPlacementE2ETests(LiveBiddingTestCase):
     """The crux: place a bid in the browser and confirm the websocket round-trips,
     and that one bidder's secret max proxy bid never leaks to anyone else."""
+
+    def test_a_signed_out_browser_is_reported_as_signed_out(self):
+        """The failure message has to tell "no socket on the page" from "the socket never opened".
+
+        Everything the bid tests wait for lives inside ``{% if request.user.is_authenticated %}``
+        in view_lot_images.html, so a session cookie that does not survive -- the CI-only failure
+        this diagnosis was written for -- leaves a page with no websocket on it at all, which times
+        out looking exactly like a refused handshake.
+        """
+        driver = self.new_browser()
+        driver.get(self.live_server_url + reverse("lot_by_pk", kwargs={"pk": self.lot.pk}))
+        diagnosis = self.page_diagnosis(driver)
+        self.assertIn("signed_in: False", diagnosis)
+        self.assertIn("socket_on_page: False", diagnosis)
 
     def test_placing_a_bid_makes_you_the_high_bidder(self):
         """Bid in the UI -> the websocket broadcast comes back and you're shown as the
@@ -1043,3 +1219,67 @@ class BidPlacementE2ETests(LiveBiddingTestCase):
         self.assertIn(bob.username, self.text_of(alice_browser, "high_bidder_name"))
         self.assertNotIn("30", self.text_of(alice_browser, "price"))
         self.assertNotIn("30", self.text_of(alice_browser, "high_bidder_name"))
+
+
+@unittest.skipUnless(
+    CHANNELS_LIVE_AVAILABLE and SELENIUM_AVAILABLE and selenium_available(),
+    "Selenium and channels' live server are both needed",
+)
+@tag("selenium")
+class ModalReopenTests(LiveBiddingTestCase):
+    """A modal has to open, close, and open again -- indefinitely, not twice.
+
+    The bug this exists to prevent had been reported three times as "the third click does nothing".
+    Two things had to be true at once, and each on its own was invisible:
+
+    * ``hx-swap`` is an inherited attribute. The table wrapper on this page refreshes itself with
+      ``hx-swap="outerHTML"``, so every modal link inside it inherited outerHTML and *replaced*
+      ``#modals-here`` with the modal instead of filling it. The modal appeared, so it looked fine.
+    * Two elements claimed that id -- base.html's and one in a page template -- so the first two
+      clicks each destroyed one of them and the third had no target left, failing silently with
+      ``htmx:targetError``.
+
+    Asserting the container is still there after each cycle is the point: a test that only checked
+    the modal opened would have passed on the broken code for two of these three rounds.
+    """
+
+    def test_a_modal_opens_again_after_being_cancelled(self):
+        driver = self.new_browser(self.seller)
+        driver.get(self.live_server_url + reverse("auction_tos_list", kwargs={"slug": self.auction.slug}))
+        WebDriverWait(driver, 10).until(lambda d: d.execute_script("return typeof htmx") == "object")
+        self.assertEqual(
+            driver.execute_script("return document.querySelectorAll('#modals-here').length"),
+            1,
+            f"the page must render exactly one modal container: {self.page_diagnosis(driver)}",
+        )
+
+        for attempt in (1, 2, 3):
+            link = WebDriverWait(driver, 10).until(
+                EC.element_to_be_clickable((By.CSS_SELECTOR, "tbody a[hx-get*='/api/auctiontos/']"))
+            )
+            driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", link)
+            link.click()
+            try:
+                WebDriverWait(driver, 10).until(
+                    EC.visibility_of_element_located((By.CSS_SELECTOR, "[data-htmx-modal-root]"))
+                )
+            except TimeoutException:
+                self.fail(f"the modal did not open on attempt {attempt}: {self.page_diagnosis(driver)}")
+            self.assertEqual(
+                driver.execute_script("return document.querySelectorAll('#modals-here').length"),
+                1,
+                f"opening the modal must fill the container, not replace it (attempt {attempt})",
+            )
+
+            cancel = WebDriverWait(driver, 10).until(
+                EC.element_to_be_clickable((By.XPATH, "//*[@data-htmx-modal-root]//button[normalize-space()='Cancel']"))
+            )
+            cancel.click()
+            WebDriverWait(driver, 10).until_not(
+                EC.presence_of_element_located((By.CSS_SELECTOR, "[data-htmx-modal-root]"))
+            )
+            self.assertEqual(
+                driver.execute_script("return document.querySelectorAll('#modals-here').length"),
+                1,
+                f"closing the modal must leave the container behind (attempt {attempt})",
+            )

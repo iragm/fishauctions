@@ -1,7 +1,16 @@
+"""Values every template needs and no view should have to remember to pass.
+
+Each of these runs on every render, so the expensive ones are wrapped in ``once_per_request``, and
+the ones that write to the session only write when the value they store actually changes -- an
+unconditional write here is a ``django_session`` UPDATE for every page anybody loads.
+"""
+
 import functools
 import zoneinfo
 
 from django.conf import settings  # import the settings file
+
+from auctions import dmca
 
 DEFAULT_USER_TIMEZONE = "America/New_York"
 GOOGLE_OAUTH_PLACEHOLDER_VALUES = {
@@ -9,6 +18,18 @@ GOOGLE_OAUTH_PLACEHOLDER_VALUES = {
     "secret",
     "secret.apps.googleusercontent.com",
 }
+
+# Google One Tap is drawn once a visitor has this many page loads behind them, and always on the
+# pages named below. See google_one_tap() for why it is rationed at all.
+ONE_TAP_MIN_PRIOR_PAGE_VIEWS = 1
+ONE_TAP_PAGE_VIEW_SESSION_KEY = "page_views_before_one_tap"
+ONE_TAP_ALWAYS_SHOWN_ON = frozenset({"account_login", "account_signup"})
+# Pages the prompt is never drawn on, however much browsing is behind the visitor: it lands on top
+# of something it cannot share the screen with -- the club map, the promo page's video, a long FAQ,
+# the terms somebody is reading, and the two big browse lists where it reads as noise rather than an
+# offer. Keyed on the view rather than the URL name, so a second path onto the same page is covered.
+ONE_TAP_NEVER_SHOWN_ON = frozenset({"AllAuctions", "AllLots", "ClubMap", "FAQ", "PromoSite", "UserAgreement"})
+CRAWLER_USER_AGENTS = ("Googlebot", "Baiduspider")
 
 
 def once_per_request(processor):
@@ -65,11 +86,9 @@ def google_oauth(request):
     Apple's Services ID (the native app's bundle id doesn't work for the browser redirect) and
     Facebook's app id and secret — so a mobile-only configuration correctly shows no web button.
     """
-    token = (settings.GOOGLE_OAUTH_LINK or "").strip()
-    google_login_enabled = bool(token) and token not in GOOGLE_OAUTH_PLACEHOLDER_VALUES
     return {
-        "GOOGLE_OAUTH_LINK": token,
-        "GOOGLE_LOGIN_ENABLED": google_login_enabled,
+        "GOOGLE_OAUTH_LINK": (settings.GOOGLE_OAUTH_LINK or "").strip(),
+        "GOOGLE_LOGIN_ENABLED": _google_login_enabled(),
         # The web Apple flow also needs the team key to build its client secret; without it the
         # redirect reaches Apple and fails there, so treat it as not configured.
         "APPLE_LOGIN_ENABLED": bool(
@@ -77,6 +96,80 @@ def google_oauth(request):
         ),
         "FACEBOOK_LOGIN_ENABLED": bool(settings.FACEBOOK_APP_ID and settings.FACEBOOK_APP_SECRET),
     }
+
+
+def _google_login_enabled():
+    """Whether this deployment has a real Google client id, rather than one of .env.example's."""
+    token = (settings.GOOGLE_OAUTH_LINK or "").strip()
+    return bool(token) and token not in GOOGLE_OAUTH_PLACEHOLDER_VALUES
+
+
+def _view_class_name(resolver_match):
+    """The class behind a resolved URL, or "" for a function view."""
+    view_class = getattr(resolver_match.func, "view_class", None)
+    return view_class.__name__ if view_class is not None else ""
+
+
+def _is_page_load(request):
+    """A whole page the visitor asked for, rather than a fragment of one.
+
+    HTMx re-renders partials against the same URL several times per page; counting those would let
+    one page look like a browsing session and open the prompt on the visitor's first screen, which
+    is the thing google_one_tap() exists to prevent.
+    """
+    if request.method != "GET" or getattr(request, "htmx", False):
+        return False
+    user_agent = request.META.get("HTTP_USER_AGENT", "")
+    return not any(crawler in user_agent for crawler in CRAWLER_USER_AGENTS)
+
+
+@once_per_request
+def google_one_tap(request):
+    """Whether to draw Google's One Tap prompt on this page.
+
+    One Tap is a budget, not a banner. Closing it sets Google's ``g_state`` cookie for the whole
+    origin and starts an escalating cooldown -- hours, then days, then weeks -- and under FedCM the
+    browser runs a quiet period of its own that no callback reports back to us. A prompt spent on
+    somebody who was about to leave is a prompt they do not get on the page where they meant to
+    sign up, and nothing in the page can tell that it was spent.
+
+    So it is rationed on intent: withheld until a visitor has a page load behind them, and always
+    drawn on sign-in and sign-up, where it cannot be wasted and where the button in
+    `account/login.html` and `account/signup.html` is there anyway if it has been.
+
+    Layout still overrides intent. ONE_TAP_NEVER_SHOWN_ON is the list of pages a floating prompt
+    cannot share the screen with, and it wins over everything below it -- but those pages still
+    count, because reading the FAQ or working down the lot list is exactly the browsing the gate is
+    trying to detect. Suppressing the prompt there is not the same as pretending the visit did not
+    happen.
+
+    Counting stops at the threshold, because past it the answer cannot change again: a visitor
+    costs one extra session write, once, and returning visitors cost none.
+    """
+    user = getattr(request, "user", None)
+    session = getattr(request, "session", None)
+    if user is None or session is None:
+        # An error page rendered off a request that never reached the auth and session middleware.
+        # There is nobody to prompt, and raising here would replace the error with a worse one.
+        return {"SHOW_GOOGLE_ONE_TAP": False}
+    if user.is_authenticated:
+        return {"SHOW_GOOGLE_ONE_TAP": False}
+    if getattr(request, "is_mobile_app", False):
+        # The app has its own native Google flow (MobileSocialAuthView), and Google's script does
+        # not run in an embedded WebView regardless.
+        return {"SHOW_GOOGLE_ONE_TAP": False}
+    if not _google_login_enabled():
+        return {"SHOW_GOOGLE_ONE_TAP": False}
+    seen = session.get(ONE_TAP_PAGE_VIEW_SESSION_KEY, 0)
+    if seen < ONE_TAP_MIN_PRIOR_PAGE_VIEWS and _is_page_load(request):
+        session[ONE_TAP_PAGE_VIEW_SESSION_KEY] = seen + 1
+    resolver_match = getattr(request, "resolver_match", None)
+    if resolver_match is not None:
+        if _view_class_name(resolver_match) in ONE_TAP_NEVER_SHOWN_ON:
+            return {"SHOW_GOOGLE_ONE_TAP": False}
+        if resolver_match.url_name in ONE_TAP_ALWAYS_SHOWN_ON:
+            return {"SHOW_GOOGLE_ONE_TAP": True}
+    return {"SHOW_GOOGLE_ONE_TAP": seen >= ONE_TAP_MIN_PRIOR_PAGE_VIEWS}
 
 
 def theme(request):
@@ -189,6 +282,9 @@ def site_config(request):
         "enable_help": settings.ENABLE_HELP,
         "enable_promo_page": settings.ENABLE_PROMO_PAGE,
         "recaptcha_enabled": getattr(settings, "RECAPTCHA_ENABLED", False),
+        # Whether this deployment has a registered DMCA agent to publish. False hides the footer
+        # and menu links, because /dmca/ 404s without one -- see auctions/dmca.py.
+        "dmca_configured": dmca.is_configured(),
         # When the whole site is one club, the club name duplicates the navbar
         # brand, so templates can hide it.
         "single_club_mode": getattr(settings, "SINGLE_CLUB_MODE", False),

@@ -29,6 +29,15 @@ repos:
       language: system
       pass_filenames: false
       files: templates/.*\.(html|txt)$
+    # An <img> with no alt, or a button whose only content is an icon, is invisible when you look
+    # at the page — which is what makes it an accessibility bug rather than a rendering one, and
+    # why it comes back unless something fails. Same checker auctions.test_template_a11y runs.
+    - id: template-accessibility
+      name: Images have alt text and icon-only controls have names
+      entry: python3 -m auctions.template_a11y
+      language: system
+      pass_filenames: false
+      files: templates/.*\.html$
     # docs/module_map.md is generated from every module's docstring and top-level names. Checked
     # in so it can be read without running anything, which means it can also be stale; this is the
     # check that it isn't. It also enforces "a module over 300 lines says what it is for" and the

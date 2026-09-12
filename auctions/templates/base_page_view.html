@@ -1,4 +1,19 @@
-{# This is included in base.html. To use it, call pageView(data) from any javascript template; data should be a dict containing auction : pk and lot : pk values, or can be blank #}
+{% comment %}Included in base.html, so every page that extends it records exactly one view.
+
+A page that is somebody looking at an auction says so from its *view*, by putting
+``page_view_auction`` (and ``page_view_lot``) in the context. Three do: the auction's rules page,
+its lot list, and a lot page. That list is the definition of Auction.unique_views -- "distinct
+visitors who viewed this auction's rules page or any of its lots" -- which organizers read on their
+own stats page, so the bidder list, the stats page and the edit form must not tag, even though all
+three have an `auction` in context. Reading the tag off whatever `auction` happens to be in scope
+would quietly fill an organizer's traffic number with their own admin visits.
+
+A lot page sends the auction too, not just the lot. Rows written before 2026-09-09 carry only the
+lot, which is why the readers of this data still match an auction as `auction_id OR
+lot_number__auction_id` -- an OR across a join, and the shape behind the July database incident.
+tasks.backfill_page_view_auctions is walking those rows in the background so that can go.
+
+auctions/test_page_view_beacon.py is the ratchet for all of it.{% endcomment %}
 
 <script>
     var urlParams = new URLSearchParams(window.location.search);
@@ -9,34 +24,35 @@
     // Remove uid
     newUrl = newUrl.replace(/(\?|&)uid=[^&]*(&|$)/, '$1').replace(/(&|\?)$/, '');
     window.history.replaceState(null, document.title, newUrl)
-    var first_view = true;
+    {% comment %}Empty on the pages that are not about a lot or an auction, which is most of them. The server treats an empty string as "not given" -- see PageViewCreate in views/ajax.py.{% endcomment %}
+    var pageViewSubject = {
+        lot: "{{ page_view_lot|default_if_none:'' }}",
+        auction: "{{ page_view_auction|default_if_none:'' }}",
+    };
+    var pageViewSent = false;
     function pageView(data) {
-        setTimeout(() => {
-            sendPageView(data);
-        }, 2000);
-    }
-    function sendPageView(data) {
+        if (pageViewSent) { return; }
+        pageViewSent = true;
         data = data ?? {};
         data.src = src;
         data.uid = uid;
-        data.url = newUrl;
+        {# PageView.url stores a site-relative path -- see page_view_path() in views/ajax.py. #}
+        data.url = window.location.pathname;
         data.title = document.title;
         data.referrer = document.referrer;
-        data.first_view = first_view;
-        if (document.hasFocus() || first_view) {
-            $.ajax({
-                type: "POST",
-                beforeSend: function (request) {
-                    request.setRequestHeader("X-CSRFTOKEN", "{{ csrf_token }}");
-                },
-                url: "{% url 'pageview' %}",
-                data: data,
-            });
-        }
-        //{# corresponding code in views.pageview() is also removed #}
-        // first_view = false;
-        // setTimeout(() => {
-        //     pageView(data);
-        // }, 10000);
+        {% comment %}The server only writes a row for first_view. The ten-second heartbeat that sent
+        the others is gone, and views/ajax.py has the matching commented-out block.{% endcomment %}
+        data.first_view = true;
+        $.ajax({
+            type: "POST",
+            beforeSend: function (request) {
+                request.setRequestHeader("X-CSRFTOKEN", "{{ csrf_token }}");
+            },
+            url: "{% url 'pageview' %}",
+            data: data,
+        });
     }
+    {% comment %}No timer. It used to wait two seconds, which deleted exactly the fast bounces --
+    the confused mis-click, the immediate back button -- that a funnel is about.{% endcomment %}
+    document.addEventListener('DOMContentLoaded', function () { pageView(pageViewSubject); });
 </script>

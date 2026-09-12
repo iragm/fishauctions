@@ -29,6 +29,8 @@ GET /api/mobile/config/
           // Omitted when this deployment has no privacy policy page; the app then draws no
           // privacy link rather than a dead one.
           "privacy_policy_url":      "/privacy/",
+          // Omitted the same way when this deployment has no registered DMCA agent.
+          "dmca_url":                "/dmca/",
           // Optional; present only for platforms whose Firebase config file is set. Public values.
           "firebase": {
             "android": {"package_name": "...", "api_key": "...", "app_id": "...",
@@ -36,16 +38,20 @@ GET /api/mobile/config/
             "ios":     {"bundle_id": "...", "api_key": "...", "app_id": "...",
                         "messaging_sender_id": "...", "project_id": "..."}
           },
-          // Optional; the set-winners voice grammar, present only once an admin has configured
-          // one (auctions.models.VoiceGrammar). Absent means "use the app's bundled grammar".
-          // See auctions/voice.py for what each key does.
+          // The set-winners voice grammar: the configured row (auctions.models.VoiceGrammar), or
+          // the defaults in auctions/voice.py when nobody has made one. Always present -- these
+          // values are the grammar, and the app's bundled copy is only for a first run that never
+          // reached us. See auctions/voice.py for what each key does.
           "voice": {
             "enabled": true, "backend": "platform", "locale": "en_US", "prefer_on_device": true,
             "anchors": {"lot": ["lot", "item"], "…": []},
             "number_words": {"seventeen": 17},
             "homophones": [["15", "50"]],
-            "weights": {"asr": 0.5, "keyword": 1.0, "snap": 1.0, "agreement": 0.4},
-            "thresholds": {"confident": 0.85, "unsure": 0.5},
+            "weights": {"asr": 0.2, "keyword": 0.5, "match": 1.0, "agreement": 0.4},
+            "thresholds": {"confident": 0.77, "unsure": 0.5},
+            // Milliseconds a heard value must stop changing before the app fills the field; 0
+            // means it waits for the recognizer's final result, as it did before this existed.
+            "commit_after_ms": 700,
             "auto_submit_on_sold": true, "block_auto_submit_when_unsure": true
           },
           // The app's navigation drawer, built server-side so a new link needs a Django deploy
@@ -670,6 +676,7 @@ POST /api/mobile/command-palette/log/
         { "id": 7 }
 """
 
+import base64
 import hashlib
 import json
 import logging
@@ -689,7 +696,7 @@ from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.views import TokenRefreshView
 
-from auctions import voice
+from auctions import dmca, voice
 from auctions.account_deletion import cancel_deletion
 from auctions.models import (
     PRIVACY_POLICY_SLUG,
@@ -723,6 +730,7 @@ from .serializers import (
     MobileDeviceSerializer,
     MobileDeviceUnregisterSerializer,
     MobileGoogleAuthSerializer,
+    MobileLabelBatchSerializer,
     MobileLabelPrefsSerializer,
     MobileLabelsPrintedSerializer,
     MobileLoginSerializer,
@@ -1315,19 +1323,24 @@ class MobileConfigView(APIView):
         # then draws no privacy link at all, which is the honest state.
         if BlogPost.objects.filter(slug=PRIVACY_POLICY_SLUG).exists():
             data["privacy_policy_url"] = reverse("privacy_policy")
+        # Same rule one line down: omitted rather than pointing at a 404.  /dmca/ only exists on a
+        # deployment that has configured a designated agent (auctions/dmca.py), and the app draws
+        # no copyright link when there isn't one.
+        if dmca.is_configured():
+            data["dmca_url"] = reverse("dmca")
         # Public Firebase client config per platform, parsed from the mobile config files. Only the
         # platforms whose file is configured appear; the whole key is omitted when neither is set.
         # Public values only (api key, app id, sender id, project id, package/bundle id) — no secrets.
         firebase = getattr(settings, "FIREBASE_CLIENT_CONFIG", None)
         if firebase:
             data["firebase"] = firebase
-        # The set-winners voice grammar, when an admin has configured one. Omitted otherwise, which
-        # the app reads as "use the grammar you shipped with" — so the key's absence is the normal
-        # state, not a failure. `enabled: false` in a configured row is the kill switch: the app
-        # reports supported=false and the page hides its microphone button, no release needed.
-        grammar = VoiceGrammar.load()
-        if grammar:
-            data["voice"] = voice.serialize_grammar(grammar)
+        # The set-winners voice grammar: the configured row, or this deployment's defaults when
+        # nobody has made one. Served either way, because the page has always matched against the
+        # defaults in auctions/voice.py and a block that appeared only once an admin had visited the
+        # admin page meant the app and the page scored the same utterance differently until they
+        # did. `enabled: false` in a configured row is the kill switch: the app reports
+        # supported=false and the page hides its microphone button, no release needed.
+        data["voice"] = voice.serialize_grammar(VoiceGrammar.load())
         # The navigation drawer, gated the way base.html gates the navbar. The only per-user block
         # in this response -- see auctions/mobile/menu.py for what the app does with it.
         data["menu"] = menu_for(request.user)
@@ -1631,13 +1644,106 @@ class MobileLotLabelView(APIView):
         return HttpResponse(content, content_type=content_type)
 
 
+class MobileLotLabelBatchView(APIView):
+    """POST /api/mobile/labels/batch/ — a whole print run's PNGs in one request.
+
+    Printing forty labels used to be forty GETs of ``labels/<pk>/``, and the cost the user feels is
+    not the render (about 110 ms a label, and now cached on the label's own HTML) but the forty
+    round trips carrying it: TLS, auth, throttle and scheduling, over the wifi of an auction hall,
+    while somebody stands at a table waiting. This is the same labels in one request.
+
+    The response is deliberately not "all of them". ``labels`` is what got rendered, ``remaining``
+    is what did not, and the app's loop is *post what is left, print what comes back* — so a run of
+    three hundred starts printing after the first chunk instead of after the last, and a slow server
+    returns a smaller chunk on its own (see ``render_lot_labels_png``'s budget) rather than making
+    the phone wait for a minute-long response it can't begin.
+
+    Lots the caller can't print are skipped rather than refusing the batch, the same rule as
+    ``labels/printed/``: one bad pk in a run of forty must not cost the other thirty-nine.
+    Nothing here marks anything printed — that is what the printer decides, and the app reports it.
+    """
+
+    permission_classes = [IsMobileAuthenticated]
+    throttle_scope = "mobile_api"
+    throttle_classes = [ScopedRateThrottle]
+
+    def post(self, request):
+        from .services.label_raster import render_lot_labels_png
+
+        serializer = MobileLabelBatchSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        data = serializer.validated_data
+        try:
+            width, height, dpi = LabelService.parse_dimensions(data.get("resolution"), data.get("dpi"))
+        except ValueError:
+            # The message is logged, not returned: every other handler in this module answers a bad
+            # request with a fixed string, and echoing an exception back to a caller is what CodeQL
+            # flags here whether or not this particular one is safe to show.
+            logger.warning("Invalid label batch request.", exc_info=True)
+            return Response({"detail": "Invalid label request."}, status=status.HTTP_400_BAD_REQUEST)
+
+        pks = list(dict.fromkeys(data["lots"]))  # de-duped, order kept: it is the print order
+        by_pk = Lot.objects.filter(pk__in=pks, is_deleted=False).select_related(
+            "user",
+            "auction",
+            "species_category",
+            "auctiontos_seller",
+            "auctiontos_seller__auction",
+            "auctiontos_seller__user",
+        )
+        by_pk = {lot.pk: lot for lot in by_pk}
+        wanted, skipped = [], []
+        for pk in pks:
+            lot = by_pk.get(pk)
+            if lot is None:
+                skipped.append({"lot": pk, "detail": "Lot not found."})
+            elif not MobileLotLabelView._can_access(request.user, lot):
+                skipped.append({"lot": pk, "detail": "You do not have permission to print this lot's label."})
+            else:
+                wanted.append(lot)
+
+        rendered, remaining = render_lot_labels_png(wanted, request, width=width, height=height, dpi=dpi)
+        labels = []
+        for lot, png in rendered:
+            if png is None:
+                # Same fallback as the single-lot endpoint: a lot with no auction has no label
+                # configuration to render against, and the standalone renderer draws it instead.
+                png, _content_type = LabelService.render_label(
+                    lot, "png", resolution=data.get("resolution") or None, dpi=dpi
+                )
+            labels.append({"lot": lot.pk, "content_type": "image/png", "png": base64.b64encode(png).decode("ascii")})
+        return Response(
+            {
+                "labels": labels,
+                "remaining": [lot.pk for lot in remaining],
+                "skipped": skipped,
+                "resolution": f"{width}x{height}",
+                "dpi": dpi,
+            }
+        )
+
+
 class MobileLabelsPrintedView(APIView):
-    """POST /api/mobile/labels/printed/ — mark a batch of lot labels as printed.
+    """POST /api/mobile/labels/printed/ — what came out of the printer, and what didn't.
 
     The PDF views set ``label_printed`` as a side effect of rendering
     (``LotLabelView.get_context_data`` → ``bulk_update``), and neither ``labels/<pk>/`` nor the
     ``fishauctions://print/`` deep-link path goes through them — so "print unprinted labels" would
     never shrink for anyone printing natively over Bluetooth. This closes that.
+
+    **``failed`` is the half that was missing, and it is the only cure for a jam reported as a
+    success.** The server cannot see the printer: every byte goes phone → Bluetooth → printhead, and
+    nothing on that path passes through here. What the server *does* own is the vocabulary — each
+    ``ThermalPrinterProfile`` carries a ``status_program`` and a ``status_flags`` table that decodes
+    a status byte into ``paper_jam`` / ``out_of_paper`` / ``cover_open`` / … (see
+    ``auctions.printer_programs.STATUS_CONDITIONS``), and the app already downloads both. So the
+    division is: the app reads the status and says which labels did not come out; this endpoint puts
+    those lots back to unprinted and flags them for reprinting, so clearing the jam and pressing
+    "print unprinted labels" prints exactly what is missing. An app that reports every label as
+    printed regardless — which is what a printer with a red light on it used to produce — is a bug
+    in the app, not something this endpoint can second-guess, and inventing a server-side check
+    would only mean inventing an answer.
 
     Fire-and-forget from the app, and self-disabling: a 404 turns it off for the process, so a
     deployment without this endpoint behaves exactly as before.
@@ -1652,19 +1758,49 @@ class MobileLabelsPrintedView(APIView):
         if not serializer.is_valid():
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
-        pks = serializer.validated_data["lots"]
-        lots = Lot.objects.filter(pk__in=pks, is_deleted=False).select_related(
+        data = serializer.validated_data
+        # A lot named in both lists is a contradiction; "it did not come out" wins, because that is
+        # the report that leaves a label to print and the other one only leaves it printed.
+        failed_pks = set(data["failed"])
+        printed_pks = [pk for pk in data["lots"] if pk not in failed_pks]
+        lots = Lot.objects.filter(pk__in=set(printed_pks) | failed_pks, is_deleted=False).select_related(
             "auctiontos_seller", "auctiontos_seller__auction"
         )
         # Lots the caller can't touch are skipped, not refused: a batch of forty is one print run,
         # and most of it printed fine. Same per-lot rule as GET labels/<pk>/.
-        allowed = [lot for lot in lots if MobileLotLabelView._can_access(request.user, lot)]
-        for lot in allowed:
+        allowed = {lot.pk: lot for lot in lots if MobileLotLabelView._can_access(request.user, lot)}
+        marked = []
+        for pk in printed_pks:
+            lot = allowed.get(pk)
+            if lot is None:
+                continue
             lot.label_printed = True
             lot.label_needs_reprinting = False
+            marked.append(lot)
+        failed = []
+        for pk in failed_pks:
+            lot = allowed.get(pk)
+            if lot is None:
+                continue
+            # Back to unprinted even if an earlier run had marked it printed: the label the person
+            # is holding is a jam, and unprinted_labels_qs is what "print unprinted labels" reads.
+            lot.label_printed = False
+            lot.label_needs_reprinting = True
+            failed.append(lot)
         # Matches what the PDF views write, so the two paths agree on what "printed" means.
-        Lot.objects.bulk_update(allowed, ["label_printed", "label_needs_reprinting"])
-        return Response({"marked": len(allowed)})
+        Lot.objects.bulk_update(marked + failed, ["label_printed", "label_needs_reprinting"])
+        if failed:
+            # No model for this: the durable record is the lots left unprinted, and a row per jam
+            # would be a table nobody reads. The log is for the case where somebody asks why a
+            # printer keeps failing, and it carries the app's own words and its decoded conditions.
+            logger.warning(
+                "User %s reported %s label(s) that did not print (conditions=%s): %s",
+                request.user.pk,
+                len(failed),
+                ",".join(data["conditions"]) or "none reported",
+                data["message"] or "no message",
+            )
+        return Response({"marked": len(marked), "failed": len(failed)})
 
 
 # ---------------------------------------------------------------------------

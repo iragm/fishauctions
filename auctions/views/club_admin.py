@@ -38,6 +38,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.views import APIView
 
 from auctions import club_events
+from auctions.form_friction import FormFrictionMixin
 from auctions.forms import (
     ClubEditForm,
     ClubEmailSettingsForm,
@@ -46,6 +47,7 @@ from auctions.forms import (
     ClubMembershipSettingsForm,
     ClubPayPalCredentialsForm,
 )
+from auctions.history import record_club_history
 from auctions.models import (
     AuctionTOS,
     BapAward,
@@ -57,6 +59,7 @@ from auctions.models import (
     SquareSeller,
     UserLabelPrefs,
 )
+from auctions.printing import inches_per_unit
 
 from .base import ClubViewMixin, check_club_permission, close_modal_response
 from .club_pages import _membership_renewal_state, _process_pending_membership_renewal_for_member
@@ -166,7 +169,8 @@ class ClubBarcodeLabelsView(LoginRequiredMixin, ClubViewMixin, TemplateView):
                 for f in UserLabelPrefs._meta.get_fields()
                 if f.name not in ("id", "user", "preset", "empty_labels", "print_border") and hasattr(prefs, f.name)
             }
-        unit_factor = 2.54 if d.get("unit") == "cm" else 1
+        # Sizes are saved in the unit the user picked; the template writes inches.
+        unit_factor = inches_per_unit(d.get("unit"))
         for k in (
             "label_width",
             "label_height",
@@ -735,7 +739,7 @@ class ClubSetupView(LoginRequiredMixin, ClubViewMixin, TemplateView):
         return context
 
 
-class ClubEditView(LoginRequiredMixin, ClubViewMixin, UpdateView):
+class ClubEditView(FormFrictionMixin, LoginRequiredMixin, ClubViewMixin, UpdateView):
     """Edit club info"""
 
     active_tab = "edit"
@@ -769,16 +773,17 @@ class ClubEditView(LoginRequiredMixin, ClubViewMixin, UpdateView):
 
     def form_valid(self, form):
         result = super().form_valid(form)
-        ClubHistory.objects.create(
-            club=self.club,
-            user=self.request.user,
+        record_club_history(
+            self.club,
+            "SETTINGS",
             action="Updated club settings",
-            applies_to="SETTINGS",
+            user=self.request.user,
+            form=form,
         )
         return result
 
 
-class ClubMembershipSettingsView(LoginRequiredMixin, ClubViewMixin, UpdateView):
+class ClubMembershipSettingsView(FormFrictionMixin, LoginRequiredMixin, ClubViewMixin, UpdateView):
     """Edit membership and payment settings for a club."""
 
     active_tab = "membership"
@@ -832,11 +837,12 @@ class ClubMembershipSettingsView(LoginRequiredMixin, ClubViewMixin, UpdateView):
 
     def form_valid(self, form):
         result = super().form_valid(form)
-        ClubHistory.objects.create(
-            club=self.club,
-            user=self.request.user,
+        record_club_history(
+            self.club,
+            "SETTINGS",
             action="Updated membership settings",
-            applies_to="SETTINGS",
+            user=self.request.user,
+            form=form,
         )
         return result
 
@@ -953,7 +959,7 @@ class ClubPayPalCredentialsView(LoginRequiredMixin, ClubViewMixin, View):
         return redirect(settings_url)
 
 
-class ClubEmailSettingsView(LoginRequiredMixin, ClubViewMixin, UpdateView):
+class ClubEmailSettingsView(FormFrictionMixin, LoginRequiredMixin, ClubViewMixin, UpdateView):
     active_tab = "email_settings"
     template_name = "auctions/club_email_settings.html"
     form_class = ClubEmailSettingsForm
@@ -1040,10 +1046,11 @@ class ClubEmailSettingsView(LoginRequiredMixin, ClubViewMixin, UpdateView):
 
     def form_valid(self, form):
         result = super().form_valid(form)
-        ClubHistory.objects.create(
-            club=self.club,
-            user=self.request.user,
+        record_club_history(
+            self.club,
+            "SETTINGS",
             action="Updated email settings",
-            applies_to="SETTINGS",
+            user=self.request.user,
+            form=form,
         )
         return result

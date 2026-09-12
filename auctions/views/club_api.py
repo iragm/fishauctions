@@ -1093,10 +1093,11 @@ class ClubSpeciesLookupAPIView(ClubAPIViewMixin, APIView):
     The language model runs on every lookup the database could not answer, which is the whole
     point of asking a matcher rather than querying the species table yourself.  It is bounded by
     what it costs rather than by asking permission per request: the request has to get past the
-    exact, cache and search steps to reach it, and the club spends one of
-    :data:`SPECIES_LOOKUP_LLM_CALLS_PER_CLUB_PER_DAY` when it does.  Every answer, "this is not a
-    species" included, goes to ``SpeciesSearchCache``, so a name costs one call ever for the whole
-    site.  ``X-Species-LLM-Remaining`` on every response is the number to back off on; a lookup
+    exact, cache and search steps to reach it, and the club then spends one of
+    :data:`SPECIES_LOOKUP_LLM_CALLS_PER_CLUB_PER_DAY` **per round** -- a name the model can place
+    on sight costs one, and one that has to be shown our own shortlist costs two.  Every answer,
+    "this is not a species" included, goes to ``SpeciesSearchCache``, so a name is paid for once
+    for the whole site however many rounds it took.  ``X-Species-LLM-Remaining`` on every response is the number to back off on; a lookup
     that needed the model with nothing left is the one 429, because answering it "no species"
     would be a lie that then gets cached.
     """
@@ -1145,7 +1146,7 @@ class ClubSpeciesLookupAPIView(ClubAPIViewMixin, APIView):
             return Response(
                 {
                     "error": (
-                        f"This club has used its {budget.limit} language-model species lookups for today, "
+                        f"This club has used its {budget.limit} language-model calls for today, "
                         "and the database could not answer this one.  Lookups the database can answer are "
                         "unaffected; this one is worth retrying after the allowance resets."
                     ),

@@ -42,8 +42,15 @@ class NoPageTestCase(PaletteAssistTestCase):
     def _join(self, auction, user=None):
         from auctions.models import PickupLocation
 
+        # The pickup time follows the auction's own end date rather than being stamped ``now``.
+        # ``Auction.wind_down_time`` for an online auction is the latest of ``date_end`` and any
+        # pickup time, so a ``now`` pickup on a year-old auction made it not ``pretty_much_over``
+        # -- an auction that finished last autumn but claimed a pickup window open today. Nothing
+        # here is about pickup scheduling; this is the value a real one would have.
         location = auction.location_qs.first() or PickupLocation.objects.create(
-            name=f"{auction.slug} pickup", auction=auction, pickup_time=timezone.now()
+            name=f"{auction.slug} pickup",
+            auction=auction,
+            pickup_time=(auction.date_end or auction.date_start) + datetime.timedelta(days=1),
         )
         return AuctionTOS.objects.create(
             auction=auction,
@@ -65,6 +72,10 @@ class WhichAuctionTests(NoPageTestCase):
         """The failure this whole change exists for: spring setup morning, autumn's auction acted on."""
         old = self._make_auction("Last Autumn", days_ahead=-400)
         self._join(old)
+        # The premise, stated rather than assumed. ``resolve_auction`` reads the pointer before it
+        # reads what is running, and ``pretty_much_over`` is the only thing that makes this one
+        # stale -- so a fixture that is not actually wound down would test nothing.
+        self.assertTrue(old.pretty_much_over)
         self.user.userdata.last_auction_used = old
         self.user.userdata.save()
         auction, problem = palette_actions.resolve_auction(self.user, "", {})
@@ -73,6 +84,33 @@ class WhichAuctionTests(NoPageTestCase):
         self.assertNotEqual(getattr(auction, "pk", None), old.pk)
         if problem:
             self.assertNotIn(old.title, [option["label"] for option in problem["options"]])
+
+    def test_an_auction_still_winding_down_is_not_stale(self):
+        """The deliberate other half of the test above, and the reason it turns on pickup times.
+
+        ``pretty_much_over`` is the whole staleness test, so an auction whose bidding finished long
+        ago but whose pickup window is still open counts as current -- and it should: that is an
+        auction somebody is still handing fish over for, printing labels for and invoicing. It
+        beats a different auction that happens to be running, because it is the one they were
+        working on and nobody has said otherwise.
+        """
+        from auctions.models import PickupLocation
+
+        winding_down = self._make_auction("Pickups This Week", days_ahead=-400)
+        PickupLocation.objects.create(
+            name="late pickup",
+            auction=winding_down,
+            pickup_time=timezone.now() + datetime.timedelta(days=2),
+        )
+        self._join(winding_down)
+        self.assertFalse(winding_down.pretty_much_over)
+        running = self._make_auction("Something Running")
+        self._join(running)
+        self.user.userdata.last_auction_used = winding_down
+        self.user.userdata.save()
+        auction, problem = palette_actions.resolve_auction(self.user, "", {})
+        self.assertIsNone(problem)
+        self.assertEqual(auction.pk, winding_down.pk)
 
     def test_several_running_auctions_ask_rather_than_guess(self):
         second = self._make_auction("Spring Swap")

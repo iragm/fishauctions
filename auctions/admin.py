@@ -20,11 +20,10 @@ from django.http import HttpResponse
 from django.urls import reverse
 from django.utils.html import format_html, format_html_join
 
+from .admin_paginator import EstimatedCountPaginator
+from .admin_performance import FlatInline, use_lookup_widgets
 from .models import (
     FAQ,
-    AdCampaign,
-    AdCampaignGroup,
-    AdCampaignResponse,
     AppleDeviceRegistration,
     AssistantSkillRequest,
     Auction,
@@ -35,6 +34,7 @@ from .models import (
     Bid,
     BlogPost,
     Category,
+    ChunkedJobState,
     Club,
     ClubAnnouncement,
     ClubAPIKey,
@@ -148,81 +148,6 @@ class LLMUsageAdmin(admin.ModelAdmin):
     readonly_fields = ("createdon",)
 
 
-class AdCampaignResponseInline(admin.TabularInline):
-    fields = ["user", "clicked", "timestamp"]
-    readonly_fields = ["user", "clicked", "timestamp"]
-    verbose_name = "Response"
-    verbose_name_plural = "Responses"
-    model = AdCampaignResponse
-    extra = 0
-
-
-class AdCampaignInline(admin.TabularInline):
-    fields = [
-        "title",
-        "begin_date",
-        "end_date",
-        "auction",
-        "category",
-    ]
-    readonly_fields = (
-        "number_of_impressions",
-        "number_of_clicks",
-        "click_rate",
-    )
-    verbose_name = "Campaign in this group"
-    verbose_name_plural = "Campaigns in this group"
-    model = AdCampaign
-    extra = 0
-
-
-class AdCampaignAdmin(admin.ModelAdmin):
-    list_display = [
-        "title",
-        "campaign_group",
-        "begin_date",
-        "end_date",
-        "number_of_impressions",
-        "number_of_clicks",
-        "click_rate",
-    ]
-    # exclude = []
-    readonly_fields = (
-        "number_of_impressions",
-        "number_of_clicks",
-        "click_rate",
-    )
-
-    inlines = [
-        # AdCampaignResponseInline, # this is far too noisy
-    ]
-    search_fields = (
-        "title",
-        "external_url",
-    )
-
-
-class AdCampaignGroupAdmin(admin.ModelAdmin):
-    list_display = [
-        "title",
-        "contact_user",
-        "number_of_campaigns",
-        "number_of_impressions",
-        "number_of_clicks",
-        "click_rate",
-    ]
-    # exclude = []
-    readonly_fields = (
-        "number_of_impressions",
-        "number_of_clicks",
-        "click_rate",
-    )
-    inlines = [
-        AdCampaignInline,
-    ]
-    search_fields = ("title",)
-
-
 class InvoicePaymentInline(admin.TabularInline):
     model = InvoicePayment
     extra = 0
@@ -244,8 +169,17 @@ class BlogPostAdmin(admin.ModelAdmin):
     model = BlogPost
 
 
-class AuctionTOSInline(admin.TabularInline):
+class AuctionTOSInline(FlatInline, admin.TabularInline):
     model = AuctionTOS
+    #: Every row renders `AuctionTOS.display_name`, which reads the auction and, for an online
+    #: auction, the person's `UserData`; `possible_duplicate` is a readonly FK the row prints.
+    inline_select_related = (
+        "user__userdata",
+        "auction",
+        "pickup_location",
+        "possible_duplicate__auction",
+        "possible_duplicate__user__userdata",
+    )
     list_display = ()
     readonly_fields = (
         "pickup_location",
@@ -256,11 +190,6 @@ class AuctionTOSInline(admin.TabularInline):
     list_filter = ()
     search_fields = ()
     extra = 0
-
-    def get_queryset(self, request):
-        """Optimize queryset to avoid N+1 queries"""
-        qs = super().get_queryset(request)
-        return qs.select_related("user", "auction", "pickup_location")
 
 
 class PickupLocationAdmin(admin.ModelAdmin):
@@ -711,9 +640,15 @@ class VoiceGrammarAdmin(admin.ModelAdmin):
             {
                 "description": (
                     "Raise 'confident' if wrong bidders are being filled in green; lower 'unsure' "
-                    "if commands are being dropped that the operator can hear were correct."
+                    "if commands are being dropped that the operator can hear were correct. "
+                    "Weights are exponents, so 0 switches a signal off: 'match' is how well the "
+                    "value fits this auction's own numbers, and 'asr' is the recognizer's opinion "
+                    "of itself, kept low because phones report it badly. "
+                    "'Commit after ms' is how long the app waits for the words to settle before it "
+                    "fills a field at all — 0 goes back to waiting for the recognizer to finish, "
+                    "which costs seconds per lot."
                 ),
-                "fields": ("weights", "thresholds"),
+                "fields": ("weights", "thresholds", "commit_after_ms"),
             },
         ),
         ("Saving", {"fields": ("auto_submit_on_sold", "block_auto_submit_when_unsure")}),
@@ -822,7 +757,9 @@ class GeneralInterestAdmin(admin.ModelAdmin):
     model = GeneralInterest
 
 
-class UserInline(admin.TabularInline):
+class UserInline(FlatInline, admin.TabularInline):
+    #: `UserData.__str__` is "<username>'s data".
+    inline_select_related = ("user",)
     fields = [
         "__str__",
     ]
@@ -879,7 +816,7 @@ class ClubAPIKeyInline(admin.TabularInline):
 
 class ClubAdmin(admin.ModelAdmin):
     model = Club
-    list_display = ("name", "is_nec_club", "contact_email", "date_contacted_for_in_person_auctions")
+    list_display = ("name", "outreach_stage", "is_nec_club", "contact_email", "date_contacted_for_in_person_auctions")
     search_fields = (
         "name",
         "abbreviation",
@@ -887,6 +824,10 @@ class ClubAdmin(admin.ModelAdmin):
         "homepage",
     )
     list_filter = (
+        # Only "Approved and listed" puts a club on the map, so this is the filter that answers
+        # "what have we found and not published yet" -- the working list for club discovery.
+        "outreach_stage",
+        "stall_reason",
         "active",
         "is_nec_club",
         "use_site_paypal_account",
@@ -901,7 +842,7 @@ class ClubAdmin(admin.ModelAdmin):
     readonly_fields = ("connected_paypal_seller", "connected_square_seller")
     # NEC membership is granted here and nowhere else (it gates the speaker directory), so make it
     # togglable straight from the list rather than one club edit page at a time.
-    list_editable = ("is_nec_club",)
+    list_editable = ("is_nec_club", "outreach_stage")
     inlines = [
         UserInline,
         ClubDiscordRoleInline,
@@ -959,6 +900,12 @@ class PickupLocationInline(admin.TabularInline):
 
 class AuctionAdmin(admin.ModelAdmin):
     model = Auction
+    # Every model something autocompletes to needs an order. The autocomplete view paginates its
+    # matches, and paginating an unordered queryset is what Django's UnorderedObjectListWarning is
+    # about: page 2 can repeat a row or skip one. Models with a Meta.ordering already have this;
+    # Auction, AuctionTOS, Lot and Invoice did not. Newest first, which is the useful order here
+    # and what an unordered scan approximated anyway.
+    ordering = ("-pk",)
     list_display = ("title", "created_by")
     list_select_related = ("created_by",)
     # list_filter = ("title",)
@@ -985,8 +932,10 @@ class AuctionAdmin(admin.ModelAdmin):
         return response
 
 
-class BidInline(admin.TabularInline):
+class BidInline(FlatInline, admin.TabularInline):
     model = Bid
+    #: `Bid.__str__` names the bidder and the lot, and `Lot.__str__` names its auction.
+    inline_select_related = ("user", "lot_number__auction")
     list_display = (
         "user",
         "amount",
@@ -1007,8 +956,10 @@ class BidInline(admin.TabularInline):
         )
 
 
-class WatchInline(admin.TabularInline):
+class WatchInline(FlatInline, admin.TabularInline):
     model = Watch
+    #: `Watch.__str__` names the watcher and the lot -- see `BidInline`.
+    inline_select_related = ("user", "lot_number__auction")
     list_display = ("user",)
     list_filter = ()
     search_fields = (
@@ -1028,6 +979,7 @@ class WatchInline(admin.TabularInline):
 
 class LotAdmin(admin.ModelAdmin):
     model = Lot
+    ordering = ("-pk",)  # see AuctionAdmin: three autocompletes point here and paginate their matches
     list_display = (
         "lot_name",
         "auction",
@@ -1167,7 +1119,9 @@ class BidAdmin(admin.ModelAdmin):
     )
 
 
-class SoldLotInline(admin.TabularInline):
+class SoldLotInline(FlatInline, admin.TabularInline):
+    #: `Lot.__str__` reads `lot_number_display`, which reads the auction.
+    inline_select_related = ("auction",)
     fields = ["__str__"]
     readonly_fields = ["__str__"]
     verbose_name = "Lot sold"
@@ -1177,7 +1131,8 @@ class SoldLotInline(admin.TabularInline):
     extra = 0
 
 
-class BoughtLotInline(admin.TabularInline):
+class BoughtLotInline(FlatInline, admin.TabularInline):
+    inline_select_related = ("auction",)  # see SoldLotInline
     fields = ["__str__", "winning_price"]
     readonly_fields = ["__str__", "winning_price"]
     verbose_name = "Lot bought"
@@ -1189,6 +1144,7 @@ class BoughtLotInline(admin.TabularInline):
 
 class InvoiceAdmin(admin.ModelAdmin):
     model = Invoice
+    ordering = ("-pk",)  # see AuctionAdmin: an autocomplete points here and paginates its matches
     list_display = (
         "__str__",
         "rounded_net",
@@ -1394,6 +1350,7 @@ class BanAdmin(admin.ModelAdmin):
 
 class AuctionTOSAdmin(admin.ModelAdmin):
     model = AuctionTOS
+    ordering = ("-pk",)  # see AuctionAdmin: an autocomplete paginates, and this model has no Meta.ordering
     list_display = ("name", "auction", "manually_added")
     list_select_related = ("auction",)
     search_fields = (
@@ -1409,6 +1366,21 @@ class AuctionTOSAdmin(admin.ModelAdmin):
     )
 
 
+class ChunkedJobStateAdmin(admin.ModelAdmin):
+    """Read-only: how far a chunked background job has got. See auctions/tasks.py.
+
+    Editable would mean an admin could send a walk over the biggest table on the site back to the
+    beginning by typing in the wrong number, and there is nothing here worth typing.
+    """
+
+    model = ChunkedJobState
+    list_display = ("name", "cursor", "ceiling", "finished", "updated")
+    readonly_fields = ("name", "cursor", "ceiling", "finished", "updated")
+
+    def has_add_permission(self, request):
+        return False
+
+
 class PageViewAdmin(admin.ModelAdmin):
     model = PageView
     list_display = ("user", "ip_address", "source", "url", "date_start")
@@ -1419,6 +1391,10 @@ class PageViewAdmin(admin.ModelAdmin):
         "lot_number",
     )
     ordering = ("-date_start",)
+    # Two full scans of the biggest table on the site to render twenty rows of it; see
+    # auctions/admin_paginator.py for which count each of these removes.
+    show_full_result_count = False
+    paginator = EstimatedCountPaginator
 
 
 class AuctionCampaignAdmin(admin.ModelAdmin):
@@ -1479,8 +1455,6 @@ admin.site.register(Location, LocationAdmin)
 admin.site.register(Club, ClubAdmin)
 admin.site.register(GeneralInterest, GeneralInterestAdmin)
 admin.site.register(BlogPost, BlogPostAdmin)
-admin.site.register(AdCampaign, AdCampaignAdmin)
-admin.site.register(AdCampaignGroup, AdCampaignGroupAdmin)
 admin.site.register(SearchHistory, SearchHistoryAdmin)
 admin.site.register(CommandPalettePage, CommandPalettePageAdmin)
 admin.site.register(CommandPaletteSearch, CommandPaletteSearchAdmin)
@@ -1490,6 +1464,7 @@ admin.site.register(FAQ, FaqAdmin)
 admin.site.register(LotAutoCategory, LotAutoCategoryAdmin)
 admin.site.register(AuctionTOS, AuctionTOSAdmin)
 admin.site.register(PageView, PageViewAdmin)
+admin.site.register(ChunkedJobState, ChunkedJobStateAdmin)
 admin.site.register(AuctionCampaign, AuctionCampaignAdmin)
 admin.site.register(AuctionHistory, AuctionHistoryAdmin)
 
@@ -1669,3 +1644,14 @@ class AssistantSkillRequestAdmin(admin.ModelAdmin):
     search_fields = ("skill", "reason", "params", "user__username")
     readonly_fields = ("createdon", "updatedon")
     list_select_related = ("user",)
+
+
+# These two are self-contained features that read better on their own; imported here for the side
+# effect of registering their pages -- the moderation queue (ContentReport, CopyrightNotice,
+# CopyrightStrike) and the two advertising pages.
+from . import ads_admin, moderation_admin  # noqa: E402, F401
+
+# Last, because it reads the finished registry: every foreign key on every page above that points
+# at a table without a ceiling becomes a search box rather than a dropdown of the whole table.
+# auctions/admin_performance.py says why, and auctions/test_admin_performance.py holds it to it.
+use_lookup_widgets(admin.site)

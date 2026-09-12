@@ -1,0 +1,205 @@
+{% extends "base.html" %}
+{% block title %}Usability{% endblock %}
+{% block content %}
+<h3>Usability</h3>
+<div class="help-note">
+  <i class="bi bi-lightbulb-fill" aria-hidden="true"></i>
+  <div>Three questions, three sources, and they only mean anything next to each other. A page with
+  reach and no failures is working. The same reach with people giving up on one field is what this
+  page exists to find. A setting nobody has ever changed is a deletion candidate, not a redesign
+  candidate. The buyer funnel is the fourth panel and the only one about somebody who is not
+  running an auction.</div>
+</div>
+<p class="text-muted small">
+  Showing the last {{ days }} days;
+  <a href="?days=7">7</a> &middot; <a href="?days=30">30</a> &middot; <a href="?days=90">90</a> &middot;
+  <a href="?days=365">365</a>.
+</p>
+
+<h4 class="mt-4">Failure &mdash; forms people gave up on</h4>
+<p class="text-muted small">
+  Two different failures, and on this site the second is the bigger one. <strong>Rejected</strong>
+  is the server refusing a submission, which is rare here on purpose: nearly every field is
+  optional and most of the rest are filled in on save, so there is not much left to refuse.
+  <strong>Abandoned</strong> is somebody editing the form and leaving without saving &mdash; the
+  shape giving up actually takes, and completely invisible to the server until the page started
+  reporting it. A form with rejections and no abandonments is one people can see how to fill in and
+  keep getting wrong. One with abandonments and no rejections is one they cannot see how to fill in
+  at all, and no validator will ever say so.
+</p>
+<div class="table-responsive">
+  <table class="table table-sm">
+    <thead>
+      <tr>
+        <th>Form</th>
+        <th class="text-end">Abandoned</th>
+        <th class="text-end">Edited for</th>
+        <th class="text-end">Rejected</th>
+        <th class="text-end">Never finished</th>
+        <th class="text-end">Gave up first try</th>
+        <th class="text-end">People</th>
+        <th>Fields left unsaved</th>
+        <th>Fields rejected</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in friction %}
+      <tr>
+        <td>{{ row.form_name }}</td>
+        <td class="text-end">
+          {% if row.abandoned %}<span class="text-warning">{{ row.abandoned }}</span>{% else %}0{% endif %}
+        </td>
+        <td class="text-end">
+          {% if row.seconds_before_leaving %}{{ row.seconds_before_leaving }}s{% else %}&mdash;{% endif %}
+        </td>
+        <td class="text-end">{{ row.bounces }}</td>
+        <td class="text-end">
+          {% if row.unresolved %}<span class="text-warning">{{ row.unresolved }}</span>{% else %}0{% endif %}
+        </td>
+        <td class="text-end">{{ row.gave_up_on_the_first_try }}</td>
+        <td class="text-end">{{ row.people }}</td>
+        <td>
+          {% for field in row.abandoned_fields %}
+            <span class="badge bg-secondary">{{ field.field }} &middot; {{ field.count }}</span>
+          {% empty %}
+            <span class="text-muted">&mdash;</span>
+          {% endfor %}
+        </td>
+        <td>
+          {% for field in row.fields %}
+            <span class="badge bg-secondary">{{ field.field }} &middot; {{ field.code }} &middot; {{ field.count }}</span>
+          {% empty %}
+            <span class="text-muted">&mdash;</span>
+          {% endfor %}
+        </td>
+      </tr>
+      {% empty %}
+      <tr>
+        <td colspan="9" class="text-muted">
+          Nothing recorded in this window. Either nobody gave up, or the form they gave up on is not
+          one of the instrumented views &mdash; see auctions/form_friction.py.
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<h4 class="mt-4">Adoption &mdash; auction settings nobody has ever changed</h4>
+<p class="text-muted small">
+  Over all {{ adoption_total }} auctions on the site. <strong>Off default</strong> counts auctions
+  whose stored value differs from the model's default: retroactive, covers everything, and blind to
+  a change somebody made and undid. <strong>Edits</strong> counts auctions with a changelog row
+  naming the field: exact, sees the undone ones, and knows nothing from before that column shipped.
+  A field with zeroes in both is a candidate for deletion; one with a low number is a candidate for
+  the Advanced section on the auction settings form.
+  {% if adoption_unused %}<strong>{{ adoption_unused|length }}</strong> of {{ adoption|length }}
+  fields currently read as unused.{% endif %}
+</p>
+<div class="table-responsive">
+  <table class="table table-sm">
+    <thead>
+      <tr>
+        <th>Field</th>
+        <th>Label</th>
+        <th class="text-end">Off default</th>
+        <th class="text-end">%</th>
+        <th class="text-end">Edits</th>
+        <th>Verdict</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in adoption %}
+      <tr>
+        <td><code>{{ row.name }}</code></td>
+        <td>{{ row.label }}</td>
+        <td class="text-end">{{ row.off_default }}</td>
+        <td class="text-end">{{ row.percent }}</td>
+        <td class="text-end">{{ row.edits }}</td>
+        <td>
+          {% if row.verdict == "unused" %}
+            <span class="badge text-bg-warning text-dark">unused</span>
+          {% elif row.verdict == "rare" %}
+            <span class="badge bg-secondary">rare</span>
+          {% elif row.verdict == "unmeasured" %}
+            <span class="badge bg-secondary">no default to compare</span>
+          {% else %}
+            <span class="badge text-bg-success text-dark">used</span>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<h4 class="mt-4">Buyers &mdash; how far people get</h4>
+<p class="text-muted small">
+  One row per auction, over that auction's whole life rather than the window above: people arrive
+  weeks before they pay, and a funnel cut at 30 days reports the ones who paid last month as a
+  drop-off. Every stage counts people, and somebody who never signed in counts as one &mdash; that
+  is what this phase was for. <strong>Bid</strong> is blank for an in-person auction, where the
+  bidding happens in a room and leaves no row until somebody wins. <strong>Joined</strong> includes
+  the people an organizer typed in at the door, so it can be larger than the stages above it.
+</p>
+<div class="table-responsive">
+  <table class="table table-sm">
+    <thead>
+      <tr>
+        <th>Auction</th>
+        {% for stage in funnel.0.stages %}<th class="text-end">{{ stage.stage }}</th>{% endfor %}
+        <th>Came from</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in funnel %}
+      <tr>
+        <td><a href="{{ row.auction.get_absolute_url }}">{{ row.auction }}</a></td>
+        {% for stage in row.stages %}
+        <td class="text-end">{% if stage.people == None %}<span class="text-muted">&mdash;</span>{% else %}{{ stage.people }}{% endif %}</td>
+        {% endfor %}
+        <td>
+          {% for referrer in row.referrers %}
+            <span class="badge bg-secondary">{{ referrer.referrer }} &middot; {{ referrer.views }}</span>
+          {% empty %}
+            <span class="text-muted">&mdash;</span>
+          {% endfor %}
+        </td>
+      </tr>
+      {% empty %}
+      <tr><td colspan="9" class="text-muted">No auctions have ended recently.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<h4 class="mt-4">Reach &mdash; which pages get opened</h4>
+<p class="text-muted small">
+  Grouped by URL pattern rather than by path, so a hundred auctions' settings pages are one row.
+  <strong>Pages</strong> is how many distinct paths folded into the row: one for a page there is
+  only one of, one per auction for a per-auction page &mdash; which is what says whether a route is
+  reached by many organizers or by one enthusiastic one.
+</p>
+<div class="table-responsive">
+  <table class="table table-sm">
+    <thead>
+      <tr>
+        <th>Route</th>
+        <th class="text-end">Views</th>
+        <th class="text-end">Pages</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in reach %}
+      <tr>
+        <td><code>{{ row.route }}</code></td>
+        <td class="text-end">{{ row.views }}</td>
+        <td class="text-end">{{ row.pages }}</td>
+      </tr>
+      {% empty %}
+      <tr><td colspan="3" class="text-muted">No page views in this window.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

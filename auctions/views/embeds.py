@@ -2,10 +2,13 @@
 
 Five embeds -- events, past events, the current auction, the latest announcement and the BAP
 leaderboard -- sharing one shell, each with a styled and an ``_unstyled`` template.
-``embed_mode_from_request`` is the one reader of ``?format=``. Every styled embed measures itself
-and posts its height to the parent frame; the snippet the club copies contains the listener.
+``embed_mode_from_request`` is the one reader of ``?format=``. The snippet a club copies is a bare
+``<script src>`` (``?format=js``) that writes the unstyled rows into the page where it sits; the
+iframe formats are still served for snippets pasted before that, and still measure themselves for
+the height listener those carried.
 """
 
+import json
 import logging
 from datetime import timedelta
 
@@ -50,7 +53,7 @@ logger = logging.getLogger(__name__)
 
 
 def embed_mode_from_request(request):
-    """Which representation a club asked for: "light", "dark", "unstyled", or None for JSON.
+    """Which representation a club asked for: "light", "dark", "unstyled", "script", or None for JSON.
 
     One reader for the ?format= every embed takes, so the four of them can't drift into
     supporting slightly different spellings. Anything unrecognised falls through to JSON rather
@@ -62,7 +65,53 @@ def embed_mode_from_request(request):
         return "dark" if fmt in ("iframedark", "iframdark") else "light"
     if fmt == "unstyledhtml":
         return "unstyled"
+    if fmt == "js":
+        return "script"
     return None
+
+
+#: What ?format=js puts on the club's page next to the rows. Layout only -- no font, no colour, no
+#: size -- so the rows read in the host site's own type, light theme or dark. Each selector is two
+#: classes deep so a theme's ``.entry-content ul`` bullets and indent lose to it, and no deeper, so a
+#: club that wants something else can still win with ``.club-embed .club-event``.
+SCRIPT_EMBED_CSS = (
+    ".club-embed .club-events,.club-embed .club-announcements{list-style:none;margin:0;padding:0}"
+    ".club-embed .club-event,.club-embed .club-announcement,.club-embed .club-events-empty,"
+    ".club-embed .club-announcements-empty{list-style:none;margin:0 0 1em;padding:0}"
+    ".club-embed .club-event-title,.club-embed .club-auction-title{font-weight:600}"
+    ".club-embed .club-event-when,.club-embed .club-event-where,.club-embed .club-auction-when,"
+    ".club-embed .club-auction-where,.club-embed .club-auction-lots{display:block;opacity:.75;font-size:.9em}"
+    ".club-embed .club-event-cancelled .club-event-title{text-decoration:line-through}"
+    ".club-embed .club-event-badge,.club-embed .club-event-repeats{font-size:.75em;border:1px solid;"
+    "border-radius:1em;padding:0 .5em;margin-left:.4em;white-space:nowrap}"
+    ".club-embed .club-announcement-text{margin:0;white-space:pre-wrap}"
+    ".club-embed .bap-leaderboard{width:100%;border-collapse:collapse}"
+    ".club-embed .bap-leaderboard th,.club-embed .bap-leaderboard td{text-align:left;padding:.3em .5em;"
+    "border-bottom:1px solid rgba(128,128,128,.3)}"
+)
+
+#: The whole of ?format=js: find the <script> tag that loaded this and put the rows in front of it.
+#: ``currentScript`` is null only when something re-ran the code outside a tag of its own, so the
+#: fallback takes the last ?format=js tag not yet used; ``data-club-embed`` stops two embeds on one
+#: page both landing at the same tag.
+SCRIPT_EMBED_JS = """(function () {
+  var html = %s;
+  var here = document.currentScript;
+  if (!here || here.getAttribute("data-club-embed")) {
+    here = null;
+    var tags = document.getElementsByTagName("script");
+    for (var i = tags.length - 1; i >= 0; i--) {
+      if (tags[i].src.indexOf("format=js") !== -1 && !tags[i].getAttribute("data-club-embed")) {
+        here = tags[i];
+        break;
+      }
+    }
+  }
+  if (!here) { return; }
+  here.setAttribute("data-club-embed", "1");
+  here.insertAdjacentHTML("beforebegin", html);
+})();
+"""
 
 
 def embed_response(template_stem, embed_mode, context):
@@ -71,10 +120,19 @@ def embed_response(template_stem, embed_mode, context):
     ``Access-Control-Allow-Origin`` is set on every embed response so a club's own JavaScript can
     fetch one instead of iframing it; the views themselves are GET-only and public, so there is
     nothing here CORS could leak that the page it mirrors doesn't already show.
+
+    "script" is the unstyled markup wrapped in a ``club-embed`` div with ``SCRIPT_EMBED_CSS``,
+    handed back as JavaScript that writes it into the page. It is what the website-integration
+    page hands out: a ``<script src>`` carries no inline code for a CMS to rewrite, and the rows
+    it writes are part of the page, so they are as tall as they are with nothing to measure.
     """
-    suffix = "_unstyled" if embed_mode == "unstyled" else ""
+    suffix = "" if embed_mode in ("light", "dark") else "_unstyled"
     html = render_to_string(f"auctions/embeds/{template_stem}{suffix}.html", context)
-    response = HttpResponse(html)
+    if embed_mode == "script":
+        html = f'<div class="club-embed club-embed-{template_stem}"><style>{SCRIPT_EMBED_CSS}</style>{html}</div>'
+        response = HttpResponse(SCRIPT_EMBED_JS % json.dumps(html), content_type="text/javascript; charset=utf-8")
+    else:
+        response = HttpResponse(html)
     response["Access-Control-Allow-Origin"] = "*"
     return response
 
@@ -594,8 +652,7 @@ class ClubWebsiteIntegrationView(LoginRequiredMixin, ClubViewMixin, TemplateView
                 "url": base + reverse("club_events_embed", kwargs={"slug": club.slug}),
                 "counts": True,
                 "max_count": CLUB_EVENTS_EMBED_MAX,
-                "default_count": 1,
-                "heights": {1: 200, 10: 880},
+                "default_count": 5,
                 "available": True,
             },
             {
@@ -604,14 +661,12 @@ class ClubWebsiteIntegrationView(LoginRequiredMixin, ClubViewMixin, TemplateView
                 "icon": "bi-clock-history",
                 "blurb": (
                     "The same list looking backwards, newest first — what your club has actually "
-                    "been doing. Somebody deciding whether to come to a meeting reads this one. "
-                    "Set count=1 for just the most recent."
+                    "been doing. Somebody deciding whether to come to a meeting reads this one."
                 ),
                 "url": base + reverse("club_past_events_embed", kwargs={"slug": club.slug}),
                 "counts": True,
                 "max_count": CLUB_EVENTS_EMBED_MAX,
-                "default_count": 1,
-                "heights": {1: 200, 10: 880},
+                "default_count": 5,
                 "available": True,
             },
             {
@@ -625,7 +680,6 @@ class ClubWebsiteIntegrationView(LoginRequiredMixin, ClubViewMixin, TemplateView
                 ),
                 "url": base + reverse("club_auction_embed", kwargs={"slug": club.slug}),
                 "counts": False,
-                "heights": {1: 200},
                 "available": True,
             },
             {
@@ -640,7 +694,6 @@ class ClubWebsiteIntegrationView(LoginRequiredMixin, ClubViewMixin, TemplateView
                 "counts": True,
                 "max_count": CLUB_ANNOUNCEMENTS_EMBED_MAX,
                 "default_count": 1,
-                "heights": {1: 160, 3: 340},
                 "available": True,
             },
             {
@@ -653,7 +706,6 @@ class ClubWebsiteIntegrationView(LoginRequiredMixin, ClubViewMixin, TemplateView
                 ),
                 "url": base + reverse("bap_embed", kwargs={"slug": club.slug}),
                 "counts": False,
-                "heights": {1: 420},
                 "available": club.enable_breeder_award_program,
                 "unavailable_reason": "The Breeder Award Program is turned off for this club.",
                 "settings_url": reverse("club_bap_settings", kwargs={"slug": club.slug}),

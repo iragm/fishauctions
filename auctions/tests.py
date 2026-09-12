@@ -20,7 +20,7 @@ from unittest.mock import MagicMock, patch
 from django.contrib.auth.hashers import get_hashers
 from django.contrib.auth.models import User
 from django.core.cache import cache
-from django.test import TestCase, override_settings
+from django.test import SimpleTestCase, TestCase, override_settings
 from django.utils import timezone
 
 from auctions.models import (
@@ -138,6 +138,29 @@ class WritableMediaRoot:
         cls._media_override.disable()
         cls._media_tmp.cleanup()
         super().tearDownClass()
+
+
+def give_contact_info(user, *, phone="555-0100"):
+    """Fill in enough contact info to get this user past the gates on lots and auctions.
+
+    ``services.missing_contact_info`` is what both gates ask, so a test that wants to exercise
+    anything *behind* one of them says so in a line rather than by setting four fields by hand and
+    getting a redirect it did not expect.  Pass ``phone=""`` for a user who should still be stopped
+    by the auction gate but not the lot one.
+    """
+    from auctions.models import UserData
+
+    user.first_name = user.first_name or "Test"
+    user.last_name = user.last_name or "User"
+    user.save()
+    # Through the user, not through the manager: ``user.userdata`` is cached on the instance the
+    # caller is holding, and a second copy fetched from the manager would leave that cache stale --
+    # so the gate would still see the blank account this just filled in.
+    userdata = getattr(user, "userdata", None) or UserData.objects.create(user=user)
+    userdata.address = userdata.address or "123 Test St"
+    userdata.phone_number = phone
+    userdata.save()
+    return userdata
 
 
 class CsvImportTestMixin:
@@ -403,3 +426,27 @@ class SuiteStaysFastTests(StandardTestCase):
         from django.conf import settings
 
         self.assertIn("LocMemCache", settings.CACHES["default"]["BACKEND"])
+
+
+class EveryTestStartsInTheSiteTimezoneTests(SimpleTestCase):
+    """Four forms activate a timezone and never deactivate; the runner puts it back.
+
+    ``PickupLocationForm``, ``CreateAuctionForm``, ``AuctionEditForm`` and ``ClubEventForm`` each
+    call ``timezone.activate()`` in ``__init__``, which is thread-local and outlives the test that
+    built the form. Without the reset in ``fishauctions.test_runner``, whether a test that renders
+    or parses a datetime passes depends on what ran before it in the same worker -- and
+    ``--parallel`` decides that differently on a different machine.
+    """
+
+    def test_a_leaked_timezone_does_not_reach_the_next_test(self):
+        """``_pre_setup`` is what Django runs before each test, so run it and look.
+
+        A ``SimpleTestCase`` so that calling it is only the reset plus a fresh test client -- on a
+        ``TestCase`` it would open a second atomic block that nothing ever exits, and every test
+        after this one in the same process would die on a broken transaction.
+        """
+        from django.conf import settings
+
+        timezone.activate("Pacific/Kiritimati")
+        self._pre_setup()
+        self.assertEqual(timezone.get_current_timezone_name(), settings.TIME_ZONE)

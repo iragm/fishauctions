@@ -90,7 +90,9 @@ from post_office import mail
 from pytz import timezone as pytz_timezone
 from webpush.models import PushInformation
 
-from . import cloudflare_images, printer_programs, voice
+from . import cloudflare_images, history, printer_programs, voice
+from .club_health import ClubHealth, ClubLadderSnapshot  # noqa: F401
+from .club_matching import derived_abbreviation
 from .email_routing import (
     admin_routing_email,
     build_routed_sender_address,
@@ -98,9 +100,21 @@ from .email_routing import (
     email_routing_enabled,
     sender_with_display_name,
 )
+from .friction_models import FormFailure  # noqa: F401
 from .helper_functions import bin_data, get_currency_symbol
 from .html_sanitize import sanitize_summernote_html
 from .model_caching import CachedPropertiesMixin, InvalidatesRelatedCache
+
+# The moderation models live in their own module rather than among the other eighty here: they are
+# a self-contained feature and nothing else in this file touches them, so they are quicker to read
+# and to change on their own.  Imported so `from auctions.models import ContentReport` keeps
+# working and so Django sees them at app load. They name their foreign keys as strings, so the
+# import is one-way and there is no cycle.
+from .moderation_models import (  # noqa: F401
+    ContentReport,
+    CopyrightNotice,
+    CopyrightStrike,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -499,6 +513,23 @@ class GeneralInterest(models.Model):
         return str(self.name)
 
 
+class ClubQuerySet(models.QuerySet):
+    """The one place that knows which clubs this site is willing to name in public."""
+
+    def listed(self):
+        """Approved clubs only: the map, the club search, and every dropdown a member sees.
+
+        Imports fill this table with clubs nobody here has spoken to yet (USABILITY.md phase 8),
+        and every pin on the club map is a claim this site is making about a real organisation. So
+        approval is a stage on the club rather than a second table, and this is the gate:
+        ``outreach_stage`` short of ``listed`` means found, not published.
+
+        ``active`` is the other half and a different question -- it is set by hand when a club
+        dissolves -- so both are asked here.
+        """
+        return self.filter(active=True, outreach_stage=Club.LISTED)
+
+
 class Club(CloudflareImageMixin, models.Model):
     """Users can self-select which club they belong to"""
 
@@ -515,8 +546,54 @@ class Club(CloudflareImageMixin, models.Model):
         verbose_name="Membership email address",
         help_text="Replies to membership inquiries will be sent to this email",
     )
+    EMAIL = "email"
+    WEBFORM = "webform"
+    FACEBOOK = "facebook"
+    CONTACT_METHOD_CHOICES = (
+        ("", "Not known"),
+        (EMAIL, "Email"),
+        (WEBFORM, "Form on their website"),
+        (FACEBOOK, "Facebook only"),
+    )
+    contact_method = models.CharField(max_length=20, choices=CONTACT_METHOD_CHOICES, blank=True, default="")
+    contact_method.help_text = (
+        "Which door to knock on. Outreach is a person working a queue one club at a time, and a "
+        "club reachable only through Facebook takes a different afternoon from one with an address."
+    )
     date_contacted = models.DateTimeField(blank=True, null=True)
     date_contacted_for_in_person_auctions = models.DateTimeField(blank=True, null=True)
+    PROSPECT = "prospect"
+    CONTACTED = "contacted"
+    LISTED = "listed"
+    OUTREACH_STAGE_CHOICES = (
+        # Imported from a curated list, or typed in by hand, and not approved yet. Not on the map.
+        (PROSPECT, "Found, not approved"),
+        # Somebody here has written to them. Still not on the map: an email is not an approval.
+        (CONTACTED, "Contacted, no reply yet"),
+        # Approved. This is the only value that publishes a club.
+        (LISTED, "Approved and listed"),
+    )
+    outreach_stage = models.CharField(max_length=20, choices=OUTREACH_STAGE_CHOICES, default=PROSPECT, db_index=True)
+    outreach_stage.help_text = (
+        "The half of a club's progress that no query can answer. Only 'Approved and listed' puts a "
+        "club on the map, in club search and in the dropdowns -- ClubHealth derives everything after "
+        "that from rows and never writes here."
+    )
+    STALL_REASON_CHOICES = (
+        ("", "Not known"),
+        ("no_reply", "Never replied"),
+        ("no_auction", "No auction coming up"),
+        ("uses_other", "Uses something else"),
+        ("paper", "Paper works fine"),
+        ("cost", "Cost"),
+        ("not_interested", "Not interested"),
+        ("folded", "Club has folded"),
+    )
+    stall_reason = models.CharField(max_length=20, choices=STALL_REASON_CHOICES, blank=True, default="")
+    stall_reason.help_text = (
+        "Why this club stopped where it did, in a word that can be counted. Set it when somebody "
+        "answers; notes are free text and cannot say which objection is worth fixing."
+    )
     notes = models.CharField(max_length=300, blank=True, null=True)
     notes.help_text = "Only visible in the admin site, never made public"
     interests = models.ManyToManyField(GeneralInterest, blank=True)
@@ -1025,11 +1102,18 @@ class Club(CloudflareImageMixin, models.Model):
         help_text="How long to wait for a reply before a vendor shows up as due for a follow-up.",
     )
 
+    objects = ClubQuerySet.as_manager()
+
     class Meta:
         ordering = ["name"]
 
     def __str__(self):
         return str(self.name)
+
+    @property
+    def is_listed(self):
+        """Whether this club is published here. The map gate, as a question about one club."""
+        return self.active and self.outreach_stage == self.LISTED
 
     def find_member(self, name="", email="", exclude_pk=None):
         """ClubMember analogue of Auction.find_user: duplicate check / lookup for a club member.
@@ -1153,9 +1237,9 @@ class Club(CloudflareImageMixin, models.Model):
 
     def save(self, *args, **kwargs):
         if not self.abbreviation and self.name:
-            # Auto-fill abbreviation from the initials of the club name
-            words = self.name.split()
-            self.abbreviation = "".join(w[0].upper() for w in words if w)
+            # Auto-fill abbreviation from the initials of the club name.  club_matching owns the
+            # rule so that is_hand_written() can recognise its own output; see derived_abbreviation.
+            self.abbreviation = derived_abbreviation(self.name)
             # Ensure abbreviation is included in update_fields if caller specified them
             update_fields = kwargs.get("update_fields")
             if update_fields is not None and "abbreviation" not in update_fields:
@@ -2333,6 +2417,8 @@ class ClubHistory(models.Model):
     club = models.ForeignKey(Club, on_delete=models.CASCADE, related_name="history")
     user = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL)
     action = models.CharField(max_length=800, blank=True, null=True)
+    # See AuctionHistory.changed_fields; written by auctions.history.record_club_history.
+    changed_fields = models.JSONField(default=dict, blank=True)
     timestamp = models.DateTimeField(auto_now_add=True)
     applies_to = models.CharField(
         max_length=20,
@@ -3787,6 +3873,14 @@ class SpeciesSearchCache(models.Model):
     same language-model call to work out that "blue dream shrimp" is *Neocaridina davidi* again.
     A row with ``species`` set to null is a real answer too: this name is hardware, or plants, or
     a mixed bag, and there is no point asking again.
+
+    ``scientific_name`` is the third state, and the reason the second one is safe.  A row with no
+    species *and* a name in it says "we know what this lot is, and the list does not hold it" --
+    which is a gap in the species list, not a verdict about the name.  Without somewhere to put
+    that, a correct identification of a fish we happen not to stock was written down as "not a
+    species" for every club forever, and adding the fish later could not undo it; now the next
+    lookup re-resolves the name and the row heals itself.  See :attr:`is_a_gap` and
+    :func:`~auctions.species_matching.suggest_species`.
     """
 
     SOURCE_CHOICES = (
@@ -3797,6 +3891,12 @@ class SpeciesSearchCache(models.Model):
     search_text = models.CharField(max_length=120, unique=True)
     search_text.help_text = "Normalised lot name: lowercased, punctuation stripped."
     species = models.ForeignKey(Species, null=True, blank=True, on_delete=models.CASCADE)
+    scientific_name = models.CharField(max_length=120, blank=True, default="")
+    scientific_name.help_text = (
+        "What this lot name was identified as, whether or not the species list holds it.  A row "
+        "with no species and a name filled in here is a gap in the list rather than a verdict "
+        "about the name -- see SpeciesSearchCache.is_a_gap."
+    )
     source = models.CharField(max_length=20, choices=SOURCE_CHOICES, default="llm")
     created_by = models.ForeignKey(
         User, null=True, blank=True, on_delete=models.SET_NULL, related_name="species_names_taught"
@@ -3834,6 +3934,15 @@ class SpeciesSearchCache(models.Model):
     #: bag is not evidence about the name, and throwing the answer away on it means the next
     #: hundred sellers of that name get nothing.  Three lots is disagreement; one is a Tuesday.
     MIN_REJECTS_TO_RETIRE = 3
+
+    @property
+    def is_a_gap(self):
+        """True when this row identified the lot and the species list could not supply it.
+
+        The distinction the gaps page reads: "sponge filter" is not a species, and *Yssichromis
+        piceatus* is a species we don't have, and only one of those is somebody's job.
+        """
+        return self.species_id is None and bool(self.scientific_name)
 
     @property
     def is_discredited(self):
@@ -5916,7 +6025,7 @@ class Auction(CachedPropertiesMixin, models.Model):
             date_start = date_end - time_difference
             dates_messed_with = True
 
-        views = PageView.objects.filter(Q(auction=self) | Q(lot_number__auction=self))
+        views = self.page_views
         joins = AuctionTOS.objects.filter(auction=self)
         new_lots = Lot.objects.filter(auction=self)
         searches = SearchHistory.objects.filter(auction=self)
@@ -6093,8 +6202,7 @@ class Auction(CachedPropertiesMixin, models.Model):
         from django.contrib.sites.models import Site
 
         views = (
-            PageView.objects.filter(Q(auction=self) | Q(lot_number__auction=self))
-            .exclude(referrer__isnull=True)
+            self.page_views.exclude(referrer__isnull=True)
             .exclude(referrer__startswith=Site.objects.get_current().domain)
             .exclude(referrer__exact="")
             .values("referrer")
@@ -6380,6 +6488,21 @@ class Auction(CachedPropertiesMixin, models.Model):
             ],
         }
 
+    @property
+    def page_views(self):
+        """Every page view of this auction: its rules page, its lot list, and its lots.
+
+        The OR is across a join, which is the one shape MariaDB cannot serve from an index, so
+        every caller of this needs its own window or its own reason to be cheap.
+
+        It is here because rows written before 2026-09-09 named only the lot. A lot page (and an
+        AR scan) now sends its auction as well -- see ``base_page_view.html`` for why only the
+        three visitor-facing pages send anything at all. ``tasks.backfill_page_view_auctions`` is
+        walking the older rows in the background; when it has stamped itself finished, this can
+        become ``filter(auction=self)`` and the join goes away.
+        """
+        return PageView.objects.filter(Q(auction=self) | Q(lot_number__auction=self))
+
     @cached_property
     def unique_views(self):
         """Distinct visitors who viewed this auction's rules page or any of its lots.
@@ -6402,7 +6525,7 @@ class Auction(CachedPropertiesMixin, models.Model):
         Returns a dict with the total plus the logged-in / anonymous breakdown, reused by the
         auction stats page and the participation funnel chart.
         """
-        all_views = PageView.objects.filter(Q(auction=self) | Q(lot_number__auction=self))
+        all_views = self.page_views
         logged_in = all_views.filter(user__isnull=False).values("user").distinct().count()
         # Count anonymous sessions that never also appear on a logged-in row. Expressing this as
         # ``.exclude(session_id__in=<subquery over all_views>)`` makes MariaDB plan a
@@ -6560,14 +6683,11 @@ class Auction(CachedPropertiesMixin, models.Model):
         # Don't create history if the auction hasn't been saved yet
         if not self.pk:
             return
+        changed_fields = history.changed_field_summary(form)
         if form:
             action += " "
             for field_name in form.changed_data:
-                try:
-                    field = form.instance._meta.get_field(field_name)
-                    action += field.verbose_name
-                except Exception:
-                    action += field_name.replace("_", " ").title()
+                action += history.field_label(form, field_name)
                 action += ", "
             action = action[:-2]  # remove the last comma and space
         if len(action) > 800:
@@ -6577,6 +6697,7 @@ class Auction(CachedPropertiesMixin, models.Model):
             user=user,
             action=action[:800],
             applies_to=applies_to,
+            changed_fields=changed_fields,
         )
 
 
@@ -7455,11 +7576,30 @@ class AuctionTOS(InvalidatesRelatedCache, CachedPropertiesMixin, models.Model):
         generated unique number first. An AuctionHistory entry is created. The record is
         saved via update_fields so no full-model side-effects (e.g. bidder-number
         auto-generation) are triggered.
+
+        In club-managed mode the number belongs to the *member*, not to this row, so this hands off
+        to ``services.set_member_bidder_number`` -- the one place a bidder number is written in that
+        mode. Writing only this row would leave the club page, the member's card and every other
+        auction they are in on the old number, which is the same divergence the mode exists to
+        prevent. Check-in, the barcode scanner and the app's offline queue all arrive here.
         """
         from django.db import transaction as _tx
 
         number = str(number).strip()
         if not number:
+            return
+        if self.clubmember_id and self.auction.is_club_managed:
+            from .services import set_member_bidder_number
+
+            with _tx.atomic():
+                set_member_bidder_number(self.clubmember, number, acting_user=acting_user)
+                self.bidder_number = number
+                source = " via barcode" if via_barcode else ""
+                self.auction.create_history(
+                    applies_to="USERS",
+                    action=f"Assigned bidder number {number} to {self.name}{source}",
+                    user=acting_user,
+                )
             return
         with _tx.atomic():
             conflicting = (
@@ -7787,12 +7927,19 @@ class Lot(CachedPropertiesMixin, models.Model):
     """A lot is something to bid on"""
 
     PIC_CATEGORIES = (
-        ("ACTUAL", "This picture is of the exact item"),
+        ("ACTUAL", "My photo of this exact item"),
         (
             "REPRESENTATIVE",
-            "This is my picture, but it's not of this exact item.  e.x. This is the parents of these fry",
+            "My photo, but not of this exact item.  e.x. This is the parents of these fry",
         ),
-        ("RANDOM", "This picture is from the internet"),
+        # Was "This picture is from the internet", which is a confession rather than an answer: it
+        # asked a user to record, in a column, that we are hosting somebody else's photograph -- and
+        # it is what a blank field is silently set to (see LotPage's image handling), so most rows
+        # said it whether the seller meant them to or not.  512(c) does not require a site to police
+        # what its users upload, but it does fall away on red-flag knowledge, and a database column
+        # full of self-reported infringement is the worst possible exhibit.  The category still has
+        # to exist -- it is the catch-all -- so it asks for the thing that actually needs to be true.
+        ("RANDOM", "Not my photo - I have permission to use it"),
     )
     # 3 lot numbers follow, in general use the property lot_number_display which will select the appropriate one
     # all have the verbose name lot number, and to users they are all essentially the same, but they are used differently
@@ -11568,11 +11715,29 @@ class UserIgnoreCategory(models.Model):
 
 
 class PageView(CachedPropertiesMixin, models.Model):
-    """Track what lots a user views"""
+    """One row per page opened: the site's memory of what anybody looked at.
+
+    **Repeat views are history, not duplicates.** A ``remove_duplicate_views`` job used to merge
+    them every fifteen minutes and was removed, because it could only ever reach *anonymous* rows
+    (a signed-in view stores ``session_id=NULL``, and the matcher skipped those) and it had no time
+    window at all -- with ``SESSION_COOKIE_AGE`` set to about four years, one anonymous person's
+    every visit to a page, however far apart, folded into a single row. That deleted exactly the
+    return visits this table exists to record, and it left every raw-row count on the stats pages
+    reading anonymous and signed-in traffic by different rules.
+
+    Nothing purges this table and nothing is meant to. It is the largest one here and it is the
+    only record of what somebody did before they did anything countable; the queries that read it
+    carry a window and an owner instead (see ``page_view_history``, ``usability_report``).
+
+    Four columns are inert, left in place rather than dropped from a table this size:
+    ``total_time`` and ``counter`` were only ever raised by a ten-second heartbeat that is
+    commented out in ``base_page_view.html`` and ``views/ajax.py``, ``notification_sent`` has never
+    had a writer, and ``duplicate_check_completed`` belonged to the merge job above.
+    """
 
     user = models.ForeignKey(User, on_delete=models.CASCADE, null=True, blank=True)
     auction = models.ForeignKey(Auction, null=True, blank=True, on_delete=models.CASCADE)
-    auction.help_text = "Only filled out when a user views an auction's rules page"
+    auction.help_text = "Set when a visitor views the auction's rules page, its lot list or one of its lots, and deliberately left empty on organizer-facing pages so that view counts stay visitor counts. Rows written before 2026-09-09 have it on the rules page only."
     lot_number = models.ForeignKey(Lot, null=True, blank=True, on_delete=models.CASCADE)
     lot_number.help_text = "Only filled out when a user views a specific lot's page"
     date_start = models.DateTimeField(auto_now_add=True, db_index=True)
@@ -11609,79 +11774,6 @@ class PageView(CachedPropertiesMixin, models.Model):
         # thing = self.title
         return f"User {self.user} viewed {thing} for {self.total_time} seconds"
 
-    @cached_property
-    def duplicates(self):
-        """The other rows that are the same visit as this one.
-
-        A blank ``session_id`` is not a match. Without that guard the filter below reads as
-        ``session_id IS NULL`` (or ``= ''``) and every *anonymous* view of one URL becomes a
-        duplicate of every other one, so the deduplicator would collapse thousands of unrelated
-        visits into a single row with their counters summed.
-        """
-        if not self.session_id:
-            return PageView.objects.none()
-        return PageView.objects.filter(
-            user=self.user,
-            lot_number=self.lot_number,
-            url=self.url,
-            auction=self.auction,
-            session_id=self.session_id,
-        ).exclude(pk=self.pk)
-
-    @cached_property
-    def duplicate_count(self):
-        return self.duplicates.count()
-
-    def merge_and_delete_duplicates(self):
-        """Fold **every** duplicate of this view into it, delete them, and mark it checked.
-
-        Returns how many rows were merged away. Called explicitly, never as a property: it
-        modifies and deletes rows.
-
-        Three things here are load-bearing, and all three were bugs:
-
-        * **Every duplicate, not one.** This used to merge ``duplicates.first()`` and return, while
-          the caller marked the row done regardless -- so a view with three duplicates kept two of
-          them forever.
-        * **``update()`` on this row, never ``save()``.** The caller iterates a queryset it
-          materialised before any of this ran, so it reaches rows that a previous iteration has
-          already deleted. ``save()`` on a deleted instance finds no row to UPDATE and Django
-          **re-INSERTs it** under its old primary key (``select_on_save`` is False and the pk is an
-          ``AutoField``), resurrecting a merged-away duplicate with double-counted totals and
-          deleting the row it had just been merged into. An ``UPDATE ... WHERE pk = x`` that matches
-          nothing is simply a no-op, which is the behaviour this needs.
-        * **One transaction.** Summing the counters and deleting the rows they came from must not be
-          separable, or a crash between them double-counts every one of them on the next pass.
-        """
-        duplicates = list(self.duplicates)
-        fields = {"duplicate_check_completed": True}
-        if duplicates:
-            starts = [d.date_start for d in duplicates if d.date_start]
-            if self.date_start:
-                starts.append(self.date_start)
-            ends = [d.date_end for d in duplicates if d.date_end]
-            if self.date_end:
-                ends.append(self.date_end)
-            fields["date_start"] = min(starts) if starts else self.date_start
-            # Left alone when nothing in the group has an end time, rather than invented.
-            if ends:
-                fields["date_end"] = max(ends)
-            fields["total_time"] = self.total_time + sum(d.total_time for d in duplicates)
-            fields["counter"] = self.counter + sum(d.counter for d in duplicates)
-            fields["notification_sent"] = self.notification_sent or any(d.notification_sent for d in duplicates)
-            for name in ("source", "title", "referrer"):
-                value = getattr(self, name)
-                if not value:
-                    value = next((getattr(d, name) for d in duplicates if getattr(d, name)), value)
-                fields[name] = value
-        with transaction.atomic():
-            PageView.objects.filter(pk=self.pk).update(**fields)
-            if duplicates:
-                PageView.objects.filter(pk__in=[d.pk for d in duplicates]).delete()
-        for name, value in fields.items():
-            setattr(self, name, value)
-        return len(duplicates)
-
     def save(self, *args, **kwargs):
         if not self.latitude and self.ip_address:
             # values_list, not first(): this needs two floats, and hydrating a whole PageView to
@@ -11713,6 +11805,35 @@ class PageView(CachedPropertiesMixin, models.Model):
             # every page view they have ever made and sorted them to return one row.
             models.Index(fields=["user", "-date_start"], name="pageview_user_recent_idx"),
         ]
+
+
+class ChunkedJobState(models.Model):
+    """Where a long-running chunked job got to, so a run resumes instead of starting over.
+
+    One row per job, named by the job. It exists for ``tasks.backfill_page_view_auctions``, and the
+    reason it is a table rather than a cache key is the table that job walks: the only way to work
+    out "where did I get to" without recording it is to ask ``PageView``, and every query that could
+    answer that is the full scan the chunking exists to avoid. Losing a cached position would not be
+    incorrect -- the work is idempotent -- but it would restart a walk that takes days, and a cache
+    is flushed by things as ordinary as a deploy.
+
+    Delete the row, and this model, when the job that owns it is done for good.
+    """
+
+    name = models.CharField(max_length=100, primary_key=True)
+    cursor = models.BigIntegerField(default=0)
+    cursor.help_text = "The next primary key to look at. Everything below this has been handled."
+    ceiling = models.BigIntegerField(default=0)
+    ceiling.help_text = (
+        "The primary key the job stops at, captured on its first run. Rows written after that were "
+        "written by code that already does the right thing, so chasing them would never finish."
+    )
+    finished = models.DateTimeField(null=True, blank=True)
+    updated = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        state = "finished" if self.finished else f"at {self.cursor} of {self.ceiling}"
+        return f"{self.name} ({state})"
 
 
 class UserLabelPrefs(models.Model):
@@ -13349,6 +13470,9 @@ class AuctionHistory(models.Model):
     auction = models.ForeignKey(Auction, on_delete=models.CASCADE)
     user = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL)
     action = models.CharField(max_length=800, blank=True, null=True)
+    # The queryable half of `action`: {field_name: {"from": x, "to": y}}. auctions/history.py says
+    # why prose alone could not answer "has anybody ever changed this setting".
+    changed_fields = models.JSONField(default=dict, blank=True)
     timestamp = models.DateTimeField(auto_now_add=True)
     applies_to = models.CharField(
         null=True,
@@ -13384,14 +13508,48 @@ class AdCampaignGroup(CachedPropertiesMixin, models.Model):
     def __str__(self):
         return f"{self.title}"
 
+    @staticmethod
+    def annotate_totals(queryset):
+        """Add the three counts the changelist prints for every group, as subqueries.
+
+        ``list_display`` shows the campaigns, the impressions and the clicks, and each was its own
+        ``COUNT`` -- over ``AdCampaignResponse``, which holds a row per ad ever shown. Subqueries
+        rather than ``Count(..., distinct=True)`` over joins, for the reason
+        ``AuctionTOS.annotate_lot_counts`` gives: two multi-valued joins in one query multiply each
+        other's rows, and ``distinct`` then has to undo that.
+        """
+        campaigns = AdCampaign.objects.filter(campaign_group=OuterRef("pk"))
+        responses = AdCampaignResponse.objects.filter(campaign__campaign_group=OuterRef("pk"))
+
+        def count_of(rows, group_by, **extra):
+            return Coalesce(
+                Subquery(
+                    rows.filter(**extra).order_by().values(group_by).annotate(total=Count("pk")).values("total")[:1],
+                    output_field=IntegerField(),
+                ),
+                Value(0),
+            )
+
+        return queryset.annotate(
+            annotated_campaigns=count_of(campaigns, "campaign_group"),
+            annotated_impressions=count_of(responses, "campaign__campaign_group"),
+            annotated_clicks=count_of(responses, "campaign__campaign_group", clicked=True),
+        )
+
     @cached_property
     def number_of_clicks(self):
-        """..."""
+        """From the annotation when there is one -- see ``annotate_totals``."""
+        annotated = getattr(self, "annotated_clicks", None)
+        if annotated is not None:
+            return annotated
         return AdCampaignResponse.objects.filter(campaign__campaign_group=self.pk, clicked=True).count()
 
     @cached_property
     def number_of_impressions(self):
-        """How many times ads in this campaign group have been viewed"""
+        """How many times ads in this campaign group have been viewed."""
+        annotated = getattr(self, "annotated_impressions", None)
+        if annotated is not None:
+            return annotated
         return AdCampaignResponse.objects.filter(campaign__campaign_group=self.pk).count()
 
     @property
@@ -13402,6 +13560,9 @@ class AdCampaignGroup(CachedPropertiesMixin, models.Model):
     @cached_property
     def number_of_campaigns(self):
         """How many campaigns are there in this group"""
+        annotated = getattr(self, "annotated_campaigns", None)
+        if annotated is not None:
+            return annotated
         return AdCampaign.objects.filter(campaign_group=self.pk).count()
 
 
@@ -13438,6 +13599,31 @@ class AdCampaign(CachedPropertiesMixin, CloudflareImageMixin, models.Model):
             return f"{self.campaign_group.title} - {self.title} ({self.click_rate:.2f}% clicked)"
         return f"{self.title}"
 
+    @staticmethod
+    def annotate_response_counts(queryset):
+        """Add the two counts the changelist prints for every campaign, as subqueries.
+
+        Same shape and the same reason as ``AdCampaignGroup.annotate_totals``: ``list_display``
+        prints the impressions, the clicks and the rate between them, and each was a ``COUNT`` over
+        ``AdCampaignResponse`` per row.
+        """
+        responses = AdCampaignResponse.objects.filter(campaign=OuterRef("pk"))
+
+        def count_of(**extra):
+            return Coalesce(
+                Subquery(
+                    responses.filter(**extra)
+                    .order_by()
+                    .values("campaign")
+                    .annotate(total=Count("pk"))
+                    .values("total")[:1],
+                    output_field=IntegerField(),
+                ),
+                Value(0),
+            )
+
+        return queryset.annotate(annotated_impressions=count_of(), annotated_clicks=count_of(clicked=True))
+
     @property
     def image_display_url(self):
         """Ad-sized (250x150 max) image URL; from Cloudflare when migrated"""
@@ -13446,11 +13632,21 @@ class AdCampaign(CachedPropertiesMixin, CloudflareImageMixin, models.Model):
     @cached_property
     def number_of_clicks(self):
         """..."""
+        annotated = getattr(self, "annotated_clicks", None)
+        if annotated is not None:
+            return annotated
         return AdCampaignResponse.objects.filter(campaign=self.pk, clicked=True).count()
 
     @cached_property
     def number_of_impressions(self):
-        """How many times this ad has been viewed"""
+        """How many times this ad has been viewed.
+
+        From the queryset annotation when there is one -- the campaign-group admin page prints this
+        for every campaign in the group, which would otherwise be a COUNT per row.
+        """
+        annotated = getattr(self, "annotated_impressions", None)
+        if annotated is not None:
+            return annotated
         return AdCampaignResponse.objects.filter(campaign=self.pk).count()
 
     @property
@@ -13543,12 +13739,19 @@ class LotImage(InvalidatesRelatedCache, CloudflareImageMixin, models.Model):
     invalidates_cache_on = ("lot_number",)
 
     PIC_CATEGORIES = (
-        ("ACTUAL", "This picture is of the exact item"),
+        ("ACTUAL", "My photo of this exact item"),
         (
             "REPRESENTATIVE",
-            "This is my picture, but it's not of this exact item.  e.x. This is the parents of these fry",
+            "My photo, but not of this exact item.  e.x. This is the parents of these fry",
         ),
-        ("RANDOM", "This picture is from the internet"),
+        # Was "This picture is from the internet", which is a confession rather than an answer: it
+        # asked a user to record, in a column, that we are hosting somebody else's photograph -- and
+        # it is what a blank field is silently set to (see LotPage's image handling), so most rows
+        # said it whether the seller meant them to or not.  512(c) does not require a site to police
+        # what its users upload, but it does fall away on red-flag knowledge, and a database column
+        # full of self-reported infringement is the worst possible exhibit.  The category still has
+        # to exist -- it is the catch-all -- so it asks for the thing that actually needs to be true.
+        ("RANDOM", "Not my photo - I have permission to use it"),
     )
     lot_number = models.ForeignKey(Lot, on_delete=models.CASCADE)
     caption = models.CharField(max_length=60, blank=True, null=True)
@@ -13576,6 +13779,22 @@ class LotImage(InvalidatesRelatedCache, CloudflareImageMixin, models.Model):
     def thumbnail_url(self):
         """Small (250x150) version of display_url for lot tiles and carousel previews"""
         return cloudflare_images.image_url(self.image, self.cloudflare_image_id, "lot_list") or self.url or None
+
+    @property
+    def source_display(self):
+        """The image source as a page shows it, which is not always the label that was picked.
+
+        ``RANDOM``'s label is a promise made to us on the way in -- "Not my photo - I have
+        permission to use it" -- and it is also what a blank field is silently set to (see
+        LotPage's image handling), so it sits on most rows whether the seller ever chose it.  Under
+        the picture it told a bidder nothing they were deciding on, and told everybody else that
+        this site is where other people's photographs live.  The question is worth asking, so the
+        category stays on the form; the answer is for us, not for the lot page.  The other two say
+        who took the photo and of what, which is exactly what a bidder is reading, so they show.
+        """
+        if self.image_source == "RANDOM":
+            return ""
+        return self.get_image_source_display()
 
 
 class FAQ(models.Model):
@@ -14421,7 +14640,11 @@ class VoiceGrammar(models.Model):
 
     enabled = models.BooleanField(default=True)
     enabled.help_text = "Uncheck to turn voice off everywhere; the app hides the microphone button."
-    backend = models.CharField(max_length=20, choices=voice.BACKEND_CHOICES, default=voice.BACKEND_PLATFORM)
+    # Matches the app's own default. The vocabulary-biased recognizer is the only one that can be
+    # told this auction's lot and bidder numbers before it listens, and a build or phone without the
+    # native half falls back to the plain platform recognizer by itself -- so asking for it costs
+    # nothing where it isn't available. Setting this to "Platform recognizer" is the kill switch.
+    backend = models.CharField(max_length=20, choices=voice.BACKEND_CHOICES, default=voice.BACKEND_BIASED)
     backend.help_text = "What the app should listen with, if it can. It reports what it actually managed."
     locale = models.CharField(max_length=20, default="en_US")
     prefer_on_device = models.BooleanField(default=True)
@@ -14439,6 +14662,14 @@ class VoiceGrammar(models.Model):
     weights.help_text = "How much each signal counts toward confidence: asr, keyword, snap, agreement."
     thresholds = models.JSONField(default=voice.default_thresholds, blank=True)
     thresholds.help_text = "Score cutoffs: at/above 'confident' fills green, at/above 'unsure' asks, below is ignored."
+    commit_after_ms = models.PositiveIntegerField(
+        default=voice.DEFAULT_COMMIT_AFTER_MS, validators=[MaxValueValidator(2500)]
+    )
+    commit_after_ms.help_text = (
+        "Milliseconds a heard lot, bidder or price must stop changing before the app fills the field. "
+        "0 waits for the recognizer's final result instead -- slower by seconds, and the kill switch "
+        "if early values misbehave. Under 200 the app raises it to 200."
+    )
 
     auto_submit_on_sold = models.BooleanField(default=True)
     auto_submit_on_sold.help_text = "Saying 'sold' saves the lot, instead of only filling the fields."
@@ -14896,3 +15127,47 @@ class AssistantSkillRequest(CachedPropertiesMixin, models.Model):
             .distinct()
             .count()
         )
+
+
+class SignInStitch(models.Model):
+    """The anonymous session somebody was holding at the moment they signed in.
+
+    ``PageView`` stores a signed-in view as ``user=<id>, session_id=NULL`` and an anonymous one as
+    ``user=NULL, session_id=<key>``, so the same person browsing and then signing in is two actors
+    to every query that reads that table (``usability_report._actor``). For a buyer that seam falls
+    in the middle of their story: they arrive from a club's Facebook page anonymously, browse, and
+    only become a user -- if ever -- at the point of paying.
+
+    This is the exact key that closes it, and the only new row ``docs/phase_9.md`` asks for. It is
+    not a fingerprint and deliberately not one: an IP-and-user-agent match is least reliable exactly
+    where the seam is widest (fifty people on a venue's one wifi holding the same phone), it
+    over-merges and under-merges within a single evening on carrier CGNAT, and its error is
+    correlated with the number being measured. This is a session key the site already issued.
+
+    **It only works forwards.** A stitch cannot be reconstructed for a sign-in that has already
+    happened, so any before-and-after comparison that crosses the day this shipped is comparing a
+    stitched year against an unstitched one -- which is a fake improvement, not a real one.
+    :func:`auctions.lifecycle.stitching_began` is the date to mark on any such chart, and the
+    unstitched number stays available beside it.
+
+    The key comes from ``request.COOKIES``, not from ``request.session.session_key``:
+    ``django.contrib.auth.login`` calls ``cycle_key()`` *before* it sends ``user_logged_in``, so by
+    the time a receiver runs the session already has its new key and the anonymous one is gone. The
+    cookie the browser sent with the request still holds it.
+    """
+
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="sign_in_stitches")
+    session_id = models.CharField(max_length=600, db_index=True)
+    session_id.help_text = "The session key the browser was holding before this sign-in."
+    createdon = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        # One row per person per session, not one per sign-in: somebody who signs in every week
+        # from the same browser is the same stitch each time, and the first one is the one that
+        # says when the anonymous half ended.
+        constraints = [models.UniqueConstraint(fields=["user", "session_id"], name="one_stitch_per_user_session")]
+        verbose_name = "Sign-in stitch"
+        verbose_name_plural = "Sign-in stitches"
+
+    def __str__(self):
+        return f"{self.user} signed in holding {self.session_id[:12]}"

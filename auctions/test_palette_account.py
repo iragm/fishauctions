@@ -683,6 +683,12 @@ class ClubIntegrationTests(AccountTestCase):
         result = self._run("club_website_snippets", {"club": self.club.name})
         self.assertIn(self.club.slug, result["copy_the_code_from_url"])
 
+    def test_each_embed_comes_with_the_script_tag_the_page_hands_out(self):
+        result = self._run("club_website_snippets", {"club": self.club.name})
+        events = next(row for row in result["embeds"] if row["snippet"] == "events")
+        self.assertRegex(events["script_tag"], r'^<script src="https?://[^"]+/events-embed/\?format=js"></script>$')
+        self.assertTrue(events["unstyled_url"].endswith("?format=unstyledhtml"))
+
     def test_somebody_with_no_part_in_the_club_gets_no_snippets(self):
         result = self._run("club_website_snippets", {"club": self.club.name}, user=self.userB)
         self.assertNotIn("found", result)

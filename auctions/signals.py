@@ -5,12 +5,22 @@ import logging
 
 from django.contrib.auth.models import User
 from django.contrib.auth.signals import user_logged_in
+from django.contrib.sites.models import Site
 from django.db import models, transaction
 from django.db.models.signals import post_delete, post_save, pre_delete, pre_save
 from django.dispatch import receiver
 from django.utils import timezone
 from django_ses.signals import bounce_received, complaint_received
 
+from .services import (
+    SHARED_MEMBER_FIELDS,
+    clear_bidder_number_in,
+    club_managed_auctions_for,
+    club_managed_shadows_for,
+    set_member_bidder_number,
+    shared_member_values,
+    sync_member_to_shadows,
+)
 from .site_setup import ensure_single_club_membership_for_user
 
 logger = logging.getLogger(__name__)
@@ -338,6 +348,7 @@ def stash_previous_clubmember_state(sender, instance, **kwargs):
                 "bidding_allowed",
                 "selling_allowed",
                 "name",
+                "phone_number",
                 "membership_number",
                 "membership_expiration_date",
                 "membership_last_paid",
@@ -352,6 +363,7 @@ def stash_previous_clubmember_state(sender, instance, **kwargs):
         instance._previous_bidding_allowed = prev.get("bidding_allowed")
         instance._previous_selling_allowed = prev.get("selling_allowed")
         instance._previous_name = prev.get("name") or ""
+        instance._previous_phone_number = prev.get("phone_number") or ""
         instance._previous_membership_number = prev.get("membership_number")
         instance._previous_membership_expiration_date = prev.get("membership_expiration_date")
         instance._previous_membership_last_paid = prev.get("membership_last_paid")
@@ -363,6 +375,7 @@ def stash_previous_clubmember_state(sender, instance, **kwargs):
         instance._previous_bidding_allowed = None
         instance._previous_selling_allowed = None
         instance._previous_name = ""
+        instance._previous_phone_number = ""
         instance._previous_membership_number = None
         instance._previous_membership_expiration_date = None
         instance._previous_membership_last_paid = None
@@ -373,25 +386,32 @@ def stash_previous_clubmember_state(sender, instance, **kwargs):
 
 @receiver(post_save, sender="auctions.ClubMember")
 def propagate_clubmember_to_shadow_tos(sender, instance, created, **kwargs):
-    """When a ClubMember's bidder_number / bidding_allowed / selling_allowed change,
-    push the new values to linked shadow AuctionTOS records for club-managed auctions
-    that have not yet been invoiced. Bidder-number collisions are skipped per-row
-    (warning logged) rather than letting a unique-constraint violation crash the save.
+    """Push a changed ClubMember onto every participant row that is the same person.
+
+    Managing members through the club means there is one record of a person, not one per auction:
+    their name, email, phone, address and bidder number are the same everywhere, in auctions that
+    are over as well as the one running tonight. Anything a human types is pushed; what stays with
+    the auction is what the auction did to them -- checked_in, the invoice, the reminder flags.
+
+    A bidder number takes whoever is holding it off it first (``services.clear_bidder_number_in``),
+    with a history entry in that auction, rather than being skipped: a skip is invisible, and what
+    it looks like from the floor is the member's page showing the new number, the users table
+    showing the old one, and a lot knocked down to whoever still holds it.
 
     When a new member is created, auto-create shadow TOS records in any active
-    club-managed auctions that auto-add members ("all" or "checkin" mode).
+    club-managed auctions that auto-add members ("all" or "checkin" mode). Both paths check the
+    number against the auction as well as the club, because those are two different scopes and a
+    club-managed auction can still hold people who joined it directly.
     """
-    from .models import Auction, AuctionTOS, PickupLocation
+    from .models import AuctionTOS, PickupLocation
 
     if created:
-        # Auto-create shadow TOS records in club-managed auctions for new members
-        managed_auctions = Auction.objects.filter(
-            club=instance.club,
-            is_deleted=False,
-            invoiced=False,
-            manage_users_through_club__in=["all", "checkin"],
-        )
-        for auction in managed_auctions:
+        # Every club-managed auction, finished ones included: joining the club makes somebody
+        # manageable from any of the club's auctions, which is the promise the mode makes. Rows in
+        # an auction that is over carry no checked_in and no invoice, so they are a person the
+        # admin can find there, not an attendee -- check-in auctions count attendance off
+        # checked_in, not off the row existing.
+        for auction in club_managed_auctions_for(instance.club):
             default_location = PickupLocation.objects.filter(auction=auction).order_by("-is_default", "pk").first()
             if not default_location:
                 continue
@@ -401,6 +421,7 @@ def propagate_clubmember_to_shadow_tos(sender, instance, created, **kwargs):
             if not instance.bidder_number:
                 instance.generate_bidder_number(save=True)
             bidding = False if auction.manage_users_through_club == "checkin" else instance.bidding_allowed
+            clear_bidder_number_in(auction, instance.bidder_number)
             AuctionTOS.objects.create(
                 user=instance.user,
                 auction=auction,
@@ -409,11 +430,9 @@ def propagate_clubmember_to_shadow_tos(sender, instance, created, **kwargs):
                 bidder_number=instance.bidder_number,
                 bidding_allowed=bidding,
                 selling_allowed=instance.selling_allowed,
-                name=instance.name or "",
-                email=instance.email or "",
-                phone_number=instance.phone_number or "",
-                address=instance.address or "",
                 manually_added=True,
+                # Cut to the AuctionTOS widths, which are narrower than the ClubMember ones.
+                **shared_member_values(instance),
             )
         return
 
@@ -421,32 +440,26 @@ def propagate_clubmember_to_shadow_tos(sender, instance, created, **kwargs):
     prev_bidding = getattr(instance, "_previous_bidding_allowed", None)
     prev_selling = getattr(instance, "_previous_selling_allowed", None)
 
-    shadows = AuctionTOS.objects.filter(
-        clubmember=instance,
-        auction__manage_users_through_club__in=["all", "checkin"],
-        auction__invoiced=False,
-    )
+    shadows = club_managed_shadows_for(instance)
 
     if prev_bidding is not None and prev_bidding != instance.bidding_allowed:
-        shadows.update(bidding_allowed=instance.bidding_allowed)
+        if instance.bidding_allowed:
+            # Check-in mode hands out the right to bid at the door and nowhere else. A member who
+            # has not checked in yet has to stay unable to bid however their club record changes --
+            # the same rule the auto-add path above and ``services.apply_club_member_to_tos``
+            # already enforce, and the one thing the mode is for.
+            shadows.exclude(
+                auction__manage_users_through_club="checkin",
+                auction__club__isnull=False,
+                checked_in__isnull=True,
+            ).update(bidding_allowed=True)
+        else:
+            shadows.update(bidding_allowed=False)
     if prev_selling is not None and prev_selling != instance.selling_allowed:
         shadows.update(selling_allowed=instance.selling_allowed)
+    sync_member_to_shadows(instance)
     if prev_bidder is not None and prev_bidder != instance.bidder_number and instance.bidder_number:
-        for shadow in shadows:
-            collision = (
-                AuctionTOS.objects.filter(auction_id=shadow.auction_id, bidder_number=instance.bidder_number)
-                .exclude(pk=shadow.pk)
-                .exists()
-            )
-            if collision:
-                logging.getLogger(__name__).warning(
-                    "Skipped bidder_number sync for AuctionTOS pk=%s: '%s' already taken in auction pk=%s",
-                    shadow.pk,
-                    instance.bidder_number,
-                    shadow.auction_id,
-                )
-                continue
-            AuctionTOS.objects.filter(pk=shadow.pk).update(bidder_number=instance.bidder_number)
+        set_member_bidder_number(instance, instance.bidder_number)
 
 
 @receiver(post_save, sender="auctions.ClubMember")
@@ -559,6 +572,66 @@ def sync_clubmember_to_brevo(sender, instance, created, **kwargs):
         transaction.on_commit(lambda old=prev_email: sync_club_member_email_change_brevo.delay(pk, old))
     else:
         transaction.on_commit(lambda: sync_club_member_to_brevo.delay(pk))
+
+
+#: What ``AuctionTOS.save()`` writes into a field that was left blank. These are the absence of an
+#: answer rather than an answer, and carrying one up would overwrite the member's real name with it.
+BLANK_MARKERS = {"name": {"", "Unknown"}, "bidder_number": {"", "ERROR"}}
+
+
+def _worth_carrying_up(field, value):
+    value = (value or "").strip()
+    return bool(value) and value not in BLANK_MARKERS.get(field, set())
+
+
+@receiver(post_save, sender="auctions.AuctionTOS")
+def sync_auctiontos_up_to_clubmember(sender, instance, **kwargs):
+    """The other direction: an edit made in an auction is an edit to the club member.
+
+    ``propagate_clubmember_to_shadow_tos`` carries a change down from the club page. This carries
+    one up, so it does not matter where the admin happened to be standing when they fixed somebody's
+    email -- the CSV import, the bulk-add form, ``update_person``, the app's offline queue and the
+    plain participant form all reach the same record. Writing the member then pushes it back down to
+    every other auction, which is what makes "there is one of each person" true rather than aspirational.
+
+    Only when something actually differs, because this runs on every AuctionTOS save -- including
+    the ones the downward propagation and check-in make.
+
+    ``update_fields`` is honoured, and not as an optimisation. A save that names its fields is
+    saying what changed, while the rest of the in-memory row is whatever it held when it was loaded
+    -- which the club member form makes stale on purpose: it loads the participant row, saves the
+    member (propagating the new details down with ``update()``, which cannot refresh an object
+    somebody else is holding), and then saves the row for ``is_club_member`` and the pickup
+    location. Carrying that row's fields up would push the *pre-edit* name and email back onto the
+    member and from there onto every other auction, silently undoing the edit that request was for.
+    """
+    from .models import ClubMember
+
+    member = instance.clubmember
+    if member is None or not instance.auction.is_club_managed:
+        return
+    update_fields = kwargs.get("update_fields")
+    if update_fields is not None and not set(update_fields) & {*SHARED_MEMBER_FIELDS, "bidder_number"}:
+        return
+    changed = [
+        field
+        for field in SHARED_MEMBER_FIELDS
+        if _worth_carrying_up(field, getattr(instance, field, None))
+        and (getattr(instance, field, None) or "") != (getattr(member, field, None) or "")
+    ]
+    number = (instance.bidder_number or "").strip()
+    number_changed = _worth_carrying_up("bidder_number", number) and number != (member.bidder_number or "").strip()
+    if not changed and not number_changed:
+        return
+    if changed:
+        for field in changed:
+            setattr(member, field, getattr(instance, field) or "")
+        # update() rather than save(): the member's own post_save would push these straight back
+        # down, and this row already has them. sync_member_to_shadows reaches the other auctions.
+        ClubMember.objects.filter(pk=member.pk).update(**{field: getattr(member, field) for field in changed})
+        sync_member_to_shadows(member)
+    if number_changed:
+        set_member_bidder_number(member, number)
 
 
 @receiver(post_save, sender="auctions.AuctionTOS")
@@ -722,6 +795,7 @@ def user_logged_in_callback(sender, user, request, **kwargs):
         )
 
     link_unattached_tos_for_user(user)
+    record_sign_in_stitch(user, request)
 
     from auctions.models import ClubMember
 
@@ -729,6 +803,37 @@ def user_logged_in_callback(sender, user, request, **kwargs):
     # and there is no meaningful "who did this" actor to record.
     ClubMember.objects.filter(user__isnull=True, email=user.email, is_deleted=False).update(user=user)
     ensure_single_club_membership_for_user(user)
+
+
+def record_sign_in_stitch(user, request):
+    """Remember which anonymous session this person was holding when they signed in.
+
+    The one row ``docs/phase_9.md`` asks anybody to add, and the whole of its argument is in
+    ``SignInStitch``'s docstring: it closes the anonymous-to-identified seam with a key the site
+    issued itself, rather than with an IP-and-user-agent guess that is least reliable in exactly the
+    room this site's buyers are standing in.
+
+    **From the cookie, not from the session.** ``django.contrib.auth.login`` calls
+    ``request.session.cycle_key()`` before it sends ``user_logged_in``, so a receiver reading
+    ``request.session.session_key`` gets the key issued a moment ago and stitches the sign-in to
+    itself. ``request.COOKIES`` is what the browser sent, which is the key every anonymous
+    ``PageView`` in this visit was written under.
+
+    Silent on every path that has no session cookie at all -- the mobile API's JWT logins, the
+    WebView handoff, a management command -- because there is no anonymous half to attach.
+    """
+    from django.conf import settings
+
+    from auctions.models import SignInStitch
+
+    if request is None:
+        return
+    key = (request.COOKIES or {}).get(settings.SESSION_COOKIE_NAME)
+    if not key:
+        return
+    # get_or_create rather than create: signing in again from the same browser is the same stitch,
+    # and the row already there is the one that says when the anonymous half ended.
+    SignInStitch.objects.get_or_create(user=user, session_id=key[:600])
 
 
 @receiver(post_save, sender=User)
@@ -835,6 +940,7 @@ def on_club_member_saved(sender, instance, **kwargs):
 @receiver(post_delete, sender="auctions.LotImage")
 @receiver(post_delete, sender="auctions.Club")
 @receiver(post_delete, sender="auctions.AdCampaign")
+@receiver(post_delete, sender="auctions.Speaker")
 def on_cloudflare_image_row_deleted(sender, instance, **kwargs):
     """Queue deletion of the Cloudflare copy of an image when its row is deleted.
 
@@ -857,6 +963,80 @@ def on_cloudflare_image_row_deleted(sender, instance, **kwargs):
         # image that had already been deleted from Cloudflare -- unrecoverable, and invisible until
         # somebody opened the lot.
         transaction.on_commit(lambda image_id=instance.cloudflare_image_id: delete_cloudflare_image.delay(image_id))
+
+
+@receiver(post_delete, sender="auctions.LotImage")
+@receiver(post_delete, sender="auctions.Lot")
+@receiver(post_delete, sender="auctions.Club")
+@receiver(post_delete, sender="auctions.AdCampaign")
+@receiver(post_delete, sender="auctions.Speaker")
+def on_uploaded_image_deleted(sender, instance, **kwargs):
+    """Delete the uploaded file itself, its thumbnails, and the copy cached at the edge.
+
+    Django has never deleted files when a row goes, and for most of this site's life that was
+    harmless: an orphaned JPEG under ``mediafiles/`` cost a few kilobytes and nothing else. It
+    stopped being harmless when the question became whether a photograph somebody else owns is
+    still on the internet. ``/media/`` is unauthenticated and the filename does not change, so a
+    "deleted" image was still being served at the URL the takedown notice quoted --
+    17 U.S.C. 512(c)(1)(C) asks for expeditious removal, and that was not removal at all.
+
+    Three copies have to go, and they live in three places:
+
+    * the original under ``mediafiles/``, deleted here;
+    * every easy-thumbnails derivative of it, also here -- they are separate files under separate
+      names and deleting the source leaves them behind;
+    * the copy Cloudflare's edge is holding, which ``nginx_fishauctions.conf`` told it to keep for
+      thirty days. That one is a network call, so it is queued (:func:`auctions.tasks.purge_edge_cache`).
+
+    The Cloudflare *Images* copy is the fourth, and is handled by
+    :func:`on_cloudflare_image_row_deleted` above.
+
+    **A file two rows point at is left alone.** ``clone_lot_images`` gives the copy the original's
+    file rather than duplicating it, so relisting a lot means two ``LotImage`` rows and one JPEG:
+    deleting the first row must not take the second row's picture with it. The same check is why
+    the Cloudflare deletion is a task that re-checks rather than an immediate call.
+    """
+    from easy_thumbnails.files import get_thumbnailer
+
+    field_name = getattr(instance, "IMAGE_FIELD_NAME", "image")
+    field_file = getattr(instance, field_name, None)
+    if not field_file or not field_file.name:
+        return
+    name = field_file.name
+    if sender.objects.filter(**{field_name: name}).exists():
+        return
+
+    urls = []
+    thumbnailer = get_thumbnailer(field_file)
+    try:
+        urls.append(field_file.url)
+        for thumbnail in thumbnailer.get_thumbnails():
+            urls.append(thumbnail.url)
+    except Exception:
+        # A missing source file, or no thumbnail cache for it. The file still has to go; only the
+        # purge list is poorer for it.
+        logger.exception("Could not list files to purge for %s %s", sender.__name__, name)
+    try:
+        thumbnailer.delete_thumbnails()
+        field_file.delete(save=False)
+    except Exception:
+        logger.exception("Could not delete the file for %s %s", sender.__name__, name)
+        return
+
+    absolute = []
+    try:
+        domain = Site.objects.get_current().domain
+    except Exception:
+        domain = ""
+    for url in urls:
+        absolute.append(f"https://{domain}{url}" if domain and url.startswith("/") else url)
+    if absolute:
+        from .tasks import purge_edge_cache
+
+        # on_commit for the same reason the Cloudflare deletion above uses it: post_delete fires
+        # inside the delete transaction, and a rollback would otherwise leave a live row whose
+        # image had already been purged.
+        transaction.on_commit(lambda purge=absolute: purge_edge_cache.delay(purge))
 
 
 @receiver(post_save, sender="auctions.ThermalPrinterProfile")

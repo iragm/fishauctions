@@ -19,6 +19,7 @@ import re
 from unittest.mock import patch
 
 from django.conf import settings
+from django.contrib.staticfiles.storage import staticfiles_storage
 from django.test import RequestFactory, SimpleTestCase
 from django.utils import timezone
 
@@ -313,6 +314,28 @@ class CallToolTests(StandardTestCase):
         self.assertTrue(result["isError"])
         self.assertTrue(self._text(result).strip())
 
+    def _keys_naming_a_primary_key(self, node, found=None):
+        """Every key at any depth whose name says the value under it is a row's primary key.
+
+        Structure rather than ``assertNotIn(str(self.lot.pk), json.dumps(result))``, which is what
+        the assertion below used to be and which fails whenever the fixture's lot happens to get a
+        low primary key: the answer carries ``"lot_number": 1`` and a price of ``10.00``, so a lot
+        whose pk is 1 or 2 or 5 "leaks" every time. Which pk it gets is not fixed -- MariaDB does
+        not roll an AUTO_INCREMENT back with the transaction, so it depends on how many rows every
+        class before this one in the same worker inserted, and ``--parallel`` decides that. A pk is
+        handed out by being *named*, and that is exact.
+        """
+        found = [] if found is None else found
+        if isinstance(node, dict):
+            for key, value in node.items():
+                if key in {"id", "pk", "lot_id", "lot_pk"} or key.endswith("_pk"):
+                    found.append(key)
+                self._keys_naming_a_primary_key(value, found)
+        elif isinstance(node, list):
+            for item in node:
+                self._keys_naming_a_primary_key(item, found)
+        return found
+
     def test_no_result_hands_out_a_lots_primary_key(self):
         """Stripped at any depth, because the leak was mostly in rows.
 
@@ -328,7 +351,11 @@ class CallToolTests(StandardTestCase):
             result = tools.call_tool(self._request_for(self.user), tool, arguments)
             body = self._text(result)
             self.assertNotIn("lot_id", body, f"{tool} handed out a lot's primary key")
-            self.assertNotIn(str(self.lot.pk), json.dumps(result.get("structuredContent") or {}))
+            self.assertEqual(
+                self._keys_naming_a_primary_key(result.get("structuredContent") or {}),
+                [],
+                f"{tool}'s structured answer names a primary key",
+            )
 
     def test_a_lot_is_still_named_by_the_number_on_its_label(self):
         """Taking the pk away is only safe because the public identifier is already in every answer."""
@@ -1309,6 +1336,16 @@ class IconTests(SimpleTestCase):
     def setUp(self):
         self.descriptors = tools.tool_descriptors(None)
 
+    def icon_file(self, name):
+        """``read.svg``, or ``read.<hash>.svg`` where the statics have been collected.
+
+        Asked of the storage rather than spelled out, because :mod:`auctions.mcp.icons` builds
+        these with ``static()`` and that is content-hashed in production -- see
+        ``fishauctions/static_storage.py``. A literal here passes in CI, whose ``STATIC_ROOT`` is
+        empty, and fails in the container the statics really live in.
+        """
+        return staticfiles_storage.url(f"mcp/{name}.svg").rsplit("/", 1)[-1]
+
     def test_every_tool_carries_exactly_one_icon(self):
         for descriptor in self.descriptors:
             found = descriptor.get("icons")
@@ -1334,15 +1371,15 @@ class IconTests(SimpleTestCase):
     def test_the_five_are_all_that_are_used(self):
         used = {descriptor["icons"][0]["src"].rsplit("/", 1)[-1] for descriptor in self.descriptors}
         self.assertEqual(
-            used, {f"{name}.svg" for name in (icons.READ, icons.GO, icons.AUCTION, icons.CLUB, icons.EDIT)}
+            used, {self.icon_file(name) for name in (icons.READ, icons.GO, icons.AUCTION, icons.CLUB, icons.EDIT)}
         )
 
     def test_a_read_is_a_magnifier_and_a_write_is_not(self):
         by_name = {descriptor["name"]: descriptor["icons"][0]["src"] for descriptor in self.descriptors}
-        self.assertIn(f"{icons.READ}.svg", by_name["list_lots"])
-        self.assertIn(f"{icons.GO}.svg", by_name["go_to_page"])
-        self.assertIn(f"{icons.AUCTION}.svg", by_name["check_in"])
-        self.assertIn(f"{icons.CLUB}.svg", by_name["add_club_member"])
+        self.assertIn(self.icon_file(icons.READ), by_name["list_lots"])
+        self.assertIn(self.icon_file(icons.GO), by_name["go_to_page"])
+        self.assertIn(self.icon_file(icons.AUCTION), by_name["check_in"])
+        self.assertIn(self.icon_file(icons.CLUB), by_name["add_club_member"])
 
     def test_the_icon_files_are_really_there(self):
         """A broken image beside every tool is worse than no image, and it fails silently."""

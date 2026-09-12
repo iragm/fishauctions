@@ -13,9 +13,7 @@ than the one for a meeting somebody typed in. Saying which half is which up fron
 admin hunting for a date field that was never going to be here.{% endcomment %}
 <div class="help-note"><i class="bi bi-lightbulb-fill"></i><div>
   This event comes from {% if event.source == 'pickup' %}a pickup time on {% endif %}<a href="{{ event.related_auction.get_absolute_url }}">{{ event.related_auction.title }}</a>, so
-  its date and place are the auction's and change when the auction does. What it's <em>called</em>
-  and what it <em>says</em> are yours &mdash; this is where a club puts "doors at 6:30, bring a
-  dish", the part that's different every month.
+  its date and place are the auction's and change when the auction does.
   <br>
   Edits you make in Google Calendar to this event don't stick; make them here.
 </div></div>

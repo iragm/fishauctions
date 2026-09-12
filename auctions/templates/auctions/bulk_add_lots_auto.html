@@ -41,8 +41,8 @@
                     <span class="badge bg-success text-dark lot-number-badge">Lot #{{ lot.lot_number_display }}</span>
                     <!-- Actions dropdown menu -->
                     <div class="dropdown actions-menu">
-                      <button class="btn btn-sm btn-primary dropdown-toggle py-0 px-1" type="button" data-bs-toggle="dropdown" aria-expanded="false" style="font-size: 0.75rem;">
-                        <i class="bi bi-three-dots"></i>
+                      <button class="btn btn-sm btn-primary dropdown-toggle py-0 px-1" type="button" data-bs-toggle="dropdown" aria-expanded="false" aria-label="Actions for this lot" style="font-size: 0.75rem;">
+                        <i class="bi bi-three-dots" aria-hidden="true"></i>
                       </button>
                       <ul class="dropdown-menu dropdown-menu-end">
                         <li><a class="dropdown-item dropdown-item-sm" href="{{ lot.lot_link }}" target="_blank"><i class="bi bi-eye"></i> View lot</a></li>
@@ -175,8 +175,8 @@
                     <span class="badge bg-secondary text-dark lot-number-badge">Not saved</span>
                     <!-- Actions dropdown menu (hidden until saved) -->
                     <div class="dropdown actions-menu" style="display: none;">
-                      <button class="btn btn-sm btn-primary dropdown-toggle py-0 px-1" type="button" data-bs-toggle="dropdown" aria-expanded="false" style="font-size: 0.75rem;">
-                        <i class="bi bi-three-dots"></i>
+                      <button class="btn btn-sm btn-primary dropdown-toggle py-0 px-1" type="button" data-bs-toggle="dropdown" aria-expanded="false" aria-label="Actions for this lot" style="font-size: 0.75rem;">
+                        <i class="bi bi-three-dots" aria-hidden="true"></i>
                       </button>
                       <ul class="dropdown-menu dropdown-menu-end">
                         <li><a class="dropdown-item dropdown-item-sm action-view" href="#" target="_blank"><i class="bi bi-eye"></i> View lot</a></li>

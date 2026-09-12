@@ -11,8 +11,10 @@ from django.utils import timezone
 from auctions.models import (
     Auction,
     AuctionTOS,
+    Category,
     Invoice,
     PickupLocation,
+    UserInterestCategory,
 )
 from auctions.tests import StandardTestCase
 
@@ -516,3 +518,31 @@ class WatchOrUnwatchViewTests(StandardTestCase):
         self.client.login(username=self.user.username, password="testpassword")
         response = self.client.get(f"/api/watchitem/{self.lot.pk}/")
         self.assertEqual(response.status_code, 405)
+
+
+class AdFetchTests(TestCase):
+    """``/ads/fetch/`` -- the async request every page makes for its ad slot.
+
+    This 500ed for every signed-in visitor who had any category interest recorded: it passed a
+    QuerySet to ``random.sample``, which wants a sequence, and the ``except`` beside it named
+    IndexError and ValueError but not TypeError. It never showed up in CI because CI runs the
+    site with DEBUG on, where nothing crawls the page set, and the endpoint fails silently into a
+    slot the page leaves empty.
+    """
+
+    def setUp(self):
+        self.user = User.objects.create_user(username="ad_viewer", password="x", email="ad@example.com")
+        self.category = Category.objects.create(name="Ad test category")
+
+    def test_the_ad_endpoint_answers_for_a_signed_in_user_with_interests(self):
+        UserInterestCategory.objects.create(user=self.user, category=self.category, interest=9, as_percent=90)
+        self.client.force_login(self.user)
+        response = self.client.get(reverse("get_ad"))
+        self.assertEqual(response.status_code, 200)
+
+    def test_the_ad_endpoint_answers_with_no_interests_recorded(self):
+        self.client.force_login(self.user)
+        self.assertEqual(self.client.get(reverse("get_ad")).status_code, 200)
+
+    def test_the_ad_endpoint_answers_for_a_signed_out_visitor(self):
+        self.assertEqual(self.client.get(reverse("get_ad")).status_code, 200)

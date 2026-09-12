@@ -599,7 +599,7 @@ class ClubEventViewTests(TestCase):
         response = self.client.get(reverse("club_event_edit", kwargs={"slug": self.club.slug, "pk": event.pk}))
         self.assertEqual(response.status_code, 200)
         form = response.context["form"]
-        self.assertEqual(sorted(form.fields), ["description", "reset_description", "reset_title", "title"])
+        self.assertEqual(sorted(form.fields), ["description", "title"])
         self.assertContains(response, "Edit event details")
         self.assertNotContains(response, "Delete event")
 
@@ -635,16 +635,18 @@ class ClubEventViewTests(TestCase):
         self.assertFalse(event.title_is_custom)
         self.assertFalse(event.description_is_custom)
 
-    def test_the_reset_box_puts_the_auctions_wording_back(self):
+    def test_retyping_the_auctions_wording_in_one_field_releases_only_that_field(self):
+        """There is no reset box: retyping the generated wording is the way back, and it has to
+        leave the field the club still owns alone."""
         self.client.force_login(self.admin)
         _auction, event = self._auction_event()
         url = reverse("club_event_edit", kwargs={"slug": self.club.slug, "pk": event.pk})
+        generated_title, _generated_description = club_events.generated_wording(event)
         self.client.post(url, {"title": "April meeting", "description": "Doors at 6:30."})
 
-        # Ticked alongside a typed value, reset wins — it is the only way back.
-        self.client.post(url, {"title": "Something else", "description": "Doors at 6:30.", "reset_title": "on"})
+        self.client.post(url, {"title": generated_title, "description": "Doors at 6:30."})
         event.refresh_from_db()
-        self.assertEqual(event.title, "Auction")
+        self.assertEqual(event.title, generated_title)
         self.assertFalse(event.title_is_custom)
         self.assertTrue(event.description_is_custom)
 
@@ -891,14 +893,15 @@ class ClubEventsEmbedTests(TestCase):
         self.client.logout()
         self.assertEqual(self.client.get(integration).status_code, 403)
 
-    def test_the_snippets_offer_the_next_event_and_the_next_ten(self):
+    def test_the_snippet_is_a_script_tag_not_an_iframe(self):
+        """WordPress rewrote the inline listener's && into &#038;&#038; and killed it; a bare
+        <script src> has nothing inside it to rewrite."""
         self._events(1)
         self.client.force_login(self.admin)
         body = self.client.get(reverse("club_website_integration", kwargs={"slug": self.club.slug})).content.decode()
-        self.assertIn("count=1", body)
-        self.assertIn("count=10", body)
-        self.assertIn("iframelight", body)
-        self.assertIn("iframedark", body)
+        self.assertIn(f'&lt;script src="http://testserver{self.url}?format=js&amp;count=5', body)
+        self.assertNotIn("&lt;iframe", body)
+        self.assertNotIn('addEventListener("message"', body)
 
     def test_the_calendar_links_are_offered_as_plain_addresses(self):
         """Not an embed on purpose — a club's own site already has somewhere to put a link, and
@@ -1016,34 +1019,6 @@ class EmbedSelfSizingTests(TestCase):
         self.assertNotIn("<script src", body)
         self.assertNotIn("://fonts.", body)
 
-    def test_the_snippet_hands_over_a_listener_with_the_iframe(self):
-        self.client.force_login(self.admin)
-        body = self.client.get(reverse("club_website_integration", kwargs={"slug": self.club.slug})).content.decode()
-        self.assertIn('&lt;script&gt;addEventListener("message"', body)
-        self.assertIn("testserver", body)
-
-    def test_the_listener_checks_where_the_message_came_from(self):
-        """A club page carrying somebody else's iframe must not be resizable by it."""
-        self.client.force_login(self.admin)
-        body = self.client.get(reverse("club_website_integration", kwargs={"slug": self.club.slug})).content.decode()
-        self.assertIn("contentWindow===e.source", body)
-        self.assertIn('f[i].src.indexOf(e.origin+"/")===0', body)
-
-    def test_the_listener_names_no_host_of_its_own(self):
-        """The origin it checks comes off the iframe, so copying the snippet between hosts works.
-
-        The first version pasted this site's origin into the script.  A snippet copied from one
-        host with the iframe pointed at another -- staging to production, a club changing
-        domains -- then listened for messages that never came and silently resized nothing.
-        """
-        self.client.force_login(self.admin)
-        body = self.client.get(reverse("club_website_integration", kwargs={"slug": self.club.slug})).content.decode()
-        listeners = [line for line in body.splitlines() if 'addEventListener("message"' in line]
-        self.assertGreaterEqual(len(listeners), 2)
-        for line in listeners:
-            self.assertNotIn("testserver", line)
-            self.assertNotIn("http", line)
-
     def test_the_embed_repeats_a_height_it_has_already_sent(self):
         """A listener registered late must not leave the iframe stuck at its pasted height."""
         body = self._embed("club_announcements_embed").content.decode()
@@ -1051,6 +1026,68 @@ class EmbedSelfSizingTests(TestCase):
         self.assertIn("height === last && !force", body)
         self.assertIn('window.addEventListener("load", again)', body)
         self.assertIn("setTimeout(again, 1000)", body)
+
+
+class ScriptEmbedTests(TestCase):
+    """?format=js: a <script src> that writes plain rows into the club's page where it sits."""
+
+    def setUp(self):
+        self.client = Client()
+        self.club = Club.objects.create(name="Script Club", enable_breeder_award_program=True)
+        now = timezone.now()
+        for days, title in ((9, "Furthest"), (1, "Soonest"), (4, "Middle")):
+            ClubEvent.objects.create(club=self.club, title=title, date_start=now + datetime.timedelta(days=days))
+
+    def _get(self, name, **params):
+        return self.client.get(reverse(name, kwargs={"slug": self.club.slug}), {"format": "js", **params})
+
+    def test_it_is_javascript_that_inserts_the_rows_before_its_own_tag(self):
+        response = self._get("club_events_embed")
+        self.assertEqual(response["Content-Type"], "text/javascript; charset=utf-8")
+        self.assertEqual(response["Access-Control-Allow-Origin"], "*")
+        body = response.content.decode()
+        self.assertIn("document.currentScript", body)
+        self.assertIn('insertAdjacentHTML("beforebegin", html)', body)
+
+    def test_the_rows_are_the_unstyled_markup_soonest_first(self):
+        body = self._get("club_events_embed").content.decode()
+        self.assertIn("club-embed", body)
+        self.assertIn("club-event-title", body)
+        self.assertLess(body.index("Soonest"), body.index("Middle"))
+        self.assertLess(body.index("Middle"), body.index("Furthest"))
+
+    def test_it_honours_count(self):
+        body = self._get("club_events_embed", count=1).content.decode()
+        self.assertIn("Soonest", body)
+        self.assertNotIn("Middle", body)
+
+    def test_its_css_sets_no_font_or_colour_of_its_own(self):
+        """The rows are on the club's page now, and must read in the club's own type and theme."""
+        from auctions.views.embeds import SCRIPT_EMBED_CSS
+
+        for banned in ("font-family", "color:", "background"):
+            self.assertNotIn(banned, SCRIPT_EMBED_CSS)
+
+    def test_markup_in_a_title_cannot_break_out_of_the_string(self):
+        ClubEvent.objects.create(
+            club=self.club, title='"; alert(1); "</script>', date_start=timezone.now() + datetime.timedelta(days=2)
+        )
+        body = self._get("club_events_embed").content.decode()
+        self.assertNotIn('alert(1); "</script>', body)
+        self.assertNotIn("</script>", body)
+
+    def test_every_embed_offers_it(self):
+        for name in (
+            "club_events_embed",
+            "club_past_events_embed",
+            "club_announcements_embed",
+            "club_auction_embed",
+            "bap_embed",
+        ):
+            with self.subTest(embed=name):
+                response = self._get(name)
+                self.assertEqual(response.status_code, 200)
+                self.assertIn("insertAdjacentHTML", response.content.decode())
 
 
 class EventsEmbedUsageTrackingTests(TestCase):
@@ -1179,7 +1216,7 @@ class CustomizeEventPromptTests(TestCase):
     def test_the_banner_is_on_the_auction_page_for_an_admin(self):
         self.client.force_login(self.admin)
         response = self.client.get(reverse("auction_main", kwargs={"slug": self.auction.slug}))
-        self.assertContains(response, "website is showing this auction")
+        self.assertContains(response, "This auction has been added to your calendar")
         self.assertContains(response, "Customize this event")
         self.assertContains(response, reverse("club_event_edit", kwargs={"slug": self.club.slug, "pk": self.event.pk}))
 
@@ -1187,7 +1224,7 @@ class CustomizeEventPromptTests(TestCase):
         other = User.objects.create_user(username="pr_other", password="pw", email="pro@example.com")
         self.client.force_login(other)
         response = self.client.get(reverse("auction_main", kwargs={"slug": self.auction.slug}))
-        self.assertNotContains(response, "website is showing this auction")
+        self.assertNotContains(response, "This auction has been added to your calendar")
 
     def test_dismissing_it_sticks(self):
         self.client.force_login(self.admin)
@@ -1196,7 +1233,7 @@ class CustomizeEventPromptTests(TestCase):
         self.auction.refresh_from_db()
         self.assertTrue(self.auction.dismissed_customize_event_banner)
         self.assertIsNone(self.auction.event_needing_custom_wording)
-        self.assertNotContains(self.client.get(url), "website is showing this auction")
+        self.assertNotContains(self.client.get(url), "This auction has been added to your calendar")
 
     def test_the_customize_link_works_for_an_auction_admin_with_no_club_role(self):
         """The banner is written for the auction's creator, who often holds no club permission."""

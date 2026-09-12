@@ -2,7 +2,6 @@
 {% block title %} {{ blogpost.title }} {% endblock %}
 {% load static %}
 {% block extra_js %}
-<script type='text/javascript'>pageView();</script>
 <script>
   window.__user = {
     isAuthenticated: {{ request.user.is_authenticated|yesno:"true,false" }},

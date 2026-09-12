@@ -14,7 +14,11 @@
 {{ form.media }}
 {% include "club_ribbon.html" %}
 
+<div class="help-note">
+  <i class="bi bi-lightbulb-fill" aria-hidden="true"></i>
+  <div>This is what people see on your club&rsquo;s public page and on the club map. Membership dues, payments and emails to members are on their own pages in the menu above.</div>
+</div>
+
 {% crispy form %}
 
-<div id="modals-here"></div>
 {% endblock %}

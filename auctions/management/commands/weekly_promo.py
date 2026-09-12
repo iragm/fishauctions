@@ -34,6 +34,12 @@ class Command(BaseCommand):
 
         now = timezone.now()
         # get any users who have opted into the weekly email
+        # Both windows are deliberate, and the six days is the one that looks like a bug.
+        # Somebody who has been on the site this week already knows what auctions are running; this
+        # email exists for the people who have not been, which makes its audience the semi-lapsed by
+        # construction and makes it the site's one re-engagement channel. Confirmed 2026-09-09;
+        # USABILITY.md phase 2 builds on it. The 400 days at the other end is the point where
+        # somebody is gone rather than quiet.
         exclude_newer_than = now - datetime.timedelta(days=6)
         exclude_older_than = now - datetime.timedelta(days=400)
         in_person_auctions_cutoff = now + datetime.timedelta(days=7)

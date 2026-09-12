@@ -1681,6 +1681,9 @@ class DescribeTests(PaletteAssistTestCase):
         club = Club.objects.create(
             name="Describable Aquarium Society",
             active=True,
+            # Named rather than found by name: describe_club resolves a club nobody has joined
+            # through Club.objects.listed(), so a club that has not been approved is not describable.
+            outreach_stage=Club.LISTED,
             enable_breeder_award_program=True,
             points_per_lot=5,
             min_quantity=6,
@@ -1695,7 +1698,7 @@ class DescribeTests(PaletteAssistTestCase):
         self.assertIn(5, by_name.values())
 
     def test_describe_club_hides_member_counts_from_a_non_admin(self):
-        club = Club.objects.create(name="Private Aquarium Society", active=True)
+        club = Club.objects.create(name="Private Aquarium Society", active=True, outreach_stage=Club.LISTED)
         result = self._run("describe_club", {"club": club.name}, user=self.member)
         self.assertNotIn("_admin", result["club"])
 
@@ -3893,3 +3896,289 @@ class CheckInSkipsTheCountdownTests(PaletteAssistTestCase):
         self.assertNotEqual(data["kind"], "done", data)
         self.tos.refresh_from_db()
         self.assertIsNone(self.tos.checked_in)
+
+
+class LotNumberLookupTests(RunActionTestCase):
+    """Resolving a lot by the number printed on it, which is the number people actually say.
+
+    ``find_lot`` searched ``custom_lot_number`` and the lot's *name*, and nothing else. Standard
+    auctions number their lots in ``lot_number_int``, so in one of those no lot could be found by
+    its number at all: "63" matched nothing and "58" matched every lot whose name contained 58.
+    Every tool that resolves a lot through ``_resolve_lot`` inherited it -- edit_lot, describe_lot,
+    remove_lot, add_lot_image -- while ``add_lot`` and ``find_lot``-by-name looked fine, which is
+    what made it read as an auction-scoping bug rather than a lookup that was never performed.
+    """
+
+    def setUp(self):
+        super().setUp()
+        # The fixture's in-person auction is in seller-dash numbering, which is the one mode whose
+        # numbers this lookup *could* already find -- and is why the hole survived. Standard
+        # numbering is the default and is what nearly every auction uses.
+        self.in_person_auction.use_seller_dash_lot_numbering = False
+        self.in_person_auction.save()
+        self.in_person_lot.custom_lot_number = None
+        self.in_person_lot.save()
+        self.in_person_lot.refresh_from_db()
+        self.number = str(self.in_person_lot.lot_number_display)
+        self.assertTrue(self.number.isdigit(), "a standard auction numbers its lots in lot_number_int")
+
+    def _agent(self, action, params, user=None):
+        """As an agent sees it: no page, so nothing but the parameters can scope the lookup."""
+        return self._run(action, params, user=user, page={})
+
+    def _work_on(self, auction):
+        """What ``set_my_auction`` writes: the auction this person is working on."""
+        self.user.userdata.last_auction_used = auction
+        self.user.userdata.save()
+
+    def test_a_lot_is_found_by_the_number_on_it(self):
+        result = self._run("find_lot", {"lot": self.number, "auction": self.in_person_auction.slug})
+        self.assertTrue(result.get("found"), result)
+        self.assertEqual([row["lot_number"] for row in result["lots"]], [self.in_person_lot.lot_number_display])
+
+    def test_a_number_beats_a_lot_that_is_named_after_a_number(self):
+        """The failure that looked like ambiguity: 58 found lots *called* 58, in other auctions."""
+        decoy = Lot.objects.create(
+            lot_name=self.number,
+            auction=self.in_person_auction,
+            auctiontos_seller=self.admin_in_person_tos,
+            quantity=1,
+        )
+        result = self._run("find_lot", {"lot": self.number, "auction": self.in_person_auction.slug})
+        found = [row["lot_number"] for row in result["lots"]]
+        self.assertIn(self.in_person_lot.lot_number_display, found)
+        self.assertNotIn(decoy.lot_number_display, found)
+
+    def test_a_number_with_no_auction_means_the_auction_being_worked_on(self):
+        """Every auction has a lot 3. Searching all of them for one is six answers and no lot."""
+        elsewhere = Lot.objects.create(
+            lot_name="A lot in the other auction",
+            auction=self.online_auction,
+            auctiontos_seller=self.online_tos,
+            quantity=1,
+            lot_number_int=self.in_person_lot.lot_number_int,
+        )
+        self._work_on(self.in_person_auction)
+        result = self._agent("find_lot", {"lot": self.number})
+        self.assertTrue(result.get("found"), result)
+        self.assertEqual([row["name"] for row in result["lots"]].count(elsewhere.lot_name), 0)
+        self.assertIn(self.in_person_auction.title, result["summary"])
+
+    def test_a_lot_outside_the_current_auction_is_still_reachable_by_name(self):
+        """The current auction is a preference, not a filter: last year's lot is a fair question."""
+        self._work_on(self.in_person_auction)
+        result = self._agent("find_lot", {"lot": self.lot.lot_name})
+        self.assertTrue(result.get("found"), result)
+        self.assertIn(self.lot.lot_name, str(result["lots"]))
+
+    def test_edit_lot_reaches_the_lot_by_its_number(self):
+        result = self._agent(
+            "edit_lot",
+            {"lot": self.number, "auction": self.in_person_auction.slug, "quantity": 4},
+        )
+        self.assertTrue(result.get("ok"), result)
+        self.in_person_lot.refresh_from_db()
+        self.assertEqual(self.in_person_lot.quantity, 4)
+
+    def test_describe_lot_reaches_the_lot_by_its_number(self):
+        result = self._agent("describe_lot", {"lot": self.number, "auction": self.in_person_auction.slug})
+        self.assertTrue(result.get("found"), result)
+        self.assertEqual(result["lot"]["lot_number"], self.in_person_lot.lot_number_display)
+
+    def test_the_answer_to_a_disambiguation_question_resolves(self):
+        """The question offers a lot number, so that number has to be an answer this can take."""
+        first = Lot.objects.create(
+            lot_name="Red root floaters",
+            auction=self.in_person_auction,
+            auctiontos_seller=self.admin_in_person_tos,
+            quantity=1,
+        )
+        Lot.objects.create(
+            lot_name="Red root floaters",
+            auction=self.in_person_auction,
+            auctiontos_seller=self.admin_in_person_tos,
+            quantity=1,
+        )
+        asked = self._agent(
+            "edit_lot",
+            {"lot": "Red root floaters", "auction": self.in_person_auction.slug, "quantity": 2},
+        )
+        self.assertIn("more_info_needed", asked)
+        values = [option["value"] for option in asked["options"]]
+        self.assertIn(first.lot_number_display, values)
+        answered = self._agent(
+            "edit_lot",
+            {"lot": str(values[0]), "auction": self.in_person_auction.slug, "quantity": 2},
+        )
+        self.assertTrue(answered.get("ok"), answered)
+
+    def test_a_question_spanning_auctions_says_to_send_the_auction_too(self):
+        """A lot number alone cannot answer it, so the question must not pretend it can.
+
+        Reached only once there is no current auction to prefer -- which is the state the widened
+        search exists for, and the only state in which candidates can come from two auctions.
+        """
+        Lot.objects.create(
+            lot_name="Amazon frogbit",
+            auction=self.in_person_auction,
+            auctiontos_seller=self.admin_in_person_tos,
+            quantity=1,
+        )
+        Lot.objects.create(
+            lot_name="Amazon frogbit",
+            auction=self.online_auction,
+            auctiontos_seller=self.online_tos,
+            quantity=1,
+        )
+        long_ago = timezone.now() - datetime.timedelta(days=400)
+        for auction in (self.in_person_auction, self.online_auction):
+            auction.date_start = long_ago
+            auction.date_end = long_ago + datetime.timedelta(hours=1)
+            auction.lot_submission_end_date = long_ago
+            auction.date_online_bidding_end = None
+            auction.save()
+        self.user.userdata.last_auction_used = None
+        self.user.userdata.save()
+        asked = self._agent("edit_lot", {"lot": "Amazon frogbit", "quantity": 2})
+        self.assertIn("more_info_needed", asked)
+        self.assertIn("auction", asked["more_info_needed"])
+        self.assertIn(self.online_auction.title, str(asked["options"]))
+        self.assertIn(self.in_person_auction.title, str(asked["options"]))
+
+    def test_a_number_too_big_for_the_column_is_a_miss_not_a_crash(self):
+        result = self._run("find_lot", {"lot": "9" * 30, "auction": self.in_person_auction.slug})
+        self.assertFalse(result.get("found"), result)
+
+    def test_a_seller_dash_number_still_resolves(self):
+        """The one numbering mode that always worked has to go on working."""
+        self.in_person_auction.use_seller_dash_lot_numbering = True
+        self.in_person_auction.save()
+        dashed = Lot.objects.create(
+            lot_name="A dash-numbered lot",
+            auction=self.in_person_auction,
+            auctiontos_seller=self.admin_in_person_tos,
+            quantity=1,
+            custom_lot_number="101-7",
+        )
+        result = self._run("find_lot", {"lot": "101-7", "auction": self.in_person_auction.slug})
+        self.assertTrue(result.get("found"), result)
+        self.assertEqual([row["lot_number"] for row in result["lots"]], [dashed.lot_number_display])
+
+
+class WorkingAuctionTests(RunActionTestCase):
+    """``set_my_auction`` has to still be true on the next call, and it wasn't.
+
+    ``resolve_auction`` ranked ``last_auction_used`` *below* ``live_auctions``, and consulted it
+    only as a tie-break between several live auctions -- so when exactly one auction came out of
+    that funnel it was returned without the column ever being read. ``live_auctions`` takes the
+    twenty-eight oldest auctions inside a 120-day window and filters them down to seven, so the
+    auction somebody had just named could easily not be in it. The tool said "ok" and the next
+    command acted on a different auction, which is what add_lot's "you can't add lots until you
+    join this auction" was about.
+    """
+
+    def _agent(self, action, params=None, user=None):
+        """As an agent sees it: no page, so nothing but the stored pointer can scope the call."""
+        return self._run(action, params or {}, user=user, page={})
+
+    def _outside_the_live_window(self, auction):
+        """Active -- lot submission open -- but too old for ``live_auctions`` to list it.
+
+        The shape of the real failure: ``live_auctions`` filters on ``date_start``, so an auction
+        whose event has passed while its submission or pickup window is still open is not "running"
+        by that measure and is not in the list, however much work is still being done on it.
+        """
+        long_ago = timezone.now() - datetime.timedelta(days=palette_actions.RECENT_AUCTION_DAYS + 10)
+        auction.date_start = long_ago
+        auction.date_end = long_ago + datetime.timedelta(hours=1)
+        auction.lot_submission_start_date = long_ago - datetime.timedelta(days=1)
+        auction.lot_submission_end_date = timezone.now() + datetime.timedelta(days=1)
+        auction.save()
+        self.assertFalse(auction.pretty_much_over)
+        self.assertNotIn(auction.pk, [one.pk for one in palette_actions.live_auctions(self.user)])
+
+    def _make_it_live(self, auction):
+        auction.date_start = timezone.now() + datetime.timedelta(days=3)
+        auction.date_end = timezone.now() + datetime.timedelta(days=5)
+        auction.save()
+
+    def _wind_down(self, auction):
+        """Push every date ``pretty_much_over`` reads well into the past."""
+        long_ago = timezone.now() - datetime.timedelta(days=400)
+        auction.date_start = long_ago
+        auction.date_end = long_ago + datetime.timedelta(hours=1)
+        auction.lot_submission_start_date = long_ago - datetime.timedelta(days=1)
+        auction.lot_submission_end_date = long_ago
+        auction.date_online_bidding_end = None
+        auction.save()
+
+    def test_the_auction_being_worked_on_beats_one_that_is_running(self):
+        """The regression: the named auction is not in ``live``, another one is, and it lost."""
+        self._agent("set_my_auction", {"auction": self.in_person_auction.slug})
+        self._outside_the_live_window(self.in_person_auction)
+        self._make_it_live(self.online_auction)
+        auction, problem = palette_actions.resolve_auction(self.user)
+        self.assertIsNone(problem)
+        self.assertEqual(auction.pk, self.in_person_auction.pk)
+
+    def test_a_later_command_that_names_no_auction_lands_in_it(self):
+        self._agent("set_my_auction", {"auction": self.in_person_auction.slug})
+        self._make_it_live(self.online_auction)
+        result = self._agent("add_lot", {"name": "Worked-on shrimp"})
+        self.assertTrue(result.get("ok"), result)
+        self.assertEqual(result["auction"], self.in_person_auction.slug)
+
+    def test_it_still_wins_when_several_auctions_are_running(self):
+        """This case worked before, through the tie-break the branch above now makes redundant."""
+        self._make_it_live(self.online_auction)
+        self._make_it_live(self.in_person_auction)
+        self._agent("set_my_auction", {"auction": self.online_auction.slug})
+        auction, _problem = palette_actions.resolve_auction(self.user)
+        self.assertEqual(auction.pk, self.online_auction.pk)
+
+    def test_once_it_is_over_it_stops_winning(self):
+        """The whole reason this used to sit below ``live_auctions``: last season's auction."""
+        self._agent("set_my_auction", {"auction": self.in_person_auction.slug})
+        self._wind_down(self.in_person_auction)
+        self._make_it_live(self.online_auction)
+        auction, _problem = palette_actions.resolve_auction(self.user)
+        self.assertEqual(auction.pk, self.online_auction.pk)
+
+    def test_an_auction_that_is_over_is_still_the_last_resort(self):
+        """Invoices and labels outlive the auction, so the pointer is read again without the guard."""
+        self._agent("set_my_auction", {"auction": self.in_person_auction.slug})
+        self._wind_down(self.in_person_auction)
+        self._wind_down(self.online_auction)
+        auction, problem = palette_actions.resolve_auction(self.user)
+        self.assertIsNone(problem)
+        self.assertEqual(auction.pk, self.in_person_auction.pk)
+
+    def test_set_my_auction_with_no_name_still_means_whatever_is_running(self):
+        """Otherwise the tool answers with the value it is replacing, and can never be moved."""
+        self._agent("set_my_auction", {"auction": self.in_person_auction.slug})
+        self._outside_the_live_window(self.in_person_auction)
+        self.online_auction.date_start = timezone.now() - datetime.timedelta(hours=1)
+        self.online_auction.date_end = timezone.now() + datetime.timedelta(days=2)
+        self.online_auction.save()
+        result = self._agent("set_my_auction", {})
+        self.assertEqual(result.get("slug"), self.online_auction.slug, result)
+
+    def test_an_auction_the_user_has_lost_access_to_is_not_returned(self):
+        """The pointer outlives the relationship, so it is re-scoped rather than trusted."""
+        self.userB.userdata.last_auction_used = self.in_person_auction
+        self.userB.userdata.save()
+        auction, problem = palette_actions.resolve_auction(self.userB)
+        self.assertNotEqual(getattr(auction, "pk", None), self.in_person_auction.pk)
+        self.assertTrue(auction or problem)
+
+    def test_my_context_says_it_is_the_one_tools_will_act_on(self):
+        self._agent("set_my_auction", {"auction": self.in_person_auction.slug})
+        note = self._agent("my_context")["last_auction"]["note"]
+        self.assertIn("working on", note)
+        self.assertNotIn("no longer", note)
+
+    def test_my_context_says_so_when_it_is_over_instead(self):
+        self._agent("set_my_auction", {"auction": self.in_person_auction.slug})
+        self._wind_down(self.in_person_auction)
+        note = self._agent("my_context")["last_auction"]["note"]
+        self.assertIn("no longer", note)

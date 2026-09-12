@@ -44,6 +44,7 @@ from django.views.generic.edit import (
 )
 from webpush.models import PushInformation
 
+from auctions.form_friction import FormFrictionMixin
 from auctions.forms import (
     IMAGE_PROCESSING_EXCEPTIONS,
     CreateImageForm,
@@ -68,6 +69,8 @@ from auctions.models import (
 from auctions.notifications import user_has_app_push
 from auctions.services import (
     copy_lot_images,
+    missing_contact_info,
+    readable_list,
     user_can_clone_lot,
 )
 from auctions.species_matching import record_choice as record_species_choice
@@ -428,6 +431,10 @@ class ViewLot(DetailView):
         context = super().get_context_data(**kwargs)
         context["domain"] = Site.objects.get_current().domain
         context["is_auction_admin"] = False
+        context["page_view_lot"] = lot.pk
+        # Sending the auction as well as the lot is what lets a reader of this data match an
+        # auction on one indexed column; see base_page_view.html.
+        context["page_view_auction"] = lot.auction_id
         if lot.auction:
             context["auction"] = lot.auction
             context["is_auction_admin"] = lot.auction.permission_check(self.request.user)
@@ -505,7 +512,14 @@ class ViewLot(DetailView):
         context["viewer_pk"] = self.request.user.pk
         context["submitter_pk"] = getattr(lot.user, "pk", 0)
         context["user_specific_bidding_error"] = False
+        # The other reasons this dialog carries -- your own lot, you haven't joined, you aren't
+        # checked in, you need approval -- are refusals, and look like refusals. "You are not signed
+        # in yet" is not one, so it does not get the red title and the exclamation icon. Only an
+        # anonymous visitor can reach that branch (the ones below all need a pk), so this flag
+        # cannot go stale against the message beside it.
+        context["bidding_error_is_sign_in"] = False
         if not self.request.user.is_authenticated:
+            context["bidding_error_is_sign_in"] = True
             context["user_specific_bidding_error"] = format_html(
                 "You have to <a href='/login/?next={}'>sign in</a> to place bids.", lot.lot_link
             )
@@ -856,10 +870,11 @@ class LotValidation(LoginRequiredMixin):
     auction = None  # used for specifying which auction via GET param
 
     def dispatch(self, request, *args, **kwargs):
-        # if the user hasn't filled out their address, redirect:
-        userData = request.user.userdata
-        if not userData.address or not request.user.first_name or not request.user.last_name:
-            messages.error(self.request, "Please fill out your contact info before creating a lot")
+        # Somewhere to send the cheque.  No phone number: a seller is reached through the auction,
+        # and ``services.missing_contact_info`` is where the two gates differ on that.
+        missing = missing_contact_info(request.user)
+        if missing:
+            messages.error(self.request, f"Please add your {readable_list(missing)} before creating a lot")
             return redirect(f"{reverse('contact_info')}?{urlencode({'next': request.get_full_path()})}")
         return super().dispatch(request, *args, **kwargs)
 
@@ -979,7 +994,11 @@ class LotValidation(LoginRequiredMixin):
         # lot, and that is evidence worth keeping.  See species_matching.record_choice.
         if lot.auction and lot.auction.use_scientific_name and lot.lot_name:
             record_species_choice(
-                lot.lot_name, lot.species, first_save=lot_is_new, changed="species" in form.changed_data
+                lot.lot_name,
+                lot.species,
+                first_save=lot_is_new,
+                changed="species" in form.changed_data,
+                user=self.request.user,
             )
         return super().form_valid(form)
 
@@ -992,7 +1011,7 @@ class LotValidation(LoginRequiredMixin):
         return kwargs
 
 
-class LotCreateView(LotValidation, CreateView):
+class LotCreateView(FormFrictionMixin, LotValidation, CreateView):
     """
     Creating a new lot
     """
@@ -1124,7 +1143,7 @@ class LotCreateView(LotValidation, CreateView):
         return super().dispatch(request, *args, **kwargs)
 
 
-class LotUpdate(LotValidation, UpdateView):
+class LotUpdate(FormFrictionMixin, LotValidation, UpdateView):
     """
     Changing an existing lot
     This is almost identical to the create view, but needs to verify permissions to edit the lot
@@ -1435,7 +1454,7 @@ class LotAdmin(LoginRequiredMixin, TemplateView, FormMixin, AuctionViewMixin):
                 # there is of whatever the matcher remembered for this name.  Never an *accept*:
                 # this form is only ever a later edit, and re-saving a lot to set its winner is
                 # not somebody confirming the species.  See species_matching.record_choice.
-                record_species_choice(obj.lot_name, species, first_save=False, changed=True)
+                record_species_choice(obj.lot_name, species, first_save=False, changed=True, user=self.request.user)
             if species_changed and species and obj.lot_name:
                 remember_species(obj.lot_name, species, source="user", user=self.request.user)
             # add message if the winner changed

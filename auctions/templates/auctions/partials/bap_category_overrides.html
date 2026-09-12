@@ -20,8 +20,8 @@
         <td>
           <form method="post" action="{% url 'club_bap_category_override_delete' slug=club.slug pk=override.pk %}" style="display:inline">
             {% csrf_token %}
-            <button type="submit" class="btn btn-sm btn-danger py-0 px-1">
-              <i class="bi bi-x-lg"></i>
+            <button type="submit" class="btn btn-sm btn-danger py-0 px-1" aria-label="Remove the override for {{ override.category.name }}">
+              <i class="bi bi-x-lg" aria-hidden="true"></i>
             </button>
           </form>
         </td>

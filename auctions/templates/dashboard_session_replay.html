@@ -1,0 +1,90 @@
+{% extends "base.html" %}
+{% block title %}Session replay{% endblock %}
+{% block content %}
+<h3>Session replay</h3>
+<div class="help-note">
+  <i class="bi bi-lightbulb-fill" aria-hidden="true"></i>
+  <div>One person's pages, in the order they opened them, with the gaps. Built entirely out of
+  <code>PageView</code> rows that go back to 2020 &mdash; nothing new is recorded to make this
+  work. With dozens of active organizers there is no split of anything that could ever reach
+  significance, so twenty real sessions read end to end are the instrument.</div>
+</div>
+
+<form method="get" class="row g-2 align-items-end mb-3">
+  <div class="col-auto">
+    <label class="form-label" for="session">Session key</label>
+    <input class="form-control form-control-sm" type="text" name="session" id="session" value="{{ session_id }}">
+  </div>
+  <div class="col-auto">
+    <label class="form-label" for="user">or user id</label>
+    <input class="form-control form-control-sm" type="number" name="user" id="user" value="{{ subject.pk|default:'' }}">
+  </div>
+  <div class="col-auto"><button type="submit" class="btn btn-sm btn-primary">Read it</button></div>
+</form>
+
+{% if subject %}
+<p>
+  <strong>{{ subject }}</strong>&rsquo;s signed-in pages{% if stitched %}, and the anonymous pages
+  from {{ stitched|length }} session(s) they were holding when they signed in{% endif %}.
+</p>
+{% if not stitched %}
+<p class="text-muted small">
+  No sign-in stitch for this person, so nothing they did before making an account is here. That is
+  a limit of the data, not evidence that they arrived cold: a stitch cannot be reconstructed
+  backwards{% if stitching_began %}, and none exist before {{ stitching_began|date:"j M Y" }}{% endif %}.
+</p>
+{% endif %}
+{% elif session_id %}
+<p><strong>Anonymous session</strong> <code>{{ session_id }}</code>.</p>
+{% endif %}
+
+{% if timeline %}
+<p class="text-muted small">
+  A shaded row is a gap of {{ visit_gap_minutes }} minutes or more &mdash; the same session, but a
+  different sitting.
+</p>
+<div class="table-responsive">
+  <table class="table table-sm">
+    <thead>
+      <tr><th>When</th><th>Gap</th><th>Page</th><th>Route</th><th>Auction</th><th>Referrer</th></tr>
+    </thead>
+    <tbody>
+      {% for step in timeline %}
+      <tr{% if step.new_visit %} class="table-active"{% endif %}>
+        <td class="text-muted small">{{ step.view.date_start|date:"j M Y H:i" }}</td>
+        <td class="text-muted small">{% if step.gap %}{{ step.gap }}{% else %}&mdash;{% endif %}</td>
+        <td><code>{{ step.view.url }}</code></td>
+        <td class="text-muted small">{{ step.route }}</td>
+        <td class="text-muted small">{% if step.view.auction %}{{ step.view.auction }}{% elif step.view.lot_number %}{{ step.view.lot_number.auction }}{% else %}&mdash;{% endif %}</td>
+        <td class="text-muted small">{{ step.view.referrer|default:"&mdash;" }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% elif session_id or subject %}
+<p class="text-muted">No page views for that {% if subject %}person{% else %}session{% endif %}.</p>
+{% else %}
+<h4 class="mt-4">Busiest sessions</h4>
+<p class="text-muted small">
+  Somewhere to start. These are the sessions with the most pages in them, which is not the same as
+  the most interesting &mdash; the ones worth reading are usually short and end somewhere odd.
+</p>
+<div class="table-responsive">
+  <table class="table table-sm">
+    <thead><tr><th>Who</th><th class="text-end">Pages</th><th></th></tr></thead>
+    <tbody>
+      {% for row in recent %}
+      <tr>
+        <td>{% if row.user_id %}user {{ row.user_id }}{% else %}<code>{{ row.session_id }}</code>{% endif %}</td>
+        <td class="text-end">{{ row.pages }}</td>
+        <td>{% if row.user_id %}<a href="?user={{ row.user_id }}">Read it</a>{% else %}<a href="?session={{ row.session_id }}">Read it</a>{% endif %}</td>
+      </tr>
+      {% empty %}
+      <tr><td colspan="3" class="text-muted">No page views recorded yet.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+{% endblock %}

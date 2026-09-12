@@ -1,6 +1,7 @@
 from django.core.management.base import BaseCommand, CommandError
 
-from auctions.models import Auction, Club, ClubHistory, ClubMember
+from auctions.models import Auction, Club
+from auctions.services import link_auction_to_club
 
 
 class Command(BaseCommand):
@@ -73,19 +74,11 @@ class Command(BaseCommand):
         assigned = 0
         admins_granted = 0
         for auction in auctions:
-            auction.club = club
-            # save() books the club ledger for already-settled invoices when a club is first attached.
-            auction.save(update_fields=["club"])
-            auction.create_history(
-                applies_to="RULES",
-                action=f"Assigned to club '{club}' via assign_auction_to_club management command.",
-                user=None,
-            )
-            assigned += 1
-
-            creator = auction.created_by
-            if creator and self._ensure_club_admin(club, creator):
+            # Shared with the GUI on /admin-unlinked-auctions/, which does the same job for the
+            # same backlog; see services.link_auction_to_club.
+            if link_auction_to_club(auction, club, note="via the assign_auction_to_club command"):
                 admins_granted += 1
+            assigned += 1
 
         self.stdout.write(
             self.style.SUCCESS(
@@ -104,24 +97,3 @@ class Command(BaseCommand):
             creator = auction.created_by
             creator_label = creator.username if creator else "(no creator)"
             self.stdout.write(f"  - {auction.title} (id={auction.pk}) — creator: {creator_label}")
-
-    def _ensure_club_admin(self, club, user):
-        """Make `user` an admin of `club`. Returns True if admin was newly granted."""
-        member = ClubMember.objects.filter(club=club, user=user, is_deleted=False).first()
-        if member and member.permission_admin:
-            return False
-        if not member:
-            member = ClubMember(club=club, user=user, source="manually_added")
-        # Populate contact fields from the user account without overwriting anything already set.
-        member.name = member.name or user.get_full_name() or user.username
-        if not member.email:
-            member.email = user.email or None
-        member.permission_admin = True
-        member.save()
-        ClubHistory.objects.create(
-            club=club,
-            user=None,
-            action=f"Granted admin permissions to {member.name} via assign_auction_to_club management command.",
-            applies_to="MEMBERS",
-        )
-        return True

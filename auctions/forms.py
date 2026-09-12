@@ -61,6 +61,7 @@ from django_summernote.widgets import SummernoteWidget
 from easy_thumbnails.exceptions import EasyThumbnailsError
 from PIL import Image, ImageFile, ImageOps, UnidentifiedImageError
 
+from . import auction_form_layout
 from .helper_functions import get_currency_symbol
 from .html_sanitize import sanitize_summernote_html
 from .models import (
@@ -2372,9 +2373,10 @@ class CreateImageForm(forms.ModelForm):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.fields[
-            "image"
-        ].help_text = "Select an image to upload, or paste one from your clipboard (Ctrl+V) anywhere on this page"
+        self.fields["image"].help_text = (
+            "Select an image to upload, or paste one from your clipboard (Ctrl+V) anywhere on this "
+            "page.  Only upload photos you took yourself, or that you have permission to use."
+        )
         # Marking the input as image-only lets the native app's WebView file chooser offer the camera
         # (many WebViews only surface "Take photo" when accept is set to an image type). We deliberately
         # do NOT set `capture`, so picking from the photo library stays available too.
@@ -2800,301 +2802,28 @@ class AuctionEditForm(forms.ModelForm):
             currency = "USD"
         currency_symbol = get_currency_symbol(currency)
 
-        def slot(field_name, visible_element):
-            """Place a field in its grid column when visible, but render just the
-            bare hidden input (no empty column) when its widget has been switched
-            to HiddenInput above. This keeps the value in the POST without leaving
-            a blank cell in the row. See auction_edit_form.html for the JS-toggled
-            fields, which collapse their own column via toggleCol()."""
-            if isinstance(self.fields[field_name].widget, forms.HiddenInput):
-                return field_name
-            return visible_element
+        self.helper = auction_form_layout.build_layout(self, currency_symbol)
 
-        self.helper = FormHelper()
-        self.helper.form_method = "post"
-        self.helper.form_id = "auction-form"
-        self.helper.form_class = "form"
-        self.helper.form_tag = True
-        self.helper.layout = Layout(
-            "summernote_description",
-            HTML("<h4>Dates</h4>"),
-            Div(
-                Div(
-                    "lot_submission_start_date",
-                    css_class="col-md-3",
-                ),
-                Div(
-                    "lot_submission_end_date",
-                    css_class="col-md-3",
-                ),
-                Div(
-                    "date_start",
-                    css_class="col-md-3",
-                    label="Bidding opens",
-                ),
-                slot(
-                    "date_end",
-                    Div(
-                        "date_end",
-                        css_class="col-md-3",
-                    ),
-                ),
-                css_class="row",
-            ),
-            HTML("<h4>Lot fees</h4>"),
-            Div(
-                slot(
-                    "unsold_lot_fee",
-                    PrependedAppendedText(
-                        "unsold_lot_fee",
-                        currency_symbol,
-                        ".00",
-                        wrapper_class="col-lg-3",
-                    ),
-                ),
-                PrependedAppendedText(
-                    "lot_entry_fee",
-                    currency_symbol,
-                    ".00",
-                    wrapper_class="col-lg-3",
-                ),
-                PrependedAppendedText(
-                    "registration_fee",
-                    currency_symbol,
-                    ".00",
-                    wrapper_class="col-lg-3",
-                ),
-                PrependedAppendedText(
-                    "winning_bid_percent_to_club",
-                    "",
-                    "%",
-                    wrapper_class="col-lg-3",
-                ),
-                PrependedAppendedText(
-                    "user_cut",
-                    "",
-                    "%",
-                    wrapper_class="col-lg-3",
-                ),
-                PrependedAppendedText(
-                    "force_donation_threshold",
-                    currency_symbol,
-                    ".00",
-                    wrapper_class="col-lg-3",
-                ),
-                css_class="row",
-            ),
-            HTML("<h4>Lot fee discounts</h4>"),
-            Div(
-                Div(
-                    "alternate_split_mode",
-                    css_class="col-lg-3",
-                ),
-                Div(
-                    "alternative_split_label",
-                    css_class="col-lg-9",
-                ),
-                css_class="row",
-            ),
-            Div(
-                slot(
-                    "pre_register_lot_discount_percent",
-                    PrependedAppendedText(
-                        "pre_register_lot_discount_percent",
-                        "",
-                        "%",
-                        wrapper_class="col-lg-3",
-                    ),
-                ),
-                PrependedAppendedText(
-                    "lot_entry_fee_for_club_members",
-                    currency_symbol,
-                    ".00",
-                    wrapper_class="col-lg-3",
-                ),
-                PrependedAppendedText(
-                    "registration_fee_for_club_members",
-                    currency_symbol,
-                    ".00",
-                    wrapper_class="col-lg-3",
-                ),
-                PrependedAppendedText(
-                    "winning_bid_percent_to_club_for_club_members",
-                    "",
-                    "%",
-                    wrapper_class="col-lg-3",
-                ),
-                PrependedAppendedText(
-                    "club_member_cut",
-                    "",
-                    "%",
-                    wrapper_class="col-lg-3",
-                ),
-                css_class="row",
-            ),
-            HTML("<h4>Lot permissions</h4>"),
-            Div(
-                slot(
-                    "online_bidding",
-                    Div(
-                        "online_bidding",
-                        css_class="col-md-3",
-                    ),
-                ),
-                slot(
-                    "date_online_bidding_starts",
-                    Div(
-                        "date_online_bidding_starts",
-                        css_class="col-md-3",
-                    ),
-                ),
-                slot(
-                    "date_online_bidding_ends",
-                    Div(
-                        "date_online_bidding_ends",
-                        css_class="col-md-3",
-                    ),
-                ),
-                Div(
-                    "allow_deleting_bids",
-                    css_class="col-md-3",
-                ),
-                css_class="row",
-            ),
-            Div(
-                Div(
-                    "max_lots_per_user",
-                    css_class="col-md-4",
-                ),
-                Div(
-                    "allow_additional_lots_as_donation",
-                    css_class="col-md-4",
-                ),
-                Div(
-                    "only_approved_sellers",
-                    css_class="col-md-4",
-                ),
-                Div(
-                    "only_approved_bidders",
-                    css_class="col-md-4",
-                ),
-                slot(
-                    "copy_users_when_copying_this_auction",
-                    Div(
-                        "copy_users_when_copying_this_auction",
-                        css_class="col-md-4",
-                    ),
-                ),
-                Div(
-                    "use_seller_dash_lot_numbering",
-                    css_class="col-md-4",
-                ),
-                css_class="row",
-            ),
-            HTML("<h4>Club</h4>"),
-            Div(
-                slot(
-                    "club",
-                    Div(
-                        "club",
-                        css_class="col-md-6",
-                    ),
-                ),
-                Div(
-                    "manage_users_through_club",
-                    css_class="col-md-6",
-                ),
-                # Only applies to check-in mode; shown/hidden by update_club_fields() in
-                # auction_edit_form.html as the mode select changes.
-                Div(
-                    "allow_self_checkin",
-                    css_class="col-md-6",
-                ),
-                PrependedAppendedText(
-                    "club_member_discount",
-                    currency_symbol,
-                    ".00",
-                    wrapper_class="col-md-6",
-                ),
-                css_class="row",
-            ),
-            HTML("<h4>General</h4>"),
-            Div(
-                Div(
-                    "require_phone_number",
-                    css_class="col-md-3",
-                ),
-                Div(
-                    "email_users_when_invoices_ready",
-                    css_class="col-md-3",
-                ),
-                slot(
-                    "add_membership_fee_to_invoices_for_expired_members",
-                    Div(
-                        "add_membership_fee_to_invoices_for_expired_members",
-                        css_class="col-md-3",
-                    ),
-                ),
-                slot(
-                    "enable_online_payments",
-                    Div(
-                        "enable_online_payments",
-                        css_class="col-md-3",
-                    ),
-                ),
-                slot(
-                    "enable_square_payments",
-                    Div(
-                        "enable_square_payments",
-                        css_class="col-md-3",
-                    ),
-                ),
-                Div(
-                    "invoice_payment_instructions",
-                    css_class="col-md-6",
-                ),
-                Div(
-                    "invoice_rounding",
-                    css_class="col-md-3",
-                ),
-                Div(
-                    "only_whole_dollar_bids",
-                    css_class="col-md-3",
-                ),
-                Div(
-                    "minimum_bid",
-                    css_class="col-md-3",
-                ),
-                # Div(
-                #     "advanced_lot_adding",
-                #     css_class="col-md-3",
-                # ),
-                Div(
-                    "auto_add_images",
-                    css_class="col-md-3",
-                ),
-                slot(
-                    "message_users_when_lots_sell",
-                    Div(
-                        "message_users_when_lots_sell",
-                        css_class="col-md-3",
-                    ),
-                ),
-                # Div('set_lot_winners_url', css_class='col-md-3',),
-                PrependedAppendedText(
-                    "tax",
-                    "",
-                    "%",
-                    wrapper_class="col-md-3",
-                ),
-                Div(
-                    "promote_this_auction",
-                    css_class="col-md-3",
-                ),
-                css_class="row",
-            ),
-            Submit("submit", "Save", css_class="create-update-auction btn-success"),
-        )
+    @property
+    def advanced_fields(self):
+        """The fields the layout puts behind the Advanced disclosure."""
+        return [name for name in self.fields if name not in auction_form_layout.ESSENTIAL_FIELDS]
+
+    @property
+    def advanced_open(self):
+        """Whether the Advanced section renders already open. See auctions/auction_form_layout.py.
+
+        Read from the template at render time, not built into the layout, because two of the three
+        answers are not known when __init__ runs.
+        """
+        advanced = self.advanced_fields
+        if any(name in advanced for name in self.errors):
+            return True
+        if auction_form_layout.advanced_fields_in_use(self.instance, advanced):
+            return True
+        # An organizer on their third auction knows what is down there and goes looking for it.
+        user = self.user or getattr(self.instance, "created_by", None)
+        return bool(user and hasattr(user, "userdata") and user.userdata.is_experienced)
 
     def clean(self):
         cleaned_data = super().clean()
@@ -3357,7 +3086,14 @@ class AuctionEditForm(forms.ModelForm):
                 lot_changed = False
                 for field_name in ("reserve_price", "buy_now_price", "winning_price"):
                     value = getattr(lot, field_name)
-                    if value is not None and value != value.to_integral_value():
+                    if value is None:
+                        continue
+                    # A price whose column never got migration 0227's DECIMAL type reads back as
+                    # an int, whatever the field says; migration 0437 repairs the column, and an
+                    # int is a whole number of dollars already.
+                    if not isinstance(value, Decimal):
+                        value = Decimal(str(value))
+                    if value != value.to_integral_value():
                         setattr(lot, field_name, round_to_whole_dollar(value))
                         lot_changed = True
                 if lot_changed:
@@ -4107,6 +3843,11 @@ class UserLocation(forms.ModelForm):
         )
 
     def __init__(self, *args, **kwargs):
+        # Set by the gate on creating an auction, which refuses a blank phone number where the one
+        # on adding a lot does not: an organizer is somebody their participants have to be able to
+        # reach.  Required here as well as there, or saving the page sends them straight back to
+        # the gate that sent them.  See ``services.missing_contact_info``.
+        self.require_phone = kwargs.pop("require_phone", False)
         super().__init__(*args, **kwargs)
         self.fields["address"].widget = forms.Textarea()
         self.fields["address"].widget.attrs = {"rows": 3}
@@ -4115,6 +3856,9 @@ class UserLocation(forms.ModelForm):
             "location"
         ].help_text = "Optional. You'll be notified about new lots that can ship to this location."
         self.fields["phone_number"].help_text = "Optional"
+        if self.require_phone:
+            self.fields["phone_number"].required = True
+            self.fields["phone_number"].help_text = "Needed before you can create an auction"
         self.helper = FormHelper()
         self.helper.form_method = "post"
         self.helper.form_id = "user-form"
@@ -4205,6 +3949,16 @@ class DisabledOptionSelect(forms.Select):
 
     The options are still shown (so the user can see the choice exists) but can't be picked. Used for
     print methods that only work in the native app when the page is viewed on the web.
+
+    **The option that is currently selected is never disabled**, whatever ``disabled_values`` says.
+    That is not a nicety: HTML's form-submission algorithm appends an entry for a ``<select>``'s
+    selected option *only if that option is not disabled*, so a field whose stored value is one of
+    the disabled ones submits **nothing at all**. On a required field that is a validation error the
+    user cannot see the cause of ("this field is required" on a dropdown that is plainly showing a
+    value), and re-rendering the page then leaves no option selected -- so the browser shows the
+    first one instead, and the second attempt "works" by silently overwriting the setting the user
+    never touched. Leaving the selected option enabled keeps the value round-tripping; it still
+    can't be *chosen* here, because it is only ever enabled when it is already the answer.
     """
 
     def __init__(self, *args, disabled_values=(), **kwargs):
@@ -4213,7 +3967,7 @@ class DisabledOptionSelect(forms.Select):
 
     def create_option(self, name, value, *args, **kwargs):
         option = super().create_option(name, value, *args, **kwargs)
-        if str(option["value"]) in self.disabled_values:
+        if str(option["value"]) in self.disabled_values and not option["selected"]:
             option["attrs"]["disabled"] = True
         return option
 
@@ -4247,6 +4001,13 @@ class UserLabelPrefsForm(forms.ModelForm):
                     "System printer and Bluetooth printing only work in the app. "
                     "Only PDF labels are available from the web."
                 )
+                # Belt and braces for the same problem the widget fixes: a POST that carries no
+                # print_method at all must leave the stored one alone rather than fail validation.
+                # Anything that can produce that -- an older cached page rendered before the widget
+                # fix, a browser that drops the value for its own reasons, a script posting only the
+                # fields it means to change -- would otherwise put a required-field error on a
+                # dropdown the user never touched. See clean_print_method.
+                self.fields["print_method"].required = False
             print_method_layout = [
                 Div(
                     Div("print_method", css_class="col-sm-7"),
@@ -4362,6 +4123,18 @@ class UserLabelPrefsForm(forms.ModelForm):
             ),
             Submit("submit", "Save", css_class="btn-success"),
         )
+
+    def clean_print_method(self):
+        """An omitted print method means "leave it as it is", never "set it to blank".
+
+        The field is only optional on the web (see ``__init__``), where the app-only methods can't
+        be chosen anyway. Falling back to the instance keeps a Bluetooth user's setting through a
+        save made from a computer -- which is the whole point of showing them the value at all.
+        """
+        method = self.cleaned_data.get("print_method")
+        if not method:
+            return self.instance.print_method or "pdf"
+        return method
 
 
 class ChangeUserPreferencesForm(forms.ModelForm):
@@ -4642,7 +4415,8 @@ class LabelPrintFieldsForm(forms.Form):
         self.available_fields = [
             # if updating this:
             # also update models.Auction.label_print_fields if a new field should be enabled by default
-            # update views.LotLabelView.get_context_data and put the field in either the first or second column
+            # a short one-line fact goes in printing.LABEL_TAG_FIELDS; anything else needs a band in
+            # label_template.html -- the layout rules are in auctions/printing.py's docstring
             {
                 "value": "qr_code",
                 "description": "QR Code",
@@ -4797,12 +4571,9 @@ class ClubEventForm(forms.ModelForm):
     members reading on their phone — but the dates, the location and whether the event exists at
     all belong to the auction, and an event whose date disagrees with its auction is worse than no
     feature at all. Typing either field sets the matching ``*_is_custom`` flag, which is what stops
-    ``club_events.sync_one_auction_event`` writing over it on the auction's next save; the reset
-    box clears the flag and puts the generated wording straight back.
+    ``club_events.sync_one_auction_event`` writing over it on the auction's next save; typing the
+    generated wording back in clears the flag again.
     """
-
-    reset_title = forms.BooleanField(required=False, label="Use the auction's title instead")
-    reset_description = forms.BooleanField(required=False, label="Use the auction's description instead")
 
     class Meta:
         model = ClubEvent
@@ -4859,8 +4630,6 @@ class ClubEventForm(forms.ModelForm):
                 layout_fields.append("cancelled")
             else:
                 del self.fields["cancelled"]
-            del self.fields["reset_title"]
-            del self.fields["reset_description"]
         self.helper.layout = Layout(*layout_fields)
         self.helper.add_input(Submit("submit", "Save event", css_class="btn-primary"))
 
@@ -4874,13 +4643,11 @@ class ClubEventForm(forms.ModelForm):
         title_field.help_text = (
             f"What members see on their calendar. The auction's own title is “{self.generated_title}”."
         )
-        self.fields["description"].help_text = (
-            "The details that change from one meeting to the next — doors at 6:30, bring a dish, "
-            f"who's speaking. Replaces “{self.generated_description}”."
+        desc_field = self.fields["description"]
+        desc_field.help_text = (
+            f'Information about the speaker and other details about the event. Replaces "{self.generated_description}".'
         )
-        for name in ("reset_title", "reset_description"):
-            self.fields[name].help_text = "Tick to go back to what the auction says, now and from now on."
-        return ["title", "reset_title", "description", "reset_description"]
+        return ["title", "description"]
 
     def clean(self):
         cleaned_data = super().clean()
@@ -4894,20 +4661,14 @@ class ClubEventForm(forms.ModelForm):
         """Record which of the two fields the club typed, so the next sync leaves them alone."""
         event = super().save(commit=False)
         if self.is_generated:
-            for field, reset, generated in (
-                ("title", "reset_title", self.generated_title),
-                ("description", "reset_description", self.generated_description),
+            for field, generated in (
+                ("title", self.generated_title),
+                ("description", self.generated_description),
             ):
-                if self.cleaned_data.get(reset):
-                    # Reset wins over anything typed in the box above it: somebody who ticks it and
-                    # edits the text in the same save has said two things, and this is the one they
-                    # can't get back to any other way.
-                    setattr(event, field, generated)
-                    setattr(event, f"{field}_is_custom", False)
-                else:
-                    # Typing the generated wording back in by hand is not a custom value — there
-                    # would be nothing for the flag to protect.
-                    setattr(event, f"{field}_is_custom", getattr(event, field) != generated)
+                # Typing the generated wording back in by hand is not a custom value — there
+                # would be nothing for the flag to protect, and a flag set here would quietly stop
+                # the event following a later rename.
+                setattr(event, f"{field}_is_custom", getattr(event, field) != generated)
         if commit:
             event.save()
         return event
@@ -6350,6 +6111,12 @@ class ClubMemberAdminForm(MarksClubMemberAdminEditedMixin, forms.ModelForm):
         if clash:
             msg = f"Bidder number '{bidder_number}' is already used by another member in this club."
             raise forms.ValidationError(msg)
+        # Deliberately no check against the club's auctions. A member's number is one number, in
+        # the club and in every auction they are in, so saving it here takes it from whoever is
+        # holding it there and gives them another -- ``services.set_member_bidder_number``, the same
+        # thing the check-in dialog does and says it does. The live validation on this field names
+        # that person before you save; refusing instead would leave the member's page showing one
+        # number and the auction another, which is the bug this mode exists to not have.
         return bidder_number
 
 
