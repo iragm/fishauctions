@@ -4640,7 +4640,7 @@ class ClubEventForm(forms.ModelForm):
 
     def _narrow_to_the_wording(self):
         """Drop every field the auction owns, and label the two that are left."""
-        for name in ("date_start", "date_end", "location", "cancelled"):
+        for name in ("date_start", "date_end", "location", "cancelled", "reset_title", "reset_description"):
             del self.fields[name]
         # Both stay required exactly as the model has them — a generated event with a blank title
         # would show up blank in every member's calendar.
@@ -4648,13 +4648,11 @@ class ClubEventForm(forms.ModelForm):
         title_field.help_text = (
             f"What members see on their calendar. The auction's own title is “{self.generated_title}”."
         )
-        self.fields["description"].help_text = (
-            "The details that change from one meeting to the next — doors at 6:30, bring a dish, "
-            f"who's speaking. Replaces “{self.generated_description}”."
+        desc_field = self.fields["description"]
+        desc_field.help_text = (
+            f'Information about the speaker and other details about the event. Replaces "{self.generated_description}".'
         )
-        for name in ("reset_title", "reset_description"):
-            self.fields[name].help_text = "Tick to go back to what the auction says, now and from now on."
-        return ["title", "reset_title", "description", "reset_description"]
+        return ["title", "description"]
 
     def clean(self):
         cleaned_data = super().clean()
