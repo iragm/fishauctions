@@ -2833,11 +2833,22 @@ class AppPaletteDeepLinkTests(StandardTestCase):
         self.assertNotIn(self.tap_to_pay_link, self._urls(self._palette(user_agent=self.WEB_UA)))
 
     def test_the_label_is_the_one_apples_review_guide_allows(self):
-        """5.4: "Tap to Pay on iPhone" is iPhone-only wording, and neither string takes a suffix."""
-        self.assertIn("Tap to Pay on iPhone", self._titles(self._palette()))
-        android_titles = self._titles(self._palette(user_agent=self.ANDROID_UA))
-        self.assertIn("Tap to Pay", android_titles)
-        self.assertNotIn("Tap to Pay on iPhone", android_titles)
+        """5.4: "Tap to Pay on iPhone" is the permitted wording, and it takes no " — {auction}"
+        suffix, so the auction goes in the subtitle."""
+        titles = self._titles(self._palette())
+        self.assertIn("Tap to Pay on iPhone", titles)
+        self.assertFalse([title for title in titles if title.startswith("Tap to Pay on iPhone —")], titles)
+
+    def test_tap_to_pay_is_not_offered_on_android(self):
+        """The screen behind the link is Apple's flow end to end, which is why the app gates its own
+        two entry points on the platform. This row was the one that didn't: on Android it opened the
+        iPhone setup screen, which asked an uninitialized Square SDK for its state and killed the
+        process."""
+        for query in ("", "tap", "card", "payment"):
+            urls = self._urls(self._palette(query, self.ANDROID_UA))
+            self.assertNotIn(self.tap_to_pay_link, urls, query)
+        # The other native row is unaffected -- lot scanning is the same screen on both phones.
+        self.assertIn(self.ar_link, self._urls(self._palette(user_agent=self.ANDROID_UA)))
 
     def test_the_row_carries_no_payment_iconography(self):
         """5.5: an icon on the control must be SF Symbols' wave.3.right.circle, which we don't have
@@ -2871,6 +2882,7 @@ class AppPaletteNavigationTests(StandardTestCase):
     """ "Take me to tap to pay" — the assistant's navigation skill knows the native screens too."""
 
     IOS_UA = "FishAuctionsApp/1.0 (Flutter; iOS)"
+    ANDROID_UA = "FishAuctionsApp/1.0 (Flutter; Android)"
 
     def setUp(self):
         super().setUp()
@@ -2921,6 +2933,18 @@ class AppPaletteNavigationTests(StandardTestCase):
         prompt = palette_assist.build_system_prompt(self.user, {}, destinations)
         self.assertIn("lot scanning", prompt)
         self.assertIn("tap to pay", prompt)
+
+    def test_android_hears_about_lot_scanning_but_never_about_tap_to_pay(self):
+        """Otherwise the assistant answers "take me to tap to pay" on an Android phone with a link
+        that opens Apple's setup screen, which is not a screen that exists there."""
+        from auctions import command_palette
+
+        request = self._request(self.ANDROID_UA)
+        destinations = command_palette.app_destinations_for_prompt(request)
+        self.assertEqual([name for name, _ in destinations], ["lot scanning"])
+        self.assertIsNone(command_palette.app_deep_link_by_name(request, "tap to pay"))
+        # And the question still gets a useful answer: the nearest real page on the web.
+        self.assertTrue(self._go("tap to pay", self.ANDROID_UA)["url"].startswith("/"))
 
     def test_the_web_prompt_says_nothing_about_screens_the_browser_cannot_open(self):
         from auctions import command_palette, palette_assist

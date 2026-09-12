@@ -14640,7 +14640,11 @@ class VoiceGrammar(models.Model):
 
     enabled = models.BooleanField(default=True)
     enabled.help_text = "Uncheck to turn voice off everywhere; the app hides the microphone button."
-    backend = models.CharField(max_length=20, choices=voice.BACKEND_CHOICES, default=voice.BACKEND_PLATFORM)
+    # Matches the app's own default. The vocabulary-biased recognizer is the only one that can be
+    # told this auction's lot and bidder numbers before it listens, and a build or phone without the
+    # native half falls back to the plain platform recognizer by itself -- so asking for it costs
+    # nothing where it isn't available. Setting this to "Platform recognizer" is the kill switch.
+    backend = models.CharField(max_length=20, choices=voice.BACKEND_CHOICES, default=voice.BACKEND_BIASED)
     backend.help_text = "What the app should listen with, if it can. It reports what it actually managed."
     locale = models.CharField(max_length=20, default="en_US")
     prefer_on_device = models.BooleanField(default=True)
@@ -14658,6 +14662,14 @@ class VoiceGrammar(models.Model):
     weights.help_text = "How much each signal counts toward confidence: asr, keyword, snap, agreement."
     thresholds = models.JSONField(default=voice.default_thresholds, blank=True)
     thresholds.help_text = "Score cutoffs: at/above 'confident' fills green, at/above 'unsure' asks, below is ignored."
+    commit_after_ms = models.PositiveIntegerField(
+        default=voice.DEFAULT_COMMIT_AFTER_MS, validators=[MaxValueValidator(2500)]
+    )
+    commit_after_ms.help_text = (
+        "Milliseconds a heard lot, bidder or price must stop changing before the app fills the field. "
+        "0 waits for the recognizer's final result instead -- slower by seconds, and the kill switch "
+        "if early values misbehave. Under 200 the app raises it to 200."
+    )
 
     auto_submit_on_sold = models.BooleanField(default=True)
     auto_submit_on_sold.help_text = "Saying 'sold' saves the lot, instead of only filling the fields."

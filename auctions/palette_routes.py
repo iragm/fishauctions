@@ -1215,6 +1215,11 @@ EXCLUDED: dict[str, str] = {
     "lot_refund": _API,
     "bulk_set_lots_won": _API,
     "auction_unsell_lot": _ACTION_ONLY,
+    "auction_voice_vocabulary": (
+        "The lot and bidder numbers voice may match against, fetched by the set-winners page to keep "
+        "its own matcher current while an auction runs. It is that page's working data, not a "
+        "capability: everything in it is already on the users and lots pages the palette can reach."
+    ),
     "auction_enable_bidding_for_all": _API,
     "auction_invoices_ready": _API,
     "auction_invoices_paid": _API,

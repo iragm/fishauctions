@@ -80,15 +80,24 @@ def default_anchors():
     price slot never filled. The app now reads a currency symbol immediately in front of a number as
     the price anchor, substituting the canonical (first) word of this list — which is what lets a
     deployment rename the anchor without breaking, and what makes the first entry load-bearing.
+
+    Keep this in step with the app's bundled copy (``bundled_voice_grammar.dart``). A served list
+    *replaces* the app's for that slot, so a word missing here is a word the app stops accepting the
+    moment this block reaches it.
     """
     return {
         "lot": ["lot", "lot number", "item"],
-        "bidder": ["bidder", "buyer", "bidder number"],
+        # "bitter" is not a mishearing to forgive, it is the same sound: American English flaps the
+        # consonant in both words, so there is nothing in the audio that separates them and no
+        # acoustic model will ever fix it. Listed outright rather than left to the app's fuzzy pass,
+        # which scores a guess (0.6) and leaves every bidder amber -- and which the page's own
+        # matcher would otherwise have to guess its way to as well.
+        "bidder": ["bidder", "buyer", "bidder number", "paddle", "bitter"],
         "price": ["dollars", "dollar", "bucks"],
         "sold": ["sold", "hammer"],
         "unsold": ["no sale", "unsold", "pass"],
         "undo": ["undo", "scratch that"],
-        "clear": ["clear", "cancel that"],
+        "clear": ["clear", "cancel that", "start over"],
         "confirm": ["confirm", "yes", "correct"],
     }
 
@@ -153,17 +162,72 @@ def default_homophones():
 def default_weights():
     """How much each signal contributes to a command's confidence score.
 
-    ``asr`` is the recognizer's own confidence, ``keyword`` an anchor word being present, ``snap`` a
-    clean match against a value that actually exists in this auction's vocabulary, ``agreement``
-    two passes landing on the same answer.
+    These are **exponents**, not multipliers. The app scores a command as
+    ``asr**asr × keyword**keyword × match**match × ((1 - agreement) + agreement × agreed)``, so a
+    weight of 0 switches a signal off entirely and 1 lets it count in full.
+
+    ``asr`` is the recognizer's own confidence, ``keyword`` the anchor word's quality (1.0 for the
+    first word of a slot's list, 0.8 for one of the synonyms after it, 0.6 for a fuzzy hit),
+    ``match`` how cleanly the value matched something this auction actually has, ``agreement`` two
+    passes landing on the same answer.
+
+    **The key is ``match``.** This table said ``snap`` until 2026-09-12, and the app has always read
+    ``match`` -- so the one weight describing the vocabulary match was unreachable from the admin,
+    and every edit to it did nothing at all.
+
+    Two of these are deliberately low, and both were 1.0-scale mistakes that made voice feel broken:
+
+    - **asr 0.2.** The platforms report their own confidence badly -- iOS on-device results and
+      Android partials say -1 ("don't know") constantly, and a phone that reports an honest 0.6 for
+      a sentence it heard perfectly used to drag every field under the confident cutoff, which with
+      ``block_auto_submit_when_unsure`` meant no "sold" ever saved. At 0.2 a recognizer's doubt
+      shades the score instead of deciding it.
+    - **keyword 0.5.** At 1.0 no synonym could ever clear the cutoff: "buyer" scored 0.8 against a
+      0.85 threshold however perfectly the bidder number matched. That made the entire point of this
+      table -- add the word your auctioneer actually says -- produce nothing but amber fields that
+      then blocked the save.
     """
-    return {"asr": 0.5, "keyword": 1.0, "snap": 1.0, "agreement": 0.4}
+    return {"asr": 0.2, "keyword": 0.5, "match": 1.0, "agreement": 0.4}
 
 
 def default_thresholds():
     """Score cutoffs: at or above ``confident`` the page fills the field green, at or above
-    ``unsure`` it fills it amber and asks, below ``unsure`` the app sends no command at all."""
-    return {"confident": 0.85, "unsure": 0.5}
+    ``unsure`` it fills it amber and asks, below ``unsure`` the app sends no command at all.
+
+    0.77 is where it is because of what has to land on either side of it. With
+    :func:`default_weights` and a recognizer that reports nothing (asr 0.8, so ``asr**0.2`` = 0.956):
+
+    ======================================  =====  ========
+    reading                                 score  tier
+    ======================================  =====  ========
+    canonical anchor + a real value         0.956  green
+    configured synonym + a real value       0.855  green
+    canonical anchor + value one edit away  0.765  amber
+    fuzzy anchor ("bitter") + a real value  0.741  amber
+    canonical anchor + two values fit        0.622  amber
+    canonical anchor + no such value here   0.593  amber
+    fuzzy anchor + no such value here       0.459  dropped
+    ======================================  =====  ========
+
+    The gap between the third row and the cutoff is 0.005, which is thin and deliberate: a value one
+    edit from a real one has to ask, and a word the deployment configured itself must not have to.
+    A phone that reports an honest 0.5 still fills a canonical match green (0.871), which is the
+    failure this number was moved to fix.
+    """
+    return {"confident": 0.77, "unsure": 0.5}
+
+
+# How long a spoken *value* (lot, bidder, price) has to stop changing in the partial transcript
+# before the app writes it, in milliseconds. Before this existed a value waited for the recognizer's
+# final result, which only arrives once its three-second silence window has run out -- five or six
+# seconds between "lot one" and a filled field, and the window stays long on purpose because every
+# utterance end costs a restart's deafness. Actions ("sold", "undo") still act on finals only.
+#
+# Served in the ``voice`` block of mobile config. The app clamps what it gets to 200-2500, so a typo
+# can neither commit mid-word nor outwait the window this exists to beat, and reads 0 as "finals
+# only" -- the kill switch if early values misbehave in a hall, and the reason to serve the number
+# rather than bake it into the app.
+DEFAULT_COMMIT_AFTER_MS = 700
 
 
 def _as_confidence(value):
@@ -209,6 +273,32 @@ def log_command(user, auction, *, log_id=None, slot="", heard="", chosen="", con
     return VoiceCommandLog.objects.create(auction=auction, user=user, slot=slot, **fields).pk
 
 
+# The slots that are a whole command on their own. An utterance that is only one of these words is
+# somebody selling a lot, not somebody walking past the phone -- see :func:`_is_action_word`.
+ACTION_SLOTS = (SLOT_SOLD, SLOT_UNSOLD, SLOT_UNDO, SLOT_CLEAR, SLOT_CONFIRM)
+
+
+def _is_action_word(word, anchors=None):
+    """Whether one word on its own is (or is the plural of) an anchor for an action slot.
+
+    "sold", heard and matched by nothing, is the single most useful row this table can hold, and the
+    two-token floor was the reason it never appeared in it. Everything else about that floor stays:
+    the recognizer hears the whole room, and one-word utterances are mostly the room.
+    """
+    word = " ".join(str(word or "").split()).lower()
+    if not word:
+        return False
+    stems = {word}
+    if word.endswith("s") and not word.endswith("ss"):
+        stems.add(word[:-1])
+    anchors = anchors or default_anchors()
+    for slot in ACTION_SLOTS:
+        for phrase in anchors.get(slot) or []:
+            if str(phrase).strip().lower() in stems:
+                return True
+    return False
+
+
 def log_unmatched(user, auction, *, heard="", confidence=None, session_key=""):
     """Record one utterance that matched nothing — the row a log of accepted commands can't hold.
 
@@ -225,11 +315,14 @@ def log_unmatched(user, auction, *, heard="", confidence=None, session_key=""):
     Never raises for bad input, for the reason :func:`log_command` doesn't: losing a sale to a
     logging error would be a considerably worse bug than losing the sample.
     """
-    from auctions.models import VoiceCommandLog
+    from auctions.models import VoiceCommandLog, VoiceGrammar
 
     heard = " ".join(str(heard or "").split())[:300]
-    if len(heard.split(" ")) < UNMATCHED_MIN_TOKENS:
-        return None
+    words = heard.split(" ")
+    if len(words) < UNMATCHED_MIN_TOKENS:
+        grammar = VoiceGrammar.load()
+        if not _is_action_word(words[0], (grammar.anchors if grammar else None) or default_anchors()):
+            return None
     # cache.add only succeeds when nothing is there and the key expires by itself, so the rate limit
     # needs no window stored anywhere and nothing to clean up. Per session rather than per user: an
     # operator running two handsets is two microphones in two parts of the room, not one.
@@ -246,7 +339,22 @@ def log_unmatched(user, auction, *, heard="", confidence=None, session_key=""):
 
 
 def serialize_grammar(grammar):
-    """Shape a :class:`~auctions.models.VoiceGrammar` for the ``voice`` block of mobile config."""
+    """Shape a :class:`~auctions.models.VoiceGrammar` for the ``voice`` block of mobile config.
+
+    ``None`` -- nobody has made a row -- serves the defaults in this module rather than omitting the
+    block, and that is the point rather than a convenience. The app carries a bundled copy of these
+    values for a first run that never reached the server, and while the block was optional that copy
+    was also what every deployment without a row actually ran on: :func:`page_config` has always
+    fallen back to the functions here, so retuning a default moved the *page* and left the *app*
+    scoring the same utterance by last year's numbers. The server's defaults are the grammar; the
+    app's are what it does when it has never heard from us.
+    """
+    if grammar is None:
+        # An unsaved row, so "no grammar configured" serves exactly what creating one in the admin
+        # would start as -- one definition of the defaults rather than two that can drift.
+        from .models import VoiceGrammar
+
+        grammar = VoiceGrammar()
     return {
         "enabled": grammar.enabled,
         "backend": grammar.backend,
@@ -257,6 +365,7 @@ def serialize_grammar(grammar):
         "homophones": grammar.homophones,
         "weights": grammar.weights,
         "thresholds": grammar.thresholds,
+        "commit_after_ms": grammar.commit_after_ms,
         "auto_submit_on_sold": grammar.auto_submit_on_sold,
         "block_auto_submit_when_unsure": grammar.block_auto_submit_when_unsure,
     }

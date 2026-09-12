@@ -38,16 +38,20 @@ GET /api/mobile/config/
             "ios":     {"bundle_id": "...", "api_key": "...", "app_id": "...",
                         "messaging_sender_id": "...", "project_id": "..."}
           },
-          // Optional; the set-winners voice grammar, present only once an admin has configured
-          // one (auctions.models.VoiceGrammar). Absent means "use the app's bundled grammar".
-          // See auctions/voice.py for what each key does.
+          // The set-winners voice grammar: the configured row (auctions.models.VoiceGrammar), or
+          // the defaults in auctions/voice.py when nobody has made one. Always present -- these
+          // values are the grammar, and the app's bundled copy is only for a first run that never
+          // reached us. See auctions/voice.py for what each key does.
           "voice": {
             "enabled": true, "backend": "platform", "locale": "en_US", "prefer_on_device": true,
             "anchors": {"lot": ["lot", "item"], "…": []},
             "number_words": {"seventeen": 17},
             "homophones": [["15", "50"]],
-            "weights": {"asr": 0.5, "keyword": 1.0, "snap": 1.0, "agreement": 0.4},
-            "thresholds": {"confident": 0.85, "unsure": 0.5},
+            "weights": {"asr": 0.2, "keyword": 0.5, "match": 1.0, "agreement": 0.4},
+            "thresholds": {"confident": 0.77, "unsure": 0.5},
+            // Milliseconds a heard value must stop changing before the app fills the field; 0
+            // means it waits for the recognizer's final result, as it did before this existed.
+            "commit_after_ms": 700,
             "auto_submit_on_sold": true, "block_auto_submit_when_unsure": true
           },
           // The app's navigation drawer, built server-side so a new link needs a Django deploy
@@ -1330,13 +1334,13 @@ class MobileConfigView(APIView):
         firebase = getattr(settings, "FIREBASE_CLIENT_CONFIG", None)
         if firebase:
             data["firebase"] = firebase
-        # The set-winners voice grammar, when an admin has configured one. Omitted otherwise, which
-        # the app reads as "use the grammar you shipped with" — so the key's absence is the normal
-        # state, not a failure. `enabled: false` in a configured row is the kill switch: the app
-        # reports supported=false and the page hides its microphone button, no release needed.
-        grammar = VoiceGrammar.load()
-        if grammar:
-            data["voice"] = voice.serialize_grammar(grammar)
+        # The set-winners voice grammar: the configured row, or this deployment's defaults when
+        # nobody has made one. Served either way, because the page has always matched against the
+        # defaults in auctions/voice.py and a block that appeared only once an admin had visited the
+        # admin page meant the app and the page scored the same utterance differently until they
+        # did. `enabled: false` in a configured row is the kill switch: the app reports
+        # supported=false and the page hides its microphone button, no release needed.
+        data["voice"] = voice.serialize_grammar(VoiceGrammar.load())
         # The navigation drawer, gated the way base.html gates the navbar. The only per-user block
         # in this response -- see auctions/mobile/menu.py for what the app does with it.
         data["menu"] = menu_for(request.user)

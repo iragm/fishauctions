@@ -640,9 +640,15 @@ class VoiceGrammarAdmin(admin.ModelAdmin):
             {
                 "description": (
                     "Raise 'confident' if wrong bidders are being filled in green; lower 'unsure' "
-                    "if commands are being dropped that the operator can hear were correct."
+                    "if commands are being dropped that the operator can hear were correct. "
+                    "Weights are exponents, so 0 switches a signal off: 'match' is how well the "
+                    "value fits this auction's own numbers, and 'asr' is the recognizer's opinion "
+                    "of itself, kept low because phones report it badly. "
+                    "'Commit after ms' is how long the app waits for the words to settle before it "
+                    "fills a field at all — 0 goes back to waiting for the recognizer to finish, "
+                    "which costs seconds per lot."
                 ),
-                "fields": ("weights", "thresholds"),
+                "fields": ("weights", "thresholds", "commit_after_ms"),
             },
         ),
         ("Saving", {"fields": ("auto_submit_on_sold", "block_auto_submit_when_unsure")}),

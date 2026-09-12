@@ -29,7 +29,7 @@ this only quotes its opening sentence.
 - **`account_nav.py`** (220 lines)
   The **Account setup** menu: which pages are in it, which one you're on, and where /account/setup/ lands.
   `Row`, `Group`, `active_page`, `remember`, `landing_url`, `groups_for`
-- **`admin.py`** (1651 lines)
+- **`admin.py`** (1657 lines)
   The Django admin: the staff-only back door, and the handful of jobs that only live here.
 - **`admin_paginator.py`** (51 lines)
   Paginate the admin's biggest changelists without counting the whole table.
@@ -88,7 +88,7 @@ this only quotes its opening sentence.
 - **`club_matching.py`** (265 lines)
   Which club does this belong to?  Name normalisation, initialisms, and the auction backlog.
   `normalize`, `initials`, `derived_abbreviation`, `similarity`, `is_hand_written`, `best_match`, `Suggestion`, `suggest_clubs`
-- **`command_palette.py`** (1547 lines)
+- **`command_palette.py`** (1555 lines)
   Shared logic for the command palette.
   `resolve_page`, `app_destinations_for_prompt`, `app_deep_link_by_name`, `default_items`, `search`, `log_search`
 - **`consumers.py`** (432 lines)
@@ -157,7 +157,7 @@ this only quotes its opening sentence.
 - **`model_caching.py`** (101 lines)
   ``@cached_property`` on a model, and the invalidation that makes it safe.
   `InvalidatesRelatedCache`, `CachedPropertiesMixin`
-- **`models.py`** (15161 lines)
+- **`models.py`** (15173 lines)
   The database: 80 models, and the reason they are still in one file.
 - **`moderation_admin.py`** (139 lines)
   The Django admin for the moderation queue: reports, copyright notices and strikes.
@@ -178,7 +178,7 @@ this only quotes its opening sentence.
   The things the command palette's natural-language assist is allowed to do.
 - **`palette_assist.py`** (1518 lines)
   Natural-language orchestration for the command palette.
-- **`palette_routes.py`** (1924 lines)
+- **`palette_routes.py`** (1929 lines)
   Every page on the site, as a thing the command palette's assistant can reach.
   `Route`, `excluded_reason`, `is_third_party`, `audit`, `catalog_for_prompt`, `match_routes`, `get_route`, `route_needs_an_auction`, `resolve_route`, `page_context_from_path`
 - **`passkit_views.py`** (191 lines)
@@ -376,7 +376,7 @@ this only quotes its opening sentence.
 - **`test_membership_flow.py`** (1339 lines)
   Club membership as money: invoices, discounts, renewals and the confirmation emails.
   `InvoiceStatusButtonTests`, `ClubMembershipRenewalFlowTests`, `PayPalSubscriptionWebhookTests`, `ClubMemberDiscountTests`, `ClubMoneyRenewalConsistencyTests`, `ClubMembershipEmailTaskTests`, `ClubBarcodeViewTests`, `QuickCheckoutHTMXTests`
-- **`test_mobile_features.py`** (2939 lines)
+- **`test_mobile_features.py`** (2963 lines)
   Tests for the mobile-app web-side features.
 - **`test_mobile_last_used.py`** (156 lines)
   Tests for GET /api/mobile/auctions/last-used/ — the command palette's AR-gating lookup.
@@ -411,7 +411,7 @@ this only quotes its opening sentence.
   The rest of the account, and the auction and club setup pages behind it.
 - **`test_palette_assist.py`** (4184 lines)
   Tests for the command palette's natural-language assist.
-- **`test_palette_core.py`** (1238 lines)
+- **`test_palette_core.py`** (1247 lines)
   The command palette itself, and the mobile surfaces that call into it.
   `CommandPaletteTests`, `MobileCommandPaletteTests`, `MobileMyClubsTests`, `MobileLabelTests`, `MobileConfigTests`, `FirebaseClientConfigParsingTests`, `SingleLotLabelPngTests`, `MobileEmailLoginTests`, `MobileWebSessionTests`
 - **`test_palette_mic.py`** (101 lines)
@@ -477,7 +477,7 @@ this only quotes its opening sentence.
 - **`test_userdata.py`** (299 lines)
   ``UserData`` and ``AuctionTOS`` properties, and merging one user into another.
   `AuctionTOSPropertyTests`, `UserDataPropertyTests`, `UserDataMergeIntoTests`
-- **`test_voice.py`** (770 lines)
+- **`test_voice.py`** (790 lines)
   Voice-driven set winners.
   `VoiceV1RemovedTests`, `VoiceVocabularyTests`, `VoiceVocabularyClubManagedTests`, `VoiceConfigBlockTests`, `VoicePageTests`, `VoiceCommandLogTests`, `VoiceUnmatchedLogTests`, `VoiceLogAdminTests`, `VoiceSettingsPanelTests`, `PriceAnchorCanonicalWordTests`
 - **`test_volunteers.py`** (268 lines)
@@ -493,14 +493,14 @@ this only quotes its opening sentence.
   `patch_views`, `WritableMediaRoot`, `give_contact_info`, `CsvImportTestMixin`, `StandardTestCase`, `SuiteStaysFastTests`, `EveryTestStartsInTheSiteTimezoneTests`
 - **`tests_selenium.py`** (1285 lines)
   Selenium-based browser tests for client-side JavaScript functionality.
-- **`urls.py`** (1319 lines)
+- **`urls.py`** (1324 lines)
   Every URL on the site, and the one place a new one has to be declared.
 - **`usability_report.py`** (366 lines)
   The usability measurements, in one place a dashboard can read.
   `route_name`, `reach_by_route`, `friction_by_form`, `abandoned_durations`, `worst_fields`, `buyer_funnel`, `funnel_referrers`
 - **`validators.py`** (19 lines)
   `validate_username_no_at_symbol`
-- **`voice.py`** (303 lines)
+- **`voice.py`** (412 lines)
   Voice-driven set winners: the grammar the mobile app listens with.
   `default_anchors`, `default_number_words`, `default_homophones`, `default_weights`, `default_thresholds`, `log_command`, `log_unmatched`, `serialize_grammar`, `page_config`
 
@@ -661,7 +661,7 @@ The site's Model Context Protocol server, and the tool catalogue behind it.
 - **`serializers.py`** (641 lines)
   Request and response shapes for the mobile app's own API.
 - **`urls.py`** (138 lines)
-- **`views.py`** (2575 lines)
+- **`views.py`** (2579 lines)
   Mobile API views.
 
 ## `auctions/mobile/services/`
@@ -797,7 +797,7 @@ Every view on the site, split by what part of it the view belongs to.
 - **`printing.py`** (606 lines)
   Labels: what gets drawn on them, and getting them to a printer.
   `LotLabelView`, `UnprintedLotLabelsView`, `SingleLotLabelView`, `RemotePrintJobMixin`, `RemotePrintJobStatusView`, `RemotePrintJobRetryView`, `RemotePrintJobCancelView`
-- **`selling.py`** (1053 lines)
+- **`selling.py`** (1073 lines)
   Auction night: setting winners, the lot queue, and the volunteers who help.
 - **`site_admin.py`** (556 lines)
   The superuser's dashboard: traffic, signups, referrers, the user map.
