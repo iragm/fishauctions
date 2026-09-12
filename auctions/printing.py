@@ -126,7 +126,9 @@ def wrapped_lines(text, *, width_pt, font_size_pt, bold=False):
     for paragraph in str(text).splitlines():
         used = None  # width taken on the current line; None before the paragraph's first word
         for word in paragraph.split():
-            for index, piece in enumerate(re.findall(r"[^/-]*[/-]|[^/-]+", word)):
+            # Split after each "/" or "-", keeping it on the piece it ends; a lookbehind so that a
+            # word of nothing but delimiters is still linear to scan.
+            for index, piece in enumerate(p for p in re.split(r"(?<=[/-])", word) if p):
                 gap = space if index == 0 else 0
                 width = text_width_pt(piece, font_size_pt, bold)
                 if used is not None and used + gap + width <= width_pt:

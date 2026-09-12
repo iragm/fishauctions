@@ -334,3 +334,6 @@ class LabelMeasurementTests(SimpleTestCase):
         # 9.89em, with nowhere to break: split across two 50pt lines, as overflow-wrap: anywhere does.
         self.assertEqual(wrapped_lines("Featherstonehaugh", width_pt=50, font_size_pt=10), 2)
         self.assertEqual(wrapped_lines("one\ntwo", width_pt=100, font_size_pt=10), 2)
+        # A word that ends in a delimiter, or is nothing but delimiters, is still one word.
+        self.assertEqual(wrapped_lines("BAP/HAP/", width_pt=90, font_size_pt=10), 1)
+        self.assertEqual(wrapped_lines("-- //", width_pt=90, font_size_pt=10), 1)

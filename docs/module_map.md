@@ -190,7 +190,7 @@ this only quotes its opening sentence.
 - **`printer_programs.py`** (756 lines)
   Validation + seed data for :class:`ThermalPrinterProfile` command programs.
   `ProgramValidationError`, `validate_program`, `validate_match_patterns`, `validate_profile_programs`, `serialize_profile`
-- **`printing.py`** (355 lines)
+- **`printing.py`** (357 lines)
   Shared label-printing helpers.
   `text_width_pt`, `split_label_tags`, `wrapped_lines`, `plan_label`, `inches_per_unit`, `deterministic_warnings`, `label_prefs_warnings`, `warning_matrix`
 - **`queryset_annotations.py`** (226 lines)
@@ -339,7 +339,7 @@ this only quotes its opening sentence.
 - **`test_invoice_models.py`** (220 lines)
   Invoice models: what an invoice contains, when it is created, and when it notifies.
   `InvoiceModelTests`, `InvoiceCreateViewTests`, `InvoiceNotificationDueTests`
-- **`test_label_layout.py`** (336 lines)
+- **`test_label_layout.py`** (339 lines)
   Every lot label preset, rendered with worst-case lots and held to the layout rules.
   `PlacedText`, `laid_out_text`, `squeezed`, `LabelLayoutTests`, `LabelUnitTests`, `LabelMeasurementTests`
 - **`test_lifecycle.py`** (477 lines)
