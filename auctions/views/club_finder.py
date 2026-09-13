@@ -1,8 +1,7 @@
-"""The public club finder: a map of clubs, the same clubs as a filtered list, and one club's card.
+"""The public club finder: a map of clubs, and the same clubs as a filtered list.
 
 Everything here is visible to anybody, signed in or not, and that is the whole constraint on the
-module. ``Club.objects.listed()`` is the only gate -- approved, and not since folded -- and nothing
-on these pages says anything about a club that the club's own public page does not already say.
+module. ``Club.objects.listed()`` is the only gate -- approved, and not since folded.
 
 What that rules out is worth writing down, because the filters are where it would leak: no
 addresses (the map has always shown a pin and deliberately not the street it sits on), no member
@@ -10,6 +9,13 @@ names or counts, no contact addresses, and nothing from the outreach queue -- ``
 ``stall_reason``, ``date_contacted`` and ``notes`` are a record of our conversations with a club,
 not facts about it. So the filters are built out of interests, what a club has coming up, and
 whether it is taking new members: three things a visitor could already read off the club's page.
+
+There is deliberately **no summary card** here, which is the one place this differs from the
+speaker directory it is otherwise built like. A row and a map pin both lead to the club's own page.
+A card would be a second public surface carrying the same privacy rules, needing to be kept in step
+with the page forever; and finding a club is a find-one task, unlike comparing speakers, so the
+page load it saves is not worth that. The filters live in the query string, so Back returns to the
+same list.
 
 Distance is the one number here that isn't stored on the club. It is measured from the pin, which
 is already public, to a location the *visitor* supplied, so it tells them something without telling
@@ -24,9 +30,7 @@ from django.shortcuts import redirect
 from django.urls import reverse
 from django.utils import timezone
 from django.utils.functional import cached_property
-from django.views.generic import DetailView
 
-from auctions import club_events
 from auctions.filters import ClubFilter
 from auctions.models import Club, ClubEvent, distance_to
 from auctions.tables import ClubHTMxTable
@@ -34,10 +38,6 @@ from auctions.tables import ClubHTMxTable
 from .base import HTMxTableView, LocationMixin
 
 logger = logging.getLogger(__name__)
-
-#: How many upcoming events a club's card lists. The card is a summary that ends in a link to the
-#: club's own page, which has the whole calendar; three is enough to show a club is active.
-CLUB_PANEL_EVENT_LIMIT = 3
 
 #: Ceiling on how many pins one map draws. Far above the number of clubs that exist, and here for
 #: the same reason the speaker map has one: the payload is every *matching* club rather than the
@@ -153,6 +153,9 @@ class ClubFinderView(LocationMixin, HTMxTableView):
 
         A map that only plotted the current page of results would be actively misleading, which is
         why this deliberately ignores pagination.
+
+        Name and slug are all a pin needs: it opens an info window naming the club, and the name is
+        a link to the club's own page.
         """
         queryset = filterset.qs.filter(latitude__isnull=False, longitude__isnull=False)
         return [
@@ -192,41 +195,4 @@ class ClubFinderView(LocationMixin, HTMxTableView):
                     "<div class='text-center py-3'><p class='text-muted mb-0'>No clubs match these filters.</p></div>"
                 )
         context["default_view"] = "map" if self.request.GET.get("view") == "map" else "list"
-        return context
-
-
-class ClubPanelView(DetailView):
-    """One club's card: what the finder shows beside the list, and what a map pin opens.
-
-    Deliberately thin. The club's own page is the thing with everything on it, and this is the
-    summary somebody reads before deciding to open it -- so the card ends in a link to that page
-    rather than trying to reproduce it. Scoped to ``listed()`` for the same reason the list is: a
-    club nobody has approved has no card here either, whoever guesses its slug.
-    """
-
-    model = Club
-    template_name = "auctions/partials/club_panel.html"
-    context_object_name = "club"
-
-    def get_queryset(self):
-        return Club.objects.listed().prefetch_related("interests")
-
-    def get_context_data(self, **kwargs):
-        context = super().get_context_data(**kwargs)
-        club = self.object
-        # exclude_pickups for the same reason the list annotation does it.
-        upcoming, _past = club_events.upcoming_events(club, limit=CLUB_PANEL_EVENT_LIMIT, exclude_pickups=True)
-        context["upcoming_events"] = upcoming
-        latitude = float(self.request.COOKIES.get("latitude") or 0)
-        longitude = float(self.request.COOKIES.get("longitude") or 0)
-        if not latitude and self.request.user.is_authenticated:
-            latitude = self.request.user.userdata.latitude or 0
-            longitude = self.request.user.userdata.longitude or 0
-        if latitude and longitude and club.latitude and club.longitude:
-            context["distance"] = (
-                Club.objects.filter(pk=club.pk)
-                .annotate(distance=distance_to(latitude, longitude))
-                .values_list("distance", flat=True)
-                .first()
-            )
         return context

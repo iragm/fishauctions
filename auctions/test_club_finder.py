@@ -90,37 +90,31 @@ class ClubFinderTests(TestCase):
         """No login: a club finder that needs an account can't find anybody a club."""
         self.assertEqual(self.client.get(reverse("clubs")).status_code, 200)
 
-    def test_the_card_opens_for_anybody(self):
-        response = self.client.get(reverse("club_panel", kwargs={"slug": self.listed.slug}))
-        self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "Listed Aquarium Society")
+    def test_a_row_links_straight_to_the_club_page(self):
+        """No card: the club's own page is the only place a club is described."""
+        response = self.client.get(reverse("clubs"))
+        self.assertContains(response, f"href='{reverse('club_detail', kwargs={'slug': self.listed.slug})}'")
 
-    def test_an_unapproved_clubs_card_does_not_exist(self):
-        """Guessing the slug is not a way around the listing rule."""
-        for club in (self.prospect, self.folded):
-            response = self.client.get(reverse("club_panel", kwargs={"slug": club.slug}))
-            self.assertEqual(response.status_code, 404, club.name)
+    def test_the_finder_does_not_publish_the_address_the_contact_address_or_the_notes(self):
+        """The map has only ever shown a pin, the club page draws its email button for signed-in
+        visitors only, and notes are a record of our conversations with the club."""
+        for query in ("", "within 50 miles", "joinable"):
+            response = self.client.get(reverse("clubs"), {"query": query})
+            self.assertNotContains(response, "12 Private Street", msg_prefix=query)
+            self.assertNotContains(response, "secretary@example.com", msg_prefix=query)
+            self.assertNotContains(response, "try again in spring", msg_prefix=query)
 
-    def test_the_card_does_not_publish_the_address_or_the_contact_address(self):
-        """The two fields this page has always withheld, on the surface that is new.
-
-        The map has only ever shown a pin, and the club page draws its email button for signed-in
-        visitors only. A card that quietly printed either would undo both.
-        """
-        response = self.client.get(reverse("club_panel", kwargs={"slug": self.listed.slug}))
-        self.assertNotContains(response, "12 Private Street")
-        self.assertNotContains(response, "secretary@example.com")
-
-    def test_the_card_does_not_publish_the_outreach_notes(self):
-        response = self.client.get(reverse("club_panel", kwargs={"slug": self.listed.slug}))
-        self.assertNotContains(response, "try again in spring")
-
-    def test_no_member_is_named_by_the_finder_or_the_card(self):
+    def test_no_member_is_named_by_the_finder(self):
         ClubMember.objects.create(club=self.listed, name="Wilma Fingerdoo", email="wilma@example.com")
-        for url in (reverse("clubs"), reverse("club_panel", kwargs={"slug": self.listed.slug})):
-            response = self.client.get(url)
-            self.assertNotContains(response, "Wilma Fingerdoo", msg_prefix=url)
-            self.assertNotContains(response, "wilma@example.com", msg_prefix=url)
+        response = self.client.get(reverse("clubs"))
+        self.assertNotContains(response, "Wilma Fingerdoo")
+        self.assertNotContains(response, "wilma@example.com")
+
+    def test_the_map_payload_carries_only_what_a_pin_needs(self):
+        rows = map_payload(self.client.get(reverse("clubs")))
+        self.assertTrue(rows)
+        for row in rows:
+            self.assertEqual(set(row), {"slug", "name", "lat", "lng"})
 
     def test_searching_matches_the_name_and_the_abbreviation(self):
         for query in ("Listed", "LAS"):

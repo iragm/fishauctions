@@ -1345,19 +1345,16 @@ class ClubHTMxTable(tables.Table):
         )
 
     def render_name(self, value, record):
-        """Open the card over htmx, but push the club's *page* URL, not the fragment's.
+        """A plain link to the club's own page.
 
-        Same reasoning as the speaker table: hx-push-url='true' would push the /panel/ URL that was
-        actually requested, so a copied link would hand someone a bare unstyled fragment. href keeps
-        the row working as an ordinary link when JavaScript hasn't loaded.
+        Unlike the speaker table this opens no panel, and deliberately: a summary beside the list
+        would be a second public surface carrying the same privacy rules as the club page, and
+        finding a club is a find-one task where the page load it would save is not worth that. See
+        :mod:`auctions.views.club_finder`.
         """
-        page_url = reverse("club_detail", kwargs={"slug": record.slug})
         link = format_html(
-            "<a href='{}' class='club-open' hx-get='{}' hx-target='#club-panel' "
-            "hx-swap='innerHTML' hx-push-url='{}'>{}</a>",
-            page_url,
-            reverse("club_panel", kwargs={"slug": record.slug}),
-            page_url,
+            "<a href='{}'>{}</a>",
+            reverse("club_detail", kwargs={"slug": record.slug}),
             record.name,
         )
         if not record.allow_joining:

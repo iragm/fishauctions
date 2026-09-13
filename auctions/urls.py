@@ -196,10 +196,6 @@ urlpatterns = [
     ),
     path("leaderboard/", views.Leaderboard.as_view(), name="leaderboard"),
     path("clubs/", views.ClubFinderView.as_view(), name="clubs"),
-    # The finder's detail card, kept next to the finder rather than down with the club management
-    # URLs: it is a fragment of this page, not a page about one club. `clubs/<slug>/` can't shadow
-    # it -- a slug converter never matches a slash -- so the order here is for the reader.
-    path("clubs/<slug:slug>/panel/", views.ClubPanelView.as_view(), name="club_panel"),
     path("admin-usermap/", views.UserMap.as_view(), name="admin_user_map"),
     path("admin-dashboard/", views.AdminDashboard.as_view(), name="admin_dashboard"),
     path("admin-setup-checklist/", views.AdminSetupChecklistView.as_view(), name="admin_setup_checklist"),

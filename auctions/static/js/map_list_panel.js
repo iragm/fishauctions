@@ -1,20 +1,29 @@
 /**
- * A filtered list, the same set drawn on a map, and a detail panel that slides in over both.
+ * A filtered list and the same set drawn on a map, with the two kept in step.
  *
- * Two pages are built this way -- the speaker directory and the club finder -- and they have to
- * behave identically: a row and its own map pin open the same panel, the panel pushes a URL worth
- * sharing, and filtering redraws the markers without a page load. That last part is why the map
- * can't just be rendered once: the htmx table response carries every matching row's coordinates
- * back out of band (see the *_table.html partials), and this redraws from that payload, so the
- * map and the list can never show different sets.
+ * Two pages are built this way -- the speaker directory and the club finder -- and the part they
+ * share is that filtering must move both halves at once. The htmx table response carries every
+ * matching row's coordinates back out of band (see the *_table.html partials) and this redraws the
+ * markers from that payload, so the map and the list can never show different sets.
+ *
+ * Where they differ is what a result opens, and that is what `panelUrl` selects:
+ *
+ *   * With `panelUrl` (the speaker directory) a row and its own pin both open a detail panel that
+ *     slides in over the list, pushing a URL worth sharing. Speakers are a page you compare on --
+ *     filter by topic, check who is nearest, look at three of them -- so keeping the list, the map
+ *     and the filters underneath is worth a panel.
+ *   * Without it (the club finder) a pin opens a small info window naming the club, whose name is
+ *     a link to the club's own page; rows are already plain links to the same place. Finding a
+ *     club is a find-one task, and a summary beside the list would be a second public surface with
+ *     the same privacy rules to keep in step with the club page.
  *
  * Element ids stay per-page (`club-map`, `speaker-map`) so one page's markup can't reach into the
- * other's; everything that differs between the two lives in the config object:
+ * other's; everything that differs lives in the config object:
  *
  *   initMapListPanel({
- *     prefix: "club",                     // ids: <prefix>-map, <prefix>-panel, <prefix>-view-map…
- *     panelUrl: function (slug) {...},    // the htmx fragment the panel is filled from
- *     pageUrl: function (slug) {...},     // the real page, pushed into the address bar
+ *     prefix: "club",                     // ids: <prefix>-map, <prefix>-view-map, <prefix>-panel…
+ *     pageUrl: function (slug) {...},     // the real page a result opens
+ *     panelUrl: function (slug) {...},    // optional: the htmx fragment the panel is filled from
  *     origin: {lat: 42, lng: -72},        // where distances are measured from, or null
  *     originLabel: "your location",
  *     defaultView: "map",                 // which half the URL asked for
@@ -47,10 +56,7 @@
     var mapWrapper = byId("map-wrapper");
     var listButton = byId("view-list");
     var mapButton = byId("view-map");
-
-    if (!shell || !panel) {
-      return;
-    }
+    var hasPanel = !!(shell && panel && config.panelUrl);
 
     /* ---- the sliding detail panel -------------------------------------- */
 
@@ -76,42 +82,44 @@
       }
     }
 
-    document.body.addEventListener("htmx:beforeRequest", function (event) {
-      if (event.target.closest && event.target.closest("." + prefix + "-open")) {
-        listUrlBeforePanel = window.location.pathname + window.location.search;
-      }
-    });
+    if (hasPanel) {
+      document.body.addEventListener("htmx:beforeRequest", function (event) {
+        if (event.target.closest && event.target.closest("." + prefix + "-open")) {
+          listUrlBeforePanel = window.location.pathname + window.location.search;
+        }
+      });
 
-    document.body.addEventListener("htmx:afterSwap", function (event) {
-      if (event.target && event.target.id === prefix + "-panel") {
-        openPanel();
-      }
-    });
+      document.body.addEventListener("htmx:afterSwap", function (event) {
+        if (event.target && event.target.id === prefix + "-panel") {
+          openPanel();
+        }
+      });
 
-    // Two spellings because the speaker panel shipped with a prefixed attribute of its own and
-    // its markup is shared with that speaker's standalone page, which has no JavaScript on it at
-    // all -- renaming the attribute there would be a change to a page that cannot be the one to
-    // notice it broke. New markup uses the unprefixed one.
-    document.addEventListener("click", function (event) {
-      if (event.target.closest("[data-panel-close], [data-speaker-panel-close]")) {
-        event.preventDefault();
-        closePanel();
-      }
-    });
+      // Two spellings because the speaker panel shipped with a prefixed attribute of its own and
+      // its markup is shared with that speaker's standalone page, which has no JavaScript on it at
+      // all -- renaming the attribute there would be a change to a page that cannot be the one to
+      // notice it broke. New markup uses the unprefixed one.
+      document.addEventListener("click", function (event) {
+        if (event.target.closest("[data-panel-close], [data-speaker-panel-close]")) {
+          event.preventDefault();
+          closePanel();
+        }
+      });
 
-    document.addEventListener("keydown", function (event) {
-      if (event.key === "Escape" && !shell.hidden) {
-        closePanel();
-      }
-    });
+      document.addEventListener("keydown", function (event) {
+        if (event.key === "Escape" && !shell.hidden) {
+          closePanel();
+        }
+      });
 
-    // Back/forward: the pushed URL is a real page, so let the browser load it rather than trying
-    // to reconstruct state.
-    window.addEventListener("popstate", function () {
-      if (!shell.hidden) {
-        closePanel();
-      }
-    });
+      // Back/forward: the pushed URL is a real page, so let the browser load it rather than trying
+      // to reconstruct state.
+      window.addEventListener("popstate", function () {
+        if (!shell.hidden) {
+          closePanel();
+        }
+      });
+    }
 
     /* ---- the radio filter menu ------------------------------------------ */
 
@@ -135,6 +143,7 @@
     var mapInitialized = false;
     var theMap = null;
     var markers = [];
+    var infoWindow = null;
 
     /* Selected is primary, unselected is secondary -- see style_reference.md. */
     function setViewButtons(selected, unselected) {
@@ -212,6 +221,22 @@
         });
     }
 
+    /**
+     * The info window a pin opens when there is no panel: the name, as a link to the page.
+     *
+     * Built as a DOM node rather than an HTML string because the name is somebody's typed-in club
+     * name. Google's info window is white whatever the page's theme, so the link carries its own
+     * color -- the site's primary blue, which is the one brand color that stays legible on it.
+     */
+    function nameLink(record) {
+      var link = document.createElement("a");
+      link.href = config.pageUrl(record.slug);
+      link.textContent = record.name;
+      link.style.color = ORIGIN_COLOR;
+      link.style.fontWeight = "bold";
+      return link;
+    }
+
     function renderMarkers(records) {
       if (!theMap) {
         return;
@@ -232,8 +257,15 @@
           },
         });
         marker.addListener("click", function () {
-          // The same panel the table rows open, so the two views never diverge.
-          openPanelFor(record.slug);
+          if (hasPanel) {
+            // The same panel the table rows open, so the two views never diverge.
+            openPanelFor(record.slug);
+            return;
+          }
+          // Name first, page second. A pin that navigated on the first tap would be a blind jump
+          // on a touch screen, where there is no hover to tell you which one you are about to open.
+          infoWindow.setContent(nameLink(record));
+          infoWindow.open(theMap, marker);
         });
         markers.push(marker);
       });
@@ -263,6 +295,7 @@
         zoom: 7,
         center: origin || FALLBACK_CENTER,
       });
+      infoWindow = new google.maps.InfoWindow();
       if (origin) {
         new google.maps.Marker({
           position: origin,

@@ -178,7 +178,7 @@ this only quotes its opening sentence.
   The things the command palette's natural-language assist is allowed to do.
 - **`palette_assist.py`** (1518 lines)
   Natural-language orchestration for the command palette.
-- **`palette_routes.py`** (1936 lines)
+- **`palette_routes.py`** (1934 lines)
   Every page on the site, as a thing the command palette's assistant can reach.
   `Route`, `excluded_reason`, `is_third_party`, `audit`, `catalog_for_prompt`, `match_routes`, `get_route`, `route_needs_an_auction`, `resolve_route`, `page_context_from_path`
 - **`passkit_views.py`** (191 lines)
@@ -221,7 +221,7 @@ this only quotes its opening sentence.
   `normalize_category_name`, `CategoryResolver`, `hint_for`, `assign_categories`
 - **`species_matching.py`** (1608 lines)
   Turn a lot name someone typed into a short list of species to pick from.
-- **`tables.py`** (1533 lines)
+- **`tables.py`** (1530 lines)
   The ``django_tables2`` tables behind every list on the site.
 - **`tasks.py`** (2146 lines)
   Celery tasks for the auctions app.
@@ -291,7 +291,7 @@ this only quotes its opening sentence.
   `ClubAPITests`, `ClubAPIKeyMemberPermissionTests`, `ClubBapLotAPITests`, `ClubAuctionReadAPITests`, `ParseBoolEnvTests`, `RequireSecureProdSecretsTests`, `ClubAuctionIntegrationTests`
 - **`test_club_events.py`** (3088 lines)
   Tests for club events, Google Calendar sync, and the Discord events built on top of them.
-- **`test_club_finder.py`** (184 lines)
+- **`test_club_finder.py`** (178 lines)
   Tests for the public club finder: what it lists, and what it refuses to say about a club.
   `map_payload`, `ClubFinderTests`
 - **`test_club_health.py`** (634 lines)
@@ -496,7 +496,7 @@ this only quotes its opening sentence.
   `patch_views`, `WritableMediaRoot`, `give_contact_info`, `CsvImportTestMixin`, `StandardTestCase`, `SuiteStaysFastTests`, `EveryTestStartsInTheSiteTimezoneTests`
 - **`tests_selenium.py`** (1285 lines)
   Selenium-based browser tests for client-side JavaScript functionality.
-- **`urls.py`** (1328 lines)
+- **`urls.py`** (1324 lines)
   Every URL on the site, and the one place a new one has to be declared.
 - **`usability_report.py`** (366 lines)
   The usability measurements, in one place a dashboard can read.
@@ -768,9 +768,9 @@ Every view on the site, split by what part of it the view belongs to.
 - **`club_api_keys.py`** (424 lines)
   Club API keys, and the page that documents the API they open.
   `ClubAPIKeyListView`, `ClubAPIKeyCreateView`, `club_api_documentation_context`, `ClubAPIKeyDetailView`, `ClubAPIKeyRevokeView`, `ClubAPIKeyFieldMapCreateView`, `ClubAPIKeyFieldMapDeleteView`, `ClubMemberMapView`, `SelfServeContactLinkView`
-- **`club_finder.py`** (232 lines)
-  The public club finder: a map of clubs, the same clubs as a filtered list, and one club's card.
-  `ClubFinderView`, `ClubPanelView`
+- **`club_finder.py`** (198 lines)
+  The public club finder: a map of clubs, and the same clubs as a filtered list.
+  `ClubFinderView`
 - **`club_integrations.py`** (1321 lines)
   The outside accounts a club connects: Mailchimp, Brevo, Google Calendar, Square links.
 - **`club_members.py`** (1092 lines)

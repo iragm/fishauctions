@@ -1153,8 +1153,6 @@ EXCLUDED: dict[str, str] = {
     # name for the same reason it excuses allauth's. An entry would in fact *break* the audit --
     # ``audit()`` drops ``namespace:*`` from the live set, so a reason written for one is a reason
     # for a URL that is never seen, which is exactly what ``stale`` reports.
-    # Club finder
-    "club_panel": _API,
     # Speaker directory
     "speaker_panel": _API,
     "speaker_tag": _API,
