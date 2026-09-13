@@ -8,7 +8,7 @@ one being caught quickly. See auctions/club_health.py.
 import datetime
 
 from django.conf import settings
-from django.test import TestCase, override_settings
+from django.test import TestCase, TransactionTestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
 
@@ -551,3 +551,61 @@ class LadderSnapshotTests(TestCase):
 
     def test_no_snapshots_is_an_empty_report_rather_than_a_row_of_zeroes(self):
         self.assertEqual(club_health.ladder_history(), {"months": [], "rows": []})
+
+
+class LinkCheckColumnDropTests(TransactionTestCase):
+    """Migration 0435 drops four columns that may already be gone.
+
+    Staging stopped on this migration with ``OperationalError (1091, "Can't DROP COLUMN
+    `date_links_checked`")``: 0434 was recorded as applied against a database whose
+    ``auctions_club`` did not end up with the columns.  entrypoint.sh refuses to start on a failed
+    migrate, so that is the whole site down until somebody edits the database by hand -- over four
+    columns that were scrapped a day after they shipped and never held a value anywhere.
+    """
+
+    TABLE = "auctions_club"
+
+    def _migration(self):
+        import importlib
+
+        return importlib.import_module("auctions.migrations.0435_remove_club_date_links_checked_and_more")
+
+    def _repair(self):
+        from django.apps import apps
+        from django.db import connection
+
+        with connection.schema_editor() as schema_editor:
+            self._migration().drop_link_check_columns(apps, schema_editor)
+
+    def _columns(self):
+        from django.db import connection
+
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT COLUMN_NAME FROM information_schema.COLUMNS "
+                "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = %s",
+                [self.TABLE],
+            )
+            return {row[0] for row in cursor.fetchall()}
+
+    def test_columns_that_are_already_gone_are_not_an_error(self):
+        """Staging's state, and the state of any database built from these migrations."""
+        self.assertEqual(self._columns() & set(self._migration().LINK_CHECK_COLUMNS), set())
+        self._repair()
+        self.assertEqual(self._columns() & set(self._migration().LINK_CHECK_COLUMNS), set())
+        Club.objects.create(name="Link check club")
+
+    def test_a_column_that_is_there_is_still_dropped(self):
+        """The guard is about tolerating the absent column, not about skipping the work."""
+        from django.db import connection
+
+        with connection.cursor() as cursor:
+            cursor.execute(f"ALTER TABLE {self.TABLE} ADD COLUMN date_links_checked datetime(6) NULL")
+        try:
+            self._repair()
+        finally:
+            if "date_links_checked" in self._columns():
+                with connection.cursor() as cursor:
+                    cursor.execute(f"ALTER TABLE {self.TABLE} DROP COLUMN date_links_checked")
+        self.assertNotIn("date_links_checked", self._columns())
+        Club.objects.create(name="Link check club two")
