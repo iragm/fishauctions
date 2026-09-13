@@ -38,9 +38,11 @@ from .models import (
     AuctionTOS,
     BapAward,
     Category,
+    Club,
     ClubHistory,
     ClubMember,
     DonationVendor,
+    GeneralInterest,
     Invoice,
     Location,
     Lot,
@@ -1536,25 +1538,34 @@ SPEAKER_FILTER_CONTROL_CLASS = "speaker-filter-control"
 DISTANCE_PHRASE_RE = re.compile(r"\b(?:within\s+)?(\d{1,4})\s*(?:mi|mile|miles)\b")
 
 
-def speaker_filter_attrs(trigger, css_class, **extra):
-    """Shared htmx wiring for the speaker filter controls.
+def htmx_filter_attrs(control_class, trigger, css_class, **extra):
+    """Shared htmx wiring for a page whose filter controls are not inside one <form>.
 
     Module level, not a classmethod: these build the widgets inside the class body, so the
     class object does not exist yet when they run.  `css_class` is spelled out per widget
     because the templates render these fields directly rather than through crispy, so nothing
     else adds the Bootstrap classes.
+
+    `control_class` is what ties the set together: every control on the page carries it, and the
+    explicit `hx-include` is what keeps every value on every request.  Relying on htmx's implicit
+    "include the enclosing form" would make picking a topic or an interest drop the search text.
     """
     attrs = {
-        "class": f"{css_class} {SPEAKER_FILTER_CONTROL_CLASS}",
+        "class": f"{css_class} {control_class}",
         "hx-get": "",
         "hx-target": "div.table-container",
         "hx-trigger": trigger,
         "hx-swap": "outerHTML",
         "hx-indicator": ".progress",
-        "hx-include": f".{SPEAKER_FILTER_CONTROL_CLASS}",
+        "hx-include": f".{control_class}",
     }
     attrs.update(extra)
     return attrs
+
+
+def speaker_filter_attrs(trigger, css_class, **extra):
+    """:func:`htmx_filter_attrs` for the speaker directory's own control class."""
+    return htmx_filter_attrs(SPEAKER_FILTER_CONTROL_CLASS, trigger, css_class, **extra)
 
 
 class SpeakerFilter(django_filters.FilterSet):
@@ -1709,6 +1720,147 @@ class SpeakerFilter(django_filters.FilterSet):
                 | Q(topics__name__icontains=text)
             ).distinct()
         return queryset
+
+
+#: Marks every club finder control so one hx-include picks up the whole set -- the search box, the
+#: interest radios inside their dropdown, and the filter chips are not in one <form>.
+CLUB_FILTER_CONTROL_CLASS = "club-filter-control"
+
+
+class ClubFilter(django_filters.FilterSet):
+    """Filter for the public club finder.
+
+    The same shape as :class:`SpeakerFilter` -- one text box that also understands keyword tokens,
+    plus a menu of the same kind -- with one rule of its own that the shape does not imply.
+
+    **Everything this can filter on is something the club's own public page already shows.** That
+    is the constraint, and a filter is exactly where it would be lost, because a filter is a way of
+    reading a field one yes/no answer at a time: given ``?members=10-50`` a stranger can bracket a
+    club's membership in four requests without the number ever being printed. So there is nothing
+    here about how many members a club has, when we last emailed it, whether it replied, or how
+    ``club_health`` rates it. Interests, what is on the calendar, whether it takes new members and
+    whether it has a website are the four things a visitor could already read off the club page.
+
+    ``events`` filters on the ``has_upcoming_event`` annotation and a radius needs ``distance``;
+    both are added by :class:`~auctions.views.club_finder.ClubFinderView`, which is the only thing
+    that uses this. Without them those two quietly do nothing rather than filtering everything away.
+    """
+
+    query = django_filters.CharFilter(
+        method="club_search",
+        label="",
+        widget=TextInput(
+            attrs=htmx_filter_attrs(
+                CLUB_FILTER_CONTROL_CLASS,
+                "keyup changed delay:300ms",
+                "form-control",
+                placeholder="Search clubs",
+            )
+        ),
+    )
+    # Never rendered -- club_table_header.html writes the radios itself -- but still real query
+    # parameters, because ?interest=3&distance=50 is a link somebody can be sent.
+    interest = django_filters.CharFilter(method="filter_by_interest", label="Interest", widget=HiddenInput())
+    distance = django_filters.NumberFilter(method="filter_by_distance", label="Distance", widget=HiddenInput())
+
+    class Meta:
+        model = Club
+        fields = []
+
+    def __init__(self, data=None, *args, **kwargs):
+        self.latitude = kwargs.pop("latitude", None)
+        self.longitude = kwargs.pop("longitude", None)
+        # Same reason as SpeakerFilter: FilterView passes `request.GET or None`, and an unbound
+        # filterset never runs filter_queryset, so `qs` would skip the filtering entirely.
+        if not data:
+            data = {"query": ""}
+        super().__init__(data, *args, **kwargs)
+
+    def interest_choices(self):
+        """(value, name) for the interest menu, only interests a listed club actually has.
+
+        Scoped to listed clubs so the menu can't be read as a directory of what unlisted ones are
+        into, and so it never offers a filter that finds nothing.
+        """
+        interests = (
+            GeneralInterest.objects.filter(club__active=True, club__outreach_stage=Club.LISTED)
+            .distinct()
+            .order_by("name")
+        )
+        return [("", "Any interest"), *[(str(interest.pk), interest.name) for interest in interests]]
+
+    @property
+    def has_origin(self):
+        return self.latitude is not None and self.longitude is not None
+
+    def filter_by_interest(self, queryset, name, value):
+        if not value:
+            return queryset
+        return queryset.filter(interests__pk=value)
+
+    def filter_by_distance(self, queryset, name, value):
+        """Limit to clubs within `value` miles of the visitor.
+
+        A club with no coordinates drops out -- an unknown location can't be claimed to be nearby --
+        which is why the map footer says how many matching clubs aren't on it.
+        """
+        if value in (None, "") or not self.has_origin:
+            return queryset
+        return queryset.filter(latitude__isnull=False, longitude__isnull=False, distance__lte=int(value))
+
+    def club_search(self, queryset, name, value):
+        """Free text over name, abbreviation, description and interests, plus keywords and a radius."""
+        value, radius = self._take_distance_phrase(value or "")
+        if radius is not None:
+            queryset = self.filter_by_distance(queryset, "distance", radius)
+        tokens = value.lower().split()
+        require_events = False
+        require_joinable = False
+        require_website = False
+        require_mapped = False
+        remaining = []
+        for token in tokens:
+            if token == "events":
+                require_events = True
+            elif token in ("joinable", "joining"):
+                require_joinable = True
+            elif token == "website":
+                require_website = True
+            elif token in ("mapped", "located"):
+                require_mapped = True
+            else:
+                remaining.append(token)
+
+        if require_events:
+            queryset = queryset.filter(has_upcoming_event=True)
+        if require_joinable:
+            queryset = queryset.filter(allow_joining=True)
+        if require_website:
+            queryset = queryset.exclude(homepage="").exclude(homepage__isnull=True)
+        if require_mapped:
+            queryset = queryset.filter(latitude__isnull=False, longitude__isnull=False)
+
+        text = " ".join(remaining)
+        if text:
+            queryset = queryset.filter(
+                Q(name__icontains=text)
+                | Q(abbreviation__icontains=text)
+                | Q(description__icontains=text)
+                | Q(interests__name__icontains=text)
+            ).distinct()
+        return queryset
+
+    def _take_distance_phrase(self, value):
+        """Pull a radius out of the search text, and hand back the text without it.
+
+        Removing it matters as much as reading it: left in, "within 50 miles" would also be run as
+        a text search for that phrase, and no club's description says it.
+        """
+        match = DISTANCE_PHRASE_RE.search(value.lower())
+        if not match:
+            return value, None
+        remaining = (value[: match.start()] + " " + value[match.end() :]).strip()
+        return remaining, int(match.group(1))
 
 
 #: Marks every donation filter control so one hx-include picks up the whole set.

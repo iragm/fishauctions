@@ -302,10 +302,11 @@ class MobileNotificationPrefsSerializer(serializers.ModelSerializer):
 
     push_instead_of_email = serializers.BooleanField(source="push_notifications_instead_of_email", required=False)
     push_when_lots_sell = serializers.BooleanField(source="push_notifications_when_lots_sell", required=False)
+    running_total = serializers.BooleanField(source="show_running_total_notification", required=False)
 
     class Meta:
         model = UserData
-        fields = ["push_instead_of_email", "push_when_lots_sell"]
+        fields = ["push_instead_of_email", "push_when_lots_sell", "running_total"]
 
 
 class PrinterObservationSerializer(serializers.Serializer):

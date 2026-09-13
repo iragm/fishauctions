@@ -1,4 +1,5 @@
 {% extends "auctions/htmx_table_view.html" %}
+{% load static %}
 {% block title %}Speaker directory{% endblock %}
 
 {% comment %}
@@ -9,6 +10,9 @@ pagination behave like every other table on the site, and adds two things on top
     table response carries (see partials/speaker_table.html)
   * a detail panel that slides in from the right on desktop and covers the screen on
     mobile, pushing the speaker's own URL so it can be copied and shared
+
+Both are driven by static/js/map_list_panel.js, which the club finder uses too -- the two pages
+have to behave identically and that file is the only copy of the behaviour.
 {% endcomment %}
 
 {% block htmx_table_ribbon %}
@@ -75,260 +79,23 @@ of it on the page.{% endcomment %}
 {% block extra_js %}
 {{ block.super }}
 
-
 {% comment %} Wrapped in a div because hx-swap-oob needs an element it can replace wholesale;
 the htmx table response ships the same wrapper so filtering redraws the map markers. {% endcomment %}
 <div id="speaker-map-payload">{{ speakers_json|json_script:"speaker-map-data" }}</div>
+<script src="{% static 'js/map_list_panel.js' %}"></script>
 <script>
-(function () {
-  'use strict';
-
-  const shell = document.getElementById('speaker-panel-shell');
-  const panel = document.getElementById('speaker-panel');
-  const listWrapper = document.getElementById('speaker-list-wrapper');
-  const mapWrapper = document.getElementById('speaker-map-wrapper');
-  const listButton = document.getElementById('speaker-view-list');
-  const mapButton = document.getElementById('speaker-view-map');
-  const listUrl = window.location.pathname + window.location.search;
-
-  /* ---- the sliding detail panel -------------------------------------- */
-
-  // The URL the list was on, so closing the panel can restore it. htmx pushes the
-  // speaker's own URL when the panel opens, which is what makes the link shareable.
-  let listUrlBeforePanel = listUrl;
-
-  function openPanel() {
-    shell.hidden = false;
-    // Force a reflow so the CSS transition actually runs on first open.
-    void shell.offsetWidth;
-    shell.classList.add('is-open');
-    document.body.classList.add('speaker-panel-open');
-  }
-
-  function closePanel() {
-    shell.classList.remove('is-open');
-    document.body.classList.remove('speaker-panel-open');
-    shell.hidden = true;
-    panel.innerHTML = '';
-    if (window.location.pathname !== listUrlBeforePanel.split('?')[0]) {
-      history.pushState({}, '', listUrlBeforePanel);
-    }
-  }
-
-  window.closeSpeakerPanel = closePanel;
-
-  document.body.addEventListener('htmx:beforeRequest', function (event) {
-    if (event.target.closest && event.target.closest('.speaker-open')) {
-      listUrlBeforePanel = window.location.pathname + window.location.search;
-    }
-  });
-
-  document.body.addEventListener('htmx:afterSwap', function (event) {
-    if (event.target && event.target.id === 'speaker-panel') {
-      openPanel();
-    }
-  });
-
-  document.addEventListener('click', function (event) {
-    if (event.target.closest('[data-speaker-panel-close]')) {
-      event.preventDefault();
-      closePanel();
-    }
-  });
-
-  document.addEventListener('keydown', function (event) {
-    if (event.key === 'Escape' && !shell.hidden) {
-      closePanel();
-    }
-  });
-
-  // Back/forward: the pushed speaker URL is a real page, so let the browser load it
-  // rather than trying to reconstruct state.
-  window.addEventListener('popstate', function () {
-    if (!shell.hidden) {
-      closePanel();
-    }
-  });
-
-  /* ---- topic menu ------------------------------------------------------ */
-
-  // The menu itself remembers which radio is checked; this is so the closed button says so
-  // too. Picking a topic only swaps the table, so the server never re-renders this label.
-  const topicLabel = document.getElementById('topic-filter-label');
-  document.querySelectorAll('.topic-filter-option').forEach(function (radio) {
-    radio.addEventListener('change', function () {
-      if (radio.checked && topicLabel) {
-        topicLabel.textContent = radio.value ? radio.parentElement.textContent.trim() : 'Topics';
-      }
-    });
-  });
-
-  /* ---- list / map toggle --------------------------------------------- */
-
-  let mapInitialized = false;
-
-  /* Selected is primary, unselected is secondary -- see style_reference.md. */
-  function setViewButtons(selected, unselected) {
-    selected.classList.remove('btn-secondary');
-    selected.classList.add('btn-primary', 'active');
-    unselected.classList.remove('btn-primary', 'active');
-    unselected.classList.add('btn-secondary');
-  }
-
-  function showList() {
-    mapWrapper.classList.add('d-none');
-    listWrapper.classList.remove('d-none');
-    setViewButtons(listButton, mapButton);
-    setViewParam('list');
-  }
-
-  function showMap() {
-    listWrapper.classList.add('d-none');
-    mapWrapper.classList.remove('d-none');
-    setViewButtons(mapButton, listButton);
-    setViewParam('map');
-    initSpeakerMap();
-    if (speakerMap) {
-      // The container was display:none while Google measured it, so it needs a nudge.
-      window.google.maps.event.trigger(speakerMap, 'resize');
-      fitToMarkers();
-    }
-  }
-
-  function setViewParam(value) {
-    const url = new URL(window.location);
-    if (value === 'map') {
-      url.searchParams.set('view', 'map');
-    } else {
-      url.searchParams.delete('view');
-    }
-    history.replaceState({}, '', url);
-  }
-
-  listButton.addEventListener('click', showList);
-  mapButton.addEventListener('click', showMap);
-
-  /* ---- the map itself ------------------------------------------------- */
-
-  let speakerMap = null;
-  let markers = [];
-  let infoWindow = null;
-
-  function readMapData() {
-    const node = document.getElementById('speaker-map-data');
-    if (!node) {
-      return [];
-    }
-    try {
-      return JSON.parse(node.textContent) || [];
-    } catch (error) {
-      return [];
-    }
-  }
-
-  function initSpeakerMap() {
-    if (mapInitialized || !window.google || !window.google.maps) {
-      return;
-    }
-    const origin = {
-      lat: {{ origin_latitude|default:"null" }},
-      lng: {{ origin_longitude|default:"null" }}
-    };
-    const center = (origin.lat !== null && origin.lng !== null) ? origin : {lat: 42.0, lng: -72.0};
-    speakerMap = new google.maps.Map(document.getElementById('speaker-map'), {
-      zoom: 7,
-      center: center
-    });
-    infoWindow = new google.maps.InfoWindow();
-    if (origin.lat !== null && origin.lng !== null) {
-      new google.maps.Marker({
-        position: origin,
-        map: speakerMap,
-        title: "{{ origin_label|escapejs }}",
-        icon: {
-          path: google.maps.SymbolPath.CIRCLE,
-          scale: 9,
-          fillColor: '#375a7f',
-          fillOpacity: 1,
-          strokeColor: '#fff',
-          strokeWeight: 2
-        }
-      });
-    }
-    mapInitialized = true;
-    renderMarkers(readMapData());
-  }
-
-  function clearMarkers() {
-    markers.forEach(function (marker) { marker.setMap(null); });
-    markers = [];
-  }
-
-  function renderMarkers(speakers) {
-    if (!speakerMap) {
-      return;
-    }
-    clearMarkers();
-    speakers.forEach(function (speaker) {
-      const marker = new google.maps.Marker({
-        position: {lat: speaker.lat, lng: speaker.lng},
-        map: speakerMap,
-        title: speaker.name,
-        icon: {
-          path: google.maps.SymbolPath.CIRCLE,
-          scale: 7,
-          fillColor: '#00bc8c',
-          fillOpacity: 1,
-          strokeColor: '#fff',
-          strokeWeight: 2
-        }
-      });
-      marker.addListener('click', function () {
-        // Same panel the table rows open, so the two views never diverge.
-        const url = '/speakers/' + encodeURIComponent(speaker.slug) + '/panel/';
-        const shareUrl = '/speakers/' + encodeURIComponent(speaker.slug) + '/';
-        listUrlBeforePanel = window.location.pathname + window.location.search;
-        htmx.ajax('GET', url, {target: '#speaker-panel', swap: 'innerHTML'}).then(function () {
-          history.pushState({}, '', shareUrl);
-        });
-      });
-      markers.push(marker);
-    });
-    fitToMarkers();
-  }
-
-  function fitToMarkers() {
-    if (!speakerMap || markers.length === 0) {
-      return;
-    }
-    const bounds = new google.maps.LatLngBounds();
-    markers.forEach(function (marker) { bounds.extend(marker.getPosition()); });
-    speakerMap.fitBounds(bounds);
-    if (markers.length === 1) {
-      speakerMap.setZoom(10);
-    }
-  }
-
-  // The htmx table response replaces the map payload out of band; redraw from it so
-  // filtering updates both views at once. htmx names the event differently depending on
-  // version, so listen for both rather than depending on which one fires.
-  function onPayloadSwap(event) {
-    if (event.target && event.target.id === 'speaker-map-payload') {
-      renderMarkers(readMapData());
-    }
-  }
-  document.body.addEventListener('htmx:afterSwap', onPayloadSwap);
-  document.body.addEventListener('htmx:oobAfterSwap', onPayloadSwap);
-
-  window.initSpeakerMap = initSpeakerMap;
-
-  // Restore the view the URL asked for.
-  if ('{{ default_view }}' === 'map') {
-    showMap();
-  } else {
-    showList();
-  }
-})();
+initMapListPanel({
+  prefix: 'speaker',
+  panelUrl: function (slug) { return '/speakers/' + encodeURIComponent(slug) + '/panel/'; },
+  pageUrl: function (slug) { return '/speakers/' + encodeURIComponent(slug) + '/'; },
+  origin: {% if has_origin %}{lat: {{ origin_latitude }}, lng: {{ origin_longitude }}}{% else %}null{% endif %},
+  originLabel: '{{ origin_label|escapejs }}',
+  defaultView: '{{ default_view }}',
+  callbackName: 'initSpeakerMap',
+  menuLabelId: 'topic-filter-label',
+  menuOptionClass: 'topic-filter-option',
+  menuFallbackLabel: 'Topics'
+});
 </script>
 {% if google_maps_api_key %}
 <script async src="https://maps.googleapis.com/maps/api/js?key={{ google_maps_api_key }}&amp;callback=initSpeakerMap"></script>

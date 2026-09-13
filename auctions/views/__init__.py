@@ -37,6 +37,7 @@ from .bulk_add_lots import *  # noqa: F403
 from .club_admin import *  # noqa: F403
 from .club_api import *  # noqa: F403
 from .club_api_keys import *  # noqa: F403
+from .club_finder import *  # noqa: F403
 from .club_integrations import *  # noqa: F403
 from .club_members import *  # noqa: F403
 from .club_pages import *  # noqa: F403

@@ -1,0 +1,40 @@
+{% comment %}
+Search and filters for the club finder, rendered by HTMxTableView via htmx_table_header_template.
+
+Same shape as the speaker directory's: the search box gets a full-width line of its own and
+everything else is a dropdown under it, which is a layout that needs no rearranging for a phone
+because a dropdown is one fixed-size button however many options are behind it. The form filters
+as you type, so there is no apply button.
+{% endcomment %}
+<div class="d-flex flex-wrap gap-2 align-items-center justify-content-between mb-2">
+  <h3 class="mb-0">Find a club</h3>
+</div>
+
+<div class="input-group mb-2">
+  <span class="input-group-text"><i class="bi bi-search"></i></span>
+  {{ filter.form.query }}
+</div>
+
+<div class="d-flex flex-wrap gap-2 align-items-center mb-2">
+  {% comment %}Interests: radios rather than checkboxes, for the reason the speaker topic menu uses them -- a club keeps several interests, and filtering on two at once would almost always find nobody.{% endcomment %}
+  <span class="dropdown">
+    <button class="btn btn-sm btn-primary dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false">
+      <i class="bi bi-tag"></i> <span id="interest-filter-label">{{ selected_interest_label|default:"Interests" }}</span>
+    </button>
+    {% comment %}htmx sits on the menu, not on each radio: change events bubble, so one set of attributes does the job. Keep them in step with htmx_filter_attrs() in filters.py.{% endcomment %}
+    <div class="dropdown-menu dropdown-menu-scroll" hx-get="" hx-target="div.table-container" hx-trigger="change" hx-swap="outerHTML" hx-indicator=".progress" hx-include=".club-filter-control">
+      {% for interest_value, interest_label in interest_choices %}
+      <label class="dropdown-item">
+        <input type="radio" name="interest" value="{{ interest_value }}" class="club-filter-control interest-filter-option" {% if interest_value == selected_interest %}checked{% endif %}> {{ interest_label }}
+      </label>
+      {% endfor %}
+    </div>
+  </span>
+
+  {% include "auctions/partials/htmx_table_filters.html" %}
+
+  {% comment %}Where distances are measured from. There is no picker: it is the location the visitor has already given the site, and the alert at the top of the page is what offers to set one.{% endcomment %}
+  {% if has_origin %}
+    <small class="text-muted">Distances from your location &mdash; sort by the Distance column for the closest.</small>
+  {% endif %}
+</div>

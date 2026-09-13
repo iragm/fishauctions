@@ -594,7 +594,13 @@ body .select2-container {
    sits at its static position: the panel then renders in the flow at the bottom of the page,
    below the table, instead of over it.  Nothing else in this file uses `inset`, so this was
    the only feature that broke that way. */
-.speaker-panel-shell {
+/* Two names for one panel: the speaker directory named these first, the club finder is the
+   second page built the same way, and both are driven by auctions/static/js/map_list_panel.js.
+   The pairs below are deliberately not collapsed into a rename -- the speaker markup is shared
+   with a standalone page that has no JavaScript on it, so its class names are load-bearing in a
+   place that would not fail loudly. New pages use the .detail-panel- spelling. */
+.speaker-panel-shell,
+.detail-panel-shell {
     position: fixed;
     top: 0;
     right: 0;
@@ -603,11 +609,13 @@ body .select2-container {
     z-index: 1045;
 }
 
-.speaker-panel-shell[hidden] {
+.speaker-panel-shell[hidden],
+.detail-panel-shell[hidden] {
     display: none;
 }
 
-.speaker-panel-backdrop {
+.speaker-panel-backdrop,
+.detail-panel-backdrop {
     position: absolute;
     top: 0;
     right: 0;
@@ -618,11 +626,13 @@ body .select2-container {
     transition: opacity 0.25s ease-out;
 }
 
-.speaker-panel-shell.is-open .speaker-panel-backdrop {
+.speaker-panel-shell.is-open .speaker-panel-backdrop,
+.detail-panel-shell.is-open .detail-panel-backdrop {
     opacity: 1;
 }
 
-.speaker-panel {
+.speaker-panel,
+.detail-panel {
     position: absolute;
     top: 0;
     right: 0;
@@ -638,31 +648,37 @@ body .select2-container {
     transition: transform 0.25s ease-out;
 }
 
-.speaker-panel-shell.is-open .speaker-panel {
+.speaker-panel-shell.is-open .speaker-panel,
+.detail-panel-shell.is-open .detail-panel {
     transform: none;
 }
 
-.speaker-panel-inner {
+.speaker-panel-inner,
+.detail-panel-inner {
     padding: 1rem;
 }
 
 /* Below lg the panel is the whole screen — a 38rem drawer on a phone is just a
    cramped page with a sliver of unusable backdrop next to it. */
 @media (max-width: 991.98px) {
-    .speaker-panel {
+    .speaker-panel,
+    .detail-panel {
         width: 100%;
         border-left: none;
     }
 }
 
 /* The page behind the panel shouldn't scroll while the panel is open. */
-body.speaker-panel-open {
+body.speaker-panel-open,
+body.detail-panel-open {
     overflow: hidden;
 }
 
 @media (prefers-reduced-motion: reduce) {
     .speaker-panel,
-    .speaker-panel-backdrop {
+    .speaker-panel-backdrop,
+    .detail-panel,
+    .detail-panel-backdrop {
         transition: none;
     }
 }

@@ -32,7 +32,6 @@ from django.views.generic import TemplateView
 from auctions.helper_functions import bin_data
 from auctions.models import (
     AuctionTOS,
-    Club,
     Lot,
     MobileDevice,
     PageView,
@@ -484,27 +483,6 @@ class UserMap(TemplateView):
             qs = qs.filter(userdata__last_activity__gte=timezone.now() - timedelta(hours=numeric_filter))
         context["users"] = qs
         # context["pageviews"] = view_qs
-        return context
-
-
-class ClubMap(TemplateView):
-    template_name = "clubs.html"
-
-    def dispatch(self, request, *args, **kwargs):
-        if not settings.ENABLE_CLUB_FINDER:
-            return redirect(reverse("home"))
-        return super().dispatch(request, *args, **kwargs)
-
-    def get_context_data(self, **kwargs):
-        context = super().get_context_data(**kwargs)
-        context["google_maps_api_key"] = settings.LOCATION_FIELD["provider.google.api_key"]
-        context["clubs"] = Club.objects.listed().filter(latitude__isnull=False)
-        context["location_message"] = "Set your location to see clubs near you"
-        latitude_cookie = self.request.COOKIES.get("latitude")
-        longitude_cookie = self.request.COOKIES.get("longitude")
-        if latitude_cookie:
-            context["latitude"] = latitude_cookie
-            context["longitude"] = longitude_cookie
         return context
 
 
