@@ -553,14 +553,15 @@ class LadderSnapshotTests(TestCase):
         self.assertEqual(club_health.ladder_history(), {"months": [], "rows": []})
 
 
-class LinkCheckColumnDropTests(TransactionTestCase):
-    """Migration 0435 drops four columns that may already be gone.
+class Migration0435RerunTests(TransactionTestCase):
+    """Migration 0435 has to survive being run against a database that already had half of it.
 
-    Staging stopped on this migration with ``OperationalError (1091, "Can't DROP COLUMN
-    `date_links_checked`")``: 0434 was recorded as applied against a database whose
-    ``auctions_club`` did not end up with the columns.  entrypoint.sh refuses to start on a failed
-    migrate, so that is the whole site down until somebody edits the database by hand -- over four
-    columns that were scrapped a day after they shipped and never held a value anywhere.
+    MariaDB commits each ``ALTER TABLE`` as it runs and discards the transaction Django wrapped
+    the migration in, so an interrupted migration leaves its finished operations behind with no
+    row in ``django_migrations``, and the retry replays the whole thing.  Staging sat in exactly
+    that state and refused to come up: first ``1091 Can't DROP COLUMN date_links_checked``, then
+    ``1060 Duplicate column name 'contact_method'``.  entrypoint.sh will not start on a failed
+    migrate, so each of those is the whole site down until somebody edits the schema by hand.
     """
 
     TABLE = "auctions_club"
@@ -570,12 +571,12 @@ class LinkCheckColumnDropTests(TransactionTestCase):
 
         return importlib.import_module("auctions.migrations.0435_remove_club_date_links_checked_and_more")
 
-    def _repair(self):
+    def _apply(self):
         from django.apps import apps
         from django.db import connection
 
         with connection.schema_editor() as schema_editor:
-            self._migration().drop_link_check_columns(apps, schema_editor)
+            self._migration().apply_club_columns(apps, schema_editor)
 
     def _columns(self):
         from django.db import connection
@@ -588,24 +589,46 @@ class LinkCheckColumnDropTests(TransactionTestCase):
             )
             return {row[0] for row in cursor.fetchall()}
 
-    def test_columns_that_are_already_gone_are_not_an_error(self):
-        """Staging's state, and the state of any database built from these migrations."""
-        self.assertEqual(self._columns() & set(self._migration().LINK_CHECK_COLUMNS), set())
-        self._repair()
-        self.assertEqual(self._columns() & set(self._migration().LINK_CHECK_COLUMNS), set())
-        Club.objects.create(name="Link check club")
-
-    def test_a_column_that_is_there_is_still_dropped(self):
-        """The guard is about tolerating the absent column, not about skipping the work."""
+    def _execute(self, sql):
         from django.db import connection
 
         with connection.cursor() as cursor:
-            cursor.execute(f"ALTER TABLE {self.TABLE} ADD COLUMN date_links_checked datetime(6) NULL")
+            cursor.execute(sql)
+
+    def test_a_second_run_against_the_finished_schema_changes_nothing(self):
+        """Staging's state, and the state of every database built from these migrations."""
+        before = self._columns()
+        self.assertEqual(before & set(self._migration().LINK_CHECK_COLUMNS), set())
+        self.assertIn("contact_method", before)
+        self._apply()
+        self.assertEqual(self._columns(), before)
+        Club.objects.create(name="Rerun club", contact_method="email")
+
+    def test_a_link_check_column_that_is_there_is_still_dropped(self):
+        """The guard tolerates the absent column; it does not skip the work."""
+        self._execute(f"ALTER TABLE {self.TABLE} ADD COLUMN date_links_checked datetime(6) NULL")
         try:
-            self._repair()
+            self._apply()
         finally:
             if "date_links_checked" in self._columns():
-                with connection.cursor() as cursor:
-                    cursor.execute(f"ALTER TABLE {self.TABLE} DROP COLUMN date_links_checked")
+                self._execute(f"ALTER TABLE {self.TABLE} DROP COLUMN date_links_checked")
         self.assertNotIn("date_links_checked", self._columns())
-        Club.objects.create(name="Link check club two")
+        Club.objects.create(name="Rerun club two")
+
+    def test_contact_method_is_created_when_it_is_missing(self):
+        """The half of the migration staging had already done -- on a database that has not."""
+        self._execute(f"ALTER TABLE {self.TABLE} DROP COLUMN contact_method")
+        try:
+            self._apply()
+        finally:
+            if "contact_method" not in self._columns():
+                self._execute(f"ALTER TABLE {self.TABLE} ADD COLUMN contact_method varchar(20) NOT NULL")
+        self.assertIn("contact_method", self._columns())
+        club = Club.objects.create(name="Rerun club three", contact_method="facebook")
+        self.assertEqual(Club.objects.get(pk=club.pk).contact_method, "facebook")
+
+    def test_an_existing_contact_method_keeps_its_data(self):
+        """A re-add would be ``1060``; a re-add that somehow worked would drop what clubs answered."""
+        club = Club.objects.create(name="Rerun club four", contact_method="webform")
+        self._apply()
+        self.assertEqual(Club.objects.get(pk=club.pk).contact_method, "webform")

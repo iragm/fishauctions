@@ -291,7 +291,7 @@ this only quotes its opening sentence.
   `ClubAPITests`, `ClubAPIKeyMemberPermissionTests`, `ClubBapLotAPITests`, `ClubAuctionReadAPITests`, `ParseBoolEnvTests`, `RequireSecureProdSecretsTests`, `ClubAuctionIntegrationTests`
 - **`test_club_events.py`** (3088 lines)
   Tests for club events, Google Calendar sync, and the Discord events built on top of them.
-- **`test_club_health.py`** (611 lines)
+- **`test_club_health.py`** (634 lines)
   Tests for the club lifecycle rollup and the outreach queue that comes out of it.
 - **`test_club_import.py`** (200 lines)
   Phase 8: importing a curated club list, and never publishing anything by accident.
