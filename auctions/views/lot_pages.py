@@ -525,8 +525,17 @@ class ViewLot(DetailView):
             )
         if context["viewer_pk"] == context["submitter_pk"]:
             context["user_specific_bidding_error"] = "You can't bid on your own lot"
-        context["amount"] = defaultBidAmount
         context["only_whole_dollar_bids"] = lot.auction.only_whole_dollar_bids if lot.auction else True
+        # In a whole-dollar auction the bid box steps by 1 and carries a hard-coded ".00" beside it,
+        # so what goes *in* the box has to be a whole number.  Every branch above builds this out of
+        # a DecimalField, and a Decimal renders as "5.00" -- which read "5.00" next to a ".00"
+        # suffix.  It was invisible until production's money columns became real decimals in 0437:
+        # an integer column handed mysqlclient an int, and an int renders as "5".
+        # Rounding up, not down: this is the *minimum* next bid, and rounding down would offer an
+        # amount the bidding rules then reject.
+        if context["only_whole_dollar_bids"]:
+            defaultBidAmount = int(Decimal(defaultBidAmount).to_integral_value(rounding="ROUND_CEILING"))
+        context["amount"] = defaultBidAmount
         context["watched"] = Watch.objects.filter(lot_number=lot.lot_number, user=self.request.user.id)
         context["category"] = lot.species_category
         # context['form'] = CreateBid(initial={'user': self.request.user.id, 'lot_number':lot.pk, "amount":defaultBidAmount}, request=self.request)

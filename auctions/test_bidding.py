@@ -1136,3 +1136,79 @@ class BidDialogTests(StandardTestCase):
         self.assertIn("Bid failed", page)
         self.assertNotIn("Sign in to bid", page)
         self.assertIn("read the auction's rules and join the auction", page)
+
+
+class WholeDollarBidBoxTests(StandardTestCase):
+    """What goes *in* the bid box when the auction takes whole dollars only.
+
+    The box steps by 1 and carries a hard-coded ".00" beside it, so an amount with cents in it reads
+    "5.00" next to ".00".  Every default this view offers is built out of a DecimalField and renders
+    as "5.00" -- but production only started showing it the day 0437 turned the money columns into
+    real decimals: an integer column handed mysqlclient an int, and an int renders as "5".  Dev and
+    staging had been decimal all along, which is why the deploy was the first sight of it.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.live_auction = Auction.objects.create(
+            created_by=self.user,
+            title="A whole dollar auction",
+            is_online=True,
+            date_start=timezone.now() - datetime.timedelta(days=1),
+            date_end=timezone.now() + datetime.timedelta(days=3),
+            promote_this_auction=True,
+        )
+        self.live_location = PickupLocation.objects.create(
+            name="whole dollar location",
+            auction=self.live_auction,
+            pickup_time=timezone.now() + datetime.timedelta(days=5),
+        )
+        self.dollar_seller = AuctionTOS.objects.create(
+            user=self.user,
+            auction=self.live_auction,
+            pickup_location=self.live_location,
+            bidder_number="701",
+        )
+        self.dollar_bidder = AuctionTOS.objects.create(
+            user=self.user_with_no_lots,
+            auction=self.live_auction,
+            pickup_location=self.live_location,
+            bidder_number="702",
+        )
+        self.dollar_lot = Lot.objects.create(
+            lot_name="A whole dollar lot",
+            auction=self.live_auction,
+            auctiontos_seller=self.dollar_seller,
+            quantity=1,
+            reserve_price=5,
+            active=True,
+        )
+        # Bidding is held off a lot for its first 20 minutes (Lot.bidding_allowed_on), and a lot
+        # created inside a test is always brand new -- which puts "this lot is very new" where the
+        # bid box goes.  date_posted is auto_now_add, so a queryset update is the only way past it.
+        Lot.objects.filter(pk=self.dollar_lot.pk).update(date_posted=timezone.now() - datetime.timedelta(hours=1))
+
+    def _bid_box(self):
+        """The bid input's own tag, so an amount elsewhere on the page cannot satisfy the assert."""
+        self.client.login(username="no_lots", password="testpassword")
+        page = self.client.get(self.dollar_lot.lot_link).content.decode()
+        self.assertIn("id='bid_amount'", page)
+        return page.split("id='bid_amount'")[1].split(">")[0]
+
+    def test_the_box_holds_a_whole_number_when_the_auction_takes_whole_dollars(self):
+        box = self._bid_box()
+        self.assertIn('value="5"', box)
+        self.assertNotIn('value="5.00"', box)
+
+    def test_the_dot_zero_zero_suffix_is_the_only_place_cents_appear(self):
+        """The suffix is the whole reason the value must not carry its own cents."""
+        box = self._bid_box()
+        self.assertIn('step="1"', box)
+
+    def test_an_auction_that_takes_cents_still_offers_them(self):
+        """The fix is about whole-dollar auctions; a cents auction keeps its cents."""
+        self.live_auction.only_whole_dollar_bids = False
+        self.live_auction.save()
+        box = self._bid_box()
+        self.assertIn('value="5.00"', box)
+        self.assertIn('step="0.01"', box)
