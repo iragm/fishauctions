@@ -1,13 +1,237 @@
 """Shared label-printing helpers.
 
-The mismatch-warning matrix lives here so the ``/printing/`` template and the mobile prefs API
-(``GET /api/mobile/labels/prefs/``) surface exactly the same warnings from the same saved prefs.
-Warnings are advisory — they never block saving.
+The mismatch-warning matrix lives here so ``/printing/`` and the mobile prefs API
+(``GET /api/mobile/labels/prefs/``) surface identical warnings from the same saved prefs; they are
+advisory and never block saving. ``plan_label`` measures text so ``label_template.html`` can lay
+out two fixed columns without ever clipping or overflowing (rules enforced by
+``test_label_layout.py``): left column is lot number, QR code, then short tags that fit whole;
+right column is lot name, then owner (winner+pickup location, or seller) pinned to the bottom, with
+species/custom-field/category/description filling whatever height is left, sold and unsold filling
+that middle band in different priority order since a sold label is read to collect a lot and an
+unsold one is read to sell it. A field with nothing to say takes no space.
 """
+
+import html
+import math
+import re
 
 # Presets that describe a thermal label roll vs. a sheet of Avery-style labels.
 THERMAL_PRESETS = frozenset({"thermal_sm", "thermal_very_sm"})
 SHEET_PRESETS = frozenset({"sm", "lg"})
+
+# One-line facts a label can carry, in print order. See split_label_tags for left/right placement.
+LABEL_TAG_FIELDS = (
+    "quantity_label",
+    "donation_label",
+    "min_bid_label",
+    "buy_now_label",
+    "custom_checkbox_label",
+    "custom_dropdown_label",
+    "i_bred_this_fish_label",
+    "auction_date",
+)
+
+# label_template.html sets this line-height, and split_label_tags counts lines with it.
+LABEL_LINE_HEIGHT = 1.2
+
+# DejaVu Serif advance widths for ASCII 32..126, hundredths of an em (Pillow ImageFont.getlength).
+# Non-ASCII counts as a full em, erring toward moving a tag right rather than under-wrapping it.
+# fmt: off
+_SERIF_WIDTHS = (
+    32, 40, 46, 84, 64, 95, 89, 27, 39, 39, 50, 84, 32, 34, 32, 34, 64, 64, 64, 64, 64, 64, 64, 64,
+    64, 64, 34, 34, 84, 84, 84, 54, 100, 72, 73, 77, 80, 73, 69, 80, 87, 40, 40, 75, 66, 102, 88, 82,
+    67, 82, 75, 69, 67, 84, 72, 103, 71, 66, 69, 39, 34, 39, 84, 50, 50, 60, 64, 56, 64, 59, 37, 64,
+    64, 32, 31, 61, 32, 95, 64, 60, 64, 64, 48, 51, 40, 64, 56, 86, 56, 56, 53, 64, 34, 64, 84,
+)
+# fmt: on
+# Kerning/rounding slack: a tag measured as exactly filling the column still goes right.
+_FIT_SLACK = 0.97
+# DejaVu Serif Bold: for the winner's name, the one bold text plan_label fits.
+# fmt: off
+_SERIF_BOLD_WIDTHS = (
+    35, 44, 52, 84, 70, 95, 90, 31, 47, 47, 52, 84, 35, 42, 35, 37, 70, 70, 70, 70, 70, 70, 70, 70,
+    70, 70, 37, 37, 84, 84, 84, 59, 100, 78, 85, 80, 87, 76, 71, 85, 94, 47, 47, 87, 70, 111, 91, 87,
+    75, 87, 83, 72, 74, 87, 78, 112, 78, 71, 73, 47, 37, 47, 84, 50, 50, 65, 70, 61, 70, 64, 43, 70,
+    73, 38, 36, 69, 38, 106, 73, 67, 70, 70, 53, 56, 46, 73, 58, 86, 60, 58, 57, 64, 36, 64, 84,
+)
+# fmt: on
+
+
+# The tag separator plan_label inserts itself; not ASCII, so given its (wider, bold) width here.
+_OTHER_WIDTHS = {"·": 35}
+
+
+def text_width_pt(text, font_size_pt, bold=False):
+    """How wide *text* prints in the label face at *font_size_pt*, in points."""
+    widths = _SERIF_BOLD_WIDTHS if bold else _SERIF_WIDTHS
+    hundredths = sum(widths[ord(c) - 32] if 32 <= ord(c) < 127 else _OTHER_WIDTHS.get(c, 100) for c in str(text))
+    return hundredths * font_size_pt / 100
+
+
+def split_label_tags(values, *, width_pt, height_pt, font_size_pt):
+    """Split one label's non-empty tag *values* into ``(left, right)``.
+
+    A tag stays left if it fits on one line and a line is free; otherwise it goes right. Order is
+    kept on each side; a short tag after a long one can still take a free left line.
+    """
+    lines = int(height_pt // (font_size_pt * LABEL_LINE_HEIGHT))
+    left, right = [], []
+    for value in values:
+        if len(left) < lines and text_width_pt(value, font_size_pt) <= width_pt * _FIT_SLACK:
+            left.append(value)
+        else:
+            right.append(value)
+    return left, right
+
+
+def wrapped_lines(text, *, width_pt, font_size_pt, bold=False):
+    """How many lines *text* takes in a column *width_pt* wide; a newline starts a new line.
+
+    Breaks where WeasyPrint does -- at spaces and after "/" or "-" -- and inside an
+    overlong word like ``overflow-wrap: anywhere``. Where the two could differ (kerning), this
+    counts more lines, never fewer.
+    """
+    lines = 0
+    space = text_width_pt(" ", font_size_pt, bold)
+    for paragraph in str(text).splitlines():
+        used = None  # width taken on the current line; None before the paragraph's first word
+        for word in paragraph.split():
+            # Split after each "/" or "-", keeping the delimiter on the piece it ends.
+            for index, piece in enumerate(p for p in re.split(r"(?<=[/-])", word) if p):
+                gap = space if index == 0 else 0
+                width = text_width_pt(piece, font_size_pt, bold)
+                if used is not None and used + gap + width <= width_pt:
+                    used += gap + width
+                    continue
+                # A new line, plus as many more as a piece wider than the column needs.
+                extra = max(math.ceil(width / width_pt) - 1, 0)
+                lines += 1 + extra
+                used = width - extra * width_pt
+        if used is None:
+            lines += 1  # a blank line: <br><br> in a description
+    return lines
+
+
+def plan_label(label, *, print_fields, geometry):
+    """Decide what goes where on one lot label, so ``label_template.html`` only has to draw it.
+
+    *geometry* is the label view's context: label sizes in inches, font sizes in points. Sets on
+    *label*: ``tags_left``/``tags_right``; ``name_lines``, ``tags_lines`` and ``location_lines``
+    (lines the lot name, moved-over tags, and pickup location are clamped to); ``species_line`` and
+    ``species_is_scientific``; ``details``, the rest of the middle band that fits whole, in order;
+    and ``description_lines``. A count of 0 leaves the field off.
+    """
+    font = geometry["font_size"]
+    small = geometry["description_font_size"]
+    tag_font = geometry["tag_font_size"]
+    right_width = (geometry["label_width"] - geometry["first_column_width"]) * 72
+
+    def line(size):
+        return size * LABEL_LINE_HEIGHT
+
+    def block(text, size, bold=False):
+        return wrapped_lines(text, width_pt=right_width, font_size_pt=size, bold=bold) * line(size)
+
+    # An empty tag value (e.g. no minimum bid on a sold lot) must not hold a line a real one needs.
+    tag_height = geometry["label_height"] * 72 - line(font)  # under the lot number...
+    if "qr_code" in print_fields:
+        tag_height -= geometry["qr_size"] * 72  # ...and the QR code
+    tags = [value for value in (getattr(label, field) for field in LABEL_TAG_FIELDS if field in print_fields) if value]
+    label.tags_left, label.tags_right = split_label_tags(
+        tags, width_pt=geometry["first_column_width"] * 72, height_pt=tag_height, font_size_pt=tag_font
+    )
+
+    # The owner's name is measured first and never clipped. Half a point off for layout rounding.
+    budget = geometry["label_height"] * 72 - 0.5
+    if label.sold:
+        # "Winner:" is regular, but measuring all of it bold only errs toward a spare line.
+        budget -= block(f"Winner: {label.winner_name}", font, bold=True)
+    else:
+        seller = f"Seller: {label.seller_name}" if "seller_name" in print_fields else ""
+        email = label.seller_email if "seller_email" in print_fields and label.seller_email else ""
+        # A long email prints at seller_email_font_size, an em ratio.
+        email_font = font * (
+            float(label.seller_email_font_size.removesuffix("em")) if label.seller_email_font_size else 1
+        )
+        if seller and email and text_width_pt(f"{seller} ", font) + text_width_pt(email, email_font) <= right_width:
+            owner_lines = 1
+        else:
+            owner_lines = wrapped_lines(seller, width_pt=right_width, font_size_pt=font) + wrapped_lines(
+                email, width_pt=right_width, font_size_pt=email_font
+            )
+        budget -= owner_lines * line(font)
+
+    def needs(text, size, cap=None):
+        lines = wrapped_lines(text, width_pt=right_width, font_size_pt=size) if text else 0
+        return min(lines, cap) if cap else lines
+
+    location = label.winner_location if label.sold and label.auction.multi_location else ""
+    name_wanted = needs(label.lot_name if "lot_name" in print_fields else "", font, geometry["name_lines"])
+    tags_wanted = needs(" · ".join(label.tags_right), tag_font)
+    if label.sold:
+        # Sold: read to get the lot to its winner, so name and pickup location come before tags.
+        priority = (
+            ("name_lines", name_wanted, font),
+            ("location_lines", needs(location, font), font),
+            ("tags_lines", tags_wanted, tag_font),
+        )
+    else:
+        # Unsold: the tags (min bid, buy-now) are what sells it, so a long name can't push them off.
+        priority = (
+            ("name_lines", name_wanted, font),
+            ("tags_lines", tags_wanted, tag_font),
+            ("location_lines", 0, font),
+        )
+    given = dict.fromkeys((key for key, _, _ in priority), 0)
+    # First two get one line each before either gets a second.
+    for key, wanted, size in priority[:2]:
+        if wanted and budget >= line(size):
+            given[key] = 1
+            budget -= line(size)
+    # Then each grows back toward what it needs, in the same order; the third takes what is left.
+    for key, wanted, size in priority:
+        while given[key] < wanted and budget >= line(size):
+            given[key] += 1
+            budget -= line(size)
+    for key, value in given.items():
+        setattr(label, key, value)
+    if given["tags_lines"] < tags_wanted:
+        # Tags are the top of the middle band; if cut, nothing below prints either, or e.g. dropping
+        # "Min: $25" while keeping the category would make the category look more important.
+        budget = 0
+
+    # The name the seller did *not* type -- see Lot.scientific_name_line.
+    label.species_line, label.species_is_scientific = "", False
+    if "scientific_name" in print_fields:
+        if label.scientific_name_line:
+            label.species_line, label.species_is_scientific = label.scientific_name_line, True
+        elif label.common_name_line:
+            label.species_line = label.common_name_line
+
+    middle_band = (
+        ("species", label.species_line, small),
+        ("custom_field", label.custom_field_1 if "custom_field_1" in print_fields else "", small),
+        ("category", str(label.category) if "category" in print_fields and label.category else "", font),
+    )
+    label.details = []
+    for key, text, size in middle_band:
+        if not text:
+            continue
+        needed = block(text, size)
+        if needed > budget:
+            budget = 0  # clipped from the bottom: nothing after the first field that doesn't fit
+            break
+        label.details.append(key)
+        budget -= needed
+
+    label.description_lines = 0
+    if "description_label" in print_fields and budget > 0:
+        # description_label keeps only <br> from the seller's HTML.
+        text = html.unescape(re.sub(r"<[^>]*>", "", re.sub(r"<br\s*/?>", "\n", label.description_label)))
+        if text.strip():
+            description_lines = wrapped_lines(text, width_pt=right_width, font_size_pt=small)
+            label.description_lines = min(int(budget // line(small)), description_lines)
+
 
 WARNING_SHEET_METHOD_THERMAL_SIZE = (
     "Your label size is a thermal roll. Regular printers usually take letter/A4 label sheets — "
@@ -19,6 +243,12 @@ WARNING_BLUETOOTH_SHEET_SIZE = (
 WARNING_BLUETOOTH_TOO_LARGE = "No supported Bluetooth printer takes labels this large."
 
 _MM_PER_UNIT = {"in": 25.4, "cm": 10.0}
+
+
+def inches_per_unit(unit):
+    """One *unit* in inches: custom label sizes are saved in ``UserLabelPrefs.unit``, and the label
+    templates write inches. Both label views convert through this, so they cannot disagree."""
+    return _MM_PER_UNIT.get(unit, 25.4) / 25.4
 
 
 def _label_size_mm(prefs):

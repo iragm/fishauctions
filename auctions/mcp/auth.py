@@ -1,26 +1,11 @@
 """Who is calling ``/mcp/``, and what they may do.
 
-Two ways in, and a third that is refused on purpose.
-
-**OAuth 2.1** is the one Claude's own hosted surfaces use -- claude.ai, Desktop, mobile and Claude
-Code all run a real authorization-code flow with PKCE, and there is no way to paste a key into any
-of them. The authorization server is ``django-oauth-toolkit`` running inside this project, so the
-consent screen is this site's own login. Turned on by adding ``oauth2_provider`` to
-``INSTALLED_APPS``; a deployment that does not want to be an authorization server simply doesn't,
-and the key path below still works.
-
-**A per-user API key** (:class:`auctions.models.UserAPIKey`, prefix ``ak_``) covers everything that
-cannot do an OAuth dance: ``claude mcp add --header``, a cron job, a club's own script.
-
-**A session cookie is refused**, and that is the most important line in this module. ``/mcp/`` is a
-CSRF-exempt POST endpoint that performs writes. If it honoured cookies, any page on the internet
-could post to it and act as whoever was signed in -- the site's own CSRF protection is what
-normally stops that, and bearer credentials are what replace it here. This is the same rule
-``mobile/permissions.IsMobileAuthenticated`` applies for the same reason.
-
-A credential can only ever narrow what its owner may do (:attr:`Credential.writes`). It can never
-widen it: every tool goes through the resolver, which asks the database what *this user* is allowed
-to do on *this auction*, exactly as it does for somebody clicking buttons.
+Two credentials, both ``Authorization: Bearer``: OAuth 2.1 (``django-oauth-toolkit``, gated on
+``oauth2_provider`` in ``INSTALLED_APPS``) and a per-user :class:`auctions.models.UserAPIKey`
+(prefix ``ak_``) for clients that can't run an OAuth dance. A session cookie is refused: this is a
+CSRF-exempt POST endpoint that performs writes, so honouring cookies would let any page act as
+whoever is signed in. A credential only ever narrows what its owner may do -- every tool still asks
+the database what this user may do on this object, same as a click would.
 """
 
 from __future__ import annotations

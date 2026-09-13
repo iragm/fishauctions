@@ -1,8 +1,8 @@
 """Query-count guards: the N+1s that were fixed, and stay fixed.
 
-Every optimization in ``OPTIMIZATION.md`` that removed a per-row query has a test here, because a
-``select_related`` or a ``@cached_property`` is invisible: delete it and every test still passes,
-the page just costs ten times as much. That is the same failure mode as ``SuiteStaysFastTests`` in
+Every change that removed a per-row query has a test here, because a ``select_related`` or a
+``@cached_property`` is invisible: delete it and every test still passes, the page just costs ten
+times as much. That is the same failure mode as ``SuiteStaysFastTests`` in
 ``auctions/tests.py``, and this file is the same answer to it.
 
 **These assert growth, not totals.** A page's fixed cost (session, userdata, the nav, feature

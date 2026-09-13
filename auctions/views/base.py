@@ -54,6 +54,7 @@ from auctions.models import (
     PickupLocation,
     UserData,
 )
+from auctions.services import SHARED_MEMBER_FIELDS, clear_bidder_number_in
 from auctions.tasks import (
     maybe_send_membership_renewal_confirmation,
 )
@@ -296,11 +297,14 @@ def _upsert_clubmember_shadow_tos(
     tos.user = member.user
     tos.pickup_location = pickup_location
     tos.clubmember = member
-    tos.bidder_number = member.bidder_number
-    tos.name = member.name or ""
-    tos.email = member.email or ""
-    tos.phone_number = member.phone_number or ""
-    tos.address = member.address or ""
+    # The member's number, and nobody else in this auction may still be on it -- one person, one
+    # number, here and in the club and in every other auction. Two rows sharing a number made every
+    # later lookup pick one of them, and setting a lot winner is a lookup by number.
+    if member.bidder_number:
+        clear_bidder_number_in(auction, member.bidder_number, keep_tos=tos)
+        tos.bidder_number = member.bidder_number
+    for field in SHARED_MEMBER_FIELDS:
+        setattr(tos, field, getattr(member, field, None) or "")
     if is_club_member is not _UNSET:
         tos.is_club_member = is_club_member
     if bidding_allowed is not _UNSET:

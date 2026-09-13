@@ -77,6 +77,11 @@ def get_single_club(*, create: bool = False):
         "enable_membership": True,
         "allow_non_oauth_paypal": False,
         "use_site_paypal_account": site_paypal_configured(),
+        # On a single-club site this club *is* the site, so it is approved by definition.
+        # Club.outreach_stage defaults to "prospect" (it exists for the clubs phase 8 goes looking
+        # for), and an unlisted club is off the map and out of every dropdown -- which for this one
+        # would mean the deployment hiding itself.
+        "outreach_stage": Club.LISTED,
     }
     for field_name, desired_value in desired_values.items():
         if getattr(club, field_name) != desired_value:

@@ -244,12 +244,49 @@ class LabelViewBranchTests(RemotePrintBase):
         self.assertEqual(self._get()["Content-Type"], "application/pdf")
         self.assertFalse(RemotePrintJob.objects.exists())
 
-    def test_no_reachable_phone_gets_the_pdf(self):
-        """The preference alone is a promise the phone may not be able to keep."""
+    def test_no_reachable_phone_lands_on_the_same_page_and_says_so(self):
+        """The one that used to silently hand back a PDF.
+
+        Somebody who asked for labels on the printer beside their phone and got a file in their
+        downloads folder has been answered with a different thing and told nothing; the only way to
+        find out why is to guess. Same page, and it says what to do about it.
+        """
         self.device.last_heartbeat = timezone.now() - datetime.timedelta(hours=1)
         self.device.save()
-        self.assertEqual(self._get()["Content-Type"], "application/pdf")
-        self.assertFalse(RemotePrintJob.objects.exists())
+        response = self._get()
+        self.assertTemplateUsed(response, "label_remote_print.html")
+        job = RemotePrintJob.objects.get(user=self.user)
+        self.assertEqual(job.status, RemotePrintJob.STATUS_UNREACHABLE)
+        html = response.content.decode()
+        # Painted from the server, so the error is on the first frame rather than one poll later.
+        self.assertIn("remote-print-initial-state", html)
+        self.assertIn(RemotePrintJob.STATUS_UNREACHABLE, html)
+
+    def test_the_unreachable_page_offers_retry_cancel_and_the_way_out(self):
+        self.device.last_heartbeat = timezone.now() - datetime.timedelta(hours=1)
+        self.device.save()
+        html = self._get().content.decode()
+        self.assertIn("Open the app on your phone, then press Try again.", html)
+        self.assertIn('id="remote-print-retry"', html)
+        self.assertIn('id="remote-print-cancel"', html)
+        # Still one button away, for whoever wants it -- it is a choice now, not a substitution.
+        self.assertIn("Print a PDF here", html)
+        self.assertIn(reverse("printing"), html)
+
+    def test_retry_from_the_unreachable_page_reaches_a_phone_that_has_woken_up(self):
+        """What the button is for: open the app, press Try again, labels print."""
+        self.device.last_heartbeat = timezone.now() - datetime.timedelta(hours=1)
+        self.device.save()
+        self._get()
+        first = RemotePrintJob.objects.get(user=self.user)
+        self.device.last_heartbeat = timezone.now()
+        self.device.save()
+        with patch("auctions.mobile.services.remote_print.send_fcm_data_message", return_value=SEND_OK):
+            response = self.client.post(reverse("remote_print_job_retry", kwargs={"job_uuid": first.uuid}))
+        self.assertEqual(response.status_code, 200)
+        retried = RemotePrintJob.objects.exclude(uuid=first.uuid).get(user=self.user)
+        self.assertEqual(retried.status, RemotePrintJob.STATUS_SENT)
+        self.assertEqual(retried.lots, first.lots)
 
     def test_the_app_arm_wins_over_the_job_arm(self):
         """Printing *from* the phone prints directly, rather than routing a job back to itself."""

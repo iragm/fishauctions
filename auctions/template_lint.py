@@ -1,19 +1,15 @@
-"""Catches Django template tags that silently render as text instead of being parsed.
+"""Catches two silent template mistakes: no error, no warning, just a wrong page.
 
-Django's lexer is ``({%.*?%}|{{.*?}}|{#.*?#})`` with no ``re.DOTALL``, so **every** template
-tag has to open and close on the same line. A tag spread over two lines isn't a syntax error and
-nothing warns about it — Django simply doesn't recognise it and copies it to the output, where
-members read it. The usual way this happens is a comment that grew too long for one line::
+Django's lexer is ``({%.*?%}|{{.*?}}|{#.*?#})`` with no ``re.DOTALL``, so every template tag must
+open and close on the same line -- a tag split across two lines renders onto the page as text with
+no error. Use ``{% comment %} … {% endcomment %}`` for anything that needs more than one line.
 
-    {# Subscribing, not downloading: the plain .ics link is a one-time import that never
-       updates again, so it's the last item rather than the button. #}
+The other check is ``id="modals-here"``: base.html renders that container once, per page. A second
+element with the same id makes htmx and ``document.querySelector`` swap into whichever comes first,
+so modals stop opening once that one is swapped away.
 
-which puts that entire note, ``#}`` and all, on the club page. Use ``{% comment %} … {% endcomment %}``
-for anything that needs more than one line.
-
-Pure stdlib and no Django import, so this runs three ways off one implementation: as a unit test
-(``auctions/test_template_hygiene.py``), from the lint script, and as a pre-commit hook —
-``python3 -m auctions.template_lint``.
+Pure stdlib, no Django import: runs as a unit test (``auctions/test_template_hygiene.py``), from the
+lint script, and as a pre-commit hook (``python3 -m auctions.template_lint``).
 """
 
 from __future__ import annotations
@@ -28,23 +24,21 @@ TAG_PAIRS = {"{%": "%}", "{{": "}}", "{#": "#}"}
 # Balanced tags, so what's left on a line is anything unpaired.
 BALANCED_TAG = re.compile(r"\{%.*?%\}|\{\{.*?\}\}|\{#.*?#\}")
 
-# Closers worth reporting on their own, for the line an unclosed opener spills onto (and for the
-# orphan left behind when someone deletes the opening line of a multi-line comment). "}}" is
-# missing on purpose: minified JavaScript and CSS end nested blocks with it all the time.
+# "}}" is excluded: minified JS/CSS legitimately ends nested blocks with it.
 ORPHAN_CLOSERS = ("%}", "#}")
 
 TEMPLATE_SUFFIXES = (".html", ".txt")
+
+# The one template allowed to declare the modal container; everything else inherits base.html's.
+MODAL_CONTAINER = 'id="modals-here"'
+MODAL_CONTAINER_OWNERS = ("templates/base.html",)
 
 
 def iter_template_files(root):
     """Every template under ``root``, found by directory name rather than by asking Django.
 
-    Keeps this importable without settings configured, and picks up templates in any app.
-
-    ``root`` may also be a single **file**, so the same entry point serves the whole tree (CI) and
-    one template (the edit hook in ``.claude/hooks/``). Without that, a file path here matched no
-    ``templates`` directory and the checker reported nothing at all -- a lint that always passes,
-    which is worse than not having one.
+    ``root`` may also be a single file, so one entry point serves both the whole tree (CI) and one
+    template (the edit hook in ``.claude/hooks/``).
     """
     root = Path(root)
     if root.is_file():
@@ -110,11 +104,31 @@ def check_text(text):
     return problems
 
 
+def check_modal_container(path, text):
+    """Return ``[(line_number, message)]`` for a template that declares a second modal container."""
+    posix = Path(path).as_posix()
+    if any(posix.endswith(owner) for owner in MODAL_CONTAINER_OWNERS):
+        return []
+    return [
+        (
+            number,
+            f"{MODAL_CONTAINER} is already rendered by base.html. A second element with that id "
+            f"makes htmx swap into whichever comes first, and modals stop opening once that one has "
+            f"been swapped away. Delete this and use the inherited container.",
+        )
+        for number, line in enumerate(text.splitlines(), 1)
+        if MODAL_CONTAINER in line
+    ]
+
+
 def check_templates(root):
     """Return ``[(path, line_number, message)]`` for every template under ``root``."""
     findings = []
     for path in iter_template_files(root):
-        for number, message in check_text(path.read_text(encoding="utf-8", errors="replace")):
+        text = path.read_text(encoding="utf-8", errors="replace")
+        for number, message in check_text(text):
+            findings.append((path, number, message))
+        for number, message in check_modal_container(path, text):
             findings.append((path, number, message))
     return findings
 
@@ -130,7 +144,7 @@ def main(argv=None):
     for path, number, message in findings:
         sys.stderr.write(f"{path}:{number}: {message}\n")
     if findings:
-        sys.stderr.write(f"\n{len(findings)} unparsed template tag(s) would render as text.\n")
+        sys.stderr.write(f"\n{len(findings)} template problem(s) that would render a wrong page.\n")
         return 1
     return 0
 

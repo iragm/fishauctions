@@ -314,7 +314,12 @@ class _OpApplier:
         apply_club_member_to_tos(self.auction, tos, member)
         tos.save()  # AuctionTOS.save() auto-assigns a free bidder_number when the requested one is blank
         if requested and tos.bidder_number != requested:
-            # The club number lost to the one being handed out at the door; this auction uses the card.
+            # The card the admin just handed out wins, and in club-managed mode it wins for the
+            # *person*: force_set_bidder_number routes through services.set_member_bidder_number, so
+            # the club, this auction and every other auction they are in all say the same number.
+            # Letting this auction alone use the card is what produced the original bug -- the club
+            # page showing one number and the floor another, and a lot knocked down to whoever still
+            # held it.
             tos.force_set_bidder_number(requested, acting_user=self.user)
         self.auction.create_history(applies_to="USERS", action=f"Added {name}", user=self.user)
         echo = {"bidder_number": tos.bidder_number}

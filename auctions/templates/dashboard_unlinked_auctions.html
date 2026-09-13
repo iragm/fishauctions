@@ -1,0 +1,118 @@
+{% extends "base.html" %}
+{% block title %}Auctions with no club{% endblock %}
+{% block content %}
+<h3>Auctions with no club</h3>
+<div class="help-note">
+  <i class="bi bi-lightbulb-fill" aria-hidden="true"></i>
+  <div>Every club number on this site &mdash; the cadence, the ladder, the check-in queue &mdash; counts
+  only auctions that have a <code>club</code>, and an auction gets one at creation only if its creator
+  had already named a club on their account <em>and</em> held a permission in it. Most had neither.
+  Linking one here also makes its creator an admin of that club, which is what lets them pick it on
+  their next auction without anybody doing this again.</div>
+</div>
+<p class="text-muted small">
+  {{ unlinked_total }} auction(s) have no club and {{ linked_total }} do.
+  {% if unlinked_total > shown %}Showing the {{ shown }} most recent; link these and the next lot appear.{% endif %}
+</p>
+
+{% for group in groups %}
+<form method="post" action="{% url 'link_auctions_to_club' %}" class="mb-4">
+  {% csrf_token %}
+  <h5>
+    {{ group.club.name }}
+    {% if group.confidence == "high" %}<span class="badge text-bg-success text-dark">likely</span>
+    {% elif group.confidence == "medium" %}<span class="badge text-bg-warning text-dark">probably</span>
+    {% else %}<span class="badge bg-secondary">a guess</span>{% endif %}
+    <span class="text-muted small">&mdash; {{ group.reason }}</span>
+  </h5>
+  <div class="table-responsive">
+    <table class="table table-sm">
+      <thead>
+        <tr>
+          <th style="width:3rem"><input type="checkbox" class="form-check-input" data-check-all aria-label="Select every auction in this group"></th>
+          <th>Auction</th>
+          <th>Organizer</th>
+          <th>Started</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in group.rows %}
+        <tr>
+          <td><input type="checkbox" class="form-check-input" name="auction" value="{{ row.auction.pk }}" checked aria-label="Link {{ row.auction.title }}"></td>
+          <td><a href="{{ row.auction.get_absolute_url }}">{{ row.auction.title }}</a></td>
+          <td>{% if row.auction.created_by %}{{ row.auction.created_by }}{% else %}<span class="text-muted">nobody</span>{% endif %}</td>
+          <td class="small text-muted">{{ row.auction.date_start|date:"M j, Y" }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <div class="d-flex flex-wrap gap-2 align-items-center">
+    <select name="club" class="form-select form-select-sm w-auto" aria-label="Which club these auctions belong to">
+      {% for club in clubs %}<option value="{{ club.pk }}"{% if club.pk == group.club.pk %} selected{% endif %}>{{ club.name }}</option>{% endfor %}
+    </select>
+    <div class="form-check">
+      <input class="form-check-input" type="checkbox" name="grant_admin" id="grant-admin-{{ group.club.pk }}" checked>
+      <label class="form-check-label small" for="grant-admin-{{ group.club.pk }}">Make each organizer a club admin</label>
+    </div>
+    <button type="submit" class="btn btn-sm btn-primary">Link checked</button>
+  </div>
+</form>
+{% endfor %}
+
+{% if unmatched %}
+<form method="post" action="{% url 'link_auctions_to_club' %}" class="mb-4">
+  {% csrf_token %}
+  <h5>No idea <span class="text-muted small">&mdash; nothing about the organizer or the name says which club</span></h5>
+  <div class="table-responsive">
+    <table class="table table-sm">
+      <thead>
+        <tr>
+          <th style="width:3rem"></th>
+          <th>Auction</th>
+          <th>Organizer</th>
+          <th>Started</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for auction in unmatched %}
+        <tr>
+          <td><input type="checkbox" class="form-check-input" name="auction" value="{{ auction.pk }}" aria-label="Link {{ auction.title }}"></td>
+          <td><a href="{{ auction.get_absolute_url }}">{{ auction.title }}</a></td>
+          <td>{% if auction.created_by %}{{ auction.created_by }}{% else %}<span class="text-muted">nobody</span>{% endif %}</td>
+          <td class="small text-muted">{{ auction.date_start|date:"M j, Y" }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <div class="d-flex flex-wrap gap-2 align-items-center">
+    <select name="club" class="form-select form-select-sm w-auto" aria-label="Which club these auctions belong to">
+      {% for club in clubs %}<option value="{{ club.pk }}">{{ club.name }}</option>{% endfor %}
+    </select>
+    <div class="form-check">
+      <input class="form-check-input" type="checkbox" name="grant_admin" id="grant-admin-unmatched" checked>
+      <label class="form-check-label small" for="grant-admin-unmatched">Make each organizer a club admin</label>
+    </div>
+    <button type="submit" class="btn btn-sm btn-primary">Link checked</button>
+  </div>
+</form>
+{% endif %}
+
+{% if not groups and not unmatched %}
+<p class="text-muted">Every auction on the site belongs to a club.</p>
+{% endif %}
+
+<script>
+  // The header checkbox in each group ticks and unticks that group only -- the groups are separate
+  // forms, and a "select all" that crossed them would post one club's auctions to another club.
+  document.querySelectorAll('[data-check-all]').forEach(function (master) {
+    master.checked = true;
+    master.addEventListener('change', function () {
+      master.closest('form').querySelectorAll('input[name="auction"]').forEach(function (box) {
+        box.checked = master.checked;
+      });
+    });
+  });
+</script>
+{% endblock %}

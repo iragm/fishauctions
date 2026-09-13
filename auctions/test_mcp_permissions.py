@@ -436,7 +436,6 @@ class NobodyElsesDataTests(CrossTenantTestCase):
         self._assert_no_leak(self.outsider, "an outsider")
 
     def test_an_administrator_of_another_club_is_told_nothing(self):
-        """The interesting one: real club and auction permissions, held somewhere else."""
         self._assert_no_leak(self.our_owner, "another club's admin")
 
     def test_a_bidder_is_not_told_about_the_other_bidders(self):
@@ -483,7 +482,6 @@ class NobodyElsesRowsTests(CrossTenantTestCase):
         self._assert_nothing_written(self.our_owner, "another club's admin")
 
     def test_a_bidder_in_the_auction_changes_nothing_that_is_not_theirs(self):
-        """Being let in is not being given the keys: they may add their own lot and nothing else."""
         self._assert_nothing_written(self.their_bidder_user, "a bidder", may_create_inside=True)
 
 
@@ -533,7 +531,6 @@ class PrintLabelsByPrimaryKeyTests(CrossTenantTestCase):
         self.assertIn("error", self._print(self.our_owner))
 
     def test_nor_a_bidder_in_the_same_auction_who_does_not_own_it(self):
-        """Being in the auction is not owning the lot -- and labels carry the seller's details."""
         self.assertIn("error", self._print(self.their_bidder_user))
 
     def test_the_seller_still_gets_their_own_label(self):
@@ -548,7 +545,6 @@ class PrintLabelsByPrimaryKeyTests(CrossTenantTestCase):
         self.assertTrue(result.get("ok"), result)
 
     def test_the_answer_still_says_which_lot_and_links_to_it(self):
-        """``url`` is the label page; the lot's own address rides alongside as ``lot_url``."""
         result = self._print(self.their_owner)
         self.assertIn("/lots/print/", result["url"])
         self.assertIn("lot_url", result)

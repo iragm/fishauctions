@@ -10,6 +10,7 @@ import logging
 import re
 from datetime import timedelta
 from io import BytesIO
+from urllib.parse import urlsplit
 
 from django.conf import settings
 from django.contrib import messages
@@ -44,12 +45,18 @@ from webpush.models import PushInformation
 from auctions.filters import (
     AuctionTOSFilter,
 )
+from auctions.form_friction import (
+    ABANDON_SESSION_KEY,
+    MAX_ABANDONED_FIELDS,
+    read_abandon_token,
+)
 from auctions.models import (
     Auction,
     AuctionCampaign,
     AuctionTOS,
     Bid,
     ClubMember,
+    FormFailure,
     Invoice,
     Lot,
     LotImage,
@@ -319,6 +326,116 @@ def clean_referrer(url):
     return url
 
 
+def page_view_path(url, host=""):
+    """The stored form of ``PageView.url``: a site-relative path, starting with ``/``.
+
+    Every reader of that field wants a path. ``usability_report`` groups on it exactly, and
+    ``url__startswith="/account/"`` is what makes "how many people opened preferences" a query
+    rather than a full scan. The browser beacon posts ``window.location.href``, so normalizing here
+    -- not trusting the caller -- is what makes the invariant true: this endpoint is ``AllowAny``
+    and stores whatever it is handed.
+
+    The query string was always stripped (one page, one row); the fragment never was, and split
+    ``/lots/1`` from ``/lots/1#chat``. ``urlsplit`` drops both.
+
+    A URL on some *other* host is stored whole. It is not one of our pages, and filing it as a
+    path would make it indistinguishable from one.
+
+    Nothing but ``http``/``https`` survives at all. That is a page-view beacon's whole vocabulary,
+    and the admin traffic dashboard renders this column as ``<a href="...">`` -- so a
+    ``javascript:`` URL posted to this endpoint by anyone at all (again: ``AllowAny``) would be
+    waiting as a link on an admin's page.
+    """
+    if not url:
+        return ""
+    parts = urlsplit(url)
+    if parts.scheme and parts.scheme not in ("http", "https"):
+        return ""
+    if parts.netloc and parts.netloc.lower() != (host or "").lower():
+        return url[:600]
+    return (parts.path or "/")[:600]
+
+
+class FormAbandonedBeacon(APIView):
+    """Record a form somebody edited and left without saving.
+
+    The other half of the friction instrument, and on this site the bigger half: almost every field
+    is optional and most of the rest are filled in on save, so a validator refusing something is
+    the rare case. Somebody changing three settings, failing to work out the fourth and closing the
+    tab is the ordinary one, and the server never sees it. ``unsaved_changes.js`` already knows
+    which fields have changed -- it has to, to draw the unsaved-changes bar -- and posts that here
+    with ``navigator.sendBeacon`` as the page goes away.
+
+    Unauthenticated by necessity: a beacon fires during unload, when there may be no time for
+    anything but a fire-and-forget POST, and the person may never have signed in. Three things
+    keep that from being a hole:
+
+    * The form name comes from a **signed token** the server itself rendered
+      (``form_friction.abandon_token``), so this endpoint's vocabulary is exactly the set of forms
+      it handed out, not whatever a caller invents.
+    * **Field names only**, filtered against the form name's own token -- never values. The whole
+      point of the abandonment case is that the values were not saved, and a table of what people
+      typed into forms they thought better of submitting is the last thing this site should keep.
+    * One row per form per session, so a page reopened twenty times is one story.
+    """
+
+    authentication_classes = [SessionAuthentication]
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        form_name = read_abandon_token(request.POST.get("token", ""))
+        if not form_name:
+            # A forged, stale or absent token. Nothing to record and nothing to say about it.
+            return JsonResponse({"recorded": False}, status=200)
+        session = request.session
+        already = session.get(ABANDON_SESSION_KEY) or []
+        if form_name in already:
+            return JsonResponse({"recorded": False}, status=200)
+        fields = [
+            str(name)[:100]
+            for name in str(request.POST.get("fields", "")).split(",")[:MAX_ABANDONED_FIELDS]
+            if name.strip()
+        ]
+        try:
+            # Clamped at both ends: the column is a PositiveIntegerField, and a negative or absurd
+            # duration from an unauthenticated caller would otherwise be a DataError -- a 500 on a
+            # beacon, which is a page-load failure for the person who was just leaving.
+            seconds = max(0, min(int(request.POST.get("seconds", 0) or 0), 60 * 60 * 24))
+        except (TypeError, ValueError):
+            seconds = None
+        user = request.user if request.user.is_authenticated else None
+        if not user and not request.session.session_key:
+            request.session.save()
+        FormFailure.objects.create(
+            kind="abandoned",
+            form_name=form_name,
+            url=page_view_path(request.POST.get("url", ""), request.get_host()),
+            user=user,
+            session_id=(request.session.session_key or "")[:100],
+            field_errors={name: ["edited"] for name in fields},
+            seconds_on_page=seconds,
+        )
+        session[ABANDON_SESSION_KEY] = [*already, form_name][-40:]
+        return JsonResponse({"recorded": True}, status=201)
+
+
+def beacon_subject(model, pk, **extra):
+    """The lot or auction a page view names, or None.
+
+    The beacon posts both keys on every page and most pages leave them empty (see
+    base_page_view.html), so "" has to mean "not given" rather than reach the FK -- assigning it
+    raises ValueError before the row is built. A junk pk has to mean the same thing: this endpoint
+    is AllowAny, and ``filter(pk="abc")`` raises too, which on a beacon is a 500 in the middle of
+    somebody's page load.
+    """
+    if not pk:
+        return None
+    try:
+        return model.objects.filter(pk=pk, **extra).first()
+    except (ValueError, TypeError):
+        return None
+
+
 class PageViewCreate(APIView):
     """Record page views"""
 
@@ -327,15 +444,9 @@ class PageViewCreate(APIView):
 
     def post(self, request):
         data = request.POST
-        auction = data.get("auction", None)
-        if auction:
-            auction = Auction.objects.filter(pk=auction).first()
-        lot_number = data.get("lot", None)
-        if lot_number:
-            lot_number = Lot.objects.filter(pk=lot_number, is_deleted=False).first()
-        url = data.get("url", None)
-        url_without_params = re.sub(r"\?.*", "", url)
-        url_without_params = url_without_params[:600]
+        auction = beacon_subject(Auction, data.get("auction"))
+        lot_number = beacon_subject(Lot, data.get("lot"), is_deleted=False)
+        url = page_view_path(data.get("url"), request.get_host())
         first_view = data.get("first_view", False)
         if request.user.is_authenticated:
             user = request.user
@@ -387,7 +498,7 @@ class PageViewCreate(APIView):
             if "Googlebot" not in user_agent and "Baiduspider" not in user_agent:
                 PageView.objects.create(
                     lot_number=lot_number,
-                    url=url_without_params,
+                    url=url,
                     auction=auction,
                     session_id=session_id,
                     user=user,

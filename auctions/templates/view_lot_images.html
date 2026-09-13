@@ -157,7 +157,6 @@ function deactivate_lot() {
     });
     }, 5000);
     {% endif %}
-    pageView({'lot':{{ lot.pk }} });
      // Logic for watching lots
      $( "#watch" ).click(function() {
         var data = {};
@@ -352,6 +351,8 @@ Nothing has been dropped -- see the git history of this file if a fact looks mis
                     <button class="btn btn-sm btn-danger" name="action_deactivate" onclick="deactivate_lot()">{% if lot.deactivated %}Reactivate{% else %}Deactivate this lot{% endif %}</button>
                     {% endif %}
                 </div>
+                {% endif %}
+                {% if request.user.is_authenticated %}
                 {% comment %}The "you're being watched" follow-up. Which of the two lines below is on
                 screen is decided by the watch button, not by the page: see refreshWatchState().{% endcomment %}
                 {% if not lot.auction or lot.auction.is_online %}
@@ -436,9 +437,9 @@ Nothing has been dropped -- see the git history of this file if a fact looks mis
                             {% endif %}
                             {% for image in lot.images %}
                             <div class="carousel-item {% if image.is_primary and not lot.video_link %}active{%endif%}">
-                                <img src="{{ image.display_url }}" class="img-fluid rounded">
+                                <img src="{{ image.display_url }}" alt="{{ image.caption|default:lot.lot_name }}" class="img-fluid rounded">
                                 <div class='carousel-caption text-light text-start'>
-                                    <span class="text-muted"><small>{{ image.get_image_source_display }}</small></span>{%if image.caption%}<br>{{ image.caption }}{%endif%}
+                                    {% if image.source_display %}<span class="text-muted"><small>{{ image.source_display }}</small></span>{% endif %}{% if image.caption %}{% if image.source_display %}<br>{% endif %}{{ image.caption }}{% endif %}
                                 </div>
                                     {% if show_image_add_button %}
                                     <div class="d-flex flex-wrap gap-2 mb-2 mt-2">
@@ -469,12 +470,12 @@ Nothing has been dropped -- see the git history of this file if a fact looks mis
                     <div class="d-flex overflow-x-auto flex-nowrap gap-2 mt-2" style="scroll-snap-type: x mandatory;">
                         {% if lot.video_link %}
                         <button data-bs-target="#image_carousel" data-bs-slide-to="0" class="me-2 active thumbnail">
-                                <img style="min-width: 100px;" src="{% static 'youtube.png' %}" class="rounded">
+                                <img style="min-width: 100px;" src="{% static 'youtube.png' %}" alt="Video of this lot" class="rounded">
                         </button>
                         {% endif %}
                         {% for image in lot.images %}
                         <a href="#" data-bs-target="#image_carousel" data-bs-slide-to="{% if lot.video_link %}{{ forloop.counter }}{% else %}{{ forloop.counter0 }}{% endif %}"  class="me-2 {% if image.is_primary and not lot.video_link %}active{% endif %}">
-                            <img style="min-width: 100px;{% if not image.image %} max-height:150px; object-fit:cover;{% endif %}" src="{{ image.thumbnail_url }}" class="rounded">
+                            <img style="min-width: 100px;{% if not image.image %} max-height:150px; object-fit:cover;{% endif %}" src="{{ image.thumbnail_url }}" alt="Photo {{ forloop.counter }} of {{ lot.lot_name }}" class="rounded">
                         </a>
                         {% endfor %}
                     </div>
@@ -482,7 +483,7 @@ Nothing has been dropped -- see the git history of this file if a fact looks mis
                 </div>
                 {% else %}
                     {% if lot.auto_image %}
-                        <img src="{{ lot.auto_image.display_url }}" class="img-fluid rounded mb-1">
+                        <img src="{{ lot.auto_image.display_url }}" alt="A {{ lot.lot_name }} from another lot" class="img-fluid rounded mb-1">
                         <div class="text-muted small">This image was automatically added from another lot with the same name and may not be representative of this lot</div>
                         {% if is_lot_creator %}
                         <div class="text-muted small mb-2">This image was added because you have <a href="{% url 'preferences' %}">automatically add images to my lots</a> enabled</div>
@@ -920,16 +921,17 @@ side. They are closed after the recommended-lots strip at the bottom of the page
     <div class="modal-dialog" role="document">
         <div class="modal-content">
             <div class="modal-header">
-                <h5 class="modal-title text-danger" id="label"><i class="bi bi-exclamation-circle-fill"></i> Bid failed!</h5>
+                {% comment %}The title comes from the reason. Every other reason this box carries is a refusal and looks like one; "you are not signed in yet" is not a refusal, and the red exclamation used to greet somebody who had never bid.{% endcomment %}
+                {% if bidding_error_is_sign_in %}<h5 class="modal-title" id="label">Sign in to bid</h5>{% else %}<h5 class="modal-title text-danger" id="label"><i class="bi bi-exclamation-circle-fill"></i> Bid failed!</h5>{% endif %}
                 <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
             </div>
             <div id='confirmDialogText' class="modal-body">
                 {{ user_specific_bidding_error|safe }}
             </div>
             <div class="modal-footer">
+                {% comment %}One button, not two. The body is already one sentence with a sign-in link in it, and the sign-in page offers creating an account -- so a second primary button here said the same thing a third time.{% endcomment %}
                 {% if not user.is_authenticated %}
                     <a href="{% url 'account_login' %}?next={{ lot.lot_link }}" role="button" class="btn btn-primary">Sign in</a>
-                    <a href="{% url 'account_signup' %}?next={{ lot.lot_link }}" role="button" class="btn btn-primary">Create an account</a>
                 {% comment %}The auction test is not redundant: a standalone lot has no auction, and
                 user_tos is falsy for it too, so this used to reverse auction_main with an empty slug
                 and raise NoReverseMatch -- a 500 on any standalone lot a signed-in user opened.{% endcomment %}
@@ -1188,8 +1190,23 @@ grey box with a drop shadow. It is a card now, like every other panel on the pag
 {% templatetag closeblock %} and close it outside, so exactly one of the two branches left the page's
 container-fluid unclosed. Balanced now: one wrapper, both contents optional.{% endcomment %}
     <div class="mt-3">
+    {% comment %}Outside the signed-in block on purpose, and small on purpose. App Store Review
+    Guideline 1.2 asks for "a mechanism to report offensive content", and App Review reads the page
+    with no session; so does a photographer who has just found their picture on somebody's listing.
+    Neither of them has an account. It is a muted link rather than a button because it is not one of
+    the things a visitor came here to do -- see the report-button note in
+    auctions/views/moderation.py. It sits at the foot of the page, above the recommendations, and
+    outside the minutes_to_end guard below: an ended lot is exactly the one somebody is most likely
+    to be reporting, so the link cannot live inside a block that only renders while bidding is
+    open.{% endcomment %}
+    {% if lot.pk and not is_lot_creator %}
+      <div class="mb-3"><small><a class="text-muted" href="{% url 'report_lot' pk=lot.pk %}"><i class="bi bi-flag"></i> Report this lot</a></small></div>
+    {% endif %}
     {% if lot.minutes_to_end > 10 %}
-      <div class="text-muted small">Other lots you might be interested in:</div>
+      <div class="help-note">
+        <i class="bi bi-lightbulb-fill"></i>
+        <div>Other lots you might be interested in</div>
+      </div>
       <div id='recommendations'>Searching for recommended lots...</div>
     {% endif %}
     {% if lot.auction %}

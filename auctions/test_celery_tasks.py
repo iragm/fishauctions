@@ -1,8 +1,4 @@
-"""
-Tests for Celery tasks.
-
-This module tests that Celery tasks properly call their corresponding management commands.
-"""
+"""Tests that Celery tasks call their corresponding management commands."""
 
 import datetime
 from unittest.mock import patch
@@ -10,78 +6,71 @@ from unittest.mock import patch
 from django.contrib.auth.models import User
 from django.test import TestCase
 from django.utils import timezone
-from django_celery_beat.models import PeriodicTask
+from django_celery_beat.models import IntervalSchedule, PeriodicTask
 
 from auctions import tasks
-from auctions.models import Auction, AuctionHistory, AuctionTOS, Club, Invoice, PickupLocation
+from auctions.models import (
+    Auction,
+    AuctionHistory,
+    AuctionTOS,
+    ChunkedJobState,
+    Club,
+    Invoice,
+    Lot,
+    PageView,
+    PickupLocation,
+)
 from auctions.test_support import isolated_cache
 
 
-# isolated_cache is required, not tidiness: endauctions and compute_user_flow_all now take a cache
-# lock, and --parallel workers share one Redis. Without it, two workers running these at the same
-# moment would have one of them correctly skip its run and fail its own assertion.
+# isolated_cache is required, not tidiness: endauctions now takes a cache lock, and --parallel
+# workers share one Redis. Without it, two workers running these at the same moment would have one
+# of them correctly skip its run and fail its own assertion.
 @isolated_cache("celery-tasks")
 class CeleryTasksTestCase(TestCase):
-    """Test case for Celery tasks."""
-
     @patch("auctions.tasks.call_command")
     def test_endauctions_task(self, mock_call_command):
-        """Test that endauctions task calls the management command."""
         tasks.endauctions()
         mock_call_command.assert_called_once_with("endauctions")
 
     @patch("auctions.tasks.call_command")
     def test_sendnotifications_task(self, mock_call_command):
-        """Test that sendnotifications task calls the management command."""
         tasks.sendnotifications()
         mock_call_command.assert_called_once_with("sendnotifications")
 
     @patch("auctions.tasks.call_command")
     def test_auctiontos_notifications_task(self, mock_call_command):
-        """Test that auctiontos_notifications task calls the management command."""
         tasks.auctiontos_notifications()
         mock_call_command.assert_called_once_with("auctiontos_notifications")
 
     @patch("auctions.tasks.call_command")
     def test_auction_emails_task(self, mock_call_command):
-        """Test that auction_emails task calls the management command."""
         tasks.auction_emails()
         mock_call_command.assert_called_once_with("auction_emails")
 
     @patch("auctions.tasks.call_command")
     def test_email_unseen_chats_task(self, mock_call_command):
-        """Test that email_unseen_chats task calls the management command."""
         tasks.email_unseen_chats()
         mock_call_command.assert_called_once_with("email_unseen_chats")
 
     @patch("auctions.tasks.call_command")
     def test_weekly_promo_task(self, mock_call_command):
-        """Test that weekly_promo task calls the management command."""
         tasks.weekly_promo()
         mock_call_command.assert_called_once_with("weekly_promo")
 
     @patch("auctions.tasks.call_command")
     def test_set_user_location_task(self, mock_call_command):
-        """Test that set_user_location task calls the management command."""
         tasks.set_user_location()
         mock_call_command.assert_called_once_with("set_user_location")
 
     @patch("auctions.tasks.call_command")
-    def test_remove_duplicate_views_task(self, mock_call_command):
-        """Test that remove_duplicate_views task calls the management command."""
-        tasks.remove_duplicate_views()
-        mock_call_command.assert_called_once_with("remove_duplicate_views")
-
-    @patch("auctions.tasks.call_command")
     def test_webpush_notifications_deduplicate_task(self, mock_call_command):
-        """Test that webpush_notifications_deduplicate task calls the management command."""
         tasks.webpush_notifications_deduplicate()
         mock_call_command.assert_called_once_with("webpush_notifications_deduplicate")
 
     @patch("auctions.tasks.schedule_auction_stats_update")
     @patch("channels.layers.get_channel_layer")
     def test_update_auction_stats_task_with_auction(self, mock_channel, mock_schedule):
-        """Test that update_auction_stats task processes an auction and schedules next run."""
         import datetime
 
         from django.utils import timezone
@@ -121,7 +110,6 @@ class CeleryTasksTestCase(TestCase):
 
     @patch("auctions.tasks.schedule_auction_stats_update")
     def test_update_auction_stats_task_no_auction(self, mock_schedule):
-        """Test that update_auction_stats task handles no auctions gracefully."""
         # Run the task with no auctions needing update
         tasks.update_auction_stats()
 
@@ -129,7 +117,6 @@ class CeleryTasksTestCase(TestCase):
         mock_schedule.assert_called_once()
 
     def test_schedule_auction_stats_update_creates_task(self):
-        """Test that schedule_auction_stats_update creates a PeriodicTask."""
         from django_celery_beat.models import PeriodicTask
 
         # Call the scheduling function
@@ -143,7 +130,6 @@ class CeleryTasksTestCase(TestCase):
         self.assertEqual(task.task, "auctions.tasks.update_auction_stats")
 
     def test_schedule_auction_stats_update_recreates_disabled_task(self):
-        """Test that schedule_auction_stats_update recreates a disabled task."""
         from django.utils import timezone
         from django_celery_beat.models import ClockedSchedule, PeriodicTask
 
@@ -177,7 +163,6 @@ class CeleryTasksTestCase(TestCase):
         self.assertEqual(new_task.task, "auctions.tasks.update_auction_stats")
 
     def test_schedule_auction_stats_update_ensures_single_task(self):
-        """Test that there is always exactly one task after scheduling."""
         from django_celery_beat.models import PeriodicTask
 
         # Call the scheduling function multiple times
@@ -764,7 +749,7 @@ class FixedDatabaseSchedulerTestCase(TestCase):
 
 @isolated_cache("celery-locks")
 class OverlapLockTestCase(TestCase):
-    """The two tasks that must never run twice at once."""
+    """The task that must never run twice at once."""
 
     def setUp(self):
         # A lock deliberately taken by one test would otherwise still be held by the next one --
@@ -772,7 +757,6 @@ class OverlapLockTestCase(TestCase):
         from django.core.cache import cache
 
         cache.delete(tasks.ENDAUCTIONS_LOCK_KEY)
-        cache.delete(tasks.USER_FLOW_LOCK_KEY)
 
     @patch("auctions.tasks.call_command")
     def test_endauctions_skips_a_tick_it_is_already_running(self, mock_call_command):
@@ -796,36 +780,6 @@ class OverlapLockTestCase(TestCase):
         with self.assertRaises(RuntimeError):
             tasks.endauctions()
         self.assertIsNone(cache.get(tasks.ENDAUCTIONS_LOCK_KEY))
-
-    @patch("auctions.tasks._compute_user_flow_all")
-    def test_a_second_user_flow_request_is_dropped_rather_than_queued(self, mock_compute):
-        """It holds a worker slot for as long as it takes (time_limit=None) and the worker runs at
-        concurrency=2, so two presses of the admin button used to stop every other task on the
-        site -- endauctions included."""
-        from django.core.cache import cache
-
-        cache.add(tasks.USER_FLOW_LOCK_KEY, "1", timeout=60)
-        tasks.compute_user_flow_all()
-        mock_compute.assert_not_called()
-
-    @patch("auctions.tasks._compute_user_flow_all")
-    def test_the_user_flow_lock_is_released_afterwards(self, mock_compute):
-        from django.core.cache import cache
-
-        tasks.compute_user_flow_all()
-        mock_compute.assert_called_once()
-        self.assertIsNone(cache.get(tasks.USER_FLOW_LOCK_KEY))
-
-    @patch("auctions.views.AdminUserFlow._compute_flow", return_value=([], []))
-    def test_the_run_re_stamps_its_own_lock(self, mock_flow):
-        """The task has no time limit, so the lock cannot be "longer than the longest run" -- it is
-        a heartbeat, kept alive by the run itself. Without this a long run would age its own lock
-        out and let a second press start beside it."""
-        from django.core.cache import cache
-
-        Auction.objects.create(title="Flow auction", date_start=timezone.now() - datetime.timedelta(days=1))
-        tasks._compute_user_flow_all(0)
-        self.assertEqual(cache.get(tasks.USER_FLOW_LOCK_KEY), "1")
 
 
 @isolated_cache("celery-ytd")
@@ -1066,3 +1020,153 @@ class OrphanedPeriodicTaskTestCase(TestCase):
         app.loader.import_default_modules()
         missing = sorted(entry["task"] for entry in app.conf.beat_schedule.values() if entry["task"] not in app.tasks)
         self.assertEqual(missing, [], "these beat_schedule entries name tasks that do not exist")
+
+
+@isolated_cache("celery-backfill")
+class PageViewAuctionBackfillTestCase(TestCase):
+    """The one-shot walk that fills in PageView.auction on the rows written before the beacon did.
+
+    Everything here is about the two ways a chunked job goes wrong: doing the same rows forever
+    because nothing carries the cursor past them, and never stopping because the thing it is
+    catching up with keeps moving.
+    """
+
+    def setUp(self):
+        from django.core.cache import cache
+
+        cache.delete(tasks.PAGE_VIEW_BACKFILL_LOCK_KEY)
+        self.user = User.objects.create_user(username="backfill_user", password="testpassword")
+        self.auction = self._auction("Backfill auction")
+        self.location = PickupLocation.objects.create(
+            name="here", auction=self.auction, pickup_time=timezone.now() + datetime.timedelta(days=1)
+        )
+        self.tos = AuctionTOS.objects.create(
+            user=self.user, auction=self.auction, pickup_location=self.location, bidder_number="601"
+        )
+
+    def _auction(self, title):
+        return Auction.objects.create(
+            title=title,
+            created_by=self.user,
+            date_start=timezone.now() - datetime.timedelta(days=2),
+            date_end=timezone.now(),
+            is_online=True,
+        )
+
+    def _lot(self, name, auction):
+        return Lot.objects.create(
+            lot_name=name,
+            auction=auction,
+            auctiontos_seller=self.tos if auction else None,
+            user=None if auction else self.user,
+            quantity=1,
+        )
+
+    def _view(self, **kwargs):
+        return PageView.objects.create(url="/x/", **kwargs)
+
+    def _state(self):
+        return ChunkedJobState.objects.get(name=tasks.PAGE_VIEW_BACKFILL_JOB)
+
+    def test_a_lot_view_gets_its_lots_auction(self):
+        view = self._view(lot_number=self._lot("in an auction", self.auction))
+        tasks.backfill_page_view_auctions()
+        view.refresh_from_db()
+        self.assertEqual(view.auction, self.auction)
+
+    def test_it_leaves_rows_that_already_name_an_auction_alone(self):
+        other = self._auction("Some other auction")
+        view = self._view(lot_number=self._lot("in an auction", self.auction), auction=other)
+        tasks.backfill_page_view_auctions()
+        view.refresh_from_db()
+        self.assertEqual(view.auction, other)
+
+    def test_a_view_of_no_lot_is_never_given_an_auction(self):
+        """Most rows in this table. An untagged page view is what keeps organizer traffic out of
+        an organizer's own numbers, so inventing an auction for one would be the whole bug."""
+        view = self._view()
+        tasks.backfill_page_view_auctions()
+        view.refresh_from_db()
+        self.assertIsNone(view.auction)
+
+    def test_a_lot_with_no_auction_does_not_stall_the_job(self):
+        """Nothing can ever be written for these, so a query that filtered them out in SQL would
+        leave the cursor looking at them for ever. They are read and skipped instead."""
+        view = self._view(lot_number=self._lot("no auction", None))
+        tasks.backfill_page_view_auctions()
+        view.refresh_from_db()
+        self.assertIsNone(view.auction)
+        self.assertTrue(self._state().finished)
+
+    def test_it_finishes_and_switches_its_own_beat_entry_off(self):
+        every_15 = IntervalSchedule.objects.create(every=900, period=IntervalSchedule.SECONDS)
+        PeriodicTask.objects.create(
+            name=tasks.PAGE_VIEW_BACKFILL_BEAT,
+            task="auctions.tasks.backfill_page_view_auctions",
+            interval=every_15,
+            enabled=True,
+        )
+        self._view(lot_number=self._lot("in an auction", self.auction))
+        tasks.backfill_page_view_auctions()
+        self.assertTrue(self._state().finished)
+        self.assertFalse(PeriodicTask.objects.get(name=tasks.PAGE_VIEW_BACKFILL_BEAT).enabled)
+
+    def test_a_finished_job_does_nothing_and_does_not_move(self):
+        self._view(lot_number=self._lot("in an auction", self.auction))
+        tasks.backfill_page_view_auctions()
+        finished_at, cursor = self._state().finished, self._state().cursor
+        tasks.backfill_page_view_auctions()
+        self.assertEqual((self._state().finished, self._state().cursor), (finished_at, cursor))
+
+    def test_rows_written_after_it_started_are_not_chased(self):
+        """The ceiling. Those rows were written by code that already sets the column, so a job that
+        kept reaching for them would never finish on a site that is still being used."""
+        self._view(lot_number=self._lot("in an auction", self.auction))
+        tasks.backfill_page_view_auctions()
+        self.assertTrue(self._state().finished)
+        later = self._view(lot_number=self._lot("later", self.auction))
+        tasks.backfill_page_view_auctions()
+        later.refresh_from_db()
+        self.assertIsNone(later.auction)
+
+    @patch("auctions.tasks.PAGE_VIEW_BACKFILL_CHUNK", 1)
+    def test_a_full_chunk_resumes_after_the_last_row_it_looked_at(self):
+        lot = self._lot("in an auction", self.auction)
+        first, second = self._view(lot_number=lot), self._view(lot_number=lot)
+        tasks.backfill_page_view_auctions()
+        first.refresh_from_db()
+        second.refresh_from_db()
+        self.assertEqual((first.auction, second.auction), (self.auction, None))
+        self.assertEqual(self._state().cursor, first.pk + 1)
+        self.assertIsNone(self._state().finished)
+
+        tasks.backfill_page_view_auctions()
+        second.refresh_from_db()
+        self.assertEqual(second.auction, self.auction)
+        self.assertTrue(self._state().finished)
+
+    @patch("auctions.tasks.PAGE_VIEW_BACKFILL_SCAN", 1)
+    def test_the_scan_width_bounds_a_run_even_with_nothing_to_write(self):
+        """Without it, a run that lands on a stretch of the table with no lot views reads to the
+        end of it looking for a full chunk -- the full scan of PageView this job exists to retire."""
+        for _ in range(3):
+            self._view()
+        view = self._view(lot_number=self._lot("in an auction", self.auction))
+        runs = 0
+        while runs < 200:
+            tasks.backfill_page_view_auctions()
+            runs += 1
+            if self._state().finished:
+                break
+        view.refresh_from_db()
+        self.assertEqual(view.auction, self.auction)
+        self.assertGreater(runs, 3, "a one-key window should take a run per key, not one run for the lot")
+
+    def test_it_skips_a_tick_it_is_already_running(self):
+        from django.core.cache import cache
+
+        cache.add(tasks.PAGE_VIEW_BACKFILL_LOCK_KEY, "1", timeout=60)
+        view = self._view(lot_number=self._lot("in an auction", self.auction))
+        tasks.backfill_page_view_auctions()
+        view.refresh_from_db()
+        self.assertIsNone(view.auction)

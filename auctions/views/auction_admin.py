@@ -47,6 +47,7 @@ from auctions.filters import (
     AuctionTOSFilter,
     LotAdminFilter,
 )
+from auctions.form_friction import FormFrictionMixin
 from auctions.forms import (
     AuctionCustomFieldsForm,
     AuctionEditForm,
@@ -191,7 +192,7 @@ class PickupLocationForm:
         return super().form_valid(form)
 
 
-class PickupLocationsUpdate(LoginRequiredMixin, AuctionViewMixin, PickupLocationForm, UpdateView):
+class PickupLocationsUpdate(FormFrictionMixin, LoginRequiredMixin, AuctionViewMixin, PickupLocationForm, UpdateView):
     """Edit pickup locations"""
 
     def get_form_kwargs(self):
@@ -226,7 +227,7 @@ class PickupLocationsUpdate(LoginRequiredMixin, AuctionViewMixin, PickupLocation
         return form
 
 
-class PickupLocationsCreate(LoginRequiredMixin, AuctionViewMixin, PickupLocationForm, CreateView):
+class PickupLocationsCreate(FormFrictionMixin, LoginRequiredMixin, AuctionViewMixin, PickupLocationForm, CreateView):
     """Create a new pickup location"""
 
     def dispatch(self, request, *args, **kwargs):
@@ -253,7 +254,7 @@ class PickupLocationsCreate(LoginRequiredMixin, AuctionViewMixin, PickupLocation
         return form
 
 
-class AuctionUpdate(LoginRequiredMixin, AuctionViewMixin, UpdateView):
+class AuctionUpdate(FormFrictionMixin, LoginRequiredMixin, AuctionViewMixin, UpdateView):
     """The form users fill out to edit an auction"""
 
     model = Auction
@@ -391,7 +392,7 @@ class AuctionUpdate(LoginRequiredMixin, AuctionViewMixin, UpdateView):
         return form
 
 
-class AuctionCustomFieldsUpdate(LoginRequiredMixin, AuctionViewMixin, UpdateView):
+class AuctionCustomFieldsUpdate(FormFrictionMixin, LoginRequiredMixin, AuctionViewMixin, UpdateView):
     model = Auction
     template_name = "auction_custom_fields_form.html"
     form_class = AuctionCustomFieldsForm

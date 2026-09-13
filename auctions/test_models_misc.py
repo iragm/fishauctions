@@ -118,39 +118,6 @@ class ModelMethodsTestCase(StandardTestCase):
         auction = Auction.objects.get(pk=auction_pk)
         self.assertTrue(auction.is_deleted)
 
-    def test_pageview_merge_and_delete_duplicate_extends_time_range(self):
-        """Test PageView.merge_and_delete_duplicates extends time range correctly"""
-
-        # Create two PageView instances that are duplicates
-        base_time = timezone.now()
-        view1 = PageView.objects.create(
-            user=self.user,
-            lot_number=self.lot,
-            date_start=base_time - datetime.timedelta(hours=2),
-            date_end=base_time - datetime.timedelta(hours=1),
-            total_time=3600,
-            session_id="test_session",
-        )
-        view2 = PageView.objects.create(
-            user=self.user,
-            lot_number=self.lot,
-            date_start=base_time - datetime.timedelta(hours=1),
-            date_end=base_time,
-            total_time=3600,
-            session_id="test_session",
-        )
-
-        # Merge view2 into view1
-        # Call as method now (no longer a property)
-        view1.merge_and_delete_duplicates()
-
-        # view1 should have extended time range and combined total_time
-        view1.refresh_from_db()
-        self.assertEqual(view1.total_time, 7200)  # 3600 + 3600
-
-        # view2 should be deleted
-        self.assertEqual(PageView.objects.filter(pk=view2.pk).count(), 0)
-
     def test_pageview_save_gets_location_from_ip(self):
         """Test PageView.save gets location from IP address"""
 

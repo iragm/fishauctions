@@ -1124,7 +1124,7 @@ def _app_deep_link_items(request, ql=""):
 
     ``ql`` is the lower-cased query, or ``""`` for the palette's empty state. A row appears either
     because the query named it or -- with no query -- because the user is in the situation it exists
-    for: an in-person auction happening now, or a merchant who can take a card.
+    for: an in-person auction happening now, or an iPhone-carrying merchant who can take a card.
     """
     if not getattr(request, "is_mobile_app", False):
         return []
@@ -1143,21 +1143,29 @@ def _app_deep_link_items(request, ql=""):
                     auction.pk,
                 )
             )
+    # iPhones only, and not merely for the wording: the screen behind this link is Apple's flow end
+    # to end -- Apple's terms sheet, Apple's education sheet, "Tap to Pay on iPhone" throughout --
+    # so the app gates both of its own entry points on the platform. This row was the one that
+    # didn't, and on Android it opened the iPhone setup screen, which asked an uninitialized Square
+    # SDK for its authorization state and killed the process. Android merchants lose nothing: they
+    # take cards from the button on the invoice page, which is a different code path, and there is
+    # no Android setup screen because there is nothing to set up.
+    #
     # Cheap test first: _can_take_payments is a few exists() queries, and this runs on every
     # keystroke in the app.
-    if (not ql or _TAP_TO_PAY_QUERY.search(ql)) and _can_take_payments(user):
+    asked_for_it = not ql or _TAP_TO_PAY_QUERY.search(ql)
+    if asked_for_it and getattr(request, "is_ios_app", False) and _can_take_payments(user):
         # Both the label and the missing icon come from Apple's Tap to Pay on iPhone review guide,
-        # not from taste (see the same rules spelled out in quick_checkout_htmx.html): 5.4 allows
-        # only "Tap to Pay on iPhone" or "Tap to Pay" as the label, so the usual " — {auction}"
-        # suffix would break it and the context goes in the subtitle instead; 5.5 requires SF
-        # Symbols' wave.3.right.circle if the control carries an icon at all, and imitating it with
-        # a credit-card glyph is separately forbidden. Every palette row draws a glyph, so this one
-        # gets the palette's neutral "go here" arrow rather than anything that reads as a payment
-        # mark of ours.
+        # not from taste (see the same rules spelled out in quick_checkout_htmx.html): 5.4 fixes the
+        # label, so the usual " — {auction}" suffix would break it and the context goes in the
+        # subtitle instead; 5.5 requires SF Symbols' wave.3.right.circle if the control carries an
+        # icon at all, and imitating it with a credit-card glyph is separately forbidden. Every
+        # palette row draws a glyph, so this one gets the palette's neutral "go here" arrow rather
+        # than anything that reads as a payment mark of ours.
         items.append(
             _item(
                 "app",
-                "Tap to Pay on iPhone" if getattr(request, "is_ios_app", False) else "Tap to Pay",
+                "Tap to Pay on iPhone",
                 TAP_TO_PAY_DEEP_LINK,
                 "bi-arrow-right-short",
                 "Take a card payment on this phone",
@@ -1496,7 +1504,7 @@ def search(request, q, *, app_deep_links=True):
         groups.append({"label": "Lots", "items": lot_items})
 
     clubs = (
-        Club.objects.filter(active=True)
+        Club.objects.listed()
         .filter(Q(name__icontains=q) | Q(abbreviation__icontains=q))
         .order_by("name")[:RESULT_LIMIT]
     )

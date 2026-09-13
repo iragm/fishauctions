@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% load crispy_forms_tags %}
+{% block title %}Send a copyright notice{% endblock %}
+{% comment %}
+  Open to people with no account on purpose: a photographer who finds their picture on a listing
+  here is not going to sign up to say so. The form asks for the six things section 512(c)(3)(A)
+  requires; auctions/moderation_forms.py is where they are enforced.
+{% endcomment %}
+{% block content %}
+<div class="container py-4">
+  <h1 class="h4 mb-3">Send a copyright notice</h1>
+
+  <div class="help-note">
+    <i class="bi bi-lightbulb-fill"></i>
+    <div>
+      Use this if something on this site uses your photo, text or other work without permission.
+      It goes straight to our designated copyright agent{% if agent %}, {{ agent.name }}{% endif %}.
+      <a href="{% url 'dmca' %}">What happens next, and how to send a counter-notice.</a>
+    </div>
+  </div>
+
+  <div class="alert alert-warning text-dark">
+    <i class="bi bi-exclamation-triangle"></i>
+    You'll be asked to state, under penalty of perjury, that this notice is accurate. Section 512(f)
+    makes anyone who knowingly misrepresents that material is infringing liable for damages,
+    including costs and legal fees.
+  </div>
+
+  <div class="row">
+    <div class="col-12 col-lg-8">
+      {% crispy form form.helper %}
+    </div>
+  </div>
+</div>
+{% endblock %}

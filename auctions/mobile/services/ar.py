@@ -356,6 +356,11 @@ def record_ar_events(auction, user, events, request):
             PageView(
                 user=user,
                 lot_number=lot,
+                # The auction as well as the lot, exactly as the browser beacon sends it: it costs
+                # nothing here (the auction is the argument every lot was just filtered against)
+                # and it is what lets a reader match an auction on one indexed column rather than
+                # `auction_id OR lot_number__auction_id`. See base_page_view.html.
+                auction=auction,
                 source=source,
                 url=(lot.lot_link or "")[:600],
                 title=(lot.lot_name or "")[:600],

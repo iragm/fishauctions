@@ -833,3 +833,86 @@ body:has(.tos-banner) {
     max-width: 100%;
     border: 0;
 }
+
+/* Progressive disclosure on the long settings forms -- see auctions/auction_form_layout.py for
+   which fields end up inside one and why.
+
+   `<details>` rather than a Bootstrap collapse: no JavaScript, keyboard-reachable and
+   screen-reader-labelled with no ARIA of ours, and browser find-in-page opens it, so an organizer
+   searching the page for "tax" still lands on the field. Bootswatch styles none of it, so the
+   summary needs to be told it is a control: the default marker is a bare triangle that reads as
+   decoration next to an `h4`. */
+details.auction-advanced > summary {
+    list-style: none;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.5rem 0.75rem;
+    border: 1px solid #444;
+    border-radius: 0.375rem;
+    background-color: #303030;
+}
+
+details.auction-advanced > summary::-webkit-details-marker {
+    display: none;
+}
+
+/* The chevron is drawn here rather than left to the UA marker so it can rotate, and so it sits at
+   a fixed size next to heading text. */
+details.auction-advanced > summary::before {
+    content: "";
+    width: 0.5rem;
+    height: 0.5rem;
+    border-right: 2px solid #adb5bd;
+    border-bottom: 2px solid #adb5bd;
+    transform: rotate(-45deg);
+    transition: transform 0.15s ease-in-out;
+    flex: none;
+}
+
+details.auction-advanced[open] > summary::before {
+    transform: rotate(45deg);
+}
+
+details.auction-advanced > summary:hover {
+    background-color: #3a3a3a;
+}
+
+details.auction-advanced > summary:focus-visible {
+    outline: 2px solid #2fa4e7;
+    outline-offset: 2px;
+}
+
+details.auction-advanced[open] > summary {
+    margin-bottom: 1rem;
+}
+
+/* The unsaved-changes bar -- auctions/static/js/unsaved_changes.js draws it on any page with a
+   form somebody has edited. Hidden until then, so it costs a page nothing.
+
+   Fixed to the bottom of the viewport rather than the end of the form, because the point is to be
+   visible at the moment somebody is about to leave, which is rarely while they are looking at the
+   bottom of a four-dozen-field form. z-index sits under Bootstrap's modal backdrop (1050) so a
+   dialog is never covered by it, and over everything else on the page. */
+#unsaved-changes-bar {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 1040;
+    display: none;
+    padding: 0.75rem 1rem;
+    background-color: #303030;
+    border-top: 1px solid #444;
+    box-shadow: 0 -0.25rem 0.75rem rgba(0, 0, 0, 0.35);
+}
+
+#unsaved-changes-bar.showing {
+    display: block;
+}
+
+/* Room to scroll past the bar, so it never sits on top of the last field of the form it is about.
+   Only while the bar is showing, so no page pays for it. */
+body.has-unsaved-changes-bar {
+    padding-bottom: 5rem;
+}

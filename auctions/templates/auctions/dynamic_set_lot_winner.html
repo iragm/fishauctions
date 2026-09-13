@@ -265,8 +265,14 @@
         // see voiceParse. Only then is it really an utterance nothing understood.
         if (voiceMatchLocally(heard)) { return; }
         // One word is as likely to be someone walking past the phone as a command, and the room
-        // never stops talking. Below two, nothing is worth writing down.
-        if (heard.split(' ').length < voiceUnmatchedMinTokens) { return; }
+        // never stops talking. Below two, nothing is worth writing down -- unless that one word is
+        // (or nearly is) an action anchor, because "sold", heard and matched by nothing, is the most
+        // useful row this table can hold and the floor was throwing it away. The server applies the
+        // same exception.
+        const spoken = voiceWords(heard);
+        const only = spoken.length === 1 ? voiceAnchorAt(spoken, 0) : null;
+        const isAction = !!only && voiceValueSlots.indexOf(only.slot) === -1;
+        if (heard.split(' ').length < voiceUnmatchedMinTokens && !isAction) { return; }
         voiceLogUnmatched(heard, null);
       }, voiceUnmatchedGraceMs)
     };
@@ -298,23 +304,143 @@
   {% endcomment %}
   const voiceAnchorPhrases = [];
   Object.keys(voiceConfig.anchors || {}).forEach(function (slot) {
-    (voiceConfig.anchors[slot] || []).forEach(function (phrase) {
+    (voiceConfig.anchors[slot] || []).forEach(function (phrase, position) {
       const words = String(phrase).toLowerCase().split(/\s+/).filter(Boolean);
-      if (words.length) { voiceAnchorPhrases.push({slot: slot, words: words}); }
+      // The first word of a slot's list is the canonical one and the rest are synonyms this
+      // deployment added -- the same ranking the app applies, so both sides score "buyer" alike.
+      if (words.length) {
+        voiceAnchorPhrases.push({slot: slot, words: words, quality: position === 0 ? 1 : 0.8});
+      }
     });
   });
   // Longest first, so "lot number" beats "lot" and "no sale" is never read as two ordinary words.
   voiceAnchorPhrases.sort(function (a, b) { return b.words.length - a.words.length; });
+
+  {% comment %}
+    Anchors the way the app hears them, which this page could not until now: exactly, as a plural,
+    or one edit away with a voiced/voiceless swap costing nothing. "bitter" for "bidder" is the case
+    that matters -- American English flaps both consonants, so there is nothing in the audio that
+    separates them -- and the page used to drop every utterance containing it while the app filled
+    the field and asked.
+
+    The five-character floor is the app's, for the app's reason: at three or four characters an edit
+    distance of one covers so much of English ("sold" / "gold" / "old") that ordinary speech would
+    start firing anchors, which is the failure this grammar exists to prevent. A trailing plural is
+    checked first and at any length, because "lots" is the same word rather than a guess about which
+    word it was.
+  {% endcomment %}
+  const voiceVoicingPairs = ['td', 'sz', 'pb', 'kg', 'fv'];
+
+  function voiceSameSound(a, b) {
+    if (a === b) { return true; }
+    return voiceVoicingPairs.some(function (pair) {
+      return pair.indexOf(a) !== -1 && pair.indexOf(b) !== -1;
+    });
+  }
+
+  function voiceNearlySame(word, anchor) {
+    if (Math.abs(word.length - anchor.length) > 1) { return false; }
+    let edits = 0;
+    let i = 0;
+    let j = 0;
+    while (i < word.length && j < anchor.length) {
+      if (voiceSameSound(word.charAt(i), anchor.charAt(j))) { i += 1; j += 1; continue; }
+      edits += 1;
+      if (edits > 1) { return false; }
+      if (word.length === anchor.length) { i += 1; j += 1; }
+      else if (word.length > anchor.length) { i += 1; }
+      else { j += 1; }
+    }
+    return edits + (word.length - i) + (anchor.length - j) <= 1;
+  }
+
+  function voiceSingular(word) {
+    if (word.length > 4 && word.slice(-2) === 'es') { return word.slice(0, -2); }
+    // Not "ss": "pass" must not stem to "pas", and it is already an anchor reached exactly above.
+    if (word.length > 3 && word.slice(-1) === 's' && word.slice(-2) !== 'ss') { return word.slice(0, -1); }
+    return null;
+  }
+
+  function voiceAnchorAt(words, index) {
+    for (const anchor of voiceAnchorPhrases) {
+      const slice = words.slice(index, index + anchor.words.length).join(' ');
+      if (slice === anchor.words.join(' ')) {
+        return {slot: anchor.slot, quality: anchor.quality, length: anchor.words.length};
+      }
+    }
+    const word = words[index];
+    const singular = voiceSingular(word);
+    const single = voiceAnchorPhrases.filter(function (anchor) { return anchor.words.length === 1; });
+    for (const anchor of single) {
+      if (singular && singular === anchor.words[0]) {
+        return {slot: anchor.slot, quality: Math.min(anchor.quality, 0.8), length: 1};
+      }
+    }
+    if (word.length < 5) { return null; }
+    for (const anchor of single) {
+      if (voiceNearlySame(word, anchor.words[0])) {
+        return {slot: anchor.slot, quality: 0.6, length: 1};
+      }
+    }
+    return null;
+  }
+
+  {% comment %}
+    The page's three tiers, from how good the anchor word was. A canonical word fills green; a
+    synonym the deployment configured itself fills green too, because it is not a guess -- and
+    because a synonym that could only ever fill amber made "add the word your auctioneer says"
+    useless, since an amber field then blocks the save. A fuzzy hit fills amber and asks.
+  {% endcomment %}
+  function voiceFillConfidence(quality) {
+    if (quality >= 1) { return 1; }
+    return quality >= 0.8 ? voiceConfidentAt : voiceConfig.unsure;
+  }
   const voiceNumberWords = voiceConfig.number_words || {};
   const voiceHomophonePairs = voiceConfig.homophones || [];
   const voiceVocabulary = {
     lot: (voiceConfig.lot_numbers || []).map(String),
     bidder: (voiceConfig.bidder_numbers || []).map(String)
   };
+
+  {% comment %}
+    The vocabulary goes stale, and this page never reloads -- it is one long-lived page that posts.
+    A lot added at the table, a bidder who signs up at the desk, a lot un-sold so it can be sold
+    again: all three are values the matcher above would refuse, and refuse by saying "no lot like
+    that in this auction", which is a wrong answer rather than a slow one.
+
+    So it is re-fetched on a timer while listening, and immediately after every save and undo, which
+    are the two moments the lot list provably changed. The app refreshes its own copy the same way.
+  {% endcomment %}
+  const voiceVocabularyRefreshMs = 90000;
+  let voiceVocabularyTimer = null;
+
+  function voiceRefreshVocabulary() {
+    $.ajax({
+      url: "{% url 'auction_voice_vocabulary' slug=auction.slug %}",
+      method: 'GET',
+      success: function (data) {
+        if (!data) { return; }
+        if (Array.isArray(data.lot_numbers)) { voiceVocabulary.lot = data.lot_numbers.map(String); }
+        if (Array.isArray(data.bidder_numbers)) { voiceVocabulary.bidder = data.bidder_numbers.map(String); }
+        if (typeof data.only_whole_dollar_bids === 'boolean') {
+          voiceConfig.only_whole_dollar_bids = data.only_whole_dollar_bids;
+        }
+      },
+      error: function () {}
+    });
+  }
   const voiceValueSlots = ['lot', 'bidder', 'price'];
 
+  {% comment %}
+    Currency symbols survive tokenizing because a recognizer writes money as "$25" and the symbol is
+    then the only thing left of the price anchor -- see voiceParse. The other three are here for the
+    same reason: a deployment whose currency_symbol is £ gets a recognizer that writes £25, and
+    stripping it would leave a bare number that means nothing.
+  {% endcomment %}
+  const voiceCurrencyChars = '$£€¥';
+
   function voiceWords(text) {
-    return String(text || '').toLowerCase().replace(/[^a-z0-9$.\-]+/g, ' ').split(/\s+/).filter(Boolean);
+    return String(text || '').toLowerCase().replace(/[^a-z0-9$£€¥.\-]+/g, ' ').split(/\s+/).filter(Boolean);
   }
 
   function voiceIsNumberWord(word) {
@@ -349,8 +475,11 @@
     const amount = parts.length === 1 ? parts[0].value : Number(voiceNumberCandidates(parts).pop());
     if (!isFinite(amount)) { return null; }
     // The auction refuses half dollars when it says so, and offering one is offering a command the
-    // page is about to reject.
-    return voiceConfig.only_whole_dollar_bids ? String(Math.round(amount)) : String(amount);
+    // page is about to reject. Refused rather than rounded, which is what the app does with the same
+    // utterance: a heard "ten fifty" that quietly became 11 is money nobody said out loud, and the
+    // price field in a whole-dollar auction would have taken it.
+    if (voiceConfig.only_whole_dollar_bids && Math.round(amount) !== amount) { return null; }
+    return String(amount);
   }
 
   function voiceAlternativesFor(candidate) {
@@ -404,14 +533,15 @@
     return hits;
   }
 
-  function voiceReadValue(slot, parts, heard) {
+  function voiceReadValue(slot, parts, heard, quality) {
+    const confidence = voiceFillConfidence(typeof quality === 'number' ? quality : 1);
     if (slot === 'price') {
       const price = voicePriceOf(parts);
-      return price === null ? null : {slot: slot, value: price, confidence: 1, heard: heard};
+      return price === null ? null : {slot: slot, value: price, confidence: confidence, heard: heard};
     }
     const candidates = voiceNumberCandidates(parts);
     let hits = voiceSnap(candidates, voiceVocabulary[slot] || []);
-    if (hits.length === 1) { return {slot: slot, value: hits[0], confidence: 1, heard: heard}; }
+    if (hits.length === 1) { return {slot: slot, value: hits[0], confidence: confidence, heard: heard}; }
     if (hits.length > 1) {
       // Two real values in one utterance: offer both rather than picking, which is what the amber
       // field and its buttons are for.
@@ -447,7 +577,14 @@
     let index = 0;
     while (index < words.length) {
       const word = words[index];
-      const money = word.charAt(0) === '$' && /^\d/.test(word.slice(1));
+      if (word.length === 1 && voiceCurrencyChars.indexOf(word) !== -1) {
+        // The symbol arrived as its own token ("$ 10"), which iOS does and Android sometimes does.
+        // Same anchor; the number after it is read by the ordinary number branch on the next pass.
+        items.push({kind: 'anchor', slot: 'price'});
+        index += 1;
+        continue;
+      }
+      const money = voiceCurrencyChars.indexOf(word.charAt(0)) !== -1 && /^\d/.test(word.slice(1));
       if (money) { items.push({kind: 'anchor', slot: 'price'}); }
       const bare = money ? word.slice(1) : word;
       if (voiceIsNumberWord(bare)) {
@@ -460,14 +597,10 @@
         items.push({kind: 'number', parts: parts});
         continue;
       }
-      let matched = null;
-      for (const anchor of voiceAnchorPhrases) {
-        const slice = words.slice(index, index + anchor.words.length).join(' ');
-        if (slice === anchor.words.join(' ')) { matched = anchor; break; }
-      }
+      const matched = voiceAnchorAt(words, index);
       if (matched) {
-        items.push({kind: 'anchor', slot: matched.slot});
-        index += matched.words.length;
+        items.push({kind: 'anchor', slot: matched.slot, quality: matched.quality});
+        index += matched.length;
       } else {
         items.push({kind: 'word'});
         index += 1;
@@ -480,9 +613,12 @@
     const claimed = [];
     items.forEach(function (item, position) {
       if (item.kind !== 'anchor' || seen[item.slot]) { return; }
+      const quality = typeof item.quality === 'number' ? item.quality : 1;
       if (voiceValueSlots.indexOf(item.slot) === -1) {
         seen[item.slot] = true;
-        commands.push({slot: item.slot, value: '', confidence: 1, heard: heard});
+        // An action heard through a fuzzy anchor is still acted on -- there is no field to fill in
+        // amber -- but it is logged as the near miss it was.
+        commands.push({slot: item.slot, value: '', confidence: voiceFillConfidence(quality), heard: heard});
         return;
       }
       let numberAt = -1;
@@ -492,7 +628,7 @@
         numberAt = position - 1;
       }
       if (numberAt === -1) { return; }
-      const command = voiceReadValue(item.slot, items[numberAt].parts, heard);
+      const command = voiceReadValue(item.slot, items[numberAt].parts, heard, quality);
       if (!command) {
         // An anchor with a number after it that this auction has never heard of. Worth saying out
         // loud: "no lot like that here" is an answer, and it is the answer somebody staring at a
@@ -528,6 +664,10 @@
   let voiceMatchedHere = null;
   const voiceDuplicateWindowMs = voiceUnmatchedGraceMs * 3;
 
+  function voiceNormalizedText(text) {
+    return String(text || '').toLowerCase().trim().replace(/\s+/g, ' ');
+  }
+
   function voiceAlreadyHandledHere(event) {
     // Never our own: two identical utterances in a row ("sold", then "sold" for the next lot) are
     // two real commands, and both of them come through here carrying the same text.
@@ -536,7 +676,16 @@
       voiceMatchedHere = null;
       return false;
     }
-    return String(event.heard || '') === voiceMatchedHere.heard;
+    // Containment, and then the slot -- not string equality. The app's `heard` is the tokens for one
+    // *slot* ("132 10"), never the whole utterance, so comparing the two strings could never be
+    // true: this guard, the only thing standing between a late command and a second save of the
+    // same lot, had never once fired.
+    const heard = voiceNormalizedText(event.heard);
+    if (heard && voiceMatchedHere.heard.indexOf(heard) === -1) { return false; }
+    if (voiceValueSlots.indexOf(event.slot) !== -1) {
+      return Object.prototype.hasOwnProperty.call(voiceMatchedHere.slots, event.slot);
+    }
+    return voiceMatchedHere.actions.indexOf(event.slot) !== -1;
   }
 
   const voiceMissLabel = {lot: 'lot', bidder: 'bidder'};
@@ -559,9 +708,14 @@
       }
       return false;
     }
-    voiceMatchedHere = {heard: heard, at: Date.now()};
+    voiceMatchedHere = {heard: voiceNormalizedText(heard), at: Date.now(), slots: {}, actions: []};
     parsed.commands.forEach(function (command) {
       command.local = true;
+      if (voiceValueSlots.indexOf(command.slot) !== -1) {
+        voiceMatchedHere.slots[command.slot] = command.value;
+      } else {
+        voiceMatchedHere.actions.push(command.slot);
+      }
       voiceHandleCommand(command);
     });
     return true;
@@ -665,17 +819,62 @@
     ['lot', 'price', 'winner'].forEach(voiceClearUnsure);
     voiceFilled = {};
     voiceLogIds = {};
+    // A lot just sold or came back unsold, so the list of lots voice may hear has changed.
+    voiceRefreshVocabulary();
   };
 
-  function voiceBlockedMessage(blockedBy) {
-    const missing = (blockedBy || []).map(function (item) {
-      return voiceFieldLabel[voiceSlotToField[item]] || String(item);
-    });
-    voiceUnsureFields().forEach(function (field) {
-      const label = voiceFieldLabel[field];
-      if (missing.indexOf(label) === -1) { missing.push(label); }
+  {% comment %}
+    What is actually holding a save back, read off the form rather than taken from the app.
+
+    `blocked_by` is the app's snapshot of what *it* filled in, and it was wrong twice over. A value
+    the operator typed with the keyboard was never in it, so "sold" was refused on a form that was
+    complete. And a `sold` computed before its own siblings arrived -- which is exactly what "sold,
+    ten dollars, bidder one two three" produces, because the app reports commands in the order they
+    were spoken -- listed all three fields as missing when they were about to be filled.
+
+    The page is looking straight at the three inputs, so it never has to guess. The app's list is
+    still read for the one thing it knows and the page doesn't: whether this deployment has
+    auto-submit switched off altogether.
+  {% endcomment %}
+  function voiceBlockedMessage(blockedBy, emptyOnly) {
+    if ((blockedBy || []).indexOf('disabled') !== -1) { return ['auto-save is off for this auction']; }
+    const missing = [];
+    ['lot', 'winner', 'price'].forEach(function (field) {
+      const empty = !String($("#" + field).val() || '').trim();
+      if (empty || (!emptyOnly && voiceUnsure[field])) { missing.push(voiceFieldLabel[field]); }
     });
     return missing;
+  }
+
+  {% comment %}
+    A `sold` waits a beat before it acts, for the ordering reason above: the save is delivered first
+    in "sold, ten dollars, bidder one two three", and acting on it the moment it arrives is a refusal
+    on a form whose values are still two events behind. 250 ms is longer than the gap between the
+    commands of one utterance and far shorter than the gap between two utterances, so it costs the
+    operator nothing they can feel and it cannot swallow a later "sold".
+  {% endcomment %}
+  const voiceSoldDeferMs = 250;
+  let voiceSoldTimer = null;
+
+  function voiceTrySold(event) {
+    const heard = event.heard || '';
+    const confidence = (typeof event.confidence === 'number') ? event.confidence : 1;
+    // Never save past an unsure or empty field: block_auto_submit_when_unsure exists because selling
+    // a lot to a bidder nobody confirmed is far more expensive than asking one question. Turning it
+    // off stops the page asking about *unsure* fields; an empty one still holds the save.
+    const blocked = voiceBlockedMessage(event.blocked_by, !voiceConfig.block_auto_submit_when_unsure);
+    if (blocked.length) {
+      voiceStatus('Not saved: check ' + blocked.join(', '));
+      window.jQuery.toast({
+        title: 'Not saved yet',
+        content: 'Confirm ' + blocked.join(' and ') + ', then say sold again.',
+        type: 'warning',
+        delay: 6000
+      });
+      return;
+    }
+    voiceLogCommand('sold', {heard: heard, chosen: 'save', confidence: confidence});
+    sendFormData('save');
   }
 
   function voiceHandleCommand(event) {
@@ -691,23 +890,9 @@
       return;
     }
     if (slot === 'sold') {
-      // Never save past an unsure field: block_auto_submit_when_unsure exists because selling a lot
-      // to a bidder nobody confirmed is far more expensive than asking one question.
-      const blocked = voiceConfig.block_auto_submit_when_unsure
-        ? voiceBlockedMessage(event.blocked_by)
-        : (event.blocked_by || []).map(function (item) { return voiceFieldLabel[voiceSlotToField[item]] || String(item); });
-      if (blocked.length) {
-        voiceStatus('Not saved: check ' + blocked.join(', '));
-        window.jQuery.toast({
-          title: 'Not saved yet',
-          content: 'Confirm ' + blocked.join(' and ') + ', then say sold again.',
-          type: 'warning',
-          delay: 6000
-        });
-        return;
-      }
-      voiceLogCommand(slot, {heard: heard, chosen: 'save', confidence: confidence});
-      sendFormData('save');
+      // Deferred, so the values spoken after it land first -- see voiceTrySold.
+      clearTimeout(voiceSoldTimer);
+      voiceSoldTimer = setTimeout(function () { voiceTrySold(event); }, voiceSoldDeferMs);
       return;
     }
     if (slot === 'unsold') {
@@ -790,6 +975,14 @@
   function voiceRenderState(state) {
     const listening = !!(state && state.listening);
     voiceListening = listening;
+    // Bidders sign up at the desk while selling runs; see voiceRefreshVocabulary.
+    if (listening && !voiceVocabularyTimer) {
+      voiceRefreshVocabulary();
+      voiceVocabularyTimer = setInterval(voiceRefreshVocabulary, voiceVocabularyRefreshMs);
+    } else if (!listening && voiceVocabularyTimer) {
+      clearInterval(voiceVocabularyTimer);
+      voiceVocabularyTimer = null;
+    }
     const button = $("#voice-btn");
     if (listening) {
       button.removeClass('btn-primary').addClass('btn-danger');

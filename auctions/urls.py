@@ -112,6 +112,7 @@ urlpatterns = [
     path("api/images/primary/", views.ImagesPrimary.as_view()),
     path("api/lots/get_recommended/", views.RecommendedLots.as_view()),
     path("api/pageview/", views.PageViewCreate.as_view(), name="pageview"),
+    path("api/form-abandoned/", views.FormAbandonedBeacon.as_view(), name="form_abandoned"),
     path("api/feedback/<int:pk>/<str:leave_as>/", views.Feedback.as_view()),
     path("api/users/ban/<int:pk>/", views.CreateUserBan.as_view()),
     path("api/users/unban/<int:pk>/", views.UserUnban.as_view()),
@@ -248,7 +249,13 @@ urlpatterns = [
         name="admin_traffic_time_of_day_json",
     ),
     path("admin-referrers/", views.AdminReferrers.as_view(), name="admin_referrers"),
-    path("admin-user-flow/", views.AdminUserFlow.as_view(), name="admin_user_flow"),
+    path("admin-usability/", views.AdminUsability.as_view(), name="admin_usability"),
+    path("admin-club-health/", views.AdminClubHealth.as_view(), name="admin_club_health"),
+    path("admin-club-health/<int:pk>/contacted/", views.ClubMarkContacted.as_view(), name="club_mark_contacted"),
+    path("admin-unlinked-auctions/", views.UnlinkedAuctions.as_view(), name="admin_unlinked_auctions"),
+    path("admin-unlinked-auctions/link/", views.LinkAuctionsToClub.as_view(), name="link_auctions_to_club"),
+    path("admin-lifecycle/", views.AdminLifecycle.as_view(), name="admin_lifecycle"),
+    path("admin-session-replay/", views.AdminSessionReplay.as_view(), name="admin_session_replay"),
     path("admin-error/", views.AdminErrorPage.as_view(), name="admin_error"),
     path("user-signups/", views.AdminUserSignups.as_view(), name="admin_user_signups"),
     path("user-signups-data/", views.AdminUserSignupsJSON.as_view(), name="admin_user_signups_json"),
@@ -267,6 +274,7 @@ urlpatterns = [
     path("lots/", views.AllLots.as_view(), name="allLots"),
     path("qr/<int:pk>/", views.LotQRView.as_view(), name="lot_by_pk_qr"),
     path("lots/<int:pk>/", views.ViewLot.as_view(), name="lot_by_pk"),
+    path("lots/<int:pk>/report/", views.ReportContentCreate.as_view(), name="report_lot"),
     path(
         "lots/edit/<int:pk>/",
         login_required(views.LotUpdate.as_view()),
@@ -522,6 +530,11 @@ urlpatterns = [
         name="auction_voice_command_log",
     ),
     path(
+        "auctions/<slug:slug>/lots/set-winners/voice-vocabulary/",
+        views.VoiceVocabularyView.as_view(),
+        name="auction_voice_vocabulary",
+    ),
+    path(
         "auctions/<slug:slug>/queue/",
         views.LotQueueView.as_view(),
         name="auction_lot_queue",
@@ -720,6 +733,11 @@ urlpatterns = [
     ),
     path("blog/<slug:slug>/", views.BlogPostView.as_view(), name="blog_post"),
     path("privacy/", views.PrivacyPolicyView.as_view(), name="privacy_policy"),
+    # 512(c)(2) requires the designated agent's details to be published on the site as well as
+    # filed with the Copyright Office.  /dmca/ 404s on a deployment that hasn't configured one --
+    # see auctions/dmca.py.
+    path("dmca/", views.DmcaPolicyView.as_view(), name="dmca"),
+    path("dmca/notice/", views.CopyrightNoticeCreate.as_view(), name="dmca_notice"),
     path("feedback/", views.LeaveFeedbackView.as_view(), name="feedback"),
     path("unsubscribe/<slug:slug>/", views.UnsubscribeView.as_view()),
     path(

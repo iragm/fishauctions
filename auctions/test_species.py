@@ -1,12 +1,4 @@
-"""Tests for scientific names on lots: matching, the picker, labels, and genus BAP points.
-
-The matching tests carry a small hand-built species list rather than anything from FishBase, so
-they say what the *rules* are without depending on a snapshot: what counts as a match, what
-deliberately does not, and what happens when neither the database nor the model can answer.
-
-Everything touching the language model runs against a scripted :class:`FakeProvider`, so there is
-no network here and a test can say exactly what the model "replied", including nonsense.
-"""
+"""Tests for scientific names on lots: matching, the picker, labels, and genus BAP points."""
 
 import datetime
 import re
@@ -52,7 +44,7 @@ from auctions.species_matching import (
     visible_species,
 )
 from auctions.test_support import isolated_cache
-from auctions.tests import StandardTestCase
+from auctions.tests import StandardTestCase, give_contact_info
 
 
 class FakeProvider(LLMProvider):
@@ -78,6 +70,13 @@ class FakeProvider(LLMProvider):
     @property
     def call_count(self):
         return len(self.calls)
+
+
+#: A round-one reply that hands the question on to the shortlist round: the model was shown the
+#: lot name on its own and could not say what organism it is.  Most of the tests below are about
+#: round two, so this is what they put in front of the reply they actually care about.  See
+#: species_matching.identify.
+CANNOT_NAME_IT = {"kind": "unknown"}
 
 
 def make_species(genus, epithet, common=None, extra_names=(), source="fishbase", speccode=None, aquarium_use=""):
@@ -123,7 +122,6 @@ class SpeciesMatchingTests(StandardTestCase):
         self.assertEqual(normalize("  Betta   Splendens (pair)! "), "betta splendens pair")
 
     def test_normalize_deletes_an_apostrophe_but_splits_on_a_hyphen(self):
-        """The one punctuation mark people leave out has to normalise to the same string either way."""
         self.assertEqual(normalize("Adolf's catfish"), "adolfs catfish")
         self.assertEqual(normalize("adolfs catfish"), "adolfs catfish")
         self.assertEqual(normalize("Black-banded leporinus"), "black banded leporinus")
@@ -140,7 +138,6 @@ class SpeciesMatchingTests(StandardTestCase):
         self.assertIn("guppy", keywords("young blue guppy pair"))
 
     def test_exact_common_name_prefers_the_designated_species(self):
-        """ "Guppy" must land on Poecilia reticulata, not the other fish that share the name."""
         found = list(exact_matches("guppy"))
         self.assertEqual(found[0], self.guppy)
         self.assertIn(self.other_guppy, found)
@@ -149,7 +146,6 @@ class SpeciesMatchingTests(StandardTestCase):
         self.assertEqual(list(exact_matches("guppies"))[0], self.guppy)
 
     def test_scientific_name_in_a_longer_lot_name(self):
-        """A full scientific name wins even buried in collection-location detail."""
         self.assertEqual(search_matches("Tropheus duboisi maswa F1"), [self.tropheus])
 
     def test_common_name_phrase_survives_a_plural_and_a_quantity(self):
@@ -159,27 +155,22 @@ class SpeciesMatchingTests(StandardTestCase):
         self.assertEqual(search_matches("Tropheus sp. Ikola"), [self.tropheus])
 
     def test_equipment_matches_nothing(self):
-        """The failure this guards: 'sponge filter' matching an actual sponge."""
         self.assertEqual(search_matches("sponge filter"), [])
 
     def test_a_shared_epithet_alone_is_not_a_match(self):
-        """'davidi' belongs to lots of unrelated species; on its own it names none of them."""
         make_species("Formosania", "davidi")
         make_species("Rhinogobius", "davidi")
         self.assertEqual(search_matches("Neocaridina davidi"), [])
 
     def test_a_single_word_common_name_does_not_hijack_a_longer_name(self):
-        """'Bolivian ram' must not resolve to the fish FishBase simply calls 'Ram'."""
         self.assertEqual(search_matches("Bolivian ram"), [])
 
     def test_weak_genus_match_with_too_many_species_returns_nothing(self):
-        """A genus that matched more than a picklist's worth has told the user nothing."""
         for index in range(MAX_GENUS_MATCHES + 4):
             make_species("Ancistrus", f"species{index}")
         self.assertEqual(search_matches("Ancistrus sp. L144"), [])
 
     def test_a_small_genus_is_offered_in_full(self):
-        """Typing just "Tropheus" should show the Tropheus, not nothing."""
         for index in range(MAX_GENUS_MATCHES - 1):
             make_species("Tropheus", f"species{index}")
         found = search_matches("tropheus")
@@ -187,14 +178,12 @@ class SpeciesMatchingTests(StandardTestCase):
         self.assertIn(self.tropheus, found)
 
     def test_a_big_genus_falls_back_to_the_ones_in_the_trade(self):
-        """Seventy-seven Ancistrus in FishBase are two in the hobby, and those are the answer."""
         for index in range(MAX_GENUS_MATCHES + 4):
             make_species("Ancistrus", f"species{index}")
         kept = make_species("Ancistrus", "cirrhosus", "Bristlenose", aquarium_use="commercial")
         self.assertEqual(search_matches("Ancistrus sp. L144"), [kept])
 
     def test_a_bare_epithet_offers_the_species_that_carry_it(self):
-        """The reported failure: "saulosi" is two real fish and used to return nothing."""
         chindongo = make_species("Chindongo", "saulosi")
         aulonocara = make_species("Aulonocara", "saulosi", "Greenface aulonocara")
         self.assertEqual(search_matches("saulosi"), [aulonocara, chindongo])
@@ -204,7 +193,6 @@ class SpeciesMatchingTests(StandardTestCase):
         self.assertEqual(search_matches("6 saulosi"), [chindongo])
 
     def test_a_bare_epithet_ending_in_s_still_counts_as_one_word(self):
-        """keywords() emits a singular alongside every word, which made "elegans" look like two."""
         species = make_species("Melanotaenia", "elegans")
         self.assertEqual(search_matches("elegans"), [species])
 
@@ -265,7 +253,7 @@ class SpeciesLLMTests(StandardTestCase):
         self.assertEqual(self.provider.call_count, 0)
 
     def test_model_picks_from_the_shortlist(self):
-        self.provider.replies = [{"id": self.altispinosus.pk}]
+        self.provider.replies = [CANNOT_NAME_IT, {"id": self.altispinosus.pk}]
         matches, source = suggest_species("Bolivian ram")
         self.assertEqual(source, "llm")
         self.assertEqual(matches, [self.altispinosus])
@@ -276,14 +264,13 @@ class SpeciesLLMTests(StandardTestCase):
         Without the sibling expansion the model is shown a list that cannot contain the right
         answer, and correctly answers null -- which reads as the feature not working.
         """
-        self.provider.replies = [{"id": self.altispinosus.pk}]
+        self.provider.replies = [CANNOT_NAME_IT, {"id": self.altispinosus.pk}]
         suggest_species("Bolivian ram")
-        shortlist = self.provider.calls[0]["messages"][0]["content"]
+        shortlist = self.provider.calls[1]["messages"][0]["content"]
         self.assertIn(str(self.altispinosus.pk), shortlist)
 
     def test_an_id_that_was_not_offered_is_discarded(self):
-        """Nothing the model says can put a species on a lot that we didn't shortlist."""
-        self.provider.replies = [{"id": 99999999}]
+        self.provider.replies = [CANNOT_NAME_IT, {"id": 99999999}]
         matches, source = suggest_species("Bolivian ram")
         self.assertEqual(matches, [])
         self.assertEqual(source, "none")
@@ -295,33 +282,35 @@ class SpeciesLLMTests(StandardTestCase):
         happens to hit FishBase's "Labidochromis yellow" -- luck, not design.
         """
         lab = make_species("Labidochromis", "caeruleus", "Blue streak hap")
-        self.provider.replies = [{"id": None, "scientific_name": "Labidochromis caeruleus"}]
+        self.provider.replies = [CANNOT_NAME_IT, {"id": None, "scientific_name": "Labidochromis caeruleus"}]
         matches, source = suggest_species("yellow lab")
         self.assertEqual(matches, [lab])
         self.assertEqual(source, "llm")
 
     def test_a_species_it_names_that_we_do_not_have_is_no_species(self):
-        """The name is looked up in the same table the form validates against.  No invention."""
-        self.provider.replies = [{"id": None, "scientific_name": "Betta imbellis"}]
+        self.provider.replies = [CANNOT_NAME_IT, {"id": None, "scientific_name": "Betta imbellis"}]
         self.assertEqual(suggest_species("peaceful betta")[0], [])
 
     def test_a_name_it_makes_up_out_of_free_text_is_not_looked_up(self):
-        self.provider.replies = [{"id": None, "scientific_name": "some kind of small brown fish"}]
+        self.provider.replies = [
+            CANNOT_NAME_IT,
+            {"id": None, "scientific_name": "some kind of small brown fish"},
+        ]
         self.assertEqual(suggest_species("brown fish")[0], [])
 
     def test_null_is_an_answer_and_gets_remembered(self):
-        self.provider.replies = [{"id": None}]
+        self.provider.replies = [CANNOT_NAME_IT, {"id": None}]
         self.assertEqual(suggest_species("Bolivian ram")[0], [])
         cached = SpeciesSearchCache.objects.get(search_text="bolivian ram")
         self.assertIsNone(cached.species)
 
     def test_the_cache_stops_a_second_call(self):
-        self.provider.replies = [{"id": self.altispinosus.pk}]
+        self.provider.replies = [CANNOT_NAME_IT, {"id": self.altispinosus.pk}]
         suggest_species("Bolivian ram")
         matches, source = suggest_species("BOLIVIAN RAM!")
         self.assertEqual(source, "cache")
         self.assertEqual(matches, [self.altispinosus])
-        self.assertEqual(self.provider.call_count, 1)
+        self.assertEqual(self.provider.call_count, 2)
 
     def test_a_provider_failure_degrades_to_no_species(self):
         self.provider.replies = []  # raises LLMError
@@ -330,14 +319,15 @@ class SpeciesLLMTests(StandardTestCase):
         self.assertEqual(source, "none")
 
     def test_every_call_is_recorded(self):
-        self.provider.replies = [{"id": self.altispinosus.pk}]
+        self.provider.replies = [CANNOT_NAME_IT, {"id": self.altispinosus.pk}]
         suggest_species("Bolivian ram", user=self.user)
-        usage = LLMUsage.objects.get(query="Bolivian ram")
-        self.assertEqual(usage.response_kind, "species")
-        self.assertEqual(usage.user, self.user)
+        # Both rounds, and told apart by what they answered: this name cost an "unknown" and then
+        # a species, and the bill for a lookup is the sum of its rounds.
+        kinds = list(LLMUsage.objects.filter(query="Bolivian ram").values_list("response_kind", flat=True))
+        self.assertEqual(sorted(kinds), ["species", "unknown"])
+        self.assertEqual(LLMUsage.objects.filter(query="Bolivian ram", user=self.user).count(), 2)
 
     def test_rate_limit_stops_asking(self):
-        """Bulk-adding fifty lots that all miss the cache must not be able to run up the bill."""
         from auctions import species_matching
 
         self.assertTrue(species_matching.check_rate_limit(self.user, limit=2))
@@ -355,6 +345,413 @@ class SpeciesLLMTests(StandardTestCase):
             species_matching.MAX_LLM_CALLS_PER_USER_PER_DAY = original
         self.assertEqual(matches, [])
         self.assertEqual(self.provider.call_count, 0)
+
+
+@isolated_cache("species-shortlist")
+class SpeciesShortlistTests(StandardTestCase):
+    """What the shortlist round is shown.  Recall failures here read as the model being unhelpful."""
+
+    def setUp(self):
+        super().setUp()
+        llm.set_provider_override(None)
+        self.caudopunctatus = make_species("Neolamprologus", "caudopunctatus", "Caudopunk")
+        self.brichardi = make_species("Neolamprologus", "brichardi", "Fairy cichlid")
+        self.shrimp = make_species("Neocaridina", "davidi", "Cherry shrimp", source="aquarium")
+        self.blue_dream = Species.objects.create(
+            genus="Neocaridina",
+            species="davidi",
+            variety="Blue Dream",
+            common_name="Blue dream shrimp",
+            parent=self.shrimp,
+            source="aquarium",
+        )
+        SpeciesCommonName.objects.create(species=self.blue_dream, name="blue dream shrimp", is_preferred=True)
+
+    def shortlist(self, name):
+        from auctions.species_matching import _shortlist, keywords, normalize
+
+        return _shortlist(keywords(name), normalize(name))
+
+    def test_a_word_that_is_an_epithet_shortlists_that_species(self):
+        """Half this hobby sells fish as an abbreviated genus plus a full epithet.
+
+        "Neolamp caudopunctatus" used to shortlist *nothing*: the genus is not a genus we hold,
+        no common name contains either word, and no layer looked at the epithet column at all --
+        so the model was handed an empty list about a fish that is right there in the table.
+        """
+        self.assertIn(self.caudopunctatus, self.shortlist("neolamp caudopunctatus red fin 6"))
+
+    def test_the_epithet_beats_a_genus_too_big_to_fit(self):
+        """Which is why it runs before the genus layer rather than after it.
+
+        The genus siblings are worth having -- that is what finds the Bolivian ram -- but a genus
+        with more members than the shortlist holds is an unordered slice of itself, and the one
+        species the seller actually typed has no better claim on a place in it than any other.
+        """
+        from auctions.species_matching import LLM_SHORTLIST_SIZE
+
+        for number in range(LLM_SHORTLIST_SIZE + 10):
+            make_species("Neolamprologus", f"filler{number}")
+        self.assertIn(self.caudopunctatus, self.shortlist("neolamp caudopunctatus red fin 6"))
+
+    def test_a_strain_brings_its_plain_species_with_it(self):
+        """The prompt's fallback for a strain we don't stock -- "pick the species it is a strain
+        of" -- is only takeable when that species is on the list too."""
+        shortlist = self.shortlist("blue dream shrimp")
+        self.assertIn(self.blue_dream, shortlist)
+        self.assertIn(self.shrimp, shortlist)
+
+    def test_a_short_word_that_happens_to_be_an_epithet_is_a_coincidence(self):
+        """The trap this layer sets if it is allowed to match anything.
+
+        "Geo" is the hobby's abbreviation for *Geophagus* and also the specific epithet of
+        *Hoplolatilus geo*, a marine tilefish -- which is what "geo alto sinu" was shortlisted
+        with, and what it came back as.  A wrong species with a real scientific name next to it is
+        the failure this module is written to avoid.
+        """
+        # Named so that the epithet is the only way in: a common name containing "geo" would put
+        # it on the list through the last layer, which is a different question.
+        tilefish = make_species("Hoplolatilus", "geo", "Yellow tilefish")
+        self.assertNotIn(tilefish, self.shortlist("geo alto sinu"))
+
+    def test_a_typed_epithet_answers_with_the_species_rather_than_its_strains(self):
+        """A cultivar carries its parent's epithet, so the epithet layer asks for nominal species
+        only -- otherwise "Neocaridina davidi" spends its place on colour strains nobody typed.
+
+        They are still reachable, by their own names, in the layer above: see
+        test_a_strain_brings_its_plain_species_with_it.
+        """
+        for number in range(3):
+            Species.objects.create(
+                genus="Neocaridina",
+                species="davidi",
+                variety=f"Strain {number}",
+                parent=self.shrimp,
+                source="aquarium",
+            )
+        self.assertIn(self.shrimp, self.shortlist("davidi"))
+
+
+@isolated_cache("species-identify")
+class SpeciesIdentifyFirstTests(StandardTestCase):
+    """Round one: the lot name on its own, with no list in front of it.
+
+    The half of the model step that does most of the work, and the half that is not limited by our
+    own recall -- see species_matching.identify.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.provider = FakeProvider()
+        llm.set_provider_override(self.provider)
+        self.ludwigia = make_species("Ludwigia", "repens", "Water primrose", source="aquarium")
+        self.guppy = make_species("Poecilia", "reticulata", "Guppy")
+        self.other_guppy = make_species("Poecilia", "vivipara", "Eye spot toothcarp", ["Guppy"])
+        self.shrimp = make_species("Neocaridina", "davidi", "Cherry shrimp", source="aquarium")
+        self.blue_dream = Species.objects.create(
+            genus="Neocaridina",
+            species="davidi",
+            variety="Blue Dream",
+            parent=self.shrimp,
+            source="aquarium",
+        )
+        SpeciesCommonName.objects.create(species=self.blue_dream, name="blue dream shrimp", is_preferred=True)
+
+    def tearDown(self):
+        llm.set_provider_override(None)
+        super().tearDown()
+
+    def test_a_misspelling_is_read_through_without_a_shortlist(self):
+        """The case the shortlist cannot reach however wide the net is cast.
+
+        Every layer of _shortlist is an equality or a substring against a column, and "luwigia" is
+        not a substring of "ludwigia" -- so "red luwigia" was handed an empty list, correctly
+        answered null, and was written down as "not a species" for every club on the site.
+        """
+        self.provider.replies = [{"kind": "species", "scientific_name": "Ludwigia repens"}]
+        matches, source = suggest_species("red luwigia")
+        self.assertEqual(matches, [self.ludwigia])
+        self.assertEqual(source, "llm")
+        self.assertEqual(self.provider.call_count, 1)
+
+    def test_the_first_round_is_not_shown_our_list(self):
+        """It is a question about the hobby, not about our tables, and asking it that way is the
+        point: a menu of forty near misses is what makes "none of the above" the natural reply."""
+        self.provider.replies = [{"kind": "species", "scientific_name": "Ludwigia repens"}]
+        suggest_species("red luwigia")
+        self.assertNotIn("Candidates", self.provider.calls[0]["messages"][0]["content"])
+
+    def test_an_answer_it_gives_is_still_looked_up_here(self):
+        self.provider.replies = [
+            {"kind": "species", "scientific_name": "Yssichromis piceatus"},
+            {"id": None},
+        ]
+        self.assertEqual(suggest_species("yssichromis piceatus pitch black fulu")[0], [])
+
+    def test_a_strain_is_reached_by_the_common_name(self):
+        """A cultivar has no scientific name of its own -- it shares its parent's.
+
+        So an answer of "Neocaridina davidi" for "blue dream shrimp" is *correct* and still lands
+        on the wrong row unless the common name is read too.
+        """
+        self.provider.replies = [
+            {"kind": "species", "scientific_name": "Neocaridina davidi", "common_name": "blue dream shrimp"}
+        ]
+        self.assertEqual(suggest_species("bluedream shrimp 6x")[0], [self.blue_dream])
+
+    def test_a_common_name_several_species_carry_is_not_an_identification(self):
+        """Several poeciliids answer to "guppy"; a name carried by more than one is not an answer,
+        and the binomial is what settles it."""
+        self.provider.replies = [{"kind": "species", "scientific_name": "Poecilia reticulata", "common_name": "guppy"}]
+        self.assertEqual(suggest_species("fancy guppys")[0], [self.guppy])
+
+    def test_equipment_is_confirmed_by_the_second_round_before_it_is_written_down(self):
+        """A remembered negative is permanent and site-wide, so it takes two calls to write one.
+
+        Nothing walks one back on its own: it is served to every club ahead of the token search,
+        and a lot saved with no species is agreement with it rather than evidence against it.  Two
+        short calls, once, for the whole site is the price of not having to be right first time.
+        """
+        self.provider.replies = [{"kind": "not an organism"}, {"id": None}]
+        matches, _source = suggest_species("sponge filter")
+        self.assertEqual(matches, [])
+        self.assertEqual(self.provider.call_count, 2)
+        self.assertIsNone(SpeciesSearchCache.objects.get(search_text="sponge filter").species)
+
+    def test_an_unconfirmed_negative_is_never_written_down(self):
+        """Round one said "equipment" and round two never got to answer -- no budget, no provider,
+        a failed call.  That is one opinion, and one opinion does not get to be everybody's."""
+        self.provider.replies = [{"kind": "not an organism"}]  # round two raises LLMError
+        self.assertEqual(suggest_species("sponge filter")[0], [])
+        self.assertFalse(SpeciesSearchCache.objects.filter(search_text="sponge filter").exists())
+
+    def test_the_second_round_may_overturn_it(self):
+        """Our own list holds synonyms, strain names and club words the model has never seen, so
+        the round that is shown the list is allowed to know better -- and a species it gets wrong
+        is one sellers can outvote, which a negative is not."""
+        self.provider.replies = [{"kind": "not an organism"}, {"id": self.guppy.pk}]
+        self.assertEqual(suggest_species("some club's word for a guppy")[0], [self.guppy])
+
+    def test_a_name_it_cannot_place_falls_through_to_the_shortlist_round(self):
+        self.provider.replies = [CANNOT_NAME_IT, {"id": self.guppy.pk}]
+        matches, _source = suggest_species("some club's word for a guppy")
+        self.assertEqual(matches, [self.guppy])
+        self.assertEqual(self.provider.call_count, 2)
+
+    def test_a_shrug_is_not_written_down_at_all(self):
+        self.provider.replies = [CANNOT_NAME_IT, {"id": None, "scientific_name": ""}]
+        suggest_species("mystery bag")
+        row = SpeciesSearchCache.objects.get(search_text="mystery bag")
+        self.assertEqual(row.scientific_name, "")
+        self.assertFalse(row.is_a_gap)
+
+    def test_a_corrected_spelling_goes_back_through_the_species_list(self):
+        """The division of labour, and the reason round one asks for a common name at all.
+
+        "Red luwigia" has no binomial to give -- it is a genus and a colour -- so the model
+        answers unknown and fixes the spelling, and the species list answers the question it was
+        always able to answer.  The model does the spelling; we do the identifying.
+        """
+        self.provider.replies = [{"kind": "unknown", "common_name": "red ludwigia"}]
+        matches, source = suggest_species("red luwigia")
+        self.assertEqual(matches, [self.ludwigia])
+        self.assertEqual(source, "llm")
+        self.assertEqual(self.provider.call_count, 1)
+
+    def test_a_corrected_spelling_is_never_written_to_the_shared_cache(self):
+        """exact_matches was scoped to this caller, and the cache is not.
+
+        The row would be keyed on the misspelling, which belongs to nobody, so the guard that
+        stops one club's name reaching another club has nothing to match on.  One short call per
+        lookup is the cheaper mistake.
+        """
+        self.provider.replies = [{"kind": "unknown", "common_name": "red ludwigia"}]
+        suggest_species("red luwigia")
+        self.assertFalse(SpeciesSearchCache.objects.filter(search_text="red luwigia").exists())
+
+    def test_a_correction_that_matches_nothing_still_falls_through_to_round_two(self):
+        self.provider.replies = [
+            {"kind": "unknown", "common_name": "some plant"},
+            # Named rather than picked by id: nothing about "smoe plnt" shortlists anything, which
+            # is the situation this fallback is for.
+            {"id": None, "scientific_name": "Poecilia reticulata"},
+        ]
+        self.assertEqual(suggest_species("smoe plnt")[0], [self.guppy])
+        self.assertEqual(self.provider.call_count, 2)
+
+    def test_the_corrected_spelling_builds_round_twos_shortlist(self):
+        """The correction is the only thing that makes round two answerable at all.
+
+        Every layer of _shortlist is an equality or a substring against a column, so the typed
+        misspelling reaches none of them: "mudflwoer" shortlisted nothing, and the second call was
+        spent asking the model to choose from an empty list -- the one question it cannot answer --
+        while the reading it had just handed back finds the plant.
+        """
+        plant = make_species("Micranthemum", "umbrosum", "Mudflower carpet plant", source="aquarium")
+        self.provider.replies = [
+            {"kind": "unknown", "common_name": "mudflower"},
+            {"id": plant.pk},
+        ]
+        self.assertEqual(suggest_species("mudflwoer")[0], [plant])
+        listing = self.provider.calls[1]["messages"][0]["content"]
+        self.assertIn("Micranthemum umbrosum", listing)
+        # ...and what the seller typed is still the question being asked.
+        self.assertIn("mudflwoer", listing)
+
+    def test_the_typed_name_is_still_searched_on(self):
+        """A correction is itself a guess, so it only ever widens the shortlist.
+
+        One species here is reachable only from what was typed and the other only from the
+        reading; round two has to be shown both.
+        """
+        typed_only = make_species("Alternanthera", "reineckii", "Shade loving stem plant", source="aquarium")
+        reading_only = make_species("Micranthemum", "umbrosum", "Mudflower carpet plant", source="aquarium")
+        self.provider.replies = [
+            {"kind": "unknown", "common_name": "mudflower"},
+            {"id": None},
+        ]
+        self.assertEqual(suggest_species("mudflwoer shade")[0], [])
+        listing = self.provider.calls[1]["messages"][0]["content"]
+        self.assertIn(typed_only.scientific_name, listing)
+        self.assertIn(reading_only.scientific_name, listing)
+
+    def test_a_species_it_resolved_is_not_also_recorded_as_a_gap(self):
+        """The binomial column is the *gap* column, and one row cannot say both.
+
+        The assassin snail is the real case: we file it under Anentome helena and the model calls
+        it Clea helena, so the common name resolves it while the binomial does not.  Recording the
+        unresolved binomial as well left the cache asserting a fish it had just identified.
+        """
+        snail = make_species("Anentome", "helena", "Assassin snail", source="aquarium")
+        self.provider.replies = [{"kind": "species", "scientific_name": "Clea helena", "common_name": "assassin snail"}]
+        self.assertEqual(suggest_species("8 assasin snails")[0], [snail])
+        row = SpeciesSearchCache.objects.get(search_text="8 assasin snails")
+        self.assertEqual(row.species, snail)
+        self.assertEqual(row.scientific_name, "")
+        self.assertFalse(row.is_a_gap)
+
+    def test_round_two_placing_the_lot_clears_round_ones_gap(self):
+        """Same rule across the two rounds: once there is a species, "and we don't stock it" is
+        no longer true of this row."""
+        self.provider.replies = [
+            {"kind": "species", "scientific_name": "Clea helena"},
+            # Named rather than picked: nothing about the lot name shortlists anything, which is
+            # the case round two's fallback is for.
+            {"id": None, "scientific_name": "Poecilia reticulata"},
+        ]
+        self.assertEqual(suggest_species("mystery snail bag")[0], [self.guppy])
+        row = SpeciesSearchCache.objects.get(search_text="mystery snail bag")
+        self.assertEqual(row.species, self.guppy)
+        self.assertEqual(row.scientific_name, "")
+
+    def test_round_two_failing_keeps_round_ones_gap(self):
+        """...and the other way round: a list that does not hold the fish failing to produce it
+        does not make the identification wrong."""
+        self.provider.replies = [
+            {"kind": "species", "scientific_name": "Clea helena"},
+            {"id": None},
+        ]
+        self.assertEqual(suggest_species("mystery snail bag")[0], [])
+        row = SpeciesSearchCache.objects.get(search_text="mystery snail bag")
+        self.assertIsNone(row.species)
+        self.assertEqual(row.scientific_name, "Clea helena")
+        self.assertTrue(row.is_a_gap)
+
+    def test_one_clubs_word_for_a_fish_is_not_handed_to_another_club(self):
+        """The model answers out of its own head rather than out of visible_common_names.
+
+        The species is everybody's, which is exactly what makes this worth checking: without the
+        guard the model identifies a scoped name for a club that was never taught it, past a name
+        table that refuses to, and into a cache every club reads.
+        """
+        club = Club.objects.create(name="Someone else's club")
+        SpeciesCommonName.objects.create(species=self.guppy, name="clubfish", approved=False, club=club)
+        self.provider.replies = [
+            {"kind": "species", "scientific_name": "Poecilia reticulata"},
+            {"id": None},
+        ]
+        self.assertEqual(suggest_species("clubfish")[0], [])
+        self.assertFalse(SpeciesSearchCache.objects.filter(search_text="clubfish").exists())
+
+
+@isolated_cache("species-gap-rows")
+class SpeciesGapRowTests(StandardTestCase):
+    """A species we don't stock is a hole in the list, not a verdict about the name.
+
+    Before there was anywhere to record the difference, a correct identification of a fish nobody
+    had imported was written to the shared cache as "not a species" -- and adding the fish
+    afterwards changed nothing, because the cache is read before the token search.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.provider = FakeProvider()
+        llm.set_provider_override(self.provider)
+
+    def tearDown(self):
+        llm.set_provider_override(None)
+        super().tearDown()
+
+    def ask(self):
+        self.provider.replies = [
+            {"kind": "species", "scientific_name": "Yssichromis piceatus"},
+            {"id": None},
+        ]
+        return suggest_species("yssichromis piceatus pitch black fulu")
+
+    def test_the_name_is_remembered_even_though_the_species_is_not(self):
+        self.assertEqual(self.ask()[0], [])
+        row = SpeciesSearchCache.objects.get(search_text="yssichromis piceatus pitch black fulu")
+        self.assertIsNone(row.species)
+        self.assertEqual(row.scientific_name, "Yssichromis piceatus")
+        self.assertTrue(row.is_a_gap)
+
+    def test_it_answers_by_itself_once_the_species_is_imported(self):
+        self.ask()
+        calls_so_far = self.provider.call_count
+        fish = make_species("Yssichromis", "piceatus", "Pitch black fulu")
+        matches, source = suggest_species("yssichromis piceatus pitch black fulu")
+        self.assertEqual(matches, [fish])
+        self.assertEqual(source, "cache")
+        self.assertEqual(self.provider.call_count, calls_so_far)
+
+    def test_the_healed_row_keeps_the_answer(self):
+        self.ask()
+        fish = make_species("Yssichromis", "piceatus", "Pitch black fulu")
+        suggest_species("yssichromis piceatus pitch black fulu")
+        row = SpeciesSearchCache.objects.get(search_text="yssichromis piceatus pitch black fulu")
+        self.assertEqual(row.species, fish)
+        self.assertFalse(row.is_a_gap)
+
+    def test_a_species_only_one_club_can_see_never_heals_the_shared_row(self):
+        """A row here is served to every club, so healing it with somebody's unapproved species
+        would hand one club's private row to the whole site."""
+        self.ask()
+        club = Club.objects.create(name="A club with its own list")
+        private = Species.objects.create(
+            genus="Yssichromis", species="piceatus", approved=False, club=club, source="admin"
+        )
+        suggest_species("yssichromis piceatus pitch black fulu")
+        row = SpeciesSearchCache.objects.get(search_text="yssichromis piceatus pitch black fulu")
+        self.assertIsNone(row.species)
+        # ...and the club that added it is still answered with it.
+        self.assertEqual(suggest_species("yssichromis piceatus pitch black fulu", club=club)[0], [private])
+
+    def test_a_retired_pairing_is_not_resurrected_by_healing(self):
+        self.ask()
+        fish = make_species("Yssichromis", "piceatus", "Pitch black fulu")
+        SpeciesNameRejection.objects.create(search_text="yssichromis piceatus pitch black fulu", species=fish)
+        self.assertEqual(suggest_species("yssichromis piceatus pitch black fulu")[0], [])
+
+    def test_the_gaps_page_says_which_kind_of_no_this_is(self):
+        """ "Sponge filter is not a species" and "we have never stocked this fish" are the same row
+        in the same table and completely different jobs."""
+        self.ask()
+        User.objects.create_superuser("gap_admin", "gap_admin@example.com", "testpassword")
+        self.client.login(username="gap_admin", password="testpassword")
+        body = self.client.get(reverse("species_gaps")).content.decode()
+        self.assertIn("Yssichromis piceatus", body)
+        self.assertIn("Identified as", body)
 
 
 @isolated_cache("species-endpoint")
@@ -381,7 +778,6 @@ class SpeciesSuggestionEndpointTests(StandardTestCase):
         self.assertEqual(data["choices"][0]["scientific_name"], "Poecilia reticulata")
 
     def test_echoes_the_name_so_a_slow_reply_can_be_discarded(self):
-        """The bulk-add page has several rows in flight; a stale reply must be identifiable."""
         self.client.login(username="my_lot", password="testpassword")
         self.assertEqual(self.client.post(self.url, {"name": "sponge filter"}).json()["name"], "sponge filter")
 
@@ -446,7 +842,6 @@ class SpeciesOnLotFormsTests(StandardTestCase):
         self.assertIn("varieties=1", html)
 
     def test_the_admin_lot_form_offers_a_way_to_add_a_species(self):
-        """The end of the road on the lot form is "the list has never heard of this fish"."""
         from crispy_forms.layout import HTML
 
         from auctions.forms import EditLot
@@ -461,7 +856,6 @@ class SpeciesOnLotFormsTests(StandardTestCase):
         self.assertIn(reverse("species_create"), " ".join(html_in(form.helper.layout)))
 
     def test_the_widget_only_renders_the_chosen_option(self):
-        """139k options in every lot form would be megabytes of HTML; the rest arrive over ajax."""
         from auctions.forms import EditLot
 
         make_species("Betta", "splendens", "Siamese fighting fish")
@@ -512,7 +906,6 @@ class SpeciesOnLotFormsTests(StandardTestCase):
         self.assertEqual(SpeciesSearchCache.objects.get(search_text="fancy guppy pair").species, self.guppy)
 
     def test_editing_a_lot_later_does_not_teach_the_cache(self):
-        """Renaming a row without clearing its species must not poison the shared cache."""
         self.client.login(username="my_lot", password="testpassword")
         url = reverse("save_lot_ajax", kwargs={"slug": self.online_auction.slug})
         created = self.client.post(
@@ -562,7 +955,6 @@ class SpeciesPickerRendersTests(StandardTestCase):
         self.bulk_url = reverse("bulk_add_lots_auto_for_myself", kwargs={"slug": self.online_auction.slug})
 
     def test_bulk_add_page_carries_the_species_field_without_a_picker(self):
-        """The field is on the page as a hidden input, and there is no dropdown to read."""
         response = self.client.get(self.bulk_url)
         self.assertEqual(response.status_code, 200)
         body = response.content.decode()
@@ -571,7 +963,6 @@ class SpeciesPickerRendersTests(StandardTestCase):
         self.assertNotIn("species-select", body)
 
     def test_the_forms_do_not_carry_the_citation(self):
-        """It moved behind the "?" on the lot page: see the fishbase_citation partial."""
         body = self.client.get(self.bulk_url).content.decode()
         self.assertNotIn("Froese", body)
 
@@ -627,7 +1018,6 @@ class ScientificNameOnLabelsTests(StandardTestCase):
         self.assertEqual(self.lot.scientific_name_line, "Poecilia reticulata")
 
     def test_nothing_prints_for_a_lot_with_no_species(self):
-        """Hardware and mixed lots have no species, and must not leave a blank line."""
         self.assertEqual(self.unsoldLot.scientific_name_line, "")
         self.assertEqual(self.unsoldLot.common_name_line, "")
 
@@ -676,7 +1066,6 @@ class GenusBapOverrideTests(StandardTestCase):
         self.assertEqual(self.lot.bap_points_for_club(self.club), 10)
 
     def test_genus_override_beats_the_category_override(self):
-        """The whole point: 'Cichlids are worth 10, but Tropheus is worth 20'."""
         ClubBapCategoryOverride.objects.create(club=self.club, category=self.category, points=10)
         ClubBapGenusOverride.objects.create(club=self.club, genus="Tropheus", points=20)
         self.assertEqual(self.lot.bap_points_for_club(self.club), 20)
@@ -693,7 +1082,6 @@ class GenusBapOverrideTests(StandardTestCase):
         self.assertEqual(self.lot.bap_points_for_club(self.club), 20)
 
     def test_a_genus_with_no_species_is_refused(self):
-        """A rule for a misspelt genus would silently never fire; say so at the point of entry."""
         from auctions.forms import ClubBapGenusOverrideForm
 
         form = ClubBapGenusOverrideForm(data={"genus": "Trophaeus", "points": 20})
@@ -706,7 +1094,6 @@ class GenusBapOverrideTests(StandardTestCase):
         self.assertTrue(ClubBapGenusOverrideForm(data={"genus": "tropheus", "points": 20}).is_valid())
 
     def test_awarded_points_use_the_genus_rule(self):
-        """End to end: the award a sold lot actually generates."""
         ClubBapGenusOverride.objects.create(club=self.club, genus="Tropheus", points=20)
         self.club.auto_add_points = True
         self.club.only_sold_lots = False
@@ -732,7 +1119,6 @@ class SpeciesModelTests(StandardTestCase):
         self.assertEqual(species.scientific_name, "Poecilia reticulata")
 
     def test_scientific_name_is_rebuilt_on_save(self):
-        """Storing it separately is only safe if it can't drift from the two real columns."""
         species = make_species("Poecilia", "reticulata", "Guppy")
         species.species = "wingei"
         species.save()
@@ -747,7 +1133,6 @@ class SpeciesModelTests(StandardTestCase):
         self.assertEqual(make_species("Poecilia", "reticulata", "Guppy").label, "Poecilia reticulata")
 
     def test_the_model_still_gets_the_common_name(self):
-        """The one reader that needs it: the shortlist is matched against a typed lot name."""
         species = make_species("Poecilia", "reticulata", "Guppy")
         self.assertEqual(species.label_with_common_name, "Poecilia reticulata (Guppy)")
 
@@ -755,7 +1140,6 @@ class SpeciesModelTests(StandardTestCase):
         self.assertEqual(make_species("", "", "Mystery snail").label, "Mystery snail")
 
     def test_speccode_is_only_unique_within_a_source(self):
-        """FishBase and SeaLifeBase both number from 1; a bare unique would lose 36,000 fish."""
         make_species("Poecilia", "reticulata", source="fishbase", speccode=1)
         make_species("Caridina", "multidentata", source="sealifebase", speccode=1)
         self.assertEqual(Species.objects.filter(speccode=1).count(), 2)
@@ -773,9 +1157,9 @@ class AuctionScientificNameSettingTests(StandardTestCase):
         self.assertIn("use_scientific_name", AuctionCustomFieldsForm(instance=self.online_auction).fields)
 
     def test_cloning_an_auction_carries_the_setting(self):
-        """Copying an auction has to bring this with it, or a club re-opts-in every year."""
         self.online_auction.use_scientific_name = False
         self.online_auction.save()
+        give_contact_info(self.user)  # AuctionCreateView refuses somebody with no contact info
         self.client.login(username="my_lot", password="testpassword")
         self.client.post(
             f"{reverse('create_auction')}?clone={self.online_auction.slug}",
@@ -805,7 +1189,6 @@ class SpeciesSearchCacheTests(StandardTestCase):
         self.assertEqual(SpeciesSearchCache.objects.get(search_text="fancy guppy").hits, 1)
 
     def test_a_cached_none_is_honoured(self):
-        """A remembered 'this is not a species' has to short-circuit too, or it costs a call."""
         SpeciesSearchCache.objects.create(search_text="sponge filter", species=None, source="user")
         matches, source = suggest_species("Sponge filter")
         self.assertEqual(source, "cache")
@@ -842,7 +1225,6 @@ class SpeciesSearchCacheTests(StandardTestCase):
         self.assertEqual(theirs, [])
 
     def test_the_club_that_taught_the_name_is_still_answered_with_it(self):
-        """Scoping it away from everybody else is not the same as taking it off the club."""
         club = Club.objects.create(name="Cichlid Keepers")
         lab = make_species("Labidochromis", "caeruleus", "Blue streak hap")
         SpeciesCommonName.objects.create(species=lab, name="Yellow lab", club=club, approved=False, source="admin")
@@ -865,7 +1247,6 @@ class SpeciesSearchCacheTests(StandardTestCase):
         self.assertEqual(source, "exact")
 
     def test_a_row_no_name_claims_is_still_served_to_everybody(self):
-        """What the table is *for*: an inference nobody owns, paid for once for the whole site."""
         shrimp = make_species("Neocaridina", "davidi", "Cherry shrimp", source="aquarium")
         SpeciesSearchCache.objects.create(search_text="blue dream shrimp", species=shrimp, source="llm")
         matches, source = suggest_species("blue dream shrimp", use_llm=False)
@@ -904,7 +1285,6 @@ class SpeciesVarietyTests(StandardTestCase):
         self.assertEqual(list(exact_matches("blue dream shrimp")), [self.blue_dream])
 
     def test_the_species_name_does_not_offer_every_strain(self):
-        """ "Neocaridina davidi" means the shrimp, not a menu of its thirteen colours."""
         self.assertEqual(list(exact_matches("Neocaridina davidi")), [self.shrimp])
         self.assertEqual(search_matches("Neocaridina davidi"), [self.shrimp])
 
@@ -1003,7 +1383,6 @@ class AquariumSpeciesListTests(StandardTestCase):
         self.assertEqual(Species.objects.get(variety="Halfmoon").parent, betta)
 
     def test_a_row_with_no_scientific_name_is_a_hybrid(self):
-        """The blank first column is the whole declaration -- a cross has no binomial to write."""
         import tempfile
         from pathlib import Path
 
@@ -1133,7 +1512,6 @@ class CommonNameProvenanceTests(StandardTestCase):
         self.assertEqual(fishbase.common_name, "Blue streak hap")
 
     def test_it_does_not_delete_the_names_the_other_list_owns(self):
-        """The per-species "replace rather than merge" would otherwise throw away 49,000 names."""
         fishbase = make_species("Labidochromis", "caeruleus", "Blue streak hap", ["Yellow prince"])
         self._load("Labidochromis caeruleus,,yellow lab,,,,\n")
         self.assertEqual(
@@ -1142,7 +1520,6 @@ class CommonNameProvenanceTests(StandardTestCase):
         )
 
     def test_dropping_the_row_takes_its_names_with_it(self):
-        """Retracting a bad identification has to actually retract it."""
         fishbase = make_species("Labidochromis", "caeruleus", "Blue streak hap")
         self._load("Labidochromis caeruleus,,yellow lab,,,,\n")
         self._load("Neocaridina davidi,,cherry shrimp,Atyidae,Decapoda,invert,fresh\n")
@@ -1155,7 +1532,6 @@ class CommonNameProvenanceTests(StandardTestCase):
         self.assertEqual(SpeciesCommonName.objects.get(name="Blue streak hap").source, "fishbase")
 
     def test_a_names_only_row_for_a_species_that_does_not_exist_is_skipped(self):
-        """Almost always a typo, and inventing a bare species to hang the names off would hide it."""
         result = self._load("Labidochromis caerulues,,yellow lab,,,,\n")
         self.assertEqual(result.created, 0)
         self.assertEqual(result.adopted, 0)
@@ -1192,7 +1568,6 @@ class SpeciesCategoryFromTaxonomyTests(StandardTestCase):
         self.assertEqual(self.angel.category, self.cichlids)
 
     def test_the_family_beats_the_order(self):
-        """A guppy is a Cyprinodontiform, but nobody files one with the killifish."""
         from auctions.species_categories import assign_categories
 
         assign_categories()
@@ -1238,7 +1613,6 @@ class SpeciesCategoryFromTaxonomyTests(StandardTestCase):
         self.assertEqual(flowerhorn.genus, "")
 
     def test_the_curated_list_says_what_a_plant_is(self):
-        """Only the list knows a Microsorum is a plant; the taxonomy map is a fish map."""
         from auctions.species_categories import assign_categories
 
         plants = Category.objects.create(name="Plants")
@@ -1257,7 +1631,6 @@ class SpeciesCategoryFromTaxonomyTests(StandardTestCase):
         self.assertEqual(lot.species_category, self.cichlids)
 
     def test_the_species_beats_a_category_that_was_guessed(self):
-        """The keyword guesser runs on the lot name; the species knows its family."""
         Species.objects.filter(pk=self.angel.pk).update(category=self.cichlids)
         lot = Lot.objects.get(pk=self.lot.pk)
         lot.species_category = self.livebearers
@@ -1296,7 +1669,6 @@ class SpeciesOnTheSingleLotFormTests(StandardTestCase):
         return CreateLotForm(user=self.user, cloned_from=None, auction=auction, **kwargs)
 
     def test_the_picker_renders_even_with_no_auction_selected_yet(self):
-        """The reported bug: /lots/new/ with nothing pre-selected had no picker at all."""
         form = self._form()
         self.assertFalse(form.fields["species"].widget.is_hidden)
         self.assertIn("No species", str(form["species"]))
@@ -1322,7 +1694,6 @@ class SpeciesOnTheSingleLotFormTests(StandardTestCase):
         self.assertNotIn("Froese", body)
 
     def test_the_page_hides_both_pickers_behind_one_line_of_text(self):
-        """The seller types a lot name; the species and the category answer for themselves."""
         self.user.first_name = "Test"
         self.user.last_name = "Seller"
         self.user.save()
@@ -1342,7 +1713,6 @@ class SpeciesOnTheSingleLotFormTests(StandardTestCase):
         self.assertIn("category_shown", self._form().fields)
 
     def test_a_category_chosen_with_the_picker_open_is_not_overruled(self):
-        """Deriving over the top of a visible box reverts a deliberate answer, silently."""
         from auctions.forms import clean_species_for_auction
 
         livebearers = Category.objects.create(name="Livebearers")
@@ -1363,7 +1733,6 @@ class SpeciesOnTheSingleLotFormTests(StandardTestCase):
         self.assertEqual(cleaned["species_category"], livebearers)
 
     def test_renaming_a_lot_re_derives_the_species_rather_than_keeping_the_old_one(self):
-        """The behaviour the bulk pages have; the two forms disagreeing is the bug this fixes."""
         from django.template.loader import get_template
 
         source = get_template("lot_form.html").template.source
@@ -1371,7 +1740,6 @@ class SpeciesOnTheSingleLotFormTests(StandardTestCase):
         self.assertIn("} else if (choices.length === 1) {", source)
 
     def test_the_auction_info_endpoint_says_whether_to_show_it(self):
-        """What lets the dropdown re-hide the picker without a page reload."""
         self.client.login(username="my_lot", password="testpassword")
         response = self.client.post(reverse("get_auction_info"), {"auction": self.online_auction.pk})
         self.assertTrue(response.json()["use_scientific_name"])
@@ -1381,7 +1749,6 @@ class SpeciesOnTheSingleLotFormTests(StandardTestCase):
         self.assertFalse(response.json()["use_scientific_name"])
 
     def test_a_species_is_still_dropped_when_the_auction_does_not_use_the_field(self):
-        """Rendering it always must not mean accepting it always."""
         from auctions.forms import clean_species_for_auction
 
         self.online_auction.use_scientific_name = False
@@ -1528,12 +1895,10 @@ class TradeRankTests(StandardTestCase):
     """How likely it is that anybody actually keeps a species, in three steps."""
 
     def test_a_flagged_species_ranks_first_without_waiting_for_a_pass(self):
-        """save() owns the species' own tier; only the genus one needs the full recompute."""
         species = make_species("Tropheus", "duboisi", aquarium_use="commercial")
         self.assertEqual(Species.objects.get(pk=species.pk).trade_rank, Species.TRADE_RANK_SPECIES)
 
     def test_a_genus_with_a_kept_species_lifts_its_siblings(self):
-        """The reason this tier exists: FishBase files Chindongo saulosi under 'never/rarely'."""
         make_species("Chindongo", "demasoni", aquarium_use="commercial")
         sibling = make_species("Chindongo", "saulosi", aquarium_use="never/rarely")
         stranger = make_species("Gadus", "morhua")
@@ -1553,7 +1918,6 @@ class TradeRankTests(StandardTestCase):
         self.assertEqual(Species.objects.get(pk=species.pk).trade_rank, Species.TRADE_RANK_SPECIES)
 
     def test_the_genus_tier_cannot_rescue_a_genus_that_is_too_big(self):
-        """Every member of a genus shares its genus rank, so the narrowing uses the species one."""
         for index in range(MAX_GENUS_MATCHES + 4):
             make_species("Ancistrus", f"species{index}")
         kept = make_species("Ancistrus", "cirrhosus", "Bristlenose", aquarium_use="commercial")
@@ -1591,7 +1955,6 @@ class SpeciesGapsViewTests(StandardTestCase):
         self.assertNotIn("Blue dream shrimp", self.client.get(self.url).content.decode())
 
     def test_an_auction_that_turned_the_field_off_is_not_a_gap(self):
-        """Nobody was ever offered the choice, so there is nothing missing."""
         self.lot.auction.use_scientific_name = False
         self.lot.auction.save()
         self.client.login(username="species_admin", password="testpassword")
@@ -1605,7 +1968,6 @@ class SpeciesGapsViewTests(StandardTestCase):
         self.assertIn("decided by the language model", body)
 
     def test_a_name_that_cannot_be_a_species_is_dropped(self):
-        """ "pair" is on the site's ignore list, so nothing here can name anything."""
         self.lot.lot_name = "10 pair"
         self.lot.save()
         self.client.login(username="species_admin", password="testpassword")
@@ -1702,7 +2064,6 @@ class SpeciesCreateViewTests(StandardTestCase):
         self.assertEqual(self.client.get(self.url).status_code, 302)
 
     def test_an_auction_admin_may_add_one(self):
-        """The whole point of opening this up: a fish missing at a check-in table gets added there."""
         self.client.login(username="admin_user", password="testpassword")
         self.assertEqual(self.client.get(self.url).status_code, 200)
 
@@ -1719,7 +2080,6 @@ class SpeciesCreateViewTests(StandardTestCase):
         self.assertEqual(list(exact_matches("bushynose pleco"))[0].scientific_name, "Ancistrus cirrhosus")
 
     def test_adding_one_by_hand_counts_as_in_the_hobby(self):
-        """Somebody is adding it because a club is selling one, which beats FishBase's column."""
         self._post()
         species = Species.objects.get(scientific_name="Ancistrus cirrhosus")
         self.assertTrue(species.in_trade_override)
@@ -1821,7 +2181,6 @@ class SpeciesAutocompleteTests(StandardTestCase):
         self.assertIn("Neocaridina davidi", response.content.decode())
 
     def test_a_strain_is_never_offered_as_a_parent(self):
-        """A strain of a strain is not a thing, and nothing else knows how to walk that chain."""
         Species.objects.create(
             genus="Neocaridina", species="davidi", variety="Blue Dream", parent=self.shrimp, source="aquarium"
         )
@@ -1862,7 +2221,6 @@ class AdminLotFormLayoutTests(StandardTestCase):
         self.assertEqual(self._empty_columns(html), [])
 
     def test_but_its_value_is_still_posted(self):
-        """render_hidden_fields is what puts the input back, at the end of the form."""
         self.online_auction.use_quantity_field = False
         self.online_auction.save()
         html = self._html()
@@ -1888,7 +2246,6 @@ class AdminLotFormLayoutTests(StandardTestCase):
         self.assertNotIn("show", block.group(1))
 
     def test_a_hybrid_is_summarised_by_the_name_the_trade_uses(self):
-        """full_scientific_name, not scientific_name: a cross has no binomial to print."""
         self.online_auction.use_scientific_name = True
         self.online_auction.save()
         self.lot.species = Species.objects.create(variety="Tibee", is_hybrid=True)
@@ -1957,7 +2314,6 @@ class AdminLotFormSavesTheSpeciesTests(StandardTestCase):
         self.assertEqual(self.lot.species, self.guppy)
 
     def test_the_pairing_is_taught_to_the_rest_of_the_site(self):
-        """An auction admin correcting a lot on purpose is the one free-search pick worth trusting."""
         self._post()
         row = SpeciesSearchCache.objects.get(search_text="blue moscow")
         self.assertEqual(row.species, self.guppy)
@@ -1971,7 +2327,6 @@ class AdminLotFormSavesTheSpeciesTests(StandardTestCase):
         self.assertFalse(SpeciesSearchCache.objects.filter(search_text="blue moscow").exists())
 
     def test_clearing_the_species_teaches_nothing(self):
-        """Clearing a bad guess is not the same as saying the name is not a species."""
         self.lot.species = self.guppy
         self.lot.save()
         self._post(species="")
@@ -2045,7 +2400,6 @@ class PendingSpeciesTests(StandardTestCase):
         self.assertIn(self.shared, visible_species(None))
 
     def test_the_search_box_cannot_route_around_it(self):
-        """The autocomplete is the one place a person can reach any of 36,000 rows by hand."""
         self.client.login(username="my_lot", password="testpassword")
         self.assertNotIn(
             "Ancistrus sp1", self.client.get(reverse("species-autocomplete"), {"q": "pleco"}).content.decode()
@@ -2058,7 +2412,6 @@ class PendingSpeciesTests(StandardTestCase):
         )
 
     def test_an_unapproved_species_is_never_remembered(self):
-        """The cache is global and is read ahead of the token search, so it holds only shared rows."""
         remember("rare pleco", self.mine, source="user", user=self.admin_user)
         self.assertFalse(SpeciesSearchCache.objects.filter(search_text="rare pleco").exists())
         remember("guppy pair", self.shared, source="user", user=self.admin_user)
@@ -2067,7 +2420,6 @@ class PendingSpeciesTests(StandardTestCase):
         self.assertEqual(row.created_by, self.admin_user, "a wrong global answer has to be traceable")
 
     def test_a_species_added_on_the_site_carries_its_names_scope(self):
-        """A name is only as visible as the species it came in with, and no more."""
         self.client.login(username="admin_user", password="testpassword")
         self.client.post(reverse("species_create"), self._species_form_data())
         species = Species.objects.get(scientific_name="Corydoras habrosus")
@@ -2076,7 +2428,6 @@ class PendingSpeciesTests(StandardTestCase):
             self.assertEqual(name.added_by, self.admin_user)
 
     def test_approving_a_species_approves_the_names_it_came_with(self):
-        """Otherwise the species is everybody's while the word people type for it is not."""
         SpeciesCommonName.objects.filter(species=self.mine).update(approved=False, added_by=self.admin_user)
         name = SpeciesCommonName.objects.get(species=self.mine)
         User.objects.create_superuser("species_admin", "species_admin@example.com", "testpassword")
@@ -2125,7 +2476,6 @@ class PendingSpeciesTests(StandardTestCase):
         self.assertTrue(Species.objects.get(scientific_name="Corydoras habrosus").approved)
 
     def test_a_club_mate_sees_it_too(self):
-        """A check-in table is staffed by more than one person, and they need the same picker."""
         club = Club.objects.create(name="Species Club")
         ClubMember.objects.create(club=club, user=self.admin_user)
         ClubMember.objects.create(club=club, user=self.user)
@@ -2135,12 +2485,10 @@ class PendingSpeciesTests(StandardTestCase):
         self.assertNotIn(self.mine, visible_species(self.user_with_no_lots), "somebody else's club cannot")
 
     def test_a_species_with_no_club_is_still_visible_to_its_author(self):
-        """Club is filled in only when there was an obvious one, so it can never be the only route."""
         self.assertIsNone(self.mine.club)
         self.assertIn(self.mine, visible_species(self.admin_user))
 
     def test_no_club_in_the_lookup_does_not_open_the_gates(self):
-        """`club=None` must not read as "every species whose club is null", which is all of them."""
         self.assertNotIn(self.mine, visible_species(None, None))
         self.assertNotIn(self.mine, visible_species(self.user, None))
 
@@ -2152,7 +2500,6 @@ class PendingSpeciesTests(StandardTestCase):
         self.assertEqual(Species.objects.get(scientific_name="Corydoras habrosus").club, club)
 
     def test_it_is_left_blank_when_there_is_not(self):
-        """Two clubs is not an obvious one, and guessing puts a name in the wrong club's picker."""
         for name in ("Club One", "Club Two"):
             ClubMember.objects.create(club=Club.objects.create(name=name), user=self.admin_user)
         self.client.login(username="admin_user", password="testpassword")
@@ -2160,7 +2507,6 @@ class PendingSpeciesTests(StandardTestCase):
         self.assertIsNone(Species.objects.get(scientific_name="Corydoras habrosus").club)
 
     def test_an_auction_admin_only_attaches_it_to_their_own_auctions_lots(self):
-        """This page used to be superusers only, where "every lot on the site" was the right scope."""
         other_user = User.objects.create_user(username="other_club", password="testpassword")
         other_auction = Auction.objects.create(
             created_by=other_user,
@@ -2221,7 +2567,6 @@ class CategoryChosenByAPersonSticksTests(StandardTestCase):
         self.lot.save()
 
     def test_the_bap_admin_modal_choice_is_not_reverted(self):
-        """The reported bug: POST "Aquatic plants", get a 200, and the lot is back in Cichlids."""
         self.client.login(username="bap_admin", password="testpassword")
         response = self.client.post(
             reverse("club_bap_lot_category", kwargs={"pk": self.lot.pk}),
@@ -2237,7 +2582,6 @@ class CategoryChosenByAPersonSticksTests(StandardTestCase):
         self.assertEqual(self.lot.species_category, self.plants)
 
     def test_changing_the_category_on_any_form_survives_the_save(self):
-        """What every form with a visible category picker calls; the admin lot-edit modal is one."""
         from auctions.forms import note_category_chosen_by_person
 
         lot = Lot.objects.get(pk=self.lot.pk)
@@ -2248,7 +2592,6 @@ class CategoryChosenByAPersonSticksTests(StandardTestCase):
         self.assertEqual(lot.species_category, self.plants)
 
     def test_re_saving_without_touching_the_category_is_not_a_decision(self):
-        """Otherwise the first unrelated edit would freeze a machine-set category forever."""
         from auctions.forms import note_category_chosen_by_person
 
         lot = Lot.objects.get(pk=self.lot.pk)
@@ -2256,7 +2599,6 @@ class CategoryChosenByAPersonSticksTests(StandardTestCase):
         self.assertTrue(lot.category_automatically_added)
 
     def test_a_machine_set_category_still_follows_the_species(self):
-        """The behaviour this is not allowed to break: nobody chose Livebearers, so it moves."""
         livebearers = Category.objects.create(name="Livebearers")
         lot = Lot.objects.get(pk=self.lot.pk)
         lot.species_category = livebearers
@@ -2312,7 +2654,6 @@ class TurningTheFieldOffKeepsTheSpeciesTests(StandardTestCase):
         self.assertEqual(cleaned["species"], self.guppy)
 
     def test_a_posted_species_still_cannot_get_in(self):
-        """Keeping the stored value is not the same as accepting a hand-rolled POST."""
         from auctions.forms import clean_species_for_auction
 
         betta = make_species("Betta", "splendens", "Siamese fighting fish")
@@ -2325,7 +2666,6 @@ class TurningTheFieldOffKeepsTheSpeciesTests(StandardTestCase):
         self.assertEqual(cleaned["species"], self.guppy)
 
     def test_the_name_is_hidden_while_the_setting_is_off_and_comes_back_after(self):
-        """One display rule, everywhere -- the lot page and the label used to disagree."""
         lot = Lot.objects.get(pk=self.lot.pk)
         lot.species = self.guppy
         lot.save()
@@ -2368,7 +2708,6 @@ class BapCategoryNamesResolveTests(StandardTestCase):
         self.assertEqual(self.resolver.resolve("live food"), self.cultures)
 
     def test_a_curated_shrimp_lands_in_the_invert_category(self):
-        """End to end, because this is the half of the curated CSV that had no category at all."""
         from auctions.species_categories import assign_categories
 
         shrimp = Species.objects.create(genus="Neocaridina", species="davidi", source="aquarium")
@@ -2412,7 +2751,6 @@ class SpeciesBreederPointsFlagTests(StandardTestCase):
         self.assertEqual(lot.unsold_lot_no_bap_reason, "species_not_eligible")
 
     def test_no_award_is_generated(self):
-        """The probe that found this: a species with breeder_points=False still made 5 points."""
         Species.objects.filter(pk=self.species.pk).update(breeder_points=False)
         lot = Lot.objects.get(pk=self.lot.pk)
         lot.auto_award_bap_points()
@@ -2420,7 +2758,6 @@ class SpeciesBreederPointsFlagTests(StandardTestCase):
         self.assertEqual(lot.bap_auto_reason, "species_not_eligible")
 
     def test_a_strain_answers_for_its_parent(self):
-        """The reason not to award points is a fact about the animal, not about the colour form."""
         Species.objects.filter(pk=self.species.pk).update(breeder_points=False)
         Species.objects.create(
             genus="Tropheus", species="duboisi", variety="Maswa", parent=self.species, source="admin"
@@ -2460,12 +2797,10 @@ class QuantityInLotNamesTests(StandardTestCase):
                 self.assertEqual(list(found), [self.guppy], name)
 
     def test_it_never_reaches_into_the_middle_of_a_name(self):
-        """The cultivars are spelled out of ordinary adjectives; trimming inside would break them."""
         self.assertEqual(strip_quantity("blue dream shrimp"), "blue dream shrimp")
         self.assertEqual(strip_quantity("mickey mouse platy"), "mickey mouse platy")
 
     def test_hardware_still_answers_nothing(self):
-        """The counts come off equipment names too; that must not turn one into a species."""
         for name in ("10 gallon tank", "5 gallon bucket", "2 sponge filters", "bag of gravel"):
             with self.subTest(name=name):
                 found, _ = suggest_species(name, use_llm=False)
@@ -2499,7 +2834,6 @@ class FreshwaterRankingTests(StandardTestCase):
         self.assertIn(marine, found, "the marine one is still offered, just not first")
 
     def test_the_lots_category_still_wins_over_habitat(self):
-        """Habitat is only a tie-break, and it sits below the category the lot already looks like."""
         marine_category = Category.objects.create(name="Marine")
         marine = make_species("Holacanthus", "bermudensis", "Angelfish", aquarium_use="commercial")
         marine.saltwater = True
@@ -2538,7 +2872,6 @@ class SingleWordCommonNameTests(StandardTestCase):
         self.assertEqual(source, "search")
 
     def test_a_phrase_still_beats_a_single_word(self):
-        """Otherwise "Bolivian ram" becomes the fish FishBase simply calls "Ram", a different fish."""
         found, _ = suggest_species("wild caught bolivian ram", use_llm=False)
         self.assertEqual(list(found), [self.altispinosus])
 
@@ -2548,19 +2881,16 @@ class SingleWordCommonNameTests(StandardTestCase):
         self.assertEqual(list(suggest_species("assorted tetras", use_llm=False)[0]), [])
 
     def test_a_word_naming_a_fish_nobody_keeps_answers_nothing(self):
-        """FishBase calls the copper shark "Bronze", so without this "bronze cory" is a shark."""
         make_species("Carcharhinus", "brachyurus", "Copper shark", ["Bronze"])
         self.assertEqual(list(suggest_species("bronze cory", use_llm=False)[0]), [])
 
     def test_a_word_naming_a_kind_of_fish_answers_nothing(self):
-        """ "Barb" is one species' whole name and a component of 218 others.  It is a category."""
         make_species("Pethia", "ticto", "Ticto barb", ["Barb"], aquarium_use="commercial")
         for index in range(MAX_NAMES_USING_A_WORD + 1):
             make_species(f"Barbus{index}", f"sp{index}", f"Kind{index} barb")
         self.assertEqual(list(suggest_species("odessa barb", use_llm=False)[0]), [])
 
     def test_our_own_vocabulary_does_not_need_the_trade_flag(self):
-        """A name in the curated list is there because the hobby uses it.  That is the evidence."""
         betta = make_species("Betta", "splendens", "Siamese fighting fish")
         SpeciesCommonName.objects.create(species=betta, name="betta", source="aquarium")
         # Enough siblings that the genus is too broad to be an answer on its own, which is the
@@ -2572,7 +2902,6 @@ class SingleWordCommonNameTests(StandardTestCase):
         self.assertEqual(source, "search")
 
     def test_equipment_is_still_not_a_species(self):
-        """FishBase calls the spotted boxfish "Box"; a breeder box is not a reef fish."""
         make_species("Ostracion", "meleagris", "Spotted boxfish", ["Box"], aquarium_use="commercial")
         for name in ("breeder box", "box of misc", "sponge filter", "bag of gravel"):
             with self.subTest(name=name):
@@ -2627,7 +2956,6 @@ class HobbyCodeNamesTests(StandardTestCase):
         self.assertIn("cw11", base_words("CW11 corydoras"))
 
     def test_a_bare_count_is_still_not_a_word(self):
-        """The pattern has to keep digits without letting "6" and "10" in."""
         self.assertEqual(base_words("6 guppies"), ["guppies"])
         self.assertEqual(base_words("10 gallon tank"), ["gallon", "tank"])
 
@@ -2648,7 +2976,6 @@ class NormalizedCommonNameTests(StandardTestCase):
         self.assertEqual(list(exact_matches("Adolf's catfish")), [species])
 
     def test_the_species_own_common_name_is_normalized_too(self):
-        """exact_matches queries Species.common_name directly, not only the common-name table."""
         species = Species.objects.create(genus="Corydoras", species="agassizii", common_name="Agassiz's corydoras")
         self.assertEqual(species.common_name_normalized, "agassizs corydoras")
         self.assertEqual(list(exact_matches("Agassiz's corydoras")), [species])
@@ -2666,7 +2993,6 @@ class NormalizedCommonNameTests(StandardTestCase):
         self.assertEqual(source, "exact")
 
     def test_a_hyphenated_name_is_reachable_as_a_phrase(self):
-        """The same name buried in a longer one, where only phrase matching can find it."""
         species = make_species("Leporinus", "fasciatus", "Black-banded leporinus")
         found, source = suggest_species("black-banded leporinus wild caught", use_llm=False)
         self.assertEqual(list(found), [species])
@@ -2761,7 +3087,6 @@ class SpeciesCategoryOnASplitCategoryListTests(StandardTestCase):
         return self.resolver.resolve(hint_for(species))
 
     def test_a_dash_in_the_category_name_is_not_a_different_category(self):
-        """The old map only matched a name character for character, and nobody writes them alike."""
         self.assertEqual(self.resolver.resolve("characins").name, "Characins - Tetras, Pencilfish, Hatchetfish")
 
     def test_the_words_can_be_in_the_other_order(self):
@@ -2787,13 +3112,11 @@ class SpeciesCategoryOnASplitCategoryListTests(StandardTestCase):
         self.assertEqual(self._category_for(fish).name, "Cichlids - Old World")
 
     def test_a_cichlid_genus_nobody_sells_gets_no_category_rather_than_a_guess(self):
-        """Four categories and no way to choose between them is not an answer; the lot keeps its own."""
         fish = self._species("Konia", "eisentrauti", family="Cichlidae", order="Cichliformes")
         Species.objects.filter(pk=fish.pk).update(genus="Notarealgenus")
         self.assertIsNone(self._category_for(Species.objects.get(pk=fish.pk)))
 
     def test_a_pleco_is_not_a_corydoras(self):
-        """The bug this whole map was rewritten for."""
         fish = self._species("Ancistrus", "cirrhosus", family="Loricariidae", order="Siluriformes")
         self.assertEqual(self._category_for(fish).name, "Plecostomus")
 
@@ -2819,7 +3142,6 @@ class SpeciesCategoryOnASplitCategoryListTests(StandardTestCase):
         self.assertEqual(self._category_for(fish).name, "Bettas and labyrinth fish")
 
     def test_a_snakehead_does_not(self):
-        """Anabantiformes by taxonomy, oddball by the time it reaches a table."""
         fish = self._species("Channa", "andrao", family="Channidae", order="Anabantiformes")
         self.assertEqual(self._category_for(fish).name, "Misc and oddball fish")
 
@@ -2835,7 +3157,6 @@ class SpeciesCategoryOnASplitCategoryListTests(StandardTestCase):
         self.assertEqual(self._category_for(Species.objects.get(pk=fish.pk)).name, "Saltwater fish")
 
     def test_a_cherry_shrimp_lands_in_shrimp_rather_than_with_the_snails(self):
-        """Half the invertebrate lots at a freshwater auction, and the club has a shelf for them."""
         from auctions.species_categories import assign_categories
 
         shrimp = Species.objects.create(genus="Neocaridina", species="davidi", source="aquarium")
@@ -2902,7 +3223,6 @@ class BackfillLotSpeciesCommandTests(StandardTestCase):
         self.assertEqual(self.lot.species, guppy)
 
     def test_the_category_is_left_alone_by_default(self):
-        """Deriving it can move a lot between the BAP, HAP and Culture tracks; awards would disagree."""
         livebearers = Category.objects.create(name="Livebearers")
         Lot.objects.filter(pk=self.lot.pk).update(species_category=livebearers, category_automatically_added=True)
         self._run()
@@ -2990,7 +3310,6 @@ class BackfillReviewPassTests(StandardTestCase):
         self.assertIsNone(self.lot.species)
 
     def test_one_decision_covers_every_spelling_of_the_name(self):
-        """Two lot names, one question, one answer -- which is the whole point of the pass."""
         self._run("--review", "--min-lots", "1", answers=["1", "y", "q"])
         self.lot.refresh_from_db()
         self.second.refresh_from_db()
@@ -3022,7 +3341,6 @@ class BackfillReviewPassTests(StandardTestCase):
         self.assertFalse(SpeciesSearchCache.objects.filter(search_text="6 saulosi").exists())
 
     def test_a_name_the_matcher_can_place_is_not_asked_about(self):
-        """The automatic pass owns those; asking would be asking somebody to confirm arithmetic."""
         Lot.objects.filter(pk=self.second.pk).update(lot_name="Chindongo saulosi")
         output = self._run("--review", "--dry-run", "--min-lots", "1")
         self.assertNotIn("'chindongo saulosi'", output)
@@ -3050,7 +3368,6 @@ class BackfillReviewPassTests(StandardTestCase):
         self.assertEqual(self.lot.species, added)
 
     def test_a_cross_is_added_by_leaving_the_scientific_name_blank(self):
-        """There is no binomial to type, which is the whole reason the hobby named it something."""
         Lot.objects.filter(pk=self.lot.pk).update(lot_name="Tibee shrimp")
         Lot.objects.filter(pk=self.second.pk).update(lot_name="Tibee shrimps")
         self._run(
@@ -3144,7 +3461,6 @@ class SpeciesSmallerFixesTests(StandardTestCase):
         self.tropheus = make_species("Tropheus", "duboisi", "White spotted cichlid")
 
     def test_lot_search_finds_a_lot_by_its_scientific_name(self):
-        """Nothing in the lot's own name says Tropheus; the species the seller picked does."""
         from auctions.filters import LotFilter
 
         self.lot.lot_name = "Six young fish"
@@ -3169,7 +3485,6 @@ class SpeciesSmallerFixesTests(StandardTestCase):
         self.assertIn('value="Tropheus"', body)
 
     def test_the_bulk_add_page_clears_a_cloned_row_species(self):
-        """A cloned row's species was worked out from the previous lot name, not from this one."""
         from django.template.loader import get_template
 
         source = get_template("auctions/bulk_add_lots.html").template.source
@@ -3217,7 +3532,6 @@ class CopyingLotsToANewAuctionTests(StandardTestCase):
         self.assertIn("Poecilia reticulata", str(form["species"]))
 
     def test_the_new_auction_still_decides(self):
-        """Copying is not a way round an auction that has the field switched off."""
         from auctions.forms import clean_species_for_auction
 
         self.next_auction.use_scientific_name = False
@@ -3231,7 +3545,6 @@ class CopyingLotsToANewAuctionTests(StandardTestCase):
         self.assertIsNone(cleaned["species"])
 
     def test_the_palette_relist_carries_it_as_a_pk(self):
-        """That path builds form *data*, not initial, so an object would fail to validate."""
         from auctions.forms import quick_add_lot_form_class
         from auctions.services import clone_lot_values
 
@@ -3255,8 +3568,8 @@ class ScientificNameStaysOnForFutureAuctionsTests(StandardTestCase):
         self.assertTrue(fresh.use_scientific_name)
 
     def test_a_clone_of_an_auction_that_has_it_keeps_it(self):
-        """The setting is in fields_to_clone, so whatever the source says propagates forward."""
         self.assertTrue(self.online_auction.use_scientific_name)
+        give_contact_info(self.user)  # AuctionCreateView refuses somebody with no contact info
         self.client.login(username="my_lot", password="testpassword")
         self.client.post(
             f"{reverse('create_auction')}?clone={self.online_auction.slug}",
@@ -3273,7 +3586,6 @@ class ScientificNameStaysOnForFutureAuctionsTests(StandardTestCase):
         self.assertIn("scientific_name", clone.label_print_fields)
 
     def test_no_migration_turned_it_off_for_an_auction_taking_lots(self):
-        """0388 deliberately leaves the setting alone; see its docstring for why."""
         self.online_auction.lot_submission_start_date = timezone.now() - datetime.timedelta(days=1)
         self.online_auction.lot_submission_end_date = timezone.now() + datetime.timedelta(days=1)
         self.online_auction.date_end = timezone.now() + datetime.timedelta(days=5)
@@ -3355,7 +3667,6 @@ class ClubSpeciesLookupAPITests(StandardTestCase):
         return self.client.get(self.url, params, HTTP_X_API_KEY=self.raw_key)
 
     def test_a_key_is_required(self):
-        """Nothing reaches the matcher without one -- not even the free database steps."""
         response = self.client.get(self.url, {"q": "guppy"})
         self.assertEqual(response.status_code, 401)
 
@@ -3389,7 +3700,6 @@ class ClubSpeciesLookupAPITests(StandardTestCase):
         self.assertEqual(data["results"][0]["id"], self.yellow_lab.pk)
 
     def test_a_common_name_matches(self):
-        """What the API is for: nobody types a scientific name."""
         data = self.get(q="Yellow lab").json()
         self.assertEqual(data["query"], "Yellow lab")
         self.assertEqual(data["source"], "exact")
@@ -3398,7 +3708,6 @@ class ClubSpeciesLookupAPITests(StandardTestCase):
         self.assertEqual(data["results"][0]["full_scientific_name"], "Labidochromis caeruleus")
 
     def test_the_whole_record_travels_with_the_match(self):
-        """A caller filing this into their own system shouldn't need a second call."""
         result = self.get(q="Yellow lab").json()["results"][0]
         self.assertEqual(result["scientific_name"], "Labidochromis caeruleus")
         self.assertEqual(result["common_name"], "Yellow lab")
@@ -3418,7 +3727,6 @@ class ClubSpeciesLookupAPITests(StandardTestCase):
         self.assertEqual(sorted(name["name"] for name in result["common_names"]), ["Electric yellow", "Yellow lab"])
 
     def test_a_cultivar_comes_back_under_its_full_name(self):
-        """scientific_name is the parent species for all thirteen colour strains; the full name isn't."""
         data = self.get(q="blue dream shrimp").json()
         self.assertTrue(data["unambiguous"])
         result = data["results"][0]
@@ -3438,7 +3746,6 @@ class ClubSpeciesLookupAPITests(StandardTestCase):
         self.assertFalse(data["unambiguous"])
 
     def test_several_candidates_are_not_unambiguous(self):
-        """The signal the site itself acts on: fill it in only when there is exactly one answer."""
         make_species("Labidochromis", "gigas")
         data = self.get(q="Labidochromis").json()
         self.assertGreater(data["total_matches"], 1)
@@ -3457,8 +3764,6 @@ class ClubSpeciesLookupAPITests(StandardTestCase):
         self.assertEqual(data["count"], MAX_SUGGESTIONS)
         self.assertEqual(len(data["results"]), MAX_SUGGESTIONS)
         self.assertEqual(data["total_matches"], MAX_GENUS_MATCHES)
-
-    # -- the category hint ---------------------------------------------------
 
     def _two_angelfish(self):
         """The pair only a category can separate: same name, one marine, one not."""
@@ -3481,7 +3786,6 @@ class ClubSpeciesLookupAPITests(StandardTestCase):
         self.assertEqual(data["results"][0]["id"], emperor.pk)
 
     def test_a_category_only_reorders_and_never_filters(self):
-        """A category is itself a guess from the lot's name; one guess must not veto the list."""
         marine, freshwater, _emperor = self._two_angelfish()
         data = self.get(q="angelfish", category_id=marine.pk).json()
         self.assertIn(freshwater.pk, [result["id"] for result in data["results"]])
@@ -3497,11 +3801,8 @@ class ClubSpeciesLookupAPITests(StandardTestCase):
         self.assertEqual(response.status_code, 400)
         self.assertIn("not both", response.json()["error"])
 
-    # -- the language model and its budget -----------------------------------
-
     def test_the_model_runs_without_being_asked_for(self):
-        """The point of asking a matcher rather than querying the species table yourself."""
-        provider = FakeProvider([{"id": self.altispinosus.pk}])
+        provider = FakeProvider([{"kind": "species", "scientific_name": "Mikrogeophagus altispinosus"}])
         llm.set_provider_override(provider)
         try:
             data = self.get(q="Bolivian ram").json()
@@ -3513,7 +3814,7 @@ class ClubSpeciesLookupAPITests(StandardTestCase):
             llm.set_provider_override(None)
 
     def test_a_database_answer_never_reaches_the_model(self):
-        provider = FakeProvider([{"id": self.altispinosus.pk}])
+        provider = FakeProvider([{"kind": "species", "scientific_name": "Mikrogeophagus altispinosus"}])
         llm.set_provider_override(provider)
         try:
             data = self.get(q="Yellow lab").json()
@@ -3523,8 +3824,7 @@ class ClubSpeciesLookupAPITests(StandardTestCase):
             llm.set_provider_override(None)
 
     def test_the_model_answer_is_remembered_so_the_next_caller_is_free(self):
-        """One club paying for a lot name is every club's answer -- that is what keeps this cheap."""
-        provider = FakeProvider([{"id": self.altispinosus.pk}])
+        provider = FakeProvider([{"kind": "species", "scientific_name": "Mikrogeophagus altispinosus"}])
         llm.set_provider_override(provider)
         try:
             self.get(q="Bolivian ram")
@@ -3537,7 +3837,7 @@ class ClubSpeciesLookupAPITests(StandardTestCase):
     def test_every_response_says_what_is_left_of_the_budget(self):
         """On every response, not just the expensive ones: a number you first read while being
         refused is a number you read too late."""
-        provider = FakeProvider([{"id": self.altispinosus.pk}])
+        provider = FakeProvider([{"kind": "species", "scientific_name": "Mikrogeophagus altispinosus"}])
         llm.set_provider_override(provider)
         try:
             limit = views.club_api.SPECIES_LOOKUP_LLM_CALLS_PER_CLUB_PER_DAY
@@ -3554,8 +3854,7 @@ class ClubSpeciesLookupAPITests(StandardTestCase):
             llm.set_provider_override(None)
 
     def test_out_of_budget_with_nothing_to_show_is_a_rate_limit_error(self):
-        """Answering "no species" would be writing down something the site never worked out."""
-        provider = FakeProvider([{"id": self.altispinosus.pk}])
+        provider = FakeProvider([{"kind": "species", "scientific_name": "Mikrogeophagus altispinosus"}])
         llm.set_provider_override(provider)
         original = views.club_api.SPECIES_LOOKUP_LLM_CALLS_PER_CLUB_PER_DAY
         views.club_api.SPECIES_LOOKUP_LLM_CALLS_PER_CLUB_PER_DAY = 0
@@ -3585,7 +3884,7 @@ class ClubSpeciesLookupAPITests(StandardTestCase):
         Before the budget was checked separately from the answer, running out wrote "not a species"
         for the name -- and that row would then outrank the model for every club, forever.
         """
-        provider = FakeProvider([{"id": self.altispinosus.pk}])
+        provider = FakeProvider([{"kind": "species", "scientific_name": "Mikrogeophagus altispinosus"}])
         llm.set_provider_override(provider)
         original = views.club_api.SPECIES_LOOKUP_LLM_CALLS_PER_CLUB_PER_DAY
         views.club_api.SPECIES_LOOKUP_LLM_CALLS_PER_CLUB_PER_DAY = 0
@@ -3600,8 +3899,12 @@ class ClubSpeciesLookupAPITests(StandardTestCase):
             llm.set_provider_override(None)
 
     def test_the_budget_is_one_clubs_and_not_the_sites(self):
-        """A club that has spent its allowance must not be able to switch the model off for anyone else."""
-        provider = FakeProvider([{"id": self.altispinosus.pk}, {"id": self.altispinosus.pk}])
+        provider = FakeProvider(
+            [
+                {"kind": "species", "scientific_name": "Mikrogeophagus altispinosus"},
+                {"kind": "species", "scientific_name": "Mikrogeophagus altispinosus"},
+            ]
+        )
         llm.set_provider_override(provider)
         original = views.club_api.SPECIES_LOOKUP_LLM_CALLS_PER_CLUB_PER_DAY
         views.club_api.SPECIES_LOOKUP_LLM_CALLS_PER_CLUB_PER_DAY = 1
@@ -3627,10 +3930,7 @@ class ClubSpeciesLookupAPITests(StandardTestCase):
             llm.set_provider_override(None)
         self.assertFalse(SpeciesSearchCache.objects.filter(search_text="bolivian ram").exists())
 
-    # -- what a club may see -------------------------------------------------
-
     def test_a_club_sees_the_species_it_added_itself(self):
-        """Added at a check-in table or POSTed by its own software; nobody has approved it yet."""
         mine = Species.objects.create(
             genus="Ancistrus",
             species="sp. l183",
@@ -3667,7 +3967,6 @@ class ClubSpeciesLookupAPITests(StandardTestCase):
         self.client.login(username="my_lot", password="testpassword")
 
     def test_the_permission_can_be_granted_from_the_key_page(self):
-        """A permission nobody can tick is a permission nobody has."""
         self._log_in_as_a_club_admin()
         create_url = reverse("club_api_key_create", kwargs={"slug": self.club.slug})
         self.assertContains(self.client.get(create_url), "can_look_up_species")
@@ -3677,7 +3976,6 @@ class ClubSpeciesLookupAPITests(StandardTestCase):
         self.assertTrue(ClubAPIKey.objects.get(club=self.club, name="Website").can_look_up_species)
 
     def test_the_key_page_documents_every_species_endpoint_once_it_is_granted(self):
-        """One permission, and those docs are the only place a club admin finds out this exists."""
         self._log_in_as_a_club_admin()
         url = reverse("club_api_key_detail", kwargs={"slug": self.club.slug, "pk": self.api_key.pk})
         page = self.client.get(url)
@@ -3689,7 +3987,6 @@ class ClubSpeciesLookupAPITests(StandardTestCase):
         self.assertNotContains(self.client.get(url), "species-lookup")
 
     def test_field_mappings_are_only_offered_to_a_key_that_writes_members(self):
-        """They rename incoming club member fields; a settings box that does nothing is worse than none."""
         self._log_in_as_a_club_admin()
         url = reverse("club_api_key_detail", kwargs={"slug": self.club.slug, "pk": self.api_key.pk})
         # can_add_club_members is on by default, so a species-only key has to say so.
@@ -3753,7 +4050,6 @@ class ClubSpeciesCreateAPITests(StandardTestCase):
         )
 
     def test_a_club_can_add_a_hybrid(self):
-        """A cross has no binomial to send, so the flag is what stands in for one."""
         response = self.post({"is_hybrid": True, "variety": "Tibee", "common_name": "Tibee shrimp"})
         self.assertEqual(response.status_code, 201, response.content)
         data = response.json()
@@ -3763,7 +4059,6 @@ class ClubSpeciesCreateAPITests(StandardTestCase):
         self.assertEqual(data["full_scientific_name"], "Hybrid 'Tibee'")
 
     def test_a_hybrid_with_a_scientific_name_or_a_parent_is_refused(self):
-        """Both are contradictions rather than extra detail, so they are refused and not dropped."""
         response = self.post({"is_hybrid": True, "variety": "Tibee", "scientific_name": "Caridina cantonensis"})
         self.assertEqual(response.status_code, 400, response.content)
         response = self.post({"is_hybrid": True, "variety": "Tibee", "parent": self.shrimp.pk})
@@ -3774,7 +4069,6 @@ class ClubSpeciesCreateAPITests(StandardTestCase):
         self.assertEqual(self.post({"is_hybrid": True, "common_name": "Some cross"}).status_code, 400)
 
     def test_what_a_key_adds_is_this_clubs_and_not_approved(self):
-        """A key is a script, not a superuser: 36,000 imported rows are a shared asset."""
         data = self.post({"scientific_name": "Ancistrus sp. L183", "common_name": "Starlight bristlenose"}).json()
         species = Species.objects.get(pk=data["id"])
         self.assertFalse(species.approved)
@@ -3787,7 +4081,6 @@ class ClubSpeciesCreateAPITests(StandardTestCase):
         self.assertTrue(species.in_trade_override)
 
     def test_the_club_can_then_look_up_what_it_added_and_nobody_else_can(self):
-        """The whole point of adding one: the next lot called this gets a scientific name."""
         self.post(
             {
                 "scientific_name": "Ancistrus sp. L183",
@@ -3815,14 +4108,12 @@ class ClubSpeciesCreateAPITests(StandardTestCase):
         self.assertEqual(theirs.json()["results"], [])
 
     def test_other_names_may_be_one_comma_separated_string(self):
-        """A script has a list; somebody pasting off a bag label has a line with commas in it."""
         data = self.post(
             {"scientific_name": "Ancistrus sp. L183", "common_name": "Starlight", "other_names": "L183, LDA08"}
         ).json()
         self.assertEqual(sorted(name["name"] for name in data["common_names"]), ["L183", "LDA08", "Starlight"])
 
     def test_a_strain_carries_its_parents_name(self):
-        """What keeps "Blue Dream" out of the genus column -- see the Species model."""
         response = self.post({"variety": "Blue Dream", "parent": self.shrimp.pk, "common_name": "Blue dream shrimp"})
         self.assertEqual(response.status_code, 201, response.content)
         species = Species.objects.get(pk=response.json()["id"])
@@ -3862,7 +4153,6 @@ class ClubSpeciesCreateAPITests(StandardTestCase):
         self.assertIn("scientific_name", response.json())
 
     def test_a_species_that_is_already_here_comes_back_instead_of_being_copied(self):
-        """Two rows for one fish is how a breeder's points end up split in half."""
         response = self.post({"scientific_name": "Neocaridina davidi", "common_name": "Red cherry"})
         self.assertEqual(response.status_code, 409)
         self.assertEqual(response.json()["species"]["id"], self.shrimp.pk)
@@ -3872,7 +4162,6 @@ class ClubSpeciesCreateAPITests(StandardTestCase):
         self.assertEqual(self.post({"scientific_name": "neocaridina DAVIDI"}).status_code, 409)
 
     def test_a_common_name_that_belongs_to_another_species_is_refused(self):
-        """Adding "cherry shrimp" to a second species is the loss of a name, not the gain of one."""
         response = self.post({"scientific_name": "Ancistrus sp. L183", "common_name": "Cherry shrimp"})
         self.assertEqual(response.status_code, 400)
         self.assertIn("common_name", response.json())
@@ -3986,14 +4275,12 @@ class ClubSpeciesCommonNameAPITests(StandardTestCase):
         self.assertEqual(lookup["results"][0]["id"], self.lab.pk)
 
     def test_the_name_is_stamped_so_a_re_import_cannot_delete_it(self):
-        """Every importer deletes only the names it wrote; this one belongs to us."""
         self.post({"name": "Yellow lab"})
         name = SpeciesCommonName.objects.get(species=self.lab, name="Yellow lab")
         self.assertEqual(name.source, "admin")
         self.assertEqual(name.name_normalized, "yellow lab")
 
     def test_it_never_edits_what_is_already_there(self):
-        """Create only: the source's own preferred name and the species' common_name are untouched."""
         self.post({"name": "Yellow lab"})
         self.lab.refresh_from_db()
         self.assertEqual(self.lab.common_name, "Blue streak hap")
@@ -4001,7 +4288,6 @@ class ClubSpeciesCommonNameAPITests(StandardTestCase):
         self.assertTrue(SpeciesCommonName.objects.get(species=self.lab, name="Blue streak hap").is_preferred)
 
     def test_sending_a_name_it_already_has_is_not_an_error(self):
-        """So a club can re-run its import without thinking about it."""
         first = self.post({"name": "Yellow lab"})
         second = self.post({"name": "yellow  lab!"})
         self.assertEqual(second.status_code, 200)
@@ -4034,19 +4320,15 @@ class ClubSpeciesCommonNameAPITests(StandardTestCase):
         self.assertEqual(self.post({"name": "Yellow lab"}).status_code, 403)
         self.assertFalse(SpeciesCommonName.objects.filter(name="Yellow lab").exists())
 
-    # -- naming the species by name rather than by id ------------------------
-
     def _name_url(self, identifier):
         return reverse("api_club_species_common_names", kwargs={"slug": self.club.slug, "identifier": identifier})
 
     def test_a_scientific_name_works_in_place_of_an_id(self):
-        """A caller that just matched free text has a name, not an id."""
         response = self.post({"name": "Yellow lab"}, url=self._name_url("labidochromis CAERULEUS"))
         self.assertEqual(response.status_code, 201, response.content)
         self.assertEqual(response.json()["species"]["id"], self.lab.pk)
 
     def test_a_strain_is_named_by_its_full_name(self):
-        """A strain shares its parent's scientific_name, so only the full name tells them apart."""
         shrimp = make_species("Neocaridina", "davidi", "Cherry shrimp", source="aquarium")
         blue_dream = Species.objects.create(
             genus="Neocaridina", species="davidi", variety="Blue Dream", parent=shrimp, source="aquarium"
@@ -4061,10 +4343,7 @@ class ClubSpeciesCommonNameAPITests(StandardTestCase):
     def test_a_name_that_matches_nothing_is_a_404(self):
         self.assertEqual(self.post({"name": "Whatever"}, url=self._name_url("Betta splendens")).status_code, 404)
 
-    # -- a name may not be taken off another species -------------------------
-
     def test_a_name_that_already_names_another_species_is_refused(self):
-        """One name on two species turns an unambiguous lookup into a picklist."""
         guppy = make_species("Poecilia", "reticulata", "Guppy")
         response = self.post({"name": "guppy"})
         self.assertEqual(response.status_code, 409)
@@ -4072,14 +4351,11 @@ class ClubSpeciesCommonNameAPITests(StandardTestCase):
         self.assertFalse(SpeciesCommonName.objects.filter(species=self.lab, name="guppy").exists())
 
     def test_a_name_another_club_added_privately_does_not_block_this_one(self):
-        """Their name is not visible here, so it cannot stop us using the word."""
         theirs = make_species("Betta", "splendens", "Siamese fighting fish")
         SpeciesCommonName.objects.create(
             species=theirs, name="House fish", source="admin", approved=False, club=self.other_club
         )
         self.assertEqual(self.post({"name": "House fish"}).status_code, 201)
-
-    # -- what this club adds is this club's ----------------------------------
 
     def test_the_name_is_this_clubs_until_it_is_approved(self):
         self.post({"name": "Yellow lab"})
@@ -4089,7 +4365,6 @@ class ClubSpeciesCommonNameAPITests(StandardTestCase):
         self.assertIsNone(name.added_by)
 
     def test_another_club_is_not_answered_with_it(self):
-        """The whole point of scoping: one club's word for a fish is not the site's word for it."""
         self.post({"name": "Yellow lab"})
         other_raw_key, other_prefix, other_key_hash = ClubAPIKey.generate()
         ClubAPIKey.objects.create(
@@ -4144,7 +4419,6 @@ class ClubSpeciesCommonNameAPITests(StandardTestCase):
         self.assertEqual(mine["results"][0]["id"], self.lab.pk)
 
     def test_approving_it_is_what_makes_it_everybodys(self):
-        """The Django admin's action on the name, the other half of approving a species."""
         self.post({"name": "Yellow lab"})
         self.assertEqual(exact_matches("yellow lab", club=self.other_club), [])
         SpeciesCommonName.objects.filter(species=self.lab, name="Yellow lab").update(approved=True)
@@ -4189,7 +4463,6 @@ class ClubSpeciesAPISessionAuthTests(StandardTestCase):
         self.assertEqual(self.get().status_code, 403)
 
     def test_a_club_member_with_no_permissions_is_refused(self):
-        """Being on the member list is not standing to read the club's API."""
         self._sign_in()
         self.assertEqual(self.get().status_code, 403)
 
@@ -4199,7 +4472,6 @@ class ClubSpeciesAPISessionAuthTests(StandardTestCase):
         self.assertEqual(self.get().status_code, 403)
 
     def test_permission_view_reads_but_does_not_write(self):
-        """The same split the key has: looking a species up is not adding one."""
         self._sign_in(permission_view=True)
         response = self.get()
         self.assertEqual(response.status_code, 200)
@@ -4223,7 +4495,6 @@ class ClubSpeciesAPISessionAuthTests(StandardTestCase):
         self.assertEqual(self.post().status_code, 201)
 
     def test_a_site_superuser_is_let_through_as_everywhere_else_on_the_site(self):
-        """Deliberate, and the same rule check_club_permission applies to every club page."""
         User.objects.create_superuser("species_admin", "species_admin@example.com", "testpassword")
         self.client.login(username="species_admin", password="testpassword")
         self.assertEqual(self.get().status_code, 200)
@@ -4243,7 +4514,6 @@ class ClubSpeciesAPISessionAuthTests(StandardTestCase):
         self.assertFalse(name.approved, "a club admin is not a site admin")
 
     def test_a_superuser_naming_a_species_names_it_for_everybody(self):
-        """Same rule the add-a-species form follows: a superuser is adding to the shared list."""
         User.objects.create_superuser("species_admin", "species_admin@example.com", "testpassword")
         self.client.login(username="species_admin", password="testpassword")
         url = reverse("api_club_species_common_names", kwargs={"slug": self.club.slug, "identifier": self.lab.pk})
@@ -4275,7 +4545,6 @@ class BrowsableAPITests(StandardTestCase):
             self.assertEqual(renderers, ["rest_framework.renderers.JSONRenderer"])
 
     def test_the_views_are_built_with_that_set(self):
-        """APIView reads the setting once, at import, so this is what the endpoints really use."""
         from rest_framework.renderers import BrowsableAPIRenderer
 
         from fishauctions import settings as settings_module
@@ -4286,7 +4555,6 @@ class BrowsableAPITests(StandardTestCase):
         self.assertNotIn(BrowsableAPIRenderer, views.ClubMemberListCreateAPIView.renderer_classes)
 
     def test_a_browser_still_gets_an_answer_rather_than_a_406(self):
-        """A browser's Accept header ends in */*, so JSON-only negotiation still succeeds."""
         from rest_framework.renderers import BrowsableAPIRenderer
 
         if BrowsableAPIRenderer in views.ClubSpeciesLookupAPIView.renderer_classes:
@@ -4329,7 +4597,6 @@ class RememberedAnswersCanBeUnlearnedTests(StandardTestCase):
         self.assertEqual(self._row().rejects, 0)
 
     def test_re_saving_a_lot_is_not_a_second_vote(self):
-        """Otherwise a busy club voting nothing at all makes a wrong answer permanent."""
         record_choice("Sponge filter", self.guppy, first_save=True)
         for _ in range(5):
             record_choice("Sponge filter", self.guppy, first_save=False)
@@ -4353,6 +4620,71 @@ class RememberedAnswersCanBeUnlearnedTests(StandardTestCase):
         self.assertFalse(SpeciesSearchCache.objects.filter(search_text="sponge filter").exists())
         self.assertTrue(SpeciesNameRejection.objects.filter(search_text="sponge filter", species=self.guppy).exists())
 
+    def test_a_negative_is_scored_when_somebody_picks_a_species(self):
+        """The answer nothing used to be able to walk back.
+
+        A lot saved with no species is agreement with a remembered "not a species", and nobody is
+        ever shown a negative to disagree with, so the row collected nothing at all and only a
+        superuser deleting it on the gaps page could take it back.
+        """
+        remember("box of gravel", None, source="llm")
+        record_choice("box of gravel", self.guppy, first_save=True, user=self.user)
+        row = SpeciesSearchCache.objects.get(search_text="box of gravel")
+        self.assertIsNone(row.species)
+        self.assertEqual(row.rejects, 1)
+
+    def test_one_seller_picking_a_species_is_not_the_sites_answer(self):
+        """The same floor the positive half has, and for the same reason: one misclick must not
+        become what every club is served."""
+        remember("box of gravel", None, source="llm")
+        record_choice("box of gravel", self.guppy, first_save=True, user=self.user)
+        self.assertIsNone(SpeciesSearchCache.objects.get(search_text="box of gravel").species)
+
+    def test_three_of_them_replace_the_answer(self):
+        """Three people on three lots outrank the two model calls that wrote the row -- and what
+        they leave behind is a species, which the counters above can undo in their turn."""
+        remember("box of gravel", None, source="llm")
+        for _ in range(SpeciesSearchCache.MIN_REJECTS_TO_RETIRE):
+            record_choice("box of gravel", self.guppy, first_save=True, user=self.user)
+        row = SpeciesSearchCache.objects.get(search_text="box of gravel")
+        self.assertEqual(row.species, self.guppy)
+        self.assertEqual(row.created_by, self.user)
+        # ...and it starts its life with a clean slate, not one rejection from being retired for
+        # something it was never asked about.
+        self.assertEqual(row.rejects, 0)
+        self.assertEqual(row.accepts, 0)
+
+    def test_a_lot_saved_with_no_species_is_not_a_vote_against_a_negative(self):
+        """Most lots have no species because nobody filled the field in.  Agreement here measures
+        nothing, so it is not counted -- see forms being optional by design."""
+        remember("box of gravel", None, source="llm")
+        for _ in range(5):
+            record_choice("box of gravel", None, first_save=True, user=self.user)
+        self.assertEqual(SpeciesSearchCache.objects.get(search_text="box of gravel").rejects, 0)
+
+    def test_re_saving_one_lot_is_not_three_people_disagreeing_with_a_negative(self):
+        remember("box of gravel", None, source="llm")
+        record_choice("box of gravel", self.guppy, first_save=True, user=self.user)
+        for _ in range(5):
+            record_choice("box of gravel", self.guppy, first_save=False, changed=False, user=self.user)
+        self.assertIsNone(SpeciesSearchCache.objects.get(search_text="box of gravel").species)
+
+    def test_a_replacement_still_refuses_an_unapproved_species(self):
+        """remember() is the one door into this table and it keeps its guards: a species that is
+        not everybody's has no business in a row every club reads."""
+        remember("box of gravel", None, source="llm")
+        private = Species.objects.create(genus="Yssichromis", species="piceatus", approved=False, source="admin")
+        for _ in range(SpeciesSearchCache.MIN_REJECTS_TO_RETIRE):
+            record_choice("box of gravel", private, first_save=True, user=self.user)
+        self.assertIsNone(SpeciesSearchCache.objects.get(search_text="box of gravel").species)
+
+    def test_replacing_an_answer_does_not_inherit_its_votes(self):
+        record_choice("Sponge filter", None, first_save=True)
+        self.assertEqual(self._row().rejects, 1)
+        remember("sponge filter", self.betta, source="user", user=self.user)
+        self.assertEqual(self._row().rejects, 0)
+        self.assertEqual(self._row().accepts, 0)
+
     def test_re_saving_one_cleared_lot_is_not_three_lots_disagreeing(self):
         """The floor would be worth nothing if one seller could walk over it by pressing save.
 
@@ -4367,7 +4699,6 @@ class RememberedAnswersCanBeUnlearnedTests(StandardTestCase):
         self.assertTrue(SpeciesSearchCache.objects.filter(search_text="sponge filter").exists())
 
     def test_a_well_supported_answer_survives_the_floor_being_reached(self):
-        """One in ten is the line: nine people leaving it alone outvote one taking it off."""
         SpeciesSearchCache.objects.filter(search_text="sponge filter").update(accepts=90)
         for _ in range(SpeciesSearchCache.MIN_REJECTS_TO_RETIRE):
             record_choice("Sponge filter", None, first_save=True)
@@ -4389,7 +4720,6 @@ class RememberedAnswersCanBeUnlearnedTests(StandardTestCase):
         self.assertFalse(SpeciesNameRejection.objects.exists())
 
     def test_a_remembered_no_is_never_scored(self):
-        """Nobody is shown "not a species" and given the chance to disagree with it."""
         remember("box of gravel", None, source="llm")
         record_choice("box of gravel", None, first_save=True)
         row = SpeciesSearchCache.objects.get(search_text="box of gravel")
@@ -4436,7 +4766,12 @@ class RememberedAnswersCanBeUnlearnedTests(StandardTestCase):
         finally:
             llm.set_provider_override(None)
         offered = provider.calls[-1]["messages"][-1]["content"]
-        self.assertNotIn(f"{self.guppy.pk}: ", offered)
+        # Anchored to the start of a candidate line: the listing is "<pk>: <name>" one per line, so
+        # a bare "12: " is also a substring of "112: " -- somebody else's line, on a run where the
+        # primary keys happen to straddle a power of ten. They are not fixed; MariaDB does not roll
+        # an AUTO_INCREMENT back with the transaction, so they depend on how many rows every class
+        # before this one in the same --parallel worker inserted.
+        self.assertNotIn(f"\n{self.guppy.pk}: ", offered)
         self.assertEqual(found, [])
 
     def test_and_naming_one_anyway_is_not_written_down_as_no_species(self):
@@ -4462,7 +4797,6 @@ class RememberedAnswersCanBeUnlearnedTests(StandardTestCase):
         )
 
     def test_clearing_a_species_on_the_bulk_page_reports_it(self):
-        """End to end: the page that writes the cache is the page that reports back."""
         SpeciesSearchCache.objects.filter(search_text="sponge filter").update(
             rejects=SpeciesSearchCache.MIN_REJECTS_TO_RETIRE - 1
         )
@@ -4568,7 +4902,6 @@ class DuplicateSpeciesTests(StandardTestCase):
         self.assertEqual(other.possible_duplicate, self.guppy)
 
     def test_a_strain_is_not_a_duplicate_of_its_species(self):
-        """A variety carries its parent's genus and epithet -- that is the design, not a mistake."""
         strain = Species.objects.create(
             genus="Poecilia", species="reticulata", variety="Full Red", parent=self.guppy, source="admin"
         )
@@ -4712,7 +5045,6 @@ class TheOtherNameUnderTheLotNameTests(StandardTestCase):
         self.assertEqual(self.lot.common_name_line, "")
 
     def test_the_data_columns_are_untouched(self):
-        """The CSV export and the API still say what the lot is, whatever the page prints."""
         self.lot.lot_name = "Chindongo saulosi"
         self.lot.save()
         self.assertEqual(self.lot.scientific_name, "Chindongo saulosi")
@@ -4906,7 +5238,6 @@ class HybridSpeciesTests(StandardTestCase):
         self.assertContains(response, "this is a hybrid")
 
     def test_the_same_cross_added_twice_is_flagged_as_a_duplicate(self):
-        """Nothing else would catch it: the scientific name both rows are compared on is empty."""
         self._post()
         first = self._tibee()
         second = Species.objects.create(variety="Tibee", is_hybrid=True, source="admin", common_name="Tibees")
@@ -4932,7 +5263,6 @@ class HybridSpeciesTests(StandardTestCase):
         self.assertIsNone(strain.possible_duplicate)
 
     def test_a_hybrid_is_never_offered_as_the_species_to_be_a_strain_of(self):
-        """A strain of a cross would inherit a genus the cross deliberately hasn't got."""
         self._post()
         parents = self.client.get(reverse("species-autocomplete"), {"q": "Tibee"}).content.decode()
         self.assertNotIn("Tibee", parents)
@@ -4948,12 +5278,10 @@ class HybridSpeciesTests(StandardTestCase):
         self.assertEqual(suggest_species("Tibee", use_llm=False), ([tibee], "exact"))
 
     def test_a_hybrid_earns_breeder_points_like_anything_else(self):
-        """The whole point of giving them a row: people breed these and submit them."""
         self._post()
         self.assertTrue(self._tibee().earns_breeder_points)
 
     def test_a_hybrid_in_the_hobby_does_not_promote_every_other_nameless_row(self):
-        """recompute_trade_ranks groups by genus, and a hybrid's genus is the empty string."""
         self._post()
         legacy = Species.objects.create(common_name="Some old hand-typed row", source="manual")
         Species.recompute_trade_ranks()
@@ -5019,14 +5347,12 @@ class NamingASpeciesThatIsAlreadyThereTests(StandardTestCase):
         self.assertTrue(SpeciesCommonName.objects.get(name="yellow lab").approved)
 
     def test_a_name_that_already_names_another_species_is_refused(self):
-        """One name on two species is the loss of a name, not the gain of one."""
         make_species("Poecilia", "reticulata", "Guppy")
         response = self._post(names="guppy")
         self.assertContains(response, "already the name for")
         self.assertFalse(SpeciesCommonName.objects.filter(name="guppy", species=self.yellow_lab).exists())
 
     def test_naming_it_sets_the_species_on_the_lots_that_needed_it(self):
-        """The reason the page carries a lot name at all: the gap that sent somebody here closes."""
         self.online_auction.use_scientific_name = True
         self.online_auction.save()
         lot = Lot.objects.create(
@@ -5048,7 +5374,6 @@ class NamingASpeciesThatIsAlreadyThereTests(StandardTestCase):
         self.assertFalse(SpeciesSearchCache.objects.filter(search_text="yellow lab").exists())
 
     def test_it_sends_you_back_where_you_came_from(self):
-        """Auction admins cannot open the gaps page, and the button that opens this is on a lot."""
         response = self._post(**{"names": "yellow lab"})
         self.assertEqual(response.status_code, 302)
         following = f"{self.url}?next=/lots/"

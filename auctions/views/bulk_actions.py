@@ -72,8 +72,10 @@ class GetClubs(APIView):
 
     def post(self, request):
         search = request.POST["search"]
-        result = Club.objects.filter(Q(name__icontains=search) | Q(abbreviation__icontains=search)).values(
-            "id", "name", "abbreviation"
+        result = (
+            Club.objects.listed()
+            .filter(Q(name__icontains=search) | Q(abbreviation__icontains=search))
+            .values("id", "name", "abbreviation")
         )
         return JsonResponse(list(result), safe=False)
 
@@ -91,7 +93,10 @@ class BulkSetLotsWon(LoginRequiredMixin, TemplateView, FormMixin, AuctionViewMix
         if not self.original_query:
             self.original_query = request.POST.get("query", "")
         self.query = unquote(self.original_query)
-        self.queryset = LotAdminFilter.generic(self, self.auction.lots_qs, self.query)
+        # select_related("auction"): every lot here belongs to `self.auction`, and
+        # `sell_to_online_high_bidder` reads the auction (through `calculated_end`) for each one,
+        # which was a query per lot on a button whose whole job is to touch hundreds of them.
+        self.queryset = LotAdminFilter.generic(self, self.auction.lots_qs, self.query).select_related("auction")
         return super().dispatch(request, *args, **kwargs)
 
     def post(self, request, *args, **kwargs):

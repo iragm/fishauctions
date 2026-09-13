@@ -1,11 +1,12 @@
 {% extends "base.html" %}
 {% load crispy_forms_tags %}
 {% block title %}Preferences{% endblock %}
-{% block extra_js %}
-<script type='text/javascript'>pageView();</script>
-{% endblock %}
 {% block content %}
 {% comment %}No JavaScript left on this page.  The distance-unit converter that used to live here existed only because the unit and the three radii it converted were on the same screen; the radii are on the notifications page now, and the form converts them once on the way out and once on the way back in.{% endcomment %}
+<div class="help-note">
+  <i class="bi bi-lightbulb-fill" aria-hidden="true"></i>
+  <div>This page is what the site <em>shows</em> you. When it is allowed to <em>contact</em> you is on the <a href="{% url 'notification_preferences' %}">notifications page</a>.</div>
+</div>
 <div class="mt-3">
 {% crispy form form.helper %}
 </div>

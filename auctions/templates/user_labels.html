@@ -21,7 +21,6 @@ $('#id_preset').change(function(data){
 $(document).ready(function() {
     show_hide_advanced();
 });
-var form_id = '#printing-prefs';
 
 // ---- Print method: live mismatch warnings + Bluetooth connect card -------------------------
 (function () {
@@ -169,7 +168,6 @@ var form_id = '#printing-prefs';
     toggleBtCard();
 })();
 
-{% include 'leave_page_warning.js' %}
 </script>
 {% endblock %}
 {% block content %}

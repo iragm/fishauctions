@@ -1,8 +1,4 @@
-"""Tests for donation tracking: routing, the inbound webhook, the LLM seams, and the UI gates.
-
-Every language-model call goes through a fake provider installed with
-``llm.set_provider_override``, so nothing here touches the network.
-"""
+"""Tests for donation tracking: routing, the inbound webhook, the LLM seams, and the UI gates."""
 
 import datetime
 import json

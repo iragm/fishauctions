@@ -1,8 +1,4 @@
-"""Clubs: the model, the pages, and who is allowed to do what inside one.
-
-``ClubPermissionTests`` is the big one and is worth reading before changing anything that calls
-``check_club_permission``.
-"""
+"""Clubs: the model, the pages, and who is allowed to do what inside one."""
 
 import datetime
 from decimal import Decimal
@@ -611,8 +607,6 @@ class ClubPermissionTests(CsvImportTestMixin, TestCase):
         self.assertEqual(BapAward.objects.filter(club_member=self.target_member).count(), before + 1)
         self.assertEqual(BapAward.objects.filter(club_member=self.target_member).latest("pk").points, 3)
 
-    # --- Anonymous access ---
-
     def test_anonymous_redirected_from_club_admin(self):
         url = reverse("club_admin", kwargs={"slug": self.club.slug})
         response = self.client.get(url)
@@ -654,8 +648,6 @@ class ClubPermissionTests(CsvImportTestMixin, TestCase):
         response = self.client.get(url)
         self.assertEqual(response.status_code, 302)
         self.assertIn("/login", response["Location"])
-
-    # --- Non-member access ---
 
     def test_non_member_blocked_from_club_admin(self):
         self._login(self.non_member)
@@ -712,8 +704,6 @@ class ClubPermissionTests(CsvImportTestMixin, TestCase):
         self._login(self.non_member)
         response = self.client.get(reverse("club_treasurer_report", kwargs={"slug": self.club.slug}))
         self.assertEqual(response.status_code, 403)
-
-    # --- permission_view ---
 
     def test_view_only_can_access_admin_panel(self):
         """A view-only member can see the member list"""
@@ -782,8 +772,6 @@ class ClubPermissionTests(CsvImportTestMixin, TestCase):
         response = self.client.get(reverse("clubmember_permissions", kwargs={"pk": self.target_member.pk}))
         self.assertEqual(response.status_code, 403)
 
-    # --- permission_add_edit implicitly grants permission_view ---
-
     def test_add_edit_implicitly_can_access_admin_panel(self):
         """A member with add_edit but not view should still see the admin panel"""
         self._login(self.add_edit_user)
@@ -816,8 +804,6 @@ class ClubPermissionTests(CsvImportTestMixin, TestCase):
         response = self.client.get(reverse("clubmember_permissions", kwargs={"pk": self.target_member.pk}))
         self.assertEqual(response.status_code, 403)
 
-    # --- permission_export ---
-
     def test_export_can_export_csv(self):
         self._login(self.export_user)
         response = self.client.get(reverse("club_member_export", kwargs={"slug": self.club.slug}))
@@ -832,8 +818,6 @@ class ClubPermissionTests(CsvImportTestMixin, TestCase):
         self._login(self.export_user)
         response = self.client.get(reverse("club_edit", kwargs={"slug": self.club.slug}))
         self.assertEqual(response.status_code, 403)
-
-    # --- permission_edit_club ---
 
     def test_edit_club_can_access_club_edit(self):
         self._login(self.edit_club_user)
@@ -866,8 +850,6 @@ class ClubPermissionTests(CsvImportTestMixin, TestCase):
         self._login(self.edit_club_user)
         response = self.client.get(reverse("clubmember_permissions", kwargs={"pk": self.target_member.pk}))
         self.assertEqual(response.status_code, 403)
-
-    # --- permission_money ---
 
     def test_money_user_can_access_membership_settings(self):
         self._login(self.money_user)
@@ -935,8 +917,6 @@ class ClubPermissionTests(CsvImportTestMixin, TestCase):
         response = self.client.get(reverse("club_admin", kwargs={"slug": self.club.slug}))
         self.assertEqual(response.status_code, 403)
 
-    # --- permission_manage_bap ---
-
     def test_bap_user_can_access_bap_lots(self):
         self._login(self.bap_user)
         response = self.client.get(reverse("club_bap_lots", kwargs={"slug": self.club.slug}))
@@ -968,8 +948,6 @@ class ClubPermissionTests(CsvImportTestMixin, TestCase):
         self._login(self.view_user)
         response = self.client.get(reverse("club_bap_lots", kwargs={"slug": self.club.slug}))
         self.assertEqual(response.status_code, 403)
-
-    # --- permission_admin (wildcard) ---
 
     def test_admin_can_access_all_views(self):
         self._login(self.admin_user)

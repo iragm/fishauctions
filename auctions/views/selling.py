@@ -511,6 +511,26 @@ class VoiceCommandLogView(LoginRequiredMixin, AuctionViewMixin, View):
         return self.http_method_not_allowed(request, *args, **kwargs)
 
 
+class VoiceVocabularyView(LoginRequiredMixin, AuctionViewMixin, View):
+    """The lot and bidder numbers voice may match against here, for the set-winners page itself.
+
+    The page never reloads -- it is one long-lived page that posts -- so the vocabulary it was
+    rendered with goes stale while the auction runs: a lot added at the table, a bidder who signs up
+    at the desk, a lot un-sold so it can be sold again. Every one of those is a value the page's own
+    matcher would then refuse, and refuse by saying "no lot like that in this auction", which is a
+    wrong answer rather than a slow one.
+
+    The app has the same data on the mobile API, and cannot share it: that endpoint is JWT-only on
+    purpose, so a web session can't reach mobile endpoints. So this is the same builder behind the
+    page's session auth, admin-only through ``AuctionViewMixin``.
+    """
+
+    def get(self, request, *args, **kwargs):
+        from auctions.mobile.services import voice as voice_service
+
+        return JsonResponse(voice_service.build_vocabulary(self.auction))
+
+
 def notify_watchers_lot_selling_soon(lot, request_user=None, position=None):
     """Send a "coming up soon" or "about to be sold" web push to a lot's watchers.
 

@@ -8,7 +8,7 @@ writes that happen from a list rather than a page -- watching and bidding.
 import logging
 import re
 from decimal import Decimal
-from random import sample, uniform
+from random import choice, uniform
 
 from dal import autocomplete
 from django.conf import settings
@@ -117,12 +117,16 @@ class RenderAd(DetailView):
             except Category.DoesNotExist:
                 pass
         if user and not category:
-            # there wasn't a category on this page, pick one of the user's interests instead
-            try:
-                categories = UserInterestCategory.objects.filter(user=user).order_by("-as_percent")[:5]
-                category = sample(categories, 1)
-            except (IndexError, ValueError):
-                pass
+            # There wasn't a category on this page, so pick one of the user's interests instead.
+            #
+            # `random.sample` wants a sequence and a QuerySet is not one, so this raised TypeError --
+            # which the except did not name -- for every signed-in visitor, on an endpoint every page
+            # fetches asynchronously. It only ever surfaced with DEBUG off (CI runs with it on), and
+            # `sample` returns a *list*, so on the day it did not raise it assigned a list where the
+            # comparison below expects a Category and quietly matched nothing.
+            categories = list(UserInterestCategory.objects.filter(user=user).order_by("-as_percent")[:5])
+            if categories:
+                category = choice(categories).category
         adCampaigns = (
             AdCampaign.objects.filter(begin_date__lte=timezone.now())
             .filter(Q(end_date__gte=timezone.now()) | Q(end_date__isnull=True))
@@ -230,6 +234,9 @@ class LotListView(AjaxListView):
             context["display_auction_on_lots"] = True
         if not self.request.COOKIES.get("longitude"):
             context["location_message"] = "Set your location to see lots near you"
+        # The beacon tags a page view with this auction. Only the three pages that are a
+        # visitor looking at an auction do -- see base_page_view.html.
+        context["page_view_auction"] = context["auction"].pk if context["auction"] else None
         context["src"] = "lot_list"
         return context
 

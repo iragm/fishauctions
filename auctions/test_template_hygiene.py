@@ -1,4 +1,4 @@
-"""Guards against template tags that render as text instead of being parsed.
+"""Guards against the template mistakes that produce a wrong page without an error.
 
 The bug this exists to prevent: ``{# … #}`` (and ``{% … %}``, and ``{{ … }}``) must open and
 close on the same line, because Django's lexer has no ``re.DOTALL``. Spread one over two lines
@@ -24,15 +24,13 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
 class TemplateTagsAreParseableTests(SimpleTestCase):
-    def test_no_template_tag_spans_two_lines(self):
+    def test_no_template_renders_a_wrong_page(self):
         findings = template_lint.check_templates(REPO_ROOT)
         if findings:
             report = "\n".join(
                 f"  {path.relative_to(REPO_ROOT)}:{number}: {message}" for path, number, message in findings
             )
-            self.fail(
-                f"{len(findings)} template tag(s) would render onto the page as text instead of being parsed:\n{report}"
-            )
+            self.fail(f"{len(findings)} template problem(s) that would render a wrong page:\n{report}")
 
     def test_the_checker_actually_looks_at_this_repo_s_templates(self):
         """A checker pointed at nothing would pass for ever without anyone noticing."""
@@ -103,3 +101,42 @@ class TemplateLintTests(SimpleTestCase):
         problems = template_lint.check_text("<p>hi</p>\n   and the rest of the note #}\n")
         self.assertEqual(problems[0][0], 2)
         self.assertIn("closes nothing", problems[0][1])
+
+
+class OneModalContainerPerPageTests(SimpleTestCase):
+    """Only base.html may declare ``id="modals-here"``.
+
+    A second element with that id is not a cosmetic duplicate. htmx resolves ``hx-target`` with
+    ``querySelector``, which returns whichever comes first in document order, so two containers take
+    turns being the target -- and because a modal response used to be able to *replace* its
+    container, opening a modal destroyed one of them. Two clicks emptied the page of both, and the
+    third opened nothing at all. This had been reported, and chased, as a bug in the modal code
+    three times.
+    """
+
+    def test_every_template_uses_the_inherited_container(self):
+        findings = [
+            (path, number, message)
+            for path, number, message in template_lint.check_templates(REPO_ROOT)
+            if template_lint.MODAL_CONTAINER in message
+        ]
+        self.assertEqual(findings, [], f"templates declaring a second modal container: {findings}")
+
+    def test_base_html_is_allowed_to_declare_it(self):
+        path = REPO_ROOT / "auctions" / "templates" / "base.html"
+        text = path.read_text(encoding="utf-8")
+        self.assertIn(template_lint.MODAL_CONTAINER, text, "base.html should render the modal container")
+        self.assertEqual(template_lint.check_modal_container(path, text), [])
+
+    def test_a_second_container_anywhere_else_is_caught(self):
+        path = REPO_ROOT / "auctions" / "templates" / "some_page.html"
+        problems = template_lint.check_modal_container(path, '<p>hi</p>\n<div id="modals-here"></div>\n')
+        self.assertEqual([number for number, _ in problems], [2])
+        self.assertIn("already rendered by base.html", problems[0][1])
+
+    def test_pointing_at_the_container_is_not_declaring_one(self):
+        """Every modal trigger on the site names it in hx-target; only rendering one is the problem."""
+        path = REPO_ROOT / "auctions" / "templates" / "some_page.html"
+        self.assertEqual(
+            template_lint.check_modal_container(path, '<a hx-get="/x/" hx-target="#modals-here">go</a>'), []
+        )

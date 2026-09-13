@@ -18,9 +18,10 @@ Four rules hold it together.
 - **Imports of the rest of the app are absolute** (`from auctions.models import ...`), not `..`
   relative. Ruff's TID252 enforces it, and the two older packages here (`mcp/`, `mobile/`) already
   did it that way.
-- **No module over 1500 lines.** `auctions/module_map.py` fails the build on a new one. When a
-  module gets close, split it along an area boundary and give both halves a real docstring rather
-  than adding it to the `OVERSIZED` list.
+- **Split along an area boundary, not at a line count.** These 34 modules exist because one file of
+  views was tedious to work in, and the same reasoning is how a new split gets decided: when a
+  module covers two areas, separate them and give both halves a real docstring. Nothing enforces a
+  size, and nothing should.
 
 Every module's docstring says what area it covers; `docs/module_map.md` lists them all in one place.
 Start there rather than grepping blind.

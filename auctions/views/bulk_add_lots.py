@@ -125,7 +125,11 @@ class BulkAddLots(LoginRequiredMixin, AuctionViewMixin, TemplateView):
                 # answer cleared here is exactly the same evidence.  See record_choice.
                 if self.auction.use_scientific_name and lot.lot_name:
                     record_species_choice(
-                        lot.lot_name, lot.species, first_save=lot_is_new, changed=id(lot) in species_moved
+                        lot.lot_name,
+                        lot.species,
+                        first_save=lot_is_new,
+                        changed=id(lot) in species_moved,
+                        user=self.request.user,
                     )
             if lots:
                 updated_lot_count = len(lots) - new_lot_count
@@ -574,7 +578,11 @@ class SaveLotAjax(APIView, AuctionViewMixin):
                 # deliberately: the person teaching the site a pairing must not also be counted as a
                 # second person agreeing with it.  See species_matching.record_choice.
                 record_species_choice(
-                    lot.lot_name, lot.species, first_save=is_new, changed=lot.species_id != species_before
+                    lot.lot_name,
+                    lot.species,
+                    first_save=is_new,
+                    changed=lot.species_id != species_before,
+                    user=request.user,
                 )
                 # Remember it only on the row's first save, where the name and the species were
                 # entered together and the pairing is really what the person meant.  On a later edit

@@ -295,24 +295,44 @@ class VoiceConfigBlockTests(TestCase):
     def _config(self):
         return self.client.get(reverse("mobile-config")).data
 
-    def test_block_is_absent_until_an_admin_configures_one(self):
-        """Absent means "use the grammar you shipped with", which is the state every deployment
-        starts in."""
-        self.assertNotIn("voice", self._config())
+    def test_the_defaults_are_served_when_nobody_has_configured_a_grammar(self):
+        """The page has always matched against these functions, so the app has to score by them too.
+        A block that appeared only once somebody had visited the admin left the two sides scoring
+        the same utterance differently until they did."""
+        block = self._config()["voice"]
+        self.assertEqual(block["anchors"], voice.default_anchors())
+        self.assertEqual(block["thresholds"], voice.default_thresholds())
+        self.assertEqual(block["weights"], voice.default_weights())
+        self.assertEqual(block["backend"], voice.BACKEND_BIASED)
 
     def test_configured_grammar_is_served_whole(self):
         VoiceGrammar.objects.create()
         block = self._config()["voice"]
         self.assertTrue(block["enabled"])
-        self.assertEqual(block["backend"], voice.BACKEND_PLATFORM)
+        self.assertEqual(block["backend"], voice.BACKEND_BIASED)
         self.assertEqual(block["locale"], "en_US")
-        self.assertEqual(block["thresholds"], {"confident": 0.85, "unsure": 0.5})
-        self.assertEqual(block["weights"]["snap"], 1.0)
+        self.assertEqual(block["thresholds"], {"confident": 0.77, "unsure": 0.5})
+        self.assertEqual(block["weights"]["match"], 1.0)
         self.assertIn("lot", block["anchors"])
         self.assertEqual(block["number_words"]["seventeen"], 17)
         self.assertIn(["15", "50"], block["homophones"])
         self.assertTrue(block["auto_submit_on_sold"])
         self.assertTrue(block["block_auto_submit_when_unsure"])
+        self.assertEqual(block["commit_after_ms"], voice.DEFAULT_COMMIT_AFTER_MS)
+
+    def test_how_long_a_value_waits_to_settle_is_a_row_edit(self):
+        """VOICE-8. Waiting for the recognizer's final result put five or six seconds between "lot
+        one" and a filled field, so values are written from a settled partial instead -- and how
+        long "settled" is wants tuning in a hall, which makes it a row and not an app constant."""
+        grammar = VoiceGrammar.objects.create()
+        grammar.commit_after_ms = 450
+        grammar.save()
+        self.assertEqual(self._config()["voice"]["commit_after_ms"], 450)
+
+    def test_zero_hands_the_app_back_to_final_results_only(self):
+        """The kill switch if early values misbehave: the old behaviour, without an app release."""
+        VoiceGrammar.objects.create(commit_after_ms=0)
+        self.assertEqual(self._config()["voice"]["commit_after_ms"], 0)
 
     def test_admin_edits_reach_the_app_without_a_release(self):
         grammar = VoiceGrammar.objects.create()
@@ -374,7 +394,7 @@ class VoicePageTests(StandardTestCase):
     def test_app_page_carries_the_thresholds_so_green_means_the_same_thing(self):
         page = self.client.get(self.url, HTTP_USER_AGENT=APP_UA).content.decode()
         self.assertIn('id="voice-config"', page)
-        self.assertIn("0.85", page)
+        self.assertIn("0.77", page)
 
     def test_thresholds_follow_the_admin_grammar(self):
         VoiceGrammar.objects.create(thresholds={"confident": 0.7, "unsure": 0.4})

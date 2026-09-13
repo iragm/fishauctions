@@ -41,13 +41,18 @@ CALENDAR_SYNC_LOCK_SECONDS = 60 * 60
 ENDAUCTIONS_LOCK_KEY = "endauctions_running"
 ENDAUCTIONS_LOCK_SECONDS = 15 * 60
 
-# One user-flow computation at a time; see compute_user_flow_all. The task has no time limit at all
-# (time_limit=None), so this cannot be "comfortably longer than the run" the way the endauctions lock
-# is. It is a heartbeat instead: the run re-stamps it after every auction, so it outlives a run of
-# any length, and a worker killed mid-run -- a deploy, most often -- wedges the button for this long
-# rather than for the length of the longest run anybody can imagine.
-USER_FLOW_LOCK_KEY = "compute_user_flow_all_running"
-USER_FLOW_LOCK_SECONDS = 30 * 60
+# The one-shot backfill of PageView.auction; see backfill_page_view_auctions. CHUNK is rows
+# written per run and SCAN is primary keys looked at, and both matter: without the second, a run
+# that lands on a stretch of the table with no lot views scans to the end looking for its five
+# thousand, which is the full scan of PageView this is all trying to retire. The beat entry name
+# has to match the key in fishauctions/celery.py, because that is what the PeriodicTask row is
+# called and this task switches its own row off.
+PAGE_VIEW_BACKFILL_JOB = "page_view_auction"
+PAGE_VIEW_BACKFILL_BEAT = "backfill_page_view_auctions"
+PAGE_VIEW_BACKFILL_CHUNK = 5000
+PAGE_VIEW_BACKFILL_SCAN = 50000
+PAGE_VIEW_BACKFILL_LOCK_KEY = "backfill_page_view_auctions_running"
+PAGE_VIEW_BACKFILL_LOCK_SECONDS = 20 * 60
 
 logger = logging.getLogger(__name__)
 
@@ -500,6 +505,121 @@ def auctiontos_notifications(self):
     Previously run every 15 minutes via cron.
     """
     call_command("auctiontos_notifications")
+
+
+@shared_task(bind=True, ignore_result=True)
+def refresh_club_health(self):
+    """Recompute every club's lifecycle rollup and the outreach queue that comes out of it.
+
+    Nightly, because nothing it measures moves faster than that: the fastest column is "days since
+    the last auction". See auctions/club_health.py for what the numbers mean.
+    """
+    from auctions import club_health
+
+    written = club_health.refresh_all()
+    # The ladder snapshot rides on the same nightly run and is keyed on the month, so it writes
+    # this month's row the first time it runs and refreshes it every night after. A task that had
+    # to notice the first of the month would record nothing at all in the month it was deployed.
+    month = club_health.snapshot_ladder()
+    logger.info("refreshed club health for %s clubs, ladder snapshot for %s", written, month)
+
+
+def _switch_off_beat_entry(name):
+    """Stop beat dispatching a job that has nothing left to do.
+
+    ``save()`` rather than ``update()``: django-celery-beat tells a running beat to reload through
+    the ``post_save`` signal, and a queryset update does not send one -- the row would read as
+    disabled while beat kept firing the old in-memory entry until it was next restarted.
+    """
+    row = PeriodicTask.objects.filter(name=name).first()
+    if row and row.enabled:
+        row.enabled = False
+        row.save()
+        logger.info("periodic task %s has nothing left to do; disabled it", name)
+
+
+@shared_task(bind=True, ignore_result=True)
+def backfill_page_view_auctions(self):
+    """Fill in ``PageView.auction`` on the lot views written before the beacon started sending it.
+
+    A page view of a lot now names the lot *and* its auction, so a reader can match an auction on
+    one indexed column. Older rows name only the lot, which is why ``Auction.page_views`` -- and so
+    ``unique_views``, both stat charts and both funnel queries -- has to ask for
+    ``auction_id OR lot.auction_id``: an OR across a join, the one shape MariaDB cannot serve from
+    an index, over the largest and least-purged table on the site. This walks the old rows so that
+    clause can eventually go.
+
+    One window of primary keys per run, `PAGE_VIEW_BACKFILL_SCAN` wide, up to
+    `PAGE_VIEW_BACKFILL_CHUNK` rows written -- a range scan on the primary key, which is the
+    cheapest thing this table can be asked for and is bounded whatever it finds. The position is
+    kept in ``ChunkedJobState`` because working it out from ``PageView`` itself is the scan being
+    avoided.
+
+    It stops on its own. The ceiling is the last primary key at the time of the first run: rows
+    above it were written by code that already sets the column, so chasing them would mean a job
+    that never finishes. When the cursor passes it the row is stamped ``finished`` and the beat
+    entry is switched off -- and a re-enabled entry costs one indexed `SELECT` before returning.
+
+    Rows whose lot has no auction at all are read and skipped rather than filtered out in SQL. They
+    can never be written, so leaving them in the window is what carries the cursor past them; asking
+    the database to exclude them would leave the job looking at the same rows forever.
+    """
+    from collections import defaultdict
+
+    from django.core.cache import cache
+    from django.db.models import Max
+    from django.utils import timezone
+
+    from auctions.models import ChunkedJobState, PageView
+
+    state, _ = ChunkedJobState.objects.get_or_create(name=PAGE_VIEW_BACKFILL_JOB)
+    if state.finished:
+        _switch_off_beat_entry(PAGE_VIEW_BACKFILL_BEAT)
+        return
+
+    if not cache.add(PAGE_VIEW_BACKFILL_LOCK_KEY, "1", timeout=PAGE_VIEW_BACKFILL_LOCK_SECONDS):
+        logger.info("backfill_page_view_auctions is already running; skipping this tick.")
+        return
+    try:
+        if not state.ceiling:
+            state.ceiling = PageView.objects.aggregate(Max("pk"))["pk__max"] or 0
+        window_end = min(state.cursor + PAGE_VIEW_BACKFILL_SCAN, state.ceiling + 1)
+        rows = list(
+            PageView.objects.filter(
+                pk__gte=state.cursor,
+                pk__lt=window_end,
+                lot_number__isnull=False,
+                auction__isnull=True,
+            )
+            .order_by("pk")
+            .values_list("pk", "lot_number__auction")[:PAGE_VIEW_BACKFILL_CHUNK]
+        )
+        by_auction = defaultdict(list)
+        for pk, auction_id in rows:
+            if auction_id:
+                by_auction[auction_id].append(pk)
+        written = 0
+        for auction_id, pks in by_auction.items():
+            written += PageView.objects.filter(pk__in=pks).update(auction_id=auction_id)
+
+        # A short read means the whole window is done; a full one means we stopped mid-window and
+        # the next run picks up after the last row we looked at.
+        state.cursor = rows[-1][0] + 1 if len(rows) == PAGE_VIEW_BACKFILL_CHUNK else window_end
+        if state.cursor > state.ceiling:
+            state.finished = timezone.now()
+        state.save()
+    finally:
+        cache.delete(PAGE_VIEW_BACKFILL_LOCK_KEY)
+
+    logger.info(
+        "backfilled %s page views with their auction; cursor %s of %s%s",
+        written,
+        state.cursor,
+        state.ceiling,
+        " (finished)" if state.finished else "",
+    )
+    if state.finished:
+        _switch_off_beat_entry(PAGE_VIEW_BACKFILL_BEAT)
 
 
 @shared_task(bind=True, ignore_result=True)
@@ -1264,16 +1384,6 @@ def set_user_location(self):
 
 
 @shared_task(bind=True, ignore_result=True)
-def remove_duplicate_views(self):
-    """
-    Remove duplicate page views.
-
-    Previously run every 15 minutes via cron.
-    """
-    call_command("remove_duplicate_views")
-
-
-@shared_task(bind=True, ignore_result=True)
 def webpush_notifications_deduplicate(self):
     """
     Deduplicate web push notification subscriptions.
@@ -1317,17 +1427,28 @@ def delete_cloudflare_image(self, image_id):
     (lots copied with "relist" share the Cloudflare image of the original).
     """
     from auctions import cloudflare_images
-    from auctions.models import AdCampaign, Club, LotImage
+    from auctions.models import AdCampaign, Club, LotImage, Speaker
 
     if not cloudflare_images.enabled():
         return
-    for model in (LotImage, Club, AdCampaign):
+    for model in (LotImage, Club, AdCampaign, Speaker):
         if model.objects.filter(cloudflare_image_id=image_id).exists():
             return
     try:
         cloudflare_images.delete(image_id)
     except cloudflare_images.CloudflareImagesError:
         logger.exception("Could not delete Cloudflare image %s", image_id)
+
+
+@shared_task(bind=True, ignore_result=True)
+def purge_edge_cache(self, urls):
+    """Drop these URLs from the edge cache after the file behind them was deleted.
+
+    Why a deletion has to, and why nothing here raises, is in :mod:`auctions.cloudflare_cache`.
+    """
+    from auctions import cloudflare_cache
+
+    cloudflare_cache.purge_urls(urls)
 
 
 def schedule_auction_stats_update(run_at=None):
@@ -1993,70 +2114,6 @@ def bootstrap_bap_recalculation_tasks(run_at):
             schedule_bap_recalculation(club.pk, run_at=run_at)
         else:
             schedule_bap_recalculation(club.pk, run_at=club.next_bap_recalculation)
-
-
-@shared_task(bind=True, ignore_result=True, time_limit=None, soft_time_limit=None)
-def compute_user_flow_all(self, sleep_seconds=2):
-    """Pre-compute user flow data for every auction and store results in the cache.
-
-    Processes one auction at a time, sleeping between each to stay low-CPU.
-    The final step aggregates all page views into a combined "all auctions" result.
-    Trigger via the admin user-flow page; results persist indefinitely in Redis.
-    """
-    from django.core.cache import cache
-
-    # One at a time. This is enqueued by a button on the admin page, holds a worker slot for as long
-    # as it takes (time_limit=None) and sleeps between auctions, and the worker runs with
-    # concurrency=2 -- so two presses of the button occupied both slots and stopped every other task
-    # on the site, endauctions included. A second press is now a no-op rather than a queue.
-    if not cache.add(USER_FLOW_LOCK_KEY, "1", timeout=USER_FLOW_LOCK_SECONDS):
-        logger.info("compute_user_flow_all is already running; ignoring this request.")
-        return
-    try:
-        _compute_user_flow_all(sleep_seconds)
-    finally:
-        cache.delete(USER_FLOW_LOCK_KEY)
-
-
-def _compute_user_flow_all(sleep_seconds):
-    import time
-
-    from django.core.cache import cache
-    from django.utils import timezone
-
-    from auctions.models import Auction
-    from auctions.views import AdminUserFlow
-
-    auctions = list(Auction.objects.filter(is_deleted=False).order_by("-date_end"))
-    logger.info("compute_user_flow_all: starting for %d auctions (sleep=%ss)", len(auctions), sleep_seconds)
-
-    for i, auction in enumerate(auctions, 1):
-        try:
-            freq, trans = AdminUserFlow._compute_flow(auction)
-            cache.set(
-                f"user_flow_{auction.pk}",
-                {"frequency_table": freq, "transition_table": trans, "computed_at": timezone.now().isoformat()},
-                timeout=None,
-            )
-            logger.info("compute_user_flow_all: %d/%d done — %s", i, len(auctions), auction.slug)
-        except Exception:
-            logger.exception("compute_user_flow_all: failed for auction pk=%s", auction.pk)
-        # Re-stamp the lock rather than letting it age out under a run that has no time limit. A
-        # `set` and not an `add`: this run holds the lock, and refreshing it is the point.
-        cache.set(USER_FLOW_LOCK_KEY, "1", timeout=USER_FLOW_LOCK_SECONDS)
-        time.sleep(sleep_seconds)
-
-    # Combined view across all auctions
-    try:
-        freq, trans = AdminUserFlow._compute_flow(None)
-        now_iso = timezone.now().isoformat()
-        cache.set("user_flow_all", {"frequency_table": freq, "transition_table": trans}, timeout=None)
-        cache.set("user_flow_all_computed_at", now_iso, timeout=None)
-        logger.info("compute_user_flow_all: combined all-auctions result cached")
-    except Exception:
-        logger.exception("compute_user_flow_all: failed to compute combined result")
-
-    logger.info("compute_user_flow_all: complete")
 
 
 @shared_task(

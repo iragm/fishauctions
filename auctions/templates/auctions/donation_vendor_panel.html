@@ -105,7 +105,7 @@ create/edit AuctionTOS dialog (generic_admin_form.html) and mounted the same way
                 data-confirm-variant="danger"
                 class="d-inline">
             {% csrf_token %}
-            <button type="submit" class="btn btn-danger"><i class="bi bi-trash"></i></button>
+            <button type="submit" class="btn btn-danger" aria-label="Remove this vendor"><i class="bi bi-trash" aria-hidden="true"></i></button>
           </form>
           <button type="button" class="btn btn-secondary" data-modal-close-action="none">Close</button>
         </div>

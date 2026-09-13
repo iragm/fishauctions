@@ -1,8 +1,4 @@
-"""The club REST API's read side: members, BAP lots, auctions and lots.
-
-The tests that matter most here are the negative ones -- a key without the privacy flag must not see
-a name, an email or a bidder number, in any field, through any filter or ordering.
-"""
+"""The club REST API's read side: members, BAP lots, auctions and lots."""
 
 import datetime
 import io
@@ -33,7 +29,7 @@ from auctions.models import (
     PickupLocation,
     Species,
 )
-from auctions.tests import WritableMediaRoot
+from auctions.tests import WritableMediaRoot, give_contact_info
 from fishauctions._env import parse_bool_env, require_secure_prod_secrets
 
 
@@ -585,8 +581,6 @@ class ClubAuctionReadAPITests(WritableMediaRoot, TestCase):
     def lots(self, identifier="current", **params):
         return self.get("api_club_auction_lots", params, identifier=identifier)
 
-    # --- permissions -----------------------------------------------------------------
-
     def test_every_endpoint_needs_a_key(self):
         for name, kwargs in (
             ("api_club_auctions", {}),
@@ -625,8 +619,6 @@ class ClubAuctionReadAPITests(WritableMediaRoot, TestCase):
         self.auctions()
         self.api_key.refresh_from_db()
         self.assertIsNotNone(self.api_key.last_used_at)
-
-    # --- which auction ---------------------------------------------------------------
 
     def test_auction_list_names_current_and_latest(self):
         self.allow("can_read_auction_info")
@@ -695,8 +687,6 @@ class ClubAuctionReadAPITests(WritableMediaRoot, TestCase):
         Auction.objects.filter(pk=self.auction.pk).update(is_deleted=True)
         self.assertEqual(self.auction_detail("current").status_code, 404)
 
-    # --- auction payload -------------------------------------------------------------
-
     def test_auction_detail_carries_the_rules_dates_and_settings(self):
         self.allow("can_read_auction_info")
         data = self.auction_detail(self.auction.slug).json()
@@ -740,8 +730,6 @@ class ClubAuctionReadAPITests(WritableMediaRoot, TestCase):
         fields = self.auction_detail(self.auction.slug).json()["lot_fields"]
         self.assertEqual(fields["custom_dropdown_name"], "Tank size")
         self.assertEqual(fields["custom_dropdown_options"], ["10 gallon"])
-
-    # --- lot payload -----------------------------------------------------------------
 
     def test_public_lot_payload(self):
         self.allow("can_read_public_lots")
@@ -854,8 +842,6 @@ class ClubAuctionReadAPITests(WritableMediaRoot, TestCase):
     def test_a_bad_limit_is_a_400(self):
         self.allow("can_read_public_lots")
         self.assertEqual(self.lots(limit="lots").status_code, 400)
-
-    # --- filtering, ordering and sparse fields ---------------------------------------
 
     def extra_lots(self):
         """Two more lots, deliberately out of lot-number order by name and price."""
@@ -1028,8 +1014,6 @@ class ClubAuctionReadAPITests(WritableMediaRoot, TestCase):
         )
         self.assertEqual(sorted(response.json()), ["lot_number", "url"])
 
-    # --- images ----------------------------------------------------------------------
-
     def make_image(self, lot, **kwargs):
         from PIL import Image as PILImage
 
@@ -1052,7 +1036,7 @@ class ClubAuctionReadAPITests(WritableMediaRoot, TestCase):
         self.assertEqual(first["id"], primary.pk)
         self.assertTrue(first["is_primary"])
         self.assertEqual(first["caption"], "Parents")
-        self.assertEqual(first["image_source_display"], "This picture is of the exact item")
+        self.assertEqual(first["image_source_display"], "My photo of this exact item")
         self.assertTrue(first["url"].startswith("http"))
         self.assertTrue(first["thumbnail"].startswith("http"))
 
@@ -1093,8 +1077,6 @@ class ClubAuctionReadAPITests(WritableMediaRoot, TestCase):
         )
         self.assertIsNotNone(self.lots().json()["results"][0]["thumbnail"])
 
-    # --- one lot ---------------------------------------------------------------------
-
     def test_one_lot_by_its_number(self):
         self.allow("can_read_public_lots")
         response = self.client.get(
@@ -1115,8 +1097,6 @@ class ClubAuctionReadAPITests(WritableMediaRoot, TestCase):
             HTTP_X_API_KEY=self.raw_key,
         )
         self.assertEqual(response.status_code, 404)
-
-    # --- a person rather than a key ---------------------------------------------------
 
     def test_a_club_admin_can_read_it_signed_in(self):
         ClubMember.objects.create(club=self.club, user=self.owner, permission_manage_auctions=True)
@@ -1239,6 +1219,7 @@ class ClubAuctionIntegrationTests(TestCase):
 
     def _create_auction_via_view(self, user):
         """Helper to create an auction via the create auction view."""
+        give_contact_info(user)  # AuctionCreateView refuses somebody with no contact info
         self.client.login(username=user.username, password="testpass")
         from django.utils import timezone
 

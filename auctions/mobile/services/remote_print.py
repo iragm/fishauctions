@@ -10,8 +10,10 @@ high-priority data message wakes a headless isolate that has none of the shell's
 silent pushes are rate-limited, best-effort, and dropped entirely once the app is force-quit, and
 CoreBluetooth in the background does not survive a terminated app either. So this does not fire a
 push into the void and wait out a timeout. It *measures* whether the phone is awake
-(``MobileDevice.print_ready`` + a heartbeat, see :func:`heartbeat`), only offers when it is, and
-tells the user the truth when it isn't.
+(``MobileDevice.print_ready`` + a heartbeat, see :func:`heartbeat`) and tells the user the truth
+either way -- including before the push, so a job with no phone to go to is ``unreachable`` on the
+page that opens rather than twenty seconds later. What it never does is quietly do something else
+instead: the preference decides the page, the heartbeat decides what the page says.
 
 The division of labour, because it is not obvious from any one function:
 
@@ -67,19 +69,25 @@ def heartbeat(user, device_uuid, *, print_ready=False, printer_name="", print_me
     return device
 
 
-def can_print_from_computer(user):
-    """Is this user's ``print_from_computer`` on *and* is a phone actually reachable right now?
+def wants_print_from_computer(user):
+    """Is this user's ``print_from_computer`` preference on? Says nothing about the phone.
 
-    Both halves, because the preference alone is a promise the phone may not be able to keep — and
-    the whole point of this feature is that the computer never promises what it can't deliver.
+    This is what decides *which page* a print goes to, and it is deliberately only half the
+    question -- ``MobileDevice.reachable_printers_for`` is the other half, "will it work right now",
+    and that one is asked by :func:`create_job` when it looks for a phone to push to and answered on
+    the page rather than in this branch.
+
+    Somebody who has asked for their labels to come out of the printer next to their phone has asked
+    for that whether or not the app happens to be open this second, and silently handing them a PDF
+    instead is the site doing something else without saying so — they find out when no labels
+    appear. They get the same page either way now, and it tells them the truth: open the app, then
+    Try again, with the PDF still one button away for whoever wants it.
     """
     from auctions.models import UserLabelPrefs
 
     if not user or not user.is_authenticated:
         return False
-    if not UserLabelPrefs.objects.filter(user=user, print_from_computer=True).exists():
-        return False
-    return MobileDevice.reachable_printers_for(user).exists()
+    return UserLabelPrefs.objects.filter(user=user, print_from_computer=True).exists()
 
 
 @transaction.atomic

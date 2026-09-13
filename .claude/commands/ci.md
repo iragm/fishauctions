@@ -20,6 +20,5 @@ docker compose run --rm test --lint       # apply lint fixes
 python3 auctions/module_map.py --write    # regenerate docs/module_map.md
 ```
 
-If the module-map step complains that a module is too big or has no docstring, read
-`auctions/module_map.py` -- the rule and the reason for it are in its docstring. Adding a module to
-`OVERSIZED` is a last resort and needs a reason; the list is a ratchet that is supposed to shrink.
+If the module-map step complains that a module has no docstring, read `auctions/module_map.py` --
+the rule and the reason for it are in its docstring. It has no opinion about how long a module is.

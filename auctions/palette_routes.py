@@ -140,6 +140,18 @@ ROUTE_LIST: list[Route] = [
     _r("faq", "Frequently asked questions", "Browsing", keywords=["faq", "help", "how does this work"]),
     _r("tos", "Terms of service", "Browsing", keywords=["terms", "user agreement", "rules of the site"]),
     _r("privacy_policy", "Privacy policy", "Browsing", keywords=["privacy", "data"]),
+    _r(
+        "dmca",
+        "Copyright and DMCA policy",
+        "Browsing",
+        keywords=["dmca", "copyright", "takedown", "designated agent", "my photo was stolen"],
+    ),
+    _r(
+        "dmca_notice",
+        "Send a copyright takedown notice",
+        "Browsing",
+        keywords=["dmca notice", "report copyright infringement", "someone used my photo"],
+    ),
     _r("feedback", "Leave feedback about the site", "Browsing", keywords=["suggest", "bug report", "contact"]),
     _r(
         "support",
@@ -175,6 +187,13 @@ ROUTE_LIST: list[Route] = [
     _r("my_lot_report", "Download my lots as a spreadsheet", "My stuff", keywords=["csv", "export my lots"]),
     _r("my_won_lot_csv", "Download lots I won as a spreadsheet", "My stuff", keywords=["csv", "export purchases"]),
     _r("lot_by_pk", "A specific lot's page", "My stuff", scope=SCOPE_LOT, keywords=["view lot", "open lot"]),
+    _r(
+        "report_lot",
+        "Report a problem with a lot",
+        "My stuff",
+        scope=SCOPE_LOT,
+        keywords=["report", "flag", "scam", "offensive", "shouldn't be sold"],
+    ),
     _r("edit_lot", "Edit a lot", "My stuff", scope=SCOPE_LOT, keywords=["change lot", "fix lot", "update lot"]),
     _r("delete_lot", "Delete a lot", "My stuff", scope=SCOPE_LOT, keywords=["remove lot", "cancel lot"]),
     _r(
@@ -1039,7 +1058,29 @@ ROUTE_LIST: list[Route] = [
     ),
     _r("admin_traffic", "Site traffic", "Site admin", admin=ADMIN_SUPERUSER, keywords=["traffic", "pageviews"]),
     _r("admin_referrers", "Where visitors come from", "Site admin", admin=ADMIN_SUPERUSER, keywords=["referrers"]),
-    _r("admin_user_flow", "How visitors move around", "Site admin", admin=ADMIN_SUPERUSER, keywords=["user flow"]),
+    _r("admin_usability", "Usability report", "Site admin", admin=ADMIN_SUPERUSER, keywords=["usability", "friction"]),
+    _r("admin_club_health", "Club health", "Site admin", admin=ADMIN_SUPERUSER, keywords=["dormant clubs", "outreach"]),
+    _r(
+        "admin_unlinked_auctions",
+        "Auctions with no club",
+        "Site admin",
+        admin=ADMIN_SUPERUSER,
+        keywords=["unlinked auctions", "assign auction to club"],
+    ),
+    _r(
+        "admin_lifecycle",
+        "Buyer and seller lifecycle",
+        "Site admin",
+        admin=ADMIN_SUPERUSER,
+        keywords=["milestones", "cohorts", "retention", "lapsed members", "median member", "new people"],
+    ),
+    _r(
+        "admin_session_replay",
+        "Read one person's session",
+        "Site admin",
+        admin=ADMIN_SUPERUSER,
+        keywords=["session replay", "what did this person do", "page history", "one visitor"],
+    ),
     _r("admin_user_map", "Map of users", "Site admin", admin=ADMIN_SUPERUSER, keywords=["user map", "where users are"]),
     _r("admin_user_signups", "New signups", "Site admin", admin=ADMIN_SUPERUSER, keywords=["signups", "new users"]),
     _r("admin_error", "Trigger a test error", "Site admin", admin=ADMIN_SUPERUSER, keywords=["test error", "500"]),
@@ -1174,6 +1215,11 @@ EXCLUDED: dict[str, str] = {
     "lot_refund": _API,
     "bulk_set_lots_won": _API,
     "auction_unsell_lot": _ACTION_ONLY,
+    "auction_voice_vocabulary": (
+        "The lot and bidder numbers voice may match against, fetched by the set-winners page to keep "
+        "its own matcher current while an auction runs. It is that page's working data, not a "
+        "capability: everything in it is already on the users and lots pages the palette can reach."
+    ),
     "auction_enable_bidding_for_all": _API,
     "auction_invoices_ready": _API,
     "auction_invoices_paid": _API,
@@ -1227,6 +1273,11 @@ EXCLUDED: dict[str, str] = {
     "auction_stats_location_volume": _API,
     "auction_stats_feature_use": _API,
     "auction_stats_referrers": _API,
+    "form_abandoned": "A beacon the page fires on its way out. There is no page here to send anybody to.",
+    "club_mark_contacted": "POST-only button on the club health queue; the page it sits on is admin_club_health.",
+    "link_auctions_to_club": (
+        "POST-only button on the unlinked auctions page; the page it sits on is admin_unlinked_auctions."
+    ),
     "admin_traffic_json": _API,
     "admin_traffic_time_of_day_json": _API,
     "admin_user_signups_json": _API,

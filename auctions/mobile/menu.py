@@ -47,6 +47,8 @@ from django.conf import settings
 from django.urls import reverse
 from django.utils.http import url_has_allowed_host_and_scheme
 
+from auctions import dmca
+
 # Advisory; the app ignores it today. Bump it if the *shape* ever changes incompatibly -- not for
 # adding a row, a section or a key, all of which are free (unknown keys are ignored on both sides).
 MENU_VERSION = 1
@@ -154,8 +156,11 @@ def _admin_section():
             _row("User map", reverse("admin_user_map") + "?view=recent&filter=24", "bi-geo-alt"),
             _row("Traffic", reverse("admin_traffic") + "?days=30", "bi-graph-up"),
             _row("Referrers", reverse("admin_referrers") + "?days=30", "bi-signpost-split"),
+            _row("Usability", reverse("admin_usability") + "?days=30", "bi-clipboard-data"),
+            _row("Club health", reverse("admin_club_health"), "bi-heart-pulse"),
+            _row("Lifecycle", reverse("admin_lifecycle"), "bi-people"),
+            _row("Session replay", reverse("admin_session_replay"), "bi-list-ol"),
             _row("User signups", reverse("admin_user_signups") + "?days=90", "bi-person-plus"),
-            _row("User flow", reverse("admin_user_flow"), "bi-diagram-3"),
             _row("Command palette searches", reverse("command_palette_analytics"), "bi-search"),
             _row("Lots with no scientific name", reverse("species_gaps"), "bi-tags"),
             _row("Assistant skill requests", reverse("assistant_skill_requests"), "bi-stars"),
@@ -169,13 +174,18 @@ def _admin_section():
 
 
 def _about_section():
-    """Collapsed, and last. "About site" is gated on ENABLE_PROMO_PAGE exactly as the navbar gates
-    it -- a deployment with the promo page switched off has no such page to link to."""
+    """Collapsed, and last. Two rows here are gated exactly as the navbar gates them, because a
+    row only one side gates is the bug ``NavbarDriftTests`` exists to catch: "About site" on
+    ENABLE_PROMO_PAGE, since a deployment with the promo page off has no such page, and the
+    copyright row on whether a DMCA agent is configured, since ``/dmca/`` 404s without one."""
     rows = []
     if settings.ENABLE_PROMO_PAGE:
         rows.append(_row("About site", reverse("promo"), "bi-globe"))
     rows.append(_row("FAQ", reverse("faq"), "bi-question-circle"))
     rows.append(_row("Terms and Conditions", reverse("tos"), "bi-file-text"))
+    rows.append(_row("Privacy policy", reverse("privacy_policy"), "bi-shield-lock"))
+    if dmca.is_configured():
+        rows.append(_row("Copyright / DMCA", reverse("dmca"), "bi-c-circle"))
     return _section("about", rows, title="About", icon="bi-info-circle", collapsed=True)
 
 

@@ -1,14 +1,6 @@
-"""The HTTP end of the MCP server: one view, at ``/mcp/``.
+"""The HTTP end of the MCP server: one view, at ``/mcp/``. Nothing here knows what a tool is.
 
-Everything here is a rule the transport specification attaches to a status code, and nothing here
-knows what a tool is. That is the whole point of the split -- see :mod:`auctions.mcp`.
-
-**Stateless.** The spec lets a server answer a POSTed request with a single
-``Content-Type: application/json`` body instead of opening an SSE stream, and lets it refuse the
-GET stream with a ``405``. Both are taken: there is nothing this server wants to say to a client
-that the client didn't ask for, so a session id would be bookkeeping with nothing in it. The
-consequence worth knowing is that a long tool call holds a request open, which is what the rate
-limit and the resolvers' own bounded queries are for.
+Stateless: a POST gets one JSON body back, no SSE stream and no session id.
 
 ===============================  ===========================================================
 ``POST`` a JSON-RPC request      ``200 application/json``, one JSON-RPC response
@@ -22,9 +14,8 @@ good credential, feature off     ``403`` and no challenge — see ``auth.Refusal
 over the rate limit              ``429`` with ``Retry-After``
 ===============================  ===========================================================
 
-The 401 matters more than it looks: a client that gets a *tool error* saying "please log in" has
-no way to start an OAuth flow, because the flow begins with the ``WWW-Authenticate`` header on a
-401. Authentication failures are answered at this layer and never reach :mod:`protocol`.
+A 401 (not a tool error) is required so the client's OAuth flow can start from ``WWW-Authenticate``.
+Authentication failures are answered here and never reach :mod:`protocol`.
 """
 
 from __future__ import annotations
@@ -59,12 +50,8 @@ def _rpc_error(code, message, status=200):
 
 @method_decorator(csrf_exempt, name="dispatch")
 class MCPEndpointView(View):
-    """The Model Context Protocol endpoint.
-
-    ``csrf_exempt`` because the credential is a bearer token in a header, which a cross-site form
-    post cannot set. :func:`auctions.mcp.auth.authenticate` refuses session cookies outright, so
-    there is no ambient authority here for a forged request to borrow.
-    """
+    """The Model Context Protocol endpoint. ``csrf_exempt``: the credential is a bearer token, and
+    session cookies are refused outright, so there is no ambient authority to forge."""
 
     http_method_names = ["post", "get", "delete", "options"]
 
@@ -75,11 +62,7 @@ class MCPEndpointView(View):
         return super().dispatch(request, *args, **kwargs)
 
     def check_origin(self, request):
-        """Reject a cross-origin browser request outright (DNS-rebinding protection).
-
-        A real MCP client sends no ``Origin`` at all. One that does is a browser, and the only
-        browser that has any business here is one on this site.
-        """
+        """Reject a cross-origin browser request outright (DNS-rebinding protection)."""
         origin = request.META.get("HTTP_ORIGIN")
         if not origin:
             return None
@@ -107,20 +90,13 @@ class MCPEndpointView(View):
         return response
 
     def forbidden(self, message):
-        """A credential we recognised and won't act on. Deliberately *not* a 401.
-
-        No ``WWW-Authenticate``: the credential is not the problem, so telling the client to go and
-        get another one sends it round the OAuth flow to be refused again. See
-        :class:`auctions.mcp.auth.Refusal`.
-        """
+        """A credential we recognised and won't act on: 403, not 401, and no ``WWW-Authenticate``."""
         return _rpc_error(protocol.INVALID_REQUEST, message, status=403)
 
     def get(self, request, *args, **kwargs):
-        # The spec's own way of saying "I have nothing to push you".
         return HttpResponse(status=405)
 
     def delete(self, request, *args, **kwargs):
-        # No sessions are issued, so there are none to terminate.
         return HttpResponse(status=405)
 
     def post(self, request, *args, **kwargs):
@@ -143,31 +119,21 @@ class MCPEndpointView(View):
         except (ValueError, UnicodeDecodeError):
             return _rpc_error(protocol.PARSE_ERROR, "Request body was not valid JSON.", status=400)
 
-        # A batch is a JSON array. Removed from the spec in 2025-06-18 and never sent by Claude;
-        # say so rather than half-implementing it.
         if isinstance(message, list):
             return _rpc_error(protocol.INVALID_REQUEST, "Batched requests are not supported.", status=400)
 
-        # The resolvers run as this user. Setting it here rather than in a middleware keeps the
-        # substitution local to this endpoint: nothing else on the site sees a request whose user
-        # came from a bearer token.
+        # Resolvers run as this credential's user; set only on this endpoint, not via middleware.
         request.user = credential.user
         request.mcp_credential = credential
-        # What the auction history says did this, instead of "(command palette)" for everything.
-        # See ``palette_actions.via``.
-        request.assistant_surface = credential.label
+        request.assistant_surface = credential.label  # what the auction history says did this
 
         caller = protocol.Caller(
             request=request,
             writes=credential.writes,
             protocol_version=version,
-            # ``/mcp/?tools=club`` narrows the catalogue. Part of the address rather than the
-            # protocol because the protocol has nowhere to put it, and the address is the one
-            # thing every client lets a person type.
-            areas=tools.parse_areas(request.GET.get("tools", "")),
+            areas=tools.parse_areas(request.GET.get("tools", "")),  # ``?tools=club`` narrows it
         )
         answer = protocol.handle(message, caller)
         if answer is None:
-            # A notification or a client response: accepted, nothing to say back.
             return HttpResponse(status=202)
         return _json(answer)

@@ -6,6 +6,7 @@ from decimal import Decimal
 from unittest.mock import patch
 
 from django.contrib.auth.models import User
+from django.contrib.staticfiles.storage import staticfiles_storage
 from django.test import TestCase
 from django.urls import reverse
 from django.utils import timezone
@@ -1319,7 +1320,9 @@ class QuickCheckoutHTMXTests(StandardTestCase):
         url = reverse("auction_quick_checkout", kwargs={"slug": self.in_person_auction.slug})
         html = self.client.get(url).content.decode("utf-8")
         # The camera module is always shipped...
-        self.assertIn("camera_scanner.js", html)
+        # Through the storage: whether this name is hashed depends on whether collectstatic has
+        # run, which differs between CI and a dev container -- see fishauctions/static_storage.py.
+        self.assertIn(staticfiles_storage.url("js/camera_scanner.js"), html)
         # ...and the live-preview wrapper carries d-md-none so desktop never shows (or grabs) it.
         self.assertIn("d-md-none", html)
 

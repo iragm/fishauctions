@@ -11,9 +11,9 @@ to the model it annotates.
   what they bought and sold, whether they have bid, whether an admin has banned them.
 * ``add_tos_distance_info`` -- how far each of those people travelled to their pickup location.
 
-They live outside ``models.py`` because that file is at its 15000-line ceiling and none of these is
-reached from inside it. That direction of dependency is the whole arrangement: this module imports
-models, models does not import this, and there is no cycle to manage.
+They live outside ``models.py`` because none of them is reached from inside it, and that direction
+of dependency is the whole arrangement: this module imports models, models does not import this,
+and there is no cycle to manage.
 """
 
 from django.db.models import (

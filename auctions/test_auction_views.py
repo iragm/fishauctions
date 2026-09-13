@@ -20,7 +20,7 @@ from auctions.models import (
     Club,
     PayPalSeller,
 )
-from auctions.tests import StandardTestCase
+from auctions.tests import StandardTestCase, give_contact_info
 
 
 class AuctionViewPermissionTests(StandardTestCase):
@@ -342,6 +342,7 @@ class AuctionCloneCustomFieldsTests(StandardTestCase):
         # ALLOW_USERS_TO_CREATE_AUCTIONS is read from the environment, and CI's differs from dev's.
         userdata.can_create_club_auctions = True
         userdata.save()
+        give_contact_info(self.user)  # AuctionCreateView refuses somebody with no contact info
         self.client.login(username="my_lot", password="testpassword")
 
     def _copy(self, source):

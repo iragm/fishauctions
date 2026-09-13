@@ -9,6 +9,7 @@ from django.utils import timezone
 from rest_framework_simplejwt.tokens import RefreshToken
 
 from auctions.models import Auction, AuctionHistory, AuctionTOS, Club, ClubMember, PickupLocation
+from auctions.tests import give_contact_info
 
 User = get_user_model()
 
@@ -530,6 +531,7 @@ class CheckinCloneTests(TestCase):
             date_end=timezone.now() + datetime.timedelta(hours=6),
             **auction_kwargs,
         )
+        give_contact_info(creator)  # AuctionCreateView refuses somebody with no contact info
         self.client.force_login(creator)
         # Cloning is triggered by ?copy=<slug>&clone on the create-auction POST (see AuctionCreateView).
         self.client.post(

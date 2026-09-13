@@ -151,6 +151,14 @@ Everything else can be done through the UI.
 
 Note: Do not remove the default "Uncategorized" category, it's referenced in several places in the code.  It's fine to remove the other default categories.
 
+#### If you let users upload photos, you need a DMCA agent
+
+This one isn't optional and no software can do it for you.  Your users upload photos of their fish, which makes you a service provider hosting somebody else's material.  US law (17 U.S.C. 512) shelters you from what they upload only if you **register a designated agent with the Copyright Office** at [dmca.copyright.gov/osp](https://dmca.copyright.gov/osp/) -- $6, and it lapses after three years -- **and** publish that agent's details on your own site.
+
+Once you've registered, set the `DMCA_*` variables in your `.env` (they're in `.env.example`, and Admin -> Setup Checklist has copy/paste examples).  The site then publishes them at `/dmca/` with a takedown form, a counter-notice policy and a three-strike repeat-infringer policy, and links to it from the footer and the About menu.  Leave them unset and that page stays off, which is the right default for a fork -- publishing somebody else's agent would be worse than publishing none.
+
+Two things to do alongside it: say the same thing in your `tos.html` (users have to be told about the repeat-infringer policy for it to count), and set `CLOUDFLARE_ZONE_ID` and `CLOUDFLARE_CACHE_PURGE_API_TOKEN` if you run behind Cloudflare, so a removed photo actually leaves the CDN instead of being served from the edge for another month.
+
 ### Updates:
 Updates can be run by typing `./update.sh` in your VM.
 

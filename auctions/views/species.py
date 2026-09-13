@@ -164,6 +164,13 @@ class SpeciesGapsView(AdminOnlyViewMixin, TemplateView):
                 # The name resolves fine; these lots predate the answer, or the seller said no.
                 entry["verdict"] = "matches a species"
                 entry["verdict_detail"] = verdict.species.label
+            elif verdict.is_a_gap:
+                # Not the same thing as "not a species", and the distinction is the whole of the
+                # work: this one was identified, and the species list is what came up short.  It
+                # is a row for the curated CSV, and the cache row starts answering by itself the
+                # moment the import runs -- see SpeciesSearchCache.scientific_name.
+                entry["verdict"] = "missing from the list"
+                entry["verdict_detail"] = verdict.scientific_name
             elif verdict.source == "llm":
                 entry["verdict"] = "not a species"
                 entry["verdict_detail"] = "decided by the language model"
@@ -478,11 +485,19 @@ class SpeciesCreateView(AuctionAdminAnywhereViewMixin, LotNameSpeciesMixin, Crea
         return kwargs
 
     def get_initial(self):
+        from auctions.species_matching import normalize
+
         initial = super().get_initial()
         name = self._lot_name()
         if name:
             # The lot name is the best guess at the common name -- it is what people call it.
             initial["common_name"] = name[:255]
+            # ...and when the matcher already worked out what it is and only the list came up
+            # short, the scientific name is known too.  A gap row on the page behind this one is
+            # an identification nobody has to make again; retyping it here is how a typo gets in.
+            gap = SpeciesSearchCache.objects.filter(search_text=normalize(name), species__isnull=True).first()
+            if gap and gap.is_a_gap:
+                initial["scientific_name_input"] = gap.scientific_name
         return initial
 
     def get_context_data(self, **kwargs):

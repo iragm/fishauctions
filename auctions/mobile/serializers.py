@@ -46,24 +46,15 @@ class MobileGoogleAuthSerializer(serializers.Serializer):
 class MobileSocialAuthSerializer(serializers.Serializer):
     """Request body for POST /api/mobile/auth/social/ — one shape for all three providers.
 
-    Which credential field is used depends on the provider (and, for Facebook, on the platform):
-    Google and Apple send ``id_token``; Facebook sends ``id_token`` for iOS Limited Login and
-    ``access_token`` for the classic Android flow. The field-level checks here are deliberately
-    thin — everything that decides whether a credential is *genuine* happens in
-    ``auctions.mobile.services.social_auth``, which is also where the per-provider requirements are
-    enforced, so that a serializer change can't quietly weaken verification.
-
-    ``email``/``first_name``/``last_name`` are Apple's one-time first-authorization values, which
-    Apple sends outside the token. They are unauthenticated hints; see
-    ``_apply_apple_first_authorization_hints`` for exactly how far they are (not) trusted.
+    Field-level checks are deliberately thin: verification lives in
+    ``auctions.mobile.services.social_auth`` so a serializer change can't weaken it.
     """
 
     provider = serializers.ChoiceField(choices=SUPPORTED_PROVIDERS)
     id_token = serializers.CharField(required=False, allow_blank=True, write_only=True)
     access_token = serializers.CharField(required=False, allow_blank=True, write_only=True)
     authorization_code = serializers.CharField(required=False, allow_blank=True, write_only=True)
-    # The *raw* nonce; the provider was given sha256() of it. Not an email/identity field, so no
-    # length or charset rules beyond keeping it sane — the hash comparison is the real check.
+    # Raw nonce; provider holds sha256() of it -- the hash comparison is the real check.
     nonce = serializers.CharField(required=False, allow_blank=True, max_length=256, write_only=True)
     email = serializers.CharField(required=False, allow_blank=True, max_length=254)
     first_name = serializers.CharField(required=False, allow_blank=True, max_length=150)
@@ -127,7 +118,6 @@ class MobileDeviceSerializer(serializers.ModelSerializer):
     """Serialiser for MobileDevice registration / update."""
 
     device_uuid = serializers.UUIDField()
-    # FCM registration token. Optional so an app build without push still registers cleanly.
     fcm_token = serializers.CharField(required=False, allow_blank=True, default="")
 
     class Meta:
@@ -223,6 +213,47 @@ class MobileLabelsPrintedSerializer(serializers.Serializer):
     """
 
     lots = serializers.ListField(child=serializers.IntegerField(min_value=1), allow_empty=True, max_length=1000)
+    # The other half of the same report: labels that were *sent* and did not come out -- the jam, the
+    # cover left open, the roll that ran out mid-run. Optional, because only an app that can read its
+    # printer's status can fill it in (see STATUS_CONDITIONS below and the note on the view), and a
+    # printer with no status program has nothing to say. A lot named here is put back to unprinted
+    # and flagged for reprinting, so clearing the jam and pressing "print unprinted labels" prints
+    # exactly what is missing.
+    failed = serializers.ListField(
+        child=serializers.IntegerField(min_value=1), required=False, allow_empty=True, max_length=1000, default=list
+    )
+    # Machine-readable printer conditions, from the vocabulary the profiles' status_flags already
+    # decode into (auctions.printer_programs.STATUS_CONDITIONS) -- one list, not two, or the profile
+    # that says "02 means paper_jam" and the report that says "jammed" drift apart.
+    conditions = serializers.ListField(
+        child=serializers.CharField(max_length=40), required=False, allow_empty=True, max_length=20, default=list
+    )
+    # The app's own words for what went wrong, kept verbatim in the log the same way the remote-print
+    # job keeps them for the page.
+    message = serializers.CharField(required=False, allow_blank=True, default="", max_length=1000)
+
+    def validate_conditions(self, value):
+        from auctions.printer_programs import STATUS_CONDITIONS
+
+        unknown = [one for one in value if one not in STATUS_CONDITIONS]
+        if unknown:
+            msg = f"Unknown printer condition(s): {', '.join(sorted(unknown))}. Known: {', '.join(sorted(STATUS_CONDITIONS))}."
+            raise serializers.ValidationError(msg)
+        return value
+
+
+class MobileLabelBatchSerializer(serializers.Serializer):
+    """Request body for POST /api/mobile/labels/batch/ — render a whole print run in one request.
+
+    ``lots`` is the run in print order; the endpoint answers with as many as it rendered and hands
+    back the rest as ``remaining``, so the app's loop is "post what is left, print what comes back"
+    and the server decides the chunk size. ``resolution``/``dpi`` mean exactly what they mean on
+    GET labels/<pk>/ and default the same way (600x400 @ 203dpi).
+    """
+
+    lots = serializers.ListField(child=serializers.IntegerField(min_value=1), allow_empty=False, max_length=1000)
+    resolution = serializers.CharField(required=False, allow_blank=True, default="", max_length=20)
+    dpi = serializers.IntegerField(required=False, allow_null=True, default=None)
 
 
 class MobileRemotePrintProgressSerializer(serializers.Serializer):

@@ -94,8 +94,19 @@
 {% endblock %}
 {% block extra_js %}
 <script>
-  document.querySelectorAll('[data-bs-toggle="tooltip"]').forEach(function (el) {
-    if (window.bootstrap && bootstrap.Tooltip) { new bootstrap.Tooltip(el); }
-  });
+  {% comment %}Bootstrap's JS is deferred in base.html, so it does not exist yet while this runs;
+  wait for it. The `window.bootstrap` branch covers this block arriving in an HTMX swap, when
+  DOMContentLoaded has long since fired and would never fire again.{% endcomment %}
+  function initVolunteerTooltips() {
+    if (!window.bootstrap || !bootstrap.Tooltip) { return; }
+    document.querySelectorAll('[data-bs-toggle="tooltip"]').forEach(function (el) {
+      bootstrap.Tooltip.getOrCreateInstance(el);
+    });
+  }
+  if (window.bootstrap) {
+    initVolunteerTooltips();
+  } else {
+    document.addEventListener("DOMContentLoaded", initVolunteerTooltips);
+  }
 </script>
 {% endblock %}

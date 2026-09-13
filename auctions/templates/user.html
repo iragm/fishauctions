@@ -99,6 +99,7 @@
                     This user has been banned from bidding on your lots and in auctions you administer.<br><button class="btn btn-primary"  name="action_unban" type="submit">Unban</button>
                 </form>
                 {% else %}
+                {# Confirms through data-confirm (confirm_modal.js); never the browser's confirm(). #}
                 <form method="post" action="/api/users/ban/{{user.pk}}/">
                     {% csrf_token %}
                     <button class="btn btn-danger" name="action_ban" type="submit"
@@ -151,12 +152,4 @@
                 });
             </script>
             {% endif %}
-{% endblock %}
-
-
-{% block extra_js %}
-{# The Ban button confirms through data-confirm (confirm_modal.js); never the browser's confirm(). #}
-<script type="text/javascript">
-pageView();
-</script>
 {% endblock %}

@@ -1,8 +1,7 @@
 """Keeps a club's event list, its Google Calendar, and its Discord events in step.
 
-The club page renders ``ClubEvent`` rows, so anything that should appear there has to become one
-first. ``sync_auction_events`` mirrors promoted auctions into events; ``sync_all`` is what the
-periodic task calls to service every club.
+The club page renders ``ClubEvent`` rows. ``sync_auction_events`` mirrors promoted auctions into
+events; ``sync_all`` is what the periodic task calls to service every club.
 """
 
 from __future__ import annotations
@@ -17,8 +16,7 @@ from auctions import discord_events, google_calendar
 
 logger = logging.getLogger(__name__)
 
-# How long an in-person auction is assumed to run when it has no end date. Matches what the
-# Discord auction events have always used.
+# How long an in-person auction is assumed to run when it has no end date.
 DEFAULT_AUCTION_LENGTH = datetime.timedelta(hours=2)
 
 # Pickups are a "be there at this time" slot rather than a window, so they get a short block.
@@ -28,8 +26,8 @@ PICKUP_LENGTH = datetime.timedelta(minutes=15)
 def auction_event_window(auction):
     """(start, end) for an auction's calendar entry, or (None, None) when it can't be placed.
 
-    Online auctions span from the start of bidding to the end of it. In-person auctions have no
-    meaningful ``date_end`` (bidding is live in the room), so they get a fixed-length block.
+    Online auctions span start-of-bidding to end-of-bidding. In-person auctions have no meaningful
+    ``date_end``, so they get a fixed-length block.
     """
     start = auction.date_start
     if not start:
@@ -42,8 +40,7 @@ def auction_event_window(auction):
 def sync_one_auction_event(auction):
     """Create, update, or retire the single ClubEvent mirroring one auction.
 
-    Called from a post_save signal so the club's calendar tracks the auction as soon as it's
-    edited. Returns the event, or None when the auction doesn't belong on a calendar.
+    Called from a post_save signal. Returns the event, or None when it doesn't belong on a calendar.
     """
     from auctions.models import ClubEvent
 
@@ -54,16 +51,14 @@ def sync_one_auction_event(auction):
     start, end = auction_event_window(auction) if belongs else (None, None)
     if not belongs or not start:
         if event and not event.is_deleted:
-            # DB-only: this runs from the auction post_save signal, inside its transaction.
-            # purge_retired() removes the Google/Discord copies on the next sync.
+            # DB-only: runs inside the auction's save transaction; purge_retired() removes remote copies later.
             retire_event(event, remote=False)
         return None
 
     description = _auction_description(auction)
     location = _auction_location(auction)
     if event is None:
-        # get_or_create rather than create: the unique index on `auction` is the real guard, and
-        # this keeps a concurrent sync from raising instead of just no-opping.
+        # get_or_create: the unique index on `auction` guards a concurrent sync from raising.
         event, _created = ClubEvent.objects.get_or_create(
             auction=auction,
             defaults={
@@ -78,11 +73,8 @@ def sync_one_auction_event(auction):
         )
         return event
 
-    # A title or description a club admin typed is theirs and stays: the meeting details that
-    # belong on the calendar entry change every month, and the auction's own title and "In-person
-    # auction." don't. Everything else here is still owned by the auction, so an auction that
-    # moves still moves its event. Clearing the flag on the form brings the generated value back
-    # on the next save.
+    # Hand-typed title/description survive (title_is_custom/description_is_custom); everything
+    # else tracks the auction, so a moved auction still moves its event.
     keep_title = event.title_is_custom
     keep_description = event.description_is_custom
     changed = (
@@ -113,9 +105,8 @@ def sync_one_auction_event(auction):
 def sync_auction_events(club):
     """Reconcile every one of this club's auctions with its calendar.
 
-    The per-auction signal keeps things current day to day; this is the periodic backstop that
-    catches auctions saved before the club turned the feature on, and events left behind by an
-    auction that has since been unpromoted or deleted. Returns how many events changed.
+    The periodic backstop for the per-auction signal: catches auctions saved before the feature was
+    on, and events left behind by an unpromoted or deleted auction. Returns how many events changed.
     """
     from auctions.models import Auction, ClubEvent
 
@@ -127,7 +118,6 @@ def sync_auction_events(club):
                 touched += 1
             touched += sync_pickup_events(auction)
 
-    # Events whose auction is gone, unpromoted, or no longer wanted on the calendar.
     stale = ClubEvent.objects.filter(club=club, source=ClubEvent.SOURCE_AUCTION, is_deleted=False)
     stale_pickups = ClubEvent.objects.filter(club=club, source=ClubEvent.SOURCE_PICKUP, is_deleted=False)
     if club.add_auctions_to_calendar:
@@ -148,9 +138,8 @@ def sync_auction_events(club):
 def retire_event(event, *, remote=True):
     """Soft-delete an event and take it off Google Calendar and Discord.
 
-    Pass ``remote=False`` from anywhere that runs inside a transaction (the auction signal) so
-    the soft-delete stays a plain DB write. ``purge_retired(club)`` does the remote half later —
-    it picks up any soft-deleted event that still carries a remote id.
+    Pass ``remote=False`` from inside a transaction (the auction signal); ``purge_retired(club)``
+    does the remote half later, for any soft-deleted event still carrying a remote id.
     """
     event.is_deleted = True
     event.save(update_fields=["is_deleted"])
@@ -171,12 +160,10 @@ def _remove_remote(event):
     if event.discord_event_id:
         if discord_events.cancel_scheduled_event(club.discord_server_id, event.discord_event_id):
             event.discord_event_id = ""
-            # An event that comes back — a pickup time re-added, an auction re-promoted — has to
-            # be able to reach Discord again, so re-arm it rather than leaving it "already tried".
+            # Re-arm rather than leave "already tried", so a re-added time can reach Discord again.
             event.needs_discord_sync = True
             event.save(update_fields=["discord_event_id", "needs_discord_sync"])
-    # An auction's own Discord event is made by auction_emails and tracked on the auction, so it
-    # needs taking down here too — otherwise the auction disappears everywhere but Discord.
+    # An auction's own Discord event (made by auction_emails) needs taking down here too.
     auction = event.auction if event.auction_id else None
     if auction and auction.discord_event_id:
         if discord_events.cancel_scheduled_event(club.discord_server_id, auction.discord_event_id):
@@ -184,8 +171,8 @@ def _remove_remote(event):
 
             auction.discord_event_id = ""
             auction.discord_event_needs_update = False
-            # A queryset update, not auction.save(): this also runs from ClubEvent's pre_delete,
-            # where saving the auction would re-enter the mirroring signal mid-cascade.
+            # Queryset update, not .save(): also runs from ClubEvent's pre_delete, where saving
+            # the auction would re-enter the mirroring signal mid-cascade.
             Auction.objects.filter(pk=auction.pk).update(discord_event_id="", discord_event_needs_update=False)
 
 
@@ -201,38 +188,24 @@ def purge_retired(club):
 
 
 def _auction_description(auction):
-    """A short plain-text blurb for the calendar entry.
-
-    Deliberately just what kind of auction it is. The lot submission deadline used to be here and
-    was removed: it is a seller's deadline, not the event, and it landed in every member's Google
-    Calendar and Discord next to a date that had nothing to do with when to turn up.
-    """
+    """A short plain-text blurb for the calendar entry: just what kind of auction it is."""
     if auction.is_online:
         return "Online auction with in-person pickup."
     return "In-person auction."
 
 
 def auction_display_location(auction):
-    """The one address worth advertising for an auction, or "" when there isn't one.
-
-    Public wrapper over the rule the calendar entry already uses, so the website embeds show the
-    same place the club's Google Calendar does instead of inventing a second answer.
-    """
+    """The one address worth advertising for an auction, or "" -- same rule the calendar entry
+    uses, so website embeds agree with the club's Google Calendar."""
     return _auction_location(auction)
 
 
 def _auction_location(auction):
-    """Where the auction itself happens.
-
-    Online auctions have no location — the bidding happens on the website, and the addresses
-    people actually need belong on the pickup events instead. In-person auctions use their single
-    physical location; with several, no one address is the right one to advertise.
-    """
+    """Where the auction itself happens. Online auctions have none (bidding is on the website)."""
     if auction.is_online:
         return ""
-    # Count distinct *addresses*, not locations: switching an auction to in-person auto-creates a
-    # default location with no address, so counting rows would blank out the real one sitting
-    # next to it.
+    # Count distinct addresses, not locations: switching to in-person auto-creates a default
+    # location with no address, which would otherwise blank out the real one.
     addresses = {
         location.address.strip() for location in auction.physical_location_qs if (location.address or "").strip()
     }
@@ -244,19 +217,14 @@ def _auction_location(auction):
 def pickup_slots(auction):
     """Yield (location, slot, start) for each pickup time an online auction advertises.
 
-    Only online auctions get pickup events: for an in-person auction the "pickup" is the auction
-    itself, which already has its own event. Mail-only locations have no time or place to show.
-
-    An auction with several pickup locations gets none at all — only the auction's own event.
-    A member goes to exactly one of those locations, so putting all of them on the club calendar
-    (and from there into everyone's Google Calendar and Discord) buries the auction itself under
-    a pile of appointments that don't apply to them. The auction page is where you pick your
-    location; that's where the full list belongs.
+    Only online auctions get pickup events. An auction with several pickup locations gets none at
+    all -- only its own event -- since a member goes to exactly one location and the auction page,
+    not the calendar, is where they pick it.
     """
     if not auction.is_online:
         return
-    # Count locations that would actually produce an event, not rows: a half-filled location with
-    # no pickup time yet shouldn't suppress the one real location sitting next to it.
+    # Count locations that would produce an event, not rows: a half-filled location with no pickup
+    # time yet shouldn't suppress a real one next to it.
     locations = [
         location
         for location in auction.location_qs.filter(pickup_by_mail=False)
@@ -273,10 +241,8 @@ def pickup_slots(auction):
 def sync_pickup_events(auction):
     """Create, update, or retire the calendar events for an online auction's pickup times.
 
-    Each pickup time ``pickup_slots`` yields becomes its own short event at that location's
-    address, so members can see exactly when and where to collect their lots. Multi-location
-    auctions yield nothing, and any events they picked up before are retired here along with
-    cleared pickup times. Returns how many events changed.
+    Multi-location auctions yield nothing from ``pickup_slots``, and any events picked up before
+    are retired here. Returns how many events changed.
     """
     from auctions.models import ClubEvent
 
@@ -314,8 +280,7 @@ def sync_pickup_events(auction):
             )
             touched += 1
             continue
-        # Same rule as the auction event above: hand-typed wording survives, everything else
-        # tracks the pickup time. "Pickup — swap table open too" is a real thing a club says.
+        # Same rule as the auction event above: hand-typed wording survives.
         keep_title = event.title_is_custom
         keep_description = event.description_is_custom
         changed = (
@@ -341,7 +306,7 @@ def sync_pickup_events(auction):
             event.save()
             touched += 1
 
-    # Pickup times that have been cleared, or that belong to an auction no longer on the calendar.
+    # Pickup times that were cleared, or belong to an auction no longer on the calendar.
     for key, event in existing.items():
         if key not in wanted and not event.is_deleted:
             retire_event(event, remote=False)
@@ -367,15 +332,9 @@ def _pickup_description(auction, location):
 
 
 def generated_wording(event):
-    """(title, description) as this site would write them for a generated event, or ("", "").
-
-    The counterpart to ``title_is_custom`` / ``description_is_custom``: those columns say "don't
-    overwrite this", and this says what the overwrite *would* have been. The edit form needs it
-    twice — to show an admin what they are replacing, and to put it back when they press reset.
-
-    Recomputed rather than stored. It is two attribute reads and a string join, and a stored copy
-    would be one more thing that can fall out of step with the auction it came from.
-    """
+    """(title, description) as this site would generate them, or ("", "") -- what
+    title_is_custom/description_is_custom would be overwriting. Recomputed, not stored, so it can't
+    fall out of step with the auction it came from."""
     from auctions.models import ClubEvent
 
     if event.source == ClubEvent.SOURCE_AUCTION and event.auction:
@@ -390,9 +349,8 @@ def generated_wording(event):
 def refresh_recurring_events(club):
     """Move each repeating event on to the occurrence that's on now, or the next one.
 
-    One row stands for a whole series (see auctions/recurrence.py), and its ``date_start`` is what
-    every other part of the site reads. Nothing else would ever move it along, so a weekly meeting
-    would sit on the club page showing last Tuesday for ever. Returns how many moved.
+    One row stands for a whole series (see auctions/recurrence.py); nothing else moves
+    ``date_start`` along. Returns how many moved.
     """
     from auctions.models import ClubEvent
 
@@ -418,11 +376,7 @@ def sync_all():
     """Service every club that has something to sync. Returns how many clubs were touched."""
     from auctions.models import Club
 
-    # Skip clubs with nothing to do. The token column is encrypted, so it can only be tested for
-    # NULL — an empty-string token slips through and sync_club() no-ops on it, which is fine.
-    # Everything else is tested for content: `discord_server_id__isnull=False` looked like a
-    # filter but matched every club that had ever been saved with the field left blank, because
-    # a blank CharField stores "" rather than NULL.
+    # discord_server_id__gt="" not __isnull=False: a blank CharField stores "" rather than NULL.
     clubs = Club.objects.filter(
         Q(google_calendar_refresh_token__isnull=False)
         | Q(discord_server_id__gt="")
@@ -435,7 +389,6 @@ def sync_all():
         try:
             sync_club(club)
         except Exception:
-            # One club's broken integration must never stop the rest of the run.
             logger.exception("Club event sync failed for club %s", club.pk)
             continue
         count += 1
@@ -445,9 +398,7 @@ def sync_all():
 def next_member_facing_event(club):
     """The club's next event worth advertising in a membership email, or None.
 
-    Pickup events are left out on purpose: they're logistics for people who already won lots, not
-    something to invite a new or renewing member to. Cancelled events are skipped too. An event
-    that's under way still counts — "our next event" shouldn't skip past today's meeting.
+    Pickup events and cancelled events are excluded. An event under way still counts.
     """
     from auctions.models import ClubEvent
 
@@ -465,20 +416,9 @@ def next_member_facing_event(club):
 def record_website_view(club):
     """Count one impression of a club's events embed, and stamp when it happened.
 
-    The sibling of :func:`auctions.announcements.record_website_views`, and it exists for the same
-    reason: the only thing anybody can observe about a snippet pasted into somebody else's
-    WordPress is that a browser asked us for it. What it buys is one question that had no answer
-    before -- "is this club's own website showing our calendar?" -- which is what
-    ``Club.embeds_events_on_website`` reads and what the prompt on the auction page is gated on.
-
-    Two deliberate differences from the announcements counter. It counts on the **club**, not on a
-    row, so an embed that came back empty still counts: a club with nothing coming up has the
-    snippet installed exactly as much as a club with ten meetings, and that is the fact being
-    collected. And the club page here is *not* counted -- only the embed is -- because the whole
-    point of the number is to tell the club's website apart from ours.
-
-    ``F()`` rather than read-modify-write, so two visitors at the same moment can't lose each
-    other's count, and one UPDATE rather than a ``save()`` so nothing else on the row is touched.
+    Counts on the **club**, not on a row, so an embed that came back empty still counts -- a club
+    with nothing coming up has the snippet installed exactly as much as one with ten meetings. The
+    club page itself is not counted, only the embed. ``F()`` avoids read-modify-write races.
     """
     from auctions.models import Club
 
@@ -489,13 +429,7 @@ def record_website_view(club):
 
 
 def past_events(club, *, limit=5, exclude_pickups=False):
-    """The club's most recent events, newest first, for the "what we've been up to" embed.
-
-    The same rows and the same order the club page's history column shows -- newest first, so
-    ``limit=1`` is the thing that happened last. Split out of :func:`upcoming_events` rather than
-    called through it because the past embed wants nothing else that function returns, and asking
-    for ``include_past`` means also running the upcoming query and throwing it away.
-    """
+    """The club's most recent events, newest first, for the "what we've been up to" embed."""
     from auctions.models import ClubEvent
 
     now = timezone.now()
@@ -511,11 +445,8 @@ def past_events(club, *, limit=5, exclude_pickups=False):
 def upcoming_events(club, *, limit=None, include_past=False, past_limit=5, exclude_pickups=False):
     """Events for the club page: everything upcoming, plus a little recent history.
 
-    Returns (upcoming, past). ``past`` is newest-first so the most recent event is on top.
-
-    ``exclude_pickups`` drops pickup events for the same reason ``next_member_facing_event``
-    does — they're logistics for people who already won lots, not something to advertise. It
-    filters in the query rather than after the slice, so ``limit`` still counts real rows.
+    Returns (upcoming, past); past is newest-first. ``exclude_pickups`` drops pickup events for the
+    same reason ``next_member_facing_event`` does.
     """
     from auctions.models import ClubEvent
 

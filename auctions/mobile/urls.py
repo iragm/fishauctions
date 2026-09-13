@@ -19,6 +19,7 @@ from .views import (
     MobileLabelsPrintedView,
     MobileLastUsedAuctionView,
     MobileLoginView,
+    MobileLotLabelBatchView,
     MobileLotLabelView,
     MobileLotWatchView,
     MobileMyClubsView,
@@ -90,6 +91,10 @@ urlpatterns = [
     # Labels
     path("labels/prefs/", MobileLabelPrefsView.as_view(), name="mobile-label-prefs"),
     path("labels/printed/", MobileLabelsPrintedView.as_view(), name="mobile-labels-printed"),
+    # A whole print run in one request. Before "labels/<int:pk>/" because a literal path and an
+    # int converter can't collide, but the reader should meet the batch first: it is the one the
+    # app should be calling, and the per-lot GET is what a single reprint uses.
+    path("labels/batch/", MobileLotLabelBatchView.as_view(), name="mobile-labels-batch"),
     path("labels/<int:pk>/", MobileLotLabelView.as_view(), name="mobile-label-lot"),
     # Remote print jobs: labels started on a computer, printed on this phone's Bluetooth printer.
     path(

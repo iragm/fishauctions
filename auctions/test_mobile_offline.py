@@ -260,13 +260,21 @@ class MobileOfflineSyncTests(StandardTestCase):
         self.assertEqual(tos.clubmember, member)
         self.assertEqual(tos.bidder_number, member.bidder_number)
 
-    def test_add_user_keeps_the_door_number_when_the_club_number_differs(self):
+    def test_the_door_number_becomes_the_members_number_everywhere(self):
+        """The card the admin hands out wins, and in this mode it wins for the person.
+
+        This used to leave the club on its own number and let this auction alone use the card, which
+        is the drift the mode exists to prevent: the member's page showing 12, the floor showing 99,
+        and a lot knocked down by number going to whoever still held it. ``force_set_bidder_number``
+        routes through ``services.set_member_bidder_number`` instead, so the club and every auction
+        the member is in are renumbered together.
+        """
         club = self._club_manage()
         ClubMember.objects.create(club=club, name="Renamed", email="r@example.com", bidder_number="12")
         resp = self._add_user("cm4", "Renamed", bidder_number="99", email="r@example.com")
-        # The club keeps its own number; this auction uses the card the admin handed out.
         self.assertEqual(self._results_by_id(resp)["cm4"]["bidder_number"], "99")
-        self.assertEqual(ClubMember.objects.get(club=club, email="r@example.com").bidder_number, "12")
+        self.assertEqual(ClubMember.objects.get(club=club, email="r@example.com").bidder_number, "99")
+        self.assertEqual(AuctionTOS.objects.get(auction=self.auction, email="r@example.com").bidder_number, "99")
 
     def test_add_user_makes_no_club_member_without_club_management(self):
         self._add_user("cm5", "Plain Guy", bidder_number="87")

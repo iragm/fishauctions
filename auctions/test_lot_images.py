@@ -446,6 +446,77 @@ class LotImageManagementTests(StandardTestCase):
         self.assertFalse(source_lot.image_permission_check(self.user))
 
 
+class ImageSourceOnThePageTests(StandardTestCase):
+    """Which image_source labels a lot page prints.
+
+    The catch-all is a question we ask the person adding the picture -- "Not my photo - I have
+    permission to use it" -- and it is what a blank field is set to, so it lands on most rows
+    whether it was chosen or not.  It is not something to print under a photograph.
+    """
+
+    RANDOM_LABEL = dict(LotImage.PIC_CATEGORIES)["RANDOM"]
+    ACTUAL_LABEL = dict(LotImage.PIC_CATEGORIES)["ACTUAL"]
+
+    def setUp(self):
+        super().setUp()
+        self.labelled_lot = Lot.objects.create(
+            lot_name="Labelled lot",
+            auction=self.online_auction,
+            auctiontos_seller=self.online_tos,
+            user=self.user,
+            quantity=1,
+        )
+        self.image = LotImage.objects.create(
+            lot_number=self.labelled_lot,
+            url="https://example.com/labelled.jpg",
+            image_source="RANDOM",
+            is_primary=True,
+        )
+
+    def _simple_page(self):
+        return self.client.get(
+            reverse(
+                "htmx_lot",
+                kwargs={"slug": self.online_auction.slug, "custom_lot_number": self.labelled_lot.lot_number_display},
+            )
+        )
+
+    def test_the_catch_all_label_is_not_shown_on_the_lot_page(self):
+        response = self.client.get(self.labelled_lot.lot_link)
+        self.assertEqual(response.status_code, 200)
+        self.assertNotContains(response, self.RANDOM_LABEL)
+
+    def test_the_catch_all_label_is_not_shown_to_the_seller_either(self):
+        """The seller picks it on the image form; the lot page is not the image form."""
+        self.client.force_login(self.user)
+        response = self.client.get(self.labelled_lot.lot_link)
+        self.assertNotContains(response, self.RANDOM_LABEL)
+
+    def test_the_catch_all_label_is_not_shown_on_the_simple_lot_page(self):
+        self.client.force_login(self.admin_user)
+        response = self._simple_page()
+        self.assertEqual(response.status_code, 200)
+        self.assertNotContains(response, self.RANDOM_LABEL)
+
+    def test_a_sellers_own_photo_still_says_so(self):
+        """The other two labels are what a bidder is deciding on, so they stay on the page."""
+        self.image.image_source = "ACTUAL"
+        self.image.save()
+        response = self.client.get(self.labelled_lot.lot_link)
+        self.assertContains(response, self.ACTUAL_LABEL)
+
+    def test_a_caption_survives_a_hidden_label(self):
+        """The label and the caption shared one line, so dropping the label must not drop it."""
+        self.image.caption = "Second generation"
+        self.image.save()
+        response = self.client.get(self.labelled_lot.lot_link)
+        self.assertContains(response, "Second generation")
+
+    def test_source_display_is_empty_for_a_blank_source(self):
+        self.image.image_source = ""
+        self.assertEqual(self.image.source_display, "")
+
+
 class ChangeUsernameFormTest(TestCase):
     """Tests for ChangeUsernameForm to ensure @ symbol is disallowed in usernames"""
 

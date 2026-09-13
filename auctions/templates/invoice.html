@@ -4,11 +4,8 @@
 {% block title %} Invoice for {{ invoice.label }} {% endblock %}
 {% load static %}
 {% block extra_js %}
-<script type='text/javascript'>pageView();</script>
 {% if is_admin %}
 <script type='text/javascript'>
-var form_id = '#form-container';
-{% include 'leave_page_warning.js' %}
 $('#add-form').click(function() {
   cloneMore('.adjustment-form:last', 'form');
 });
@@ -551,5 +548,4 @@ document.addEventListener("DOMContentLoaded", function() {
 {% if request.user.is_superuser and show_links %}
   <a href="/admin/auctions/invoice/{{invoice.pk}}/change/" class="btn btn-info">Admin</a>
 {% endif %}
-<div id="modals-here"></div>
 {% endblock %}

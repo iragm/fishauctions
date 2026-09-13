@@ -139,7 +139,7 @@ break those.
   window applies), `set_current_auction`, `update_club_setting`, `list_club_events`,
   `list_club_members`, `sync_club_calendar` (`GoogleCalendarSyncNowView`'s body, including the
   forced re-read of whether the calendar is publicly shared), `club_website_snippets` (hands over
-  addresses and points at the page; it deliberately does **not** rebuild the iframe HTML).
+  each embed's one-line `<script src>` tag and points at the page).
 - `club_api` is the club's own REST API described to whoever is about to write against it: the keys
   it has, what each one is allowed to do, and — one `topic=` at a time — the endpoint documentation
   itself. It **renders** `_club_api_endpoints.html`, the include the key's own page draws, with an
