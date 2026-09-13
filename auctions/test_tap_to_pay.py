@@ -1,20 +1,4 @@
-"""Tests for the Tap to Pay on iPhone review-guide work (TTP-1..4).
-
-These aren't cosmetic. Apple grants the *publishing* entitlement — the one TestFlight and the App
-Store need — only after reviewing the app against the Tap to Pay on iPhone App & Marketing
-Requirements, and three of these are review blockers rather than polish:
-
-* **TTP-1 (2.2, General Requirements)** — merchant onboarding must work inside the app. Sending a
-  merchant to Safari to connect Square fails both rules, and it's the first thing the reviewer's
-  onboarding video would show.
-* **TTP-2 (5.4, 5.5)** — the button's wording comes from Apple's localization table, and an icon
-  may only be SF Symbols' ``wave.3.right.circle``. "Tap to Pay on iPhone" is also iPhone-only
-  wording, so the same template must not say it on an Android phone.
-* **TTP-3 (1.5, 5.6, 3.8)** — the reader has to start preparing when the app foregrounds, which
-  needs seller credentials before any invoice exists, and only the backend knows who is authorized
-  to accept Apple's terms.
-* **TTP-4 (5.10)** — a receipt must be sendable for every outcome, approved or declined.
-"""
+"""Tests for the Tap to Pay on iPhone review-guide work (TTP-1..4)."""
 
 from datetime import timedelta
 from io import StringIO
@@ -197,7 +181,6 @@ class TapToPayWarmUpMixin:
         self.assertIn(self.HANDLER, self._html(IOS_UA))
 
     def test_android_warms_too(self):
-        """Tap to Pay is iPhone-only wording, not an iPhone-only feature; Android readers warm too."""
         self.assertIn(self.HANDLER, self._html(ANDROID_UA))
 
     def test_nothing_is_warmed_outside_the_app(self):
@@ -224,7 +207,6 @@ class TapToPayWarmUpMixin:
         self.assertIn(".catch(", html.split(self.HANDLER)[1].split("</script>")[0])
 
     def test_the_bridge_is_checked_before_it_is_called(self):
-        """In a browser there is no ``window.flutter_inappwebview`` at all, so calling it throws."""
         script = self._html(IOS_UA).split(self.HANDLER)[0].rsplit("<script>", 1)[1]
         self.assertIn("window.flutter_inappwebview &&", script)
 
@@ -256,7 +238,6 @@ class QuickCheckoutTapToPayCopyTests(TapToPayButtonCopyMixin, TapToPayWarmUpMixi
             return self.client.get(self.url, HTTP_USER_AGENT=user_agent).content.decode()
 
     def test_button_comes_before_the_qr_block(self):
-        """5.2 — with several payment options, Tap to Pay sits at the top of the list."""
         html = self._html(IOS_UA)
         self.assertLess(html.index(f"fishauctions://pay/{self.invoice.pk}"), html.index("View or adjust invoice"))
 
@@ -498,7 +479,6 @@ class SquareAccessGateDisclosureTests(StandardTestCase):
         self.assertNotIn("reviewed before they're switched on", html)
 
     def test_the_menu_entry_stays_visible_for_someone_who_runs_an_auction(self):
-        """preferences_ribbon.html used to hide the whole Square item on square_enabled."""
         html = self.client.get(reverse("preferences"), HTTP_USER_AGENT=IOS_UA).content.decode()
         self.assertIn(reverse("square_seller"), html)
 
@@ -569,7 +549,6 @@ class SquareAccessGateDisclosureTests(StandardTestCase):
 
     @override_settings(SQUARE_APPLICATION_ID="", SQUARE_CLIENT_SECRET="")
     def test_a_site_with_no_square_app_says_that_instead_of_offering_the_queue(self):
-        """The other half of the pin above, and the reason the gate disclosure sits under it."""
         html = self._club_settings_html()
         self.assertIn("Square isn't configured on this site", html)
         self.assertNotIn("Contact us and request access", html)
@@ -616,7 +595,6 @@ class SquareCallbackReturnToAppTests(StandardTestCase):
         self.assertTemplateUsed(response, "auctions/square_connected_app.html")
 
     def test_a_session_the_app_opened_is_enough(self):
-        """The in-app browser view sends Safari's User-Agent, so the session is the only signal."""
         from auctions.mobile.services.web_session import mark_session_opened_by_app
 
         session = self.client.session
@@ -673,7 +651,6 @@ class PaymentAuthorizationEndpointTests(StandardTestCase):
         return SquareSeller.objects.create(user=user, **{**defaults, **kwargs})
 
     def test_buyer_is_not_eligible_and_gets_no_credentials(self):
-        """The gate that stands between a signed-in buyer and a merchant-wide OAuth token."""
         resp = self.client.get(self.url, **_bearer(self.buyer))
         self.assertEqual(resp.status_code, 200)
         body = resp.json()
@@ -703,7 +680,6 @@ class PaymentAuthorizationEndpointTests(StandardTestCase):
         self.assertNotIn("location_id", body)
 
     def test_legacy_seller_without_the_in_person_scope_gets_no_credentials(self):
-        """A pre-Tap-to-Pay token would fail authorize() with an opaque Square error."""
         self._seller_for(self.user, scopes="")
         self.user.userdata.last_auction_used = self.in_person_auction
         self.user.userdata.save()
@@ -713,7 +689,6 @@ class PaymentAuthorizationEndpointTests(StandardTestCase):
         self.assertNotIn("access_token", body)
 
     def test_club_auction_hands_out_the_club_token_not_the_creators(self):
-        """Same routing as create: a club's money never lands in an individual's Square account."""
         club = Club.objects.create(name="TTP Club")
         club_owner = User.objects.create_user("ttpclubowner", "ttpco@example.com", "pw")
         self._seller_for(self.user)  # the creator's personal account, to compete with the club's
@@ -731,7 +706,6 @@ class PaymentAuthorizationEndpointTests(StandardTestCase):
         del club_seller
 
     def test_club_money_manager_is_eligible(self):
-        """Requirement 3.8: whoever may accept Apple's terms is whoever may take payments."""
         club = Club.objects.create(name="Money Club")
         manager = User.objects.create_user("moneyman", "mm@example.com", "pw")
         ClubMember.objects.create(club=club, user=manager, permission_money=True)
@@ -783,7 +757,6 @@ class PaymentAuthorizationIsolationTests(StandardTestCase):
         self.assertFalse(body["eligible"])
 
     def test_plain_attendee_is_not_eligible(self):
-        """An AuctionTOS without is_admin is a buyer, not a cashier."""
         attendee = User.objects.create_user("attendee", "at@example.com", "pw")
         AuctionTOS.objects.create(user=attendee, auction=self.online_auction, pickup_location=self.location)
         body = self.client.get(reverse("mobile-payment-authorization"), **_bearer(attendee)).json()
@@ -1176,14 +1149,12 @@ class SetupChecklistTests(TestCase):
         self.assertTrue(items["Account deletion & Hide My Email"]["configured"])
 
     def test_hide_my_email_warning_is_stated_plainly(self):
-        """The failure is silent, so the page has to say so — that's the whole reason it's an item."""
         _, items = self._items()
         text = items["Account deletion & Hide My Email"]["what_it_does"]
         self.assertIn("privaterelay.appleid.com", text)
         self.assertIn("without a bounce", text)
 
     def test_apple_callback_url_has_no_accounts_prefix(self):
-        """allauth is mounted at the site root here, so the usual /accounts/ path is wrong."""
         _, items = self._items()
         steps = " ".join(items["Sign in with Apple on the website"]["setup_steps"])
         self.assertIn(reverse("apple_callback"), steps)
@@ -1221,7 +1192,6 @@ class SetupChecklistTests(TestCase):
 
     @override_settings(SQUARE_APPLICATION_ID="sq0idp-x")
     def test_entitlement_item_does_not_claim_to_know_apples_answer(self):
-        """It renders a green badge because there's no setting — say so, or it reads as a claim."""
         _, items = self._items()
         self.assertIn(
             "can't tell whether Apple has granted it", items["Apple's publishing entitlement"]["what_it_does"]
@@ -1285,7 +1255,6 @@ class TapToPayAwarenessOfferTests(StandardTestCase):
         self.assertIn(self.HANDLER, self._html())
 
     def test_never_on_the_web(self):
-        """There is no handler in a browser, and no modal to show."""
         self.assertNotIn(self.HANDLER, self._html("Mozilla/5.0"))
 
     def test_not_offered_without_a_connected_square_account(self):
@@ -1320,6 +1289,5 @@ class OffersTapToPayPropertyTests(StandardTestCase):
         self.assertFalse(Auction.objects.get(pk=self.in_person_auction.pk).offers_tap_to_pay)
 
     def test_oauth_started_but_never_finished(self):
-        """No merchant id means the OAuth handshake never completed; there is no account to charge to."""
         SquareSeller.objects.create(user=self.user, square_merchant_id="", scopes="PAYMENTS_WRITE_IN_PERSON")
         self.assertFalse(Auction.objects.get(pk=self.in_person_auction.pk).offers_tap_to_pay)

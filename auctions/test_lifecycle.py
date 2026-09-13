@@ -1,22 +1,4 @@
-"""Tests for phase 9: the milestones, the lapsing definition, the session replay and the cohorts.
-
-Three of these have teeth beyond "the function returns a number".
-
-**The lapsing definition** is the one most likely to be got wrong by a later edit, and it is wrong
-in a way that reads as good news: counting a right-censored person as retained makes every
-retention number look better than it is.  ``test_the_last_auction_cannot_report_lapsing`` and
-``test_somebody_who_came_back_is_not_lapsed`` are the ratchet on that.
-
-**The sign-in stitch** has one non-obvious mechanic and the whole feature rests on it:
-``django.contrib.auth.login`` cycles the session key *before* it sends ``user_logged_in``, so a
-receiver that reads ``request.session.session_key`` records the key issued a moment ago and stitches
-a sign-in to itself.  ``test_the_stitch_records_the_key_the_browser_sent`` fails if anybody
-"simplifies" the cookie read back to the session.
-
-**The median member has to be a real person.**  A later edit to a mean, or to the top of the
-distribution, would be invisible on a fixture where everybody did the same thing -- so the fixture
-here has one power user in it, which is the case the median exists to survive.
-"""
+"""Tests for phase 9: milestones, lapsing definition, session replay and cohorts."""
 
 from datetime import timedelta
 
@@ -42,8 +24,6 @@ from auctions.usability_report import route_name
 
 
 class ClubHistoryFixture(TestCase):
-    """A club with four auctions and people who came and went between them."""
-
     @classmethod
     def setUpTestData(cls):
         cls.owner = User.objects.create_user(username="cohort_owner", password="x")
@@ -73,8 +53,6 @@ class ClubHistoryFixture(TestCase):
 
 
 class LapsingTests(ClubHistoryFixture):
-    """Lapsing is counted in the club's own auctions, and the last one cannot report it."""
-
     def test_somebody_who_stopped_coming_is_lapsed(self):
         person = User.objects.create_user(username="lapser", password="x")
         self.join(self.auctions[0], user=person, number="10")
@@ -108,12 +86,6 @@ class LapsingTests(ClubHistoryFixture):
         self.assertFalse(measurable)
 
     def test_a_person_with_no_account_is_still_the_same_person_next_time(self):
-        """The non-user persona: an organizer typed them in, and the email is all there is.
-
-        Without this the seller who brings lots on a piece of paper is a new person at every
-        auction, and a club that keeps the same members forever reads as one that replaces all of
-        them every time.
-        """
         self.join(self.auctions[0], email="Paper@Example.com", number="20")
         self.join(self.auctions[1], email="paper@example.com", number="21")
         lapsed, measurable = lifecycle.lapsed_participants(self.club, self.auctions[0])
@@ -133,7 +105,6 @@ class CohortTests(ClubHistoryFixture):
         self.assertEqual(cohorts[self.auctions[2].pk].returning, 1)
 
     def test_joining_is_not_participating(self):
-        """ "Participated" is bought or sold -- never "logged in", and never merely joined."""
         joiner = User.objects.create_user(username="joiner_only", password="x")
         buyer = User.objects.create_user(username="cohort_buyer", password="x")
         self.join(self.auctions[1], user=joiner, number="31")
@@ -154,15 +125,12 @@ class CohortTests(ClubHistoryFixture):
         self.assertEqual(row.new_who_participated, 2)
 
     def test_cohorts_are_oldest_first(self):
-        """A trend read backwards is a different trend."""
         rows = lifecycle.club_cohorts(self.club)
         dates = [row.auction.date_start for row in rows]
         self.assertEqual(dates, sorted(dates))
 
 
 class SignInStitchTests(TestCase):
-    """The one row phase 9 adds, and the mechanic the whole thing rests on."""
-
     def setUp(self):
         self.password = "a-long-enough-password"
         self.person = User.objects.create_user(
@@ -173,13 +141,6 @@ class SignInStitchTests(TestCase):
         EmailAddress.objects.create(user=self.person, email=self.person.email, verified=True, primary=True)
 
     def test_the_stitch_records_the_key_the_browser_sent(self):
-        """Not the key ``login()`` cycled to a moment before the signal fired.
-
-        ``django.contrib.auth.login`` calls ``session.cycle_key()`` *before* sending
-        ``user_logged_in``, so a receiver reading ``request.session.session_key`` gets the new key
-        and stitches the sign-in to itself -- recording a row that joins nothing.  The cookie is
-        what the browser sent, which is the key every anonymous ``PageView`` in the visit carries.
-        """
         # An anonymous visit first, so the client is holding a session key when it signs in.
         self.client.get(reverse("allLots"))
         before = self.client.session.session_key

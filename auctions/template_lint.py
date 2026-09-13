@@ -1,29 +1,15 @@
-"""Catches template mistakes that are silent -- no error, no warning, just a wrong page.
+"""Catches two silent template mistakes: no error, no warning, just a wrong page.
 
-Two of them so far: a template tag that never renders as a tag, and a second element claiming the
-one id every modal is swapped into.
+Django's lexer is ``({%.*?%}|{{.*?}}|{#.*?#})`` with no ``re.DOTALL``, so every template tag must
+open and close on the same line -- a tag split across two lines renders onto the page as text with
+no error. Use ``{% comment %} … {% endcomment %}`` for anything that needs more than one line.
 
-Django's lexer is ``({%.*?%}|{{.*?}}|{#.*?#})`` with no ``re.DOTALL``, so **every** template
-tag has to open and close on the same line. A tag spread over two lines isn't a syntax error and
-nothing warns about it — Django simply doesn't recognise it and copies it to the output, where
-members read it. The usual way this happens is a comment that grew too long for one line::
+The other check is ``id="modals-here"``: base.html renders that container once, per page. A second
+element with the same id makes htmx and ``document.querySelector`` swap into whichever comes first,
+so modals stop opening once that one is swapped away.
 
-    {# Subscribing, not downloading: the plain .ics link is a one-time import that never
-       updates again, so it's the last item rather than the button. #}
-
-which puts that entire note, ``#}`` and all, on the club page. Use ``{% comment %} … {% endcomment %}``
-for anything that needs more than one line.
-
-The second is ``id="modals-here"``. base.html renders that container once, on every page; a
-template that declares its own puts two elements with one id on the page, and htmx and
-``document.querySelector`` both take the first in document order. The two then take turns being
-destroyed, which reads as "the modal opens twice and then stops" and had been chased three times as
-a bug in the modal code. (print.html, the other base, deliberately has none -- it loads neither htmx
-nor htmx_modal.js, so nothing there can open a modal in the first place.)
-
-Pure stdlib and no Django import, so this runs three ways off one implementation: as a unit test
-(``auctions/test_template_hygiene.py``), from the lint script, and as a pre-commit hook —
-``python3 -m auctions.template_lint``.
+Pure stdlib, no Django import: runs as a unit test (``auctions/test_template_hygiene.py``), from the
+lint script, and as a pre-commit hook (``python3 -m auctions.template_lint``).
 """
 
 from __future__ import annotations
@@ -38,15 +24,12 @@ TAG_PAIRS = {"{%": "%}", "{{": "}}", "{#": "#}"}
 # Balanced tags, so what's left on a line is anything unpaired.
 BALANCED_TAG = re.compile(r"\{%.*?%\}|\{\{.*?\}\}|\{#.*?#\}")
 
-# Closers worth reporting on their own, for the line an unclosed opener spills onto (and for the
-# orphan left behind when someone deletes the opening line of a multi-line comment). "}}" is
-# missing on purpose: minified JavaScript and CSS end nested blocks with it all the time.
+# "}}" is excluded: minified JS/CSS legitimately ends nested blocks with it.
 ORPHAN_CLOSERS = ("%}", "#}")
 
 TEMPLATE_SUFFIXES = (".html", ".txt")
 
-# The modal container, and the one template allowed to declare it: everything else inherits
-# base.html's -- see the module docstring.
+# The one template allowed to declare the modal container; everything else inherits base.html's.
 MODAL_CONTAINER = 'id="modals-here"'
 MODAL_CONTAINER_OWNERS = ("templates/base.html",)
 
@@ -54,12 +37,8 @@ MODAL_CONTAINER_OWNERS = ("templates/base.html",)
 def iter_template_files(root):
     """Every template under ``root``, found by directory name rather than by asking Django.
 
-    Keeps this importable without settings configured, and picks up templates in any app.
-
-    ``root`` may also be a single **file**, so the same entry point serves the whole tree (CI) and
-    one template (the edit hook in ``.claude/hooks/``). Without that, a file path here matched no
-    ``templates`` directory and the checker reported nothing at all -- a lint that always passes,
-    which is worse than not having one.
+    ``root`` may also be a single file, so one entry point serves both the whole tree (CI) and one
+    template (the edit hook in ``.claude/hooks/``).
     """
     root = Path(root)
     if root.is_file():

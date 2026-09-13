@@ -1,12 +1,4 @@
-"""Tests for Part 3 — AR lot scanning & location mapping, plus the two Part 1/2 follow-up fixes.
-
-* Solver geometry (``auctions.ar_mapping``): synthetic scenes recovered up to a similarity
-  transform, outlier rejection, moved-lot convergence, prior-continuity (no flip), metric scale.
-* Mobile API (``ar/lots``, ``ar/observations``, ``ar/positions``): auth, caps, per-user flags,
-  label fields, clamping/dropping, dirty flag, payload shapes.
-* Web: admin-only lot map + data + clear, and the widened QR scan counter.
-* Follow-ups: ``/lots/my-last-auction/`` redirect and the ``escpos-raster`` seed width.
-"""
+"""Tests for Part 3 — AR lot scanning & location mapping, plus the two Part 1/2 follow-up fixes."""
 
 import json
 import math
@@ -314,7 +306,6 @@ class ArHeadingOdometryTests(TestCase):
         self.assertLess(_ab_direction_error_deg(sol), 6.0)
 
     def test_without_yaw_direction_is_unconstrained(self):
-        """Pin the value of the feature: the same scan, minus yaw, does NOT recover the direction."""
         sol = solve_positions(_walk_observations(uuid.uuid4(), with_yaw=False, now=self.now), {}, now=self.now)
         self.assertGreaterEqual(set(sol), set(_ALL_CLUSTER_LOTS))
         self.assertGreater(_ab_direction_error_deg(sol), 15.0)
@@ -325,7 +316,6 @@ class ArHeadingOdometryTests(TestCase):
         self.assertLess(_ab_direction_error_deg(sol), 8.0)
 
     def test_yawless_session_no_regression(self):
-        """Old-app data (no yaw) still solves the well-conditioned co-visible scene as before."""
         obs = _gen_observations(SQUARE, CAMS, uuid.uuid4(), now=self.now)  # yaw_deg defaults to None
         sol = solve_positions(obs, {}, now=self.now)
         self.assertEqual(set(sol), set(SQUARE))
@@ -940,7 +930,6 @@ class ArObservationsEndpointTests(ArApiBaseTestCase):
         resp = self._post(self.user, self._batch(det))
         self.assertEqual(resp.status_code, 400)
 
-    # --- yaw_deg (gyro heading) ----------------------------------------------
     def test_yaw_persisted_on_every_detection_row(self):
         det = [
             {"lot": self.lot_a.pk, "bearing_deg": 0.0, "depression_deg": 20.0},
@@ -982,7 +971,6 @@ class ArObservationsEndpointTests(ArApiBaseTestCase):
         self._post(self.user, payload)
         self.assertEqual(LotObservation.objects.get(auction=self.auction).yaw_deg, 1080.0)
 
-    # --- GPS (island anchoring) ----------------------------------------------
     def test_gps_persisted_on_every_detection_row(self):
         det = [
             {"lot": self.lot_a.pk, "bearing_deg": 0.0, "depression_deg": 20.0},
@@ -1035,7 +1023,6 @@ class ArObservationsEndpointTests(ArApiBaseTestCase):
         self.assertIsNone(obs.latitude)
         self.assertIsNone(obs.longitude)
 
-    # --- heading_deg (absolute compass heading) ------------------------------
     def test_heading_persisted_on_every_detection_row(self):
         det = [
             {"lot": self.lot_a.pk, "bearing_deg": 0.0, "depression_deg": 20.0},
@@ -1077,7 +1064,6 @@ class ArObservationsEndpointTests(ArApiBaseTestCase):
         self._post(self.user, payload)
         self.assertEqual(LotObservation.objects.get(auction=self.auction).heading_deg, 270.0)
 
-    # --- odo_x_m/odo_y_m (translation dead-reckoning) -------------------------
     def test_odo_persisted_on_every_detection_row(self):
         det = [
             {"lot": self.lot_a.pk, "bearing_deg": 0.0, "depression_deg": 20.0},

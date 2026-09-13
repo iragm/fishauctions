@@ -1,32 +1,16 @@
 """The map of this repository: which module does what, generated from the modules themselves.
 
-There is no hand-written overview of this codebase and there deliberately never will be. An
-overview is the kind of document that is true the day it is written and quietly wrong three months
-later, and a wrong map is worse than no map -- it sends a reader to the wrong file with confidence.
-So this file *derives* the map, out of two things that live next to the code and move when it
-moves: each module's **docstring** and its **top-level names**. ``docs/module_map.md`` is the
-output, it is checked in so it can be read without running anything, and
-:mod:`auctions.test_module_map` fails the build if it stops matching what this script produces.
+Derived from each module's **docstring** and **top-level names**, never hand-written, so it cannot
+drift from the code. ``docs/module_map.md`` is the output; :mod:`auctions.test_module_map` fails
+the build if it stops matching what this script produces.
 
-One check rides along with the generation, because the map is only as good as what it is reading:
-**a module over** :data:`DOCSTRING_REQUIRED_OVER` **lines must have a module docstring.** That is
-the whole anti-drift mechanism, stated as a rule. A docstring sits in the diff of the change that
-invalidates it, which is the only reliable moment to fix a description; a separate document does
-not, and that is why separate documents rot. The threshold is high enough that a small helper
-module is not made to explain itself.
+Rule enforced here: **a module over** :data:`DOCSTRING_REQUIRED_OVER` **lines must have a module
+docstring.** No line limit otherwise -- split a file when splitting makes it easier to work in.
 
-**There is no line limit here, and there should not be one.** Files in this repository get split
-when splitting makes them easier to work in -- less to read to find the thing you came for -- and
-that is a judgement about a particular file, not a number a script can hold anybody to. A line
-count has no opinion about whether a module is doing one job or five.
-
-Run it directly to check, or with ``--write`` to regenerate the map:
-
-    python3 auctions/module_map.py            # check: map current, rules met (this is what CI runs)
+    python3 auctions/module_map.py            # check (what CI runs)
     python3 auctions/module_map.py --write     # regenerate docs/module_map.md
 
-It imports nothing from Django and touches no database, so it runs in a bare pre-commit
-environment as happily as inside the container.
+No Django import, no database, so it runs in a bare pre-commit environment.
 """
 
 from __future__ import annotations
@@ -52,9 +36,7 @@ the "which file do I open" index. It is not documentation -- the docstring in th
 this only quotes its opening sentence.
 """
 
-# Directories whose contents are not this project's prose-worthy source: generated, vendored, or
-# somebody else's. `migrations` is the big one -- 294 files that are the schema's history rather
-# than modules anybody reads top to bottom.
+# Generated, vendored, or otherwise not this project's source. `migrations` is the big one.
 SKIP_DIR_NAMES = frozenset(
     {
         "__pycache__",
@@ -73,9 +55,7 @@ SKIP_TOP_LEVEL = frozenset({"swag", ".git", ".github", "logs", "mediafiles", "st
 
 DOCSTRING_REQUIRED_OVER = 300
 
-# A module's top-level names are listed only when there are few enough of them to be an answer.
-# A truncated list ("+58 more") is not an index of anything -- grep does that job better -- and it
-# was two thirds of this file's size when the map listed every module's names.
+# Symbols are listed only when few enough to be an answer; a truncated list is not an index.
 MAX_SYMBOLS_SHOWN = 10
 
 
@@ -87,7 +67,7 @@ class Module:
         try:
             self.rel = path.relative_to(REPO_ROOT).as_posix()
         except ValueError:
-            # A module built from source text in a test, which has no place in the tree.
+            # A module built from source text in a test, with no place in the tree.
             self.rel = path.as_posix()
         if source is None:
             source = path.read_text(encoding="utf-8", errors="replace")
@@ -147,9 +127,7 @@ def render(modules: list[Module]) -> str:
             lines.append(f"{package.summary}\n")
         for module in entries:
             if module.is_package and (package is module or not module.summary):
-                # A package's own docstring is the directory's heading above; printing it again as
-                # an `__init__.py` row says the same sentence twice.
-                continue
+                continue  # already shown as the directory's heading above
             name = pathlib.PurePosixPath(module.rel).name
             lines.append(f"- **`{name}`** ({module.line_count} lines)")
             if module.summary:

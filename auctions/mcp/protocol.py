@@ -1,25 +1,11 @@
 """JSON-RPC 2.0 and the MCP methods, with no HTTP in it.
 
-:func:`handle` takes one decoded JSON-RPC message and a :class:`Caller`, and returns the message
-to send back -- or ``None`` when the input was a notification and there is nothing to answer.
-Whoever calls it decides what that means on the wire; :mod:`auctions.mcp.transport` turns ``None``
-into a ``202``.
-
-Keeping this layer free of ``HttpRequest`` is what makes the transport replaceable: everything
-below is dicts, and every rule that has an HTTP status attached to it (methods, headers, origins)
-lives one module up. The one exception is :attr:`Caller.request`, which is passed straight through
-to the resolvers because they need a real Django request to run the same views the web UI runs --
-it is carried, never inspected.
-
-Only the methods this server actually implements are here. MCP is a large protocol and most of it
-is optional, and a capability we declare is one a client is entitled to use -- so nothing here is
-stubbed. What is implemented is tools, resources (the ``ui://`` widget documents and the
-addressable reads in :mod:`auctions.mcp.resources`), prompts, and the argument completion that
-makes a prompt's ``auction`` argument something a person can pick rather than spell.
-
-Everything still absent needs the server to speak first -- elicitation, sampling, progress,
-subscriptions -- and this transport answers one POST with one JSON body and holds no session. See
-``docs/mcp_next.md``, which says so once so nobody rediscovers it.
+:func:`handle` takes one decoded JSON-RPC message and a :class:`Caller` and returns the reply, or
+``None`` for a notification (:mod:`auctions.mcp.transport` turns that into a ``202``). No
+``HttpRequest`` handling here -- :attr:`Caller.request` passes straight through to resolvers
+untouched. Only implemented methods are declared (a declared capability is one a client may use);
+what is missing (elicitation, sampling, progress, subscriptions) needs a session this transport
+does not hold -- see ``docs/mcp_next.md``.
 """
 
 from __future__ import annotations
@@ -36,14 +22,11 @@ from . import icons, prompts, resources, tools, widgets
 
 logger = logging.getLogger(__name__)
 
-#: What we speak, newest first. ``initialize`` echoes the client's version when it is one of
-#: these, and otherwise answers with the first -- which is the spec's own way of saying "this is
-#: what I have; take it or disconnect".
+#: What we speak, newest first. ``initialize`` echoes the client's version if supported, else the first.
 SUPPORTED_PROTOCOL_VERSIONS = ("2025-11-25", "2025-06-18", "2025-03-26")
 LATEST_PROTOCOL_VERSION = SUPPORTED_PROTOCOL_VERSIONS[0]
 
-#: The version assumed when an HTTP request carries no ``MCP-Protocol-Version`` header, per the
-#: transport spec's backwards-compatibility rule.
+#: Assumed when a request carries no ``MCP-Protocol-Version`` header.
 ASSUMED_PROTOCOL_VERSION = "2025-03-26"
 
 SERVER_NAME = "auction-site"
@@ -57,8 +40,7 @@ METHOD_NOT_FOUND = -32601
 INVALID_PARAMS = -32602
 INTERNAL_ERROR = -32603
 
-#: What the host is told this server is, on ``initialize``. A statement of what is here, not an
-#: instruction about how to behave with it -- the same line connector review draws.
+#: What the host is told this server is, on ``initialize``.
 INSTRUCTIONS = (
     "Tools for running and taking part in fish auctions and aquarium club membership on this "
     "site: lots, bidders, check-in, invoices, club members and breeder award points. Every tool "
@@ -82,21 +64,13 @@ INSTRUCTIONS = (
 
 @dataclass
 class Caller:
-    """Who is on the other end of one request, and what they are allowed to do.
-
-    ``request`` is a Django ``HttpRequest`` with ``.user`` already set by :mod:`auctions.mcp.auth`.
-    It is handed to the resolvers untouched -- they instantiate real views with it -- and read
-    nowhere in this module.
-    """
+    """Who is on the other end of one request, and what they are allowed to do."""
 
     request: Any
     writes: bool = True
-    #: The optional ``?tools=`` filter from the endpoint URL. Empty means the whole catalogue.
-    areas: set = field(default_factory=set)
-    #: Negotiated protocol version, for a handler that ever needs to branch on it. None so far.
+    areas: set = field(default_factory=set)  # ``?tools=`` filter; empty means the whole catalogue
     protocol_version: str = LATEST_PROTOCOL_VERSION
-    #: Set by ``initialize`` so a log line can say which client this was.
-    client: dict[str, Any] = field(default_factory=dict)
+    client: dict[str, Any] = field(default_factory=dict)  # set by ``initialize``
 
     @property
     def user(self):
@@ -121,9 +95,7 @@ def is_notification(message: Any) -> bool:
         return False
     if "id" not in message:
         return True
-    # A response *to us*. We send no server-initiated requests, so this can only be noise, but the
-    # spec says take it and answer 202 rather than erroring.
-    return "method" not in message
+    return "method" not in message  # a response to us; we send no server-initiated requests
 
 
 def negotiate(requested: Any) -> str:
@@ -139,38 +111,19 @@ def _initialize(caller: Caller, params: dict[str, Any]) -> dict[str, Any]:
     caller.client = client if isinstance(client, dict) else {}
     return {
         "protocolVersion": caller.protocol_version,
-        # Only what is implemented. ``listChanged`` is false and stays false: this server holds no
-        # session and offers no server-initiated stream (see ``transport``), so there is nowhere to
-        # send the notification a ``true`` here would promise. What the list depends on -- the
-        # caller's permissions -- can change while a host has it cached, so being made a club admin
-        # does not reveal the club tools until the host lists them again. In practice that is one
-        # conversation (Claude lists per session) or one press of Refresh (ChatGPT's app settings),
-        # and the recovery path holds either way: ``tools.call_tool`` looks a name up in the whole
-        # registry, so an agent that knows the name of a tool it was not offered can still call it
-        # and the resolver decides. ``/ai/`` says this in the page's own words.
         "capabilities": {
+            # listChanged/subscribe all false: no session, no server-initiated stream to notify on.
+            # A permission change (e.g. becoming a club admin) needs a fresh tools/list to show up;
+            # tools.call_tool still looks up any name in the full registry regardless.
             "tools": {"listChanged": False},
-            # The ui:// widget documents and the addressable reads. ``subscribe`` and
-            # ``listChanged`` are both false and stay false for the same reason
-            # ``tools.listChanged`` is: no session, no server-initiated stream, nowhere to send the
-            # notification a ``true`` would promise. Nothing here is polled either -- a data
-            # resource is read on demand and is as current as the read.
             "resources": {"subscribe": False, "listChanged": False},
-            # The recipes. Fixed text in a module, so there is genuinely nothing to notify about.
             "prompts": {"listChanged": False},
-            # Argument completion for those recipes. An empty object is the whole declaration:
-            # the capability has no options.
             "completions": {},
         },
         "serverInfo": {
-            # ``name`` is the stable identifier a host stores; ``title`` is what a person reads,
-            # so it takes the deployment's own domain -- one of these tools' answers is about
-            # *this* site, and a host that has three of them connected has to be able to tell.
             "name": SERVER_NAME,
             "title": getattr(settings, "SITE_DOMAIN", "") or SERVER_TITLE,
             "version": SERVER_VERSION,
-            # What somebody looks for by sight in a list of every connector they have added, which
-            # is the site's own mark and not one of the five tool icons. See auctions.mcp.icons.
             "icons": icons.server(),
             "websiteUrl": f"https://{icons.domain()}/",
         },
@@ -179,24 +132,13 @@ def _initialize(caller: Caller, params: dict[str, Any]) -> dict[str, Any]:
 
 
 def _tools_list(caller: Caller, params: dict[str, Any]) -> dict[str, Any]:
-    # No cursor: the whole catalogue is at most a few dozen small descriptors, and paginating it
-    # would cost a round trip to save nothing.
     return {"tools": tools.tool_descriptors(caller.user, writes=caller.writes, areas=caller.areas)}
 
 
 def _resources_list(caller: Caller, params: dict[str, Any]) -> dict[str, Any]:
-    """The ``ui://`` widget documents plus the two ``me://`` reads. Not paginated: there are seven.
-
-    Unfiltered by permission on purpose, and the two kinds of entry earn that separately. A widget
-    is a *template* -- an empty lot card, an empty invoice table -- and holds nobody's data; what
-    fills it is a tool result the caller already had to be allowed to fetch. The ``me://`` reads
-    hold plenty of data, but they are the same URI for every caller, so knowing one exists says
-    nothing about anybody; the answer is permission-checked when it is read.
-
-    What is deliberately **not** here is anything concrete with a slug in it. A list of
-    ``auction://spring-2027`` would be a list of which auctions exist handed to whoever asked, so
-    enumeration stays in the tools, where it is behind a check that knows whose auctions they are.
-    """
+    """The ``ui://`` widget documents plus the two ``me://`` reads, unfiltered by permission -- a
+    widget is an empty template and the ``me://`` reads are checked when read. No concrete slugs
+    here (e.g. ``auction://spring-2027``): that would enumerate auctions to whoever asked."""
     return {"resources": widgets.resource_descriptors() + resources.fixed_descriptors()}
 
 
@@ -210,9 +152,7 @@ def _resources_read(caller: Caller, params: dict[str, Any]) -> dict[str, Any] | 
     if not isinstance(uri, str) or not uri.strip():
         return _Problem(INVALID_PARAMS, "A resource uri is required.")
     uri = uri.strip()
-    # The widget documents first: they are static and need no request, and their scheme cannot
-    # collide with a data resource's.
-    contents = widgets.read_resource(uri)
+    contents = widgets.read_resource(uri)  # widget schemes first; they need no request
     if contents is None:
         contents = resources.read(caller.request, uri)
     if contents is None:
@@ -236,13 +176,8 @@ def _prompts_get(caller: Caller, params: dict[str, Any]) -> dict[str, Any] | _Pr
 
 
 def _completion_complete(caller: Caller, params: dict[str, Any]) -> dict[str, Any] | _Problem:
-    """Suggestions for one prompt argument. The half that makes a prompt argument usable.
-
-    Only ``ref/prompt`` is answered. A ``ref/resource`` completion would be asked to complete an
-    auction slug inside ``auction://{auction}``, and answering it means listing this person's
-    auctions in response to a URI pattern -- which is the enumeration ``resources/list`` is
-    careful not to do. The tools answer that question, with the permission check attached.
-    """
+    """Suggestions for one prompt argument. Only ``ref/prompt`` is answered -- ``ref/resource``
+    would mean enumerating auctions by URI pattern, which ``resources/list`` avoids too."""
     reference = params.get("ref")
     argument = params.get("argument")
     if not isinstance(reference, dict) or not isinstance(argument, dict):
@@ -261,8 +196,6 @@ def _tools_call(caller: Caller, params: dict[str, Any]) -> dict[str, Any] | _Pro
     try:
         return tools.call_tool(caller.request, name, params.get("arguments"), writes=caller.writes)
     except tools.UnknownTool:
-        # A name that isn't in the registry is a protocol error, not a tool that failed: the
-        # client asked for something tools/list never offered.
         return _Problem(INVALID_PARAMS, f"There is no tool called “{name}”.")
 
 
@@ -271,16 +204,8 @@ def _ping(caller: Caller, params: dict[str, Any]) -> dict[str, Any]:
 
 
 class _Problem(NamedTuple):
-    """A handler saying "send this instead", rather than a result. Becomes a JSON-RPC error.
-
-    This was an exception, and the dispatcher pulled its message back out with ``str(problem)``.
-    That is a value we wrote ourselves, but "the text of a caught exception is written into an HTTP
-    response" is exactly the shape of an accidental traceback disclosure, and neither a reader nor a
-    static analyser can tell the two apart by looking. Nothing here is exceptional anyway -- a
-    client naming a tool that does not exist is an ordinary Tuesday -- so a returned value says it
-    better than a raise does, and the ``except Exception`` below is left meaning only what it says:
-    the protocol layer itself broke.
-    """
+    """A handler saying "send this instead" of a result; becomes a JSON-RPC error. A return value
+    rather than a raised exception, so it can't look like an accidental traceback disclosure."""
 
     code: int
     message: str
@@ -319,9 +244,7 @@ def handle(message: Any, caller: Caller) -> dict[str, Any] | None:
     try:
         result = handler(caller, params)
     except Exception:
-        # A resolver that raises is already caught inside run_action and turned into a tool error,
-        # so reaching here means the protocol layer itself broke. Say so without a traceback: no
-        # part of what we send back is derived from the exception.
+        # A resolver's own errors are caught in run_action; reaching here means protocol itself broke.
         logger.exception("MCP handler for %s failed", method)
         return error(message_id, INTERNAL_ERROR, "Something went wrong handling that request.")
     if isinstance(result, _Problem):

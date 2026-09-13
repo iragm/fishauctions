@@ -1,14 +1,4 @@
-"""Tests for what the command palette assistant can *do*.
-
-The first test is the important one, and like the route audit it isn't really a test of behaviour:
-it is the rule that every capability on this site is either a palette skill or something somebody
-has written down a reason for skipping.
-
-``auctions/test_palette_routes.py`` already guarantees the assistant can reach every *page*. That
-turned out to be half a guarantee: a URL that adds a club member is not a page, so the route audit
-excused it as a "JSON/HTMX endpoint" and everyone moved on -- and the assistant went on not knowing
-how to add a club member. This is the other half.
-"""
+"""Tests for what the command palette assistant can *do*."""
 
 import datetime
 import json
@@ -66,7 +56,6 @@ class SkillAuditTests(SimpleTestCase):
         )
 
     def test_the_audit_actually_sees_the_site(self):
-        """A guard against the walk silently matching nothing and the audit passing on air."""
         audit = palette_actions.audit_skills()
         self.assertGreater(len(audit["covered"]) + len(audit["excused"]), 100)
         self.assertGreater(len(audit["covered"]), 10)
@@ -114,7 +103,6 @@ class SkillAuditTests(SimpleTestCase):
         )
 
     def test_the_write_surface_is_found_by_class_not_by_url_name(self):
-        """Several capabilities have no URL name at all; they must still be audited."""
         views = palette_actions.postable_views()
         self.assertIn("WatchOrUnwatch", views)
         self.assertEqual(views["WatchOrUnwatch"], [])
@@ -190,7 +178,6 @@ class EditLotTests(SkillTestCase):
         self.assertEqual(self.my_lot.quantity, 4)
 
     def test_naming_the_lot_does_not_rename_it(self):
-        """'change the editable shrimp quantity' must not rename the lot to 'Editable Shrimp'."""
         self._run("edit_lot", {"name": "editable shrimp", "quantity": 2})
         self.my_lot.refresh_from_db()
         self.assertEqual(self.my_lot.lot_name, "Editable Shrimp")
@@ -243,7 +230,6 @@ class InvoiceStatusTests(SkillTestCase):
         self.assertEqual(self.buyer_invoice.status, "DRAFT")
 
     def test_an_invoice_that_is_already_paid_is_not_paid_twice(self):
-        """Marking PAID books club ledger entries, so doing it again is not a harmless no-op."""
         Invoice.objects.filter(pk=self.buyer_invoice.pk).update(status="PAID")
         result = self._run(
             "set_invoice_status",
@@ -310,7 +296,6 @@ class HistoryVocabularyTests(SimpleTestCase):
             self.assertEqual(words.get(value.lower()), value)
 
     def test_settings_means_a_different_thing_on_each_table(self):
-        """The reason the two synonym tables are written out separately rather than shared."""
         auction = palette_actions.history_words(AuctionHistory, palette_actions._AUCTION_HISTORY_WORDS)
         club = palette_actions.history_words(ClubHistory, palette_actions._CLUB_HISTORY_WORDS)
         self.assertEqual(auction["settings"], "RULES")
@@ -339,7 +324,6 @@ class ClubHistoryTests(ClubSkillTestCase):
         self.assertEqual(result["changes"][0]["about"], "MEMBERSHIP")
 
     def test_a_word_that_only_means_something_on_the_auction_side_is_refused(self):
-        """'invoices' is an auction category; accepting it here would answer nothing, quietly."""
         result = self._run("club_history", {"club": self.club.slug, "about": "invoices"}, user=self.admin_user)
         self.assertIn("error", result)
 
@@ -514,7 +498,6 @@ class SkillPromptTests(StandardTestCase):
                 self.assertIn(name, offered)
 
     def test_the_tool_list_is_filtered_but_the_server_is_not(self):
-        """A skill the tool list didn't mention is still accepted -- filtering is not a permission."""
         from auctions import palette_assist
 
         offered = {tool["name"] for tool in palette_assist.tools_for(self.user)}
@@ -522,13 +505,11 @@ class SkillPromptTests(StandardTestCase):
         self.assertIsNotNone(palette_actions.get_action("award_points"))
 
     def test_the_prompt_is_filtered_but_the_server_is_not(self):
-        """A skill the prompt didn't mention is still accepted -- filtering is not a permission."""
         offered = {action.name for action in palette_actions.actions_for(self.user)}
         self.assertNotIn("award_points", offered)
         self.assertIsNotNone(palette_actions.get_action("award_points"))
 
     def test_writes_are_never_advertised_as_safe(self):
-        """A ``safe`` action runs during assist with no countdown, so it must not change anything."""
         for action in palette_actions.ACTIONS.values():
             if action.danger == palette_actions.DANGER_SAFE:
                 self.assertTrue(
@@ -571,7 +552,6 @@ class CreateAuctionTests(SkillTestCase):
         )
 
     def test_a_copy_is_never_listed_publicly(self):
-        """The source is promoted; copying it is not a second decision to advertise it."""
         self._run(
             "create_auction",
             {"title": "Quiet Copy", "date_start": self.when, "copy_from": self.in_person_auction.slug},
@@ -596,7 +576,6 @@ class CreateAuctionTests(SkillTestCase):
         self.assertIn(result["copied_from"], {self.online_auction.slug, self.in_person_auction.slug})
 
     def test_somebody_with_nothing_to_copy_is_sent_to_the_page(self):
-        """A first auction is twenty decisions and stays a form. The answer has to say where."""
         userdata = self.user_with_no_lots.userdata
         userdata.can_create_club_auctions = True
         userdata.save()
@@ -714,7 +693,6 @@ class LotImageTests(SkillTestCase):
         self.assertTrue(remaining.is_primary, "the lot would show a placeholder with no primary")
 
     def test_lots_with_no_picture_can_be_listed(self):
-        """'for any of my lots that don't have images' — the question the whole skill is for."""
         result = self._run(
             "list_lots", {"status": "mine", "without_images": True, "auction": self.in_person_auction.slug}
         )
@@ -765,7 +743,6 @@ class AuctionWideLotImageTests(SkillTestCase):
         self.assertTrue(LotImage.objects.filter(lot_number=self.someone_elses_lot).exists())
 
     def test_a_club_officer_running_a_club_auction_can_too(self):
-        """The clause that was missing: in a club-managed auction admin comes from the club."""
         club = Club.objects.create(name="Photo Club", active=True)
         self.in_person_auction.club = club
         self.in_person_auction.manage_users_through_club = "all"
@@ -821,7 +798,6 @@ class ClubManagedParticipantTests(ClubSkillTestCase):
         self.assertEqual(result["bidder_number"], "62")
 
     def test_the_summary_never_reads_back_the_error_placeholder(self):
-        """The reported bug: 'Set Jane Seller's bidder number to ERROR'."""
         result = self._run(
             "update_person",
             {"person": "Managed Mike", "auction": self.in_person_auction.slug, "bidder_number": "63"},
@@ -908,7 +884,6 @@ class UndoCheckInTests(SkillTestCase):
         self.assertTrue(AuctionTOS.objects.filter(auction=self.in_person_auction, checked_in__isnull=False).exists())
 
     def test_there_is_no_way_to_clear_the_whole_auction_in_one_call(self):
-        """The bound that makes prompt injection expensive is 'no tool changes more than one row'."""
         action = palette_actions.ACTIONS["undo_check_in"]
         self.assertNotIn("everyone", action.params)
         before = AuctionTOS.objects.filter(auction=self.in_person_auction, checked_in__isnull=False).count()
@@ -921,7 +896,6 @@ class UndoCheckInTests(SkillTestCase):
         )
 
     def test_the_list_an_agent_clears_from_is_a_read(self):
-        """ "uncheck everybody" is list_people then one call each, and this is the list."""
         result = self._run(
             "list_people", {"auction": self.in_person_auction.slug, "status": "checked_in"}, user=self.admin_user
         )
@@ -992,7 +966,6 @@ class MembershipCardTests(ClubSkillTestCase):
         self.assertIn("error", result)
 
     def test_it_cannot_be_asked_about_anybody_else(self):
-        """There is no parameter for a person, and the club filter cannot reach another member."""
         action = palette_actions.ACTIONS["my_membership"]
         self.assertEqual(set(action.params), {"club"})
         result = self._run("my_membership", {"club": self.club.name}, user=self.user)
@@ -1094,8 +1067,6 @@ class LotSpeciesTests(SkillTestCase):
         userdata.can_create_club_auctions = True
         userdata.save()
 
-    # --- set_lot_species ---
-
     def test_an_exact_scientific_name_lands_on_the_lot(self):
         result = self._run("set_lot_species", {"lot": "Yellow lab", "species": "Neocaridina davidi"})
         self.assertTrue(result.get("ok"), result)
@@ -1104,7 +1075,6 @@ class LotSpeciesTests(SkillTestCase):
         self.assertEqual(result["species"]["scientific_name"], self.cherry.full_scientific_name)
 
     def test_with_no_name_given_it_reads_the_lots_own_name(self):
-        """The fix for a lot added by a route that filled nothing in."""
         SpeciesCommonName.objects.create(species=self.yellow_lab, name="yellow lab", source="admin")
         result = self._run("set_lot_species", {"lot": "Yellow lab"})
         self.assertTrue(result.get("ok"), result)
@@ -1112,7 +1082,6 @@ class LotSpeciesTests(SkillTestCase):
         self.assertEqual(self.lot.species, self.yellow_lab)
 
     def test_two_candidates_is_a_question_not_a_pick(self):
-        """A wrong species reaches a printed label and breeder points, so no match beats a guess."""
         make_species("Neocaridina", "palmata", "Cherry shrimp")
         result = self._run("set_lot_species", {"lot": "Yellow lab", "species": "cherry shrimp"})
         self.assertIn("more_info_needed", result)
@@ -1179,8 +1148,6 @@ class LotSpeciesTests(SkillTestCase):
         self.assertTrue(result["remembered_the_lot_name"], result)
         self.assertTrue(SpeciesSearchCache.objects.filter(search_text__contains="yellow lab").exists())
 
-    # --- name_a_species ---
-
     def test_naming_a_species_makes_the_matcher_find_it(self):
         result = self._run(
             "name_a_species",
@@ -1206,7 +1173,6 @@ class LotSpeciesTests(SkillTestCase):
         self.assertEqual(self.lot.species, self.yellow_lab)
 
     def test_a_name_that_belongs_to_another_species_is_refused(self):
-        """One name on two species is the loss of a name, not the gain of one."""
         result = self._run(
             "name_a_species",
             {"species": "Labidochromis caeruleus", "names": "Cherry shrimp"},
@@ -1221,8 +1187,6 @@ class LotSpeciesTests(SkillTestCase):
             user=self.user_who_does_not_join,
         )
         self.assertIn("error", result)
-
-    # --- add_species ---
 
     def test_adding_a_species_and_putting_it_on_the_lot(self):
         result = self._run(
@@ -1284,7 +1248,6 @@ class RequestASkillTests(SkillTestCase):
         self.assertIn("bidder 12", row.reason)
 
     def test_a_name_with_no_reason_is_a_question(self):
-        """The name on its own does not say what the tool is for, and that sentence is the value."""
         result = self._run("request_a_skill", {"skill": "refund an invoice"})
         self.assertIn("more_info_needed", result)
         self.assertFalse(AssistantSkillRequest.objects.exists())
@@ -1297,7 +1260,6 @@ class RequestASkillTests(SkillTestCase):
         self.assertIn("better", rows.first().reason)
 
     def test_two_people_asking_is_two_rows_and_it_says_so(self):
-        """A duplicate is the evidence, which is why they are counted and not merged."""
         self._run("request_a_skill", {"skill": "refund an invoice", "reason": "Mine."})
         result = self._run("request_a_skill", {"skill": "refund an invoice", "reason": "Theirs."}, user=self.admin_user)
         self.assertEqual(AssistantSkillRequest.objects.filter(skill="refund an invoice").count(), 2)
@@ -1369,7 +1331,6 @@ class AssistantSkillRequestsPageTests(StandardTestCase):
         self.assertEqual(response["Location"], f"{self.url}?status=planned")
 
     def test_the_referrer_is_never_where_it_goes(self):
-        """Built out of reverse() and one validated word. A referrer is an open redirect."""
         self.admin_user.is_superuser = True
         self.admin_user.save()
         self.client.login(username="admin_user", password="testpassword")
@@ -1450,8 +1411,6 @@ class PointsDeskTests(ClubSkillTestCase):
     def _names(self, result):
         return {row["name"].strip("«»") for row in result.get("lots", [])}
 
-    # --- the queue ----------------------------------------------------------
-
     def test_pending_is_what_the_desk_has_to_decide(self):
         result = self._run("points_queue", {"club": self.club.name}, user=self.admin_user)
         self.assertTrue(result.get("found"), result)
@@ -1482,12 +1441,10 @@ class PointsDeskTests(ClubSkillTestCase):
         self.assertEqual(row["the_site_says"], "eligible")
 
     def test_a_lot_name_is_fenced(self):
-        """Forty characters somebody else typed, read by an agent holding the write scope."""
         result = self._run("points_queue", {"club": self.club.name}, user=self.admin_user)
         self.assertTrue(result["lots"][0]["name"].startswith("«"))
 
     def test_a_status_nobody_recognises_is_refused_rather_than_defaulted(self):
-        """Quietly answering "pending" hands back a real list that is not the one asked for."""
         result = self._run("points_queue", {"club": self.club.name, "status": "unsold"}, user=self.admin_user)
         self.assertIn("isn't a status I know", result.get("error", ""))
 
@@ -1500,8 +1457,6 @@ class PointsDeskTests(ClubSkillTestCase):
         self.club.save()
         result = self._run("points_queue", {"club": self.club.name}, user=self.admin_user)
         self.assertIn("doesn't run a breeder award program", result.get("error", ""))
-
-    # --- deciding one -------------------------------------------------------
 
     def test_approving_with_no_number_uses_the_clubs_own_rules(self):
         from auctions.models import BapAward
@@ -1551,7 +1506,6 @@ class PointsDeskTests(ClubSkillTestCase):
         self.assertEqual(self._names(queue), {"Waiting Wagtails"})
 
     def test_undoing_a_lot_nobody_has_decided_is_a_quiet_no_op(self):
-        """It declares itself idempotent, so a retried call must not come back an error."""
         from auctions.models import ClubHistory
 
         result = self._run("review_points", {"lot_id": self.pending_lot.pk, "decision": "undo"}, user=self.admin_user)
@@ -1559,7 +1513,6 @@ class PointsDeskTests(ClubSkillTestCase):
         self.assertFalse(ClubHistory.objects.filter(club=self.club, applies_to="BAP").exists())
 
     def test_every_decision_lands_in_the_clubs_history(self):
-        """Including undo, which used to roll back the other two and leave no trace at all."""
         from auctions.models import ClubHistory
 
         for decision in ("approve", "deny", "undo"):
@@ -1584,15 +1537,12 @@ class PointsDeskTests(ClubSkillTestCase):
         self.assertFalse(BapAward.objects.filter(lot=self.pending_lot).exists())
 
     def test_hap_points_at_a_club_with_no_separate_hap_are_refused_by_name(self):
-        """A refusal a click cannot produce: the page only ever shows the one column."""
         result = self._run("review_points", {"lot_id": self.pending_lot.pk, "hap_points": 5}, user=self.admin_user)
         self.assertIn("separate HAP", result.get("error", ""))
 
     def test_an_unknown_decision_is_refused_rather_than_guessed(self):
         result = self._run("review_points", {"lot_id": self.pending_lot.pk, "decision": "maybe"}, user=self.admin_user)
         self.assertIn("error", result)
-
-    # --- the seller's own side ----------------------------------------------
 
     def test_my_points_says_what_they_have(self):
         from auctions.models import BapAward
@@ -1603,7 +1553,6 @@ class PointsDeskTests(ClubSkillTestCase):
         self.assertEqual(result["points"]["clubs"][0]["points"]["bap"], 17)
 
     def test_the_summary_names_every_track_the_club_runs(self):
-        """A plant club's whole answer is in the HAP column."""
         from auctions.models import BapAward
 
         self.club.separate_hap = True
@@ -1690,7 +1639,6 @@ class PlaceBidTests(SkillTestCase):
         self.assertIn("more_info_needed", result)
 
     def test_a_host_is_told_to_ask_first(self):
-        """``destructive`` here means "cannot be taken back", not "overwrites a row"."""
         from auctions.mcp import tools
 
         action = palette_actions.get_action("place_bid")
@@ -1786,7 +1734,6 @@ class InvoiceLineTests(SkillTestCase):
         self.assertEqual([line["amount"] for line in result["adjustments"]], ["+$5.00"])
 
     def test_an_invoice_answers_at_its_own_address(self):
-        """``invoice://{auction}/{person}`` — the first resource about a pair of things."""
         from auctions.mcp import resources
 
         matched = resources.match(f"invoice://{self.in_person_auction.slug}/555")
@@ -1833,12 +1780,10 @@ class SendingAMembershipCardTests(ClubSkillTestCase):
         self.assertTrue(ClubHistory.objects.filter(club=self.club, action__contains="rita@example.com").exists())
 
     def test_the_address_is_the_one_on_the_membership_and_not_one_in_the_request(self):
-        """There is no parameter for an address, which is what makes widening this safe."""
         action = palette_actions.get_action("send_membership_card")
         self.assertEqual(set(action.params), {"person", "club"})
 
     def test_the_persons_name_is_never_read_as_the_club(self):
-        """``_club_or_problem(also=…)`` takes a *club* hint; ``person`` is not one."""
         result = self._send({"person": "Renewable Rita"})
         self.assertTrue(result.get("ok"), result)
 
@@ -1858,7 +1803,6 @@ class SendingAMembershipCardTests(ClubSkillTestCase):
         self.assertIn("error", result)
 
     def test_the_card_is_no_longer_drawn_in_the_senders_chat_window(self):
-        """It can send another member's card now, and their barcode is the wrong receipt for that."""
         from auctions.mcp import widgets
 
         self.assertNotIn("send_membership_card", widgets.TOOL_WIDGETS)
@@ -1943,7 +1887,6 @@ class MembershipCardPrivacyTests(ClubSkillTestCase):
         self.assertEqual(action.aliases, set(), "an alias would be a second way to name a person")
 
     def test_a_club_admin_asking_for_a_card_gets_their_own(self):
-        """``_my_memberships`` matches on ``ClubMember.user``; the club filter cannot reach past it."""
         result = self._run("my_membership", {"club": self.club.name}, user=self.admin_user)
         self.assertEqual(result["membership"]["membership_number"], 4001)
         self.assertNotIn(4100, self._numbers_in(result))
@@ -1954,7 +1897,6 @@ class MembershipCardPrivacyTests(ClubSkillTestCase):
         self.assertNotIn(4100, self._numbers_in(result))
 
     def test_no_other_read_hands_out_a_barcode(self):
-        """The club-side reads an admin has: neither carries the scannable half."""
         for name, params in (
             ("list_club_members", {"club": self.club.name}),
             ("describe_club", {"club": self.club.name}),
@@ -1963,7 +1905,6 @@ class MembershipCardPrivacyTests(ClubSkillTestCase):
             self.assertNotIn("barcode", json.dumps(result).lower(), name)
 
     def test_only_the_callers_own_membership_can_build_a_card(self):
-        """A guard on the shape rather than on one call site: every card comes from one helper."""
         card = palette_actions._membership_card(self.club_admin)
         self.assertIn("barcode_url", card)
         self.assertIn("membership_number", card)
@@ -1994,7 +1935,6 @@ class LotQueueTests(SkillTestCase):
         return self._run("lot_queue", payload, user=user or self.user_with_no_lots)
 
     def test_a_plain_bidder_can_read_the_queue(self):
-        """The Lot queue *page* is admin-only. This is the one place the two differ on purpose."""
         result = self._queue()
         self.assertTrue(result["found"], result)
         self.assertEqual(result["current_lot"]["lot_number"], self.queued[0].lot_number_display)
@@ -2012,7 +1952,6 @@ class LotQueueTests(SkillTestCase):
         )
 
     def test_a_match_reports_where_it_really_is_in_the_running_order(self):
-        """Third in the queue has to read as third, not as "second in the two things I matched"."""
         result = self._queue({"query": "ancistrus"})
         self.assertEqual([row["position"] for row in result["queue"]], ["now", 3])
 
@@ -2051,7 +1990,6 @@ class MemberListPrivacyTests(ClubSkillTestCase):
             self.assertNotIn("has_an_account", row)
 
     def test_asking_who_has_no_account_still_answers(self):
-        """The filter is a question somebody asked on purpose; the column was on every row."""
         result = self._run("list_club_members", {"club": self.club.name, "status": "no_account"}, user=self.admin_user)
         # Fenced, like every other name somebody else typed that reaches a model.
         self.assertEqual([row["name"] for row in result["members"]], ["«Renewable Rita»"])
@@ -2095,7 +2033,6 @@ class SeveralLotsOfTheSameThingTests(SkillTestCase):
         self.assertEqual(len(self._names()), 3)
 
     def test_donations_under_one_bidder_number(self):
-        """'add 5 donation lots under the club's account' — the batch's own defaults still apply."""
         result = self._add({"lots": ["fish"], "count": 5, "bidder": "504", "donation": True})
         self.assertTrue(result.get("ok"), result)
         self.assertEqual(Lot.objects.filter(auction=self.in_person_auction, donation=True).count(), 5)
@@ -2115,7 +2052,6 @@ class SeveralLotsOfTheSameThingTests(SkillTestCase):
         self.assertEqual(self._names(), [])
 
     def test_the_cap_counts_lots_and_not_entries(self):
-        """Two entries asking for twenty-five each is fifty lots, however few names were sent."""
         result = self._add(
             {
                 "lots": [
@@ -2152,7 +2088,6 @@ class RemainingLotsTests(SkillTestCase):
         self.assertEqual(result["count"], 1)
 
     def test_without_a_query_the_whole_status_comes_back(self):
-        """The regression this closes: ``query`` was accepted and silently dropped."""
         self.assertGreater(self._list({"status": "unsold"})["count"], 1)
 
     def test_the_species_answers_for_a_lot_whose_name_does_not(self):
@@ -2375,7 +2310,6 @@ class RefundTests(SkillTestCase):
         self.assertEqual(self.buyer_invoice.invoiceadjustment_set.count(), 0)
 
     def test_a_settled_invoice_does_not_stop_the_ordinary_refund_but_is_said_out_loud(self):
-        """The dialog's own behaviour: record the refund, and tell them to settle up in the room."""
         Invoice.objects.filter(pk=self.buyer_invoice.pk).update(status="PAID")
         result = self._refund({"percent": 100})
         self.assertTrue(result.get("ok"), result)
@@ -2449,13 +2383,11 @@ class PageOnlyWriteRegistryTests(SimpleTestCase):
             self.assertNotIn(view, palette_actions.NOT_A_SKILL, f"{view} is in both tables")
 
     def test_the_retired_excuse_is_not_in_use(self):
-        """``_NEEDS_THE_ROW`` argued about saying a row name out loud. Nothing may hide behind it."""
         retired = palette_actions._RETIRED_NEEDS_THE_ROW
         using = [view for view, reason in palette_actions.NOT_A_SKILL.items() if reason == retired]
         self.assertEqual(using, [], "Write the real reason for these instead of the retired one.")
 
     def test_no_excuse_still_argues_about_speech(self):
-        """The tell for an excuse written about the palette rather than about the capability."""
         speech = ("out loud", "spoken sentence", "misheard", "into a microphone", "by voice")
         offenders = []
         for view, reason in palette_actions.NOT_A_SKILL.items():
@@ -2467,7 +2399,6 @@ class PageOnlyWriteRegistryTests(SimpleTestCase):
         self.assertEqual(offenders, [], "These excuses are arguments about speech, which /mcp/ does not do.")
 
     def test_every_page_only_write_changes_exactly_one_row_shape(self):
-        """No bulk writes, whatever the surface. The second prompt-injection bound has no exceptions."""
         for name in (
             "remove_lot",
             "queue_lot",
@@ -2526,7 +2457,6 @@ class RemoveLotTests(SkillTestCase):
         self.assertFalse(self.standalone.is_deleted)
 
     def test_the_auctions_own_rules_still_decide(self):
-        """``Lot.can_be_deleted`` is the whole guard, and the refusal repeats its reason."""
         result = self._run("remove_lot", {"lot": self.lot.lot_name})
         if result.get("ok"):
             # The fixture lot happened to be deletable; the point is that nothing bypassed the check.
@@ -2867,7 +2797,6 @@ class HideChatMessageTests(SkillTestCase):
         self.assertIn("more_info_needed", result)
 
     def test_the_seller_of_the_lot_is_not_an_auction_admin(self):
-        """A lot's owner may not moderate its chat -- that is the auction's job, not theirs."""
         result = self._run(
             "hide_chat_message",
             {"lot": self.lot.lot_name, "message": "crook", "auction": self.online_auction.title},
@@ -3201,7 +3130,6 @@ class PermissionSeparationTests(SkillTestCase):
         return result
 
     def test_an_auction_admin_gets_no_club_powers(self):
-        """The direction that must never leak. Running an auction says nothing about the club."""
         from auctions.models import ClubBapGenusOverride, ClubMoney
 
         club = self.sep_club.name
@@ -3223,7 +3151,6 @@ class PermissionSeparationTests(SkillTestCase):
         self.assertFalse(ClubMoney.objects.filter(club=self.sep_club).exists())
 
     def test_a_membership_secretary_is_not_an_auction_admin(self):
-        """permission_add_edit is about people. It is not a key to the auction."""
         from auctions.models import LotHistory, LotQueueEntry
 
         message = LotHistory.objects.create(
@@ -3243,7 +3170,6 @@ class PermissionSeparationTests(SkillTestCase):
         self.assertFalse(message.removed)
 
     def test_but_a_membership_secretary_may_still_manage_people_in_a_club_managed_auction(self):
-        """The deliberate crossover, asserted so that removing it is a failure and not a surprise."""
         spare = AuctionTOS.objects.create(
             auction=self.sep_auction, pickup_location=self.sep_location, name="Typed Twice", bidder_number="902"
         )
@@ -3254,7 +3180,6 @@ class PermissionSeparationTests(SkillTestCase):
         self.assertFalse(AuctionTOS.objects.filter(pk=spare.pk).exists())
 
     def test_the_points_desk_is_not_the_member_list(self):
-        """Two club permissions, two answers. permission_manage_bap does not edit members."""
         club = self.sep_club.name
         self._refused(
             "set_member_active", {"person": "Ordinary Member", "active": False, "club": club}, self.points_officer
@@ -3264,7 +3189,6 @@ class PermissionSeparationTests(SkillTestCase):
         self.assertFalse(self.sep_member.is_deleted)
 
     def test_the_member_list_is_not_the_points_desk(self):
-        """And the other way round, which is the half a shared 'club admin' check would get wrong."""
         from auctions.models import ClubBapGenusOverride
 
         self._refused(
@@ -3273,7 +3197,6 @@ class PermissionSeparationTests(SkillTestCase):
         self.assertFalse(ClubBapGenusOverride.objects.filter(club=self.sep_club).exists())
 
     def test_a_club_officer_who_runs_auctions_does_become_an_auction_admin(self):
-        """The other deliberate crossover: permission_manage_auctions, on the club's own auctions."""
         from auctions.models import LotQueueEntry
 
         ClubMember.objects.filter(user=self.club_officer, club=self.sep_club).update(permission_manage_auctions=True)
@@ -3282,7 +3205,6 @@ class PermissionSeparationTests(SkillTestCase):
         self.assertTrue(LotQueueEntry.objects.filter(auction=self.sep_auction).exists())
 
     def test_an_ordinary_bidder_inside_the_auction_gets_nothing(self):
-        """The third persona: in the room, joined, and holding no permission at all."""
         from auctions.models import LotHistory
 
         AuctionTOS.objects.create(

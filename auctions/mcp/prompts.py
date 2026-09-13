@@ -1,23 +1,9 @@
-"""Prompts: the recipes, offered to the *person* rather than to the model.
+"""Prompts: multi-step recipes offered to the *person* to pick off a menu, not to the model.
 
-MCP's prompts are the primitive this server was missing for the longest, and the reason to want
-them is not that they are new syntax. A tool is chosen by a model reading a description; a prompt
-is chosen by a person picking it out of a menu. That difference is what makes a prompt the only
-safe place on this server for a **multi-step recipe**: an instruction the model follows because a
-tool result told it to is the whole prompt-injection problem, and an instruction the model follows
-because somebody picked it off a menu is just a menu.
-
-So the recipes that were prose in ``INSTRUCTIONS`` and in the resolver docstrings live here, where
-they cost nothing until somebody asks for one -- which is also the token argument: none of this is
-in the system prompt, and ``prompts/list`` is a few hundred bytes.
-
-Five of them, and every one is a job that is several tool calls in a particular order with a
-particular thing to be careful about. Anything that is one call is a tool and does not belong here.
-
-Nothing in a prompt is filled in from a tool result. The arguments come from the person (a host
-offers ``completion/complete`` to help them, and :func:`complete` answers it out of the auctions
-and clubs they are actually in), and everything else is a constant written in this file. A prompt
-that interpolated a lot description would be a prompt-injection surface with a menu entry.
+A tool is chosen by a model reading a description; a prompt is chosen by a person, which is why a
+prompt is the only safe place for a multi-step recipe -- an instruction the model follows because
+somebody picked it off a menu is not prompt injection. Nothing in a prompt body is filled in from a
+tool result; only the person's own arguments are interpolated.
 """
 
 from __future__ import annotations
@@ -188,23 +174,13 @@ def descriptors() -> list[dict[str, Any]]:
 
 
 def prompt_list() -> tuple[Prompt, ...]:
-    """Every prompt. Not filtered by permission, and that is the same call ``resources/list`` makes.
-
-    A prompt is a recipe with no data in it. Offering "chase unpaid invoices" to somebody who runs
-    no auction costs them a menu entry that answers with a refusal the first time they use it;
-    filtering the menu would instead tell anybody who listed it which of these jobs they are
-    allowed to do, which is a fact about their permissions and buys nothing.
-    """
+    """Every prompt, unfiltered by permission -- filtering the menu would leak who can do what."""
     return PROMPTS
 
 
 def render(name: str, arguments: dict[str, Any] | None) -> dict[str, Any] | None:
-    """One prompt, filled in. ``None`` when there is no prompt by that name.
-
-    An argument the person did not give is left as a readable placeholder rather than blank, so
-    "chase the unpaid invoices for the auction you are in" still reads as a sentence -- and the
-    model then has to ask, which is the right thing for it to do.
-    """
+    """One prompt, filled in; ``None`` for an unknown name. A missing argument becomes a readable
+    placeholder so the model has to ask, rather than blank."""
     prompt = BY_NAME.get(name)
     if prompt is None:
         return None
@@ -223,21 +199,13 @@ def render(name: str, arguments: dict[str, Any] | None) -> dict[str, Any] | None
     }
 
 
-#: How many suggestions ``completion/complete`` returns. The spec caps a page at 100; a person
-#: picking an auction out of a dropdown does not want ninety-nine of them.
+#: How many suggestions ``completion/complete`` returns.
 COMPLETION_LIMIT = 20
 
 
 def complete(user, kind: str, typed: str) -> list[str]:
-    """Values to offer for one prompt argument. The half of prompts that makes them usable.
-
-    An auction slug is exactly the thing a person cannot type from memory, and without this a
-    prompt argument is a free-text box that gets the auction wrong -- which is worse than no
-    argument at all, because the recipe then runs confidently against last spring's auction.
-
-    Scoped to what this person is actually in (``palette_actions._my_auctions``, the same list
-    ``my_context`` answers with), so completing an argument can never enumerate the site.
-    """
+    """Values to offer for one prompt argument, scoped to what this person is actually in so
+    completion can never enumerate the site."""
     typed = (typed or "").strip().lower()
     if kind == "auction":
         values = []

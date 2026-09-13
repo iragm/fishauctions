@@ -6,35 +6,19 @@
     manage.py import_fishbase --databases slb # opt in to SeaLifeBase as well
     manage.py import_fishbase --purge slb     # delete rows from a source nothing points at
 
-Three files are the whole dependency (see :mod:`auctions.fishbase` for why the version is pinned
-and why SeaLifeBase is no longer loaded by default):
+Reads ``species.parquet``, ``comnames.parquet`` and ``families.parquet`` (joined on SpecCode and
+FamCode; see :mod:`auctions.fishbase` for why the version is pinned). Known misspellings are
+dropped. Rows are matched on (source, SpecCode) so re-running updates in place.
 
-* ``species.parquet``  -- SpecCode, Genus, Species, FBname, Fresh/Brack/Saltwater, FamCode,
-  Aquarium
-* ``comnames.parquet`` -- ComName, Language, SpecCode, PreferredName, Misspelling
-* ``families.parquet`` -- FamCode, Family, Order
+Two idempotent passes run after the download, and can be run alone when only the mapping/list has
+changed (``--only-categories``, ``--only-curated``): the **curated aquarium list**
+(:mod:`auctions.aquarium_species` -- plants, inverts, live foods, cultivars FishBase lacks) and
+**categories** (:mod:`auctions.species_categories` -- family/order mapped onto site Category rows).
 
-joined on SpecCode and FamCode.  Known misspellings are dropped: surfacing those as suggestions
-would teach people the wrong name for their fish.
-
-Re-running is safe.  Rows are matched on (source, SpecCode) -- the two databases both number from
-1, so the source is half the key -- which means a second run updates in place rather than
-duplicating, and a species someone's lot already points at keeps its primary key.
-
-Two passes run after the download, both of them idempotent and both worth running on their own
-(``--only-categories``, ``--only-curated``) when the mapping or the list has changed but the
-snapshot hasn't:
-
-* the **curated aquarium list** (:mod:`auctions.aquarium_species`) -- plants, invertebrates, live
-  foods, and the fish cultivars, which FishBase has none of
-* **categories** (:mod:`auctions.species_categories`) -- family and order mapped onto the site's
-  own Category rows, so a lot with a species stops needing the keyword guesser
-
-and one that only matters the first time: **legacy rows**.  A site that has been running since
-before the species list existed has a handful of hand-typed rows left over from the old
-``Product`` table.  They are matched by scientific name, any lots pointing at them are moved onto
-the real row, and the leftover is deleted; anything that doesn't match is left alone with its
-genus and epithet filled in so it at least searches properly.  ``--keep-legacy`` skips it.
+One more only matters the first time: **legacy rows**, hand-typed leftovers from the old
+``Product`` table. Matched by scientific name; lots pointing at a match move onto the real row and
+the leftover is deleted, otherwise it's left with genus/epithet filled in so it searches properly.
+``--keep-legacy`` skips it.
 """
 
 import io
@@ -53,21 +37,15 @@ from auctions.species_categories import assign_categories
 
 logger = logging.getLogger(__name__)
 
-#: Only these become searchable common names.  FishBase carries 300+ languages; every extra one is
-#: tens of thousands of rows that make an English-language search slower and noisier.
+#: Only these become searchable common names; FishBase's 300+ languages would bloat English search.
 DEFAULT_LANGUAGES = ("English",)
 
-#: Rows per bulk_create batch.  Big enough to be fast, small enough not to blow max_allowed_packet.
+#: Rows per bulk_create batch: fast, without blowing max_allowed_packet.
 BATCH_SIZE = 2000
 
 
 def _strip_nulls(value):
-    """Return *value* as a clean string.
-
-    FishBase columns contain embedded null bytes here and there -- ``fb_tbl()`` in rfishbase has
-    explicit handling for the same thing.  MySQL rejects them on insert with an unhelpful error,
-    so they come out here rather than in a debugging session later.
-    """
+    """Return *value* as a clean string, stripped of the embedded null bytes MySQL rejects on insert."""
     if value is None:
         return ""
     return str(value).replace("\x00", "").strip()
@@ -248,10 +226,7 @@ class Command(BaseCommand):
             return
         changed, resolver = assign_categories()
         self.stdout.write(f"  {changed} species categorised")
-        # The whole mapping, not just the failures.  Every site names its categories differently
-        # and the interesting mistake is not a hint that matched nothing -- a club with no Plants
-        # category doesn't sell plants -- it is a hint that matched something *unexpected*, which
-        # is invisible unless the answers are printed.
+        # The whole mapping, not just the failures -- an unexpected match is the interesting bug.
         for hint, category in resolver.report():
             self.stdout.write(f"    {hint:<26} -> {category.name if category else '—'}")
         counts = {
@@ -260,7 +235,6 @@ class Command(BaseCommand):
         }
         self.stdout.write("  species per category: " + ", ".join(f"{name} {n}" for name, n in counts.items()))
         if resolver.unmatched_hints:
-            # Not an error: a club with no Plants category is a club that doesn't sell plants.
             self.stdout.write(
                 self.style.WARNING(
                     "  no category on this site matches: "
@@ -270,16 +244,10 @@ class Command(BaseCommand):
             )
 
     def _merge_legacy(self, *, dry_run=False):
-        """Fold the old hand-typed ``Product`` rows into the imported species list.
+        """Fold old hand-typed ``Product`` rows (``source="manual"``, no SpecCode) into the imported list.
 
-        These are the rows a long-running site already had when the picklist arrived: a scientific
-        name typed by a person, no SpecCode, ``source="manual"``.  They are not wrong so much as
-        unmanaged -- no common names, no family, no habitat -- and while one sits next to the
-        imported row for the same fish the picker offers the same species twice.
-
-        Matching is on the scientific name and nothing else, which is safe precisely because it is
-        strict: a legacy row that doesn't match an imported name is left exactly where it is, with
-        its genus and epithet split out so that it at least turns up in a search.
+        Matched on scientific name only; anything that doesn't match is left alone with genus and
+        epithet split out so it at least turns up in a search.
         """
         legacy = list(Species.objects.filter(source="manual", speccode__isnull=True))
         if not legacy:
@@ -305,9 +273,7 @@ class Command(BaseCommand):
                     species.delete()
                 merged += 1
                 continue
-            # Kept, but made searchable: the old table never split the name up, and the genus
-            # column is what every lookup in species_matching indexes on.  Migration 0385 already
-            # did this on deploy; this is here for rows added by hand since.
+            # Split so it's searchable: species_matching indexes on the genus column.
             if name and not species.genus:
                 parts = re.split(r"\s+", name)
                 species.genus = parts[0][:100]
@@ -328,8 +294,7 @@ class Command(BaseCommand):
             self.stdout.write(f"No species with source={source}.")
             return
         in_use = set(Lot.objects.filter(species__source=source).values_list("species_id", flat=True).distinct())
-        # A variety would go with its parent on the cascade.  Keeping the parent is the honest fix,
-        # so anything with children counts as in use too.
+        # A parent with children counts as in use too, since a variety cascades with it.
         in_use |= set(Species.objects.filter(parent__source=source).values_list("parent_id", flat=True).distinct())
         removable_pks = list(queryset.exclude(pk__in=in_use).values_list("pk", flat=True))
         self.stdout.write(
@@ -338,8 +303,7 @@ class Command(BaseCommand):
         if dry_run:
             self.stdout.write(self.style.WARNING("Dry run — nothing written."))
             return
-        # In batches: Django's cascade handling pulls every related row into memory, and a single
-        # delete() over 100,000 species and their common names is how you find that out the hard way.
+        # In batches: a single delete() over 100k species pulls every related row into memory.
         for index in range(0, len(removable_pks), BATCH_SIZE):
             batch = removable_pks[index : index + BATCH_SIZE]
             SpeciesCommonName.objects.filter(species_id__in=batch).delete()
@@ -347,8 +311,7 @@ class Command(BaseCommand):
         self.stdout.write(self.style.SUCCESS(f"Deleted {len(removable_pks)} species and their common names."))
 
     def _check_version(self):
-        # FishBase and SeaLifeBase are published together and share a version, so checking one is
-        # enough to know whether the pin is stale.
+        # FishBase and SeaLifeBase share a version, so checking one tells whether the pin is stale.
         versions = available_versions()
         newest = versions[-1] if versions else "?"
         self.stdout.write(f"Snapshots on the mirror: {', '.join(versions)}")
@@ -380,12 +343,7 @@ class Command(BaseCommand):
         return table.column(name).to_pylist()
 
     def _families(self, parquet, version, database):
-        """``{famcode: (family, order)}``.
-
-        A separate 664-row table, joined on FamCode, because the species table only carries the
-        code.  A snapshot without it isn't an error -- the columns just stay blank, and every
-        species falls back to the keyword guesser it used before.
-        """
+        """``{famcode: (family, order)}``, joined on FamCode; a snapshot without it leaves family/order blank."""
         try:
             table = self._read(parquet, "families", version, database)
         except httpx.HTTPError:
@@ -426,15 +384,13 @@ class Command(BaseCommand):
                 "genus": genus[:100],
                 "species": epithet[:150],
                 "common_name": _strip_nulls(fbnames[index])[:255],
-                # FishBase stores these as -1/0 rather than booleans.
-                "freshwater": bool(fresh[index]),
+                "freshwater": bool(fresh[index]),  # FishBase stores these as -1/0
                 "brackish": bool(brack[index]),
                 "saltwater": bool(salt[index]),
                 "family": family,
                 "order": order,
-                # Free text in the source ("commercial", "never/rarely"...).  Stored as-is and
-                # interpreted by Species.AQUARIUM_TRADE_VALUES rather than turned into a boolean
-                # here, so a new value in a future snapshot is visible instead of silently false.
+                # Free text ("commercial", "never/rarely"...), interpreted by
+                # Species.AQUARIUM_TRADE_VALUES rather than made a boolean here.
                 "aquarium_use": _strip_nulls(aquarium[index])[:30],
                 "source": source,
             }
@@ -462,8 +418,7 @@ class Command(BaseCommand):
             name = _strip_nulls(names[index])
             if not name:
                 continue
-            # FishBase repeats the same name for a species across sources; one row each is plenty.
-            key = (int(code), name.lower())
+            key = (int(code), name.lower())  # dedupe: FishBase repeats names across sources
             if key in seen:
                 continue
             seen.add(key)

@@ -1,37 +1,14 @@
 """Shared label-printing helpers.
 
-The mismatch-warning matrix lives here so the ``/printing/`` template and the mobile prefs API
-(``GET /api/mobile/labels/prefs/``) surface exactly the same warnings from the same saved prefs.
-Warnings are advisory — they never block saving.
-
-**How a lot label is laid out.** Every preset, every combination of ``Auction.label_print_fields``,
-sold or unsold, follows the same four rules -- ``label_template.html`` draws them and
-``test_label_layout.py`` renders each preset with worst-case lots and fails if one is broken:
-
-1. Two columns, and nothing crosses from one into the other. Each column clips, and a word too long
-   for its line breaks rather than spilling.
-2. The left column is the lot number, the QR code, then the short *tags* (:data:`LABEL_TAG_FIELDS`)
-   that fit there whole, one line each. A tag that would wrap, or that there is no line left for,
-   moves to the right column -- so nothing is lost off the bottom of the narrow column.
-3. The right column is three bands. The **lot name** at the top, clamped to a set number of lines.
-   **Who it belongs to** pinned to the bottom: the winner on a sold label -- with where they collect
-   it, when the auction has more than one pickup point -- or the seller on an unsold one.
-   **Everything else** in between -- tags moved over from the left, species, custom field, category,
-   description, in that order -- in whatever height is left. :func:`plan_label` measures the owner's
-   name first and never clips it, and then fills the label in the order that label is *read*, which
-   is not the same order sold and unsold: a **sold** label is how a lot reaches the person who won
-   it, so the lot name and the pickup location come before the tags; an **unsold** one is how it
-   sells, so the tags -- the minimum bid and the buy-now price -- come before anything else the name
-   might want. The first two of the three get one line each before either gets a second, so neither
-   can push the other off; what is left grows them toward what they need, and the third takes the
-   remainder. Then each of the rest goes in only if it fits *whole*, stopping at the first that
-   doesn't; the description, last because it is the one field that can be any length, is clamped to
-   the lines left over. So nothing is ever cut in half or printed
-   over. (Deciding it here rather than clipping in CSS is deliberate: WeasyPrint cannot end a
-   clipped box on a line boundary -- ``continue: discard`` and multi-column tricks both fail in
-   one case or another.)
-4. A field with nothing to say takes no space. Sold and unsold labels differ only through this: the
-   minimum bid, buy-now price and breeder mark are blank on a sold lot, so they vanish.
+The mismatch-warning matrix lives here so ``/printing/`` and the mobile prefs API
+(``GET /api/mobile/labels/prefs/``) surface identical warnings from the same saved prefs; they are
+advisory and never block saving. ``plan_label`` measures text so ``label_template.html`` can lay
+out two fixed columns without ever clipping or overflowing (rules enforced by
+``test_label_layout.py``): left column is lot number, QR code, then short tags that fit whole;
+right column is lot name, then owner (winner+pickup location, or seller) pinned to the bottom, with
+species/custom-field/category/description filling whatever height is left, sold and unsold filling
+that middle band in different priority order since a sold label is read to collect a lot and an
+unsold one is read to sell it. A field with nothing to say takes no space.
 """
 
 import html
@@ -42,8 +19,7 @@ import re
 THERMAL_PRESETS = frozenset({"thermal_sm", "thermal_very_sm"})
 SHEET_PRESETS = frozenset({"sm", "lg"})
 
-# The short one-line facts a label can carry, in the order they print. Each goes in the left column
-# when it fits there and in the right column when it doesn't -- see split_label_tags.
+# One-line facts a label can carry, in print order. See split_label_tags for left/right placement.
 LABEL_TAG_FIELDS = (
     "quantity_label",
     "donation_label",
@@ -58,9 +34,8 @@ LABEL_TAG_FIELDS = (
 # label_template.html sets this line-height, and split_label_tags counts lines with it.
 LABEL_LINE_HEIGHT = 1.2
 
-# Advance widths of DejaVu Serif -- what WeasyPrint's default serif resolves to in the image -- for
-# ASCII 32..126, in hundredths of an em, measured with Pillow's ImageFont.getlength. A character
-# outside ASCII counts as a full em, which errs toward moving a tag right rather than wrapping it.
+# DejaVu Serif advance widths for ASCII 32..126, hundredths of an em (Pillow ImageFont.getlength).
+# Non-ASCII counts as a full em, erring toward moving a tag right rather than under-wrapping it.
 # fmt: off
 _SERIF_WIDTHS = (
     32, 40, 46, 84, 64, 95, 89, 27, 39, 39, 50, 84, 32, 34, 32, 34, 64, 64, 64, 64, 64, 64, 64, 64,
@@ -69,11 +44,9 @@ _SERIF_WIDTHS = (
     64, 32, 31, 61, 32, 95, 64, 60, 64, 64, 48, 51, 40, 64, 56, 86, 56, 56, 53, 64, 34, 64, 84,
 )
 # fmt: on
-# Kerning and rounding: a tag measured as exactly filling the column still goes right.
+# Kerning/rounding slack: a tag measured as exactly filling the column still goes right.
 _FIT_SLACK = 0.97
-# The same for DejaVu Serif Bold: the winner's name is the one bold thing plan_label has to fit.
-# (There is no italic face in the image -- WeasyPrint slants the regular one, so the species line
-# measures as regular.)
+# DejaVu Serif Bold: for the winner's name, the one bold text plan_label fits.
 # fmt: off
 _SERIF_BOLD_WIDTHS = (
     35, 44, 52, 84, 70, 95, 90, 31, 47, 47, 52, 84, 35, 42, 35, 37, 70, 70, 70, 70, 70, 70, 70, 70,
@@ -84,8 +57,7 @@ _SERIF_BOLD_WIDTHS = (
 # fmt: on
 
 
-# Outside ASCII but put on the label by plan_label itself: the separator between moved-over tags.
-# (The bold width, which is the wider.)
+# The tag separator plan_label inserts itself; not ASCII, so given its (wider, bold) width here.
 _OTHER_WIDTHS = {"·": 35}
 
 
@@ -97,11 +69,10 @@ def text_width_pt(text, font_size_pt, bold=False):
 
 
 def split_label_tags(values, *, width_pt, height_pt, font_size_pt):
-    """Split one label's non-empty tag *values* into ``(left, right)`` -- rule 2 in the docstring.
+    """Split one label's non-empty tag *values* into ``(left, right)``.
 
-    A tag stays in the left column if it fits on one line of it and there is a line left to put it
-    on; otherwise it goes right, where the middle band has the width. Order is kept on each side, and
-    a short tag after a long one still takes a left line if one is free.
+    A tag stays left if it fits on one line and a line is free; otherwise it goes right. Order is
+    kept on each side; a short tag after a long one can still take a free left line.
     """
     lines = int(height_pt // (font_size_pt * LABEL_LINE_HEIGHT))
     left, right = [], []
@@ -116,18 +87,16 @@ def split_label_tags(values, *, width_pt, height_pt, font_size_pt):
 def wrapped_lines(text, *, width_pt, font_size_pt, bold=False):
     """How many lines *text* takes in a column *width_pt* wide; a newline starts a new line.
 
-    Breaks where WeasyPrint does -- at spaces and after a "/" or a "-" ("BAP/HAP/CARES" wraps after
-    "HAP/") -- and inside a word too long for a line of its own, the way ``overflow-wrap: anywhere``
-    does. The widths are the face's own, so this is the count WeasyPrint arrives at; where the two
-    could part (kerning pairs, which only narrow a line), this one counts more.
+    Breaks where WeasyPrint does -- at spaces and after "/" or "-" -- and inside an
+    overlong word like ``overflow-wrap: anywhere``. Where the two could differ (kerning), this
+    counts more lines, never fewer.
     """
     lines = 0
     space = text_width_pt(" ", font_size_pt, bold)
     for paragraph in str(text).splitlines():
         used = None  # width taken on the current line; None before the paragraph's first word
         for word in paragraph.split():
-            # Split after each "/" or "-", keeping it on the piece it ends; a lookbehind so that a
-            # word of nothing but delimiters is still linear to scan.
+            # Split after each "/" or "-", keeping the delimiter on the piece it ends.
             for index, piece in enumerate(p for p in re.split(r"(?<=[/-])", word) if p):
                 gap = space if index == 0 else 0
                 width = text_width_pt(piece, font_size_pt, bold)
@@ -147,11 +116,10 @@ def plan_label(label, *, print_fields, geometry):
     """Decide what goes where on one lot label, so ``label_template.html`` only has to draw it.
 
     *geometry* is the label view's context: label sizes in inches, font sizes in points. Sets on
-    *label*: ``tags_left`` and ``tags_right`` (rule 2 in the module docstring); ``name_lines``,
-    ``tags_lines`` and ``location_lines``, what the lot name, the moved-over tags and the winner's
-    pickup location are clamped to; ``species_line`` and ``species_is_scientific``; ``details``, the
-    rest of the middle band that fits whole, in order; and ``description_lines``, what the
-    description is clamped to. A count of 0 leaves the field off.
+    *label*: ``tags_left``/``tags_right``; ``name_lines``, ``tags_lines`` and ``location_lines``
+    (lines the lot name, moved-over tags, and pickup location are clamped to); ``species_line`` and
+    ``species_is_scientific``; ``details``, the rest of the middle band that fits whole, in order;
+    and ``description_lines``. A count of 0 leaves the field off.
     """
     font = geometry["font_size"]
     small = geometry["description_font_size"]
@@ -164,8 +132,7 @@ def plan_label(label, *, print_fields, geometry):
     def block(text, size, bold=False):
         return wrapped_lines(text, width_pt=right_width, font_size_pt=size, bold=bold) * line(size)
 
-    # Rule 2, on what this lot actually has: a sold lot has no minimum bid, and an empty value must
-    # not hold a line a real one could have used.
+    # An empty tag value (e.g. no minimum bid on a sold lot) must not hold a line a real one needs.
     tag_height = geometry["label_height"] * 72 - line(font)  # under the lot number...
     if "qr_code" in print_fields:
         tag_height -= geometry["qr_size"] * 72  # ...and the QR code
@@ -174,8 +141,7 @@ def plan_label(label, *, print_fields, geometry):
         tags, width_pt=geometry["first_column_width"] * 72, height_pt=tag_height, font_size_pt=tag_font
     )
 
-    # Rule 3: the name of whoever the lot belongs to is measured first and never clipped. Half a
-    # point off for layout rounding.
+    # The owner's name is measured first and never clipped. Half a point off for layout rounding.
     budget = geometry["label_height"] * 72 - 0.5
     if label.sold:
         # "Winner:" is regular, but measuring all of it bold only errs toward a spare line.
@@ -203,29 +169,26 @@ def plan_label(label, *, print_fields, geometry):
     name_wanted = needs(label.lot_name if "lot_name" in print_fields else "", font, geometry["name_lines"])
     tags_wanted = needs(" · ".join(label.tags_right), tag_font)
     if label.sold:
-        # A sold label is read to get the lot to the person who won it: their name, which lot it is,
-        # and where they collect it. The tags -- quantity, the club's own fields, the date -- are what
-        # the room used while the lot was selling, so on a sold label they take what is left over.
+        # Sold: read to get the lot to its winner, so name and pickup location come before tags.
         priority = (
             ("name_lines", name_wanted, font),
             ("location_lines", needs(location, font), font),
             ("tags_lines", tags_wanted, tag_font),
         )
     else:
-        # Unsold, the tags *are* the label: the minimum bid and the buy-now price are what it sells
-        # by, so they are not something a long lot name may push off.
+        # Unsold: the tags (min bid, buy-now) are what sells it, so a long name can't push them off.
         priority = (
             ("name_lines", name_wanted, font),
             ("tags_lines", tags_wanted, tag_font),
             ("location_lines", 0, font),
         )
     given = dict.fromkeys((key for key, _, _ in priority), 0)
-    # The first two are what that label is for: one line each before either of them gets a second.
+    # First two get one line each before either gets a second.
     for key, wanted, size in priority[:2]:
         if wanted and budget >= line(size):
             given[key] = 1
             budget -= line(size)
-    # Then each grows back toward what it needs, in the same order, and the third takes what is left.
+    # Then each grows back toward what it needs, in the same order; the third takes what is left.
     for key, wanted, size in priority:
         while given[key] < wanted and budget >= line(size):
             given[key] += 1
@@ -233,9 +196,8 @@ def plan_label(label, *, print_fields, geometry):
     for key, value in given.items():
         setattr(label, key, value)
     if given["tags_lines"] < tags_wanted:
-        # The middle band is read top to bottom and the tags are the top of it. If they were cut,
-        # nothing below them prints either -- a label that drops "Min: $25" but keeps the category
-        # would look like the category mattered more.
+        # Tags are the top of the middle band; if cut, nothing below prints either, or e.g. dropping
+        # "Min: $25" while keeping the category would make the category look more important.
         budget = 0
 
     # The name the seller did *not* type -- see Lot.scientific_name_line.

@@ -1,19 +1,4 @@
-"""Tests for the mobile-app web-side features.
-
-Part 1 — label printing: the mismatch-warning matrix, the ThermalPrinterProfile command-program
-validator + seed data, and the mobile printer/label API.
-Part 8 — printer identification: the device-info match patterns served to the app, and the
-observed-printer feed that tells us which printers need a profile.
-Part 9 — binary label endpoints must accept an honest Accept header (application/pdf, image/png).
-Part 2 — push notifications: the push-routing decision (user_prefers_push / notify_user), the
-send_push_to_user fan-out + token pruning, device register/unregister, and the promo push job.
-Part T/X — the TSPL printer profile and the v2 command-program schema it needs.
-Part U/Y — adding a printer without an app release: what the app can capture about an unknown
-printer, and drafting a profile from it.
-Part W — bulk Bluetooth printing: the lot-set deep link and marking labels printed natively.
-Part PALETTE — the website's command palette inside the app: that it is rendered at all, and the
-two native destinations (lot scanning, Tap to Pay) it emits as fishauctions:// deep links.
-"""
+"""Tests for the mobile-app web-side features."""
 
 import base64
 import datetime
@@ -72,9 +57,7 @@ def _bearer(user):
     return {"HTTP_AUTHORIZATION": f"Bearer {RefreshToken.for_user(user).access_token}"}
 
 
-# ---------------------------------------------------------------------------
 # Part 1 — label-prefs mismatch warnings
-# ---------------------------------------------------------------------------
 
 
 class LabelPrefsWarningsTests(TestCase):
@@ -125,9 +108,7 @@ class LabelPrefsWarningsTests(TestCase):
         self.assertEqual(matrix["bluetooth|thermal_sm"], [])
 
 
-# ---------------------------------------------------------------------------
 # Part 1 — printer command-program validation + seed data
-# ---------------------------------------------------------------------------
 
 
 class PrinterProgramValidationTests(TestCase):
@@ -193,9 +174,7 @@ class PrinterProgramValidationTests(TestCase):
         profile.clean()  # must not raise
 
 
-# ---------------------------------------------------------------------------
 # Part 8.1 — matching on what the printer reports over GATT 0x180A
-# ---------------------------------------------------------------------------
 
 
 class PrinterMatchPatternTests(TestCase):
@@ -230,9 +209,7 @@ class PrinterMatchPatternTests(TestCase):
         self.assertIn("model_patterns", caught.exception.message_dict)
 
 
-# ---------------------------------------------------------------------------
 # Part 1 — mobile printer profiles API
-# ---------------------------------------------------------------------------
 
 
 class MobilePrinterProfilesApiTests(StandardTestCase):
@@ -270,9 +247,7 @@ class MobilePrinterProfilesApiTests(StandardTestCase):
         self.assertIn(self.client.get(self.url).status_code, (401, 403))
 
 
-# ---------------------------------------------------------------------------
 # Part 8.2 — POST /api/mobile/printers/observed/
-# ---------------------------------------------------------------------------
 
 
 class MobilePrinterObservedApiTests(StandardTestCase):
@@ -364,9 +339,7 @@ class MobilePrinterObservedApiTests(StandardTestCase):
         self.assertIn(self.client.post(self.url, {}, content_type="application/json").status_code, (401, 403))
 
 
-# ---------------------------------------------------------------------------
 # Part 1 — mobile label prefs API + PDF renderer
-# ---------------------------------------------------------------------------
 
 
 class MobileLabelPrefsApiTests(StandardTestCase):
@@ -488,7 +461,6 @@ class PrintMethodDropdownOnTheWebTests(StandardTestCase):
         self.assertEqual(self.prefs.print_method, "bluetooth")
 
     def test_a_post_with_no_print_method_keeps_the_stored_one(self):
-        """Belt and braces for the same failure: an omitted value means "leave it", never "blank"."""
         data = self._form_data()
         data.pop("print_method")
         response = self.client.post(reverse("printing") + "?next=/", data, HTTP_USER_AGENT=self.WEB_UA)
@@ -567,7 +539,6 @@ class MobileLabelBatchTests(StandardTestCase):
         self.assertEqual(base64.b64decode(entry["png"])[:8], b"\x89PNG\r\n\x1a\n")
 
     def test_a_lot_you_cannot_print_is_skipped_rather_than_failing_the_run(self):
-        """One bad pk in a run of forty must not cost the other thirty-nine."""
         other = Lot.objects.create(lot_name="not yours", user=self.userB, quantity=1)
         body = self._post({"lots": [self.lot.pk, other.pk, 9999999]}).json()
         self.assertEqual([entry["lot"] for entry in body["labels"]], [self.lot.pk])
@@ -603,13 +574,11 @@ class MobileLabelBatchTests(StandardTestCase):
         self.assertEqual(len(remaining), 4)
 
     def test_rendering_a_label_does_not_mark_it_printed(self):
-        """Nothing has printed yet — the app posts labels/printed/ for what actually comes out."""
         self._post({"lots": [self.lot.pk]})
         self.lot.refresh_from_db()
         self.assertFalse(self.lot.label_printed)
 
     def test_the_same_label_twice_is_rendered_once(self):
-        """The reprint, the retry after a jam, and the overlap between "all" and "unprinted"."""
         with patch(
             "auctions.mobile.services.label_raster.rasterize_pdf", return_value=b"\x89PNG\r\n\x1a\nfake"
         ) as raster:
@@ -618,7 +587,6 @@ class MobileLabelBatchTests(StandardTestCase):
         self.assertEqual(raster.call_count, 1)
 
     def test_editing_the_lot_renders_it_again(self):
-        """The cache key is a hash of the label's own HTML, so it cannot serve a stale label."""
         with patch(
             "auctions.mobile.services.label_raster.rasterize_pdf", return_value=b"\x89PNG\r\n\x1a\nfake"
         ) as raster:
@@ -670,9 +638,7 @@ class MobileLabelAcceptHeaderTests(StandardTestCase):
         self.assertIn("detail", resp.json())
 
 
-# ---------------------------------------------------------------------------
 # Part 2 — push routing decision
-# ---------------------------------------------------------------------------
 
 
 class PushConfiguredTests(TestCase):
@@ -777,9 +743,7 @@ class NotifyUserTests(TestCase):
         self.assertEqual(sent, [1])
 
 
-# ---------------------------------------------------------------------------
 # Part 2 — send_push_to_user fan-out + token pruning
-# ---------------------------------------------------------------------------
 
 
 class SendPushToUserTests(TestCase):
@@ -828,9 +792,7 @@ class SendPushToUserTests(TestCase):
         send.assert_not_called()
 
 
-# ---------------------------------------------------------------------------
 # Part 2 — device register/unregister (token lifecycle)
-# ---------------------------------------------------------------------------
 
 
 class DeviceServiceTokenTests(TestCase):
@@ -905,9 +867,7 @@ class MobileDeviceApiTests(StandardTestCase):
         self.assertEqual(resp.status_code, 404)
 
 
-# ---------------------------------------------------------------------------
 # Part 2 — preferences form push toggle (disabled without a device)
-# ---------------------------------------------------------------------------
 
 
 class PreferencesPushToggleTests(TestCase):
@@ -927,9 +887,7 @@ class PreferencesPushToggleTests(TestCase):
         self.assertFalse(form.fields["push_notifications_instead_of_email"].disabled)
 
 
-# ---------------------------------------------------------------------------
 # Part 2 — promo push job + weekly_promo skip
-# ---------------------------------------------------------------------------
 
 
 class PromoPushCommandTests(TestCase):
@@ -1039,9 +997,7 @@ class WeeklyPromoSkipsPushUsersTests(TestCase):
         self.assertNotIn(user.email, emailed)
 
 
-# ---------------------------------------------------------------------------
 # Part X — command-program schema v2
-# ---------------------------------------------------------------------------
 
 
 class ProgramSchemaV2Tests(TestCase):
@@ -1060,7 +1016,6 @@ class ProgramSchemaV2Tests(TestCase):
             validate_profile_programs(print_program=[{"tx": "1d {u64le:total_bytes}"}])
 
     def test_u16le_rejects_total_bytes(self):
-        """total_bytes has no 16-bit form — a real raster overflows it."""
         with self.assertRaises(ProgramValidationError):
             validate_profile_programs(print_program=[{"tx": "1d {u16le:total_bytes}"}])
 
@@ -1088,7 +1043,6 @@ class ProgramSchemaV2Tests(TestCase):
         validate_profile_programs(print_program=[{"tx_raster": {"encoding": "hex"}}])
 
     def test_tx_raster_false_still_rejected(self):
-        """A step that does nothing is a typo, not an instruction to omit the label body."""
         with self.assertRaises(ProgramValidationError):
             validate_profile_programs(print_program=[{"tx_raster": False}])
 
@@ -1130,7 +1084,6 @@ class ProgramSchemaV2Tests(TestCase):
         self.assertEqual(PROGRAM_SCHEMA_VERSION, 2)
 
     def test_language_templates_are_valid_programs(self):
-        """Every drafting template has to be something a printer could actually be driven with."""
         for language, template in LANGUAGE_TEMPLATES.items():
             with self.subTest(language=language):
                 validate_profile_programs(
@@ -1138,9 +1091,7 @@ class ProgramSchemaV2Tests(TestCase):
                 )
 
 
-# ---------------------------------------------------------------------------
 # Part T — the TSPL profile
-# ---------------------------------------------------------------------------
 
 
 class TsplPrinterProfileTests(StandardTestCase):
@@ -1164,7 +1115,6 @@ class TsplPrinterProfileTests(StandardTestCase):
         self.assertEqual(self.profile.manufacturer_patterns, [])
 
     def test_raster_is_inverted(self):
-        """TSPL BITMAP paints on a 0 bit. Without this every label comes out solid black."""
         self.assertTrue(self.profile.invert_raster)
 
     def test_program_has_no_await_step(self):
@@ -1181,7 +1131,6 @@ class TsplPrinterProfileTests(StandardTestCase):
         self.assertNotIn("out_of_paper", self.profile.status_flags["values"]["07"])
 
     def test_uses_schema_v2(self):
-        """It carries a values map, so an older app build must ignore it rather than mis-decode."""
         self.assertEqual(self.profile.schema_version, 2)
 
     def test_priority_sits_between_the_d11s_rows_and_the_escpos_fallback(self):
@@ -1190,7 +1139,6 @@ class TsplPrinterProfileTests(StandardTestCase):
         self.assertLess(priorities["tspl-raster"], priorities["escpos-raster"])
 
     def test_profile_names_read_as_printers(self):
-        """The app shows profile.name to a volunteer looking at a box on a table."""
         self.assertEqual(
             ThermalPrinterProfile.objects.get(slug="escpos-raster").name, "Other thermal printer (ESC/POS)"
         )
@@ -1210,9 +1158,7 @@ class TsplPrinterProfileTests(StandardTestCase):
         self.assertEqual(tspl.count(), 1)
 
 
-# ---------------------------------------------------------------------------
 # Part U1/U2 + Y1 — capturing what an unknown printer is
-# ---------------------------------------------------------------------------
 
 
 class ObservedPrinterProbeCaptureTests(StandardTestCase):
@@ -1290,7 +1236,6 @@ class ObservedPrinterProbeCaptureTests(StandardTestCase):
         self.assertEqual(observed.status_ambiguities, [])
 
     def test_absent_fields_are_still_a_valid_report(self):
-        """Older app builds send none of this."""
         self.assertEqual(self._post(matched_by="bleName").status_code, 201)
         observed = ObservedPrinter.objects.get(user=self.user)
         self.assertEqual(observed.probe_replies, {})
@@ -1317,9 +1262,7 @@ class ObservedPrinterProbeCaptureTests(StandardTestCase):
         self.assertFalse(ObservedPrinter.objects.get(user=self.user).characterized)
 
 
-# ---------------------------------------------------------------------------
 # Part Y2 — drafting a profile from an observation
-# ---------------------------------------------------------------------------
 
 
 class DraftProfileFromObservationTests(StandardTestCase):
@@ -1413,7 +1356,6 @@ class DraftProfileFromObservationTests(StandardTestCase):
         self.assertEqual(second.status_flags["values"]["02"], ["paper_jam"])
 
     def test_never_overwrites_an_enabled_profile(self):
-        """An enabled row is one a human has taken ownership of — including every seeded row."""
         # A model name that happens to slugify onto a seeded profile must not clobber it.
         with self.assertRaises(DraftError):
             draft_profile_from_observation(self._observation(model="TSPL raster"))
@@ -1429,7 +1371,6 @@ class DraftProfileFromObservationTests(StandardTestCase):
             draft_profile_from_observation(observation)
 
     def test_no_probed_language_cannot_be_drafted(self):
-        """The print program is the one part no probe can discover, so there is nothing to write."""
         with self.assertRaises(DraftError):
             draft_profile_from_observation(self._observation(probed_language=""))
 
@@ -1442,9 +1383,7 @@ class DraftProfileFromObservationTests(StandardTestCase):
         profile.full_clean(exclude=["slug"])
 
 
-# ---------------------------------------------------------------------------
 # Part W2 — POST /api/mobile/labels/printed/
-# ---------------------------------------------------------------------------
 
 
 class MobileLabelsPrintedApiTests(StandardTestCase):
@@ -1521,9 +1460,7 @@ class MobileLabelsPrintedApiTests(StandardTestCase):
         self.assertIn(self.client.post(self.url, {"lots": []}, content_type="application/json").status_code, (401, 403))
 
 
-# ---------------------------------------------------------------------------
 # Part W1 — bulk label printing hands a Bluetooth app user the lot set
-# ---------------------------------------------------------------------------
 
 
 class LabelPrintFailureReportTests(StandardTestCase):
@@ -1550,27 +1487,23 @@ class LabelPrintFailureReportTests(StandardTestCase):
         self.assertTrue(self.lot.label_needs_reprinting)
 
     def test_a_jam_on_a_reprint_puts_the_label_back_to_unprinted(self):
-        """It had printed before; what the person is holding now is a jam."""
         Lot.objects.filter(pk=self.lot.pk).update(label_printed=True, label_needs_reprinting=False)
         self._post({"lots": [], "failed": [self.lot.pk], "conditions": ["out_of_paper"]})
         self.lot.refresh_from_db()
         self.assertFalse(self.lot.label_printed)
 
     def test_the_failed_label_comes_back_in_print_unprinted_labels(self):
-        """The point of the whole exchange: clear the jam, press the button, get what is missing."""
         self._post({"lots": [self.lot.pk]})
         self.assertNotIn(self.lot.pk, self.online_tos.unprinted_labels_qs.values_list("pk", flat=True))
         self._post({"lots": [], "failed": [self.lot.pk], "conditions": ["paper_jam"]})
         self.assertIn(self.lot.pk, self.online_tos.unprinted_labels_qs.values_list("pk", flat=True))
 
     def test_a_lot_in_both_lists_counts_as_failed(self):
-        """ "It did not come out" is the report that leaves a label to print."""
         self._post({"lots": [self.lot.pk], "failed": [self.lot.pk]})
         self.lot.refresh_from_db()
         self.assertFalse(self.lot.label_printed)
 
     def test_a_condition_outside_the_profiles_vocabulary_is_rejected(self):
-        """One list, or the profile that says "02 means paper_jam" and the report drift apart."""
         resp = self._post({"lots": [], "failed": [self.lot.pk], "conditions": ["printer_on_fire"]})
         self.assertEqual(resp.status_code, 400)
         self.lot.refresh_from_db()
@@ -1638,20 +1571,17 @@ class BulkBluetoothPrintLinkTests(StandardTestCase):
         self.assertIn(expected, html)
 
     def test_lot_order_matches_the_order_the_pdf_prints_them(self):
-        """That's the order the labels come out of the printer."""
         self._set_method("bluetooth")
         html = self._get(self.APP_UA).content.decode()
         pks = [str(pk) for pk in self.in_person_tos.print_labels_qs.values_list("pk", flat=True)]
         self.assertIn("fishauctions://print/?lots=" + ",".join(pks), html)
 
     def test_bluetooth_on_the_web_still_gets_the_pdf(self):
-        """The scheme has no handler in a browser, so a deep link there is a dead end."""
         self._set_method("bluetooth")
         resp = self._get(self.WEB_UA)
         self.assertEqual(resp["Content-Type"], "application/pdf")
 
     def test_pdf_method_in_the_app_still_gets_the_pdf(self):
-        """Everyone else is unchanged -- the PDF and System-printer methods are the default."""
         self._set_method("pdf")
         self.assertEqual(self._get(self.APP_UA)["Content-Type"], "application/pdf")
 
@@ -1675,7 +1605,6 @@ class BulkBluetoothPrintLinkTests(StandardTestCase):
         self.assertIn("fishauctions://print/?lots=", self._get(self.APP_UA, url=url).content.decode())
 
     def test_the_handoff_does_not_mark_anything_printed(self):
-        """Nothing has printed yet. The app posts labels/printed/ for what actually comes out."""
         self._set_method("bluetooth")
         self._get(self.APP_UA)
         self.assertEqual(self.in_person_tos.unprinted_label_count, len(self.lots))
@@ -1707,9 +1636,7 @@ class BulkBluetoothPrintLinkTests(StandardTestCase):
         self.assertIn("Print only unprinted labels", html)
 
 
-# ---------------------------------------------------------------------------
 # The Bluetooth PNG must be the PDF
-# ---------------------------------------------------------------------------
 
 
 class LabelPngMatchesPdfTests(StandardTestCase):
@@ -1752,7 +1679,6 @@ class LabelPngMatchesPdfTests(StandardTestCase):
         self.assertEqual(content, rasterize_pdf(pdf_bytes, width=600, height=400, dpi=203))
 
     def test_requested_resolution_is_exact(self):
-        """The app asks for its printhead's pixel grid; anything else prints scaled and smeared."""
         for resolution, size in (("600x400", (600, 400)), ("832x1248", (832, 1248)), ("96x200", (96, 200))):
             with self.subTest(resolution=resolution):
                 self.assertEqual(self._image(self._png(resolution=resolution)).size, size)
@@ -1817,9 +1743,7 @@ class LabelPngMatchesPdfTests(StandardTestCase):
         self.assertEqual(web.content, self._png(resolution="600x400"))
 
 
-# ---------------------------------------------------------------------------
 # Part Y3 — telling a user their printer is supported now
-# ---------------------------------------------------------------------------
 
 
 class PrinterSupportedNotificationTests(StandardTestCase):
@@ -1881,7 +1805,6 @@ class PrinterSupportedNotificationTests(StandardTestCase):
     @override_settings(FIREBASE_CREDENTIALS_JSON=FAKE_FIREBASE)
     @patch("auctions.tasks.send_push_to_user.delay")
     def test_a_disabled_profile_says_nothing(self, delay):
-        """A drafted profile is a hypothesis until a human enables it."""
         with self.captureOnCommitCallbacks(execute=True):
             self._enable_matching_profile(enabled=False)
         delay.assert_not_called()
@@ -1914,7 +1837,6 @@ class PrinterSupportedNotificationTests(StandardTestCase):
         self.assertFalse(self.observation.support_notified)
 
     def test_matcher_handles_a_bad_pattern_without_blowing_up_the_save(self):
-        """A regex saved before clean() validated them must not break every later profile edit."""
         profile = ThermalPrinterProfile(slug="x", name="X", print_program=[{"tx": "1d 0c"}], model_patterns=["^ITPP("])
         self.assertFalse(profile_matches_observation(profile, self.observation))
 
@@ -1924,9 +1846,7 @@ class PrinterSupportedNotificationTests(StandardTestCase):
         self.assertFalse(profile_matches_observation(profile, blank))
 
 
-# ---------------------------------------------------------------------------
 # Part 2 — watched-lot "bidding is starting" alerts pick one channel per person
-# ---------------------------------------------------------------------------
 
 
 class WatchedLotPushRoutingTests(StandardTestCase):
@@ -1983,7 +1903,6 @@ class WatchedLotPushRoutingTests(StandardTestCase):
 
     @override_settings(FIREBASE_CREDENTIALS_JSON=FAKE_FIREBASE)
     def test_the_email_toggle_does_not_govern_this_category(self):
-        """push_notifications_instead_of_email is about mail; this alert was never an email."""
         self._app_device()
         self.assertFalse(self.watcher.userdata.push_notifications_instead_of_email)
         app_push, web_push = self._notify()
@@ -2044,7 +1963,6 @@ class WatchedLotPushRoutingTests(StandardTestCase):
 
     @override_settings(FIREBASE_CREDENTIALS_JSON=FAKE_FIREBASE)
     def test_lot_page_offers_an_app_user_a_way_to_turn_the_alerts_on(self):
-        """Without the browser subscribe button there has to be something else to opt in with."""
         userdata = UserData.objects.get(user=self.watcher)
         userdata.push_notifications_when_lots_sell = False
         userdata.save()
@@ -2128,9 +2046,7 @@ class QueueRespectsTheAuctionNotificationSettingTests(StandardTestCase):
         broadcast.assert_called_once()
 
 
-# ---------------------------------------------------------------------------
 # Part 2 — which categories are allowed to leave the inbox at all
-# ---------------------------------------------------------------------------
 
 
 class PushExemptCategoryTests(TestCase):
@@ -2153,7 +2069,6 @@ class PushExemptCategoryTests(TestCase):
 
     @override_settings(FIREBASE_CREDENTIALS_JSON=FAKE_FIREBASE)
     def test_club_membership_is_always_emailed(self):
-        """Effectively account correspondence -- a record in an inbox is the point."""
         pushed, sent, delay = self._notify(notifications.CATEGORY_MEMBERSHIP)
         self.assertFalse(pushed)
         self.assertEqual(sent, [1])
@@ -2236,9 +2151,7 @@ class JoinReminderPushTests(TestCase):
         self.assertIn(self.user.email, emailed)
 
 
-# ---------------------------------------------------------------------------
 # Part 2 — losing the app: nothing is dropped, and the UI says what's going on
-# ---------------------------------------------------------------------------
 
 
 class UninstallFallbackTests(TestCase):
@@ -2255,7 +2168,6 @@ class UninstallFallbackTests(TestCase):
 
     @override_settings(FIREBASE_CREDENTIALS_JSON=FAKE_FIREBASE)
     def test_dead_token_is_pruned_and_the_notification_is_emailed_not_lost(self):
-        """The send that *discovers* the uninstall is the one that would otherwise vanish."""
         with (
             patch("auctions.notifications.send_fcm_message", return_value=notifications.SEND_INVALID_TOKEN),
             patch("auctions.tasks.mail.send") as send,
@@ -2284,7 +2196,6 @@ class UninstallFallbackTests(TestCase):
 
     @override_settings(FIREBASE_CREDENTIALS_JSON=FAKE_FIREBASE)
     def test_push_only_categories_are_dropped_rather_than_emailed(self):
-        """A volunteer request or "your lot is selling now" email would arrive uselessly late."""
         for category in ("volunteer", "lot_selling", "promo", "printer"):
             with (
                 patch("auctions.notifications.send_fcm_message", return_value=notifications.SEND_INVALID_TOKEN),
@@ -2305,7 +2216,6 @@ class UninstallFallbackTests(TestCase):
 
     @override_settings(FIREBASE_CREDENTIALS_JSON=FAKE_FIREBASE)
     def test_later_notifications_route_to_email_on_their_own(self):
-        """Once the token is gone the routing decision flips, so nothing else needs the fallback."""
         self.assertTrue(self.user.userdata.user_prefers_push())
         MobileDevice.objects.filter(pk=self.device.pk).update(fcm_token="")
         self.assertFalse(self.user.userdata.user_prefers_push())
@@ -2350,9 +2260,7 @@ class UninstallFallbackTests(TestCase):
         self.assertTrue(form.cleaned_data["push_notifications_instead_of_email"])
 
 
-# ---------------------------------------------------------------------------
 # Part N — the app's notification opt-in
-# ---------------------------------------------------------------------------
 
 
 class MobileNotificationPrefsApiTests(TestCase):
@@ -2386,7 +2294,6 @@ class MobileNotificationPrefsApiTests(TestCase):
         self.assertTrue(userdata.push_notifications_when_lots_sell)
 
     def test_patch_is_partial(self):
-        """Only the keys sent are written — an app screen that owns one toggle can't clear the other."""
         UserData.objects.filter(user=self.user).update(push_notifications_when_lots_sell=True)
         response = self.client.patch(
             self.url,
@@ -2400,7 +2307,6 @@ class MobileNotificationPrefsApiTests(TestCase):
         self.assertTrue(userdata.push_notifications_when_lots_sell)
 
     def test_stores_intent_without_a_device_or_push_config(self):
-        """Refusing the write would lose the answer the user just gave; the web form stores it too."""
         self.assertFalse(self.user.userdata.has_push_device)
         response = self.client.patch(
             self.url,
@@ -2516,9 +2422,7 @@ class PreferencesPushBridgeTests(TestCase):
         self.assertNotContains(response, "pushGetState")
 
 
-# ---------------------------------------------------------------------------
 # Part L — terms and privacy policy, linked from sign-up
-# ---------------------------------------------------------------------------
 
 
 def _ensure_privacy_post():
@@ -2555,7 +2459,6 @@ class MobileConfigLegalUrlsTests(TestCase):
         self.assertEqual(data["privacy_policy_url"], "/privacy/")
 
     def test_privacy_omitted_when_the_page_is_missing(self):
-        """No link at all beats a dead one — the app draws nothing when the key is absent."""
         from auctions.models import BlogPost
 
         BlogPost.objects.filter(slug="privacy").delete()
@@ -2636,9 +2539,7 @@ class CookieBannerInTheAppTests(StandardTestCase):
         self.assertNotContains(self._home(), self.BANNER)
 
 
-# ---------------------------------------------------------------------------
 # Part A — wallet buttons, one per platform
-# ---------------------------------------------------------------------------
 
 
 class MobileAppPlatformMiddlewareTests(TestCase):
@@ -2715,7 +2616,6 @@ class MembershipCardWalletButtonsTests(TestCase):
         self.assertNotContains(response, "Add to Apple Wallet")
 
     def test_the_apple_explainer_is_web_only(self):
-        """ "Or just take a screenshot" is written for someone at a computer; in the app it's noise."""
         web = self._get(apple=False)
         self.assertContains(web, "apple-wallet-explainer")
         in_app = self._get("FishAuctionsApp/1.0 (Flutter; iOS)", apple=False)
@@ -2723,9 +2623,7 @@ class MembershipCardWalletButtonsTests(TestCase):
         self.assertNotContains(in_app, "take a screenshot")
 
 
-# ---------------------------------------------------------------------------
 # Part PALETTE — the website's command palette, inside the app
-# ---------------------------------------------------------------------------
 
 
 class AppCommandPaletteRenderingTests(StandardTestCase):
@@ -2749,7 +2647,6 @@ class AppCommandPaletteRenderingTests(StandardTestCase):
         self.assertContains(self._home(), "command-palette-modal")
 
     def test_the_keyboard_footer_stays_hidden_on_a_phone(self):
-        """Bootstrap does the hiding, but the class has to survive: there is no Ctrl+K on a phone."""
         self.assertContains(self._home(self.APP_UA), "d-none d-md-flex")
 
 
@@ -2790,8 +2687,6 @@ class AppPaletteDeepLinkTests(StandardTestCase):
     def _titles(self, response):
         return [item["title"] for group in response.json()["groups"] for item in group["items"]]
 
-    # -- lot scanning -----------------------------------------------------
-
     def test_lot_scanning_is_offered_for_the_auction_the_user_is_at(self):
         self.assertIn(self.ar_link, self._urls(self._palette()))
 
@@ -2799,7 +2694,6 @@ class AppPaletteDeepLinkTests(StandardTestCase):
         self.assertNotIn(self.ar_link, self._urls(self._palette(user_agent=self.WEB_UA)))
 
     def test_lot_scanning_is_not_offered_for_an_online_auction(self):
-        """There is nothing to walk to at an online auction."""
         self.user.userdata.last_auction_used = self.online_auction
         self.user.userdata.save()
         self.assertFalse([url for url in self._urls(self._palette()) if url.startswith("fishauctions://ar/")])
@@ -2816,17 +2710,13 @@ class AppPaletteDeepLinkTests(StandardTestCase):
             self.assertIn(self.ar_link, self._urls(self._palette(query)), query)
 
     def test_an_unrelated_query_does_not_drag_scanning_in(self):
-        """ "ar" is a substring of a great many words; the match is on the word, not the letters."""
         for query in ("car", "starting price", "search my lots", "find my lots"):
             self.assertNotIn(self.ar_link, self._urls(self._palette(query)), query)
-
-    # -- tap to pay -------------------------------------------------------
 
     def test_tap_to_pay_is_offered_to_someone_who_can_take_a_payment(self):
         self.assertIn(self.tap_to_pay_link, self._urls(self._palette()))
 
     def test_tap_to_pay_is_not_offered_to_a_buyer(self):
-        """The row is only worth showing to someone the payment screen would actually let in."""
         self.assertNotIn(self.tap_to_pay_link, self._urls(self._palette(user=self.userB)))
 
     def test_tap_to_pay_is_not_offered_on_the_web(self):
@@ -2865,8 +2755,6 @@ class AppPaletteDeepLinkTests(StandardTestCase):
         for query in ("tap", "card", "payment"):
             self.assertIn(self.tap_to_pay_link, self._urls(self._palette(query)), query)
 
-    # -- the native palette -----------------------------------------------
-
     def test_the_native_palette_is_not_sent_rows_it_injects_itself(self):
         """``/api/mobile/command-palette/`` backs the app's own fallback palette, which adds both
         rows natively; sending them from here as well would show the user each one twice."""
@@ -2901,7 +2789,6 @@ class AppPaletteNavigationTests(StandardTestCase):
         return palette_actions.run_action(request, "go_to_page", {"page": page})
 
     def test_tap_to_pay_opens_the_card_reader_rather_than_the_payout_settings(self):
-        """The catalog has a near miss: "tap to pay" is a keyword on the Square payout page."""
         self.assertEqual(self._go("tap to pay", self.IOS_UA)["url"], "fishauctions://tap-to-pay")
 
     def test_lot_scanning_opens_the_camera(self):
@@ -2914,7 +2801,6 @@ class AppPaletteNavigationTests(StandardTestCase):
         self.assertTrue(result["url"].startswith("/"), result)
 
     def test_a_page_the_catalog_owns_is_not_hijacked_in_the_app(self):
-        """Only the screens' own names win; everything else still goes through the catalog."""
         self.assertEqual(self._go("my_invoices", self.IOS_UA)["url"], reverse("my_invoices"))
 
     def _request(self, user_agent=""):
@@ -2953,7 +2839,6 @@ class AppPaletteNavigationTests(StandardTestCase):
         self.assertNotIn("native screens", palette_assist.build_system_prompt(self.user, {}))
 
     def test_every_name_the_prompt_offers_is_one_the_navigation_skill_accepts(self):
-        """The two lists are written in different functions; this is what keeps them the same."""
         from auctions import command_palette
 
         request = self._request(self.IOS_UA)

@@ -1,49 +1,26 @@
-"""Attach a species to the lots that were sold before there was a species list to pick from.
+"""Attach a species to lots that existed before there was a species list to pick from.
 
-The site can only *offer* a scientific name at the moment somebody types a lot name, so every lot
-that already existed when the list landed stays blank forever unless something goes back over
-them.  That is tens of thousands of lots -- "Tropheus duboisi", "guppies", "6 cardinal tetras" --
-and most of them turn up on the species-gaps page as work nobody needs to do by hand, because the
-matcher already knows the answer.
-
-So the command is three passes, in the order they are worth doing:
+Three passes, in order:
 
 ``--status``
-    What the species list actually covers before any of this starts.  A backfill can only be as
-    good as the list it matches against, and the plants, shrimp and live-food cultures are the
-    half of it that FishBase has never heard of -- so this says whether the curated list has been
-    imported at all, and how many lots are waiting.
+    What the species list covers and how many lots are missing a species.
 
 no flags
-    The certain ones.  ``suggest_species(..., use_llm=False)`` is the same code the add-lot form
-    runs, minus the paid call: exact names, the remembered answers, then token and phrase search.
-    It is deliberately strict -- "no match" is a better answer than a plausible wrong one, and a
-    wrong species here ends up on a printed label and in breeder points -- so the rule is to take
-    its answer when it gives exactly one, and to leave the lot alone otherwise.
+    Automatic pass. Uses ``suggest_species(..., use_llm=False)`` -- the same matcher the add-lot
+    form uses, minus the paid LLM call -- and only applies an answer when exactly one candidate
+    matches; a wrong species here ends up on a printed label and in breeder points.
 
 ``--review``
-    Everything that was left: the lot names that match *several* species, where only a person can
-    say which, worked through commonest first.  This is where the tail gets short.  A decision is
-    made once and applied to every lot whose name means the same thing, and remembered, so the
-    next person to type that name is offered the answer straight away.
+    Works through the lot names the matcher could not settle alone, commonest first. A decision
+    is applied to every spelling of that name and remembered for next time.
 
-Two things the writing pass does *not* do, both for the same reason: a lot's category is derived
-from its species, and moving a lot into a new category can move it between the BAP, HAP and
-Culture tracks.
+Category is deliberately not derived by default: a lot's category comes from its species, and
+moving categories can flip a lot between BAP/HAP/Culture tracks while an existing ``BapAward``
+still reflects the old one. Writes use ``update()`` rather than ``save()`` to avoid re-deriving
+the category. ``--set-category`` opts back in, but only for lots that are Uncategorized and have
+no BAP award recorded.
 
-* It writes with ``update()`` rather than ``save()``.  ``Lot._do_save`` would re-derive the
-  category from the species it has just been given, so a lot sitting in Cichlids that turns out to
-  be a java fern would become Aquatic plants and its ``bap_placeholder`` would go BAP -> HAP --
-  while any ``BapAward`` already recorded against it still holds BAP points.  The lot page and the
-  award would then disagree, on historical data, silently.
-* ``--set-category`` opts back into deriving the category, but only for lots that are currently
-  Uncategorized *and* have no award recorded.  There is nothing there for a new category to
-  contradict, and Uncategorized is where a lot lands when the guesser had no idea in the first
-  place.
-
-Start with ``--dry-run``: it prints exactly what would be set, grouped by lot name and by where
-the answer came from, and writes nothing.  ``--review --dry-run`` is the same idea for the second
-pass -- the list of names worth sitting down with, and no questions asked.
+``--dry-run`` prints what would be set and writes nothing; works with ``--review`` too.
 
     manage.py backfill_lot_species --status
     manage.py backfill_lot_species --dry-run
@@ -71,26 +48,18 @@ from auctions.species_matching import (
     visible_species,
 )
 
-#: How many species to offer in one review question.  A picklist you have to read is a picklist
-#: nobody reads, and past this the honest thing is to search for what you actually mean.
+#: Picklist size before "search instead" is the honest answer.
 MAX_CHOICES = 12
 
-#: How many of a group's spellings to teach the matcher when a decision is made.  Every one of
-#: them is written to a table every club reads, so this is bounded on purpose -- the long tail of
-#: one-off spellings is not worth a cache row each.
+#: Spellings taught to the matcher per decision; keeps the shared cache from bloating on one-offs.
 MAX_REMEMBERED = 20
 
 
 def group_key(lot_name):
-    """The words of a lot name that could name a species, singular, in order.
+    """Words in a lot name that could name a species, singular, in order.
 
-    "6 male guppies", "Guppies (pair)" and "young guppy" all come out as ``guppy``, which is what
-    makes the review pass finite: those are one question, not three.  ``base_words`` is the same
-    stop-word list the matcher uses, so a name made entirely of counts and adjectives keys to the
-    empty string and is skipped rather than asked about.
-
-    Asked twice, because the list holds singulars: "bag" is a stop word and "bags" is not, so
-    "3 bags" survives the first pass and has to be caught after the singular is taken.
+    Groups "6 male guppies", "Guppies (pair)" and "young guppy" to ``guppy``. Checked before and
+    after singularizing since the stop-word list only covers one form ("bag", not "bags").
     """
     words = []
     for word in base_words(lot_name):
@@ -101,13 +70,10 @@ def group_key(lot_name):
 
 
 class NameGroup:
-    """One question: every spelling of a lot name that means the same thing, and its candidates.
+    """One review question: every spelling of a lot name that means the same thing, and its candidates.
 
-    Grouped on :func:`group_key` *and* on the candidate species, not on the key alone.  The key
-    strips colours -- "blue" and "green" are both stop words -- so "blue dream shrimp" and "green
-    dream shrimp" share a key while naming two different cultivars.  Keying on what the matcher
-    found as well is what keeps those apart: two spellings only become one question when the list
-    offers the same answers for both.
+    Grouped by :func:`group_key` *and* by candidate species, since the key strips colours ("blue
+    dream shrimp" and "green dream shrimp" share a key but name different cultivars).
     """
 
     def __init__(self, key, candidates, source):
@@ -208,11 +174,7 @@ class Command(BaseCommand):
     # ------------------------------------------------------------------ shared
 
     def _base_queryset(self, slug):
-        """The lots this command is allowed to touch.
-
-        Only auctions that asked for scientific names: a lot in an auction with the field switched
-        off has no species because nobody was ever offered the choice, which is not a gap.
-        """
+        """Lots eligible to touch: only auctions with scientific names enabled have a real gap."""
         lots = Lot.objects.filter(
             species__isnull=True,
             is_deleted=False,
@@ -227,11 +189,7 @@ class Command(BaseCommand):
         return lots
 
     def _names(self, limit=None):
-        """``[{lot_name, count, bred}, ...]``, commonest first.
-
-        Commonest first because a name on 400 lots is worth getting right, and ``--limit`` should
-        spend itself on those rather than on the long tail of one-offs.
-        """
+        """``[{lot_name, count, bred}, ...]``, commonest first so ``--limit`` spends on the big names."""
         rows = list(
             self.lots.values("lot_name")
             .annotate(count=Count("pk"), bred=Count("pk", filter=Q(i_bred_this_fish=True)))
@@ -240,17 +198,11 @@ class Command(BaseCommand):
         return rows[:limit] if limit else rows
 
     def _apply(self, species, names, *, teach=False):
-        """Set *species* on every lot called any of *names*.  Returns ``(lots, refiled)``.
+        """Set *species* on every lot named any of *names*. Returns ``(lots, refiled)``.
 
-        ``update()``, not ``save()``: see the module docstring.  Two statements rather than one so
-        a lot only changes category when it qualified.
-
-        *teach* writes the name into the shared search cache, and is for the review pass only.
-        The automatic pass deliberately leaves it alone: its answers come straight out of the
-        species list, which is where the next lookup would find them anyway, and a cache row is
-        read *before* the token search -- so caching a derived answer can only ever shadow the
-        list it was derived from.  A person's decision is different, and is the whole point of
-        making it once.
+        Uses ``update()``, not ``save()`` (see module docstring). *teach* writes the decision to
+        the shared search cache; only the review pass sets it, since the automatic pass's answers
+        already come from the list itself.
         """
         pks = list(self.lots.filter(lot_name__in=names).values_list("pk", flat=True))
         if not pks:
@@ -272,10 +224,6 @@ class Command(BaseCommand):
                 category_automatically_added=True,
                 category_checked=True,
             )
-        # Teach the matcher, so nobody is asked this again -- on the lot form, in the club API, or
-        # by the next run of this command.  ``source="user"`` because a person decided it, which is
-        # what the gaps page shows when it lists what the matcher has been told.
-        # (Only ever reached from the review pass; see *teach* above.)
         if teach:
             for name in names[:MAX_REMEMBERED]:
                 remember(name, species, source="user")
@@ -284,7 +232,7 @@ class Command(BaseCommand):
     # ------------------------------------------------------------------ status
 
     def _status(self):
-        """Step nought: is there a list worth matching against, and how much is left to do."""
+        """Is there a list worth matching against, and how much is left to do."""
         by_source = {
             row["source"]: row["n"] for row in Species.objects.values("source").annotate(n=Count("pk")).order_by()
         }
@@ -300,8 +248,7 @@ class Command(BaseCommand):
                 )
             )
         else:
-            # By category rather than by the CSV's own "kind" column, because the category is what
-            # a person reading this can check against their own category list.
+            # Grouped by category, not the CSV's own "kind" column, to match the site's own list.
             rows = curated.values("category__name").annotate(n=Count("pk")).order_by("-n")
             self.stdout.write(
                 "  curated by category: "
@@ -325,7 +272,7 @@ class Command(BaseCommand):
     # ------------------------------------------------------------------ pass one
 
     def _auto(self, options):
-        """The certain ones: one distinct lot name at a time, applied where the matcher is sure."""
+        """Apply the matcher's answer wherever it is unambiguous, one lot name at a time."""
         names = self._names(options["limit"])
         self.stdout.write(f"{len(names)} distinct lot name(s) with no species.")
         answers = {}
@@ -341,8 +288,7 @@ class Command(BaseCommand):
                 continue
             if key not in answers:
                 found, source = suggest_species(name, use_llm=False)
-                # Exactly one, or nothing.  A shortlist is the matcher saying it cannot tell a
-                # Chindongo saulosi from an Aulonocara saulosi, and neither can this command.
+                # Only an unambiguous match; a shortlist means only a person can decide.
                 answers[key] = (found[0], source) if len(found) == 1 else (None, source)
             species, source = answers[key]
             if species is None:
@@ -390,13 +336,10 @@ class Command(BaseCommand):
             name = row["lot_name"]
             key = group_key(name)
             if not key:
-                # Nothing but counts and adjectives: "3 bags", "assorted".  Not a species question.
-                continue
+                continue  # nothing but counts and adjectives: "3 bags", "assorted"
             found, source = suggest_species(name, use_llm=False)
             if len(found) == 1:
-                # The automatic pass owns this one; asking about it here would be asking somebody
-                # to confirm an answer the command can already write on its own.
-                continue
+                continue  # the automatic pass already owns this one
             if not found and not include_unmatched:
                 continue
             fingerprint = (key, tuple(sorted(species.pk for species in found)))
@@ -436,12 +379,7 @@ class Command(BaseCommand):
         self.stdout.write(self.style.SUCCESS(f"{decided} decision(s), covering {touched} lot(s)."))
 
     def _headline(self, group):
-        """The commonest spelling, then the others it stands for.
-
-        Led by a real lot name rather than by the group key: the key is singularised by a crude
-        rule that is fine for grouping and reads as a typo ("ancistru bristlenose pleco"), and the
-        thing the operator is deciding about is a name somebody actually typed.
-        """
+        """The commonest spelling, then the others it stands for."""
         others = ", ".join(f"{name!r}×{count}" for name, count in group.spellings[1:4])
         if len(group.spellings) > 4:
             others += f", +{len(group.spellings) - 4} more"
@@ -489,12 +427,7 @@ class Command(BaseCommand):
             self.stdout.write("    ?")
 
     def _search(self, query):
-        """Species matching *query*, for somebody who knows what they are looking for.
-
-        Wider than the matcher on purpose.  ``suggest_species`` is written to refuse a plausible
-        guess, which is right when it is answering on its own and wrong here: a person typing
-        "ancistrus" wants the genus listed, and is the one deciding.
-        """
+        """Species matching *query*, wider than the matcher since a person here is deciding."""
         found = {species.pk: species for species in suggest_species(query, use_llm=False)[0]}
         typed = query.strip()
         wide = visible_species().filter(
@@ -521,27 +454,16 @@ class Command(BaseCommand):
         return lots
 
     def _not_a_species(self, group):
-        """Remember "this is not a species", so nothing asks about it again.
-
-        The same answer the language model would have written, and the same table the gaps page
-        reads -- so "sponge filter" and "misc plants" stop coming back on every pass.
-        """
+        """Remember "not a species" so nothing asks about this name again."""
         for name in group.names[:MAX_REMEMBERED]:
             remember(name, None, source="user")
         self.stdout.write(f"    remembered {group.key!r} as not a species")
         return 0
 
     def _add_species(self, group):
-        """Add a species -- a strain or a cross of one -- without leaving the review.
+        """Add a species (or a strain/cross of one) without leaving the review.
 
-        The command-line half of ``/species/new/``, and it exists for the same reason: the names
-        that survive the automatic pass are disproportionately the ones the list is *missing*, and
-        a workflow that ends in "go and add it on the website, then start again" ends in the lot
-        keeping no species at all.  Everything created here is approved: a person with a shell on
-        the server is not an auction admin adding a fish to their own club's picker.
-
-        Leaving the scientific name blank is how a **cross** is added -- a tibee, a flowerhorn.
-        There is no binomial to type, which is the whole reason the hobby named it something; see
+        Leaving the scientific name blank adds a cross (a tibee, a flowerhorn) -- see
         :attr:`~auctions.models.Species.is_hybrid`.
         """
         typed = self._ask("    scientific name (Genus species), or blank for a cross: ")
@@ -561,8 +483,7 @@ class Command(BaseCommand):
             self.stdout.write(f"    {clash.label} is already on the list.")
             return clash
         common_name = self._ask(f"    common name [{group.display}]: ") or group.display
-        # A name that already names something else is refused for the same reason the club API
-        # refuses it: one name on two species is the loss of a name, not the gain of one.
+        # Refused for the same reason the club API refuses it: one name on two species.
         carrying = species_carrying_common_name(common_name)
         if carrying:
             self.stdout.write(f"    “{common_name}” already names {carrying.label}.")
@@ -572,14 +493,10 @@ class Command(BaseCommand):
             species=epithet,
             variety=variety,
             parent=parent,
-            # save() clears the genus, the epithet and the parent when this is set, so a cross
-            # can never carry one of the two things it was crossed from.
-            is_hybrid=is_hybrid,
+            is_hybrid=is_hybrid,  # save() clears genus/epithet/parent when this is set
             common_name=common_name[:255],
             source="admin",
-            # Somebody is adding this because a club sold one, which is better evidence than
-            # FishBase's own column -- see Species.in_aquarium_trade.
-            in_trade_override=True,
+            in_trade_override=True,  # a club sold one -- see Species.in_aquarium_trade
             freshwater=parent.freshwater if parent else True,
             family=parent.family if parent else "",
             order=parent.order if parent else "",
@@ -590,7 +507,6 @@ class Command(BaseCommand):
             SpeciesCommonName.objects.create(
                 species=species, name=common_name[:255], language="English", is_preferred=True, source="admin"
             )
-        # A cross has no genus, and the species tier of the ranking is set by save() anyway.
         if species.genus:
             Species.recompute_trade_ranks(genus=species.genus)
         self.stdout.write(self.style.SUCCESS(f"    added {species.label}"))

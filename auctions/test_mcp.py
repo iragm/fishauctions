@@ -1,17 +1,4 @@
-"""Tests for the MCP tool catalogue.
-
-The bulk of this file is an **audit**, in the spirit of the two the palette already has:
-``test_palette_routes`` guarantees every page can be reached, ``test_palette_skills`` guarantees
-every write the UI can do is either covered by an action or written down as deliberately not
-covered, and this one guarantees every action that exists turns into a tool an MCP host will
-accept. All three fail the build rather than waiting for somebody to notice.
-
-The most load-bearing test here is :meth:`RegistryConformance.test_every_parameter_declares_its_type`.
-The whole schema is derived from the prose in ``Action.params`` -- there is no second table of
-types -- so the day somebody writes a parameter description that doesn't open with
-``"<type>, required|optional"`` is the day that parameter silently loses its type. This catches it
-in CI instead.
-"""
+"""Tests for the MCP tool catalogue."""
 
 import datetime
 import json
@@ -89,7 +76,6 @@ class ParamSchemaTests(SimpleTestCase):
         self.assertFalse(required)
 
     def test_the_prose_after_the_prefix_is_never_lost(self):
-        """The point of moving the prefix rather than dropping the sentence."""
         schema, _ = tools.param_schema("string, optional, ADMINS ONLY. Bidder number or name to add the lot for.")
         self.assertIn("ADMINS ONLY", schema["description"])
         self.assertIn("Bidder number", schema["description"])
@@ -163,7 +149,6 @@ class RegistryConformance(SimpleTestCase):
             self.assertNotIn("idempotentHint", annotations, f"{name} reads; the hint means nothing")
 
     def test_every_parameter_declares_its_type(self):
-        """The convention the whole schema is derived from. See this module's docstring."""
         for name, action in palette_actions.ACTIONS.items():
             for param, description in action.params.items():
                 schema, _ = tools.param_schema(description)
@@ -215,7 +200,6 @@ class RegistryConformance(SimpleTestCase):
                 self.assertIn(param, schema["properties"])
 
     def test_no_parameter_prose_is_lost_on_the_way_into_the_schema(self):
-        """A parameter documented with more than its type keeps every word of it."""
         for name, action in palette_actions.ACTIONS.items():
             properties = self.by_name[name]["inputSchema"]["properties"]
             for param, prose in action.params.items():
@@ -243,7 +227,6 @@ class RegistryConformance(SimpleTestCase):
                 )
 
     def test_descriptions_do_not_point_at_the_palette_prompt(self):
-        """A description has to stand alone: an agent has no 'context below' to look in."""
         for name, descriptor in self.by_name.items():
             haystack = descriptor["description"] + json.dumps(descriptor["inputSchema"])
             for phrase in ("context below", "list below", "listed under", "the prompt"):
@@ -303,13 +286,11 @@ class CallToolTests(StandardTestCase):
         self.assertIn("lot number", self._text(result))
 
     def test_finding_nothing_is_not_an_error(self):
-        """A search that matched nothing succeeded. Only a failure to *run* is an MCP error."""
         result = tools.call_tool(self._request_for(self.user), "describe_lot", {"lot": "no such lot anywhere"})
         self.assertFalse(result["isError"])
         self.assertIs(json.loads(self._text(result))["found"], False)
 
     def test_an_ambiguous_answer_asks_the_caller_to_narrow_it(self):
-        """``more_info_needed`` comes back as a recoverable error carrying the candidates."""
         result = tools.call_tool(self._request_for(self.user), "go_to_page", {})
         self.assertTrue(result["isError"])
         self.assertTrue(self._text(result).strip())
@@ -358,7 +339,6 @@ class CallToolTests(StandardTestCase):
             )
 
     def test_a_lot_is_still_named_by_the_number_on_its_label(self):
-        """Taking the pk away is only safe because the public identifier is already in every answer."""
         result = tools.call_tool(self._request_for(self.user), "find_lot", {"query": self.lot.lot_name})
         payload = json.loads(self._text(result))
         self.assertEqual(payload["lots"][0]["lot_number"], self.lot.lot_number_display)
@@ -379,13 +359,11 @@ class CallToolTests(StandardTestCase):
             self.assertNotIn("undo", json.loads(self._text(result)))
 
     def test_a_read_carries_the_parsed_object_as_well_as_the_text(self):
-        """MCP 2025-06-18's ``structuredContent``: the host gets an object, not a string to parse."""
         result = tools.call_tool(self._request_for(self.user), "my_context", {})
         self.assertEqual(result["structuredContent"], json.loads(self._text(result)))
         self.assertEqual(result["structuredContent"]["username"], self.user.username)
 
     def test_the_structure_and_the_text_are_always_the_same_answer(self):
-        """Including when the text is a refusal: the structure must not carry what was withheld."""
         request = self._request_for(self.user)
         with patch.object(tools, "MAX_RESULT_CHARS", 200):
             result = tools.call_tool(request, "my_context", {})
@@ -393,20 +371,17 @@ class CallToolTests(StandardTestCase):
         self.assertIn("too big", result["structuredContent"]["error"])
 
     def test_a_plain_sentence_error_carries_no_structure(self):
-        """``structuredContent`` has to be an object; a one-line refusal is not one."""
         result = tools.call_tool(self._request_for(self.user), "add_lot", {"name": "guppies"}, writes=False)
         self.assertTrue(result["isError"])
         self.assertNotIn("structuredContent", result)
 
     def test_a_disambiguation_carries_structure_too(self):
-        """ "Which lot?" is a successful result that has not acted, and it is structured too."""
         result = tools.call_tool(self._request_for(self.user), "watch_lot", {})
         self.assertFalse(result["isError"])
         self.assertEqual(result["structuredContent"]["status"], "needs_more_information")
         self.assertEqual(result["structuredContent"], json.loads(self._text(result)))
 
     def test_everything_in_a_result_survives_json(self):
-        """``structuredContent`` is serialised again by the transport, so a Decimal in it is a 500."""
         result = tools.call_tool(self._request_for(self.user), "describe_lot", {"lot": str(self.lot.lot_name)})
         json.dumps(result)
 
@@ -475,8 +450,6 @@ class EndpointTests(StandardTestCase):
         self.assertNotIn("error", payload, payload)
         return payload["result"]
 
-    # --- authentication ---------------------------------------------------
-
     def test_no_credential_is_a_401_that_says_where_to_authenticate(self):
         response = self.rpc("initialize", key="")
         self.assertEqual(response.status_code, 401)
@@ -487,7 +460,6 @@ class EndpointTests(StandardTestCase):
         self.assertIn("/.well-known/oauth-protected-resource", challenge)
 
     def test_a_session_cookie_is_not_a_credential(self):
-        """The rule the CSRF exemption rests on. See auctions/mcp/auth.py."""
         self.client.force_login(self.user)
         response = self.rpc("initialize", key="")
         self.assertEqual(response.status_code, 401)
@@ -509,8 +481,6 @@ class EndpointTests(StandardTestCase):
         self.rpc("ping")
         self.key.refresh_from_db()
         self.assertIsNotNone(self.key.last_used_at)
-
-    # --- the protocol -----------------------------------------------------
 
     def test_initialize_negotiates_and_advertises_only_what_exists(self):
         result = self.result(self.rpc("initialize", {"protocolVersion": protocol.LATEST_PROTOCOL_VERSION}))
@@ -583,8 +553,6 @@ class EndpointTests(StandardTestCase):
         )
         self.assertEqual(response.status_code, 400)
 
-    # --- transport rules --------------------------------------------------
-
     def test_get_is_refused_because_no_stream_is_offered(self):
         self.assertEqual(self.client.get(self.url).status_code, 405)
 
@@ -598,8 +566,6 @@ class EndpointTests(StandardTestCase):
     def test_our_own_origin_is_fine(self):
         response = self.rpc("ping", HTTP_ORIGIN="http://testserver")
         self.assertEqual(response.status_code, 200)
-
-    # --- tools ------------------------------------------------------------
 
     def test_tools_list_is_scoped_to_the_caller(self):
         listed = self.result(self.rpc("tools/list"))["tools"]
@@ -656,7 +622,6 @@ class EndpointTests(StandardTestCase):
         self.assertIn("admins", result["content"][0]["text"])
 
     def test_the_same_tool_works_for_somebody_who_does_run_the_auction(self):
-        """The other half of the previous test: the refusal is about permissions, not about MCP."""
         raw, prefix, key_hash = UserAPIKey.generate()
         UserAPIKey.objects.create(user=self.admin_user, name="admin key", prefix=prefix, key_hash=key_hash)
         result = self.result(
@@ -743,7 +708,6 @@ class OAuthTests(StandardTestCase):
         self.assertTrue(any(not d["annotations"]["readOnlyHint"] for d in listed))
 
     def test_a_token_with_no_read_scope_is_refused(self):
-        """Reading is the floor. A token granted neither scope has nothing here it may do."""
         response = self.rpc("initialize", {}, token=self.token_for(self.user, "offline_access"))
         self.assertEqual(response.status_code, 401)
 
@@ -760,7 +724,6 @@ class OAuthTests(StandardTestCase):
         self.assertEqual(self.rpc("initialize", {}, token=token.token).status_code, 401)
 
     def test_a_token_with_nobody_behind_it_is_refused(self):
-        """A client-credentials token has no user to act as, and every tool here acts as a person."""
         import secrets
 
         token = self.AccessToken.objects.create(
@@ -799,7 +762,6 @@ class DiscoveryDocumentTests(StandardTestCase):
         return json.loads(response.content)
 
     def test_the_401_points_at_the_resource_metadata(self):
-        """Without this header a client has to guess at the well-known paths, or give up."""
         response = self.client.post("/mcp/", data="{}", content_type="application/json", secure=True)
         self.assertEqual(response.status_code, 401)
         challenge = response["WWW-Authenticate"]
@@ -814,7 +776,6 @@ class DiscoveryDocumentTests(StandardTestCase):
         self.assertTrue(document["authorization_servers"])
 
     def test_cimd_is_advertised_in_the_two_places_claude_reads(self):
-        """Claude picks CIMD only when *both* are present; miss one and it falls back to DCR."""
         document = self.metadata("/.well-known/oauth-authorization-server")
         self.assertIs(document["client_id_metadata_document_supported"], True)
         self.assertIn("none", document["token_endpoint_auth_methods_supported"])
@@ -834,7 +795,6 @@ class DiscoveryDocumentTests(StandardTestCase):
             self.assertNotIn(retired, document["grant_types_supported"])
 
     def test_registration_is_open_because_it_happens_before_anyone_signs_in(self):
-        """DCR is the first call a client makes, with no user in the loop."""
         response = self.client.post(
             "/o/register/",
             data=json.dumps(
@@ -885,12 +845,10 @@ class OptInTests(StandardTestCase):
         )
 
     def test_a_key_works_without_the_command_palette_flag(self):
-        """The flag is about the palette. Connecting an agent does not go through it."""
         self._opt_in(self.user, False)
         self.assertEqual(self.rpc().status_code, 200)
 
     def test_no_credential_at_all_is_still_a_401_with_a_challenge(self):
-        """The other half: a 401 is what *starts* an OAuth flow, so it has to survive the change."""
         response = self.client.post(
             self.url,
             data=json.dumps({"jsonrpc": "2.0", "id": 1, "method": "ping"}),
@@ -927,7 +885,6 @@ class ConnectPageTests(StandardTestCase):
     url = "/ai/"
 
     def test_the_command_palette_flag_does_not_gate_this_page(self):
-        """Somebody with the palette switched off can still connect an agent, keys and all."""
         self.user.userdata.use_llm_search = False
         self.user.userdata.save()
         self.client.force_login(self.user)
@@ -1043,7 +1000,6 @@ class OAuthOptInTests(StandardTestCase):
         self.assertEqual(self.ping(self.token_for(self.user)).status_code, 200)
 
     def test_a_token_for_a_deactivated_account_is_a_403_not_a_reauth_loop(self):
-        """A 401 here would send the client round the whole OAuth flow to be refused again."""
         token = self.token_for(self.user)
         self.user.is_active = False
         self.user.save()
@@ -1147,7 +1103,6 @@ class AuthorizationServerHardeningTests(StandardTestCase):
     """
 
     def test_the_application_pages_are_not_open_to_every_signed_in_member(self):
-        """``/o/applications/`` registers OAuth clients. It belongs to whoever runs the server."""
         self.client.force_login(self.user)
         for path in ("/o/applications/", "/o/applications/register/"):
             response = self.client.get(path)
@@ -1161,7 +1116,6 @@ class AuthorizationServerHardeningTests(StandardTestCase):
         self.assertEqual(self.client.get("/o/applications/").status_code, 200)
 
     def test_dynamic_registration_is_rate_limited_per_address(self):
-        """DCR has to stay open to anonymous callers, which makes the table writable by strangers."""
         from auctions.mcp import auth as mcp_auth
 
         body = json.dumps(
@@ -1212,7 +1166,6 @@ class ClientMetadataDocumentTests(SimpleTestCase):
         self.assertEqual(_resolve_grant_type(narrowed["grant_types"]), "authorization-code")
 
     def test_it_narrows_rather_than_widens(self):
-        """A document that asks for nothing we support still fails, which is the right answer."""
         from auctions.mcp.cimd import narrow_grant_types
 
         narrowed = narrow_grant_types({"grant_types": ["implicit", "password"]})
@@ -1225,7 +1178,6 @@ class ClientMetadataDocumentTests(SimpleTestCase):
         self.assertIs(narrow_grant_types(document), document)
 
     def test_the_supported_set_is_read_off_the_discovery_document(self):
-        """Two lists that have to agree are one list, or they drift."""
         from auctions.mcp.cimd import supported_grant_types
 
         advertised = set(settings.OAUTH2_PROVIDER["OAUTH2_GRANT_TYPES_SUPPORTED"])
@@ -1241,7 +1193,6 @@ class ClientMetadataDocumentTests(SimpleTestCase):
         self.assertEqual(metadata["grant_types"], ["authorization_code", "refresh_token"])
 
     def test_the_deployment_actually_uses_it(self):
-        """Writing the class is half of it; the setting is the half that fails silently."""
         self.assertEqual(
             settings.OAUTH2_PROVIDER["CIMD_METADATA_FETCHER"],
             "auctions.mcp.cimd.ClientMetadataFetcher",
@@ -1382,7 +1333,6 @@ class IconTests(SimpleTestCase):
         self.assertIn(self.icon_file(icons.CLUB), by_name["add_club_member"])
 
     def test_the_icon_files_are_really_there(self):
-        """A broken image beside every tool is worse than no image, and it fails silently."""
         from pathlib import Path
 
         from django.conf import settings
@@ -1409,7 +1359,6 @@ class IconTests(SimpleTestCase):
             self.assertNotIn("icons", descriptor, f"{descriptor['name']} grew an icon")
 
     def test_they_are_a_small_fraction_of_the_catalogue(self):
-        """The cost is real and this is the number to look at the day it stops being worth it."""
         with_icons = len(json.dumps({"tools": self.descriptors}))
         without = len(json.dumps({"tools": [{k: v for k, v in t.items() if k != "icons"} for t in self.descriptors]}))
         self.assertLess(with_icons - without, without * 0.15, "icons are more than 15% of tools/list")
@@ -1449,14 +1398,12 @@ class ResourceLinkTests(StandardTestCase):
             self.assertTrue(link["title"])
 
     def test_a_tool_never_links_to_its_own_answer(self):
-        """``describe_lot`` pointing at ``lot://…`` is a pointer at the document it just sent."""
         links = resources.links_for("describe_lot", {"auction": "spring", "lot": "14"})
         uris = [link["uri"] for link in links]
         self.assertNotIn("lot://spring/14", uris)
         self.assertIn("auction://spring", uris, "the auction it is in is the one worth having")
 
     def test_what_goes_in_place_of_a_dropped_self_link_is_what_sits_underneath(self):
-        """``describe_auction`` has answered the auction, so it offers what is under it."""
         uris = [link["uri"] for link in resources.links_for("describe_auction", {"auction": "spring"})]
         self.assertEqual(uris, ["auction://spring/lots", "auction://spring/people", "auction://spring/history"])
         self.assertEqual(
@@ -1465,7 +1412,6 @@ class ResourceLinkTests(StandardTestCase):
         )
 
     def test_a_tool_that_did_not_answer_the_top_level_thing_gets_only_that(self):
-        """The contrast: ``list_lots`` is not owed the people, which it did not ask about."""
         uris = [link["uri"] for link in resources.links_for("list_lots", {"auction": "spring"})]
         self.assertEqual(uris, ["auction://spring"])
 
@@ -1482,11 +1428,9 @@ class ResourceLinkTests(StandardTestCase):
         self.assertEqual(len(resources.links_for("my_context", many)), resources.MAX_LINKS)
 
     def test_a_uri_this_server_cannot_build_is_dropped_rather_than_sent(self):
-        """A decoration must never be able to fail a call that otherwise worked."""
         self.assertEqual(resources.links_for("my_context", {"auction": "one/two/three"}), [])
 
     def test_the_bookkeeping_key_is_never_in_the_answer(self):
-        """``_about`` is ours. It is not part of what the tool said, on either surface."""
         result = tools.call_tool(self._request_for(self.user), "my_context", {})
         self.assertNotIn(palette_actions.KEY_ABOUT, json.loads(result["content"][0]["text"]))
         self.assertNotIn(palette_actions.KEY_ABOUT, result["structuredContent"])
@@ -1496,11 +1440,9 @@ class ConfirmationTierTests(SimpleTestCase):
     """``asks_first`` is the palette's countdown, and it is not the read/write split."""
 
     def test_checking_someone_in_does_not_ask_first(self):
-        """Non-destructive, undone by a tool that exists, and said thirty times at a door."""
         self.assertFalse(palette_actions.get_action("check_in").asks_first)
 
     def test_it_is_still_a_write_everywhere_that_matters(self):
-        """The opt-out is about a countdown card. It must not widen what MCP advertises."""
         action = palette_actions.get_action("check_in")
         self.assertEqual(action.danger, palette_actions.DANGER_CONFIRM)
         self.assertFalse(tools.read_only(action))
@@ -1510,7 +1452,6 @@ class ConfirmationTierTests(SimpleTestCase):
         self.assertNotIn("check_in", read_only_catalogue, "a read-only credential must not be offered it")
 
     def test_only_a_reversible_write_may_skip_the_countdown(self):
-        """The bar, enforced: confirm-tier, not destructive, and safe to repeat."""
         for action in palette_actions.ACTIONS.values():
             if action.asks_first:
                 continue
@@ -1534,7 +1475,6 @@ class ConfirmationTierTests(SimpleTestCase):
         )
 
     def test_a_points_decision_can_always_be_taken_back_by_the_same_tool(self):
-        """Which is why ``review_points`` is allowed to skip the card: undo is one of its own values."""
         action = palette_actions.get_action("review_points")
         self.assertIn("undo", action.params["decision"])
         self.assertFalse(action.destructive)

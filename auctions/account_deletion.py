@@ -1,48 +1,16 @@
-"""Account deletion — what "delete my account" means here, and the machinery that does it.
+"""Account deletion -- what "delete my account" means here, and the machinery that does it.
 
-Any app that lets people create an account has to let them delete it from inside the app (App Store
-Review Guideline 5.1.1(v); Google Play's data-deletion policy asks for the same and accepts a web
-URL). That's :class:`auctions.views.AccountDeleteView` — one web page, reachable from /preferences/,
-so the app follows a link like any other page and needs no release of its own.
+Required by App Store Review Guideline 5.1.1(v) and Google Play's data-deletion policy; served by
+:class:`auctions.views.AccountDeleteView` at /preferences/. Two steps: :func:`request_deletion`
+starts a :data:`GRACE_PERIOD_DAYS` window that a plain sign-in cancels (:func:`cancel_deletion`);
+:func:`delete_account` runs once the grace period expires (daily via Celery beat).
 
-Deletion happens in two steps:
-
-1. :func:`request_deletion` records the request and signs the user out. Nothing is destroyed yet.
-   The account keeps working for :data:`GRACE_PERIOD_DAYS`, and simply signing in again cancels it
-   (:func:`cancel_deletion`, wired to the login signal in ``auctions.signals``) — the alternative is
-   an irreversible mistake at 2am.
-2. :func:`delete_account` runs when the grace period is up (the ``delete_pending_accounts`` command,
-   daily via Celery beat) and is the irreversible part.
-
-What deletion means, and why it isn't a ``User.delete()``:
-
-* **Other people's records stay.** A bid, an invoice, a sold lot and a payout are also the seller's,
-  the buyer's and the club's records; a club's past auction has to keep adding up after someone
-  leaves. So the User row survives, stripped of everything personal (username, email, password, name,
-  and it can never be signed into again), and the rows that point at it keep pointing at it.
-* **The club's own records stay.** A ClubMember row an admin created or has edited belongs to the
-  club — it loses the account link and nothing else (``ClubMember.admin_edited``), including its
-  place on the club's mailing list: the club collected that address and is the one who answers for
-  it. A row that exists only because the member signed themselves up and no admin ever touched it is
-  theirs, and goes — along with the Mailchimp/Brevo contact it created.
-* **The auction's own notes stay.** An AuctionTOS an admin typed in at the door
-  (``manually_added``) is the auction's record of who was there, written from what the person said
-  in person, so it keeps its contents and only loses the account link. One the person created by
-  joining the auction themselves is theirs, and its name and contact details go.
-* **Everything personal actually goes**: the site profile and its address/coordinates, devices and
-  their push tokens, browsing and search history, watched lots, saved payment-processor connections,
-  and the sign-in identities (password, email address records, linked Google/Apple/Facebook
-  accounts, app tokens). A linked Apple account also has its grant revoked at Apple, which Apple
-  requires of any app offering Sign in with Apple.
-
-Club and auction history record what deletion did, so an admin reading the roster later can see why
-a record lost its name. Those histories are free text and sometimes quote an email address, so the
-person's addresses are rewritten to ``[deleted]`` in the history of every auction they took part in,
-and of any club whose record of them was their own. Names are left alone — an auction's history has
-to stay readable, and the account behind the name is gone either way.
-
-The page says all of this in plain language before asking for confirmation — a deletion page that
-quietly does less than it claims is the one thing Apple actually rejects.
+Not a ``User.delete()``: other people's records (bids, invoices, sold lots, club/auction history)
+must keep adding up, so the User row survives with everything personal stripped and un-signable-in,
+while rows that point at it keep pointing at it. A club- or auction-owned record (admin-created or
+admin-edited) keeps its contents and only loses the account link; a self-created one is deleted with
+the account. Everything genuinely personal (profile, devices, history, sign-in identities, a linked
+Apple grant) is deleted outright.
 """
 
 import logging
@@ -54,12 +22,10 @@ from django.utils import timezone
 
 logger = logging.getLogger(__name__)
 
-# How long a deletion request can be undone by signing in again. Long enough to cover "I meant to do
-# that but my club needs one more thing from me", short enough to be a real deletion.
+# Long enough to undo an accidental click, short enough to be a real deletion.
 GRACE_PERIOD_DAYS = 30
 
-# Written over the name on records that are kept for their auction/club, so a person reading them
-# sees why there's no name rather than a suspicious blank.
+# Written over the name on records kept for their auction/club, so a blank isn't mistaken for a bug.
 DELETED_NAME = "Deleted user"
 
 # Written over an email address quoted in free-text history that the auction or club keeps.
@@ -86,13 +52,9 @@ def blacklist_refresh_tokens(user):
 def request_deletion(user):
     """Schedule *user*'s account for deletion and return the date it will happen.
 
-    Idempotent-ish: asking twice doesn't restart the clock, so nobody can extend their own grace
-    period by clicking again.
-
-    The web session ends in the view; the app's refresh tokens end here, because they outlive it by
-    months. Without that, someone who deletes from a desktop keeps a working app for the whole grace
-    period, never meets the one thing that calls the deletion off (signing in — using the app isn't
-    signing in), and then finds the account gone. Signing in again mints new tokens.
+    Idempotent: asking twice doesn't restart the clock. App refresh tokens are blacklisted here
+    (they outlive the web session by months) so a desktop-initiated deletion doesn't leave a
+    working app for the whole grace period. Signing in again cancels the deletion and mints new ones.
     """
     userdata = user.userdata
     if not userdata.account_deletion_requested:
@@ -115,11 +77,7 @@ def cancel_deletion(user):
 
 
 def deletion_summary(user):
-    """Counts for the confirmation page, so the warning is about *this* account.
-
-    Club memberships and auction records are each split the way deletion treats them: the ones the
-    club or auction keeps, and the ones that go with the account.
-    """
+    """Counts for the confirmation page, split the way deletion treats them: kept vs. deleted."""
     from auctions.models import Auction, AuctionTOS, ClubMember, Lot, MobileDevice
 
     memberships = ClubMember.objects.filter(user=user, is_deleted=False)
@@ -131,8 +89,7 @@ def deletion_summary(user):
         "club_memberships_kept": memberships.filter(admin_edited=True).count(),
         "club_memberships_deleted": memberships.filter(admin_edited=False).count(),
         "devices": MobileDevice.objects.filter(user=user).count(),
-        # Responsibilities other people depend on. These aren't deleted — an auction outlives its
-        # organizer's account — but someone who is the only admin should hear it before confirming.
+        # Not deleted, but a sole admin should hear about it before confirming.
         "auctions_created": Auction.objects.filter(created_by=user, is_deleted=False).count(),
         "clubs_administered": memberships.filter(permission_admin=True).count(),
     }
@@ -141,10 +98,8 @@ def deletion_summary(user):
 def _marketing_contacts(user):
     """(club_pk, email) for every mailing list this deletion removes the person from.
 
-    Only the lists that came from the person's own member records. ``admin_edited`` draws the same
-    line here as it does everywhere else: if the club owns the member record, it owns that record's
-    place on the club's mailing list too — the club collected the address and is the one who answers
-    for it, so deletion leaves the contact alone and the page tells the person to ask the club.
+    Only from the person's own (non ``admin_edited``) member records -- a club-owned record keeps
+    its place on the club's list, since the club collected that address.
     """
     from auctions.models import ClubMember
 
@@ -156,7 +111,7 @@ def _marketing_contacts(user):
 
 
 def _personal_emails(user):
-    """Every address this person's records are keyed on — collected before anything is blanked."""
+    """Every address this person's records are keyed on -- collected before anything is blanked."""
     from allauth.account.models import EmailAddress
 
     from auctions.models import AuctionTOS, ClubMember
@@ -178,10 +133,9 @@ def _delete_sign_in_identities(user):
 
     from auctions.apple_signin import revoke_all_for_user
 
-    # Apple requires an app offering Sign in with Apple to revoke the grant when the account goes;
-    # a deletion that leaves it standing is incomplete by their rules. Must happen before the token
-    # rows below are dropped -- they're the only way to reach Apple, so afterwards it's impossible.
-    # Best effort: Apple being unreachable must not be what stops someone's account being deleted.
+    # Apple requires the grant revoked when the account goes. Must happen before the token rows
+    # below are dropped -- they're the only way to reach Apple. Best effort: Apple being
+    # unreachable must not block the deletion.
     try:
         revoke_all_for_user(user)
     except Exception:
@@ -190,8 +144,8 @@ def _delete_sign_in_identities(user):
     SocialToken.objects.filter(account__user=user).delete()
     SocialAccount.objects.filter(user=user).delete()
     EmailAddress.objects.filter(user=user).delete()
-    # Already done when the deletion was requested; repeated here because a token can be issued
-    # between the two (signing in cancels the deletion, so that's a cancel-then-ask-again).
+    # Repeated here (also done on request): a token can be issued between the two, since signing
+    # in cancels the deletion.
     blacklist_refresh_tokens(user)
 
 
@@ -223,28 +177,25 @@ def _delete_personal_rows(user):
         Watch,
     )
 
-    # Push subscriptions: the app's FCM tokens and any browser subscription (the endpoint and its
-    # keys are the browser's address for this person, so the SubscriptionInfo goes too).
+    # Push subscriptions: FCM tokens and any browser subscription (its endpoint/keys are the
+    # browser's address for this person).
     subscription_pks = list(PushInformation.objects.filter(user=user).values_list("subscription_id", flat=True))
     PushInformation.objects.filter(user=user).delete()
     SubscriptionInfo.objects.filter(pk__in=subscription_pks).delete()
     MobileDevice.objects.filter(user=user).delete()
     MobileOfflineOp.objects.filter(user=user).delete()
-    # The log of what was pushed to those devices, and which prompts they'd already been shown.
     PushNotificationSent.objects.filter(user=user).delete()
     CheckinNudge.objects.filter(user=user).delete()
-    # Their own Bluetooth hardware, reported by the app when they paired it. The printer profiles it
-    # taught us are already ThermalPrinterProfile rows and aren't about this person at all.
+    # Their own Bluetooth hardware; the printer profiles it taught us are separate rows, not this
+    # person's data.
     ObservedPrinter.objects.filter(user=user).delete()
-    # Camera sightings from their phone, keyed to its AR session. The lot map is solved out of these
-    # into Lot positions, and the buffer is pruned constantly, so nothing depends on keeping them.
+    # Camera sightings from their phone; the lot map is solved out of these and the buffer is
+    # pruned constantly, so nothing depends on keeping them.
     LotObservation.objects.filter(user=user).delete()
 
-    # Payment-processor connections (access tokens, merchant ids).
     PayPalSeller.objects.filter(user=user).delete()
     SquareSeller.objects.filter(user=user).delete()
 
-    # Preferences, interests and history — all of it is a profile of one person.
     Watch.objects.filter(user=user).delete()
     ChatSubscription.objects.filter(user=user).delete()
     SearchHistory.objects.filter(user=user).delete()
@@ -255,18 +206,14 @@ def _delete_personal_rows(user):
     # Promo-email campaigns carry the address they were sent to, so they go rather than unlink.
     AuctionCampaign.objects.filter(user=user).delete()
     UserLabelPrefs.objects.filter(user=user).delete()
-    # Who this person refused to sell to is their own list and goes with them. Bans *of* them stay:
-    # that list belongs to the person who wrote it.
+    # Who this person refused to sell to is their own list. Bans *of* them stay: that list belongs
+    # to whoever wrote it.
     UserBan.objects.filter(user=user).delete()
     # An ad response is the campaign owner's statistic; keep the row, lose the person.
     AdCampaignResponse.objects.filter(user=user).update(user=None, session="")
-    # A report they filed is the moderation queue's record of a decision somebody has to make or
-    # has made, so the row stays and the reporter comes off it -- the same treatment as an ad
-    # response, for the same reason. A copyright notice they sent is a legal document that quotes
-    # its own sender's name and address in its own fields; the account link goes and the notice
-    # stays. Copyright strikes *against* them are not touched at all: they are this site's record
-    # of what its repeat-infringer policy did, they hang off the User row that survives deletion,
-    # and 512(i) is a condition we would be dismantling one deleted account at a time.
+    # A content report and a copyright notice are someone else's record of a decision to be made;
+    # unlink, don't delete. Copyright strikes *against* them stay untouched -- this site's own
+    # repeat-infringer record, required by 17 U.S.C. 512(i).
     ContentReport.objects.filter(reported_by=user).update(reported_by=None, reporter_email="")
     CopyrightNotice.objects.filter(submitted_by=user).update(submitted_by=None)
 
@@ -283,26 +230,20 @@ def _anonymize_page_views(user):
 def _anonymize_club_memberships(user):
     """Unlink every membership; scrub the ones the club doesn't own.
 
-    ``admin_edited`` is the line: a record a club admin created or edited is the club's own (their
-    roster, their dues, their bidder number, their mailing list), so it keeps its contents and only
-    stops pointing at the account. A record that exists because the member signed themselves up, and
-    that no admin has touched since, is the member's and is emptied and deactivated.
+    ``admin_edited`` is the line: a club-owned record keeps its contents (roster, dues, bidder
+    number, mailing list) and only stops pointing at the account; a self-signed-up, untouched
+    record is emptied and deactivated.
     """
     from auctions.models import ClubHistory, ClubMember
 
     for member in ClubMember.objects.filter(user=user).select_related("club"):
-        # Written with queryset updates rather than member.save(): ClubMember.save() re-links a
-        # user-less record to whichever account matches its email, which is what keeps club rosters
-        # attached to their members and would immediately undo the unlink here. It also fires the
-        # mailing-list sync, which has nothing to do here either way — a kept record keeps its
-        # contact, and a member's own record has its contact deleted outright by delete_account.
+        # Queryset update, not member.save(): save() re-links a user-less record to whichever
+        # account matches its email, and fires the mailing-list sync -- neither belongs here.
         if member.admin_edited:
-            # contact_status is deliberately not touched. Marking do-not-contact would archive the
-            # club's Mailchimp contact and delete its Brevo one on the next sync, which is exactly
-            # the club-owned data this branch exists to leave alone.
+            # contact_status untouched: do-not-contact would archive/delete the club's mailing
+            # list contact, which is exactly the club-owned data this branch leaves alone.
             ClubMember.objects.filter(pk=member.pk).update(user=None)
-            # member.name, not str(member), which falls back to the email address — this line is
-            # kept forever and must not be the one place the address survives.
+            # member.name, not str(member) (which falls back to email) -- this line is kept forever.
             who = member.name or f"Member #{member.pk}"
             action = f"{who} deleted their site account; the club's member record was kept"
         else:
@@ -324,20 +265,14 @@ def _anonymize_club_memberships(user):
 def _anonymize_auction_records(user):
     """Auctions keep their books; the person's identity comes off them.
 
-    An AuctionTOS keeps its bidder number, its pickup location and everything the invoice is built
-    from — the auction's totals have to keep adding up, and the seller of a lot this person bought
-    still needs their own history to make sense.
-
-    ``manually_added`` decides the rest. A row an admin typed in at the door is the auction's own
-    note of who was there, taken down from what the person said in person, so it keeps its contents
-    and only loses the account link. A row that exists because the person joined the auction
-    themselves is theirs: name, email, phone and address all go.
+    ``manually_added`` decides how much: an admin-typed record keeps its contents and only loses
+    the account link; a self-joined record has name/email/phone/address removed too. Bidder number
+    and invoice amounts are kept either way.
     """
     from auctions.models import AuctionHistory, AuctionTOS, Lot
 
-    # Queryset updates for the same reason as the club records: AuctionTOS.save() re-attaches a
-    # row to the account matching its email, and its side effects (invoice recalculation, welcome
-    # mail, duplicate merging) have no business running for someone who is leaving.
+    # Queryset updates: AuctionTOS.save() re-attaches by email and triggers invoice recalculation,
+    # welcome mail and duplicate merging -- none of which should run for someone leaving.
     for tos in AuctionTOS.objects.filter(user=user):
         who = f"Bidder {tos.bidder_number}" if tos.bidder_number else f"Participant #{tos.pk}"
         if tos.manually_added:
@@ -356,10 +291,8 @@ def _anonymize_auction_records(user):
             )
         AuctionHistory.objects.create(auction_id=tos.auction_id, user=None, action=action, applies_to="USERS")
 
-    # Lots stay: they're part of an auction's results, and a buyer's invoice references them. The
-    # seller is identified by the AuctionTOS record above, which is the auction's own copy.
-    # A standalone lot is nobody else's record — it's a listing this person put up, and there's
-    # no longer anyone to sell it, so take it off the site (noted before the user link goes).
+    # Lots stay (part of an auction's results); a standalone lot has nobody left to sell it, so
+    # it's deactivated rather than left listed.
     standalone_pks = list(
         Lot.objects.filter(user=user, auction__isnull=True, is_deleted=False).values_list("pk", flat=True)
     )
@@ -372,18 +305,11 @@ def _anonymize_auction_records(user):
 def _redact_emails_from_history(emails, auction_pks, member_owned_club_pks):
     """Rewrite the person's addresses to ``[deleted]`` in the histories that are kept.
 
-    Auction and club history are prose an admin reads back later ("changed email from a@b.com to
-    c@d.com"), so an address outlives every structured field that held it. Names are left alone —
-    the history has to stay readable, and the account behind the name is gone anyway.
-
-    Scoped to the auctions the person took part in and the clubs whose record of them was their own.
-    Scoping the auctions is what keeps this off ``AuctionHistory`` as a whole: ``action__icontains``
-    is a leading-wildcard LIKE that no index can help, and this runs for every account in the daily
-    batch. An address only ever reaches an auction's history through the person's own participation
-    in it, so that is the same set of rows.
-
-    Club history is left alone where the club kept its record: it kept the address in that record,
-    and blanking the changelog would leave the club's own history disagreeing with its own roster.
+    Names are left alone; only addresses, since the history has to stay readable. Scoped to the
+    auctions this person took part in and clubs whose record of them was their own -- an unscoped
+    ``action__icontains`` would be a leading-wildcard LIKE with no index, over every account in the
+    daily batch. Club history that the club kept is left alone entirely: the club's own changelog
+    should agree with its own roster.
     """
     from auctions.models import AuctionHistory, ClubHistory
 
@@ -433,7 +359,7 @@ def delete_account(user):
     """Delete *user*'s personal data for good. Not reversible; see the module docstring.
 
     Returns the (now anonymous) User row, which stays so that bids, invoices and sold lots keep
-    resolving. Safe to call twice — every step is idempotent.
+    resolving. Safe to call twice -- every step is idempotent.
     """
     from auctions.models import AuctionTOS, ClubMember
     from auctions.tasks import delete_marketing_contact
@@ -466,9 +392,8 @@ def process_due_deletions(now=None):
     now = now or timezone.now()
     cutoff = now - timezone.timedelta(days=GRACE_PERIOD_DAYS)
     user_model = get_user_model()
-    # No is_active filter: _scrub_profile clears account_deletion_requested, and that is what stops
-    # an account being processed twice. Filtering on is_active as well would silently strand the
-    # request of anyone an admin had deactivated for some other reason in between.
+    # No is_active filter: _scrub_profile clears account_deletion_requested, which is what stops
+    # reprocessing -- filtering on is_active too would strand anyone deactivated for other reasons.
     due = user_model.objects.filter(
         userdata__account_deletion_requested__isnull=False,
         userdata__account_deletion_requested__lte=cutoff,
@@ -479,6 +404,5 @@ def process_due_deletions(now=None):
             delete_account(user)
             count += 1
         except Exception:
-            # One account's club integration failing must not stall everyone else's deletion.
             logger.exception("Failed to delete account for user %s", user.pk)
     return count
