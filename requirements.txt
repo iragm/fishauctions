@@ -38,9 +38,9 @@ bleach==6.4.0
     # via
     #   -r requirements.in
     #   django-summernote
-boto3==1.43.89
+boto3==1.43.93
     # via django-ses
-botocore==1.43.89
+botocore==1.43.93
     # via
     #   boto3
     #   s3transfer
@@ -139,7 +139,7 @@ django==5.2.17
     #   djangorestframework
     #   djangorestframework-simplejwt
     #   easy-thumbnails
-django-allauth==65.19.2
+django-allauth==65.19.3
     # via -r requirements.in
 django-autocomplete-light==5.0.0
     # via -r requirements.in
@@ -191,7 +191,7 @@ django-weasyprint==2.5.0
     # via -r requirements.in
 django-webpush==0.3.6
     # via -r requirements.in
-djangorestframework==3.18.0
+djangorestframework==3.18.1
     # via
     #   -r requirements.in
     #   djangorestframework-simplejwt
@@ -201,7 +201,7 @@ easy-thumbnails==2.10.1
     # via -r requirements.in
 firebase-admin==7.5.0
     # via -r requirements.in
-fonttools[woff]==4.64.0
+fonttools[woff]==4.65.0
     # via weasyprint
 frozenlist==1.8.0
     # via
@@ -213,7 +213,7 @@ google-api-core[grpc]==2.36.0
     #   google-cloud-core
     #   google-cloud-firestore
     #   google-cloud-storage
-google-auth==2.57.1
+google-auth==2.58.0
     # via
     #   -r requirements.in
     #   google-api-core
@@ -226,7 +226,7 @@ google-cloud-core==2.7.0
     #   google-cloud-storage
 google-cloud-firestore==2.30.0
     # via firebase-admin
-google-cloud-storage==3.13.1
+google-cloud-storage==3.14.1
     # via firebase-admin
 google-crc32c==1.8.0
     # via
@@ -238,12 +238,12 @@ googleapis-common-protos==1.75.3
     # via
     #   google-api-core
     #   grpcio-status
-grpcio==1.83.1
+grpcio==1.84.0
     # via
     #   google-api-core
     #   google-cloud-firestore
     #   grpcio-status
-grpcio-status==1.83.1
+grpcio-status==1.84.0
     # via google-api-core
 gunicorn==26.2.0
     # via -r requirements.in
@@ -303,7 +303,7 @@ msgpack==1.2.2
     # via
     #   cachecontrol
     #   channels-redis
-multidict==6.7.1
+multidict==6.8.0
     # via
     #   aiohttp
     #   yarl
@@ -387,7 +387,7 @@ pygeomag==1.1.0
     # via -r requirements.in
 pyheif==0.8.0
     # via heif-image-plugin
-pyjwt[crypto]==2.13.0
+pyjwt[crypto]==2.14.0
     # via
     #   -r requirements.in
     #   djangorestframework-simplejwt
@@ -492,7 +492,7 @@ typing-inspection==0.4.4
     # via
     #   pydantic
     #   pydantic-settings
-tzdata==2026.3
+tzdata==2026.4
     # via
     #   django-celery-beat
     #   kombu
@@ -513,7 +513,7 @@ urllib3==2.7.0
     #   requests
 user-agents==2.2.0
     # via -r requirements.in
-uvicorn[standard]==0.52.4
+uvicorn[standard]==0.53.0
     # via -r requirements.in
 uvloop==0.22.1
     # via uvicorn
@@ -526,7 +526,7 @@ watchfiles==1.2.0
     # via uvicorn
 wcwidth==0.8.3
     # via prompt-toolkit
-weasyprint==69.0
+weasyprint==70.0
     # via django-weasyprint
 webencodings==0.6.1
     # via
