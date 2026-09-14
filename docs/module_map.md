@@ -291,7 +291,7 @@ this only quotes its opening sentence.
   `ClubAPITests`, `ClubAPIKeyMemberPermissionTests`, `ClubBapLotAPITests`, `ClubAuctionReadAPITests`, `ParseBoolEnvTests`, `RequireSecureProdSecretsTests`, `ClubAuctionIntegrationTests`
 - **`test_club_events.py`** (3088 lines)
   Tests for club events, Google Calendar sync, and the Discord events built on top of them.
-- **`test_club_finder.py`** (178 lines)
+- **`test_club_finder.py`** (196 lines)
   Tests for the public club finder: what it lists, and what it refuses to say about a club.
   `map_payload`, `ClubFinderTests`
 - **`test_club_health.py`** (634 lines)
@@ -768,7 +768,7 @@ Every view on the site, split by what part of it the view belongs to.
 - **`club_api_keys.py`** (424 lines)
   Club API keys, and the page that documents the API they open.
   `ClubAPIKeyListView`, `ClubAPIKeyCreateView`, `club_api_documentation_context`, `ClubAPIKeyDetailView`, `ClubAPIKeyRevokeView`, `ClubAPIKeyFieldMapCreateView`, `ClubAPIKeyFieldMapDeleteView`, `ClubMemberMapView`, `SelfServeContactLinkView`
-- **`club_finder.py`** (198 lines)
+- **`club_finder.py`** (199 lines)
   The public club finder: a map of clubs, and the same clubs as a filtered list.
   `ClubFinderView`
 - **`club_integrations.py`** (1321 lines)
@@ -809,7 +809,7 @@ Every view on the site, split by what part of it the view belongs to.
   The superuser's dashboard: traffic, signups, referrers, the user map.
 - **`site_pages.py`** (599 lines)
   Pages that belong to the site rather than to any auction or club.
-- **`speakers.py`** (517 lines)
+- **`speakers.py`** (518 lines)
   The speaker directory: who will come and talk to a club, and what about.
   `NECSpeakerAccessMixin`, `SpeakerListView`, `SpeakerPanelView`, `SpeakerDetailView`, `SpeakerCreateView`, `SpeakerUpdateView`, `SpeakerDeleteView`, `SpeakerTagView`, `SpeakerCommentView`, `SpeakerCommentDeleteView`
 - **`species.py`** (631 lines)
@@ -841,7 +841,7 @@ This will make sure the app is always imported when
 - **`firebase_config.py`** (88 lines)
   Parse the public Firebase client-config files that ship with the mobile build.
   `load_android_config`, `load_ios_config`, `load_firebase_client_config`
-- **`settings.py`** (1387 lines)
+- **`settings.py`** (1388 lines)
   Django settings for fishauctions project.
 - **`static_storage.py`** (63 lines)
   Content-hashed names for `/static/`, tolerant of the two things that would break a deploy.

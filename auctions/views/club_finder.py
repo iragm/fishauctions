@@ -176,6 +176,7 @@ class ClubFinderView(LocationMixin, HTMxTableView):
         context["origin_latitude"] = latitude
         context["origin_longitude"] = longitude
         context["google_maps_api_key"] = settings.LOCATION_FIELD["provider.google.api_key"]
+        context["google_maps_map_id"] = settings.GOOGLE_MAPS_MAP_ID
         # The interest menu is markup the template writes itself (radios in a dropdown), so the
         # choices come through the context rather than off a rendered widget.
         context["interest_choices"] = filterset.interest_choices() if filterset else []

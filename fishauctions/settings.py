@@ -786,6 +786,7 @@ SECURE_CROSS_ORIGIN_OPENER_POLICY = "same-origin-allow-popups"
 LOCATION_FIELD_PATH = "/static/location_field"
 GOOGLE_MAPS_API_KEY = os.environ.get("GOOGLE_MAPS_API_KEY", "")
 GOOGLE_MAPS_ENABLED = env_has_real_value(GOOGLE_MAPS_API_KEY)
+GOOGLE_MAPS_MAP_ID = os.environ.get("GOOGLE_MAPS_MAP_ID") or "DEMO_MAP_ID"
 
 LOCATION_FIELD = {
     "map.provider": "google",
