@@ -348,6 +348,9 @@ this only quotes its opening sentence.
 - **`test_lifecycle.py`** (438 lines)
   Tests for phase 9: milestones, lapsing definition, session replay and cohorts.
   `ClubHistoryFixture`, `LapsingTests`, `CohortTests`, `SignInStitchTests`, `SessionTimelineTests`, `MedianMemberTests`, `UnreachedShareTests`, `MilestoneReachTests`, `LifecyclePageTests`
+- **`test_login_required_dispatch.py`** (60 lines)
+  Signed-out visitors are turned away, not handed a 500, by views that override ``dispatch``.
+  `AnonymousDispatchTests`
 - **`test_lot_create.py`** (542 lines)
   Creating a lot, and the invoice lists a seller and buyer see afterwards.
   `LotCreateViewTests`, `InvoiceViewTests`, `MyInvoicesListTests`
@@ -739,7 +742,7 @@ Every view on the site, split by what part of it the view belongs to.
   The small endpoints the pages call, rather than the pages themselves.
 - **`auction_admin.py`** (1255 lines)
   Setting an auction up, and running the room: pickup locations, users, check-in.
-- **`auction_extras.py`** (664 lines)
+- **`auction_extras.py`** (669 lines)
   The rest of an auction's admin surface: label config, bulk printing, no-shows, chat.
 - **`auction_pages.py`** (1084 lines)
   The auction as a thing you join: the TOS, creating one, and the auction's own page.
