@@ -235,6 +235,7 @@ class SpeakerListView(NECSpeakerAccessMixin, HTMxTableView):
             dict(context["topic_choices"]).get(selected_topic, "") if selected_topic else ""
         )
         context["google_maps_api_key"] = settings.LOCATION_FIELD["provider.google.api_key"]
+        context["google_maps_map_id"] = settings.GOOGLE_MAPS_MAP_ID
         context["is_htmx"] = bool(self.request.htmx)
         context["speakers_json"] = self.speakers_for_map(filterset) if filterset else []
         if filterset:

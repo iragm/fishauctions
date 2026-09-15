@@ -248,7 +248,7 @@ this only quotes its opening sentence.
 - **`test_apple_notifications.py`** (645 lines)
   Tests for Sign in with Apple server-to-server notifications.
   `AppleNotificationTestCase`, `AppleNotificationVerificationTests`, `AppleNotificationForgeryTests`, `AppleNotificationEventParsingTests`, `AppleConsentRevokedTests`, `AppleAccountDeleteTests`, `AppleEmailForwardingTests`, `AppleNotificationRetryTests`, `AppleNotificationErrorTypeTests`, `AppleNotificationChecklistTests`
-- **`test_ar.py`** (1799 lines)
+- **`test_ar.py`** (1813 lines)
   Tests for Part 3 — AR lot scanning & location mapping, plus the two Part 1/2 follow-up fixes.
 - **`test_assistant_context.py`** (633 lines)
   What the assistant does when nobody is looking at a page.
@@ -291,7 +291,7 @@ this only quotes its opening sentence.
   `ClubAPITests`, `ClubAPIKeyMemberPermissionTests`, `ClubBapLotAPITests`, `ClubAuctionReadAPITests`, `ParseBoolEnvTests`, `RequireSecureProdSecretsTests`, `ClubAuctionIntegrationTests`
 - **`test_club_events.py`** (3088 lines)
   Tests for club events, Google Calendar sync, and the Discord events built on top of them.
-- **`test_club_finder.py`** (178 lines)
+- **`test_club_finder.py`** (216 lines)
   Tests for the public club finder: what it lists, and what it refuses to say about a club.
   `map_payload`, `ClubFinderTests`
 - **`test_club_health.py`** (634 lines)
@@ -664,7 +664,7 @@ The site's Model Context Protocol server, and the tool catalogue behind it.
 - **`renderers.py`** (50 lines)
   DRF renderers for mobile endpoints that return raw bytes.
   `BinaryRenderer`, `PdfRenderer`, `PngRenderer`
-- **`serializers.py`** (632 lines)
+- **`serializers.py`** (642 lines)
   Request and response shapes for the mobile app's own API.
 - **`urls.py`** (138 lines)
 - **`views.py`** (1671 lines)
@@ -771,7 +771,7 @@ Every view on the site, split by what part of it the view belongs to.
 - **`club_api_keys.py`** (424 lines)
   Club API keys, and the page that documents the API they open.
   `ClubAPIKeyListView`, `ClubAPIKeyCreateView`, `club_api_documentation_context`, `ClubAPIKeyDetailView`, `ClubAPIKeyRevokeView`, `ClubAPIKeyFieldMapCreateView`, `ClubAPIKeyFieldMapDeleteView`, `ClubMemberMapView`, `SelfServeContactLinkView`
-- **`club_finder.py`** (198 lines)
+- **`club_finder.py`** (216 lines)
   The public club finder: a map of clubs, and the same clubs as a filtered list.
   `ClubFinderView`
 - **`club_integrations.py`** (1321 lines)
@@ -812,7 +812,7 @@ Every view on the site, split by what part of it the view belongs to.
   The superuser's dashboard: traffic, signups, referrers, the user map.
 - **`site_pages.py`** (599 lines)
   Pages that belong to the site rather than to any auction or club.
-- **`speakers.py`** (517 lines)
+- **`speakers.py`** (518 lines)
   The speaker directory: who will come and talk to a club, and what about.
   `NECSpeakerAccessMixin`, `SpeakerListView`, `SpeakerPanelView`, `SpeakerDetailView`, `SpeakerCreateView`, `SpeakerUpdateView`, `SpeakerDeleteView`, `SpeakerTagView`, `SpeakerCommentView`, `SpeakerCommentDeleteView`
 - **`species.py`** (631 lines)
@@ -844,7 +844,7 @@ This will make sure the app is always imported when
 - **`firebase_config.py`** (88 lines)
   Parse the public Firebase client-config files that ship with the mobile build.
   `load_android_config`, `load_ios_config`, `load_firebase_client_config`
-- **`settings.py`** (1387 lines)
+- **`settings.py`** (1388 lines)
   Django settings for fishauctions project.
 - **`static_storage.py`** (63 lines)
   Content-hashed names for `/static/`, tolerant of the two things that would break a deploy.

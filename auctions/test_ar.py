@@ -1119,9 +1119,9 @@ class ArObservationsEndpointTests(ArApiBaseTestCase):
 
     def test_odo_non_finite_dropped_by_validate(self):
         # A bare NaN/Infinity literal in the JSON *body* is rejected upstream by DRF's strict JSON
-        # parser (400) before our code runs, so it can't be expressed via a posted payload. We instead
-        # assert the server-side isfinite guard directly at the serializer: a non-finite odo value that
-        # does reach validate() (e.g. inf produced numerically) nulls BOTH, never raising.
+        # parser (400) before our code runs, so this asserts at the serializer: a non-finite odo value
+        # (e.g. inf produced numerically) nulls BOTH, never raising. Plain FloatField rejects it since
+        # DRF 3.18.1; FiniteOrNullFloatField is what keeps this a drop rather than a 400.
         from auctions.mobile.serializers import ArFrameSerializer
 
         ser = ArFrameSerializer(
@@ -1136,6 +1136,20 @@ class ArObservationsEndpointTests(ArApiBaseTestCase):
         self.assertTrue(ser.is_valid(), ser.errors)
         self.assertIsNone(ser.validated_data["odo_x_m"])
         self.assertIsNone(ser.validated_data["odo_y_m"])
+
+    def test_non_finite_strings_dropped_not_400(self):
+        # "Infinity"/"NaN" as JSON *strings* do get past the parser, and one bad reading must not
+        # reject the whole batch.
+        det = [{"lot": self.lot_a.pk, "bearing_deg": 0.0, "depression_deg": 20.0}]
+        payload = self._batch(det)
+        frame = payload["frames"][0]
+        frame.update(odo_x_m="Infinity", odo_y_m=1.0, yaw_deg="NaN", heading_deg="-Infinity", latitude="NaN")
+        frame["longitude"] = 10.0
+        resp = self._post(self.user, payload)
+        self.assertEqual(resp.status_code, 202)
+        obs = LotObservation.objects.get(auction=self.auction)
+        for field in ("odo_x_m", "odo_y_m", "yaw_deg", "heading_deg", "latitude", "longitude"):
+            self.assertIsNone(getattr(obs, field), field)
 
 
 class ArEventsEndpointTests(ArApiBaseTestCase):

@@ -10,12 +10,14 @@ names or counts, no contact addresses, and nothing from the outreach queue -- ``
 not facts about it. So the filters are built out of interests, what a club has coming up, and
 whether it is taking new members: three things a visitor could already read off the club's page.
 
-There is deliberately **no summary card** here, which is the one place this differs from the
-speaker directory it is otherwise built like. A row and a map pin both lead to the club's own page.
-A card would be a second public surface carrying the same privacy rules, needing to be kept in step
-with the page forever; and finding a club is a find-one task, unlike comparing speakers, so the
-page load it saves is not worth that. The filters live in the query string, so Back returns to the
-same list.
+There is deliberately **no detail panel** here, which is the one place this differs from the
+speaker directory it is otherwise built like. A row leads straight to the club's own page. A pin
+opens a small info window -- the name, the club's website and Facebook links, its interests, and
+"View all club info" -- because on a map the links are what a visitor wants from a pin, and making
+them open the club page first to reach its website is a wasted page load. The info window is a
+second public surface, so the rule is that it carries nothing the club page doesn't already show
+to a signed-out visitor; ``test_club_finder`` pins the payload to exactly those fields. The filters
+live in the query string, so Back returns to the same list.
 
 Distance is the one number here that isn't stored on the club. It is measured from the pin, which
 is already public, to a location the *visitor* supplied, so it tells them something without telling
@@ -43,6 +45,18 @@ logger = logging.getLogger(__name__)
 #: the same reason the speaker map has one: the payload is every *matching* club rather than the
 #: current page, so it is the one query on this page with no natural limit.
 CLUB_MAP_LIMIT = 1000
+
+
+def _external_url(value):
+    """A club's typed-in website or Facebook page as a link, prefixed the way club_detail.html does.
+
+    Anything not already starting with ``http`` gets ``https://``, which is also what keeps a
+    typed-in ``javascript:`` from becoming a live link.
+    """
+    value = (value or "").strip()
+    if not value:
+        return ""
+    return value if value.startswith("http") else f"https://{value}"
 
 
 def _upcoming_events_subquery():
@@ -154,8 +168,8 @@ class ClubFinderView(LocationMixin, HTMxTableView):
         A map that only plotted the current page of results would be actively misleading, which is
         why this deliberately ignores pagination.
 
-        Name and slug are all a pin needs: it opens an info window naming the club, and the name is
-        a link to the club's own page.
+        Everything here is also on the club's public page: the pin's info window lists the website,
+        the Facebook page and the interests, and links to the page for the rest.
         """
         queryset = filterset.qs.filter(latitude__isnull=False, longitude__isnull=False)
         return [
@@ -164,6 +178,9 @@ class ClubFinderView(LocationMixin, HTMxTableView):
                 "name": club.name,
                 "lat": club.latitude,
                 "lng": club.longitude,
+                "homepage": _external_url(club.homepage),
+                "facebook": _external_url(club.facebook_page),
+                "interests": sorted(interest.name for interest in club.interests.all()),
             }
             for club in queryset[:CLUB_MAP_LIMIT]
         ]
@@ -176,6 +193,7 @@ class ClubFinderView(LocationMixin, HTMxTableView):
         context["origin_latitude"] = latitude
         context["origin_longitude"] = longitude
         context["google_maps_api_key"] = settings.LOCATION_FIELD["provider.google.api_key"]
+        context["google_maps_map_id"] = settings.GOOGLE_MAPS_MAP_ID
         # The interest menu is markup the template writes itself (radios in a dropdown), so the
         # choices come through the context rather than off a rendered widget.
         context["interest_choices"] = filterset.interest_choices() if filterset else []

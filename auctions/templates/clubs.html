@@ -9,8 +9,9 @@ filtered set, kept in sync by an out-of-band payload the htmx table response car
 partials/club_table.html). Driven by static/js/map_list_panel.js, which the speaker directory uses
 too.
 
-No detail panel, unlike the speaker directory: rows link to the club page, and a pin names the club
-in an info window whose name is that link. Why is in auctions/views/club_finder.py.
+No detail panel, unlike the speaker directory: rows link to the club page, and a pin opens an info
+window with the club's website, Facebook and interests and a "View all club info" link to that
+page. Why is in auctions/views/club_finder.py.
 {% endcomment %}
 
 {% comment %}Empty on purpose: the search box is rendered by club_table_header.html, above the interest and filter menus. Rendering the crispy form here as well would put a second, unwired copy of it on the page.{% endcomment %}
@@ -54,23 +55,23 @@ in an info window whose name is that link. Why is in auctions/views/club_finder.
 
 {% comment %} Wrapped in a div because hx-swap-oob needs an element it can replace wholesale; the htmx table response ships the same wrapper so filtering redraws the map markers. {% endcomment %}
 <div id="club-map-payload">{{ clubs_json|json_script:"club-map-data" }}</div>
+{% if google_maps_api_key %}
+{% include "auctions/partials/google_maps_loader.html" %}
+{% else %}
+<script>console.error('Google Maps is not configured; the club map will stay empty.');</script>
+{% endif %}
 <script src="{% static 'js/map_list_panel.js' %}"></script>
 <script>
 initMapListPanel({
   prefix: 'club',
   pageUrl: function (slug) { return '/clubs/' + encodeURIComponent(slug) + '/'; },
+  mapId: '{{ google_maps_map_id|escapejs }}',
   origin: {% if has_origin %}{lat: {{ origin_latitude }}, lng: {{ origin_longitude }}}{% else %}null{% endif %},
   originLabel: 'your location',
   defaultView: '{{ default_view }}',
-  callbackName: 'initClubMap',
   menuLabelId: 'interest-filter-label',
   menuOptionClass: 'interest-filter-option',
   menuFallbackLabel: 'Interests'
 });
 </script>
-{% if google_maps_api_key %}
-<script async src="https://maps.googleapis.com/maps/api/js?key={{ google_maps_api_key }}&amp;callback=initClubMap"></script>
-{% else %}
-<script>console.error('Google Maps is not configured; the club map will stay empty.');</script>
-{% endif %}
 {% endblock %}
