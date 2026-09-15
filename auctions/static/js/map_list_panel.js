@@ -12,10 +12,14 @@
  *     slides in over the list, pushing a URL worth sharing. Speakers are a page you compare on --
  *     filter by topic, check who is nearest, look at three of them -- so keeping the list, the map
  *     and the filters underneath is worth a panel.
- *   * Without it (the club finder) a pin opens a small info window naming the club, whose name is
- *     a link to the club's own page; rows are already plain links to the same place. Finding a
- *     club is a find-one task, and a summary beside the list would be a second public surface with
- *     the same privacy rules to keep in step with the club page.
+ *   * Without it (the club finder) a pin opens a small info window: the club's name, its website
+ *     and Facebook links and interests, and "View all club info" to the club's own page; rows are
+ *     already plain links to that page. What may go in the window is decided server-side, in
+ *     auctions/views/club_finder.py.
+ *
+ * The first view of the map is framed around the visitor: their location plus the few nearest pins
+ * (NEAREST_PINS), not every pin -- framing a continent of results put the neighbours a few pixels
+ * apart. With no location to measure from it frames everything.
  *
  * The map follows Google's current Maps JavaScript API guidance:
  *
@@ -57,6 +61,12 @@
   var FALLBACK_CENTER = { lat: 42.0, lng: -72.0 };
   /* Google's Map ID for testing. Production sets a real one; see GOOGLE_MAPS_MAP_ID. */
   var FALLBACK_MAP_ID = "DEMO_MAP_ID";
+  /* With a location to measure from, the first view frames it and this many of the nearest pins. */
+  var NEAREST_PINS = 5;
+  /* Framing never zooms in past roughly a county, so one pin beside the visitor isn't street level. */
+  var MAX_FIT_ZOOM = 10;
+  /* Pixels kept clear around the framed pins, so none sits on the map's edge under a control. */
+  var FIT_PADDING = 48;
 
   window.initMapListPanel = function (config) {
     var prefix = config.prefix;
@@ -161,8 +171,12 @@
     var theMap = null;
     var Marker = null;
     var LatLngBounds = null;
+    var mapEvent = null;
     var infoWindow = null;
     var markers = [];
+    // Each pin's coordinates as plain {lat, lng}, straight from the payload. Framing reads these
+    // rather than `marker.position`, which on an advanced marker is not guaranteed to be a LatLng.
+    var positions = [];
 
     /* Selected is primary, unselected is secondary -- see style_reference.md. */
     function setViewButtons(selected, unselected) {
@@ -264,19 +278,66 @@
     }
 
     /**
-     * The info window a pin opens when there is no panel: the name, as a link to the page.
+     * The info window a pin opens when there is no panel: the name, the club's own links and
+     * interests, and "View all club info" to its page.
      *
-     * Built as a DOM node rather than an HTML string because the name is somebody's typed-in club
-     * name. Google's info window is white whatever the page's theme, so the link carries its own
-     * color -- the site's primary blue, which is the one brand color that stays legible on it.
+     * Built from DOM nodes rather than an HTML string because every part of it is text a club
+     * typed in. Google's info window is white whatever the page's theme, so the links carry their
+     * own color -- the site's primary blue, which is the one brand color that stays legible on it.
      */
-    function nameLink(record) {
+    function infoLink(href, text, external) {
       var link = document.createElement("a");
-      link.href = config.pageUrl(record.slug);
-      link.textContent = record.name;
+      link.href = href;
+      link.textContent = text;
       link.style.color = ORIGIN_COLOR;
-      link.style.fontWeight = "bold";
+      if (external) {
+        link.target = "_blank";
+        link.rel = "noopener noreferrer";
+      }
       return link;
+    }
+
+    function clubInfo(record) {
+      var box = document.createElement("div");
+      box.style.color = "#212529";
+      box.style.maxWidth = "16rem";
+
+      var name = document.createElement("div");
+      name.textContent = record.name;
+      name.style.fontWeight = "bold";
+      name.style.marginBottom = "0.25rem";
+      box.appendChild(name);
+
+      var links = [
+        ["Website", record.homepage],
+        ["Facebook", record.facebook],
+      ].filter(function (pair) {
+        return pair[1];
+      });
+      if (links.length) {
+        var list = document.createElement("ul");
+        list.style.margin = "0 0 0.25rem";
+        list.style.paddingLeft = "1.1rem";
+        links.forEach(function (pair) {
+          var item = document.createElement("li");
+          item.appendChild(infoLink(pair[1], pair[0], true));
+          list.appendChild(item);
+        });
+        box.appendChild(list);
+      }
+
+      if (record.interests && record.interests.length) {
+        var interests = document.createElement("div");
+        interests.textContent = record.interests.join(", ");
+        interests.style.fontSize = "0.875em";
+        interests.style.marginBottom = "0.25rem";
+        box.appendChild(interests);
+      }
+
+      var more = infoLink(config.pageUrl(record.slug), "View all club info", false);
+      more.style.fontWeight = "bold";
+      box.appendChild(more);
+      return box;
     }
 
     function renderMarkers(records) {
@@ -284,6 +345,9 @@
         return;
       }
       clearMarkers();
+      positions = records.map(function (record) {
+        return { lat: record.lat, lng: record.lng };
+      });
       records.forEach(function (record) {
         var marker = new Marker({
           position: { lat: record.lat, lng: record.lng },
@@ -303,7 +367,7 @@
           // Name first, page second. A pin that navigated on the first tap would be a blind jump
           // on a touch screen, where there is no hover to tell you which one you are about to open.
           infoWindow.close();
-          infoWindow.setContent(nameLink(record));
+          infoWindow.setContent(clubInfo(record));
           infoWindow.open({ anchor: marker, map: theMap });
         });
         markers.push(marker);
@@ -311,18 +375,40 @@
       fitToMarkers();
     }
 
+    /* The `count` pins nearest `origin`. Degrees of longitude shrink toward the poles, so they are
+       scaled by cos(latitude) -- close enough for choosing neighbours, which is all this does. */
+    function nearestTo(origin, count) {
+      var scale = Math.cos((origin.lat * Math.PI) / 180);
+      return positions
+        .map(function (position) {
+          var dLat = position.lat - origin.lat;
+          var dLng = (position.lng - origin.lng) * scale;
+          return { position: position, distance: dLat * dLat + dLng * dLng };
+        })
+        .sort(function (a, b) {
+          return a.distance - b.distance;
+        })
+        .slice(0, count)
+        .map(function (entry) {
+          return entry.position;
+        });
+    }
+
     function fitToMarkers() {
-      if (!theMap || markers.length === 0) {
+      if (!theMap || positions.length === 0) {
         return;
       }
+      var framed = config.origin ? nearestTo(config.origin, NEAREST_PINS).concat([config.origin]) : positions;
       var bounds = new LatLngBounds();
-      markers.forEach(function (marker) {
-        bounds.extend(marker.position);
+      framed.forEach(function (position) {
+        bounds.extend(position);
       });
-      theMap.fitBounds(bounds);
-      if (markers.length === 1) {
-        theMap.setZoom(10);
-      }
+      theMap.fitBounds(bounds, FIT_PADDING);
+      mapEvent.addListenerOnce(theMap, "idle", function () {
+        if (theMap.getZoom() > MAX_FIT_ZOOM) {
+          theMap.setZoom(MAX_FIT_ZOOM);
+        }
+      });
     }
 
     function initMap() {
@@ -342,6 +428,7 @@
         var maps = libraries[0];
         Marker = libraries[1].AdvancedMarkerElement;
         LatLngBounds = libraries[2].LatLngBounds;
+        mapEvent = libraries[2].event;
         theMap = new maps.Map(mapElement, {
           zoom: 7,
           center: config.origin || FALLBACK_CENTER,

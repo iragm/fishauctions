@@ -128,11 +128,31 @@ class ClubFinderTests(TestCase):
         # The direct script-tag loader is not on the page as well: the API only loads once.
         self.assertNotContains(response, "maps.googleapis.com/maps/api/js?key=")
 
-    def test_the_map_payload_carries_only_what_a_pin_needs(self):
+    def test_the_map_payload_carries_only_what_the_club_page_shows(self):
+        """The info window is a second public surface: every field in it is one the club page
+        already shows a signed-out visitor. Adding a field here means checking that first."""
         rows = map_payload(self.client.get(reverse("clubs")))
         self.assertTrue(rows)
         for row in rows:
-            self.assertEqual(set(row), {"slug", "name", "lat", "lng"})
+            self.assertEqual(set(row), {"slug", "name", "lat", "lng", "homepage", "facebook", "interests"})
+
+    def test_a_pin_lists_the_clubs_links_and_interests(self):
+        Club.objects.filter(pk=self.listed.pk).update(facebook_page="https://facebook.com/las")
+        self.listed.interests.add(self.plants)
+        row = next(row for row in map_payload(self.client.get(reverse("clubs"))) if row["slug"] == self.listed.slug)
+        # Prefixed the way the club page's own Website button is.
+        self.assertEqual(row["homepage"], "https://example.com")
+        self.assertEqual(row["facebook"], "https://facebook.com/las")
+        self.assertEqual(row["interests"], ["Cichlids", "Plants"])
+        bare = next(
+            row for row in map_payload(self.client.get(reverse("clubs"))) if row["slug"] == self.plant_club.slug
+        )
+        self.assertEqual((bare["homepage"], bare["facebook"]), ("", ""))
+
+    def test_a_typed_in_script_url_is_not_a_live_link(self):
+        Club.objects.filter(pk=self.listed.pk).update(homepage="javascript:alert(1)")
+        row = next(row for row in map_payload(self.client.get(reverse("clubs"))) if row["slug"] == self.listed.slug)
+        self.assertEqual(row["homepage"], "https://javascript:alert(1)")
 
     def test_searching_matches_the_name_and_the_abbreviation(self):
         for query in ("Listed", "LAS"):

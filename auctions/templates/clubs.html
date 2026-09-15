@@ -9,8 +9,9 @@ filtered set, kept in sync by an out-of-band payload the htmx table response car
 partials/club_table.html). Driven by static/js/map_list_panel.js, which the speaker directory uses
 too.
 
-No detail panel, unlike the speaker directory: rows link to the club page, and a pin names the club
-in an info window whose name is that link. Why is in auctions/views/club_finder.py.
+No detail panel, unlike the speaker directory: rows link to the club page, and a pin opens an info
+window with the club's website, Facebook and interests and a "View all club info" link to that
+page. Why is in auctions/views/club_finder.py.
 {% endcomment %}
 
 {% comment %}Empty on purpose: the search box is rendered by club_table_header.html, above the interest and filter menus. Rendering the crispy form here as well would put a second, unwired copy of it on the page.{% endcomment %}
