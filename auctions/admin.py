@@ -1,12 +1,7 @@
-"""The Django admin: the staff-only back door, and the handful of jobs that only live here.
+"""The Django admin: staff-only, and the few jobs that only live here.
 
-Most of this file is registration -- a `ModelAdmin` per model so a superuser can look at a row.
-The parts worth knowing are the ones that are not: the bulk actions (approving a species, merging a
-duplicate, marking one "not a duplicate") are real capabilities with no other home, and
-``export_to_csv`` is the generic exporter every changelist hangs off.
-
-Nothing here is a permission boundary anyone else relies on. Everything the *site* can do is gated
-in the views and in ``palette_actions``; this file assumes whoever reached it is already staff.
+Mostly registrations. The species bulk actions (approve, merge, not a duplicate) have no other
+home, and ``export_to_csv`` serves every changelist. Not a permission boundary anything relies on.
 """
 
 import csv
@@ -153,7 +148,7 @@ class InvoicePaymentInline(admin.TabularInline):
     extra = 0
 
     def get_readonly_fields(self, request, obj=None):
-        # make all InvoicePayment fields readonly (except the FK back to Invoice which is implied)
+        # Payments are read-only here.
         return tuple(
             f.name
             for f in self.model._meta.get_fields()
@@ -161,7 +156,7 @@ class InvoicePaymentInline(admin.TabularInline):
         )
 
     def has_add_permission(self, request, obj=None):
-        # disallow creating payments from the invoice admin inline (payments should come from payment handlers)
+        # Payments come from payment handlers, not the admin.
         return False
 
 
@@ -171,8 +166,7 @@ class BlogPostAdmin(admin.ModelAdmin):
 
 class AuctionTOSInline(FlatInline, admin.TabularInline):
     model = AuctionTOS
-    #: Every row renders `AuctionTOS.display_name`, which reads the auction and, for an online
-    #: auction, the person's `UserData`; `possible_duplicate` is a readonly FK the row prints.
+    #: Rows render `AuctionTOS.display_name` (auction, UserData) and the `possible_duplicate` FK.
     inline_select_related = (
         "user__userdata",
         "auction",
@@ -248,7 +242,7 @@ class UserLabelPrefsInline(admin.StackedInline):
 
 
 class MobileDeviceInline(admin.TabularInline):
-    """Read-only view of a user's registered mobile devices. Devices are created by the app, not the admin."""
+    """A user's registered mobile devices, read-only; the app creates them."""
 
     model = MobileDevice
     extra = 0
@@ -263,7 +257,7 @@ class MobileDeviceInline(admin.TabularInline):
 
 
 class HasMobileAppFilter(admin.SimpleListFilter):
-    """Filter users by whether they have registered at least one mobile device (i.e. installed the app)."""
+    """Users with at least one registered mobile device."""
 
     title = "mobile app installed"
     parameter_name = "has_mobile_app"
@@ -297,8 +291,7 @@ class UserAdmin(BaseUserAdmin):
         UserdataInline,
         UserLabelPrefsInline,
         MobileDeviceInline,
-        # AuctionTOSInline,  # too much noise, but important to have
-        # InterestInline,  # too much noise
+        # AuctionTOSInline and InterestInline are too noisy.
     ]
     search_fields = (
         "first_name",
@@ -325,7 +318,7 @@ class UserAdmin(BaseUserAdmin):
     def last_activity(self, obj):
         return obj.userdata.last_activity
 
-    # this doesn't seem to work, but you can use this url: admin/auth/user/?o=-4
+    # Doesn't seem to work; use admin/auth/user/?o=-4.
     last_activity.admin_order_field = "userdata__last_activity"
     last_activity.short_description = "Last activity"
 
@@ -365,9 +358,9 @@ class MobileDeviceAdmin(admin.ModelAdmin):
 
 @admin.register(RemotePrintJob)
 class RemotePrintJobAdmin(admin.ModelAdmin):
-    """Labels sent from a computer to a phone's Bluetooth printer. Read-only — the website creates
-    these and the app reports on them, so the only reason to open one is to find out why somebody's
-    labels didn't come out. ``message`` is the app's own words, unedited."""
+    """Labels sent from a computer to a phone's Bluetooth printer. Read-only, for finding out why labels
+    didn't print. ``message`` is the app's own words.
+    """
 
     list_display = ("uuid", "user", "device", "status", "printed_count", "total_count", "created_at")
     list_select_related = ("user", "device")
@@ -394,7 +387,7 @@ class RemotePrintJobAdmin(admin.ModelAdmin):
 
 @admin.register(MobileOfflineOp)
 class MobileOfflineOpAdmin(admin.ModelAdmin):
-    """Idempotency ledger for offline-sync ops. Read-only — rows are written by the sync endpoint."""
+    """Idempotency ledger for offline-sync ops. Read-only."""
 
     list_display = ("op_id", "op_type", "auction", "user", "result_pk", "created_at")
     list_select_related = ("auction", "user")
@@ -407,10 +400,8 @@ class MobileOfflineOpAdmin(admin.ModelAdmin):
 
 @admin.register(AppleDeviceRegistration)
 class AppleDeviceRegistrationAdmin(admin.ModelAdmin):
-    """One row = one iPhone/Watch holding a member's Apple Wallet pass.
-
-    Rows are created/removed by the PassKit web service (auctions/passkit_views.py);
-    this admin exists for debugging pass-update pushes, not for editing.
+    """One iPhone or Watch holding a member's Apple Wallet pass. Managed by the PassKit web service; here
+    for debugging pushes.
     """
 
     list_display = ("member", "club", "device_library_identifier", "createdon")
@@ -427,9 +418,7 @@ class AppleDeviceRegistrationAdmin(admin.ModelAdmin):
 
 @admin.register(ThermalPrinterProfile)
 class ThermalPrinterProfileAdmin(admin.ModelAdmin):
-    """One row = one Bluetooth thermal printer the app can drive. The command programs (JSON) are
-    validated on save via ThermalPrinterProfile.clean(), so a typo is rejected here, not on the
-    printer."""
+    """One Bluetooth thermal printer profile. Command programs are validated on save."""
 
     list_display = (
         "name",
@@ -499,25 +488,19 @@ class ThermalPrinterProfileAdmin(admin.ModelAdmin):
 
 @admin.register(ObservedPrinter)
 class ObservedPrinterAdmin(admin.ModelAdmin):
-    """Printers users actually paired — the work queue for new printer support.
+    """Printers users paired: the work queue for new printer support.
 
-    Filter to ``matched_by = manual``: each row there is a printer no profile matched, so the user
-    had to be asked what it was. Copy its model/manufacturer into a ThermalPrinterProfile's
-    model_patterns / manufacturer_patterns and that printer auto-pairs for everyone afterwards.
-    Rows with no profile (the user cancelled) or no model (the printer identifies as nothing) need
-    a BLE-name pattern or a brand-new profile instead.
-
-    Better still, filter to ``characterized = yes``: those rows carry the printer's GATT tree, its
-    command language and what each of its status codes means, which is everything a profile needs.
-    Select them and run "Draft a profile from this observation"."""
+    ``matched_by = manual`` rows matched no profile; copy their model/manufacturer into a profile's
+    patterns. ``characterized = yes`` rows carry everything a profile needs: run "Draft a profile from
+    this observation".
+    """
 
     list_display = (
         "ble_name",
         "manufacturer",
         "model",
         "firmware",
-        # The single most useful column for triaging an unsupported printer: it says which profile
-        # family a new row belongs in, where model/manufacturer often name only the radio module.
+        # Which profile family a new row belongs in.
         "probed_language",
         "characterized",
         "profile_slug",
@@ -567,11 +550,8 @@ class ObservedPrinterAdmin(admin.ModelAdmin):
 
     @admin.action(description="Draft a profile from this observation")
     def draft_profile(self, request, queryset):
-        """Create a disabled ThermalPrinterProfile pre-filled from each characterized row.
-
-        Left disabled because a drafted profile is a hypothesis: the person who submitted the
-        observation is the one holding the printer, and "Print test label" in the app is what
-        confirms it. Enable the row and their next print picks it up.
+        """Create a disabled profile from each characterized row. Disabled until the printer's owner confirms
+        with "Print test label".
         """
         from auctions.printer_drafts import DraftError, draft_profile_from_observation
 
@@ -600,15 +580,10 @@ class ObservedPrinterAdmin(admin.ModelAdmin):
 
 @admin.register(VoiceGrammar)
 class VoiceGrammarAdmin(admin.ModelAdmin):
-    """The words the app listens for on the set-winners page. One row, site-wide.
+    """The words the app listens for on set winners. One row, site-wide.
 
-    Tune it against the Voice command log: sort that list by the rows with a correction and you are
-    looking at exactly what is being misheard. An auctioneer who says "hammer" instead of "sold"
-    needs a word added to ``anchors``, not an app release. Save takes effect the next time a phone
-    fetches config.
-
-    Delete the row to hand control back to the app's bundled defaults; uncheck ``enabled`` to turn
-    the microphone button off everywhere mid-auction.
+    Tune against the Voice command log's corrections. Saves apply on the next config fetch. Delete the
+    row to use the app's defaults; uncheck ``enabled`` to turn the mic off everywhere.
     """
 
     list_display = ("__str__", "enabled", "backend", "locale", "auto_submit_on_sold", "updatedon")
@@ -655,16 +630,12 @@ class VoiceGrammarAdmin(admin.ModelAdmin):
     )
 
     def has_add_permission(self, request):
-        # The singleton exists or it doesn't; once it does, "Add" would just overwrite it.
+        # A singleton: no Add once it exists.
         return not VoiceGrammar.objects.exists()
 
 
 class VoiceOutcomeFilter(admin.SimpleListFilter):
-    """Split the log by what actually happened, which the ``slot`` filter can't do.
-
-    "Nothing matched" is a blank slot, and blank isn't one of the field's choices, so it would
-    otherwise be unreachable — despite being the pile worth reading first.
-    """
+    """Split the log by outcome. "Nothing matched" is a blank slot, which the ``slot`` filter can't reach."""
 
     title = "outcome"
     parameter_name = "outcome"
@@ -688,11 +659,8 @@ class VoiceOutcomeFilter(admin.SimpleListFilter):
 
 @admin.action(description="Count what was heard")
 def count_what_was_heard(modeladmin, request, queryset):
-    """Group the selected rows by ``heard`` and show the commonest first.
-
-    This is the query the log exists to answer: select the "Nothing matched" rows and the phrases at
-    the top of this list are the words the auctioneer keeps saying that the grammar has never heard
-    of. Each one is an ``anchors`` entry in Voice grammar, and ships without an app release.
+    """Group selected rows by ``heard``, commonest first: on "Nothing matched" rows, the words to add to
+    ``anchors``.
     """
     counts = queryset.values("heard").annotate(times=Count("id")).order_by("-times", "heard")[:25]
     if not counts:
@@ -710,13 +678,10 @@ def count_what_was_heard(modeladmin, request, queryset):
 
 @admin.register(VoiceCommandLog)
 class VoiceCommandLogAdmin(admin.ModelAdmin):
-    """What voice heard, what it filled in, and what the operator changed it to.
+    """What voice heard, filled in, and what the operator corrected. Read-only.
 
-    The tuning queue, in two piles. Filter to rows with a correction (or search a value in
-    ``corrected_to``) and each one names a word the grammar gets *wrong*. Filter to "Nothing
-    matched" and each one names a word the grammar has never heard of at all — select them and run
-    "Count what was heard" to see which phrases keep coming back. Both are fixed in Voice grammar
-    above. Read-only — these are observations, and editing them would only corrupt the sample.
+    Rows with a correction name words the grammar gets wrong; "Nothing matched" rows name words it has
+    never heard ("Count what was heard").
     """
 
     list_display = ("createdon", "auction", "user", "slot", "heard", "chosen", "confidence", "corrected_to")
@@ -768,7 +733,7 @@ class UserInline(FlatInline, admin.TabularInline):
     ]
     verbose_name = "Club member"
     verbose_name_plural = "Club members"
-    # UserData has two FKs to Club (club + last_club_used); this inline is the user's club affiliation.
+    # UserData has two FKs to Club; this is the affiliation.
     fk_name = "club"
     model = UserData
     extra = 0
@@ -790,11 +755,8 @@ class ClubDiscordRoleInline(admin.TabularInline):
 
 
 class UserAPIKeyAdmin(admin.ModelAdmin):
-    """Keys that let an agent use the MCP endpoint as one person.
-
-    The secret half of a key is hashed and is not here, on purpose: this page can revoke a key
-    (``is_active``) and can say when it was last used, but it cannot show anybody what the key is.
-    Issuing one is a job for the account page, which shows it once.
+    """Keys that let an agent use the MCP endpoint as one person. The secret is hashed and not shown; this
+    page can only revoke and show last use.
     """
 
     model = UserAPIKey
@@ -824,8 +786,7 @@ class ClubAdmin(admin.ModelAdmin):
         "homepage",
     )
     list_filter = (
-        # Only "Approved and listed" puts a club on the map, so this is the filter that answers
-        # "what have we found and not published yet" -- the working list for club discovery.
+        # "Approved and listed" is what puts a club on the map.
         "outreach_stage",
         "stall_reason",
         "active",
@@ -840,8 +801,7 @@ class ClubAdmin(admin.ModelAdmin):
         "interests",
     )
     readonly_fields = ("connected_paypal_seller", "connected_square_seller")
-    # NEC membership is granted here and nowhere else (it gates the speaker directory), so make it
-    # togglable straight from the list rather than one club edit page at a time.
+    # NEC membership (gates the speaker directory) is granted only here.
     list_editable = ("is_nec_club", "outreach_stage")
     inlines = [
         UserInline,
@@ -900,11 +860,7 @@ class PickupLocationInline(admin.TabularInline):
 
 class AuctionAdmin(admin.ModelAdmin):
     model = Auction
-    # Every model something autocompletes to needs an order. The autocomplete view paginates its
-    # matches, and paginating an unordered queryset is what Django's UnorderedObjectListWarning is
-    # about: page 2 can repeat a row or skip one. Models with a Meta.ordering already have this;
-    # Auction, AuctionTOS, Lot and Invoice did not. Newest first, which is the useful order here
-    # and what an unordered scan approximated anyway.
+    # Autocomplete paginates, and unordered pagination repeats or skips rows.
     ordering = ("-pk",)
     list_display = ("title", "created_by")
     list_select_related = ("created_by",)
@@ -934,7 +890,7 @@ class AuctionAdmin(admin.ModelAdmin):
 
 class BidInline(FlatInline, admin.TabularInline):
     model = Bid
-    #: `Bid.__str__` names the bidder and the lot, and `Lot.__str__` names its auction.
+    #: `Bid.__str__` names bidder and lot; `Lot.__str__` names its auction.
     inline_select_related = ("user", "lot_number__auction")
     list_display = (
         "user",
@@ -948,7 +904,7 @@ class BidInline(FlatInline, admin.TabularInline):
     extra = 0
 
     def get_readonly_fields(self, request, obj=None):
-        # Make all Bid fields readonly (except the FK back to Lot which is implied)
+        # Bids are read-only here.
         return tuple(
             f.name
             for f in self.model._meta.get_fields()
@@ -969,7 +925,7 @@ class WatchInline(FlatInline, admin.TabularInline):
     extra = 0
 
     def get_readonly_fields(self, request, obj=None):
-        # Make all Watch fields readonly (except the FK back to Lot which is implied)
+        # Watches are read-only here.
         return tuple(
             f.name
             for f in self.model._meta.get_fields()
@@ -979,7 +935,7 @@ class WatchInline(FlatInline, admin.TabularInline):
 
 class LotAdmin(admin.ModelAdmin):
     model = Lot
-    ordering = ("-pk",)  # see AuctionAdmin: three autocompletes point here and paginate their matches
+    ordering = ("-pk",)  # # ordered for autocomplete pagination (see AuctionAdmin)
     list_display = (
         "lot_name",
         "auction",
@@ -1064,7 +1020,7 @@ class LotAutoCategoryAdmin(admin.ModelAdmin):
     actions = ["approve", "retry", "uncategorize"]
 
     def approve(self, request, queryset):
-        """Change category_automatically_added to false to remove the warning banner from these"""
+        """Clear category_automatically_added to remove the warning banner."""
         for lot in queryset:
             lot.category_automatically_added = False
             lot.save()
@@ -1144,7 +1100,7 @@ class BoughtLotInline(FlatInline, admin.TabularInline):
 
 class InvoiceAdmin(admin.ModelAdmin):
     model = Invoice
-    ordering = ("-pk",)  # see AuctionAdmin: an autocomplete points here and paginates its matches
+    ordering = ("-pk",)  # # ordered for autocomplete pagination
     list_display = (
         "__str__",
         "rounded_net",
@@ -1200,26 +1156,21 @@ class CategoryAdmin(admin.ModelAdmin):
 class SpeciesCommonNameInline(admin.TabularInline):
     model = SpeciesCommonName
     extra = 0
-    # Rebuilt from `name` on every save, so editing it does nothing but confuse.
+    # Rebuilt from `name` on save.
     exclude = ("name_normalized",)
-    # `source` is deliberately editable and defaults to "manual", which is what makes a name added
-    # here outlive the next import: import_fishbase only ever deletes rows it wrote itself.
+    # `source` defaults to "manual", so names added here survive import_fishbase.
 
 
 class SpeciesCommonNameAdmin(admin.ModelAdmin):
-    """The queue for names a club added to a species everybody already has.
-
-    Approving a *species* brings its own names with it (see ``SpeciesAdmin.approve_species``), but
-    a name attached to a shared species -- "yellow lab" on FishBase's *Labidochromis caeruleus* --
-    has no species approval to ride along on, and this page is where that decision is made.
+    """Names clubs added to shared species, awaiting approval. Approving a species brings its own names;
+    these have no species approval to ride on.
     """
 
     model = SpeciesCommonName
     menu_label = "Species common names"
     list_display = ("name", "species", "source", "approved", "is_preferred", "added_by", "club")
     list_select_related = ("species", "added_by", "club")
-    # "approved" first: an unapproved name is offered to one club and nobody else, so the queue of
-    # them is the one thing here anybody has to act on.
+    # "approved" first: the unapproved queue is the work.
     list_filter = ("approved", "source", "club", "is_preferred")
     search_fields = ("name", "species__scientific_name", "species__common_name")
     autocomplete_fields = ("species",)
@@ -1250,20 +1201,13 @@ class SpeciesAdmin(admin.ModelAdmin):
         "possible_duplicate",
     )
     list_select_related = ("category", "added_by", "club", "possible_duplicate")
-    # Not family: there are 664 of them and the sidebar would list every one.  Search instead.
-    # "approved" first: an unapproved species is suggested to one person and nobody else, so the
-    # queue of them is the one thing on this page anybody has to act on.  possible_duplicate is an
-    # emptiness filter rather than a plain one for the same reason: it is a self-FK, so listing its
-    # values would list 36,000 species in the sidebar.  Merging a pair is deliberately *not* an
-    # action here -- which of the two rows the whole site keeps is a decision that needs the lot
-    # counts and the sources side by side, which is what the species gaps page shows.
+    # Not family (664 values). possible_duplicate as an emptiness filter (a self-FK). Merging is on
+    # the species gaps page, which shows lot counts and sources.
     list_filter = (
         "approved",
         ("possible_duplicate", admin.EmptyFieldListFilter),
         "source",
-        # A cross has no scientific name to search for and no genus to sort by, so a filter is the
-        # only way to see the ones the site holds.  There are a handful; there are 36,000 of
-        # everything else.  See Species.is_hybrid.
+        # Hybrids have no binomial to search, so filter.
         "is_hybrid",
         "club",
         "category",
@@ -1275,15 +1219,9 @@ class SpeciesAdmin(admin.ModelAdmin):
 
     @admin.action(description="Approve for every auction")
     def approve_species(self, request, queryset):
-        """Promote species from "only the person who added them" to the shared list.
-
-        The other half of ``SpeciesApproveView``, which is the same decision one row at a time
-        from the species gaps page.  Bulk here because the queue after a busy weekend is a dozen
-        rows from one check-in table, and they are approved or not as a batch.
-        """
+        """Approve species in bulk (the per-row version is ``SpeciesApproveView``)."""
         changed = queryset.filter(approved=False).update(approved=True)
-        # The names came in with the species and are scoped the same way; approving one without
-        # the other leaves a shared species nobody can find by the word they type for it.
+        # Their names too, or nobody finds the species by its word.
         SpeciesCommonName.objects.filter(species__in=queryset, approved=False).update(approved=True)
         for genus in set(queryset.values_list("genus", flat=True)):
             if genus:
@@ -1292,36 +1230,26 @@ class SpeciesAdmin(admin.ModelAdmin):
 
     search_fields = ("common_name", "scientific_name", "genus", "variety", "family", "category__name")
     inlines = [SpeciesCommonNameInline]
-    # scientific_name is rebuilt from genus + species on every save, so editing it does nothing.
+    # Rebuilt from genus + species on save.
     readonly_fields = ("scientific_name",)
-    # Tens of thousands of rows: a plain select for the parent of a cultivar would render every
-    # one of them into the page.
+    # Tens of thousands of rows.
     autocomplete_fields = ("parent",)
 
 
 class SpeciesSearchCacheAdmin(admin.ModelAdmin):
     model = SpeciesSearchCache
     menu_label = "Species name cache"
-    # accepts and rejects are the whole story of whether a remembered answer is any good: a lot
-    # saved with it left alone counts once, a lot it was cleared from counts against it, and one
-    # rejection in ten retires the row -- see species_matching.record_choice.
+    # accepts and rejects decide whether an answer is kept (species_matching.record_choice).
     list_display = ("search_text", "species", "source", "created_by", "hits", "accepts", "rejects", "createdon")
     list_select_related = ("species", "created_by")
     list_filter = ("source",)
     search_fields = ("search_text", "species__scientific_name")
-    # Deleting a row here is how you make the site look a name up again -- handy when a bad
-    # answer got cached.
+    # Delete a row to make the site look a name up again.
     autocomplete_fields = ("species",)
 
 
 class SpeciesNameRejectionAdmin(admin.ModelAdmin):
-    """The pairings the site has retired.  Deleting a row lets the matcher offer it again.
-
-    The counterpart of the name cache: that table says what a lot name *is*, this one says what
-    enough people have decided it is not.  Both are read before the language model, and this one
-    survives the cache row it came from -- otherwise the model would answer the same question the
-    same way and the wrong answer would be written straight back.
-    """
+    """Retired pairings. Deleting a row lets the matcher offer it again."""
 
     model = SpeciesNameRejection
     menu_label = "Retired species names"
@@ -1350,7 +1278,7 @@ class BanAdmin(admin.ModelAdmin):
 
 class AuctionTOSAdmin(admin.ModelAdmin):
     model = AuctionTOS
-    ordering = ("-pk",)  # see AuctionAdmin: an autocomplete paginates, and this model has no Meta.ordering
+    ordering = ("-pk",)  # # ordered for autocomplete pagination
     list_display = ("name", "auction", "manually_added")
     list_select_related = ("auction",)
     search_fields = (
@@ -1367,10 +1295,8 @@ class AuctionTOSAdmin(admin.ModelAdmin):
 
 
 class ChunkedJobStateAdmin(admin.ModelAdmin):
-    """Read-only: how far a chunked background job has got. See auctions/tasks.py.
-
-    Editable would mean an admin could send a walk over the biggest table on the site back to the
-    beginning by typing in the wrong number, and there is nothing here worth typing.
+    """Read-only progress of chunked background jobs (auctions/tasks.py). Editing could restart a walk over
+    the biggest table.
     """
 
     model = ChunkedJobState
@@ -1391,8 +1317,7 @@ class PageViewAdmin(admin.ModelAdmin):
         "lot_number",
     )
     ordering = ("-date_start",)
-    # Two full scans of the biggest table on the site to render twenty rows of it; see
-    # auctions/admin_paginator.py for which count each of these removes.
+    # Avoids two full-table counts per page; see auctions/admin_paginator.py.
     show_full_result_count = False
     paginator = EstimatedCountPaginator
 
@@ -1424,7 +1349,7 @@ class AuctionHistoryAdmin(admin.ModelAdmin):
     ordering = ("-timestamp",)
 
     def get_readonly_fields(self, request, obj=None):
-        # make all AuctionHistory model fields readonly in the admin (this is an audit log)
+        # An audit log: read-only.
         return tuple(f.name for f in self.model._meta.get_fields() if not (f.many_to_many or f.one_to_many))
 
 
@@ -1506,12 +1431,8 @@ class ClubEventAdmin(admin.ModelAdmin):
 
 
 class ClubAnnouncementAdmin(admin.ModelAdmin):
-    """Read-only-ish view of what clubs have announced.
-
-    The channel columns and the counters are not editable here on purpose: they record what
-    actually happened when the announcement was sent, and editing them would turn the club's own
-    history into something a site admin had rewritten. Delete or soft-delete an announcement that
-    shouldn't have gone out; don't retitle where it went.
+    """What clubs announced. Channel columns and counters record what happened and aren't editable;
+    delete a bad announcement instead.
     """
 
     model = ClubAnnouncement
@@ -1538,9 +1459,7 @@ class ClubAnnouncementAdmin(admin.ModelAdmin):
     )
     search_fields = ("text", "club__name")
     raw_id_fields = ("club", "created_by")
-    # sent_at is editable: it is the column everything public filters on, so it is the one lever
-    # for un-sending or re-releasing a row that got into a strange state. The rest are the record
-    # of what the providers and Discord actually did.
+    # sent_at stays editable: it gates everything public, so it's the lever for a row in a strange state.
     readonly_fields = (
         "created_at",
         "uuid",
@@ -1607,11 +1526,7 @@ class SpeakerAdmin(admin.ModelAdmin):
 
     @admin.action(description="Mark topics as reviewed")
     def mark_topics_reviewed(self, request, queryset):
-        """Clear the retired-topic flag once someone has re-filed these by hand.
-
-        The note goes with it: it named a topic that no longer exists, so keeping it around
-        after the fix would only make the next person wonder what still needs doing.
-        """
+        """Clear the retired-topic flag and its note once re-filed."""
         updated = queryset.update(topics_need_review=False, topic_review_note="")
         self.message_user(request, f"{updated} speakers marked as reviewed.")
 
@@ -1632,11 +1547,8 @@ admin.site.register(SpeakerComment, SpeakerCommentAdmin)
 
 @admin.register(AssistantSkillRequest)
 class AssistantSkillRequestAdmin(admin.ModelAdmin):
-    """The Django-admin view of what agents asked for. The dashboard page is the one to use.
-
-    Here for the same reason ``VoiceCommandLog`` is: bulk edits, and a search across every status
-    at once. ``/admin-dashboard/assistant-requests/`` is where the decision gets made, because it
-    groups by skill and counts the people asking, which is the number that matters.
+    """Agent skill requests. Decisions are made on ``/admin-dashboard/assistant-requests/``; this is for
+    bulk edits and search.
     """
 
     list_display = ("skill", "user", "status", "surface", "createdon")
@@ -1646,12 +1558,9 @@ class AssistantSkillRequestAdmin(admin.ModelAdmin):
     list_select_related = ("user",)
 
 
-# These two are self-contained features that read better on their own; imported here for the side
-# effect of registering their pages -- the moderation queue (ContentReport, CopyrightNotice,
-# CopyrightStrike) and the two advertising pages.
+# Imported to register their pages: moderation queue and advertising.
 from . import ads_admin, moderation_admin  # noqa: E402, F401
 
-# Last, because it reads the finished registry: every foreign key on every page above that points
-# at a table without a ceiling becomes a search box rather than a dropdown of the whole table.
-# auctions/admin_performance.py says why, and auctions/test_admin_performance.py holds it to it.
+# Last, since it reads the finished registry: unbounded FKs become search boxes
+# (auctions/admin_performance.py).
 use_lookup_widgets(admin.site)

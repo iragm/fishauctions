@@ -1,48 +1,17 @@
-"""Phase 9: the people who are not running the auction.
+"""Phase 9: measuring buyers, sellers and people with no account (``docs/phase_9.md``).
 
-``docs/phase_9.md`` sets out four instruments and this module is all four of them.  Phases 0-8
-measured the organizer; these measure the buyer, the seller, and the person who never made an
-account and whose first contact with this site is an invoice email.  Nothing here writes a row
-except :class:`~auctions.models.SignInStitch`, and nothing here is a new kind of tracking: every
-query below reads ``PageView``, ``AuctionTOS``, ``Lot`` and ``Invoice`` rows that already exist and
-in ``PageView``'s case go back to 2020.
+Reads existing ``PageView``, ``AuctionTOS``, ``Lot`` and ``Invoice`` rows; only
+:class:`~auctions.models.SignInStitch` is written.
 
-**Milestones, not a funnel** (:func:`milestone_reach`).  ``usability_report.buyer_funnel`` reports
-seven stages in a fixed order, and most of them do not have one.  A seller adds lots and never opens
-one; a buyer opens forty and never adds one; the non-user starts at "viewed the invoice" and has no
-earlier row at all.  A strict funnel reports *did it differently* as *dropped out*.  So the events
-here are a set each person reached, with the handful of genuine prerequisites written down as
-prerequisites (:data:`MILESTONES`), and the report is a reach rate rather than a step-to-step
-conversion.  Bidding is deliberately demoted: online bidding is about 5% of auctions and two clubs
-do most of it, and **the terminal milestone is a paid invoice**, which exists for every auction type.
-
-**Lapsing is counted in auctions, not in days** (:func:`lapsed_participants`).  An ending cannot be
-observed, only an absence, and no query separates "left the hobby" from "waiting for the spring
-auction".  What fixes that is the unit: a club running four auctions a year makes a two-month gap
-meaningless and a club running one makes it enormous, so the same *number of days* means opposite
-things and the same *number of missed auctions* means the same thing.  That is the whole of the
-normalisation, and it is why :data:`LAPSED_AFTER_AUCTIONS` can be a constant without being a global
-cutoff in disguise.  Anyone whose last auction is the club's most recent one is **right-censored** --
-not lapsed, just not asked yet -- and is excluded rather than counted as retained, which is the
-mistake that makes every retention number look better than it is.
-
-**One person's sessions, read in order** (:func:`session_timeline`).  The highest-value instrument
-here and the one that needs no new table.  At n=dozens, twenty real sessions read end to end teach
-more than any aggregate.  The anonymous seam is the real limitation and
-:class:`~auctions.models.SignInStitch` is the only honest key across it; :func:`stitched_sessions`
-is where that key is spent, and :func:`stitching_began` is the date before which it does not exist,
-which any before-and-after number has to be shown next to.
-
-**The club is its own control** (:func:`club_cohorts`).  Same members, same venue, same rules, one
-auction to the next -- as close to an experiment as this site will ever get, and the reason
-``docs/phase_9.md`` rules out A/B testing rather than merely deferring it.  Two bidders in one
-auction are not independent samples; the effective n is closer to the number of auctions than to the
-number of bidders.
-
-**What blocks the club half on today's data:** only about one auction in five has a ``club``.  Every
-query in :func:`club_cohorts` groups by club, so it can see a fifth of the site until
-``/admin-unlinked-auctions/`` has been worked down.  :func:`club_coverage` returns that fraction so
-the page can say so rather than quietly reporting a fifth of the answer.
+* **Milestones, not a funnel** (:func:`milestone_reach`): people reach different things in different
+  orders, so report reach rates with only real prerequisites. The terminal milestone is a paid
+  invoice; bidding is demoted (online bidding is ~5% of auctions).
+* **Lapsing counts missed auctions, not days** (:func:`lapsed_participants`), so clubs with different
+  schedules compare. Anyone whose last auction is the club's latest is right-censored and excluded.
+* **Session timelines** (:func:`session_timeline`): read real sessions end to end. ``SignInStitch``
+  bridges the anonymous seam, from :func:`stitching_began` on.
+* **The club is its own control** (:func:`club_cohorts`). Only ~1 auction in 5 has a club, so
+  :func:`club_coverage` reports the fraction visible.
 """
 
 from __future__ import annotations
@@ -62,23 +31,16 @@ logger = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class Milestone:
-    """One thing a person can have reached, and the one thing that has to come first.
-
-    ``after`` is a real prerequisite, not a position in a list: you have an invoice before you pay
-    it and you join before you win.  Where there is no prerequisite it is ``None``, and the pair is
-    then reported as two independent reach rates rather than as a conversion between them --
-    which is the whole difference between this and a funnel.
-    """
+    """One milestone and its real prerequisite. ``after=None`` reports two independent reach rates."""
 
     key: str
     label: str
     after: str | None = None
-    #: Shown under the label on the dashboard when the number needs a caveat to be read correctly.
+    #: A caveat shown under the label.
     note: str = ""
 
 
-#: The conversions worth counting, in the order they are usually *reported* -- which is not an
-#: order anybody moves through.  Read ``after`` for what is actually ordered.
+#: The milestones, in report order; ``after`` holds what is really ordered.
 MILESTONES: list[Milestone] = [
     Milestone("arrived", "First page view"),
     Milestone(
@@ -108,48 +70,29 @@ MILESTONES: list[Milestone] = [
     Milestone("paid", "Paid", after="invoice_opened"),
 ]
 
-#: How many of a club's own auctions have to pass before somebody counts as lapsed.  Two, and the
-#: unit is what does the work: see the module docstring.  A club that runs one auction a year and a
-#: club that runs six are compared on the same number here, and a number of *days* could not do
-#: that for both.
+#: Club auctions missed before someone counts as lapsed.
 LAPSED_AFTER_AUCTIONS = 2
 
-#: Auctions per club on the cohort page.  A club's history read across more than this stops being
-#: something an organizer looks at and starts being a chart.
+#: Auctions per club on the cohort page.
 COHORT_AUCTIONS = 6
 
-#: Rows in one session timeline.  A session with more pages than this is a crawler or somebody who
-#: left a tab open for a week, and either way the first page of it is the part worth reading.
+#: Rows in one session timeline.
 TIMELINE_LIMIT = 300
 
-#: A gap longer than this inside one session is a different visit, not a slow reader.  Used only to
-#: mark the break when the timeline is read; nothing splits a session on it.
+#: A gap this long marks a new visit in the timeline display; nothing is split on it.
 VISIT_GAP = datetime.timedelta(minutes=30)
 
-#: How far back the "somewhere to start" index looks.  ``busiest_sessions`` is a ``GROUP BY`` over
-#: ``PageView``, which is never purged and goes back to 2020, and it is the *default* render of
-#: ``/admin-session-replay/`` -- so unbounded it is a full scan of the largest table on the site
-#: every time an admin opens the page, the shape :func:`milestone_reach` names as a past production
-#: incident.  A fortnight is also what the page is for: the sessions worth reading are the recent
-#: ones, and a session from 2021 cannot be asked about.
+#: Look-back for the session index, which is a GROUP BY over PageView (never purged) on page load.
 SESSION_INDEX_DAYS = 14
 
-#: How much of a session key ever leaves this module.  For an anonymous visitor ``PageView``
-#: stores the live Django session key, so printing one on the index and putting it in ``?session=``
-#: would post a session credential into the access log, the admin's browser history and the
-#: ``Referer`` of everything that page links out to.  A prefix picks a session out of ``PageView``
-#: just as well and is not a cookie anybody can paste back.
+#: Session key characters exposed. PageView stores live anonymous session keys, which must not
+#: reach logs, history or Referer.
 SESSION_KEY_PREFIX = 12
 
 
 def stitching_began():
-    """The datetime before which no anonymous half of anybody's visit can be attributed.
-
-    :class:`~auctions.models.SignInStitch` only works forwards, so a retention number computed
-    across this date is a stitched period compared against an unstitched one.  Returned as the
-    timestamp of the oldest stitch rather than a constant, because a constant would go stale on the
-    day somebody restored a database or reran a fixture, and ``None`` when nothing has been stitched
-    yet -- which is the honest answer on a fresh install.
+    """When stitching began (oldest ``SignInStitch``), or None. Numbers across this date compare stitched
+    with unstitched periods.
     """
     from auctions.models import SignInStitch
 
@@ -158,11 +101,7 @@ def stitching_began():
 
 
 def stitched_sessions(user):
-    """Every anonymous session key this user was holding when they signed in.
-
-    The one place the stitch is spent.  Anything read through it is that person's own earlier
-    browsing; anything read without it is two people as far as this site can tell.
-    """
+    """Every anonymous session key this user held when signing in."""
     from auctions.models import SignInStitch
 
     return list(SignInStitch.objects.filter(user=user).values_list("session_id", flat=True))
@@ -178,17 +117,11 @@ def _reach(rows, key):
 
 
 def milestone_reach(auctions):
-    """``{auction_pk: {milestone_key: people}}`` for the auctions given.
+    """``{auction_pk: {milestone_key: people}}``, one GROUP BY per milestone.
 
-    One ``GROUP BY`` per milestone over the whole set rather than one query per auction, the same
-    shape as ``usability_report.buyer_funnel``, and for the same reason: this page shows several
-    auctions and a per-auction loop would be forty queries.
-
-    The ``PageView`` queries carry a date floor that is not cosmetic.  They match an auction as
-    ``pageview.auction_id OR lot.auction_id`` -- an OR across a join no single index can serve --
-    so unbounded each one is a full scan of the largest table on the site, which is the exact shape
-    behind a past production incident.  The OR itself only covers rows written before 2026-09-09;
-    ``tasks.backfill_page_view_auctions`` is retiring it.
+    PageView queries carry a date floor: the ``auction_id OR lot.auction_id`` match can't use an index,
+    and unbounded it caused a production incident. The OR covers rows before 2026-09-09 until
+    ``tasks.backfill_page_view_auctions`` retires it.
     """
     from auctions.models import AuctionTOS, Invoice, Lot, PageView
     from auctions.usability_report import FUNNEL_LOOKBACK_DAYS, _actor
@@ -209,9 +142,7 @@ def milestone_reach(auctions):
         views.annotate(auction_key=auction_key).values("auction_key").annotate(people=Count(actor, distinct=True)),
         "auction_key",
     )
-    # The rules page is the auction's own page and nothing else: a lot page also carries the
-    # auction FK now (7a.2), so "viewed something belonging to this auction" is not the question.
-    # Matched on the route rather than on the path, because the path holds a slug.
+    # The auction's own page by route: lot pages carry the auction FK too.
     read_rules = _reach(_rules_page_views(views), "auction_key")
     lot_pages = _reach(
         PageView.objects.filter(date_start__gte=floor, lot_number__auction__in=ids)
@@ -262,23 +193,13 @@ def milestone_reach(auctions):
     return found
 
 
-#: The route that serves an auction's own page -- its rules, its dates, its "join this auction"
-#: button.  Named here rather than matched as a path prefix because ``route_name`` classifies with
-#: Django's own resolver, so a route renamed in ``urls.py`` cannot leave this reading the wrong
-#: pages the way a hand-written prefix would.
+#: The route that serves an auction's own page, matched via the resolver so a rename can't break
+#: it.
 RULES_ROUTE = "auction_main"
 
 
 def _rules_page_views(views):
-    """People who opened an auction's own page, as opposed to one of its lots.
-
-    Since 7a.2 a lot page carries its auction's FK too, so "a view belonging to this auction" is
-    not the question -- ``lot_number__isnull=True`` and the route together are.
-
-    Counted in Python over the (auction, actor, url) rows because the route is not a column: there
-    is no ``GROUP BY`` for "the URL pattern that served this path" in any database here, and
-    ``route_name`` is memoised across the thousands of paths that fold into it.
-    """
+    """People who opened an auction's own page. Counted in Python, since the route isn't a column."""
     rows = (
         views.annotate(auction_key=Coalesce("auction_id", "lot_number__auction_id"))
         .filter(lot_number__isnull=True)
@@ -302,11 +223,7 @@ def _rules_page_views(views):
 
 
 def club_auctions(club, limit=None):
-    """A club's auctions, oldest first -- the ruler everything below is measured against.
-
-    Oldest first because "N auctions since the one they last took part in" is a count forwards from
-    a position in this list, and reversing it at every call site is how an off-by-one gets in.
-    """
+    """A club's auctions, oldest first, the ruler lapsing is counted on."""
     from auctions.models import Auction
 
     query = Auction.objects.filter(club=club, is_deleted=False).order_by("date_start", "pk")
@@ -317,15 +234,14 @@ def club_auctions(club, limit=None):
 
 @dataclass
 class Cohort:
-    """One auction inside a club's history, and the four numbers ``docs/phase_9.md`` asked for."""
+    """One auction in a club's history and its cohort numbers."""
 
     auction: object
     new_people: int = 0
     new_who_participated: int = 0
     returning: int = 0
     lapsed: int = 0
-    #: ``None`` for the club's most recent auction: everybody is right-censored there and a rate
-    #: computed anyway would be reported as perfect retention.
+    #: False for the latest auction, where everyone is right-censored.
     lapsed_is_measurable: bool = True
     referrers: list = field(default_factory=list)
 
@@ -338,14 +254,8 @@ class Cohort:
 
 
 def _participants(auction_ids):
-    """``{auction_pk: {identity}}`` -- who took part, by the identity that survives having no account.
-
-    Keyed on the user id where there is one and on the ``AuctionTOS`` email otherwise, because the
-    non-user persona is the point: somebody who brings lots on a piece of paper has an
-    ``AuctionTOS`` an organizer typed in, no ``User``, and is the same person at the next auction
-    only through that email.  A row with neither is that auction's own bidder number, which is
-    unique inside the auction and therefore never matches across two -- correct, and deliberately
-    so: there is nothing there to match on.
+    """``{auction_pk: {identity}}``: user id, else ``AuctionTOS`` email (so people with no account match
+    across auctions). A row with neither never matches, correctly.
     """
     from auctions.models import AuctionTOS
 
@@ -363,12 +273,7 @@ def _participants(auction_ids):
 
 
 def _did_something(auction_ids):
-    """``{auction_pk: {identity}}`` -- narrowed to the people who bought or sold, not merely joined.
-
-    "Participated" is per persona and it is never "logged in": a buyer won a lot, a seller entered
-    one.  Both are rows an organizer created at the table as often as the person did themselves,
-    which is exactly why this is the honest measure of a room.
-    """
+    """``{auction_pk: {identity}}`` narrowed to people who bought or sold."""
     from auctions.models import AuctionTOS, Lot
 
     sold = set(
@@ -396,17 +301,9 @@ def _did_something(auction_ids):
 
 
 def lapsed_participants(club, auction, after=LAPSED_AFTER_AUCTIONS):
-    """The identities who took part before ``auction`` and had not come back ``after`` auctions later.
+    """Identities who took part before ``auction`` and hadn't returned ``after`` auctions later.
 
-    The churn definition and the "who did we lose this time" report are the same query, which is
-    the point of measuring in auctions: the organizer's question -- *who was here last time and is
-    not here now* -- and the campaign's question are one thing rather than two reports that
-    disagree.
-
-    Returns ``(identities, measurable)``.  ``measurable`` is ``False`` when there have not been
-    ``after`` auctions since this one, because everybody is then **right-censored**: not lapsed,
-    just not asked yet.  Counting them as retained is what makes retention numbers look better
-    than they are, and counting them as lost is worse.
+    Returns ``(identities, measurable)``; not measurable when fewer than ``after`` auctions have passed.
     """
     history = club_auctions(club)
     try:
@@ -425,13 +322,7 @@ def lapsed_participants(club, auction, after=LAPSED_AFTER_AUCTIONS):
 
 
 def club_cohorts(club, limit=COHORT_AUCTIONS):
-    """``[Cohort]`` for a club's most recent auctions, oldest first.
-
-    Read across a club's history these four numbers say whether it is growing, replacing its
-    members, or quietly shrinking behind a flat headline attendance -- and the pattern worth
-    catching (people come, then spend less, then stop coming) is a trend in *participation rate*
-    and *lapsed* together, not a single number.
-    """
+    """``[Cohort]`` for a club's recent auctions, oldest first."""
     history = club_auctions(club)
     if not history:
         return []
@@ -466,12 +357,7 @@ def club_cohorts(club, limit=COHORT_AUCTIONS):
 
 
 def _cohort_referrers(auctions, limit=4):
-    """``{auction_pk: [{referrer, people}]}`` -- how the people at each auction first got there.
-
-    Per person rather than the per-view count ``usability_report.funnel_referrers`` reports: a
-    cohort question is "where did these forty people come from", and one visitor refreshing a lot
-    page thirty times is one answer to it, not thirty.
-    """
+    """``{auction_pk: [{referrer, people}]}``: how people first arrived, counted per person, not per view."""
     from django.contrib.sites.models import Site
 
     from auctions.models import PageView
@@ -511,12 +397,7 @@ def _cohort_referrers(auctions, limit=4):
 
 
 def club_coverage():
-    """``{linked, total, percent}`` -- the fraction of auctions any club query here can see.
-
-    Not a footnote.  Every number :func:`club_cohorts` returns is computed from the auctions that
-    have a ``club``, and most do not, so a page showing them without this is reporting a fifth of
-    the site as if it were the site.
-    """
+    """``{linked, total, percent}``: the fraction of auctions any club query can see."""
     from auctions.models import Auction
 
     total = Auction.objects.filter(is_deleted=False).count()
@@ -540,24 +421,15 @@ class Step:
     view: object
     gap: datetime.timedelta | None
     route: str
-    #: True when :data:`VISIT_GAP` has passed -- the same session, but a different sitting.
+    #: True after :data:`VISIT_GAP`.
     new_visit: bool = False
 
 
 def session_timeline(session_id=None, user=None, limit=TIMELINE_LIMIT):
-    """``[Step]`` -- what one person opened, in order, with the elapsed gap between each page.
+    """``[Step]``: what one person opened, in order, with the gap between pages.
 
-    A page and a limit, not a chart.  This is the instrument ``docs/phase_9.md`` calls the
-    highest-value item in the phase, and the argument for it is about sample size rather than
-    about features: at n=dozens, twenty real sessions read end to end teach more than any
-    aggregate, and nothing else here lets anybody read one.
-
-    Given a ``user``, this returns their signed-in rows **and** the anonymous rows from every
-    session they were holding when they signed in (:func:`stitched_sessions`) -- which for the
-    buyer persona is the half of the visit that matters, because they arrive from a club's Facebook
-    page anonymously and only become a user at the point of paying.  Before
-    :func:`stitching_began` there are no such rows to find, and their absence is not evidence that
-    the person did not browse.
+    Given a ``user``, includes anonymous rows from sessions stitched at sign-in. Before
+    :func:`stitching_began` none exist, which isn't evidence they didn't browse.
     """
     from auctions.models import PageView
 
@@ -566,8 +438,7 @@ def session_timeline(session_id=None, user=None, limit=TIMELINE_LIMIT):
         keys = stitched_sessions(user)
         query = query.filter(Q(user=user) | Q(session_id__in=keys)) if keys else query.filter(user=user)
     elif session_id:
-        # A prefix, not the key: see SESSION_KEY_PREFIX. Anything shorter is not specific enough to
-        # be one person's session, and a full key pasted from an old link is cut to the same prefix.
+        # A prefix, never the key (SESSION_KEY_PREFIX); a full key is cut to it.
         if len(session_id) < SESSION_KEY_PREFIX:
             return []
         query = query.filter(session_id__startswith=session_id[:SESSION_KEY_PREFIX])
@@ -590,18 +461,9 @@ def session_timeline(session_id=None, user=None, limit=TIMELINE_LIMIT):
 
 
 def busiest_sessions(limit=25, days=SESSION_INDEX_DAYS):
-    """``[{session_id, user_id, pages}]`` -- somewhere to start reading.
+    """``[{session_id, user_id, pages}]``: sessions to start reading, by page count (not interest).
 
-    The index in front of :func:`session_timeline`, because that instrument is useless without a
-    way to find a session to open.  Ordered by page count, which is **not** the same as ordered by
-    interest: the sessions worth reading are usually short and end somewhere odd.  This is a list
-    to click, not an answer.
-
-    Rows with neither a user nor a session key are dropped -- there is nothing to open them by.
-
-    Bounded to the last :data:`SESSION_INDEX_DAYS` on the indexed ``date_start``, because the
-    ungrouped version of this is a scan of every ``PageView`` ever written, and the session keys
-    are cut to :data:`SESSION_KEY_PREFIX` before they leave here.
+    Bounded to :data:`SESSION_INDEX_DAYS`; rows with no user or session are dropped; keys are prefixed.
     """
     from auctions.models import PageView
 
@@ -634,25 +496,15 @@ def busiest_sessions(limit=25, days=SESSION_INDEX_DAYS):
 
 
 def median_member(auction):
-    """The participant at the 50th percentile of this auction, by lots bought plus lots sold.
-
-    **Median, and a real person.**  The mean of this distribution is meaningless -- a handful of
-    power users dominate every total -- and an averaged journey is nobody's journey, which reads as
-    fiction to any organizer who knows their own members.  So this returns one ``AuctionTOS`` and
-    the caller shows *their* session.
-
-    Ranked on lots rather than on money because money is a different question (an auction's
-    takings) and because a club whose median member sells three cheap plants and one that sells one
-    expensive fish are the same amount of participation.  Ties are broken by bidder number, which
-    is stable, so the same auction returns the same person twice running.
+    """The participant at the 50th percentile by lots bought plus sold: a real person, not an average.
+    Ties broken by bidder number, so it's stable.
     """
     from auctions.models import AuctionTOS
 
     rows = (
         AuctionTOS.objects.filter(auction=auction)
         .annotate(
-            # Both reverse accessors are named after the forward field on Lot, which is why the
-            # seller side reads as "auctiontos_seller" here rather than as "lots".
+            # Reverse accessors are named after Lot's forward fields.
             sold=Count("auctiontos_seller", filter=Q(auctiontos_seller__is_deleted=False), distinct=True),
             bought=Count("auctiontos_winner", filter=Q(auctiontos_winner__is_deleted=False), distinct=True),
         )
@@ -665,16 +517,8 @@ def median_member(auction):
 
 
 def median_member_story(auction):
-    """``{tos, score, sold, bought, timeline}`` -- the median member and what they actually did.
-
-    The output most likely to change what a club does, because it is the only one here a volunteer
-    running a fish auction will read without being asked to.  It is a person and a sequence, not a
-    statistic.
-
-    The timeline is empty for somebody with no ``User`` -- the non-user persona, whose first
-    contact with this site is an invoice email.  That emptiness is the finding rather than a gap in
-    the data, and the page says so: a club whose median member has no rows here ran an auction the
-    site never spoke to.
+    """``{tos, score, sold, bought, timeline}`` for the median member. An empty timeline (no account) is a
+    finding: the site never spoke to them.
     """
     tos = median_member(auction)
     if tos is None:
@@ -686,15 +530,8 @@ def median_member_story(auction):
 
 
 def unreached_share(auction):
-    """What share of the room this site never spoke to, as an honest proxy.
-
-    ``docs/phase_9.md`` asks for this next to any buyer funnel and it is the one number here that
-    is about the people no instrument can see: somebody who does not use a computer is by
-    construction invisible to every query above, and quietly reporting a funnel that omits them is
-    the failure mode.
-
-    The proxy is an ``AuctionTOS`` with no user attached whose invoice was never opened.  It is a
-    floor, not a count: somebody with no account who did open their invoice is not in it.
+    """Share of the room the site never reached: participants with no user whose invoice was never opened.
+    A floor, not a count.
     """
     from auctions.models import AuctionTOS, Invoice
 

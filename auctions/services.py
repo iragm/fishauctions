@@ -1,13 +1,7 @@
-"""The operations that are the same whoever asked: web page, API, app or assistant.
+"""Operations that are the same whoever asks: web page, API, app or assistant.
 
-A function here is the single implementation of one thing the site can do -- join an auction, check
-somebody in, create a club member, finish setting up a new auction. Views call them, the club API
-calls them, the mobile endpoints call them and ``palette_actions`` calls them, which is the point:
-a rule enforced in a view is a rule the API does not have, and this file is where that stops being
-possible.
-
-Permission checks are the caller's job. Nothing here asks whether the user is allowed; by the time
-a service function runs, that has been settled.
+Views, the club API, mobile endpoints and ``palette_actions`` all call these, so a rule can't live
+in only one of them. Permission checks are the caller's job.
 """
 
 import logging
@@ -18,17 +12,13 @@ from .models import Auction, AuctionTOS, ClubHistory, ClubMember
 
 logger = logging.getLogger(__name__)
 
-# Source of truth for ClubMember fields acceptable via API ingest.
-# Note: ``first_name`` and ``last_name`` are accepted as aliases but stored as ``name``.
+# ClubMember fields accepted by API ingest. ``first_name``/``last_name`` are combined into ``name``.
 INGEST_ALLOWED_FIELDS = frozenset({"name", "email", "phone_number", "address", "memo"})
 
 
 def map_fields(data: dict, api_key) -> dict:
-    """Rename incoming keys using ClubAPIKeyFieldMap records for this api_key.
-
-    Special case: if ``first_name`` and/or ``last_name`` are present (either sent
-    directly or mapped to those names), they are combined into a single ``name``
-    field (unless ``name`` is already set).
+    """Rename incoming keys by this key's ClubAPIKeyFieldMap; ``first_name``/``last_name`` become ``name``
+    unless ``name`` is set.
     """
     mapping = {m.external_field: m.internal_field for m in api_key.field_mappings.all()}
     result = {mapping.get(k, k): v for k, v in data.items()}
@@ -42,10 +32,8 @@ def map_fields(data: dict, api_key) -> dict:
 
 
 def create_club_member_from_api(validated_data: dict, club, api_key):
-    """Create a ClubMember from API-validated data, skipping duplicates by email.
-
-    Logs a ClubHistory entry and updates api_key.last_used_at.
-    Returns (member, created: bool).
+    """Create a ClubMember from API data, skipping duplicate emails. Logs history, touches
+    ``api_key.last_used_at``. Returns (member, created).
     """
     email = validated_data.get("email", "")
     member = None
@@ -79,20 +67,11 @@ def create_club_member_from_api(validated_data: dict, club, api_key):
 # Participants in a club-managed auction
 # ---------------------------------------------------------------------------
 #
-# In a club-managed auction (``Auction.is_club_managed``) the ClubMember owns the bidder number and
-# the bidding/selling permissions, and every AuctionTOS is a shadow of one. So every path that adds
-# somebody to such an auction has to find or create their member record and copy those fields down —
-# otherwise the participant gets an auction-only bidder number the club has never heard of, no club
-# admin screen can find them, and their number won't be theirs again next year.
-#
-# Callers: the web rules-page join (``AuctionInfo.post``), the app's proximity join
-# (``auctions.mobile.services.checkin.join_auction``), the lot CSV import's seller creation
-# (``ImportLotsFromCSV``) and the app's offline "add user" op (``auctions.mobile.services.offline``).
-# Separate functions rather than one because the order differs: creating a ClubMember also creates
-# its shadow AuctionTOS (see ``signals.propagate_clubmember_to_shadow_tos``), so a caller that has no
-# AuctionTOS yet should ensure the member first and adopt that shadow
-# (:func:`existing_tos_for_club_member`), while a caller that already has one lets
-# ``AuctionTOS.save()`` merge the shadow away.
+# The ClubMember owns the bidder number and permissions; every AuctionTOS is its shadow. Every path
+# that adds someone must find or create the member and copy those down. Creating a ClubMember also
+# creates its shadow TOS (signals.propagate_clubmember_to_shadow_tos), so a caller with no TOS yet
+# ensures the member and adopts the shadow (existing_tos_for_club_member); one with a TOS lets
+# AuctionTOS.save() merge the shadow away.
 
 
 def ensure_club_member(
@@ -100,18 +79,10 @@ def ensure_club_member(
 ):
     """Find or create the ClubMember for a participant in *auction*; return (member, created).
 
-    Matches an existing member by user link first, then by email (the same order as
-    ``AuctionTOS.club_member_record``), and binds *user* onto a member that was added by email only.
-    A newly created member is recorded in the club's history and always leaves here with a bidder
-    number: *bidder_number* when one is asked for and still free in this club (an admin writing a
-    number on a card at the door), otherwise a generated one. Returns ``(None, False)`` when the
-    auction isn't club-managed — there is nothing to create, and no member record is wanted for a
-    plain auction.
-
-    Pass ``admin_edited=False`` when the person is signing themselves up rather than an admin adding
-    them: it marks the new row as the member's own, so deleting their account deletes it instead of
-    keeping it as one of the club's records (see :mod:`auctions.account_deletion`). It only ever
-    applies to a row created here; an existing record keeps whatever it already says.
+    Matches by user, then email, and links *user* to an email-only member. A new member gets
+    *bidder_number* if free in the club, else a generated one, and a history line. ``(None, False)``
+    for a plain auction. ``admin_edited=False`` marks a self-signup row as the member's own, so account
+    deletion removes it; existing rows are untouched.
     """
     if not auction.is_club_managed:
         return None, False
@@ -124,7 +95,7 @@ def ensure_club_member(
     created = False
     if member is None:
         if not name or name == "Unknown":
-            # AuctionTOS.save() fills a blank name with "Unknown"; don't carry that into the club.
+            # Don't carry AuctionTOS's "Unknown" placeholder name into the club.
             name = (user.get_full_name() or user.username) if user else name
         member = ClubMember(
             club=club,
@@ -137,13 +108,13 @@ def ensure_club_member(
             added_by=user,
             admin_edited=admin_edited,
         )
-        # An auction that vets its participants must not hand out permissions through the back door.
+        # A vetted auction must not grant selling through the back door.
         if auction.only_approved_sellers:
             member.selling_allowed = False
         if auction.only_approved_bidders:
             member.bidding_allowed = False
         if bidder_number and not ClubMember.objects.filter(club=club, bidder_number=bidder_number).exists():
-            # Honour the number the admin is handing this person (club-unique, so only when free).
+            # Club-unique, so only when free.
             member.bidder_number = bidder_number
         member.save()
         created = True
@@ -163,17 +134,10 @@ def ensure_club_member(
 
 
 def join_auction(user, auction, pickup_location, *, time_spent_reading_rules=0):
-    """Sign ``user`` up for ``auction``, or bring their existing record up to date.
+    """Sign ``user`` up for ``auction``, or update their existing record.
 
-    Extracted verbatim from ``views.AuctionInfo.post`` so joining is one implementation with two
-    callers: the Join button, and the assistant. It was a hundred lines inside a view method, which
-    is why "join me up for the fall auction" could only ever be a link to the page -- and a link is
-    a poor answer on a phone to somebody standing in the room.
-
-    Returns ``(tos, created, problem)``. ``problem`` is ``""`` or one of ``"phone_number"`` /
-    ``"address"``: the auction demands a detail this account has not got, and the two callers word
-    that differently (the web redirects to the contact page, the assistant says what to do). It is
-    returned rather than raised because it is not an error -- it is a step the person has to take.
+    Shared by the Join button and the assistant. Returns ``(tos, created, problem)``; ``problem`` is
+    ``""``, ``"phone_number"`` or ``"address"``: a missing detail the caller words its own way.
     """
     from django.utils import timezone as django_timezone
 
@@ -186,8 +150,7 @@ def join_auction(user, auction, pickup_location, *, time_spent_reading_rules=0):
     find_by_email = AuctionTOS.objects.filter(email=user.email, auction=auction).first()
     is_new_join = False
     if find_by_email:
-        # An admin may have typed them in by email before they ever signed in, and they may also
-        # have joined under their user id -- keep the oldest row as canonical and fold the other in.
+        # Added by email before signing in and also joined by user id: keep the oldest, fold the other.
         existing_by_user = AuctionTOS.objects.filter(user=user, auction=auction).exclude(pk=find_by_email.pk).first()
         if existing_by_user:
             if (
@@ -209,10 +172,8 @@ def join_auction(user, auction, pickup_location, *, time_spent_reading_rules=0):
             auction=auction,
             defaults={
                 "pickup_location": pickup_location,
-                # Seed the email on creation so the record never takes the None->email transition
-                # that used to trip AuctionTOS.save()'s email-change guard and clear this freshly
-                # linked user. ``or None`` (not "") keeps the "no email" admin filter working,
-                # which relies on email__isnull.
+                # Seed the email so save()'s email-change guard doesn't unlink the user. ``None``,
+                # not "", keeps the email__isnull admin filter working.
                 "email": user.email or None,
             },
         )
@@ -221,10 +182,9 @@ def join_auction(user, auction, pickup_location, *, time_spent_reading_rules=0):
     if obj.pickup_location and obj.pickup_location.pickup_by_mail and not userdata.address:
         return None, False, "address"
     obj.time_spent_reading_rules = max(obj.time_spent_reading_rules or 0, time_spent_reading_rules or 0)
-    # Even if this row was originally added by hand, joining means they are not manually added.
+    # Joining means not manually added, whoever created the row.
     obj.manually_added = False
     if obj.email_address_status == "UNKNOWN":
-        # If it bounced in the past, the user may have had a full inbox or something.
         obj.email_address_status = "VALID"
     if not obj.name or obj.name == "Unknown":
         obj.name = f"{user.first_name} {user.last_name}".strip()
@@ -235,8 +195,7 @@ def join_auction(user, auction, pickup_location, *, time_spent_reading_rules=0):
     if not obj.address:
         obj.address = userdata.address
     if auction.is_club_managed:
-        # The club owns the bidder number and permissions here, so joining has to create or link
-        # the member record. Shared with the app's proximity join.
+        # The club owns the number and permissions; shared with the app's proximity join.
         club_member, _created = ensure_club_member(
             auction,
             user=user,
@@ -263,13 +222,10 @@ def join_auction(user, auction, pickup_location, *, time_spent_reading_rules=0):
 
 
 def existing_tos_for_club_member(auction, member):
-    """The participant record already linked to *member* in *auction*, or None.
+    """The participant row already linked to *member* in *auction*, or None.
 
-    Creating a ClubMember in a club-managed auction also creates its shadow AuctionTOS, so a caller
-    that ensures the member and then wants a participant record has to adopt that row: a second row
-    for the same person in one auction means two invoices and a bidder number that disagrees with the
-    club's. Returns None when there is nothing to adopt (no member, or the signal skipped the auction
-    because it is already invoiced), leaving the caller to create the row itself.
+    Creating a member creates its shadow, so adopt it: a second row means two invoices. None when
+    there is nothing to adopt (e.g. the auction is already invoiced).
     """
     if member is None or not auction.is_club_managed:
         return None
@@ -280,12 +236,8 @@ CLUB_MANAGED_MODES = ("all", "checkin")
 
 
 def club_managed_auctions_for(club):
-    """Every auction of *club* whose people are managed through the club, finished ones included.
-
-    The set a new member gets a participant row in (``signals.propagate_clubmember_to_shadow_tos``)
-    and therefore the set their bidder number has to be free in. One definition rather than two:
-    the form that warns about displacing somebody has to be asking about the same auctions the
-    save is about to write to.
+    """Every club-managed auction of *club*, finished ones included: where a new member gets a shadow row,
+    so where their bidder number must be free. One definition for the form's warning and the save.
     """
     return Auction.objects.filter(
         club=club,
@@ -295,15 +247,10 @@ def club_managed_auctions_for(club):
 
 
 def club_managed_shadows_for(member):
-    """Every ``AuctionTOS`` that is *member*, in every club-managed auction they are in.
+    """Every ``AuctionTOS`` that is *member*, across club-managed auctions, finished ones included.
 
-    A club member and their participant rows are one person with one set of details -- that is what
-    "manage members through the club" means. There is no per-auction copy of a name, an email, an
-    address or a bidder number to keep: a change to any of them is a change to all of these rows,
-    finished auctions included, and :func:`sync_member_to_shadows` is what makes that true.
-
-    Only ``checked_in``, the invoice and the reminder-email flags belong to one auction, and none of
-    those is a field anybody types into.
+    Member and shadows share one name, email, address and bidder number (:func:`sync_member_to_shadows`).
+    Only ``checked_in``, the invoice and reminder flags are per auction.
     """
     return AuctionTOS.objects.filter(
         clubmember=member,
@@ -316,12 +263,7 @@ def _member_auction_ids(member):
 
 
 def free_bidder_number_for(member, *, avoid=()):
-    """A bidder number nobody else holds, in *member*'s club or in any auction they are in.
-
-    Both scopes, because a member's number is one number. Anything in *avoid* is treated as taken --
-    callers pass the number that is being handed to somebody else, which is not on any row yet and
-    would otherwise look free.
-    """
+    """A bidder number free in *member*'s club and every auction they're in. *avoid* counts as taken."""
     from .models import _generate_unique_bidder_number
 
     avoid = {str(value).strip() for value in avoid if str(value).strip()}
@@ -344,9 +286,7 @@ def free_bidder_number_for(member, *, avoid=()):
 
     return _generate_unique_bidder_number(
         is_taken=is_taken,
-        # The number they already have, when it is still free. Displacing somebody should move them
-        # as little as possible: a member whose row drifted off their club number is put back on it
-        # rather than handed a third number nobody has ever seen.
+        # Keep their existing number when still free: displace people as little as possible.
         preferred=(member.bidder_number or "").strip() or None,
         phone=member.phone_number,
         address=member.address,
@@ -356,11 +296,8 @@ def free_bidder_number_for(member, *, avoid=()):
 def clear_bidder_number_in(auction, number, *, keep_tos=None, acting_user=None, _seen=None):
     """Move everyone except *keep_tos* off bidder *number* in *auction*.
 
-    The number is about to be given to somebody, and in this mode a number belongs to exactly one
-    person. A displaced row that belongs to a club member is renumbered in the club and in every
-    auction along with it, because those are the same number; a row with no club member is recorded
-    nowhere else, so it is renumbered here alone. Either way the auction's history says what
-    happened, which is what an admin holding a printed card needs to be able to find.
+    A displaced club member is renumbered everywhere; a row with no member only here. Each move is
+    recorded in the auction history.
     """
     from .models import _generate_unique_bidder_number
 
@@ -393,16 +330,11 @@ def clear_bidder_number_in(auction, number, *, keep_tos=None, acting_user=None, 
 
 
 def set_member_bidder_number(member, number, *, acting_user=None, _seen=None):
-    """Give *member* bidder number *number* in the club and in every auction they are in.
+    """Give *member* bidder number *number* in the club and every auction they're in.
 
-    The one place a bidder number is written in club-managed mode. Whoever else is holding it is
-    moved off first -- see :func:`clear_bidder_number_in` -- so the answer to "who is bidder 42"
-    is the same in the club, on the users page, on the invoice and when a lot is knocked down.
-
-    Writes with ``update()`` rather than ``save()`` and drives the propagation itself: going back
-    through ``ClubMember.save()`` would re-enter the post_save signal that called this. ``_seen``
-    guards the other direction -- displacing somebody renumbers *them*, which can displace a third
-    person, and a member already being moved is not moved twice.
+    The one writer of bidder numbers in club-managed mode; the current holder is moved off first.
+    ``update()`` rather than ``save()`` to avoid re-entering the post_save signal; ``_seen`` stops a
+    displacement chain moving anyone twice.
     """
     number = (number or "").strip()
     if not number or member is None:
@@ -411,8 +343,7 @@ def set_member_bidder_number(member, number, *, acting_user=None, _seen=None):
     if member.pk in _seen:
         return
     _seen.add(member.pk)
-    # The club scope first: the unique constraint on (club, bidder_number) is a database error,
-    # not a validation message, so nobody may still be holding it when this row is written.
+    # Club scope first: (club, bidder_number) is a database unique constraint.
     for other in ClubMember.objects.filter(club_id=member.club_id, bidder_number=number).exclude(pk=member.pk):
         set_member_bidder_number(
             other, free_bidder_number_for(other, avoid=[number]), acting_user=acting_user, _seen=_seen
@@ -425,12 +356,7 @@ def set_member_bidder_number(member, number, *, acting_user=None, _seen=None):
 
 
 def bidder_number_holder_in(auction, number, *, exclude_tos=None):
-    """Whoever currently holds bidder *number* in *auction*, or ``None``.
-
-    Only for telling somebody what is about to happen -- the member form warns that this person
-    will be renumbered. Nothing decides anything by it: in this mode the number always goes where
-    the admin sent it.
-    """
+    """Who holds bidder *number* in *auction*, or None. For warnings only; the number always goes where sent."""
     number = (number or "").strip()
     if not number:
         return None
@@ -440,19 +366,13 @@ def bidder_number_holder_in(auction, number, *, exclude_tos=None):
     return others.first()
 
 
-#: The fields a club member and their participant rows share. Everything a human types is here;
-#: what stays behind on the AuctionTOS is what the auction did to them rather than who they are --
-#: ``checked_in``, the invoice, the reminder flags.
+#: The fields a club member and their participant rows share; everything a person types.
 SHARED_MEMBER_FIELDS = ("name", "email", "phone_number", "address")
 
 
 def shared_member_values(member):
-    """*member*'s shared details, each cut to what the ``AuctionTOS`` column can hold.
-
-    The two models do not agree on width -- ``ClubMember.name`` is 200 characters and
-    ``AuctionTOS.name`` is 181 -- and every write below this is an ``update()``, which is not
-    validated. A name imported at full length would otherwise make every later save of that member
-    raise ``DataError 1406`` from the shadow write, with nothing on the club page to explain it.
+    """*member*'s shared details, truncated to ``AuctionTOS`` widths (name 181 vs 200). ``update()``
+    isn't validated, so an over-long name would raise DataError 1406 on every later save.
     """
     values = {}
     for field in SHARED_MEMBER_FIELDS:
@@ -463,12 +383,10 @@ def shared_member_values(member):
 
 
 def sync_member_to_shadows(member, *, acting_user=None):
-    """Push *member*'s shared details onto every one of their participant rows.
+    """Push *member*'s shared details onto every participant row.
 
-    ``update()`` rather than ``save()``: ``AuctionTOS.save()`` merges two rows in one auction that
-    share an email, and a merge is not what correcting somebody's address asks for. The email
-    status is cleared alongside the address because save() is what normally does that, and a bounce
-    recorded against the old address must not go on suppressing mail to the new one.
+    ``update()``, not ``save()``, which would merge same-email rows. Email status is cleared too, so an
+    old bounce doesn't suppress mail to a corrected address.
     """
     values = shared_member_values(member)
     for shadow in club_managed_shadows_for(member):
@@ -493,11 +411,7 @@ def sync_member_to_shadows(member, *, acting_user=None):
 
 
 def apply_club_member_to_tos(auction, tos, member):
-    """Copy *member*'s bidder number and permissions onto *tos*. Mutates it; does not save.
-
-    Callers save once afterwards with their own field handling. A no-op when the auction isn't
-    club-managed or there is no member.
-    """
+    """Copy *member*'s bidder number and permissions onto *tos* without saving. No-op if not club-managed."""
     if member is None or not auction.is_club_managed:
         return tos
     tos.clubmember = member
@@ -505,14 +419,10 @@ def apply_club_member_to_tos(auction, tos, member):
     if number:
         clear_bidder_number_in(auction, number, keep_tos=tos)
         tos.bidder_number = number
-    # Deliberately not the contact details. Callers set those first, from what the admin just
-    # typed, and copying the member's over the top is how "add Jane Doe" used to save a row still
-    # named after whoever the email matched. They reach the member the other way instead, through
-    # ``signals.sync_auctiontos_up_to_clubmember`` once this row is saved.
+    # Not contact details: the caller set those from what the admin typed. They flow up to the member
+    # through signals.sync_auctiontos_up_to_clubmember on save.
     if auction.use_check_in_mode and not tos.checked_in:
-        # Check-in mode: joining never grants bidding on its own. The member has to check in at the
-        # event, which sets checked_in + bidding_allowed (mirrors the auto-add path in
-        # signals.propagate_clubmember_to_shadow_tos).
+        # Check-in mode: bidding comes from checking in, as in propagate_clubmember_to_shadow_tos.
         tos.bidding_allowed = False
     else:
         tos.bidding_allowed = member.bidding_allowed
@@ -521,19 +431,10 @@ def apply_club_member_to_tos(auction, tos, member):
 
 
 def check_in_auctiontos(tos, *, acting_user, bidder_number="", note=""):
-    """Check a participant in: stamp ``checked_in``, allow bidding, optionally set their bidder number.
+    """Check a participant in: stamp ``checked_in``, allow bidding, optionally set a bidder number.
 
-    Extracted verbatim from ``views.AuctionCheckIn.post`` so the web check-in modal and the
-    command palette's ``check_in`` action share one implementation. Idempotent -- checking in
-    someone who is already checked in only writes an auction history entry.
-
-    ``note`` is appended to the history entry. The palette passes "(command palette)" so its own
-    check-ins read the same as every other write it makes -- without it, ``recent_changes`` and any
-    audit built on it were blind to the single most common thing the assistant does at a live event,
-    purely because that one write happens to go through shared code.
-
-    Permission is the caller's job (both callers gate on ``can_add_edit_people``).
-    Returns the ``AuctionTOS``.
+    Shared by the check-in modal and the palette. Idempotent apart from the history line. ``note`` is
+    appended to it so assistant check-ins show in ``recent_changes``. Returns the ``AuctionTOS``.
     """
     bidder_number = (bidder_number or "").strip()
     update_fields = []
@@ -556,16 +457,8 @@ def check_in_auctiontos(tos, *, acting_user, bidder_number="", note=""):
 
 
 def undo_check_in_auctiontos(tos, *, acting_user, note=""):
-    """Un-check-in a participant: clear ``checked_in`` and say so in the auction's history.
-
-    The reversal of :func:`check_in_auctiontos`, and new -- the web has no Undo on the check-in
-    modal, because at a desk with a queue in front of it the fix for a wrong name is to check in
-    the right one. An assistant needs it for a different reason: it mishears, and "undo that" has
-    to reach the thing it just did.
-
-    Deliberately does **not** touch ``bidding_allowed``. Checking somebody in turns it on, but so
-    do half a dozen other things, and turning it back off on the strength of an undo would quietly
-    stop somebody bidding who was allowed to before any of this happened.
+    """Undo a check-in: clear ``checked_in`` and record it. Leaves ``bidding_allowed`` alone, since other
+    things grant it too.
     """
     if tos.checked_in:
         tos.checked_in = None
@@ -579,18 +472,9 @@ def undo_check_in_auctiontos(tos, *, acting_user, note=""):
 
 
 def draw_door_prize(auction, *, acting_user):
-    """Pick a random checked-in participant who hasn't won a door prize yet.
+    """Pick a random checked-in participant without a door prize, or None.
 
-    Extracted verbatim from ``views.AuctionDoorPrizes.post`` so the door-prize page and the command
-    palette's ``draw_door_prize`` action draw from the same pool by the same rule. ``door_prize_called``
-    is a per-person timestamp, so "already won one" is simply "has one set", and drawing twice can
-    never pick the same person.
-
-    ``secrets.choice`` rather than ``random.choice``: this is a draw in front of a room, and the
-    only defensible answer to "was that rigged?" is a cryptographic RNG.
-
-    Permission is the caller's job (both callers gate on ``can_add_edit_people``).
-    Returns the winning ``AuctionTOS``, or ``None`` when nobody is left to draw.
+    Shared by the door-prize page and the palette. ``secrets.choice`` so "was it rigged?" has an answer.
     """
     import secrets
 
@@ -614,7 +498,7 @@ def draw_door_prize(auction, *, acting_user):
     return winner
 
 
-# Why lots can't be added, keyed so each caller can pick its own destination/wording.
+# Why lots can't be added; each caller picks its own wording.
 LOT_ADD_BLOCK_NO_TOS = "no_tos"
 LOT_ADD_BLOCK_SELLING_NOT_ALLOWED = "selling_not_allowed"
 LOT_ADD_BLOCK_SUBMISSION_ENDED = "submission_ended"
@@ -622,16 +506,10 @@ LOT_ADD_BLOCK_BULK_DISABLED = "bulk_disabled"
 
 
 def lot_add_block(auction, tos, is_admin, *, bulk=True):
-    """Return ``(code, message)`` explaining why lots can't be added here, or ``None`` when they can.
+    """``(code, message)`` for why lots can't be added here, or ``None``.
 
-    Extracted verbatim from ``views.BulkAddLots.dispatch`` so the bulk-add page and the command
-    palette's ``add_lot`` action enforce exactly the same rules (joined the auction, selling
-    allowed, submission still open, bulk adding enabled). Admins bypass every check but the
-    first, exactly as they do on the page.
-
-    ``bulk=False`` skips only the ``allow_bulk_adding_lots`` check, which is about the bulk-add
-    *page* rather than permission to sell: an auction with bulk adding turned off still lets
-    people add lots one at a time, so the palette (which adds exactly one) passes ``False``.
+    Shared by bulk add and the palette's ``add_lot``. Admins skip all but the join check.
+    ``bulk=False`` skips only ``allow_bulk_adding_lots``, which is about the page, not selling.
     """
     if not tos:
         return LOT_ADD_BLOCK_NO_TOS, "You can't add lots until you join this auction"
@@ -648,18 +526,12 @@ def lot_add_block(auction, tos, is_admin, *, bulk=True):
 
 
 def save_new_lot(lot, *, auction, tos, added_by):
-    """Attach a new lot to its seller/auction and save it, mirroring ``views.BulkAddLots.post``.
-
-    Sets the seller TOS, auction, owning user and ``added_by``, then saves. Callers are
-    responsible for the seller's invoice afterwards (see ``recalculate_seller_invoice``) --
-    the bulk-add page does that once per batch rather than once per lot.
-    Shared with the palette's ``add_lot`` action so a lot added by voice is identical to one
-    added on the bulk-add page.
+    """Attach a new lot to seller and auction and save it. The caller recalculates the seller's invoice
+    (bulk add does it once per batch).
     """
     lot.auctiontos_seller = tos
     lot.auction = auction
-    # tos.lot_owner rather than tos.user: an unlinked TOS would otherwise leave lot.user null and
-    # lock the seller out of their own lot later. See AuctionTOS.lot_owner and Lot.is_owned_by.
+    # lot_owner, not tos.user: an unlinked TOS would leave lot.user null and lock the seller out.
     owner = tos.lot_owner(added_by)
     if owner:
         lot.user = owner
@@ -669,11 +541,7 @@ def save_new_lot(lot, *, auction, tos, added_by):
 
 
 def recalculate_seller_invoice(auction, tos):
-    """Make sure the seller has an invoice for this auction and recalculate it.
-
-    Same three lines every lot-creating view runs after saving; shared so the palette's
-    ``add_lot`` action can't forget it.
-    """
+    """Ensure the seller has an invoice for this auction and recalculate it."""
     from .models import Invoice
 
     invoice = Invoice.objects.filter(auctiontos_user=tos, auction=auction).first()
@@ -687,16 +555,10 @@ def recalculate_seller_invoice(auction, tos):
 # Copying a lot ("Copy to new lot")
 # ---------------------------------------------------------------------------
 #
-# The button on the lot page (``view_lot_images.html``) links to ``new_lot?copy=<pk>``, which
-# pre-fills the form from the old lot (``forms.CreateLotForm.__init__``) and then copies its images
-# once the new lot is saved (``views.LotValidation.form_valid``). The palette's ``add_lot`` does the
-# same thing without a form in between -- it creates the lot outright -- so the field list, the
-# ownership rule and the image copy live here rather than in either caller. Change what "copy"
-# means once and both paths change together.
+# The web button pre-fills a form; the palette's add_lot creates the lot outright. Both use these.
 
 
-#: The lot fields "Copy to new lot" carries over. Read by ``CreateLotForm`` to pre-fill the form and
-#: by the palette's ``add_lot`` to seed a lot directly.
+#: The lot fields "Copy to new lot" carries over.
 CLONE_LOT_FIELDS = (
     "lot_name",
     "quantity",
@@ -715,7 +577,7 @@ CLONE_LOT_FIELDS = (
 
 
 def user_can_clone_lot(user, lot) -> bool:
-    """Whether *user* may copy *lot*. You can only clone your own lots (superusers, anything)."""
+    """Whether *user* may copy *lot*: their own lots only (superusers: any)."""
     if not (user and lot):
         return False
     if getattr(user, "is_superuser", False):
@@ -724,31 +586,17 @@ def user_can_clone_lot(user, lot) -> bool:
 
 
 def clone_lot_values(lot) -> dict:
-    """The values from *lot* that a copy starts out with, keyed by field name.
-
-    Model *instances* come back for the two foreign keys, which is what a form's ``initial`` wants.
-    A caller building form *data* instead -- the command palette's relist does -- has to swap them
-    for their pks, the same way it already does for ``species_category``.
-
-    The scientific name is copied because relisting is the case it most obviously survives: it is
-    the same fish, from the same breeder, a season later.  Whether it is kept is still the target
-    auction's decision -- ``clean_species_for_auction`` drops it if that auction has the field
-    switched off.
-
-    Permission is the caller's job -- call :func:`user_can_clone_lot` first.
+    """The values a copy of *lot* starts with. Foreign keys come back as instances (form ``initial``); a
+    caller building form data swaps in pks. The scientific name is kept unless the target auction has
+    the field off.
     """
     return {field: getattr(lot, field) for field in CLONE_LOT_FIELDS}
 
 
 def copy_lot_images(original_lot, new_lot):
-    """Copy every image from *original_lot* onto the already-saved *new_lot*. Returns the new rows.
+    """Copy every image from *original_lot* onto the saved *new_lot*. Returns the new rows.
 
-    Extracted verbatim from ``views.LotValidation.form_valid``. Both rows point at the same file, so
-    they share the same Cloudflare image rather than re-uploading it, and a picture of an item that
-    has already sold is demoted from "the exact item" to "representative" -- because it isn't.
-
-    Only images are copied, not watchers, views, or any other related model. Permission is the
-    caller's job (:func:`user_can_clone_lot`).
+    Rows share the file and Cloudflare image. A picture of a sold lot becomes "representative".
     """
     from easy_thumbnails.files import get_thumbnailer
 
@@ -765,9 +613,7 @@ def copy_lot_images(original_lot, new_lot):
         )
         if original_image.image:
             new_image.image = get_thumbnailer(original_image.image)
-            # both rows share the same file, so they share the same Cloudflare image
             new_image.cloudflare_image_id = original_image.cloudflare_image_id
-        # if the original lot sold, this picture sure isn't of the actual item
         if original_lot.winner and original_image.image_source == "ACTUAL":
             new_image.image_source = "REPRESENTATIVE"
         new_image.save()
@@ -776,15 +622,9 @@ def copy_lot_images(original_lot, new_lot):
 
 
 def promoting_makes_it_the_clubs_current_auction(auction, was_promoted) -> bool:
-    """Turning promotion on makes an auction its club's current one. Returns True if it did.
+    """Turning promotion on makes an auction its club's current one. True if it did.
 
-    Extracted from ``views.AuctionUpdate.form_valid`` so the edit page and
-    ``palette_actions.update_auction_setting`` cannot disagree about what promoting an auction
-    means. The web version says so in a message; the assistant says so in its answer, and both are
-    reading the same rule.
-
-    Only on the transition. An auction that was already promoted must not steal the club's current
-    auction back every time somebody saves an unrelated setting.
+    Only on the transition, so saving an unrelated setting doesn't steal the club's current auction.
     """
     if was_promoted or not auction.promote_this_auction or not auction.club_id:
         return False
@@ -796,15 +636,8 @@ def promoting_makes_it_the_clubs_current_auction(auction, was_promoted) -> bool:
     return True
 
 
-#: Auction settings a copy inherits.  Anything a person set on the source auction and would expect
-#: to find again next year belongs here: a field left off this list is silently reset to the model
-#: default by the copy, which is how a copied auction came back with the custom checkbox switched
-#: off while still carrying the name the club had given it.  ``tests.AuctionCloneCustomFieldsTests``
-#: reads it and fails if the custom fields form grows a field this list does not carry.
-#:
-#: It lives here rather than on ``AuctionCreateView`` because the copy button on the create page is
-#: no longer the only caller: ``palette_actions.create_auction`` makes the same copy for an agent,
-#: and two lists would diverge on the first field somebody added.
+#: Auction settings a copy inherits. A field missing here is reset to the default on copy.
+#: ``tests.AuctionCloneCustomFieldsTests`` fails if the custom fields form outgrows it.
 AUCTION_FIELDS_TO_CLONE = [
     "is_online",
     "summernote_description",
@@ -873,24 +706,9 @@ AUCTION_FIELDS_TO_CLONE = [
     "exact_location_set",
 ]
 
-#: What a participant row records about *one evening* rather than about the person, and what a copy
-#: therefore has to blank.  Copying an auction copies its people when the source says to -- that is
-#: the point of ``copy_users_when_copying_this_auction`` -- but it was doing it with ``tos.pk = None``
-#: on a loaded row, which carries every column across, and several of these columns are answers to
-#: "what happened at the last one".
-#:
-#: ``checked_in`` is the one that does real damage: an auction that uses check-in mode opens with
-#: everybody already through the door, so the desk has nothing to do and the ``not checked_in``
-#: guard on bidding never fires.  ``door_prize_called`` is the same mistake in a smaller place (last
-#: year's winners are ineligible for this year's draw), and ``possible_duplicate`` is worse than
-#: stale -- it is a foreign key pointing at a row in the *old* auction, so the duplicate warning on
-#: the new users page links somewhere else entirely.  The two confirmation-email flags and the
-#: seconds spent reading the rules are per-auction by definition: nobody has been emailed about this
-#: auction yet, and nobody has read rules that may since have been rewritten.
-#:
-#: Everything not listed is deliberately carried: the name, the contact details, the bidder number,
-#: the admin memo and the permissions are facts about the person, which is why a club copies an
-#: auction in the first place.
+#: Participant columns about one auction rather than the person, blanked when people are copied.
+#: ``checked_in`` would open check-in mode with everyone through the door; ``possible_duplicate``
+#: points at the old auction. Name, contact, bidder number, memo and permissions are carried.
 PER_RUN_TOS_STATE = {
     "checked_in": None,
     "door_prize_called": None,
@@ -912,13 +730,8 @@ DEFAULT_AUCTION_DESCRIPTION = """
 
 
 def auction_to_copy(user):
-    """The auction "copy my last auction" means, or ``None`` if they have never run one.
-
-    Ordered by ``-date_start`` rather than by ``-date_end``, which is what this used to do and got
-    wrong for exactly the clubs that copy the most: an in-person auction has no ``date_end`` at
-    all, so on MariaDB every one of them sorted *behind* every online auction, and a club that has
-    only ever run in-person auctions was offered whichever one the database happened to return.
-    ``date_start`` is set on all of them.
+    """The auction "copy my last auction" means, or ``None``. By ``-date_start``: in-person auctions have
+    no ``date_end``.
     """
     from .models import Auction
 
@@ -929,24 +742,17 @@ def auction_to_copy(user):
 
 
 def clone_auction(source, *, title, date_start, created_by, note=""):
-    """Create a new auction carrying everything from ``source`` except its dates and its bids.
+    """Create a new auction from ``source``, minus its dates and bids.
 
-    Extracted from ``views.AuctionCreateView.form_valid`` so the copy button on the create page and
-    :func:`auctions.palette_actions.create_auction` produce the same auction rather than two that
-    drift.  What comes across: every setting in :data:`AUCTION_FIELDS_TO_CLONE`, the pickup
-    locations with their times shifted to the new dates, the custom dropdown options, and -- only
-    when the source says so *and* the copy is not club-managed -- the people, minus everything in
-    :data:`PER_RUN_TOS_STATE`.
-
-    The dates are *offsets*, not values: how long the source ran, and how far ahead of it lot
-    submission and online bidding opened.  A copy made a year later therefore opens for lots the
-    same number of days before the auction as last year's did.
+    Shared by the create page's copy button and ``palette_actions.create_auction``. Copies
+    :data:`AUCTION_FIELDS_TO_CLONE`, pickup locations (times shifted), dropdown options, and people
+    (minus :data:`PER_RUN_TOS_STATE`) when the source says so and the copy isn't club-managed. Dates
+    keep the source's offsets.
     """
     from .models import Auction, AuctionDropdown, PickupLocation
 
     auction = Auction(title=title, created_by=created_by, date_start=date_start)
-    # Never inherited, whatever the source says. An auction is listed publicly by being promoted on
-    # purpose, and a copy of a promoted auction is not that decision being made a second time.
+    # Never inherited: promotion is a decision made each time.
     auction.promote_this_auction = False
     for field in AUCTION_FIELDS_TO_CLONE:
         setattr(auction, field, getattr(source, field))
@@ -962,10 +768,7 @@ def clone_auction(source, *, title, date_start, created_by, note=""):
         online_bidding_end_diff = source.date_start - source.date_online_bidding_ends
     if source.lot_submission_end_date:
         lot_submission_end_date_diff = source.date_start - source.lot_submission_end_date
-    # No ``cloned_from`` is written, because ``Auction`` has no such column -- the create view has
-    # been assigning one to a transient attribute for years and throwing it away on save. Where the
-    # copy came from is recorded where somebody can actually read it: the "Created auction by
-    # copying X" line ``finish_new_auction`` writes to the auction's own history.
+    # There is no cloned_from column; finish_new_auction writes the source into the history.
     if not auction.summernote_description:
         auction.summernote_description = DEFAULT_AUCTION_DESCRIPTION
     if auction.is_online:
@@ -1000,16 +803,11 @@ def clone_auction(source, *, title, date_start, created_by, note=""):
             location.second_pickup_time = (auction.date_end or auction.date_start) + second_time_diff
         location.save()
 
-    # A club-managed auction never copies its people, whatever the source says. In that mode the
-    # participants *are* the club's members: "all" creates a shadow row for every one of them, and
-    # "checkin" creates the row when somebody walks through the door -- which is the entire point of
-    # check-in mode, and pre-filling it from last year's list is exactly the thing that mode exists
-    # to stop. Copying would also drag across everybody who has since left the club, since the
-    # setting knows nothing about who is still a member.
+    # Club-managed auctions never copy people: participants are the club's members, and check-in mode
+    # exists to create rows at the door.
     if source.copy_users_when_copying_this_auction and not auction.is_club_managed:
         for tos in AuctionTOS.objects.filter(auction=source):
-            # in tos.save(), bid permissions are reset if there's no pk
-            # to preserve them, we store them here, then resave again once the new instance is created
+            # save() resets bid permissions on a new row; restore them after.
             original_bid_permission = tos.bidding_allowed
             tos.pk = None
             tos.createdon = None
@@ -1036,12 +834,8 @@ def clone_auction(source, *, title, date_start, created_by, note=""):
 
 
 def finish_new_auction(auction, created_by, *, copied_from=None, note=""):
-    """The bookkeeping every newly created auction gets, however it was created.
-
-    One history line saying where it came from, the creator's club if they have the run of it, the
-    "auction they last used" pointer, and the club's own admins as auction admins.  ``note`` is
-    :func:`auctions.palette_actions.via`, so a club reading its own history can tell an auction an
-    assistant copied from one somebody made on the site.
+    """The bookkeeping every new auction gets: a history line, the creator's club if permitted,
+    ``last_auction_used``, and the club's admins as auction admins. ``note`` is ``palette_actions.via``.
     """
     from .views import check_club_permission
     from .views.auction_pages import _add_club_admins_as_auction_tos
@@ -1052,7 +846,7 @@ def finish_new_auction(auction, created_by, *, copied_from=None, note=""):
     if note:
         action += f" {note}"
     auction.create_history(applies_to="RULES", action=action, user=created_by)
-    # Associate auction with the creator's club if they have admin or manage_auctions permission
+    # The creator's club, if they have admin or manage_auctions there.
     if not auction.club:
         creator_club = created_by.userdata.club
         if creator_club and (
@@ -1068,28 +862,16 @@ def finish_new_auction(auction, created_by, *, copied_from=None, note=""):
             )
     created_by.userdata.last_auction_used = auction
     created_by.userdata.save(update_fields=["last_auction_used"])
-    # Add club admin members as AuctionTOS admins (works for copied auctions with locations,
-    # and for new auctions once a pickup location exists — also called from PickupLocationsCreate)
+    # Also called from PickupLocationsCreate, once a location exists.
     _add_club_admins_as_auction_tos(auction, created_by)
 
 
 def link_auction_to_club(auction, club, *, note, actor=None, grant_admin=True):
-    """Attach an auction to a club after the fact, and give its creator the run of that club.
+    """Attach an auction to a club after the fact, and optionally make its creator a club admin.
 
-    The backlog this exists for is most of the auctions on the site: ``finish_new_auction`` links
-    one only when the creator had already declared a club *and* held a permission in it, so an
-    organizer who set the site up before their club was on it -- which is nearly all of them -- has
-    auctions belonging to nothing.  Two callers do the repair, the ``assign_auction_to_club``
-    command and ``views.usability.LinkAuctionToClub``, and they have to do the same three things or
-    the two routes leave the site in different states.
-
-    ``save()`` rather than a queryset update on purpose: attaching a club books the club ledger for
-    invoices that were already settled, and an ``update()`` skips the model and silently doesn't.
-
-    ``grant_admin`` is what makes the link worth anything to the organizer rather than only to the
-    reports.  Somebody who has been running auctions here is already the person who runs them; what
-    they lack is any way to say so, and without a permission in the club they still cannot pick it
-    on their next auction.  Returns ``True`` when a new admin was granted.
+    For organizers whose auctions predate their club. Shared by ``assign_auction_to_club`` and
+    ``LinkAuctionToClub``. ``save()``, not ``update()``: attaching a club books settled invoices to the
+    club ledger. Returns True when an admin was granted.
     """
     auction.club = club
     auction.save(update_fields=["club"])
@@ -1100,11 +882,8 @@ def link_auction_to_club(auction, club, *, note, actor=None, grant_admin=True):
 
 
 def ensure_club_admin(club, user, *, note, actor=None):
-    """Make ``user`` an admin of ``club``, reusing their membership row if they have one.
-
-    Returns ``True`` only when admin was newly granted, so a caller can report how many people it
-    actually changed something for.  Contact fields are filled in from the account without
-    overwriting anything the club has already recorded: the club's copy is the club's.
+    """Make ``user`` an admin of ``club``, reusing their membership row. True only when newly granted.
+    Contact fields are filled from the account without overwriting the club's.
     """
     member = ClubMember.objects.filter(club=club, user=user, is_deleted=False).first()
     if member and member.permission_admin:
@@ -1131,24 +910,12 @@ def ensure_club_admin(club, user, *, note, actor=None):
 
 
 # --- breeder award points ----------------------------------------------------
-#
-# The club's BAP/HAP/CAP review desk: which lots are waiting for a decision, and what taking one
-# does. Both halves were methods on views -- ``ClubBapLotsView.get_queryset`` and
-# ``LotBapPointsView.post`` -- so the only way to ask "what am I approving?" or to answer it was
-# to be a browser holding a session cookie and a rendered table.
 
 
 def bap_review_lots(club):
-    """Every lot in this club's auctions that its points desk could have an opinion about.
-
-    The base queryset behind the Pending BAP page, extracted from ``ClubBapLotsView`` so the
-    ``points_queue`` skill lists exactly the rows the page lists. The status filtering on top of it
-    is ``filters.ClubBapLotFilter``'s, for the same reason: "pending" means one particular
-    combination of three columns and there must be only one place that says which.
-
-    ``Exists(matching_member)`` is the load-bearing clause -- a lot only reaches this table when its
-    seller is a member of *this* club, matched on the account or on the email, which is what stops a
-    club's review queue filling up with lots sold by strangers at a shared auction.
+    """Every lot in this club's auctions its points desk could decide on; the Pending BAP page's base
+    queryset. Status filtering is ``filters.ClubBapLotFilter``. ``Exists(matching_member)`` keeps
+    strangers' lots at shared auctions out.
     """
     from django.db.models import Exists, OuterRef, Q
 
@@ -1173,29 +940,15 @@ def bap_review_lots(club):
     )
 
 
-#: The three things a points desk can decide about one lot. ``undo`` is not a fourth decision so
-#: much as the absence of one: it puts the lot back in the pending queue it came out of.
+#: The three decisions on a lot's points. ``undo`` returns it to pending.
 BAP_DECISIONS = ("approve", "deny", "undo")
 
 
 def review_lot_points(lot, club, *, acting_user, decision, bap=0, hap=0, cap=0):
-    """Approve, deny, or un-decide one lot's breeder award points. Returns the ``BapAward`` or ``None``.
+    """Approve, deny or undo one lot's breeder award points. Returns the ``BapAward`` or ``None``.
 
-    Extracted from ``views.LotBapPointsView.post``, which rendered the row's buttons back to htmx
-    and so could not be called by anything that wasn't a browser. The three branches are that view's
-    own, unchanged in what they write, and the caller does the permission check
-    (``permission_manage_bap``) exactly as both callers already did.
-
-    The one thing that is new is that **undo writes a history line** -- except on a lot nobody has
-    decided, where it does nothing at all. Approve and deny always wrote one; undo silently rolled
-    either of them back, which was survivable while the only way to press it was to be looking at
-    the table, and is not survivable now that an assistant can press it -- "every write is in the
-    history with who did it" is most of what makes handing this to an agent reasonable, and a write
-    that leaves no trace is the exception that would prove it wrong.
-
-    Note what ``deny`` deliberately does *not* touch: ``bap_auto_reason`` stays as the system left
-    it. That column is the site's own verdict on eligibility and stays worth showing next to a
-    human's decision to overrule it.
+    The caller checks ``permission_manage_bap``. Every decision writes a history line, including undo.
+    ``deny`` leaves ``bap_auto_reason`` alone: the site's own verdict stays visible.
     """
     from .models import BapAward
 
@@ -1207,11 +960,7 @@ def review_lot_points(lot, club, *, acting_user, decision, bap=0, hap=0, cap=0):
     if decision == "undo":
         existing = BapAward.objects.filter(lot=lot).first()
         if not existing and not lot.manually_approved:
-            # Nothing was ever decided, so there is nothing to take back and nothing worth a
-            # history line. A quiet no-op rather than a refusal, because ``review_points`` declares
-            # itself idempotent and a host retrying a dropped connection must not get an error for
-            # a call that already worked. The page cannot reach this at all: a pending row has no
-            # Undo button on it.
+            # Nothing decided: a quiet no-op, since review_points is idempotent and hosts retry.
             return None
         if existing:
             existing.delete()
@@ -1273,12 +1022,7 @@ def review_lot_points(lot, club, *, acting_user, decision, bap=0, hap=0, cap=0):
 
 
 def bap_member_for_lot(lot, club):
-    """The club member who would be credited for this lot: its seller, by account then by email.
-
-    The same two-step lookup ``Lot.unsold_lot_no_bap_reason``, ``LotBapPointsView`` and
-    ``BapAwardAdminView`` each wrote out for themselves. The email half is what makes points work
-    at all for somebody who has been in the club for years and never made an account here.
-    """
+    """The club member credited for this lot: its seller, by account then email (for members with no account)."""
     seller_user = lot.user or (lot.auctiontos_seller.user if lot.auctiontos_seller else None)
     seller_email = (lot.auctiontos_seller.email if lot.auctiontos_seller else None) or (
         seller_user.email if seller_user else None
@@ -1300,20 +1044,14 @@ def _bap_seller_name(lot):
     return f"lot #{lot.pk}"
 
 
-#: How far back a participant row counts as "current" when contact details change.
-#:
-#: The contact info page has always pushed a corrected name, phone or address into the auctions the
-#: person is *currently* in, and thirty days is what it means by that. Older rows are left alone
-#: deliberately: an ``AuctionTOS`` is a record of who stood at a desk on a particular Saturday, and
-#: rewriting last spring's address because somebody moved this week would falsify it.
+#: How recent a participant row must be to receive a contact-info change. Older rows are a record
+#: of who stood at a desk that day and are left alone.
 CONTACT_INFO_RECENT_DAYS = 30
 
 
 def recent_auctiontos_for(user):
-    """The participant rows a contact-info change should follow into.
-
-    ``manually_added`` rows are excluded because an auction admin typed those by hand for this
-    person, and an admin's correction outranks the account's own details.
+    """Participant rows a contact-info change follows into. ``manually_added`` rows are skipped: the
+    admin's version wins.
     """
     from datetime import timedelta
 
@@ -1325,29 +1063,16 @@ def recent_auctiontos_for(user):
     ).select_related("auction")
 
 
-#: Session flag set by a gate that turned somebody away for having no phone number on file.
-#: Deliberately not a querystring parameter.  The contact info page has to require the same field
-#: the gate asked for, and a parameter somebody can strip is a parameter that sends them straight
-#: back to the gate they just came from -- a redirect loop is worse than either policy.
+#: Session flag (not a querystring, which could be stripped into a redirect loop) for a gate that
+#: needs a phone number.
 CONTACT_GATE_NEEDS_PHONE = "contact_gate_needs_phone"
 
 
 def missing_contact_info(user, *, require_phone=False):
-    """Which contact fields this person has left blank, in the order the page asks for them.
+    """Contact fields this person left blank, in page order. Empty when nothing is missing.
 
-    Two gates read this and they want different answers, which is why it takes an argument.
-    *Adding a lot* needs somewhere to send the cheque, so it asks for a name and an address
-    (``views.lot_pages.LotValidation``).  *Creating an auction* makes somebody an organizer their
-    participants and this site both have to be able to reach, so it asks for a phone number too
-    (``views.auction_pages.AuctionCreateView``).
-
-    The auction gate is also the only thing that ever puts the club picker in front of an organizer,
-    which is half the reason it exists.  ``Auction.club`` is filled in from ``UserData.club`` by
-    :func:`finish_new_auction`, and somebody who has never opened the contact info page has no
-    ``UserData.club`` -- so their auction is filed under no club, and every number in
-    ``club_health`` is computed as though it never happened.
-
-    Returns a list of labels, empty when there is nothing left to ask for.
+    Adding a lot needs name and address; creating an auction also needs a phone. The auction gate is
+    also what puts the club picker in front of an organizer, without which their auction has no club.
     """
     userdata = getattr(user, "userdata", None)
     asked_for = {
@@ -1369,16 +1094,9 @@ def readable_list(items):
 
 
 def propagate_contact_info(user, userdata, *, acting_user=None):
-    """Push a changed name, phone or address out to the auctions and clubs that hold a copy.
+    """Push a changed name, phone or address to the auctions and clubs holding a copy.
 
-    Extracted from ``views.UserLocationUpdate.form_valid`` so the assistant's ``update_contact_info``
-    does exactly what the contact info page does. The copies are the point of the design: an
-    ``AuctionTOS`` and a ``ClubMember`` each hold their own name and address so that a club's records
-    survive the account being deleted -- which means a person who moves has to be able to correct
-    all of them at once, and there is one function that knows where they all are.
-
-    Returns a list of sentences naming what it touched, so a caller with no page to put a message on
-    can say it instead.
+    Shared by the contact info page and ``update_contact_info``. Returns sentences naming what changed.
     """
     from .models import AuctionHistory
 

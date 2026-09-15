@@ -1,8 +1,7 @@
 """One lot: its page, its photos, and creating or editing it.
 
-``ViewLot`` is the most-visited page on the site. The page-view history helpers at the top of the
-module are what draws the "who looked at this" panel on it, and they are shared with the seller's
-own dashboard.
+``ViewLot`` is the most-visited page on the site. The page-view history helpers at the top are
+shared with the seller's dashboard.
 """
 
 import collections
@@ -80,67 +79,34 @@ from .base import AuctionViewMixin, check_club_permission, close_modal_response
 from .selling import notify_watchers_lot_selling_soon
 
 logger = logging.getLogger(__name__)
-#: How far back the page-view history modals look.  Fifteen days is what the modals say on the
-#: tin, and it is also the bound that keeps them cheap: PageView is the largest table on the site.
+#: Page-view history window. Also what keeps it cheap: PageView is the largest table.
 PAGE_VIEW_HISTORY_DAYS = 15
 
-#: How many off-site referrers the history lists.  The referrer column is free text with a long
-#: tail, so the whole list would be unreadable and unbounded; the top few are the useful part.
+#: Off-site referrers listed; the column is free text with a long tail.
 PAGE_VIEW_HISTORY_REFERRERS = 5
 
-#: How many sources the day-by-day chart draws a band for before the rest are added together.
-#: ``?src=`` is not a closed vocabulary -- the club API writes a key's name into it -- so without a
-#: cap one busy lot could ask for a stack thirty colours deep, most of them one view thick.
+#: Chart bands before the rest are summed; ``?src=`` is open-ended (API key names go in it).
 PAGE_VIEW_HISTORY_CHART_SOURCES = 6
 
-#: The chart's y axis is always :data:`PAGE_VIEW_HISTORY_Y_TICKS` whole-number steps tall and never
-#: shorter than :data:`PAGE_VIEW_HISTORY_MIN_Y` views.  Most lots get five to fifteen views in the
-#: whole fortnight, and an axis fitted to numbers that small draws a single view as a full-height
-#: bar under half-view gridlines -- which reads as a busy lot with broken labels.  A floor and a
-#: whole-number step mean a quiet lot looks quiet and every gridline is a number of views.
+#: The y axis is always this many whole-number steps and at least this many views tall, so one view
+#: on a quiet lot doesn't draw as a full-height bar.
 PAGE_VIEW_HISTORY_MIN_Y = 4
 PAGE_VIEW_HISTORY_Y_TICKS = 4
 
 
 def page_view_history(page_views, days=PAGE_VIEW_HISTORY_DAYS):
-    """A short traffic history: totals, a breakdown by where people came from, and a daily count.
+    """A short traffic history: totals, a breakdown by ``?src=``, a daily stacked chart and top referrers.
 
-    ``page_views`` is a :class:`~auctions.models.PageView` queryset the caller has **already**
-    narrowed to the rows this reader may see -- one lot, or one seller's lots.  This function then
-    narrows it again to the last ``days`` days.  PageView is the biggest table on the site, so
-    every query below carries both bounds: a query here that is not limited by an owner *and* a
-    date has no business existing.
-
-    Four aggregate queries, and no PageView row is ever fetched into Python:
-
-    * one ``values("source").annotate(...)`` for the breakdown by ``?src=``,
-    * one ``TruncDate`` group-by over day *and* source, which the chart stacks and which the day
-      totals are the sum of -- so the per-day numbers cost no query of their own,
-    * one for the top :data:`PAGE_VIEW_HISTORY_REFERRERS` off-site referrers,
-    * one ``aggregate()`` for the unique-viewer total, which cannot be summed back out of the
-      per-source counts (the same person shows up under two sources).
-
-    What comes back is at most ``days`` columns, seven chart bands, one row per ``?src=`` value in
-    use and five referrers, so the dict handed to the template stays small however busy the window
-    was.
-
-    ``source`` is the primary breakdown and ``referrer`` the secondary one on purpose.  ``source``
-    is the ``?src=`` parameter, a vocabulary this site writes itself and can therefore label
-    (``Lot.PAGE_VIEW_SOURCE_LABELS``).  ``referrer`` is whatever the browser chose to send, which
-    for a visit from another site is normally only that site's origin: every current browser
-    defaults to ``strict-origin-when-cross-origin`` (the policy this site sets on its own pages in
-    ``settings.SECURE_REFERRER_POLICY`` too), which keeps the path only within one site.  Since our
-    own pages are excluded below, most of what is left is a bare domain.  So the source rows answer
-    "which of our surfaces sent them" and the referrer rows are kept for the one thing source
-    cannot say: who linked to this from somewhere else.
+    ``page_views`` must already be narrowed to what this reader may see; this adds the date bound. Four
+    aggregate queries, no rows fetched. ``source`` is the primary breakdown because we label it;
+    ``referrer`` is usually a bare origin (strict-origin-when-cross-origin), kept for "who linked here".
     """
     now = timezone.localtime()
     first_day = (now - timedelta(days=days - 1)).date()
     start = (now - timedelta(days=days - 1)).replace(hour=0, minute=0, second=0, microsecond=0)
     recent = page_views.filter(date_start__gte=start)
 
-    # Sources.  ``None`` and ``""`` both mean "no ?src= on the URL" and are one row, the same way
-    # Lot.page_view_source_breakdown merges them; the labels come from that same table.
+    # None and "" both mean no ?src=, merged as in Lot.page_view_source_breakdown.
     merged = {}
     for row in recent.values("source").annotate(
         views=Count("pk"),
@@ -162,16 +128,12 @@ def page_view_history(page_views, days=PAGE_VIEW_HISTORY_DAYS):
         entry["unique"] += row["users"] + row["sessions"]
     sources = sorted(merged.values(), key=lambda entry: (-entry["views"], entry["label"]))
 
-    # One row per day *and* source: the chart stacks the sources inside each day, so this one
-    # group-by is both the day-by-day totals and the split within them.
+    # One group-by gives both day totals and the per-source split.
     counted = collections.defaultdict(int)
     for row in recent.annotate(day=TruncDate("date_start")).values("day", "source").annotate(views=Count("pk")):
         counted[(row["day"], row["source"] or "")] += row["views"]
 
-    # A column for every day, including the ones nobody looked -- a chart with the quiet days left
-    # out reads as a busier lot than it was.  Bands are the sources in the order the table has them
-    # (busiest first), so the tall part of every stack is at the bottom; everything past the cap is
-    # one "Everything else" band rather than a colour nobody can tell from its neighbour.
+    # Every day gets a column, quiet ones included. Sources beyond the cap become "Everything else".
     window = [first_day + timedelta(days=offset) for offset in range(days)]
     bands = [row["label"] for row in sources[:PAGE_VIEW_HISTORY_CHART_SOURCES]]
     band_of = {row["source"]: min(index, PAGE_VIEW_HISTORY_CHART_SOURCES) for index, row in enumerate(sources)}
@@ -185,12 +147,10 @@ def page_view_history(page_views, days=PAGE_VIEW_HISTORY_DAYS):
     day_totals = [sum(band[column] for band in chart_data) for column in range(days)]
     busiest = max(day_totals, default=0)
 
-    # The y axis is worked out here rather than left to Chart.js so that the fortnight a lot
-    # actually gets -- often a single view on a single day -- is drawn as a small bar on a
-    # whole-number axis instead of a full-height one against gridlines at 0.2 of a view.
+    # Worked out here so a single view draws small on a whole-number axis.
     y_step = -(-max(busiest, PAGE_VIEW_HISTORY_MIN_Y) // PAGE_VIEW_HISTORY_Y_TICKS)
 
-    # Off-site referrers only: our own pages are already the source breakdown, in better words.
+    # Off-site only: our own pages are the source breakdown.
     domain = Site.objects.get_current().domain
     referrers = list(
         recent.exclude(referrer__isnull=True)
@@ -229,18 +189,8 @@ def page_view_history(page_views, days=PAGE_VIEW_HISTORY_DAYS):
 
 
 def page_view_history_context(request, page_views, *, title, subtitle):
-    """The context both history modals render, so the two surfaces cannot answer differently.
-
-    The one thing worth putting here rather than in either view is ``show_source_table``.  The
-    "How they got here" table is **superuser-only**: which of our own surfaces sent somebody is
-    detail an ordinary seller has no use for, and a table of it above the chart is the first thing
-    they read.  The by-source split is still in the chart for everybody -- it is the table that
-    goes -- and the referrer list stays for everybody too, since "another website linked to my lot"
-    is news to a seller in a way that "they came from a lot list" is not.
-
-    Deciding it here rather than in the template is the same rule as
-    :func:`can_see_lot_page_view_history`: the template asks one question and gets one answer, and
-    a second surface added later cannot quietly gate it differently.
+    """The context both history modals render. The "How they got here" table is superuser-only; the chart
+    and referrers are for everyone. Decided here so a new surface can't gate it differently.
     """
     return {
         "history": page_view_history(page_views),
@@ -251,19 +201,10 @@ def page_view_history_context(request, page_views, *, title, subtitle):
 
 
 def can_see_lot_page_view_history(user, lot):
-    """Who gets the view-history button on a lot page, and on which lots.
+    """Who gets the view-history button, and on which lots.
 
-    Two questions, and both are answered here rather than in the template so that
-    :class:`LotPageViewHistoryView` and the button that opens it can never disagree.
-
-    **Who:** the seller, and anyone who administers the auction the lot is in.  Nobody else -- how
-    many people looked at a lot, and how they found it, is the seller's business.
-
-    **Which lots:** only lots in an *online* auction, or with no auction at all.  A lot in an
-    in-person auction already has the per-source breakdown in the collapse under "Views"
-    (``show_page_view_breakdown`` and :attr:`Lot.page_view_source_breakdown`), and a second table of
-    the same numbers on the same page is worse than either alone.  A sealed-bid lot publishes no
-    view count at all, so it gets no history either.
+    The seller and the auction's admins. Only online or auction-less lots: in-person lots already show
+    the per-source breakdown, and sealed-bid lots publish no views.
     """
     if not lot or lot.sealed_bid:
         return False
@@ -275,17 +216,13 @@ def can_see_lot_page_view_history(user, lot):
 
 
 class LotPageViewHistoryView(LoginRequiredMixin, View):
-    """The last 15 days of traffic on one lot, as a modal loaded over HTMX into ``#modals-here``.
-
-    GET only -- it reads and never writes, which is also why it needs no ``palette_actions`` entry
-    (see the Housekeeping section of CLAUDE.md); ``palette_routes.EXCLUDED`` carries the reason it
-    is not a page somebody can be navigated to.
+    """The last 15 days of traffic on one lot, as an HTMX modal. GET only, so no palette entry;
+    ``palette_routes.EXCLUDED`` says why it isn't navigable.
     """
 
     def get(self, request, pk):
         lot = get_object_or_404(Lot.objects.exclude(is_deleted=True).select_related("auction"), pk=pk)
-        # The permission check lives here, not only on the button: the URL is guessable.  A lot
-        # whose *type* has no history modal is refused here too, so there is exactly one rule.
+        # Checked here too: the URL is guessable.
         if not can_see_lot_page_view_history(request.user, lot):
             raise PermissionDenied
         return render(
@@ -301,13 +238,8 @@ class LotPageViewHistoryView(LoginRequiredMixin, View):
 
 
 class MyLotsPageViewHistoryView(LoginRequiredMixin, View):
-    """The same 15 days as :class:`LotPageViewHistoryView`, totalled over every lot you are selling.
-
-    Opened from the selling dashboard (``MyLots``).  There is no permission question -- the answer
-    is scoped to ``request.user``'s own lots, matched the way ``filters.UserLotFilter`` matches
-    them, so one person can never be handed another's numbers.  The lot set goes in as a subquery
-    rather than a list of primary keys: it is one round trip, and it keeps the PageView query
-    bounded by owner in the database instead of in Python.
+    """The same 15 days totalled over the requesting user's lots (matched as ``UserLotFilter`` does), as a
+    subquery so the PageView query stays owner-bounded.
     """
 
     def get(self, request):
@@ -330,12 +262,7 @@ class MyLotsPageViewHistoryView(LoginRequiredMixin, View):
 
 
 def _lot_distance_to(latitude, longitude):
-    """``distance_to`` with the lot's own latitude/longitude named explicitly.
-
-    ``distance_to`` defaults to bare column names, which MariaDB rejects as ambiguous the moment the
-    query joins anything else that has a ``latitude`` -- ``userdata`` and ``club`` both do, and the
-    lot page select_relates both.
-    """
+    """``distance_to`` with the lot's columns named: bare names are ambiguous once userdata or club is joined."""
     return distance_to(
         latitude,
         longitude,
@@ -345,7 +272,7 @@ def _lot_distance_to(latitude, longitude):
 
 
 class ViewLot(DetailView):
-    """Show the picture and detailed information about a lot, and allow users to place bids"""
+    """A lot's page: pictures, details and bidding."""
 
     template_name = "view_lot_images.html"
     model = Lot
@@ -359,13 +286,7 @@ class ViewLot(DetailView):
         return super().dispatch(request, *args, **kwargs)
 
     def get_object(self):
-        """The lot, fetched once.
-
-        DetailView.get() already sets self.object, and get_context_data asks for the lot again --
-        as does image_permission_check further down. Each of those was a fresh query *and* a fresh
-        Lot instance, so every cached_property on it (bids, images, currency) was recomputed for
-        each one. Memoized on the view rather than reordering the callers.
-        """
+        """The lot, fetched once and memoized, so its cached properties aren't recomputed per caller."""
         if getattr(self, "object", None) is not None:
             return self.object
         obj = self.get_queryset().first()
@@ -376,9 +297,7 @@ class ViewLot(DetailView):
 
     def get_queryset(self):
         pk = self.kwargs.get(self.pk_url_kwarg)
-        # Everything view_lot_images.html renders about who is involved. Without these the page
-        # pays a query each for the auction, its creator's currency, the seller, the category and
-        # the submitter -- several of them more than once.
+        # Everything view_lot_images.html renders about who is involved.
         qs = Lot.objects.exclude(is_deleted=True).select_related(
             "auction",
             "auction__created_by__userdata",
@@ -432,8 +351,7 @@ class ViewLot(DetailView):
         context["domain"] = Site.objects.get_current().domain
         context["is_auction_admin"] = False
         context["page_view_lot"] = lot.pk
-        # Sending the auction as well as the lot is what lets a reader of this data match an
-        # auction on one indexed column; see base_page_view.html.
+        # The auction too, so readers match on one indexed column; see base_page_view.html.
         context["page_view_auction"] = lot.auction_id
         if lot.auction:
             context["auction"] = lot.auction
@@ -466,10 +384,7 @@ class ViewLot(DetailView):
             else:
                 defaultBidAmount = 0
                 context["viewer_bid"] = None
-            # When the app can be reached it is the only channel used (see
-            # notify_watchers_lot_selling_soon), so the browser subscribe UI is replaced by a note
-            # pointing at the phone. Inside the app's own WebView there is nothing to subscribe to
-            # either -- a WebView has no Push API -- so the button is dropped there too.
+            # App push replaces browser subscription; a WebView has no Push API either.
             context["has_app_push"] = user_has_app_push(self.request.user)
             context["can_subscribe_to_webpush"] = not context["has_app_push"] and not getattr(
                 self.request, "is_mobile_app", False
@@ -512,11 +427,7 @@ class ViewLot(DetailView):
         context["viewer_pk"] = self.request.user.pk
         context["submitter_pk"] = getattr(lot.user, "pk", 0)
         context["user_specific_bidding_error"] = False
-        # The other reasons this dialog carries -- your own lot, you haven't joined, you aren't
-        # checked in, you need approval -- are refusals, and look like refusals. "You are not signed
-        # in yet" is not one, so it does not get the red title and the exclamation icon. Only an
-        # anonymous visitor can reach that branch (the ones below all need a pk), so this flag
-        # cannot go stale against the message beside it.
+        # Signing in isn't a refusal, so it doesn't get the error styling. Only anonymous users reach it.
         context["bidding_error_is_sign_in"] = False
         if not self.request.user.is_authenticated:
             context["bidding_error_is_sign_in"] = True
@@ -526,24 +437,17 @@ class ViewLot(DetailView):
         if context["viewer_pk"] == context["submitter_pk"]:
             context["user_specific_bidding_error"] = "You can't bid on your own lot"
         context["only_whole_dollar_bids"] = lot.auction.only_whole_dollar_bids if lot.auction else True
-        # In a whole-dollar auction the bid box steps by 1 and carries a hard-coded ".00" beside it,
-        # so what goes *in* the box has to be a whole number.  Every branch above builds this out of
-        # a DecimalField, and a Decimal renders as "5.00" -- which read "5.00" next to a ".00"
-        # suffix.  It was invisible until production's money columns became real decimals in 0437:
-        # an integer column handed mysqlclient an int, and an int renders as "5".
-        # Rounding up, not down: this is the *minimum* next bid, and rounding down would offer an
-        # amount the bidding rules then reject.
+        # Whole-dollar auctions show ".00" beside the box, so the default must be an integer, rounded
+        # up (it's the minimum next bid). Visible since 0437 made money columns decimal.
         if context["only_whole_dollar_bids"]:
             defaultBidAmount = int(Decimal(defaultBidAmount).to_integral_value(rounding="ROUND_CEILING"))
         context["amount"] = defaultBidAmount
         context["watched"] = Watch.objects.filter(lot_number=lot.lot_number, user=self.request.user.id)
         context["category"] = lot.species_category
-        # context['form'] = CreateBid(initial={'user': self.request.user.id, 'lot_number':lot.pk, "amount":defaultBidAmount}, request=self.request)
         context["user_tos"] = None
         context["user_tos_location"] = None
         if lot.auction and self.request.user.is_authenticated:
-            # same resolver the bid gate uses (newest record wins), so the UI can't
-            # disagree with enforcement when duplicate TOS records exist
+            # Same resolver as the bid gate (newest record wins), so UI and enforcement agree.
             tos = lot.auction.tos_for_user(self.request.user)
             if tos:
                 context["user_tos"] = True
@@ -564,12 +468,8 @@ class ViewLot(DetailView):
                 )
             if not lot.auction.is_online and lot.auction.message_users_when_lots_sell:
                 context["push_notifications_possible"] = True
-                # Ask the app to offer notifications here, where the offer means something: this is
-                # an in-person auction that pushes "your lot is selling now", the user is looking at
-                # a lot in it, and the auction is still running. The app owns the "at most once per
-                # device" part and simply ignores the call when it has already asked. Deciding it
-                # here is the point -- the app can't tell an in-person lot page from any other, and
-                # won't spend a round trip per lot page guessing.
+                # Ask the app to offer notifications here: an in-person auction that pushes "selling
+                # now", still running. The app handles at-most-once per device.
                 context["offer_push_prompt"] = (
                     getattr(self.request, "is_mobile_app", False)
                     and not lot.auction.pretty_much_over
@@ -625,8 +525,7 @@ class ViewLot(DetailView):
                     context["distance"] = "over 3000 miles away"
         except (AttributeError, TypeError):
             context["distance"] = 0
-        # for lots that are part of an auction, it's very handy to show the exchange info right on the lot page
-        # this should be visible only to people running the auction or the seller
+        # Exchange info for sold online lots, for admins and the seller only.
         if lot.auction and lot.auction.is_online and lot.sold:
             if context["is_auction_admin"] or lot.is_owned_by(self.request.user):
                 context["show_exchange_info"] = True
@@ -657,21 +556,15 @@ class ViewLot(DetailView):
                 context["bap_club"] = club
                 context["bap_default_points"] = lot.bap_points_for_club(club)
         is_lot_creator = lot.is_owned_by(self.request.user)
-        # The template gates the edit/delete/deactivate buttons and the seller-only notes on this,
-        # rather than on lot.user, because lot.user is null on lots added through an unlinked TOS.
+        # Not lot.user, which is null for lots added through an unlinked TOS.
         context["is_lot_creator"] = is_lot_creator
         if lot.use_images_from and is_lot_creator:
             context["images_managed_from_lot"] = lot.use_images_from
-        # The seller of a lot in an in-person auction gets the per-source view breakdown: the AR
-        # sources only exist there, and how people found the lot in the room is useful to them and
-        # to nobody else. See Lot.page_view_source_breakdown.
+        # In-person lots: per-source breakdown (AR sources) for the seller only.
         context["show_page_view_breakdown"] = bool(
             is_lot_creator and lot.auction and not lot.auction.is_online and not lot.sealed_bid
         )
-        # The 15-day history modal is the other half of that: online (and auction-less) lots, where
-        # there is no in-room scanning to break down, and open to the auction's admins as well as
-        # the seller. can_see_lot_page_view_history is the one rule; LotPageViewHistoryView asks it
-        # again, so this flag only decides whether the button is drawn.
+        # The history modal button; LotPageViewHistoryView re-checks the same rule.
         context["show_page_view_history"] = can_see_lot_page_view_history(self.request.user, lot)
         # chat subscription stuff
         if self.request.user.is_authenticated:
@@ -721,8 +614,7 @@ class ViewLotSimple(ViewLot, AuctionViewMixin):
                     "username": "System",
                 }
                 lot.send_websocket_message(result)
-                # Web push goes through the deduped helper so a lot that already notified from the
-                # queue does not notify again when it's pulled up to be sold (and vice versa).
+                # Deduped helper, so queue and pull-up don't both notify.
                 notify_watchers_lot_selling_soon(lot, request_user=self.request.user)
         return context
 
@@ -745,10 +637,6 @@ class ImageCreateView(LoginRequiredMixin, CreateView):
                 f"All lots for {self.tos.bidder_number} already have an image",
             )
             return redirect(reverse("auction_tos_list", kwargs={"slug": self.auction.slug}))
-        # try:
-        #     self.lot = Lot.objects.get(lot_number=kwargs["lot"], is_deleted=False)
-        # except:
-        #     raise Http404
         if not self.lot.image_permission_check(request.user):
             messages.error(request, "You can't add an image to this lot")
             return redirect(self.get_success_url())
@@ -781,13 +669,11 @@ class ImageCreateView(LoginRequiredMixin, CreateView):
             image.is_primary = True
         if not image.image_source:
             image.image_source = "RANDOM"
-        # Anything Pillow can't write as a JPEG (an animated GIF, an MPO from a phone's burst
-        # mode) was already converted by CreateImageForm.clean_image -- see forms.jpeg_safe_upload.
+        # Formats Pillow can't write as JPEG were already converted (forms.jpeg_safe_upload).
         try:
             image.save()
         except IMAGE_PROCESSING_EXCEPTIONS as e:
-            # The image itself is unusable (bad format, corrupt, decompression bomb...).
-            # Show the uploader a friendly, actionable error.
+            # An unusable image: a friendly error for the uploader.
             logger.info("Rejected lot image during save: %s", e)
             form.add_error(
                 "image",
@@ -795,9 +681,7 @@ class ImageCreateView(LoginRequiredMixin, CreateView):
                 "Please try a different photo.",
             )
             return self.form_invalid(form)
-        # Anything else (permission denied writing to mediafiles, disk full, database
-        # errors...) is a server/site problem, not the user's file. Let it propagate so it
-        # becomes a 500 and the admins get emailed instead of blaming the uploader's photo.
+        # Anything else (permissions, disk, database) is ours: let it 500 so admins hear.
         return super().form_valid(form)
 
 
@@ -857,9 +741,7 @@ class ImageUpdateView(UpdateView):
         try:
             image.save()
         except IMAGE_PROCESSING_EXCEPTIONS as e:
-            # Same split as ImageCreateView: an unusable file is the uploader's problem and
-            # gets a friendly inline error, while a disk or permission error is ours and is
-            # left to become a 500 so the admins hear about it.
+            # As in ImageCreateView: bad file is inline, server errors 500.
             logger.info("Rejected lot image during save: %s", e)
             form.add_error(
                 "image",
@@ -872,15 +754,12 @@ class ImageUpdateView(UpdateView):
 
 
 class LotValidation(LoginRequiredMixin):
-    """
-    Base class for adding a lot.  This defines the rules for validating a lot
-    """
+    """Base for adding or editing a lot: the validation rules."""
 
     auction = None  # used for specifying which auction via GET param
 
     def dispatch(self, request, *args, **kwargs):
-        # Somewhere to send the cheque.  No phone number: a seller is reached through the auction,
-        # and ``services.missing_contact_info`` is where the two gates differ on that.
+        # Name and address, for the payout; no phone (see services.missing_contact_info).
         missing = missing_contact_info(request.user)
         if missing:
             messages.error(self.request, f"Please add your {readable_list(missing)} before creating a lot")
@@ -888,13 +767,9 @@ class LotValidation(LoginRequiredMixin):
         return super().dispatch(request, *args, **kwargs)
 
     def form_valid(self, form, **kwargs):
-        """
-        There is quite a lot that needs to be done before the lot is saved
-        """
         lot = form.save(commit=False)
         if lot.auction and lot.auction.user_banned_by_admins(self.request.user):
-            # CreateUserBan sweeps the banned user's existing lots out of the auction;
-            # without this, they could simply resubmit them
+            # CreateUserBan removes their lots; without this they could resubmit.
             form.add_error(None, "You've been banned from selling lots in this auction")
             return self.form_invalid(form)
         lot.user = self.request.user
@@ -907,9 +782,6 @@ class LotValidation(LoginRequiredMixin):
                     "Buy now price can't be lower than the minimum bid.  Buy now price has been set to the minimum bid, but you should probably edit this lot and change the buy now price.",
                 )
         if lot.auction:
-            # if not lot.auction.is_online:
-            #    if lot.buy_now_price or lot.reserve_price > lot.auction.minimum_bid:
-            #        messages.info(self.request, f"Reserve and buy now prices may not be used in this auction.  Read the auction's rules for more information")
             if lot.auction.reserve_price == "disable":
                 lot.reserve_price = lot.auction.minimum_bid
             if lot.auction.buy_now == "disable" and lot.buy_now_price:
@@ -924,8 +796,7 @@ class LotValidation(LoginRequiredMixin):
             userData.save()
             auctiontos = AuctionTOS.objects.filter(user=self.request.user, auction=lot.auction).first()
             if not auctiontos:
-                # it should not be possible to get here (famous last words...)
-                # remember that on form submit in CreateLotForm.clean(), we are validating that the user has an auctiontos
+                # Shouldn't happen: CreateLotForm.clean() checks for an auctiontos.
                 messages.error(
                     self.request,
                     format_html(
@@ -997,10 +868,8 @@ class LotValidation(LoginRequiredMixin):
                 messages.error(self.request, "The image URL provided was not valid and will not be used.")
             lot.image_url = None
             lot.save(update_fields=["image_url"])
-        # What the seller did with the species the matcher offered for this lot name.  This form
-        # never *writes* to the shared name cache -- only the admin's lot editor and the bulk-add
-        # page do -- but it is one of the places a wrong remembered answer is visibly taken off a
-        # lot, and that is evidence worth keeping.  See species_matching.record_choice.
+        # Record what the seller did with the offered species (never writes the cache). See
+        # species_matching.record_choice.
         if lot.auction and lot.auction.use_scientific_name and lot.lot_name:
             record_species_choice(
                 lot.lot_name,
@@ -1021,18 +890,12 @@ class LotValidation(LoginRequiredMixin):
 
 
 class LotCreateView(FormFrictionMixin, LotValidation, CreateView):
-    """
-    Creating a new lot
-    """
+    """Create a lot."""
 
     model = Lot
     template_name = "lot_form.html"
     form_class = CreateLotForm
     auction = None
-
-    # it's better to take the user to the lot they just added, in case they want to edit it
-    # def get_success_url(self):
-    #    return "/lots/new/"
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
@@ -1063,8 +926,7 @@ class LotCreateView(FormFrictionMixin, LotValidation, CreateView):
         return context
 
     def get_initial(self):
-        """Pre-fill form fields from GET params. Any field in the form can be set this way.
-        The 'auction' param is handled separately in dispatch() and 'cloned_from' in get_form_kwargs()."""
+        """Pre-fill form fields from GET params. ``auction`` and ``cloned_from`` are handled elsewhere."""
         initial = super().get_initial()
         exclude = {"auction", "cloned_from"}
         form_fields = set(self.form_class.Meta.fields) | set(self.form_class.declared_fields)
@@ -1153,10 +1015,7 @@ class LotCreateView(FormFrictionMixin, LotValidation, CreateView):
 
 
 class LotUpdate(FormFrictionMixin, LotValidation, UpdateView):
-    """
-    Changing an existing lot
-    This is almost identical to the create view, but needs to verify permissions to edit the lot
-    """
+    """Edit a lot; like create, plus the edit permission check."""
 
     model = Lot
     template_name = "lot_form.html"
@@ -1358,7 +1217,7 @@ class LotAdmin(LoginRequiredMixin, TemplateView, FormMixin, AuctionViewMixin):
         return Lot.objects.all()
 
     def dispatch(self, request, *args, **kwargs):
-        # this can be an int if we are updating, or a string (auction slug) if we are creating
+        # An int when updating, an auction slug when creating.
         pk = kwargs.pop("pk")
         try:
             self.lot = Lot.objects.get(pk=pk, is_deleted=False)
@@ -1416,7 +1275,6 @@ class LotAdmin(LoginRequiredMixin, TemplateView, FormMixin, AuctionViewMixin):
                 category = Category.objects.filter(name="Uncategorized").first()
             obj.species_category = category
             obj.summernote_description = form.cleaned_data["summernote_description"]
-            # obj.auctiontos_seller = form.cleaned_data['auctiontos_seller'] or request.user
             obj.quantity = form.cleaned_data["quantity"] or 1
             obj.donation = form.cleaned_data["donation"]
             obj.i_bred_this_fish = form.cleaned_data["i_bred_this_fish"]
@@ -1428,17 +1286,9 @@ class LotAdmin(LoginRequiredMixin, TemplateView, FormMixin, AuctionViewMixin):
             obj.custom_checkbox = form.cleaned_data["custom_checkbox"]
             obj.custom_field_1 = form.cleaned_data["custom_field_1"]
             obj.custom_dropdown = form.cleaned_data["custom_dropdown"]
-            # This view assigns field by field rather than calling form.save(), and the scientific
-            # name was simply not on the list -- so the picker rendered, validated, and had its
-            # answer thrown away on every save since it was added.  It is the *admin's* lot form:
-            # the one place a wrong species is meant to get fixed.
-            #
-            # Guarded on the auction's own setting rather than trusting cleaned_data, because
-            # EditLot is built without an ``instance``: clean_species_for_auction falls back to
-            # "whatever is stored on the lot" when the field is switched off, and what it actually
-            # reads is a blank Lot() -- so assigning that would wipe the column on every auction
-            # that has scientific names turned off.  Turning the setting off hides the field; it
-            # does not throw the data away.
+            # Assigned field by field (no form.save()), and species was once missing from the list.
+            # Guarded on the auction setting: EditLot has no instance, so with the field off
+            # cleaned_data holds a blank and would wipe the column.
             species = form.cleaned_data.get("species") if self.auction.use_scientific_name else None
             species_changed = bool(self.auction.use_scientific_name) and obj.species_id != getattr(species, "pk", None)
             if self.auction.use_scientific_name:
@@ -1449,20 +1299,12 @@ class LotAdmin(LoginRequiredMixin, TemplateView, FormMixin, AuctionViewMixin):
                     obj.winner = None
                 elif obj.auctiontos_winner.user:
                     obj.winner = obj.auctiontos_winner.user
-                # winner not set if auctiontos_winner is set for the first time...don't see a real downside here, winner is generally not set as part of an auction anyway
+                # winner isn't set when auctiontos_winner is first set; winner is rarely used in auctions.
             obj.save()
-            # Teach the site the pairing -- but only from here, and only on a real change.  This
-            # form has the "search every species" box on it, so the choice is not bounded by the
-            # five suggestions the matcher produced; it can be any of 36,000 rows, and the cache
-            # is read by every club ahead of the token search.  What makes it safe to write anyway
-            # is who is doing it: this view is auction admins only, they are correcting a lot on
-            # purpose, and the answer is listed and revertible on the species gaps page.  The
-            # seller-facing forms deliberately do not do this.
+            # Teach the cache only here, on a real change: auction admins correcting a lot, revertible
+            # on the gaps page. Seller forms don't.
             if self.auction.use_scientific_name and species_changed and obj.lot_name:
-                # An admin moving a lot off the species it was given is the clearest rejection
-                # there is of whatever the matcher remembered for this name.  Never an *accept*:
-                # this form is only ever a later edit, and re-saving a lot to set its winner is
-                # not somebody confirming the species.  See species_matching.record_choice.
+                # An admin changing the species is a rejection of the remembered answer, never an accept.
                 record_species_choice(obj.lot_name, species, first_save=False, changed=True, user=self.request.user)
             if species_changed and species and obj.lot_name:
                 remember_species(obj.lot_name, species, source="user", user=self.request.user)

@@ -29,8 +29,8 @@ this only quotes its opening sentence.
 - **`account_nav.py`** (220 lines)
   The **Account setup** menu: which pages are in it, which one you're on, and where /account/setup/ lands.
   `Row`, `Group`, `active_page`, `remember`, `landing_url`, `groups_for`
-- **`admin.py`** (1657 lines)
-  The Django admin: the staff-only back door, and the handful of jobs that only live here.
+- **`admin.py`** (1566 lines)
+  The Django admin: staff-only, and the few jobs that only live here.
 - **`admin_paginator.py`** (51 lines)
   Paginate the admin's biggest changelists without counting the whole table.
   `EstimatedCountPaginator`
@@ -45,8 +45,8 @@ this only quotes its opening sentence.
 - **`app_links.py`** (153 lines)
   The two files that let a site link open in the mobile app instead of a browser.
   `assetlinks`, `apple_app_site_association`
-- **`apple_notifications.py`** (514 lines)
-  Sign in with Apple server-to-server notifications — Apple telling us an account changed.
+- **`apple_notifications.py`** (391 lines)
+  Sign in with Apple server-to-server notifications.
   `AppleNotificationError`, `notifications_configured`, `verify_notification`, `parse_events`, `handle_event`, `process_notification`, `AppleServerNotificationView`
 - **`apple_signin.py`** (203 lines)
   Sign in with Apple: redeeming the authorization code, and revoking the grant on deletion.
@@ -59,8 +59,8 @@ this only quotes its opening sentence.
 - **`aquarium_species.py`** (280 lines)
   The curated aquarium-trade species list (plants, invertebrates, live food, cultivars), and the
   `Row`, `Result`, `read_rows`, `kind_hints`, `load`
-- **`ar_mapping.py`** (1068 lines)
-  AR lot-location solver — bearing-dominant 2D bundle adjustment.
+- **`ar_mapping.py`** (945 lines)
+  AR lot-location solver: bearing-dominant 2D bundle adjustment.
   `solve_positions`, `update_positions_for_auction`
 - **`auction_form_layout.py`** (234 lines)
   The layout of ``AuctionEditForm``: what an organizer sees first, and what is behind *Advanced*.
@@ -88,8 +88,8 @@ this only quotes its opening sentence.
 - **`club_matching.py`** (265 lines)
   Which club does this belong to?  Name normalisation, initialisms, and the auction backlog.
   `normalize`, `initials`, `derived_abbreviation`, `similarity`, `is_hand_written`, `best_match`, `Suggestion`, `suggest_clubs`
-- **`command_palette.py`** (1555 lines)
-  Shared logic for the command palette.
+- **`command_palette.py`** (1442 lines)
+  Shared logic for the command palette, behind the JSON views.
   `resolve_page`, `app_destinations_for_prompt`, `app_deep_link_by_name`, `default_items`, `search`, `log_search`
 - **`consumers.py`** (432 lines)
   The websocket half of the site: live bidding, chat, and "somebody else just bid".
@@ -105,8 +105,8 @@ this only quotes its opening sentence.
 - **`donation_views.py`** (562 lines)
   Views for donation tracking: the vendor table, the vendor panel, and the contact dialog.
   `DonationPermissionMixin`, `ClubDonationVendorsView`, `ClubDonationSettingsView`, `DonationVendorPanelView`, `DonationVendorDeleteView`, `DonationContactView`, `DonationEmailPreviewView`, `DonationUnsubscribeView`, `InboundDonationEmailView`
-- **`donations.py`** (957 lines)
-  Donation tracking: asking vendors for donations, and reading what they write back.
+- **`donations.py`** (822 lines)
+  Donation tracking: asking vendors for donations and reading their replies.
 - **`email_routing.py`** (188 lines)
   `email_routing_enabled`, `email_routing_domain`, `build_routed_sender_address`, `sender_with_display_name`, `admin_routing_email`, `resolve_donation_alias`, `resolve_routing_info`, `resolve_routed_recipient`
 - **`error_views.py`** (35 lines)
@@ -115,23 +115,23 @@ this only quotes its opening sentence.
 - **`field_adoption.py`** (227 lines)
   Which settings has anybody ever changed -- reconstructed from the rows, not from a changelog.
   `FieldAdoption`, `model_field_default`, `form_field_names`, `history_edit_counts`, `field_adoption`, `auction_field_adoption`
-- **`filters.py`** (1942 lines)
-  The search and filter boxes above every table: what a query in one of them means.
+- **`filters.py`** (1793 lines)
+  The search and filter boxes above every table.
 - **`fishbase.py`** (58 lines)
   Where the species list comes from.
   `parquet_url`, `available_versions`
 - **`form_friction.py`** (180 lines)
   The view mixin that writes :class:`auctions.friction_models.FormFailure` rows.
   `error_codes`, `abandon_token`, `read_abandon_token`, `FormFrictionMixin`
-- **`forms.py`** (6864 lines)
-  Every form on the site: what a person is allowed to type, and what it means when they do.
+- **`forms.py`** (6116 lines)
+  Every form on the site.
 - **`friction_models.py`** (98 lines)
   Where people get stuck: one row per rejected form submission.
   `FormFailure`
 - **`geocoding.py`** (67 lines)
   Turning a typed address into a point on the map.
   `configured`, `geocode`
-- **`google_calendar.py`** (780 lines)
+- **`google_calendar.py`** (671 lines)
   Two-way Google Calendar sync for clubs.
 - **`google_wallet.py`** (323 lines)
   Helpers for talking to the Google Wallet REST API.
@@ -145,8 +145,8 @@ this only quotes its opening sentence.
 - **`html_sanitize.py`** (135 lines)
   Sanitizing the rich text people paste into Summernote.
   `sanitize_summernote_html`, `remove_html_color_tags`
-- **`lifecycle.py`** (710 lines)
-  Phase 9: the people who are not running the auction.
+- **`lifecycle.py`** (547 lines)
+  Phase 9: measuring buyers, sellers and people with no account (``docs/phase_9.md``).
 - **`llm.py`** (453 lines)
   Provider abstraction for everything on this site that talks to a language model.
 - **`mailchimp.py`** (735 lines)
@@ -157,8 +157,8 @@ this only quotes its opening sentence.
 - **`model_caching.py`** (79 lines)
   ``@cached_property`` on a model, and the invalidation that makes it safe.
   `InvalidatesRelatedCache`, `CachedPropertiesMixin`
-- **`models.py`** (14906 lines)
-  The database: 80 models, mostly kept in one file because 29 of them form a single dependency
+- **`models.py`** (13303 lines)
+  The database: 80 models, mostly in one file because 29 of them form a single dependency cycle
 - **`moderation_admin.py`** (139 lines)
   The Django admin for the moderation queue: reports, copyright notices and strikes.
   `ContentReportAdmin`, `CopyrightNoticeAdmin`, `CopyrightStrikeAdmin`
@@ -174,12 +174,12 @@ this only quotes its opening sentence.
 - **`notifications.py`** (358 lines)
   Email → mobile-push routing.
   `push_configured`, `user_prefers_push`, `user_has_app_push`, `notify_user`, `notify_running_total`, `send_fcm_message`, `send_fcm_data_message`
-- **`palette_actions.py`** (15451 lines)
-  The things the command palette's natural-language assist is allowed to do.
-- **`palette_assist.py`** (1518 lines)
+- **`palette_actions.py`** (13166 lines)
+  The things the command palette's assist, and ``/mcp/``, are allowed to do.
+- **`palette_assist.py`** (1146 lines)
   Natural-language orchestration for the command palette.
-- **`palette_routes.py`** (1934 lines)
-  Every page on the site, as a thing the command palette's assistant can reach.
+- **`palette_routes.py`** (1830 lines)
+  Every named URL, as a :class:`Route` the palette assistant can reach or an :data:`EXCLUDED` entry
   `Route`, `excluded_reason`, `is_third_party`, `audit`, `catalog_for_prompt`, `match_routes`, `get_route`, `route_needs_an_auction`, `resolve_route`, `page_context_from_path`
 - **`passkit_views.py`** (191 lines)
   Apple PassKit web service — the endpoints installed Wallet passes talk to.
@@ -200,11 +200,11 @@ this only quotes its opening sentence.
   Repeating club events.
   `clean_lines`, `to_text`, `from_text`, `current_or_next`, `with_exdate`, `describe`
 - **`routing.py`** (9 lines)
-- **`serializers.py`** (978 lines)
-  DRF serializers for the club API: the shape of what a key gets back.
-- **`services.py`** (1433 lines)
-  The operations that are the same whoever asked: web page, API, app or assistant.
-- **`signals.py`** (1130 lines)
+- **`serializers.py`** (855 lines)
+  DRF serializers for the club API.
+- **`services.py`** (1151 lines)
+  Operations that are the same whoever asks: web page, API, app or assistant.
+- **`signals.py`** (965 lines)
   Signal handlers for the auctions app.
 - **`site_setup.py`** (146 lines)
   `single_club_mode_enabled`, `single_club_name`, `site_paypal_configured`, `get_server_public_ip`, `get_single_club`, `ensure_single_club_membership_for_user`
@@ -219,12 +219,12 @@ this only quotes its opening sentence.
 - **`species_categories.py`** (501 lines)
   Turn a species' taxonomy into one of the site's :class:`~auctions.models.Category` rows.
   `normalize_category_name`, `CategoryResolver`, `hint_for`, `assign_categories`
-- **`species_matching.py`** (1608 lines)
-  Turn a lot name someone typed into a short list of species to pick from.
+- **`species_matching.py`** (1034 lines)
+  Turn a typed lot name into a short list of species to pick from, or nothing.
 - **`tables.py`** (1530 lines)
   The ``django_tables2`` tables behind every list on the site.
-- **`tasks.py`** (2146 lines)
-  Celery tasks for the auctions app.
+- **`tasks.py`** (1729 lines)
+  Celery tasks for the auctions app. Many wrap the management command of the same name.
 - **`template_a11y.py`** (96 lines)
   Two accessibility rules a template cannot break twice, checked against template source.
   `check_text`, `check_templates`, `main`
@@ -642,7 +642,7 @@ The site's Model Context Protocol server, and the tool catalogue behind it.
 - **`resources.py`** (406 lines)
   Addressable reads: the same answers the read-only tools give, reachable by URI.
   `Template`, `template_descriptors`, `fixed_descriptors`, `match`, `read`, `links_for`
-- **`tools.py`** (535 lines)
+- **`tools.py`** (365 lines)
   The action registry, as MCP tools.
 - **`transport.py`** (139 lines)
   The HTTP end of the MCP server: one view, at ``/mcp/``. Nothing here knows what a tool is.
@@ -696,7 +696,7 @@ The site's Model Context Protocol server, and the tool catalogue behind it.
 - **`offline.py`** (566 lines)
   Offline-mode service for the mobile app's in-person sale screens.
   `get_last_admin_auction`, `build_snapshot`, `apply_ops`
-- **`payments.py`** (758 lines)
+- **`payments.py`** (571 lines)
   Taking a card payment in the room, through the app's Tap to Pay.
   `PaymentVerificationError`, `PaymentAlreadyChargedError`, `TapToPayAttemptOpen`, `SquareReconnectRequired`, `PaymentService`
 - **`printers.py`** (138 lines)
@@ -751,8 +751,8 @@ Every view on the site, split by what part of it the view belongs to.
   The JSON behind the charts on one auction's stats page.
 - **`bap.py`** (621 lines)
   The breeder award program: settings, overrides, awards and the lots behind them.
-- **`base.py`** (1103 lines)
-  Shared machinery for every view on the site: the mixins that decide who may see a page.
+- **`base.py`** (1016 lines)
+  Shared view machinery: the mixins that decide who may see a page.
 - **`browse.py`** (839 lines)
   The lot lists people browse, and what they do to a lot without opening it.
 - **`bulk_actions.py`** (476 lines)
@@ -766,7 +766,7 @@ Every view on the site, split by what part of it the view belongs to.
   `BulkAddLots`, `BulkAddLotsAuto`, `SaveLotAjax`, `ImportLotsFromCSV`
 - **`club_admin.py`** (1056 lines)
   Setting a club up: its details, membership settings, payment accounts, email.
-- **`club_api.py`** (1343 lines)
+- **`club_api.py`** (1134 lines)
   The club REST API: ``/api/v1/clubs/<slug>/…``.
 - **`club_api_keys.py`** (424 lines)
   Club API keys, and the page that documents the API they open.
@@ -794,20 +794,20 @@ Every view on the site, split by what part of it the view belongs to.
 - **`invoices.py`** (391 lines)
   Invoices as a person reads them: the list, one invoice, and the no-login link.
   `Invoices`, `InvoiceCreateView`, `InvoiceView`, `InvoiceNoLoginView`, `SquarePaymentSuccessView`
-- **`lot_pages.py`** (1487 lines)
+- **`lot_pages.py`** (1329 lines)
   One lot: its page, its photos, and creating or editing it.
 - **`moderation.py`** (227 lines)
   The copyright policy page, the notice form, and the report button on a lot.
   `DmcaPolicyView`, `CopyrightNoticeCreate`, `ReportContentCreate`
 - **`palette.py`** (580 lines)
   The command palette and the assistant surface behind it.
-- **`payments.py`** (1149 lines)
-  Connecting a club's PayPal and Square accounts, and taking a payment through them.
+- **`payments.py`** (1054 lines)
+  Connecting PayPal and Square accounts and taking payments through them.
 - **`printing.py`** (606 lines)
   Labels: what gets drawn on them, and getting them to a printer.
   `LotLabelView`, `UnprintedLotLabelsView`, `SingleLotLabelView`, `RemotePrintJobMixin`, `RemotePrintJobStatusView`, `RemotePrintJobRetryView`, `RemotePrintJobCancelView`
-- **`selling.py`** (1079 lines)
-  Auction night: setting winners, the lot queue, and the volunteers who help.
+- **`selling.py`** (966 lines)
+  Auction night: setting winners, the lot queue, and volunteers.
 - **`site_admin.py`** (534 lines)
   The superuser's dashboard: traffic, signups, referrers, the user map.
 - **`site_pages.py`** (599 lines)
@@ -815,13 +815,13 @@ Every view on the site, split by what part of it the view belongs to.
 - **`speakers.py`** (518 lines)
   The speaker directory: who will come and talk to a club, and what about.
   `NECSpeakerAccessMixin`, `SpeakerListView`, `SpeakerPanelView`, `SpeakerDetailView`, `SpeakerCreateView`, `SpeakerUpdateView`, `SpeakerDeleteView`, `SpeakerTagView`, `SpeakerCommentView`, `SpeakerCommentDeleteView`
-- **`species.py`** (631 lines)
-  Adding species and common names, and the superuser's queue for cleaning them up.
+- **`species.py`** (492 lines)
+  Adding species and common names, and the superuser's cleanup queue.
 - **`usability.py`** (366 lines)
   The usability dashboards: the measurements, the buyer funnel, and the club outreach queue.
   `AdminUsability`, `AdminClubHealth`, `ClubMarkContacted`, `UnlinkedAuctions`, `LinkAuctionsToClub`, `AdminLifecycle`, `AdminSessionReplay`
-- **`webhooks.py`** (1016 lines)
-  What PayPal, Square and the email provider send us, unprompted.
+- **`webhooks.py`** (921 lines)
+  Webhooks from PayPal, Square and the email provider: unauthenticated POSTs verified by signature.
   `PayPalWebhookView`, `PayPalSubscriptionWebhookView`, `SquareWebhookView`, `QuickCheckout`, `QuickCheckoutHTMX`
 
 ## `fishauctions/`
@@ -844,8 +844,8 @@ This will make sure the app is always imported when
 - **`firebase_config.py`** (88 lines)
   Parse the public Firebase client-config files that ship with the mobile build.
   `load_android_config`, `load_ios_config`, `load_firebase_client_config`
-- **`settings.py`** (1388 lines)
-  Django settings for fishauctions project.
+- **`settings.py`** (1116 lines)
+  Django settings for fishauctions. Reads .env; variables are documented in .env.example.
 - **`static_storage.py`** (63 lines)
   Content-hashed names for `/static/`, tolerant of the two things that would break a deploy.
   `CacheBustedStaticFilesStorage`

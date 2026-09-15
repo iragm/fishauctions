@@ -5,73 +5,57 @@ description: Club announcements and the website integration: delivery channels, 
 
 # Club announcements and website integration
 
-`auctions/announcements.py` delivers; `/clubs/<slug>/announcements/` is where an admin writes one,
-behind `permission_send_announcements`. Channels: Discord, push, an email campaign through the
-club's own Mailchimp or Brevo, and the club's website. The Discord channel is set in Discord with
-`/announcements_here` (a second channel from `/auctions_here`).
+`auctions/announcements.py` delivers; `/clubs/<slug>/announcements/` writes, behind
+`permission_send_announcements`. Channels: Discord (`/announcements_here`, a separate channel from
+`/auctions_here`), push, a Mailchimp or Brevo campaign, and the club's website.
 
-- **Every channel carries the whole announcement.** It has no page of its own and nothing links to
-  one.
-- `ClubAnnouncement.website_views` counts **renders** (the club page here plus every format of the
-  embed, admins excluded) — an impression, not a read.
-- Email always goes as a **campaign** addressed to the provider's list, from a Celery task, never
-  through this site's mail server. Nobody types a from address (Mailchimp's `campaign_defaults` /
-  Brevo's verified senders; the same read fills in `Club.donation_mailing_address` when blank) and
-  nobody types a subject — it is always `"<Club> announcement"`. Mailchimp and Brevo are two
-  checkboxes but **only one may be ticked**. Only a connected provider is offered. The form opens
-  with nothing ticked, the website box included.
-- **Nothing is delivered in the request.** One with no time on it is scheduled
-  `announcements.GRACE_SECONDS` (30) out; an explicit schedule is the same path with a longer wait.
-  `sent_at`, not `scheduled_for`, is the column everything public filters on. Retracting stops one
-  that hasn't gone, deletes the Discord post, takes it off the website, then says which channels it
-  could not reach. Send and retraction each write a `ClubHistory` row under `ANNOUNCEMENTS`.
-- `docs/club_announcements.md` has the whole design.
+- **Every channel carries the whole announcement.** No page of its own, no "read more" link.
+- Channels are stored as chosen, so disconnecting Discord later doesn't rewrite history.
+- Push is in `PUSH_ONLY_CATEGORIES`: no email fallback. Recipients skip `do_not_contact` but not
+  "no non-essential emails".
+- `website_views` counts renders, not reads, admins excluded. `email_opens` is the only real read
+  receipt, pulled in the background.
+- Email is always a **campaign** to the provider's list, from a Celery task. Never through our mail
+  server and never a transactional send: both bypass the provider's unsubscribe list.
+- Nobody types a from address (provider's own sender; the same read fills a blank
+  `Club.donation_mailing_address`) or a subject (`"<Club> announcement"`). No unsubscribe link of
+  ours. No template editor.
+- Mailchimp and Brevo: only one may be ticked (members are synced to both). Only a connected provider
+  is offered. The form opens with nothing ticked.
+- **Nothing is delivered in the request.** Unscheduled means `GRACE_SECONDS` (30) out, so Retract
+  works. `sent_at`, not `scheduled_for`, gates everything public. `deliver()` stamps `sent_at`
+  before any channel, and `send_due` claims rows with a conditional UPDATE, so overlapping ticks
+  can't double-send.
+- Retract cancels, deletes the Discord post, drops it from the website, then says what it couldn't
+  recall. Sent, scheduled and retracted each write a `ClubHistory` row under `ANNOUNCEMENTS`.
 
 ## The website page and embeds
 
-`/clubs/<slug>/website/` holds everything a club can put on its own site: the event calendar, past
-events, the current auction, the latest announcement, the BAP leaderboard, plus a Calendar links
-card. Snippets are listed whether or not the feature behind them is switched on, with a note.
+`/clubs/<slug>/website/`: event calendar, past events, current auction, latest announcement, BAP
+leaderboard, and calendar links. Snippets are listed even when the feature is off.
 
-- The five embeds share one shell (`auctions/templates/auctions/embeds/`); each has a styled
-  template and an `_unstyled` one. `embed_mode_from_request` / `embed_response` in `views.py` are
-  the one reader of `?format=`.
-- `ClubPastEventsEmbedView` subclasses `ClubEventsEmbedView` and changes three class attributes —
-  deliberately the same `events.html`, row shape and `_club_events_embed_rows`.
-- **The snippet is a bare `<script src="…?format=js">`.** `embed_response` wraps the `_unstyled`
-  markup in `<div class="club-embed">` with `SCRIPT_EMBED_CSS` (layout only, so the host site's
-  fonts and colours win) and returns JS that inserts it before its own tag. It replaced iframe +
-  inline height listener because WordPress rewrites `&&` in pasted scripts to `&#038;&#038;` (a
-  SyntaxError). The iframe formats are still served, and still post
-  `{clubEmbed: "height", height: N}`, for snippets pasted before; the page no longer offers them.
-- Calendar links is **not** an embed: two plain addresses following `Club.calendar_subscribe_url` /
-  `.calendar_feed_url` — **the club's Google calendar when it is shared, ours when it isn't**. The
-  same rule picks the Google button on the club page and the "Add our calendar" link in membership
-  emails. The subscribe link is `webcal://` when it falls back to us (an `https` `.ics` is a
-  download, which most calendar apps import as a frozen snapshot).
-- **Whether that calendar is shared is read, never asked.** `google_calendar.refresh_public_flag`
-  fetches the calendar's public `.ics` anonymously (200 = really shared) at the end of every
-  `sync_club`, at most hourly (`PUBLIC_CHECK_INTERVAL`, stamped in
-  `google_calendar_public_checked`); **Sync now** forces it, `disconnect()` forgets it, and failing
-  to reach Google leaves the flag alone. We cannot *set* sharing (needs the sensitive
-  `calendar.acls` scope).
+- The five embeds share `auctions/templates/auctions/embeds/`, each styled and `_unstyled`.
+  `embed_mode_from_request` / `embed_response` are the one reader of `?format=`.
+- `ClubPastEventsEmbedView` subclasses `ClubEventsEmbedView`, changing three attributes.
+- **The snippet is a bare `<script src="…?format=js">`.** It replaced an iframe because WordPress
+  rewrites `&&` to `&#038;&#038;`. Iframe formats are still served for old snippets.
+- Calendar links follow `Club.calendar_subscribe_url` / `.calendar_feed_url`: the club's Google
+  calendar when shared, ours (`webcal://`) when not.
+- **Sharing is read, never asked.** `refresh_public_flag` fetches the public `.ics` anonymously,
+  at most hourly. We can't set sharing (needs `calendar.acls`).
 
 ## Generated event wording
 
-`ClubEvent.title_is_custom` / `description_is_custom` stop `sync_one_auction_event` and
-`sync_pickup_events` overwriting a hand-typed field; `title` and `description` still hold the value
-everything displays. `_apply_event_item` refuses Google-side edits to automatic events.
-`club_events.generated_wording` recomputes what the site would have written (help text and reset).
-`ClubEventForm` narrows itself to those two fields when `instance.is_automatic`, so dates, location,
-cancellation and delete stay with the auction (`is_editable` gates delete; `details_are_editable`
-guards the form). `docs/club_event_details.md` has the whole design.
+An auction's calendar event can have a custom title and description (migration 0406).
 
-- `Club.events_website_views` / `events_website_last_view` count renders of the events embed (every
-  `?format=` including JSON); `Club.embeds_events_on_website` is a render inside
-  `EVENTS_EMBED_ACTIVE_DAYS` (90). Counted on the **club**, not on a row; the club page here is not
-  counted, and an admin's own view is not counted.
-- `Auction.event_needing_custom_wording` is the one reader and puts a banner beside the setup
-  checklist (outside its if/else). Dismissing writes `Auction.dismissed_customize_event_banner`,
-  deliberately not in `AUCTION_FIELDS_TO_CLONE`.
-- There is deliberately **no per-event "add this to my calendar" link** on the club page's event
-  list. The pickup-time buttons on the auction page are a different thing and stay.
+- `ClubEvent.title_is_custom` / `description_is_custom` stop the sync overwriting; `title` and
+  `description` still hold what's displayed. **Not override columns:** eight readers would each
+  need to learn a `display_title`.
+- `ClubEventForm` narrows to those two fields when `is_automatic`. Dates, location, cancellation and
+  delete stay with the auction. A flag is set only when the value differs from
+  `club_events.generated_wording`. Reset beats text typed in the same save.
+- `_apply_event_item` ignores Google-side edits to automatic events, on purpose.
+- `Auction.event_needing_custom_wording` drives a banner; dismissal is not in
+  `AUCTION_FIELDS_TO_CLONE`.
+- `Club.events_website_views` counts events-embed renders on the club, not per row.
+- No per-event "add to my calendar" link on the club page.

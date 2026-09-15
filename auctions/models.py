@@ -1,16 +1,12 @@
-"""The database: 80 models, mostly kept in one file because 29 of them form a single dependency
-cycle (Auction, Lot, Club, ClubMember, AuctionTOS, Invoice, UserData, Species, and 21 more) that
-reference each other as class objects rather than "app.Model" strings, so splitting them out means
-converting every reference and risking a broken FK rather than an import error.
+"""The database: 80 models, mostly in one file because 29 of them form a single dependency cycle
+(Auction, Lot, Club, ClubMember, AuctionTOS, Invoice, UserData, Species, and 21 more) referenced as
+class objects, so splitting means converting every reference and risking a broken FK.
 
-Roughly in file order: site furniture (BlogPost, Location, GeneralInterest, FAQ, Category); Club and
-what hangs off it (ClubMember, ClubDiscordRole, ClubHistory, ClubEvent, ClubAnnouncement, ClubMoney,
-BAP); API keys (HashedAPIKey, ClubAPIKey, UserAPIKey); the auction cycle itself (Auction, AuctionTOS,
-PickupLocation, Lot, Bid, Invoice); Species; and the rest (UserData, Watch, PageView,
-ChatSubscription, ads, speakers, volunteers, printing, mobile, voice).
+Roughly in order: site furniture; Club and what hangs off it; API keys; the auction cycle (Auction,
+AuctionTOS, PickupLocation, Lot, Bid, Invoice); Species; then UserData, Watch, PageView, ads,
+speakers, volunteers, printing, mobile, voice.
 
-PageView is written on nearly every request. A `.delay()` from a signal must go inside
-transaction.on_commit -- a post_delete fires inside Django's delete transaction.
+A `.delay()` from a signal must go inside transaction.on_commit.
 """
 
 import datetime
@@ -83,11 +79,7 @@ from .helper_functions import bin_data, get_currency_symbol
 from .html_sanitize import sanitize_summernote_html
 from .model_caching import CachedPropertiesMixin, InvalidatesRelatedCache
 
-# The moderation models live in their own module rather than among the other eighty here: they are
-# a self-contained feature and nothing else in this file touches them, so they are quicker to read
-# and to change on their own.  Imported so `from auctions.models import ContentReport` keeps
-# working and so Django sees them at app load. They name their foreign keys as strings, so the
-# import is one-way and there is no cycle.
+# Moderation models live in their own module (string FKs, so no cycle); imported for Django and callers.
 from .moderation_models import (  # noqa: F401
     ContentReport,
     CopyrightNotice,
@@ -98,9 +90,8 @@ logger = logging.getLogger(__name__)
 
 CUSTOM_DROPDOWN_MAX_LENGTH = 15
 
-# The privacy policy is a BlogPost (seeded and kept current by migrations) rather than a template,
-# so it can be edited without a deploy. Both /privacy/ and /blog/privacy/ render this slug, and
-# /api/mobile/config/ hands its path to the app, which is required to link it from sign-up.
+# The privacy policy is a BlogPost so it can be edited without a deploy; /privacy/, /blog/privacy/
+# and the app's sign-up link all use this slug.
 PRIVACY_POLICY_SLUG = "privacy"
 
 
@@ -148,8 +139,7 @@ def add_price_info(qs):
                 ),
                 When(donation=True, then=Value(Decimal(0))),
                 When(
-                    # buy_now_used stays active=True until the endauctions cron; credit the seller
-                    # immediately or the sale price books entirely to the club until the cron runs.
+                    # buy_now_used lots stay active until endauctions; credit the seller now.
                     Q(winning_price__isnull=False) & (Q(active=False) | Q(buy_now_used=True)),
                     then=(
                         (
@@ -239,7 +229,7 @@ def find_image(name, user, auction):
         lot_number__auction__created_by__pk__in=auction.auction_admins_pks,
     ).order_by("-lot_number__date_posted")
     if user:
-        # user's own image first, then most recent overall, via ORDER BY instead of two queries
+        # The user's own image first, then newest, in one ORDER BY.
         qs = qs.annotate(
             not_from_this_user=Case(
                 When(lot_number__user=user, then=Value(0)), default=Value(1), output_field=IntegerField()
@@ -282,7 +272,7 @@ def distance_to(
         if not field_name_pattern.fullmatch(str(field_name)):
             msg = "invalid character passed to distance_to, possible sql injection risk"
             raise TypeError(msg)
-    # Great circle distance formula, CEILING is used to keep people from triangulating locations
+    # CEILING so distances can't be used to triangulate a location.
     gcd_formula = f"CEILING( 6371 * acos(least(greatest( \
         cos(radians({latitude})) * cos(radians({lat_field_name})) \
         * cos(radians({lng_field_name}) - radians({longitude})) + \
@@ -357,11 +347,8 @@ def _pick_unique_membership_number():
 
 
 class CloudflareImageMixin(models.Model):
-    """Mixin for models with an image that can be mirrored to Cloudflare Images.
-
-    cloudflare_image_id is set by migrate_to_cloudflare_images; once set, image URLs come from
-    Cloudflare's CDN. Replacing the image file clears the stale id. Set IMAGE_FIELD_NAME if the
-    field isn't named `image`.
+    """Mixin for models whose image can be mirrored to Cloudflare Images. ``cloudflare_image_id`` is set by
+    migrate_to_cloudflare_images; replacing the file clears it. Set IMAGE_FIELD_NAME if not ``image``.
     """
 
     IMAGE_FIELD_NAME = "image"
@@ -379,7 +366,7 @@ class CloudflareImageMixin(models.Model):
                 and old[self.IMAGE_FIELD_NAME] != getattr(self, self.IMAGE_FIELD_NAME).name
                 and old["cloudflare_image_id"] == self.cloudflare_image_id
             ):
-                # the image file changed but the id didn't: it now points at the old image
+                # New file, old id: clear it.
                 self.cloudflare_image_id = ""
                 if update_fields is not None:
                     kwargs["update_fields"] = set(update_fields) | {"cloudflare_image_id"}
@@ -427,11 +414,7 @@ class ClubQuerySet(models.QuerySet):
     """The one place that knows which clubs this site is willing to name in public."""
 
     def listed(self):
-        """Approved clubs only -- what the map, search, and dropdowns show.
-
-        outreach_stage short of LISTED means found, not published; active is set by hand when a
-        club dissolves. Both are checked here.
-        """
+        """Listed clubs only (active and outreach_stage LISTED): what the map, search and dropdowns show."""
         return self.filter(active=True, outreach_stage=Club.LISTED)
 
 
@@ -606,7 +589,7 @@ class Club(CloudflareImageMixin, models.Model):
     welcome_closing = models.TextField(
         blank=True, default="See you there!\n\nBest wishes,", verbose_name="Welcome email closing text"
     )
-    # Despite the name, covers any next calendar event, not just auctions; see tasks.next_event_fragment.
+    # Covers any next calendar event, not just auctions; see tasks.next_event_fragment.
     welcome_include_auction = models.BooleanField(
         default=True,
         verbose_name="Also include information about the next event",
@@ -780,8 +763,7 @@ class Club(CloudflareImageMixin, models.Model):
     last_bap_recalculation = models.DateTimeField(null=True, blank=True)
     next_bap_recalculation = models.DateTimeField(null=True, blank=True)
 
-    # Mailchimp integration (one-way sync: this site -> the club's own Mailchimp account).
-    # Connected per-club via OAuth; see auctions/mailchimp.py and the Mailchimp*View classes.
+    # Mailchimp: one-way OAuth sync to the club's account (auctions/mailchimp.py).
     mailchimp_access_token = EncryptedCharField(
         max_length=500, blank=True, null=True, help_text="OAuth access token (does not expire)."
     )
@@ -811,8 +793,7 @@ class Club(CloudflareImageMixin, models.Model):
     mailchimp_last_sync = models.DateTimeField(null=True, blank=True)
     mailchimp_last_error = models.TextField(blank=True)
 
-    # Brevo integration (one-way sync to the club's Brevo account); API key pasted in by the admin
-    # since Brevo OAuth is a private program we can't use. See auctions/brevo.py.
+    # Brevo: one-way sync with a pasted API key (Brevo OAuth isn't available). See auctions/brevo.py.
     brevo_api_key = EncryptedCharField(
         max_length=500, blank=True, null=True, help_text="The club's Brevo API v3 key (stored encrypted)."
     )
@@ -855,8 +836,7 @@ class Club(CloudflareImageMixin, models.Model):
     brevo_last_sync = models.DateTimeField(null=True, blank=True)
     brevo_last_error = models.TextField(blank=True)
 
-    # Two-way sync with a secondary calendar this site creates in the club's Google account, via
-    # OAuth. See auctions/google_calendar.py.
+    # Two-way sync with a secondary calendar in the club's Google account (auctions/google_calendar.py).
     google_calendar_refresh_token = EncryptedCharField(
         max_length=500,
         blank=True,
@@ -923,8 +903,7 @@ class Club(CloudflareImageMixin, models.Model):
         ),
     )
 
-    # Whether the events embed is actually on the club's own website (modelled on
-    # ClubAnnouncement.website_views): counts embed renders, never our own club page.
+    # Events embed renders on the club's own site (not our club page).
     events_website_views = models.PositiveIntegerField(
         default=0,
         help_text=(
@@ -941,7 +920,7 @@ class Club(CloudflareImageMixin, models.Model):
         ),
     )
 
-    # Tracks which vendors were asked to donate, who said yes, who needs chasing. See auctions/donations.py.
+    # Donation vendor tracking; see auctions/donations.py.
     enable_donation_tracking = models.BooleanField(
         default=False,
         verbose_name="Enable donation tracking",
@@ -1007,15 +986,12 @@ class Club(CloudflareImageMixin, models.Model):
 
     @property
     def is_listed(self):
-        """Whether this club is published here. The map gate, as a question about one club."""
+        """Whether this club is published (the map gate)."""
         return self.active and self.outreach_stage == self.LISTED
 
     def find_member(self, name="", email="", exclude_pk=None):
-        """ClubMember analogue of Auction.find_user: duplicate check / lookup for a club member.
-
-        Matches by normalized email first, then by exact-or-rhyming name (reusing rhyming_name_q so
-        "Bob Smith" finds "Robert Smith"). Only considers non-deleted members of this club. Returns the
-        oldest matching ClubMember (deterministic) or None.
+        """Duplicate lookup for a club member: normalized email first, then exact or nickname name. Non-deleted
+        members of this club only. Returns the oldest match or None.
         """
         from .filters import rhyming_name_q
 
@@ -1039,17 +1015,17 @@ class Club(CloudflareImageMixin, models.Model):
 
     @property
     def mailchimp_connected(self):
-        """True when this club has an active Mailchimp connection with an audience selected."""
+        """True when Mailchimp is connected with an audience selected."""
         return bool(self.mailchimp_access_token and self.mailchimp_audience_id and self.mailchimp_server_prefix)
 
     @property
     def brevo_connected(self):
-        """True when this club has an active Brevo connection (API key) with a list selected."""
+        """True when Brevo is connected with a list selected."""
         return bool(self.brevo_api_key and self.brevo_list_id)
 
     @property
     def google_calendar_connected(self):
-        """True when this club has authorized Google Calendar and we've provisioned its calendar."""
+        """True when Google Calendar is authorized and the calendar provisioned."""
         return bool(self.google_calendar_refresh_token and self.google_calendar_id)
 
     @property
@@ -1061,49 +1037,40 @@ class Club(CloudflareImageMixin, models.Model):
 
     @property
     def google_calendar_ical_url_candidate(self):
-        """Where this calendar's public iCal feed would be, shared or not.
-
-        Fetched anonymously by google_calendar.is_calendar_public() to check sharing, since the API
-        can't tell us without a scope over all of the admin's calendars.
-        """
+        """Where the public iCal feed would be, shared or not; fetched anonymously to test sharing."""
         if not self.google_calendar_connected:
             return ""
         return f"https://calendar.google.com/calendar/ical/{quote_plus(self.google_calendar_id)}/public/basic.ics"
 
     @property
     def google_calendar_ical_url(self):
-        """Google's public iCal feed for this club's calendar, or empty when not shareable."""
+        """Google's public iCal feed, or "" when not shared."""
         if not self.google_calendar_is_public:
             return ""
         return self.google_calendar_ical_url_candidate
 
     def _own_ical_url(self, domain):
-        """This site's own iCal feed for the club. Every club has one, connected or not."""
+        """This site's own iCal feed for the club."""
         return f"https://{domain}{reverse('club_events_ical', kwargs={'slug': self.slug})}"
 
     def calendar_subscribe_url(self, domain):
-        """The one link to hand a member who wants these events in their own calendar.
-
-        Google's own calendar when the club has shared it (the copy the club actually keeps,
-        up to date even before our pull runs); otherwise our own feed. The fallback uses
-        webcal:// rather than https:// because an https .ics is a one-time download, not a
-        live subscription.
+        """The link to give a member who wants these events in their calendar: the club's shared Google
+        calendar, else our feed as webcal:// (an https .ics is a one-time download).
         """
         if self.google_calendar_public_url:
             return self.google_calendar_public_url
         return re.sub(r"^https?://", "webcal://", self._own_ical_url(domain))
 
     def calendar_feed_url(self, domain):
-        """The raw iCal feed behind calendar_subscribe_url, for anything that reads one."""
+        """The raw iCal feed behind calendar_subscribe_url."""
         return self.google_calendar_ical_url or self._own_ical_url(domain)
 
-    # Days after the last embed render we still call it "installed" -- long enough to survive a
-    # quiet spell between meetings, short enough to notice a removed snippet by next auction.
+    # Days since the last embed render that still count as installed.
     EVENTS_EMBED_ACTIVE_DAYS = 90
 
     @property
     def embeds_events_on_website(self):
-        """True when this club's own website has rendered our events embed recently (not all-time)."""
+        """True when the club's website has rendered our events embed recently."""
         if not self.events_website_views or not self.events_website_last_view:
             return False
         return self.events_website_last_view >= timezone.now() - datetime.timedelta(days=self.EVENTS_EMBED_ACTIVE_DAYS)
@@ -1120,7 +1087,7 @@ class Club(CloudflareImageMixin, models.Model):
 
     def save(self, *args, **kwargs):
         if not self.abbreviation and self.name:
-            # club_matching owns the rule so is_hand_written() can recognise its own output.
+            # club_matching owns the rule, so is_hand_written() recognises its output.
             self.abbreviation = derived_abbreviation(self.name)
             update_fields = kwargs.get("update_fields")
             if update_fields is not None and "abbreviation" not in update_fields:
@@ -1129,8 +1096,8 @@ class Club(CloudflareImageMixin, models.Model):
         super().save(*args, **kwargs)
 
     def _first_email_member_by_priority(self, specific_permission):
-        """Oldest active member with an email, preferring a non-admin holder of specific_permission
-        over the oldest admin. Returns None if no qualifying member exists.
+        """Oldest active member with an email, preferring a non-admin holder of specific_permission over the
+        oldest admin, or None.
         """
         email_filter = (Q(email__isnull=False) & ~Q(email="")) | (Q(user__email__isnull=False) & ~Q(user__email=""))
         qs = self.members.filter(is_deleted=False).filter(email_filter)
@@ -1172,7 +1139,7 @@ class Club(CloudflareImageMixin, models.Model):
 
     @property
     def contact_routing_email(self):
-        """Return the routing email for club contact messages, or None to drop the message."""
+        """The routing email for club contact messages, or None to drop them."""
         recipient = self.contact_email_recipient
         if recipient and recipient.routing_email:
             return recipient.routing_email
@@ -1180,10 +1147,8 @@ class Club(CloudflareImageMixin, models.Model):
 
     @property
     def donation_email_recipient(self):
-        """The member donation replies are forwarded to, or None to keep them on the site only.
-
-        Unlike the auction/contact addresses this has no fallback: no contact named means replies
-        stay recorded here and are never forwarded to a personal inbox we can't see.
+        """The member donation replies are forwarded to, or None to keep them on the site. No fallback: with
+        nobody named, replies aren't forwarded to an inbox we can't see.
         """
         member = self.donation_email_member
         if (
@@ -1198,7 +1163,7 @@ class Club(CloudflareImageMixin, models.Model):
 
     @property
     def donation_routing_email(self):
-        """Where to forward donation replies, or None to record them without forwarding."""
+        """Where to forward donation replies, or None."""
         recipient = self.donation_email_recipient
         return recipient.routing_email if recipient else None
 
@@ -1222,11 +1187,7 @@ class Club(CloudflareImageMixin, models.Model):
 
     @property
     def sends_donation_email(self):
-        """True when donation emails go out from this site rather than the admin's own mail client.
-
-        Requires routing to actually be enabled, not just selected, or a stale "routed" mode would
-        offer a Send button that can only fail.
-        """
+        """True when donation emails go out from this site (routing must actually be enabled, or Send can only fail)."""
         return (
             self.enable_donation_tracking
             and self.donation_email_mode == self.DONATION_EMAIL_MODE_ROUTED
@@ -1235,8 +1196,7 @@ class Club(CloudflareImageMixin, models.Model):
 
     @property
     def effective_paypal_seller(self):
-        """The PayPalSeller linked to this club, if any (ignores use_site_paypal_account -- check
-        uses_site_paypal separately for that fallback)."""
+        """The club's linked PayPalSeller, if any. Doesn't consider use_site_paypal_account."""
         return getattr(self, "paypal_seller", None)
 
     @property
@@ -1246,7 +1206,7 @@ class Club(CloudflareImageMixin, models.Model):
 
     @property
     def uses_site_paypal(self):
-        """True when this club is configured to use the site's PayPal merchant account."""
+        """True when this club uses the site's PayPal merchant account."""
         return bool(
             self.use_site_paypal_account
             and getattr(settings, "PAYPAL_CLIENT_ID", "")
@@ -1255,20 +1215,19 @@ class Club(CloudflareImageMixin, models.Model):
 
     @property
     def uses_own_paypal_credentials(self):
-        """True when this club pays through its own PayPal app credentials (non-OAuth mode)."""
+        """True when this club pays through its own PayPal app credentials (non-OAuth)."""
         return bool(self.allow_non_oauth_paypal and self.paypal_client_id and self.paypal_secret)
 
     @property
     def paypal_credentials(self):
-        """(client_id, secret) for this club's own PayPal app, or None. Non-OAuth mode only; used
-        in place of the site's PAYPAL_CLIENT_ID/PAYPAL_SECRET."""
+        """(client_id, secret) for the club's own PayPal app, or None."""
         if self.uses_own_paypal_credentials:
             return self.paypal_client_id, self.paypal_secret
         return None
 
     @property
     def can_accept_paypal(self):
-        """True when this club has any PayPal route configured (linked seller, site account, or own credentials)."""
+        """True when any PayPal route is configured."""
         if self.uses_site_paypal or self.uses_own_paypal_credentials:
             return True
         seller = self.effective_paypal_seller
@@ -1282,9 +1241,9 @@ class Club(CloudflareImageMixin, models.Model):
 
     @property
     def supports_paypal_subscriptions(self):
-        """True when membership subscription webhooks can be verified: needs the club's own REST
-        app (non-OAuth) or the site account. An OAuth-linked club exposes no usable client secret,
-        so verification always fails there and the feature is hidden."""
+        """True when membership subscription webhooks can be verified: site account or own credentials. An
+        OAuth-linked club has no usable secret.
+        """
         return self.uses_site_paypal or self.uses_own_paypal_credentials
 
     @property
@@ -1322,7 +1281,7 @@ class ClubDiscordRole(models.Model):
 
 
 class ContactRecord(models.Model):
-    """Abstract base class for contact records (shared between AuctionTOS and ClubMember)"""
+    """Abstract contact record shared by AuctionTOS and ClubMember."""
 
     email = models.EmailField(null=True, blank=True, db_index=True)
     EMAIL_ADDRESS_STATUSES = (
@@ -1352,14 +1311,10 @@ class ContactRecord(models.Model):
 
 
 def _generate_unique_bidder_number(*, is_taken, preferred=None, phone=None, address=None, last_used=None):
-    """Generate a bidder number from phone/address/preferred, retrying on collision.
+    """A bidder number, retrying on collision. ``is_taken(number)`` checks the caller's scope.
 
-    Shared by AuctionTOS.save() (auction-scoped) and ClubMember.generate_bidder_number()
-    (club-scoped); `is_taken(number)` checks uniqueness in the caller's scope.
-
-    Reuses `last_used` if free; else seeds from the last 3 digits of phone, then address, then
-    `preferred`, skipping 13-19 (look like ages); tries up to 6000 random ints in [1, 999] before
-    giving up and returning "ERROR".
+    Reuses ``last_used`` if free; else seeds from the last 3 digits of phone, address, then
+    ``preferred``, skipping 13-19 (look like ages); up to 6000 random tries in [1, 999], else "ERROR".
     """
     dont_use_these = ["13", "14", "15", "16", "17", "18", "19"]
     if last_used and not is_taken(last_used):
@@ -1527,8 +1482,7 @@ class ClubMember(CachedPropertiesMixin, ContactRecord):
     lat = models.FloatField(null=True, blank=True, help_text="Latitude geocoded from member's address")
     lng = models.FloatField(null=True, blank=True, help_text="Longitude geocoded from member's address")
     last_club_activity = models.DateTimeField(null=True, blank=True, help_text="Last recorded activity in this club")
-    # Denormalized from UserData.total_sold/total_spent (which loop over every lot) for Mailchimp
-    # power-seller/buyer tags and member-list filtering.
+    # Denormalized from UserData totals (which loop every lot) for Mailchimp tags and filtering.
     cached_total_sold = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
     cached_total_bought = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
     MAILCHIMP_STATUS_CHOICES = (
@@ -1551,7 +1505,7 @@ class ClubMember(CachedPropertiesMixin, ContactRecord):
         max_length=50, blank=True, help_text="Mailchimp internal web_id, used to build the 'View in Mailchimp' link."
     )
     mailchimp_last_synced = models.DateTimeField(null=True, blank=True)
-    # Brevo mirrors the Mailchimp status bookkeeping above (see auctions/brevo.py).
+    # Brevo status bookkeeping, mirroring Mailchimp's.
     BREVO_STATUS_CHOICES = (
         ("", "Not synced"),
         ("subscribed", "Subscribed"),
@@ -1571,13 +1525,10 @@ class ClubMember(CachedPropertiesMixin, ContactRecord):
         max_length=50, blank=True, help_text="Brevo internal contact id, used to build the 'View in Brevo' link."
     )
     brevo_last_synced = models.DateTimeField(null=True, blank=True)
-    # Apple Wallet (PassKit web service) bookkeeping.  The auth token is the shared
-    # secret baked into the member's .pkpass; devices present it as
-    # "Authorization: ApplePass <token>" when talking to the web service.  Generated
-    # lazily the first time a pass is built (see apple_wallet.ensure_apple_pass_auth_token).
+    # Apple Wallet: the shared secret baked into the .pkpass (``Authorization: ApplePass <token>``),
+    # generated when a pass is first built.
     apple_pass_auth_token = models.CharField(max_length=64, blank=True, default="", editable=False)
-    # Bumped whenever pass-visible content changes; drives Last-Modified / If-Modified-Since
-    # on pass delivery and the passesUpdatedSince filter on the device registration list.
+    # Bumped when pass content changes; drives Last-Modified and passesUpdatedSince.
     apple_pass_updated = models.DateTimeField(default=timezone.now, editable=False)
 
     @property
@@ -1619,8 +1570,7 @@ class ClubMember(CachedPropertiesMixin, ContactRecord):
 
     @property
     def is_paid_member(self) -> bool:
-        """True when the member's dues are current. Single source of truth -- every UI gate/wallet
-        check should call this instead of re-deriving the logic."""
+        """True when dues are current. The single source of truth for UI gates and wallet passes."""
         today = timezone.now().date()
         if self.membership_expiration_date:
             return self.membership_expiration_date >= today
@@ -1632,8 +1582,9 @@ class ClubMember(CachedPropertiesMixin, ContactRecord):
 
     @property
     def effective_expiration_date(self):
-        """The date this membership is (or was) valid through, or None if the club doesn't run
-        memberships or there's no payment on record. Mirrors is_paid_member's logic."""
+        """The date this membership is valid through, or None (no memberships or no payment). Mirrors
+        is_paid_member.
+        """
         if self.club.membership_system == "none":
             return None
         if self.membership_expiration_date:
@@ -1647,9 +1598,8 @@ class ClubMember(CachedPropertiesMixin, ContactRecord):
 
     @property
     def wallet_status_text(self):
-        """Short membership-status line for Google/Apple Wallet passes, or None if the club runs no
-        memberships. "Expired 1 Jan 2025" / "Valid through 1 Jan 2025" as text, never a programmatic
-        wallet expiration -- that auto-archives the card off the device, which we never want.
+        """Wallet pass status line ("Expired 1 Jan 2025" / "Valid through 1 Jan 2025"), or None. Text only,
+        never a programmatic wallet expiry, which would archive the card.
         """
         if self.club.membership_system == "none":
             return None
@@ -1669,8 +1619,8 @@ class ClubMember(CachedPropertiesMixin, ContactRecord):
 
     @property
     def wallet_header_text(self):
-        """Pass-type line for wallet passes. Clubs that charge dues get a live "Active Paid
-        Membership"/"Unpaid Membership"; free or memberless clubs keep the static "Membership".
+        """Wallet pass type line: "Active Paid Membership"/"Unpaid Membership" for clubs with dues, else
+        "Membership".
         """
         if self.club.membership_system != "none" and (self.club.membership_annual_fee or 0) > 0:
             return "Active Paid Membership" if self.is_paid_member else "Unpaid Membership"
@@ -1678,10 +1628,8 @@ class ClubMember(CachedPropertiesMixin, ContactRecord):
 
     @cached_property
     def discord_role(self):
-        """The ClubDiscordRole that should be assigned to this member.
-
-        Order: manual override (if not auto-managed) > None if no server/roles configured > unpaid
-        role if expired > highest BAP/HAP threshold met > paid role > unpaid role as catch-all > None.
+        """The ClubDiscordRole this member should have: manual override > None if unconfigured > unpaid role
+        if expired > highest BAP/HAP threshold met > paid role > unpaid role > None.
         """
         if not self.discord_role_auto_managed:
             return self.discord_role_override
@@ -1732,14 +1680,11 @@ class ClubMember(CachedPropertiesMixin, ContactRecord):
         if paid_role:
             return paid_role
 
-        # Fall back to unpaid role so every member gets *some* role even with incomplete config.
+        # Every member gets some role even with incomplete config.
         return next((r for r in roles_qs if r.is_unpaid_role), None)
 
     def maybe_assign_discord_role(self):
-        """Compute the correct Discord role, remove stale club roles, then assign the new one.
-
-        Ensures a member holds at most one auto-managed Discord role at a time.
-        """
+        """Assign the correct Discord role and remove other auto-managed club roles."""
         import requests as _requests
         from django.conf import settings as _settings
 
@@ -1770,7 +1715,7 @@ class ClubMember(CachedPropertiesMixin, ContactRecord):
 
         if role:
             if not role.bot_can_manage:
-                # record the target so the daily task doesn't re-trigger, even though we can't assign it
+                # Recorded even if unassignable, so the daily task doesn't retry forever.
                 if role_sync_succeeded:
                     ClubMember.objects.filter(pk=self.pk).update(last_discord_role_assigned=role)
                 return
@@ -1798,7 +1743,7 @@ class ClubMember(CachedPropertiesMixin, ContactRecord):
 
     @cached_property
     def wallet_link(self):
-        """Absolute URL for adding this membership to Google/Apple Wallet (UUID-keyed)."""
+        """Absolute URL for adding this membership to a wallet."""
         from django.contrib.sites.models import Site
 
         try:
@@ -1811,7 +1756,7 @@ class ClubMember(CachedPropertiesMixin, ContactRecord):
 
     @cached_property
     def simple_membership_link(self):
-        """Absolute URL for the member-number page (shows number, expiration, payment)."""
+        """Absolute URL for the member-number page."""
         from django.contrib.sites.models import Site
         from django.urls import reverse
 
@@ -1829,7 +1774,7 @@ class ClubMember(CachedPropertiesMixin, ContactRecord):
 
     @cached_property
     def barcode_image_link(self):
-        """Absolute URL to an SVG barcode for this member's membership number, or "" if unassigned."""
+        """Absolute URL to an SVG barcode for the membership number, or ""."""
         if not self.membership_number:
             return ""
         from django.contrib.sites.models import Site
@@ -1848,8 +1793,7 @@ class ClubMember(CachedPropertiesMixin, ContactRecord):
 
     @cached_property
     def barcode_image_link_png(self):
-        """Absolute URL to a PNG barcode (renders better than SVG in email clients like Gmail),
-        or "" if the member has no number assigned."""
+        """Absolute URL to a PNG barcode (better in email clients), or ""."""
         if not self.membership_number:
             return ""
         from django.contrib.sites.models import Site
@@ -1899,7 +1843,7 @@ class ClubMember(CachedPropertiesMixin, ContactRecord):
         d = self._distance_to_club_miles()
         return d is not None and d >= 30
 
-    # Full tag vocabulary in one place: shared by the sync (removes inactive tags) and segment creation.
+    # The full tag vocabulary, shared by sync (removes inactive tags) and segment creation.
     MAILCHIMP_TAGS = (
         "expiring-soon",
         "expired",
@@ -1960,7 +1904,7 @@ class ClubMember(CachedPropertiesMixin, ContactRecord):
         cutoff = timezone.now() - datetime.timedelta(days=182)
         if self.last_club_activity:
             return self.last_club_activity < cutoff
-        # No activity ever recorded: only "inactive" once they've been around past the window.
+        # No activity ever: inactive only once past the window.
         return bool(self.createdon and self.createdon < cutoff)
 
     @cached_property
@@ -1980,9 +1924,8 @@ class ClubMember(CachedPropertiesMixin, ContactRecord):
         return bool(self.cached_total_bought and self.cached_total_bought > self.POWER_USER_THRESHOLD)
 
     def refresh_cached_totals(self, save=True):
-        """Recompute the (DB-expensive) site-wide sold/bought totals from the linked user.
-
-        Returns True if either cached value changed. save=True persists just those two columns.
+        """Recompute the site-wide sold/bought totals from the linked user. True if either changed; save=True
+        persists just those columns.
         """
         if not self.user_id:
             return False
@@ -1999,8 +1942,7 @@ class ClubMember(CachedPropertiesMixin, ContactRecord):
         return changed
 
     def compute_mailchimp_tags(self):
-        """{tag_name: is_active} for the full tag vocabulary (every tag, regardless of state, so
-        the sync can add active ones and remove inactive ones)."""
+        """{tag_name: is_active} for every tag, so sync can add and remove."""
         return {
             "expiring-soon": self.is_expiring_soon,
             "expired": self.is_expired,
@@ -2053,8 +1995,7 @@ class ClubMember(CachedPropertiesMixin, ContactRecord):
     def save(self, *args, **kwargs):
         if self.email:
             self.email = normalize_email(self.email)
-        # Belt-and-suspenders: repick membership_number before INSERT if the random default
-        # collides, so callers don't have to catch IntegrityError from the DB's unique constraint.
+        # Repick a colliding random membership_number before INSERT.
         _discord_watched = ("discord_id", "discord_role_override_id", "discord_role_auto_managed")
         _is_new = not self.pk
         if not _is_new:
@@ -2128,8 +2069,8 @@ class ClubMember(CachedPropertiesMixin, ContactRecord):
                 if existing_tos:
                     self.email_address_status = existing_tos.email_address_status
         if self.is_deleted:
-            # Clear duplicate links both ways; our own column needs an explicit update() since
-            # callers soft-delete with update_fields=["is_deleted"] and the save below would skip it.
+            # Clear duplicate links both ways; our own column needs update() since callers soft-delete
+            # with update_fields=["is_deleted"].
             if self.possible_duplicate_id:
                 ClubMember.objects.filter(pk=self.possible_duplicate_id).update(possible_duplicate=None)
                 ClubMember.objects.filter(pk=self.pk).update(possible_duplicate=None)
@@ -2143,12 +2084,12 @@ class ClubMember(CachedPropertiesMixin, ContactRecord):
         if _discord_changed or (_is_new and self.discord_id):
             self.maybe_assign_discord_role()
         if self.name:
-            # Exact-or-rhyming name match (parity with AuctionTOS.save), e.g. "Bob" flags "Robert".
+            # Exact or nickname name match, as AuctionTOS.save.
             duplicate = self.club.find_member(name=self.name, exclude_pk=self.pk)
             if duplicate:
                 ClubMember.objects.filter(pk=self.pk).update(possible_duplicate=duplicate.pk)
                 ClubMember.objects.filter(pk=duplicate.pk).update(possible_duplicate=self.pk)
-                # keep in sync with update() above, or the caller's next save() overwrites it
+                # Keep in sync with update() above.
                 self.possible_duplicate = duplicate
             else:
                 if self.possible_duplicate_id:
@@ -2157,10 +2098,7 @@ class ClubMember(CachedPropertiesMixin, ContactRecord):
                 self.possible_duplicate = None
 
     def generate_bidder_number(self, save=True):
-        """Assign and return a unique bidder_number scoped to this member's club.
-
-        Does not write to userdata.preferred_bidder_number (club-scoped numbers aren't a global hint).
-        """
+        """Assign and return a unique club-scoped bidder_number. Doesn't write userdata.preferred_bidder_number."""
         preferred = None
         if self.user_id:
             try:
@@ -2181,11 +2119,7 @@ class ClubMember(CachedPropertiesMixin, ContactRecord):
 
 
 class AppleDeviceRegistration(models.Model):
-    """A device holding a member's Apple Wallet pass (PassKit web service).
-
-    push_token is the APNs token notified when pass content changes, so the device re-fetches
-    the latest .pkpass.
-    """
+    """A device holding a member's Apple Wallet pass; push_token is notified when the pass changes."""
 
     member = models.ForeignKey(ClubMember, on_delete=models.CASCADE, related_name="apple_device_registrations")
     device_library_identifier = models.CharField(max_length=255, db_index=True)
@@ -2209,7 +2143,7 @@ class ClubHistory(models.Model):
     club = models.ForeignKey(Club, on_delete=models.CASCADE, related_name="history")
     user = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL)
     action = models.CharField(max_length=800, blank=True, null=True)
-    # See AuctionHistory.changed_fields; written by auctions.history.record_club_history.
+    # See AuctionHistory.changed_fields.
     changed_fields = models.JSONField(default=dict, blank=True)
     timestamp = models.DateTimeField(auto_now_add=True)
     applies_to = models.CharField(
@@ -2238,10 +2172,8 @@ class ClubHistory(models.Model):
 
 
 def _default_donation_routing_key():
-    """Random 10-digit key identifying a vendor in `<club-slug>-donations-<key>@<domain>`.
-
-    Digits only (survives retyping by hand) and globally unique, not per-club, so an inbound
-    message stays tied to one vendor even if the club's slug changes later.
+    """Random 10-digit key in ``<club-slug>-donations-<key>@<domain>``. Digits only, globally unique, so a
+    reply stays tied to one vendor if the slug changes.
     """
     for _attempt in range(20):
         key = str(secrets.randbelow(9_000_000_000) + 1_000_000_000)
@@ -2251,11 +2183,8 @@ def _default_donation_routing_key():
 
 
 class DonationUnsubscribe(models.Model):
-    """A vendor who asked never to be contacted about donations again.
-
-    Keyed on email and global rather than per-club or per-vendor-row: re-adding them under a new
-    vendor record must not restart the mail. No un-unsubscribe path in the UI, on purpose -- see
-    DonationVendor.can_be_contacted.
+    """A vendor who asked never to be contacted about donations. Keyed on email site-wide, so re-adding
+    them doesn't restart mail. No UI undo, on purpose.
     """
 
     email = models.CharField(max_length=255, unique=True, db_index=True)
@@ -2303,8 +2232,7 @@ class DonationVendor(models.Model):
         (STATUS_NOT_INTERESTED, "Not interested"),
         (STATUS_DO_NOT_CONTACT, "Do not contact"),
     )
-    # Statuses the LLM may set on reply. "Received" needs a human; "Do not contact" only comes
-    # from the vendor clicking unsubscribe.
+    # Statuses the LLM may set. "Received" needs a human; "Do not contact" only via unsubscribe.
     LLM_ASSIGNABLE_STATUSES = (STATUS_INTERESTED, STATUS_PROMISED, STATUS_NOT_INTERESTED)
 
     club = models.ForeignKey(Club, on_delete=models.CASCADE, related_name="donation_vendors")
@@ -2346,10 +2274,8 @@ class DonationVendor(models.Model):
 
     class Meta:
         ordering = ["name"]
-        # No DB-level uniqueness on (club, email): it would have to be conditional to allow the
-        # several blank-email vendors a club may legitimately have, and MariaDB silently declines
-        # to create conditional unique indexes (W036) -- leaving a constraint that looks enforced
-        # and isn't. Duplicate addresses are caught in DonationVendorForm.clean_email instead.
+        # No DB uniqueness on (club, email): it would need to be conditional (blank emails), and
+        # MariaDB silently skips those (W036). DonationVendorForm.clean_email checks instead.
         indexes = [models.Index(fields=["club", "status"])]
 
     def __str__(self):
@@ -2357,8 +2283,7 @@ class DonationVendor(models.Model):
 
     def save(self, *args, **kwargs):
         self.email = normalize_email(self.email)
-        # A vendor who unsubscribed anywhere on this site is unsubscribed here too, even though
-        # this row may have been typed in by a different club that never heard about it.
+        # Unsubscribed anywhere on the site is unsubscribed here.
         if self.email and not self.unsubscribed and DonationUnsubscribe.is_unsubscribed(self.email):
             self.unsubscribed = True
             if "update_fields" in kwargs and kwargs["update_fields"] is not None:
@@ -2380,7 +2305,7 @@ class DonationVendor(models.Model):
 
     @property
     def cannot_contact_reason(self):
-        """Why the Contact button is unavailable, or "" when it isn't. Shown as a tooltip."""
+        """Why the Contact button is unavailable, or "". Shown as a tooltip."""
         if not self.email:
             return "Add an email address for this vendor first"
         if self.unsubscribed:
@@ -2393,7 +2318,7 @@ class DonationVendor(models.Model):
 
     @property
     def reply_to_address(self):
-        """The per-vendor address their replies come back to, or None when routing is off."""
+        """The per-vendor reply address, or None when routing is off."""
         return build_routed_sender_address(f"{self.club.slug}-donations-{self.routing_key}")
 
     @property
@@ -2412,10 +2337,8 @@ class DonationVendor(models.Model):
 
 
 class DonationEmail(models.Model):
-    """One message to or from a donation vendor: a record of the conversation, not a mail client.
-
-    Outgoing rows are written when an admin sends/copies a request; incoming rows come from the
-    inbound mail webhook. Body is stored as plain text with images stripped.
+    """One message to or from a donation vendor: a record, not a mail client. Outgoing rows on send or copy;
+    incoming from the inbound webhook. Plain text, images stripped.
     """
 
     DIRECTION_INCOMING = "in"
@@ -2463,12 +2386,11 @@ class DonationEmail(models.Model):
 
 
 class ClubEvent(models.Model):
-    """Something on a club's calendar: a meeting, a swap, a talk, or an auction.
+    """Something on a club's calendar: meeting, swap, talk, or auction.
 
-    Single source of truth behind the club page's event list, Google Calendar, and Discord
-    scheduled events. Events arrive as `manual` (typed in), `auction` (mirrored from a promoted
-    Auction, never hand-editable, see sync_auction_events), or `google` (pulled from the club's
-    Google Calendar). Pushing to Google/Discord is idempotent via google_event_id/discord_event_id.
+    The source behind the club page list, Google Calendar and Discord events. ``manual`` (typed),
+    ``auction`` / ``pickup`` (generated, not hand-editable), or ``google`` (pulled). Pushes are
+    idempotent via google_event_id/discord_event_id.
     """
 
     SOURCE_MANUAL = "manual"
@@ -2481,7 +2403,7 @@ class ClubEvent(models.Model):
         (SOURCE_PICKUP, "From an auction pickup time"),
         (SOURCE_GOOGLE, "From Google Calendar"),
     )
-    # Sources that are generated from something else and so can't be hand-edited.
+    # Generated sources, not hand-editable.
     AUTOMATIC_SOURCES = (SOURCE_AUCTION, SOURCE_PICKUP)
 
     club = models.ForeignKey(Club, on_delete=models.CASCADE, related_name="events")
@@ -2582,12 +2504,8 @@ class ClubEvent(models.Model):
             models.Index(fields=["club", "is_deleted", "date_start"]),
         ]
         constraints = [
-            # One mirrored event per auction, and one per pickup slot, so two concurrent syncs
-            # can't double up. Only the relevant source sets these columns at all, and MariaDB
-            # lets a unique index hold any number of NULLs (in a composite index, a NULL in any
-            # column exempts the row), so manual and Google-sourced events are unaffected. A
-            # conditional constraint would say this more explicitly, but MariaDB silently drops
-            # those — see models.W036.
+            # One mirrored event per auction and per pickup slot. NULLs are exempt in MariaDB unique
+            # indexes, so other sources are unaffected. Not conditional constraints, which MariaDB drops (W036).
             models.UniqueConstraint(fields=["auction"], name="unique_auction_event"),
             models.UniqueConstraint(fields=["pickup_location", "pickup_slot"], name="unique_pickup_event"),
         ]
@@ -2596,7 +2514,7 @@ class ClubEvent(models.Model):
         return self.title
 
     def get_absolute_url(self):
-        """Auction and pickup events link to the auction; everything else to the club page."""
+        """Auction and pickup events link to the auction; others to the club page."""
         related_auction = self.related_auction
         if related_auction:
             return related_auction.get_absolute_url()
@@ -2604,7 +2522,7 @@ class ClubEvent(models.Model):
 
     @property
     def related_auction(self):
-        """The auction behind this event, whether it's the bidding window or a pickup time."""
+        """The auction behind this event, bidding window or pickup."""
         if self.auction_id:
             return self.auction
         if self.pickup_location_id and self.pickup_location:
@@ -2613,35 +2531,32 @@ class ClubEvent(models.Model):
 
     @property
     def is_editable(self):
-        """False for a generated event: dates, location and existence belong to the auction.
-        Wording doesn't -- see details_are_editable."""
+        """False for a generated event: dates, location and existence belong to the auction. Wording doesn't
+        (details_are_editable).
+        """
         return self.source not in self.AUTOMATIC_SOURCES
 
     @property
     def details_are_editable(self):
-        """Title and description can always be typed by hand, generated event or not (deliberately
-        narrower than is_editable, not a replacement for it)."""
+        """Title and description are always editable, generated or not."""
         return True
 
     @property
     def is_automatic(self):
-        """True when this event is generated and kept in step by the site, not typed in."""
+        """True when the site generates this event."""
         return self.source in self.AUTOMATIC_SOURCES
 
     @property
     def effective_end(self):
-        """A usable end time. Google and Discord both require one, and admins often leave it blank."""
+        """A usable end time; Google and Discord need one."""
         if self.date_end and self.date_end > self.date_start:
             return self.date_end
         return self.date_start + datetime.timedelta(hours=2)
 
     @property
     def when_display(self):
-        """One line saying when this event is, in the viewer's timezone.
-
-        The end is spelled out only when it adds information: same-day shows just the end time,
-        multi-day repeats the date. Exists for online auctions, which run for days. all_day events
-        store an exclusive end (Google/iCal convention), so the last day shown is date_end minus one.
+        """One line saying when, in the viewer's timezone. The end is shown only when informative. all_day
+        events store an exclusive end, so the last day shown is date_end minus one.
         """
         from django.template.defaultfilters import date as date_filter
 
@@ -2661,7 +2576,7 @@ class ClubEvent(models.Model):
 
     @property
     def is_recurring(self):
-        """True for a series. One row stands for all of it — see auctions/recurrence.py."""
+        """True for a series; one row stands for all of it (auctions/recurrence.py)."""
         return bool(self.recurrence and self.recurrence_start)
 
     @property
@@ -2672,7 +2587,7 @@ class ClubEvent(models.Model):
 
     @property
     def recurrence_summary(self):
-        """ "Repeats monthly on the first Tuesday", for the club page. Empty when it doesn't."""
+        """ "Repeats monthly on the first Tuesday", or ""."""
         from auctions import recurrence
 
         return recurrence.describe(self.recurrence_lines) if self.is_recurring else ""
@@ -2683,7 +2598,7 @@ class ClubEvent(models.Model):
         return self.effective_end - self.date_start
 
     def next_occurrence(self, now=None):
-        """When this event next happens (or is happening). None when the rule can't be read."""
+        """When this event next happens, or None if the rule can't be read."""
         from auctions import recurrence
 
         if not self.is_recurring:
@@ -2693,8 +2608,7 @@ class ClubEvent(models.Model):
         )
 
     def refresh_occurrence(self):
-        """Move a series to the occurrence on now (or next), so date_start never goes stale. True
-        when it moved."""
+        """Move a series to its current or next occurrence. True when it moved."""
         if not self.is_recurring:
             return False
         occurrence = self.next_occurrence()
@@ -2703,7 +2617,7 @@ class ClubEvent(models.Model):
         length = self.occurrence_length
         self.date_start = occurrence
         self.date_end = occurrence + length
-        # Google generates the series itself; Discord only ever holds one date.
+        # Google generates the series itself; Discord holds one date.
         self.needs_discord_sync = True
         self.save(update_fields=["date_start", "date_end", "needs_discord_sync"])
         return True
@@ -2714,18 +2628,15 @@ class ClubEvent(models.Model):
 
     @property
     def map_url(self):
-        """Google Maps search link for the location, or empty when there's no location."""
+        """Google Maps search link for the location, or ""."""
         if not self.location:
             return ""
         return "https://www.google.com/maps/search/?api=1&query=" + quote_plus(self.location)
 
 
 class ClubAnnouncement(models.Model):
-    """One short message a club sent to its members, and where it went.
-
-    Not an event, blog post, or email campaign -- a sentence or two pushed to wherever members
-    look. Records both the text and which channels were picked at send time, so disconnecting
-    Discord later doesn't rewrite history into "never went to Discord".
+    """One short message a club sent to its members, and the channels chosen at send time (so disconnecting
+    a channel later doesn't rewrite history).
     """
 
     club = models.ForeignKey(Club, on_delete=models.CASCADE, related_name="announcements")
@@ -2761,9 +2672,7 @@ class ClubAnnouncement(models.Model):
     send_to_discord = models.BooleanField(default=False)
     send_to_push = models.BooleanField(default=False)
     show_on_website = models.BooleanField(default=True)
-    # Two columns (not one "email" flag) record which provider carried it. Only one may be set --
-    # a club with both connected has the same members on both, so ticking both would double-mail.
-    # ClubAnnouncementForm.clean refuses it.
+    # Two flags record which provider carried it; only one may be set (ClubAnnouncementForm.clean).
     send_to_mailchimp = models.BooleanField(default=False)
     send_to_brevo = models.BooleanField(default=False)
 
@@ -2818,16 +2727,11 @@ class ClubAnnouncement(models.Model):
 
     @property
     def email_subject(self):
-        """Fixed as "<Club> announcement" -- a free-text subject box just duplicated the one-line
-        body. The `subject` column is legacy; nothing reads it anymore."""
+        """Always "<Club> announcement". The ``subject`` column is legacy and unread."""
         return f"{self.club.name} announcement"
 
     def save(self, *args, **kwargs):
-        """An announcement with no schedule is sent (sent_at stamped) the moment it's created.
-
-        sent_at is what everything public filters on, so this stamps it here rather than relying
-        on every call site to remember. Skipped when scheduled_for is set.
-        """
+        """An unscheduled announcement is stamped sent on creation, since ``sent_at`` gates everything public."""
         if self.sent_at is None and self.scheduled_for is None:
             self.sent_at = timezone.now()
             update_fields = kwargs.get("update_fields")
@@ -2837,8 +2741,7 @@ class ClubAnnouncement(models.Model):
 
     @property
     def is_in_grace_period(self):
-        """Waiting out the retract window rather than a date the club picked -- told apart by the
-        gap between created_at and scheduled_for."""
+        """In the retract window rather than a chosen time, told apart by created_at vs scheduled_for."""
         if self.sent_at or not self.scheduled_for or not self.created_at:
             return False
         from auctions.announcements import GRACE_SECONDS
@@ -2847,28 +2750,23 @@ class ClubAnnouncement(models.Model):
 
     @property
     def is_scheduled(self):
-        """Waiting for its time. Nothing public may show one -- see latest_for_website."""
+        """Waiting for its time; nothing public may show it."""
         return self.sent_at is None and self.scheduled_for is not None
 
     @property
     def sent_by_email(self):
-        """Whether either email provider actually accepted a campaign for this announcement."""
+        """Whether a provider accepted an email campaign for it."""
         return bool(self.mailchimp_campaign_id or self.brevo_campaign_id)
 
 
 class HashedAPIKey(models.Model):
-    """A key shown once and stored as a salted hash, with a lookup prefix in front of it.
-
-    Shared by ClubAPIKey and UserAPIKey so "issue a token and check it later" is implemented once.
-    The raw key is `<prefix>.<secret>`: prefix is indexed and identifies the row, secret is
-    verified against key_hash with Django's password hasher and never stored raw.
-
-    A subclass sets key_prefix and may narrow is_usable.
+    """A key shown once and stored as a salted hash behind a lookup prefix, shared by ClubAPIKey and
+    UserAPIKey. The raw key is ``<prefix>.<secret>``. Subclasses set key_prefix and may narrow is_usable.
     """
 
-    # Distinct per subclass so a key pasted into the wrong box, or a log line, says which kind it is.
+    # Distinct per subclass, so a stray key says what kind it is.
     key_prefix = "k_"
-    # Passed to select_related when verifying, since the caller always wants the owner.
+    # select_related when verifying.
     verify_select_related: tuple[str, ...] = ()
 
     class Meta:
@@ -2876,12 +2774,12 @@ class HashedAPIKey(models.Model):
 
     @property
     def is_usable(self):
-        """Whether this key may be used right now. Subclasses may add reasons it may not."""
+        """Whether this key may be used now."""
         return self.is_active
 
     @classmethod
     def generate(cls):
-        """Return ``(raw_key, prefix, key_hash)``. Store the last two; show the first once."""
+        """``(raw_key, prefix, key_hash)``. Store the last two; show the first once."""
         import secrets
 
         prefix = cls.key_prefix + secrets.token_hex(4)
@@ -2892,7 +2790,7 @@ class HashedAPIKey(models.Model):
 
     @classmethod
     def verify(cls, raw_key):
-        """Return the key matching ``raw_key``, or ``None``. Never raises on rubbish input."""
+        """The key matching ``raw_key``, or ``None``. Never raises on junk."""
         try:
             prefix, secret = raw_key.split(".", 1)
         except (AttributeError, ValueError):
@@ -2907,7 +2805,7 @@ class HashedAPIKey(models.Model):
 
 
 class ClubAPIKey(HashedAPIKey):
-    """API key scoped to a single Club, used by external services to ingest ClubMember records."""
+    """API key scoped to one Club, for external services."""
 
     key_prefix = "ck_"
     verify_select_related = ("club",)
@@ -2941,8 +2839,7 @@ class ClubAPIKey(HashedAPIKey):
         default=False,
         help_text="Read the lots in this club's auctions, without anything that names a person.",
     )
-    # The one privacy flag: anything naming a person travels in a `private` object that's simply
-    # absent without this, so a key on a public page can't leak a name by being asked wrong.
+    # The privacy flag: ``private`` is absent without it.
     can_read_private_lots = models.BooleanField(
         default=False,
         help_text="Include the buyer and seller of each lot.  Don't use a key with this on a public page.",
@@ -2971,19 +2868,15 @@ class ClubAPIKeyFieldMap(models.Model):
 
 
 class UserAPIKey(HashedAPIKey):
-    """A key that lets an agent act as one person over the MCP endpoint at /mcp/.
+    """A key letting an agent act as one person over /mcp/.
 
-    Unlike ClubAPIKey (scoped to a club), MCP tools resolve "may this user do this", so the key
-    needs a person to be. It carries exactly one permission, allow_writes (off by default) -- not
-    the security boundary itself, since resolvers still check the user's real permissions on every
-    call, but a ceiling: a key can only ever do less than its owner can.
-
-    OAuth (auctions.mcp.auth) is the other way in, used by Claude's hosted surfaces. This is for
-    everything that can't do an OAuth dance: Claude Code with a header, a script, a club's tooling.
+    ``allow_writes`` (off by default) is a ceiling, not a grant: resolvers still check the owner's
+    permissions. OAuth (auctions.mcp.auth) is the other way in; this is for header-based clients and
+    scripts.
     """
 
     key_prefix = "ak_"
-    # user__userdata since almost every tool's resolver reads the owner's UserData too.
+    # Resolvers read the owner's UserData.
     verify_select_related = ("user__userdata",)
 
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="api_keys")
@@ -3040,89 +2933,46 @@ class Category(models.Model):
 
 
 def normalize_species_name(text):
-    """Lowercase, strip punctuation, collapse whitespace. The key both sides of a name lookup use.
+    """Lowercase, strip punctuation, collapse whitespace: the key for name lookups.
 
-    Lives here rather than in species_matching (which re-exports it as `normalize`) because the
-    stored columns must be built with the exact function that builds the query, and models.py
-    can't import a module that imports it. Without this, a stripped query could never match a
-    stored name that still had its punctuation (SpeciesCommonName.name_normalized /
-    Species.common_name_normalized store the normalized form).
-
-    An apostrophe is deleted (not turned into a space) since that's the character people typically
-    leave out -- "Adolf's catfish" and "adolfs catfish" must normalize identically. A hyphen stays
-    a space since it genuinely separates two words.
+    Here, not in species_matching, so stored columns and queries use the same function. Apostrophes are
+    deleted ("Adolf's" = "adolfs"); hyphens become spaces.
     """
     text = re.sub(r"['‘’ʼ`]+", "", (text or "").lower())
     return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9 ]+", " ", text)).strip()[:120]
 
 
 class Species(models.Model):
-    """One species that a lot can be tagged with.
+    """One species a lot can be tagged with, loaded from FishBase and the curated list.
 
-    Started life as ``Product`` -- a stub that was never populated because filling it in by hand
-    was hopeless.  It is now loaded from FishBase (``manage.py import_fishbase``), so the table is
-    a real picklist and :attr:`Lot.species` finally means something.
+    Genus and epithet are stored separately (FishBase provides them split); ``scientific_name`` is
+    rebuilt in :meth:`save` for search and display. :class:`ClubBapGenusOverride` matches on :attr:`genus`.
 
-    Genus and the specific epithet are stored **separately** rather than parsed back out of
-    ``scientific_name`` on demand.  FishBase hands us both columns already split, so there is
-    nothing to parse and nothing to get wrong later on hybrids, ``sp.`` placeholders, or the
-    handful of names with a subgenus in parentheses.  ``scientific_name`` is the denormalised
-    "Genus species" string, rebuilt in :meth:`save`, and exists so searching and display are a
-    single column.  :class:`ClubBapGenusOverride` matches on :attr:`genus`.
+    A :attr:`variety` row is a **cultivar**: it carries its parent's genus and epithet, so breeder
+    points, genus rules and categories work off the nominal species, and :attr:`parent` points at it.
 
-    A row with :attr:`variety` set is a **cultivar** -- "Blue Dream" cherry shrimp, a "Full Red"
-    guppy.  Those are not taxonomy: no code of nomenclature has a rank for a line somebody bred in
-    a basement, and two clubs will spell the same strain three ways.  So a variety row carries the
-    *parent's* genus and epithet, which is what makes it invisible to everything that reasons
-    about the science -- breeder points, :class:`ClubBapGenusOverride`, family and category all
-    keep working off the nominal species -- and adds the strain only where a human reads it, in
-    :attr:`label` and on the printed label.  :attr:`parent` points at the nominal species so the
-    two can never drift apart.
-
-    A row with :attr:`is_hybrid` set is a **cross**, and it is the one thing on this table with no
-    scientific name at all: a tibee is a tiger crossed with a bee shrimp, a flowerhorn is nobody
-    is quite sure what, and neither has a binomial to carry.  Filing one under a parent would put
-    a wrong genus on a printed label and inside a genus BAP rule, so a hybrid keeps *only* the
-    name the trade uses -- in :attr:`variety`, with :attr:`genus`, :attr:`species` and
-    :attr:`parent` all empty -- and reads as ``Hybrid 'Tibee'`` wherever a name is shown.  What it
-    is not is invisible: it is a row like any other, so it earns breeder points, counts once in
-    :attr:`Club.days_between_same_species_lots`, and can be told apart from every other cross.
-    The flag is stored rather than worked out from "a variety with no parent" because
-    ``parent__isnull=True`` already means *nominal species* in four places, and one column is
-    cheaper than four filters that have to remember a second meaning.
+    An :attr:`is_hybrid` row is a **cross**: no genus, species or parent, only the trade name in
+    ``variety``, shown as ``Hybrid 'Tibee'``. Stored as a flag because ``parent__isnull=True`` already
+    means nominal species in several places.
     """
 
     SOURCE_CHOICES = (
         ("fishbase", "FishBase"),
-        # SeaLifeBase is FishBase's sister database.  It covers the invertebrates, but 100k marine
-        # species is mostly noise for a freshwater club, so it is no longer imported by default --
-        # see auctions/fishbase.py.  The choice stays because rows from it may still be in a
-        # database somewhere.
+        # SeaLifeBase is no longer imported by default (auctions/fishbase.py); rows may still exist.
         ("sealifebase", "SeaLifeBase"),
-        # The curated aquarium-trade list in auctions/data/aquarium_species.csv: plants, shrimp,
-        # snails and the handful of fish the two big databases get wrong or miss.
+        # The curated list in auctions/data/aquarium_species.csv.
         ("aquarium", "Aquarium trade list"),
-        # Added on the site by an admin, through SpeciesAdminForm.  Deliberately distinct from
-        # "manual": that means a row left over from the old Product table, which import_fishbase
-        # folds into the imported list, and a species somebody added on purpose must never be.
+        # Added on the site. Not "manual" (old Product rows), which import_fishbase folds away.
         ("admin", "Added on the site"),
         ("manual", "Added by hand"),
     )
 
-    #: FishBase's ``Aquarium`` column, for the values that mean "this is an aquarium fish".  The
-    #: rest are ``never/rarely``, ``public aquariums`` (zoo displays) and ``show aquarium``.
+    #: FishBase ``Aquarium`` values meaning "an aquarium fish".
     AQUARIUM_TRADE_VALUES = ("commercial", "highly commercial", "potential")
 
-    #: How likely it is that anyone actually keeps this, in three steps.  Used to rank suggestions:
-    #: when a name is shared, the fish being sold at a club auction is overwhelmingly the one in
-    #: the hobby.
-    #:
-    #: The middle step exists because FishBase's own column is *incomplete* in a way that matters.
-    #: It marks 3,475 of its 36,132 fish as aquarium species, and *Chindongo saulosi* -- a mbuna in
-    #: every African cichlid club's auction, and the fish that started this whole search-quality
-    #: exercise -- is filed under "never/rarely".  Two of the seventy-seven *Ancistrus* are flagged.
-    #: So the genus gets a say: seven of the eleven *Chindongo* are flagged, which is a much better
-    #: statement about *Chindongo saulosi* than its own blank entry is.
+    #: How likely anyone keeps this, in three steps, for ranking suggestions. The genus step exists
+    #: because FishBase's flag is incomplete (*Chindongo saulosi* is "never/rarely", but most of its
+    #: genus is flagged).
     TRADE_RANK_SPECIES = 0
     TRADE_RANK_GENUS = 1
     TRADE_RANK_NONE = 2
@@ -3170,14 +3020,11 @@ class Species(models.Model):
         "SpecCode from the source database, used to match rows on re-import.  Blank for hand-added species."
     )
     source = models.CharField(max_length=20, choices=SOURCE_CHOICES, default="manual")
-    # FishBase's habitat booleans.  Kept because they are the cheapest way to tell apart the many
-    # species sharing a common name -- there are freshwater and saltwater fish called "perch".
+    # Habitat flags separate species sharing a common name.
     freshwater = models.BooleanField(default=False)
     brackish = models.BooleanField(default=False)
     saltwater = models.BooleanField(default=False)
-    # Taxonomy above the genus, from FishBase's families table.  Stored as names rather than the
-    # FamCode so nothing has to join back to a table we don't otherwise keep, and so a curated or
-    # hand-added row can fill them in without inventing a code.
+    # Family and order as names, so curated or hand-added rows need no FamCode.
     family = models.CharField(max_length=100, blank=True, db_index=True)
     family.help_text = "Taxonomic family, e.g. Cichlidae.  Used to derive the lot category."
     order = models.CharField(max_length=100, blank=True, db_index=True)
@@ -3226,34 +3073,15 @@ class Species(models.Model):
         ),
     )
 
-    #: The two lists that number their own species.  A duplicate inside one of them is impossible
-    #: by construction -- ``unique_together`` on source and SpecCode -- so the scan below is
-    #: skipped for them.  It would otherwise cost two queries times 36,000 on every re-import,
-    #: to answer a question the source already answered.
+    #: Sources that number their own species; duplicates are impossible there, so the scan is skipped.
     IMPORTED_SOURCES = ("fishbase", "sealifebase")
 
     def find_possible_duplicate(self):
-        """Another species row that is probably this same species, or None.
+        """Another row that is probably this species, or None.
 
-        Two signals, and both of them are things a person can see on the gaps page and judge:
-
-        * **The same scientific name**, at the same rank -- variety included, so *Neocaridina
-          davidi* and its thirteen colour strains are not thirteen duplicates of each other.  This
-          is the one that actually happens: an auction admin at a check-in table adds
-          *Cryptocoryne wendtii* because searching for "crypt" found nothing, and the row is
-          already there under a name they didn't type.
-        * **The same designated common name.**  Deliberately the ``common_name`` column and not
-          the synonym table: FishBase hands out "Peppered cory" to two different *Corydoras* on
-          purpose, and flagging every shared synonym would bury the real duplicates under
-          thousands of rows that are all correct.
-
-        Never a *variety* against a plain species, and never across the imported lists -- see
-        :attr:`IMPORTED_SOURCES`.
-
-        A hybrid has no scientific name to compare, so the strain name is the whole of its
-        identity and two rows carrying it are the same cross.  Without this branch every hybrid
-        added twice would sail past the check, because the first test below reads a column that is
-        empty on both of them.
+        The same scientific name at the same rank (variety included), or the same designated
+        ``common_name`` (not synonyms, which FishBase shares on purpose). Never a variety against a plain
+        species, never within imported lists. Hybrids compare on strain name.
         """
         others = Species.objects.exclude(pk=self.pk)
         if self.is_hybrid:
@@ -3269,37 +3097,26 @@ class Species(models.Model):
         return None
 
     def flag_possible_duplicate(self):
-        """Point this row and its lookalike at each other, or clear a flag that no longer holds.
-
-        Written with ``update()`` rather than ``save()``, exactly as :class:`AuctionTOS` does it
-        and for the same reason: this runs *from* ``save()``, and assigning the field and saving
-        again is an infinite loop.
+        """Point this row and its lookalike at each other, or clear a stale flag. ``update()``, since this runs
+        from ``save()``.
         """
         duplicate = self.find_possible_duplicate()
         if duplicate:
             Species.objects.filter(pk=self.pk).update(possible_duplicate=duplicate.pk)
             Species.objects.filter(pk=duplicate.pk).update(possible_duplicate=self.pk)
-            # Keep the in-memory row in step with what update() just wrote, or the caller's next
-            # save() writes the stale value straight back over it.
+            # Keep the in-memory row in step with update().
             self.possible_duplicate = duplicate
         elif self.possible_duplicate_id:
-            # possible_duplicate_id rather than the object: the row it pointed at may have been
-            # deleted by a merge, and touching the attribute would raise instead of clearing.
+            # The id, not the object: the target may have been merged away.
             Species.objects.filter(pk=self.possible_duplicate_id).update(possible_duplicate=None)
             Species.objects.filter(pk=self.pk).update(possible_duplicate=None)
             self.possible_duplicate = None
 
     def merge_duplicate(self, duplicate):
-        """Fold *duplicate* into this row and delete it.  Returns a description of what moved.
+        """Fold *duplicate* into this row and delete it; returns what moved. A site admin's decision.
 
-        A site admin's call and nobody else's -- the two rows are usually one club's hand-added
-        species and one of FishBase's 36,000, and picking which name the whole site keeps is not a
-        decision to hand to whoever happened to add the second one.
-
-        Everything that points at a species is moved rather than cascaded: the lots keep their
-        scientific name, the strains keep their parent, and the common names the losing row
-        carried are what make the merge worth doing at all -- they are usually the hobby names
-        somebody typed in, and the row they were attached to was the wrong one.
+        Lots, strains and common names move rather than cascade; the losing row's names are usually the
+        point of merging.
         """
         if duplicate.pk == self.pk:
             return {}
@@ -3307,16 +3124,13 @@ class Species(models.Model):
             "lots": Lot.objects.filter(species=duplicate).update(species=self),
             "varieties": Species.objects.filter(parent=duplicate).update(parent=self),
         }
-        # A name we already carry is not worth moving, and moving it would put the same word on
-        # the species twice.
+        # Skip names already carried.
         have = set(self.common_names.values_list("name_normalized", flat=True)) | {self.common_name_normalized}
         keep = [name for name in duplicate.common_names.all() if name.name_normalized not in have]
         SpeciesCommonName.objects.filter(pk__in=[name.pk for name in keep]).update(species=self)
         duplicate.common_names.all().delete()
         moved["common_names"] = len(keep)
-        # The designated common name is a name too, and the losing row's is the only place it
-        # lived.  Kept as a synonym rather than overwriting ours: which of the two is *the* name
-        # is a judgement, and the admin doing the merge picked the row to keep.
+        # The losing designated name becomes a synonym.
         if duplicate.common_name and duplicate.common_name_normalized not in have:
             SpeciesCommonName.objects.create(
                 species=self,
@@ -3325,9 +3139,7 @@ class Species(models.Model):
                 approved=self.approved,
             )
             moved["common_names"] += 1
-        # Remembered answers follow the species, minus the ones that would collide: search_text is
-        # unique in the cache, and a name that already answers with the row we are keeping needs
-        # no second row saying the same thing.
+        # Cache rows follow the species, minus collisions (search_text is unique).
         kept_texts = set(SpeciesSearchCache.objects.filter(species=self).values_list("search_text", flat=True))
         SpeciesSearchCache.objects.filter(species=duplicate, search_text__in=kept_texts).delete()
         moved["remembered_names"] = SpeciesSearchCache.objects.filter(species=duplicate).update(species=self)
@@ -3346,48 +3158,32 @@ class Species(models.Model):
         self.genus = (self.genus or "").strip()
         self.species = (self.species or "").strip()
         self.variety = (self.variety or "").strip()
-        # The invariant, enforced here rather than trusted to three writers: a hybrid is a name and
-        # nothing else.  A genus left on one would be picked up by ClubBapGenusOverride and by the
-        # scientific-token rule in species_matching, both of which would then be reasoning about a
-        # species this animal is only half of.
+        # A hybrid is only a name; a leftover genus would feed genus rules and token matching.
         if self.is_hybrid:
             self.genus = ""
             self.species = ""
             self.parent = None
-        # Rows that predate the import -- hand-typed into the old Product table -- have a
-        # scientific name and no genus, because nothing ever split one for them.  Rebuilding the
-        # denormalised column from two empty strings would erase the only name they have, on any
-        # save at all, including an admin ticking a checkbox.  So the split runs the other way for
-        # those, which also makes them findable: every lookup in species_matching goes via genus.
+        # Legacy rows have a scientific name and no genus: split it rather than rebuild from blanks.
         if self.scientific_name and not self.genus and not self.species and not self.is_hybrid:
             parts = self.scientific_name.split()
             self.genus = parts[0][:100]
             self.species = " ".join(parts[1:])[:150]
         self.scientific_name = " ".join(part for part in (self.genus, self.species) if part)
         self.common_name_normalized = normalize_species_name(self.common_name)
-        # Keep the row's *own* tier honest without a full pass.  The genus tier can only be worked
-        # out by looking at every sibling, so recompute_trade_ranks() owns that one -- but a
-        # species that says outright it is in the hobby should not have to wait for an import to
-        # be ranked like it.  Demote only from 0: a 1 here is a genus statement, still true.
+        # Keep the species tier honest; the genus tier needs recompute_trade_ranks().
         if self.in_aquarium_trade:
             self.trade_rank = self.TRADE_RANK_SPECIES
         elif self.trade_rank == self.TRADE_RANK_SPECIES:
             self.trade_rank = self.TRADE_RANK_NONE
         super().save(*args, **kwargs)
-        # Everything a person or a club API added, checked against everything already there.  The
-        # two big imports are skipped -- they can't duplicate themselves, and paying two queries a
-        # row for 36,000 rows to find that out is the sort of thing that makes an import time out.
+        # Duplicate check for everything except the two big imports.
         if self.source not in self.IMPORTED_SOURCES:
             self.flag_possible_duplicate()
 
     @property
     def in_aquarium_trade(self):
-        """True when something says this species is actually kept in aquariums.
-
-        An admin's word first: :attr:`in_trade_override` exists because whoever is adding a species
-        by hand is doing it *because a club is selling one*, which is better evidence than a
-        database field.  Then the curated list, everything on which is there for the same reason.
-        Then FishBase.
+        """True when something says this is kept in aquariums: an admin override, then the curated list, then
+        FishBase.
         """
         if self.in_trade_override is not None:
             return self.in_trade_override
@@ -3395,14 +3191,8 @@ class Species(models.Model):
 
     @classmethod
     def recompute_trade_ranks(cls, genus=None, batch_size=2000):
-        """Rebuild the denormalised :attr:`trade_rank` column.  Returns rows changed.
-
-        Denormalised rather than worked out per query for one reason: every suggestion lookup
-        orders by it *before* taking a ``LIMIT``, and the alternatives are a correlated subquery
-        per row or an ``IN`` clause holding all 1,142 genera that have a species in the hobby.
-        An indexed integer column costs one pass at import time instead.
-
-        Pass *genus* to redo a single genus, which is what adding one species by hand affects.
+        """Rebuild the denormalised :attr:`trade_rank`. Returns rows changed. Denormalised because suggestions
+        order by it before a LIMIT. Pass *genus* to redo one genus.
         """
         traded = cls.objects.filter(in_trade_override=True) | cls.objects.filter(
             in_trade_override__isnull=True, aquarium_use__in=cls.AQUARIUM_TRADE_VALUES
@@ -3410,12 +3200,8 @@ class Species(models.Model):
         traded = traded | cls.objects.filter(in_trade_override__isnull=True, source="aquarium")
         if genus:
             traded = traded.filter(genus=genus)
-        # order_by() clears Meta.ordering, which would otherwise put scientific_name and variety
-        # into the SELECT DISTINCT and make this one row per species rather than one per genus:
-        # 139,000 rows sorted on disk to build a set of 1,100 strings.
-        # discard(""): a hybrid has no genus, and one of them in the hobby -- which is all of them,
-        # nobody breeds a cross by accident -- would otherwise put "" in this set and promote every
-        # other blank-genus row to the genus tier on the strength of it.
+        # order_by() clears Meta.ordering, which would make DISTINCT per species. discard(""): hybrids
+        # have no genus and would promote every blank-genus row.
         traded_genera = set(traded.order_by().values_list("genus", flat=True).distinct())
         traded_genera.discard("")
 
@@ -3443,12 +3229,7 @@ class Species(models.Model):
 
     @property
     def earns_breeder_points(self):
-        """False when a lot of this species is ineligible for breeder points.
-
-        A cultivar answers for its parent as well as itself: the reason a club won't award points
-        for breeding something is a fact about the animal, not about the strain, so unticking the
-        box on *Neocaridina davidi* has to cover its thirteen colour forms too.
-        """
+        """False when lots of this species can't earn breeder points. A cultivar also answers for its parent."""
         if not self.breeder_points:
             return False
         if self.parent_id and not self.parent.breeder_points:
@@ -3457,15 +3238,8 @@ class Species(models.Model):
 
     @property
     def full_scientific_name(self):
-        """The scientific name, with the cultivar in quotes when there is one.
-
-        Horticulture's convention -- *Neocaridina davidi* 'Blue Dream' -- because it is the one
-        readers already know, and because the quotes say out loud that the last word is not Latin.
-
-        A hybrid has nothing to put in front of the quotes, so the word "Hybrid" goes there.  It is
-        the honest answer and it is the one a BAP judge needs: a class that excludes crosses can
-        only do that if the label says which lots are crosses, and this is the line the label, the
-        lot page, the AR overlay and the lot map all print.
+        """The scientific name, with the cultivar in quotes (*Neocaridina davidi* 'Blue Dream'), or
+        ``Hybrid 'Tibee'`` for a cross. What labels and pages print.
         """
         if self.is_hybrid and self.variety:
             return f"Hybrid '{self.variety}'"
@@ -3475,28 +3249,14 @@ class Species(models.Model):
 
     @property
     def label(self):
-        """What the user picks from: the scientific name, and nothing else.
-
-        It used to read "Neocaridina davidi (Cherry shrimp)", and the bracket was noise everywhere
-        it appeared.  The field is *called* "scientific name", it sits directly under a lot name the
-        seller has already written in plain English -- "cherry shrimp x10" -- and the common name in
-        brackets is either that same phrase again or, when FishBase disagrees with the hobby, a
-        second name that makes the reader wonder whether they picked the wrong fish.
-
-        The common name still does its real job, which is matching: every one of them is in
-        :class:`SpeciesCommonName` and searchable.  It is only the display that drops it.  The one
-        reader that still gets it is the language model -- see :attr:`label_with_common_name`.
+        """What users pick from: the scientific name only. Common names still drive matching; the language
+        model gets :attr:`label_with_common_name`.
         """
         return self.full_scientific_name or self.common_name
 
     @property
     def label_with_common_name(self):
-        """The scientific name with the common name in brackets, for the language model.
-
-        The opposite trade-off from :attr:`label`: a shortlist row is read by a model that is being
-        asked to match a *typed lot name*, and the common name is the half of the row that name is
-        likely to resemble.  Dropping it there would be throwing away the evidence.
-        """
+        """Scientific name with the common name in brackets, for the language model, which matches against it."""
         name = self.full_scientific_name
         if name and self.common_name:
             return f"{name} ({self.common_name})"
@@ -3508,33 +3268,18 @@ class Species(models.Model):
     class Meta:
         verbose_name_plural = "Species"
         ordering = ["scientific_name", "variety"]
-        # SpecCode is only unique *within* a source database: FishBase and SeaLifeBase both number
-        # their species from 1, so a bare unique on speccode would have SeaLifeBase's first import
-        # overwrite 36,000 fish.
+        # SpecCode is unique only per source database.
         unique_together = ("source", "speccode")
 
 
 class SpeciesCommonName(models.Model):
-    """A common name pointing at a :class:`Species`.
+    """A common name pointing at a :class:`Species`, from FishBase, the curated CSV, or people.
 
-    FishBase ships tens of thousands of these ("Guppy", "Millionfish", "Rainbow fish" are all
-    *Poecilia reticulata*), which is what makes matching a typed lot name to a species work at
-    all.  Known misspellings are dropped at import time -- surfacing those as suggestions would
-    teach people the wrong name.
-
-    This is the table the hobby's own vocabulary lives in, and :attr:`source` is what lets it.
-    FishBase is an ichthyology database: it is authoritative about which species exist and has no
-    reason to know that *Labidochromis caeruleus* is a "yellow lab" or that a "cw11" is a
-    *Corydoras*.  Those names have to be ours.  Before this column existed there was nowhere to
-    put one that survived -- ``import_fishbase`` deletes the names for every species it touches
-    and rebuilds them from the snapshot, so a hand-added name lasted until the next pin bump --
-    and the curated CSV could only attach names to its *own* rows, so teaching a FishBase species
-    a name meant creating a second copy of it.  Now every writer stamps what it wrote, deletes
-    only its own, and a name added by hand or by the CSV outlives any number of re-imports.
+    :attr:`source` lets each writer delete only its own names, so hobby names ("yellow lab") survive
+    re-imports without cloning species.
     """
 
-    #: Same vocabulary as :attr:`Species.source`, and for the same reason: every importer has to
-    #: be able to clear out exactly what it wrote last time and nothing else.
+    #: Same vocabulary as Species.source, so importers clear only what they wrote.
     SOURCE_CHOICES = Species.SOURCE_CHOICES
 
     species = models.ForeignKey(Species, on_delete=models.CASCADE, related_name="common_names")
@@ -3553,11 +3298,8 @@ class SpeciesCommonName(models.Model):
         "Which list wrote this name.  An importer only ever deletes its own, so a name added here "
         "or in aquarium_species.csv survives the next re-import of FishBase."
     )
-    # Scoped exactly like Species, and for the same reason: a club naming a fish is a club's
-    # opinion until somebody says otherwise.  A name is read *ahead* of everything else the
-    # matcher does -- "yellow lab" is answered by this table -- so one club teaching the site a
-    # name for the wrong fish would be everybody's problem.  Default True because every row the
-    # importers and the curated CSV write is everybody's; what a person or a key adds is not.
+    # Scoped like Species: a name is read before everything else, so one club's name for the wrong
+    # fish can't become everyone's. Default True for importer rows.
     approved = models.BooleanField(default=True, db_index=True)
     approved.help_text = "Off means only the person or club that added it is offered it.  Everything imported is on."
     added_by = models.ForeignKey(
@@ -3578,8 +3320,7 @@ class SpeciesCommonName(models.Model):
 
     class Meta:
         ordering = ["name"]
-        # The second one is the one every lookup uses; the first is left alone because the admin
-        # still searches and orders on the name as written.
+        # Lookups use the normalized one; the admin searches the name as written.
         indexes = [
             models.Index(fields=["name", "is_preferred"]),
             models.Index(fields=["name_normalized", "is_preferred"]),
@@ -3587,20 +3328,10 @@ class SpeciesCommonName(models.Model):
 
 
 class SpeciesSearchCache(models.Model):
-    """A remembered answer to "what species is a lot called *this*?".
+    """A remembered answer to "what species is a lot called *this*?", so the model isn't asked again.
 
-    Lot names repeat relentlessly across auctions, so without this every club would pay for the
-    same language-model call to work out that "blue dream shrimp" is *Neocaridina davidi* again.
-    A row with ``species`` set to null is a real answer too: this name is hardware, or plants, or
-    a mixed bag, and there is no point asking again.
-
-    ``scientific_name`` is the third state, and the reason the second one is safe.  A row with no
-    species *and* a name in it says "we know what this lot is, and the list does not hold it" --
-    which is a gap in the species list, not a verdict about the name.  Without somewhere to put
-    that, a correct identification of a fish we happen not to stock was written down as "not a
-    species" for every club forever, and adding the fish later could not undo it; now the next
-    lookup re-resolves the name and the row heals itself.  See :attr:`is_a_gap` and
-    :func:`~auctions.species_matching.suggest_species`.
+    ``species`` null means "not a species". ``scientific_name`` with no species is a gap: identified,
+    but not on our list, and re-resolved once imported (:attr:`is_a_gap`).
     """
 
     SOURCE_CHOICES = (
@@ -3628,10 +3359,7 @@ class SpeciesSearchCache(models.Model):
     createdon = models.DateTimeField(auto_now_add=True)
     hits = models.PositiveIntegerField(default=0)
     hits.help_text = "How many times this cached answer has been served instead of asking again."
-    # What people did with the answer, which is the only evidence there is about whether it is
-    # right.  Before these existed a row was written by one person's first save and then served to
-    # every club forever: one misclick on a bulk-add page taught the whole site that "sponge
-    # filter" is a guppy, and nothing short of a superuser finding it on the gaps page undid it.
+    # What people did with the answer: the only evidence it is right.
     accepts = models.PositiveIntegerField(default=0)
     accepts.help_text = (
         "Lots saved with this answer left alone.  Counted once per lot, on the save that created "
@@ -3643,49 +3371,27 @@ class SpeciesSearchCache(models.Model):
         "Enough of them retires the row; see is_discredited."
     )
 
-    #: How much disagreement a remembered answer survives.  One rejection in ten is the line, so a
-    #: row needs nine people to leave it alone for every one who takes it off a lot.
+    #: Rejections allowed: one in ten.
     MAX_REJECT_RATIO = 0.1
 
-    #: ...but never on fewer than this many rejections, whatever the ratio says.  The ratio alone
-    #: retired a fresh row the first time anybody cleared it, on the theory that a first save is
-    #: the one most likely to be a misclick -- which is true, and is exactly as true of the clearing
-    #: as of the answer being cleared.  Somebody hitting the X once because *this* lot is a mixed
-    #: bag is not evidence about the name, and throwing the answer away on it means the next
-    #: hundred sellers of that name get nothing.  Three lots is disagreement; one is a Tuesday.
+    #: ...and at least this many, so one stray clear doesn't retire an answer.
     MIN_REJECTS_TO_RETIRE = 3
 
     @property
     def is_a_gap(self):
-        """True when this row identified the lot and the species list could not supply it.
-
-        The distinction the gaps page reads: "sponge filter" is not a species, and *Yssichromis
-        piceatus* is a species we don't have, and only one of those is somebody's job.
-        """
+        """True when the lot was identified but the list lacks the species."""
         return self.species_id is None and bool(self.scientific_name)
 
     @property
     def is_discredited(self):
-        """True when the rejections have outgrown :attr:`MAX_REJECT_RATIO`.
-
-        Integer arithmetic rather than a division: ``rejects / (accepts + rejects) > 0.1`` is
-        exactly ``9 * rejects > accepts``, and this is read on every lot save.  The floor is
-        checked first because it is the cheap half and the one that fires: on a row with no
-        accepts, the ratio is satisfied by every rejection there will ever be.
+        """True when rejections exceed :attr:`MAX_REJECT_RATIO` and :attr:`MIN_REJECTS_TO_RETIRE`
+        (``9 * rejects > accepts``, integer arithmetic, read on every lot save).
         """
         return self.rejects >= self.MIN_REJECTS_TO_RETIRE and self.rejects * 9 > self.accepts
 
     def retire(self):
-        """Throw this answer away, and remember that it was thrown away.
-
-        Deleting the row on its own would not be enough, and this is the question that decides the
-        whole design: the next lookup would ask the language model the same question, get the same
-        wrong answer, and write the same row back.  So the pair -- *this name is not that species*
-        -- is kept as a :class:`SpeciesNameRejection`, which is what
-        :func:`~auctions.species_matching.remember` and the model shortlist both consult.
-
-        The name itself is left with no answer rather than with "not a species": it may well match
-        something in the list, and a rejection is evidence about one species, not about the name.
+        """Discard this answer and record a :class:`SpeciesNameRejection` for the pair, so the model can't write
+        it straight back. The name is left unanswered, not "not a species".
         """
         if self.species_id:
             SpeciesNameRejection.objects.get_or_create(search_text=self.search_text, species_id=self.species_id)
@@ -3696,19 +3402,10 @@ class SpeciesSearchCache(models.Model):
 
 
 class SpeciesNameRejection(models.Model):
-    """ "This lot name is **not** that species" -- the memory that makes a retired answer stay dead.
+    """ "This lot name is **not** that species": keeps a retired answer from coming back.
 
-    :class:`SpeciesSearchCache` is a cache of guesses, and until this table existed a guess could
-    only be added, never withdrawn: deleting a row sent the next lookup back to the same language
-    model with the same shortlist, which produced the same answer and wrote it straight back.  A
-    rejection is the one piece of information that survives that loop.
-
-    Deliberately narrow.  It vetoes a *pair*, not a name and not a species, and it is read only by
-    the two places that make things up -- the cache and the model shortlist.  It never touches
-    :func:`~auctions.species_matching.exact_matches` or the token search, because those answer out
-    of the species list itself, and a handful of people clearing a field must not be able to
-    outvote the list the way a cached guess could.  A site admin can delete one on the gaps page,
-    which is the way back if a name really was rejected in error.
+    Vetoes a pair only, read only by the cache and the model shortlist, never by exact or token matching
+    (so people clearing fields can't outvote the list). Deletable on the gaps page.
     """
 
     search_text = models.CharField(max_length=120, db_index=True)
@@ -3724,11 +3421,8 @@ class SpeciesNameRejection(models.Model):
 
 
 def _slugify_auction_title(value):
-    """Slugify an auction title, stripping reserved suffixes used for email routing.
-
-    Slugs ending in ``-auctions`` or ``-contact`` would collide with the club
-    email routing aliases ``<club-slug>-auctions`` and ``<club-slug>-contact``,
-    so those suffixes are silently removed at slug-generation time.
+    """Slugify an auction title, removing ``-auctions``/``-contact`` suffixes that collide with club email
+    routing aliases.
     """
     from django.utils.text import slugify
 
@@ -3736,7 +3430,7 @@ def _slugify_auction_title(value):
     for suffix in ("-auctions", "-contact"):
         if slug.endswith(suffix):
             slug = slug[: -len(suffix)].rstrip("-")
-    return slug or slugify(value)  # fall back to unsanitised slug if stripping leaves nothing
+    return slug or slugify(value)  # # fall back to the unsanitised slug
 
 
 class Auction(CachedPropertiesMixin, models.Model):
@@ -3840,28 +3534,12 @@ class Auction(CachedPropertiesMixin, models.Model):
     location = models.CharField(max_length=300, null=True, blank=True)
     location.help_text = "State or region of this auction"
     summernote_description = models.TextField(verbose_name="Rules", default="", blank=True)
-    # notes = MarkdownField(
-    #     rendered_field="notes_rendered",
-    #     validator=VALIDATOR_STANDARD,
-    #     blank=True,
-    #     null=True,
-    #     verbose_name="Rules",
-    #     default="",
-    # )
-    # notes.help_text = "To add a link: [Link text](https://www.google.com)"
-    # notes_rendered = RenderedMarkdownField(blank=True, null=True)
     lot_promotion_cost = models.PositiveIntegerField(default=1, validators=[MinValueValidator(1)])
     first_bid_payout = models.PositiveIntegerField(default=0, validators=[MinValueValidator(0)])
     first_bid_payout.help_text = "This is a feature to encourage bidding.  Give each bidder this amount, for free.  <a href='/blog/encouraging-participation/' target='_blank'>More information</a>"
     club_member_discount = models.PositiveIntegerField(default=0, validators=[MinValueValidator(0)])
     club_member_discount.help_text = "Automatically add a discount in this amount if a paid club member has purchased at least one lot in this auction"
-    # Off by default, because being on the public list is a decision and not a starting state.
-    # ``AuctionCreateView`` has always overridden this to False with the comment "all auctions start
-    # not promoted", so the column default was only ever reached by code that creates an Auction
-    # some other way -- and what it did there was list somebody's auction publicly without being
-    # asked. ``AuctionEditForm.clean`` is where the decision belongs: it refuses a test-looking
-    # slug, an auction with no location set, one with the placeholder still in its rules, and an
-    # account that isn't trusted.
+    # Off by default: public listing is a decision, checked by AuctionEditForm.clean.
     promote_this_auction = models.BooleanField(default=False)
     promote_this_auction.help_text = "Show this to everyone in the list of auctions"
     is_chat_allowed = models.BooleanField(default=True)
@@ -3896,7 +3574,6 @@ class Auction(CachedPropertiesMixin, models.Model):
         ("disable", "No online bidding"),
     )
     online_bidding = models.CharField(max_length=20, choices=ONLINE_BIDDING_OPTIONS, blank=False, default="allow")
-    # allow_bidding_on_lots = models.BooleanField(default=True, verbose_name="Allow online bidding")
     only_approved_sellers = models.BooleanField(default=False)
     only_approved_sellers.help_text = "Require admin approval before users can add lots.  This will not change permissions for users that have already joined."
     only_approved_bidders = models.BooleanField(default=False)
@@ -4090,10 +3767,7 @@ class Auction(CachedPropertiesMixin, models.Model):
 
     @property
     def promotion_request_mailto_query(self):
-        """
-        Pre-encoded subject/body for the 'request promoted auction access' mailto link.
-        Uses SITE_DOMAIN to build an absolute URL to this auction.
-        """
+        """Pre-encoded subject/body for the 'request promoted auction access' mailto link."""
         domain = getattr(settings, "SITE_DOMAIN", "").strip()
         if domain:
             if not domain.startswith("http"):
@@ -4120,11 +3794,8 @@ class Auction(CachedPropertiesMixin, models.Model):
 
     @cached_property
     def effective_paypal_seller(self):
-        """The PayPalSeller used for payments on this auction.
-
-        Club auctions always route through the club's linked seller (or site PayPal),
-        never the auction creator. Non-club auctions use the creator's personal seller.
-        Returns ``None`` if no route is configured.
+        """The PayPalSeller for this auction: the club's route for club auctions, else the creator's. None if
+        unconfigured.
         """
         if self.club:
             return self.club.effective_paypal_seller
@@ -4134,15 +3805,8 @@ class Auction(CachedPropertiesMixin, models.Model):
 
     @cached_property
     def effective_square_seller(self):
-        """The SquareSeller used for payments on this auction.
-
-        A club auction routes through the club's linked seller whenever the club has one, so a
-        club's money never lands in an individual's Square account (and Tap to Pay hands out that
-        club account's token, not a personal one). If the club has *not* connected Square, fall
-        back to the creator's personal seller so the auction can still take payment -- that
-        fallback is what ``show_square_button`` already offers, gated on the creator being trusted
-        and having ``enable_square_payments`` set. Non-club auctions always use the creator's.
-        Unlike ``effective_paypal_seller`` there is no site fallback for Square.
+        """The SquareSeller for this auction: the club's if connected (so club money never lands in a personal
+        account), else the creator's. No site fallback.
         """
         from auctions.models import SquareSeller
 
@@ -4156,13 +3820,8 @@ class Auction(CachedPropertiesMixin, models.Model):
 
     @property
     def paypal_information(self):
-        """
-        Return the merchant ID for PayPal payments.
-
-        - Club auctions: club's PayPalSeller, or ``"admin"`` when ``use_site_paypal_account``,
-          or ``None`` when the club uses its own (non-OAuth) credentials (payment goes
-          straight to that account, so there's no payee override).
-        - Non-club auctions: creator's PayPalSeller, or ``"admin"`` when creator is a superuser.
+        """The PayPal merchant id: the club or creator's seller, ``"admin"`` for the site account, or ``None``
+        when a club uses its own credentials.
         """
         if self.club:
             if self.club.uses_own_paypal_credentials:
@@ -4180,38 +3839,23 @@ class Auction(CachedPropertiesMixin, models.Model):
 
     @property
     def offers_tap_to_pay(self):
-        """True when *this auction's* Square account can take an in-person card payment.
-
-        The one question the app cannot answer for itself. It used to decide when to show Apple's
-        mandated Tap to Pay awareness modal from a URL prefix plus "the backend once handed this user
-        live Square credentials", which is an approximation of "is the website showing its own Square
-        card to this user on this page?" -- and getting it wrong put the modal in front of an
-        organizer on an unrelated page. Read by auction_ribbon.html, which asks the app for the modal
-        when it is true; see PaymentService for the credentials themselves.
-
-        Connected *and* in-person capable: a seller connected before the Tap to Pay scope existed has
-        a merchant id and cannot take a card in the room, so offering the modal would be a dead end.
+        """True when this auction's Square account can take in-person payments (connected and has the Tap to Pay
+        scope). Read by auction_ribbon.html to request Apple's awareness modal.
         """
         seller = self.effective_square_seller
         return bool(seller and seller.square_merchant_id and seller.supports_tap_to_pay)
 
     @property
     def square_information(self):
-        """
-        Return the merchant ID for Square payments.
-
-        Only returns an ID if the effective seller has a linked Square OAuth account.
-        Site Square is not supported.
-        """
+        """The Square merchant id of the effective seller, if linked. No site Square."""
         seller = self.effective_square_seller
         return seller.square_merchant_id if seller else None
 
     @cached_property
     def show_paypal_banner(self):
-        """Can we show the link your PayPal account banner?
-        One more check is needed on the template:
-        this banner should only be shown to the auction creator.
-        Hidden when the auction has a club (the club's account is used, not the creator's)."""
+        """Whether to offer the creator the connect-PayPal banner. Hidden for club auctions; the template also
+        checks the viewer is the creator.
+        """
         if self.club:
             return False
         if self.dismissed_paypal_banner:
@@ -4228,19 +3872,12 @@ class Auction(CachedPropertiesMixin, models.Model):
 
     @cached_property
     def show_square_banner(self):
-        """Can we show the link your Square account banner?
-        One more check is needed on the template:
-        this banner should only be shown to the auction creator.
-        Hidden when the auction has a club (the club's account is used, not the creator's).
+        """Whether to offer the creator the connect-Square banner. Hidden for club auctions.
 
-        Deliberately does **not** check ``square_enabled``. That flag decides which half of the
-        banner the template draws -- the connect button, or a sentence saying accounts are reviewed
-        first plus the same request-access mailto the promotion banner uses -- not whether the
-        organizer hears about card payments at all. Hiding it was indistinguishable from "this site
-        can't take card payments", which is the reading Apple's onboarding requirements (2.1, 2.2)
-        exist to prevent, and it left an organizer with no button, no explanation and nothing to
-        ask. The gate itself stays: it is a real fraud control, and only ``SquareConnectView``
-        enforces it."""
+        Doesn't check ``square_enabled``: that picks which half the template shows (connect button, or a
+        request-access link), so organizers always learn card payments exist. ``SquareConnectView`` enforces
+        the gate.
+        """
         from auctions.models import SquareSeller
 
         if self.club:
@@ -4269,12 +3906,7 @@ class Auction(CachedPropertiesMixin, models.Model):
 
     @property
     def sender_email_with_name(self):
-        """The From line for mail about this auction: who is asking, over the auction's address.
-
-        The club runs the auction, so the club's name is the one a recipient recognises -- the
-        auction's own title is already in the subject and the first line of every one of these.
-        An auction with no club falls back to the site itself rather than showing the bare slug.
-        """
+        """The From line for this auction's mail: the club's name (or site domain) over the auction address."""
         return sender_with_display_name(
             self.club.name if self.club else email_routing_domain(),
             self.sender_email,
@@ -4293,21 +3925,14 @@ class Auction(CachedPropertiesMixin, models.Model):
         return get_currency_symbol(self.currency)
 
     def delete(self, *args, **kwargs):
-        """Perform a soft delete by setting is_deleted=True.
-
-        Note: This is a soft delete implementation that marks the auction as deleted
-        without removing it from the database. Related objects (lots, bids, etc.) will
-        still exist and may appear in queries unless they explicitly filter out deleted
-        auctions using: .exclude(auction__is_deleted=True)
-
-        This allows for data retention and potential recovery while hiding the auction
-        from normal user operations.
+        """Soft delete: sets is_deleted. Related lots and bids remain; filter with
+        ``.exclude(auction__is_deleted=True)``.
         """
         self.is_deleted = True
         self.save()
 
     def fix_year(self, date_field, low_cutoff=2000, high_cutoff=2050):
-        """If the year is a long time ago or in the future, assume they meant this year"""
+        """Assume a year far in the past or future meant this year."""
         if date_field and (date_field.year < low_cutoff or date_field.year > high_cutoff):
             self.create_history("RULES", f"Changed invalid date {date_field.year} to current year")
             current_year = timezone.now().year
@@ -4324,21 +3949,14 @@ class Auction(CachedPropertiesMixin, models.Model):
         self.date_end = self.fix_year(self.date_end)
         self.date_online_bidding_starts = self.fix_year(self.date_online_bidding_starts)
         self.date_online_bidding_ends = self.fix_year(self.date_online_bidding_ends)
-        # if self.date_start.year < 2000:
-        #    current_year = timezone.now().year
-        #    self.date_start = self.date_start.replace(year=current_year)
         self.summernote_description = sanitize_summernote_html(self.summernote_description)
         super().save(*args, **kwargs)
         if previous_club_id is None and self.club_id:
             self.backfill_club_money()
 
     def backfill_club_money(self):
-        """Reconcile the club ledger for every invoice tied to this auction.
-
-        Called when a club is first attached to an auction so existing PAID invoices get
-        their cash-basis ledger entries. ``save`` calls this automatically, but a bulk
-        ``Auction.objects.update(club=...)`` bypasses ``save``, so those call sites must
-        invoke it themselves. Idempotent — ``Invoice.sync_club_money`` books only deltas.
+        """Reconcile the club ledger for this auction's invoices. ``save`` calls it when a club is attached;
+        bulk ``update(club=...)`` callers must call it themselves. Idempotent.
         """
         invoices = (
             Invoice.objects.filter(Q(auction=self) | Q(auctiontos_user__auction=self))
@@ -4349,8 +3967,7 @@ class Auction(CachedPropertiesMixin, models.Model):
             invoice.sync_club_money()
 
     def find_user(self, name="", email="", exclude_pk=None):
-        """Used for duplicate checks and when adding users to an auction
-        Returns an AuctionTOS instance or None"""
+        """Duplicate check when adding people: returns an AuctionTOS or None."""
         email = normalize_email(email)
         qs = AuctionTOS.objects.filter(auction__pk=self.pk)
         if not name and not email:
@@ -4364,8 +3981,7 @@ class Auction(CachedPropertiesMixin, models.Model):
         if name:
             from .filters import AuctionTOSFilter
 
-            # order_by keeps the match deterministic when several records share a name; the oldest
-            # record wins so we attach to the original/canonical contact rather than an arbitrary one.
+            # Oldest match wins, deterministically.
             name_search = (
                 AuctionTOSFilter.generic(self, qs, name, match_names_only=True).order_by("createdon", "pk").first()
             )
@@ -4427,20 +4043,13 @@ class Auction(CachedPropertiesMixin, models.Model):
 
     @cached_property
     def locations(self):
-        """Every pickup location for this auction, fetched once. A **list**.
-
-        An auction has a handful of locations and the auction page asks about them constantly --
-        ``multi_location`` alone was twelve COUNT queries on one render, because each of the
-        properties below rebuilt ``location_qs`` and counted it again. They all read this now.
-        ``location_qs`` stays a queryset for the callers that need one (form fields, slicing).
-        """
+        """Every pickup location, fetched once, as a list; the derived properties read this."""
         return list(self.location_qs)
 
     @property
     def physical_location_qs(self):
         """Find all non-default locations"""
-        # I am not sure why we were excluding the default location, but it doesn't make sense to
-        # return self.location_qs.exclude(Q(pickup_by_mail=True)|Q(is_default=True))
+        # Default locations used to be excluded; no longer.
         return self.location_qs.exclude(pickup_by_mail=True)
 
     @cached_property
@@ -4450,7 +4059,7 @@ class Auction(CachedPropertiesMixin, models.Model):
 
     @property
     def location_with_location_qs(self):
-        """Find all locations that have coordinates - useful to see if there's an actual location associated with this auction.  By default, auctions get a location with no coordinates added"""
+        """Locations with coordinates. New auctions get a coordinate-less default location."""
         return self.physical_location_qs.exclude(latitude=0, longitude=0)
 
     @cached_property
@@ -4476,18 +4085,8 @@ class Auction(CachedPropertiesMixin, models.Model):
 
     @staticmethod
     def get_closest_location_distance_subquery(latitude, longitude):
-        """
-        Returns a subquery that calculates the distance to the closest valid pickup location.
-
-        Excludes locations with (0,0) coordinates and mail-only pickup locations.
-        Used to annotate auction querysets with distance information.
-
-        Args:
-            latitude: User's latitude
-            longitude: User's longitude
-
-        Returns:
-            Subquery that can be used with .annotate(distance=...) on Auction queryset
+        """A subquery for the distance to the closest real pickup location (excluding 0,0 and mail-only), for
+        annotating auctions.
         """
         return Subquery(
             PickupLocation.objects.filter(auction=OuterRef("pk"))
@@ -4500,7 +4099,7 @@ class Auction(CachedPropertiesMixin, models.Model):
 
     @property
     def auction_type(self):
-        """Returns whether this is an online, in-person, or hybrid auction for use in tooltips and templates.  See also auction_type_as_str for a friendly display version"""
+        """Online, in-person or hybrid, for tooltips and templates; see auction_type_as_str."""
         number_of_locations = self.number_of_locations
         if self.is_online and number_of_locations == 1:
             return "online_one_location"
@@ -4516,7 +4115,7 @@ class Auction(CachedPropertiesMixin, models.Model):
 
     @cached_property
     def auction_type_as_str(self):
-        """Returns friendly string of whether this is an online, in-person, or hybrid auction"""
+        """Friendly online/in-person/hybrid string."""
         auction_type = self.auction_type
         if auction_type == "online_one_location":
             return "online auction with in-person pickup"
@@ -4560,12 +4159,12 @@ class Auction(CachedPropertiesMixin, models.Model):
 
     @property
     def template_pre_register_fee(self):
-        """only for templates, winning_bid_percent_to_club - pre_register_lot_discount_percent"""
+        """For templates: winning_bid_percent_to_club - pre_register_lot_discount_percent."""
         return self.winning_bid_percent_to_club - self.pre_register_lot_discount_percent
 
     @property
     def uses_alternate_split(self):
-        """True when some users (marked with AuctionTOS.is_club_member) get the alternate fees"""
+        """True when some users (AuctionTOS.is_club_member) get the alternate fees."""
         return self.alternate_split_mode != "off"
 
     def get_absolute_url(self):
@@ -4600,12 +4199,11 @@ class Auction(CachedPropertiesMixin, models.Model):
 
     @property
     def set_lot_winners_link(self):
-        # return f"{self.get_absolute_url()}lots/set-winners/{self.set_lot_winners_url}"
         return f"{self.get_absolute_url()}lots/set-winners/"
 
     @cached_property
     def is_club_managed(self):
-        """True when this auction manages its participants via the associated club's ClubMember records."""
+        """True when participants are managed via the club's ClubMember records."""
         return bool(self.manage_users_through_club) and bool(self.club_id)
 
     @property
@@ -4615,28 +4213,22 @@ class Auction(CachedPropertiesMixin, models.Model):
 
     @property
     def use_check_in_mode(self):
-        """True when this auction adds club members as they are checked in at an event."""
+        """True when club members are added as they check in."""
         return self.manage_users_through_club == "checkin" and bool(self.club_id)
 
     @property
     def allows_app_self_checkin(self):
-        """True when attendees may join and check themselves in from the app's proximity prompt.
-
-        Only check-in-mode auctions can turn this off (``allow_self_checkin``): that's the mode where
-        checking in is what hands out a bidder number, so an auction that assigns numbers at the door
-        needs the app to stay out of it. Everywhere else the flag is meaningless and the app's
-        welcome prompt still offers to join."""
+        """True when attendees may join and check in from the app's proximity prompt. Only check-in auctions can
+        turn it off (``allow_self_checkin``), since there checking in assigns bidder numbers.
+        """
         if not self.use_check_in_mode:
             return True
         return self.allow_self_checkin
 
     def in_welcome_window(self, now=None):
-        """True during the proximity "welcome to the auction" window: from 3 h before the start
-        until the auction has pretty much wrapped up.
-
-        The tail uses date_end (the online-bidding / dynamic end) when set, else a date_start + 12 h
-        fallback for a plain in-person event — the intent is just to stop welcoming people once the
-        auction is over."""
+        """True from 3 hours before the start until the auction has wrapped up (date_end, else date_start + 12h),
+        for the proximity welcome.
+        """
         now = now or timezone.now()
         if not self.date_start:
             return False
@@ -4669,8 +4261,7 @@ class Auction(CachedPropertiesMixin, models.Model):
 
     @cached_property
     def pickup_locations_before_end(self):
-        """If there's a problem with the pickup location times, all of them need to be after the end date of the auction (or after the start date for an in-person auction).
-        Returns the edit url for the first pickup location whose end time is before the auction end"""
+        """The edit URL of the first pickup location whose time is before the auction end (or start, in person)."""
         locations = self.locations
         time_to_use = self.date_end
         if not self.is_online:
@@ -4691,8 +4282,7 @@ class Auction(CachedPropertiesMixin, models.Model):
 
     @property
     def has_non_logical_times(self):
-        """Check if auction start or end times are not set to logical times (ending in :00:00 or :30:00).
-        Returns the edit url if times are illogical, False otherwise."""
+        """The edit URL if start or end isn't on :00 or :30, else False."""
         # A logical time has minutes of 00 or 30, and seconds of 00
         for date_field in [self.date_start, self.date_end]:
             if date_field:
@@ -4730,7 +4320,7 @@ class Auction(CachedPropertiesMixin, models.Model):
 
     @cached_property
     def date_end_as_str(self):
-        """Human-reable end date of the auction; this will always be an empty string for in-person auctions"""
+        """Readable end date; always "" for in-person auctions."""
         if self.is_online:
             return self.date_end
         else:
@@ -4766,7 +4356,7 @@ class Auction(CachedPropertiesMixin, models.Model):
 
     @property
     def in_person_closed(self):
-        """Maybe we can combine this with the above `closed`, but I'm not sure where else that is used"""
+        """In-person auction started with online bidding disabled."""
         if not self.is_online and timezone.now() > self.date_start and self.online_bidding == "disable":
             return True
         if (
@@ -4781,15 +4371,12 @@ class Auction(CachedPropertiesMixin, models.Model):
 
     @cached_property
     def wind_down_time(self):
-        """The moment the auction is fully wound down, before the pretty_much_over grace period.
+        """When the auction is fully wound down, before pretty_much_over's grace period.
 
-        Online: the latest of the bidding end date or any pickup time across all locations (first or
-        second pickup). Pickup times are supposed to be after date_end, but nothing enforces that
-        (see pickup_locations_before_end), so date_end is always included as a floor to avoid firing
-        pretty_much_over while bidding is still open. In-person: the latest of the auction's start
-        date, the online bidding end date, and the lot submission end date, since in-person auctions
-        can run long after date_start and still have those windows open. Returns None if the relevant
-        date is missing."""
+        Online: the latest of date_end and every pickup time (date_end is a floor since pickups aren't
+        enforced to be later). In person: the latest of start, online bidding end and lot submission end.
+        None if the date is missing.
+        """
         if not self.is_online:
             return max(
                 self.date_start,
@@ -4805,14 +4392,9 @@ class Auction(CachedPropertiesMixin, models.Model):
 
     @cached_property
     def pretty_much_over(self):
-        """True once the auction has been wound down for at least 24 hours.
-
-        Online auctions: 24h after the later of the bidding end date or the last pickup time.
-        In-person auctions: 24h after the latest of the start date, the online bidding end date, and
-        the lot submission end date. Unlike `closed` / `in_person_closed` (which fire the moment
-        bidding ends), this waits until pickups/extra windows are done, so it's used to stop
-        surfacing the auction in the command palette and to deactivate its stray lots via
-        endauctions."""
+        """True once wound down for 24 hours. Unlike ``closed``, waits for pickups; stops the auction appearing
+        in the palette and lets endauctions deactivate stray lots.
+        """
         reference = self.wind_down_time
         if not reference:
             return False
@@ -4854,20 +4436,13 @@ class Auction(CachedPropertiesMixin, models.Model):
 
     @cached_property
     def club_profit_raw(self):
-        """Total amount made by the club in this auction.  This number does not take into account rounding in the invoices, nor any invoice adjustments"""
+        """The club's raw cut of lots, ignoring invoice rounding and adjustments."""
         return add_price_info(self.lots_qs).aggregate(total_sold=Sum("club_cut"))["total_sold"] or 0
 
     @cached_property
     def _auction_tax_collected(self):
-        """Total sales tax collected across this auction's invoices.
-
-        Tax is money the club collects on behalf of a taxing authority and must remit, so it is a
-        pass-through liability, not club profit (see ``club_profit`` and the treasurer report, which
-        reports ``tax_collected`` as its own line, never folded into auction commission). Computed
-        from the live sold, non-banned lots -- for the common case of an untaxed auction this is a
-        no-op. Mirrors ``Invoice.tax`` (final price after any partial refund, times the rate), but
-        quantizes the auction-wide total once rather than per invoice, so it can differ from the sum
-        of per-invoice tax by up to a fraction of a cent on oddly priced taxed auctions.
+        """Sales tax collected across invoices: a pass-through liability, not profit. Computed from live sold
+        lots, quantized once, so it may differ from summed per-invoice tax by a fraction of a cent.
         """
         if not self.tax:
             return Decimal("0.00")
@@ -4892,13 +4467,8 @@ class Auction(CachedPropertiesMixin, models.Model):
 
     @cached_property
     def _auction_membership_dues(self):
-        """Total membership/renewal dues collected on this auction's invoices.
-
-        Dues are separate club revenue added on top of lot prices (a renewing member pays their
-        winning bids plus the annual fee), so they are not part of what the club nets from *auction*
-        activity and are excluded from ``club_profit`` -- matching the treasurer report, which lists
-        ``membership_dues`` as its own line. Each renewing invoice charges exactly the club's annual
-        fee (see ``Invoice.membership_fee_amount``), so this is fee * number of renewing invoices.
+        """Membership dues collected on this auction's invoices: separate club revenue, excluded from
+        ``club_profit``. Fee times renewing invoices.
         """
         club = self.club
         if not club or not club.membership_annual_fee:
@@ -4908,73 +4478,34 @@ class Auction(CachedPropertiesMixin, models.Model):
 
     @cached_property
     def club_profit(self):
-        """What the club nets from AUCTION activity in this auction, positive when it made money.
+        """What the club nets from auction activity; negative on a loss.
 
-        This is the invoice-realized counterpart of ``club_profit_raw`` (the club's raw cut of the
-        lots): it reflects the actual money the club keeps once invoice rounding (always in the
-        customer's favor), promotional first-bid payouts, club-member discounts and manual invoice
-        adjustments are taken into account.
-
-        Semantics (kept consistent with the treasurer report, which breaks the same figures out):
-          * Sales tax is EXCLUDED. It is collected on behalf of a taxing authority and remitted, so
-            it is a pass-through liability, not profit.
-          * Membership/renewal dues are EXCLUDED. They are separate club revenue added on top of lot
-            prices, not margin on auction sales.
-          * A genuine loss (the club paid out more to sellers -- via payouts, promos or discounts --
-            than it collected) is returned as a NEGATIVE number. It is never abs()'d, or a loss
-            would masquerade as a profit.
-
-        Invoices whose ``calculated_total`` was never stamped (NULL -- e.g. a freshly created draft
-        that has not been recalculated) are NOT dropped: their live ``rounded_net`` is used instead,
-        so they contribute the same amount they would once stamped. PAID invoices use their frozen
-        ``calculated_total`` (see ``Invoice.recalculate``). All arithmetic stays in ``Decimal`` so
-        cents are preserved end to end.
+        Invoice-realized: rounding, first-bid payouts, member discounts and adjustments included. Tax and dues
+        excluded (as the treasurer report). Never abs()'d. Unstamped invoices use their live ``rounded_net``;
+        PAID ones their frozen ``calculated_total``. Decimal throughout.
         """
         invoices = Invoice.objects.filter(auction=self.pk)
-        # Sum the stamped/settled totals in one query, then add the live rounded_net for any invoice
-        # whose calculated_total was never stamped so those are not silently excluded.
+        # Stamped totals in one query, plus live rounded_net for unstamped invoices.
         total_net = invoices.filter(calculated_total__isnull=False).aggregate(total=Sum("calculated_total"))[
             "total"
         ] or Decimal("0.00")
-        # The fallback: an invoice nobody has recalculated yet has to be worked out live, and that
-        # reaches its auction and club. Usually an empty queryset.
         for invoice in invoices.filter(calculated_total__isnull=True).select_related(
             "auction__club", "club", "auctiontos_user"
         ):
             total_net += Decimal(invoice.rounded_net)
-        # calculated_total is negative when a buyer owes the club, so negate (never abs()) to make a
-        # club gain positive while keeping a genuine loss negative.
+        # calculated_total is negative when the buyer owes; negate, never abs().
         profit = -Decimal(total_net)
-        # Back out tax and dues so this reflects only auction-activity margin (see docstring).
+        # Back out tax and dues.
         profit -= self._auction_tax_collected
         profit -= self._auction_membership_dues
         return profit
 
     @cached_property
     def gross(self):
-        """Refund-adjusted gross sales: the total buyers were billed for lots that sold here.
+        """Refund-adjusted gross: the sum of sold, non-banned lots' final prices.
 
-        This is the sum of each sold lot's *final price* -- the winning (hammer) price reduced by
-        any ``partial_refund_percent`` -- over the sold, non-banned lots. Three deliberate choices,
-        each matching a sibling money stat so the figures on the stats page tie out:
-
-          * Removed (banned) lots are EXCLUDED. A banned lot is pulled from the sale and never
-            charged: ``add_price_info`` credits it $0, and it is dropped from ``total_to_sellers``
-            and ``median_lot_price``. The old ``Sum("winning_price")`` over ``lots_qs`` still counted
-            a banned lot's hammer price, overstating gross above every other stat.
-          * Partial refunds are NETTED OUT. A refund proportionally reduces BOTH what the buyer pays
-            (``Invoice.bought_lots_queryset.final_price``) and what the seller receives (``your_cut``/
-            ``club_cut`` in ``add_price_info``), so it is a real reduction in money that changed
-            hands, not a display-only adjustment. Reporting the full hammer price would make gross
-            disagree with the refund-adjusted ``club_profit`` and ``total_to_sellers`` shown beside
-            it (and shown as a "% of gross"), and the totals would not reconcile. With this basis
-            ``gross == total_to_sellers + club_profit_raw`` exactly (seller cut + club raw cut).
-          * The filter matches ``total_sold_lots`` exactly (``winning_price`` set, not banned), so
-            "N lots sold, $X gross" is always coherent -- the same lots are counted and summed.
-
-        Donations are included: the buyer still pays the hammer price (it simply all goes to the
-        club), so it is genuine gross. Returned as a ``Decimal`` (``Decimal("0.00")`` when nothing
-        sold), so downstream ``club_profit / gross`` arithmetic stays cent-exact.
+        Banned lots are excluded and partial refunds netted out, so ``gross == total_to_sellers +
+        club_profit_raw`` and it matches ``total_sold_lots``. Donations count. Decimal.
         """
         money = DecimalField(max_digits=12, decimal_places=2)
         return self.lots_qs.filter(winning_price__isnull=False, banned=False).aggregate(
@@ -4995,20 +4526,8 @@ class Auction(CachedPropertiesMixin, models.Model):
 
     @cached_property
     def total_to_sellers(self):
-        """Total credited to sellers for lots that sold in this auction.
-
-        This is the sum of every seller's cut (``your_cut`` from :func:`add_price_info`) over the
-        sold, non-banned lots -- the winning price minus the club's commission, the lot entry fee
-        and any partial refund, with donations and banned/removed lots contributing nothing. It is
-        the seller-side mirror of ``club_profit_raw`` (the club's raw cut of the same lots).
-
-        Computed DIRECTLY rather than as ``gross - club_profit``. That subtraction became wrong once
-        ``club_profit`` stopped being a mirror image of gross: club_profit now excludes sales tax and
-        membership dues (neither was ever part of gross) and reflects buyer-side promotions such as
-        the first-bid payout, so ``gross - club_profit`` would, for example, count a buyer's first-bid
-        payout as money paid to a seller and would be skewed by tax/dues that touch neither side of a
-        seller payout. Summing ``your_cut`` counts only what sellers are actually owed and is immune
-        to tax, dues and buyer promotions. Returned as a ``Decimal``.
+        """Total credited to sellers (``your_cut``) for sold, non-banned lots. Summed directly: ``gross -
+        club_profit`` would be skewed by tax, dues and buyer promotions. Decimal.
         """
         total = add_price_info(self.lots_qs.filter(winning_price__isnull=False, banned=False)).aggregate(
             total=Sum("your_cut")
@@ -5017,13 +4536,7 @@ class Auction(CachedPropertiesMixin, models.Model):
 
     @property
     def percent_to_club(self):
-        """The club's net auction take as a percentage of gross sales (``club_profit / gross``).
-
-        Returns ``Decimal("0")`` when there are no gross sales, avoiding division by zero. On a club
-        loss ``club_profit`` is negative, so this is correctly negative -- the abs()-distorted
-        club_profit that Item 14 removed used to mask losses as positive percentages. All arithmetic
-        stays in ``Decimal``; ``gross`` shares the currency label so the ratio is reported "% of gross".
-        """
+        """``club_profit / gross`` as a percentage; ``Decimal("0")`` with no gross. Negative on a loss."""
         gross = self.gross
         if not gross:
             return Decimal(0)
@@ -5031,8 +4544,7 @@ class Auction(CachedPropertiesMixin, models.Model):
 
     @cached_property
     def total_donations(self):
-        # Exclude banned (removed) lots to stay consistent with gross/club_profit and the other
-        # money figures on the stats table -- a pulled lot never contributed any money.
+        # Exclude banned lots, like the other money figures.
         return (
             self.lots_qs.filter(winning_price__isnull=False, donation=True)
             .exclude(banned=True)
@@ -5050,22 +4562,13 @@ class Auction(CachedPropertiesMixin, models.Model):
 
     @property
     def show_invoice_ready_button(self):
-        """invoice status of 'ready' is very confusing for people
-        This is tied to several pieces of logic that are also not needed for in person auctions, like paypal integratiaon
-        With PayPal integration, it may be needed for all auctions, let's see if it continues to be confusing"""
+        """Always True; the ready status is confusing, but PayPal may need it."""
         return True
-        # if self.is_online:
-        #    return True
-        # if self.online_bidding == "disable":
-        #    return False
-        # return True
 
     @cached_property
     def users_with_bidding_disabled(self):
-        """How many participants can't currently bid, for the bulk re-enable button on the users page.
-
-        Zero in check-in auctions: there, bidding stays off until the person checks in at the door, so
-        every participant would be counted and enabling them in bulk would defeat the whole mode.
+        """Participants who can't bid, for the bulk re-enable button. Zero in check-in auctions, where bidding
+        waits for check-in.
         """
         if self.use_check_in_mode:
             return 0
@@ -5081,12 +4584,8 @@ class Auction(CachedPropertiesMixin, models.Model):
 
     @property
     def paypal_payments_enabled(self):
-        """True when buyers can pay this auction's invoices directly via PayPal.
-
-        Used to hide the manual PayPal bulk-invoice CSV export -- sending those invoices would
-        double-request payment from buyers who can already pay online. Covers the per-auction
-        flag plus club auctions that route through the club's site or own (non-OAuth) PayPal
-        credentials, where the club config supersedes the per-auction flag.
+        """True when buyers can pay invoices through PayPal directly (hides the manual PayPal CSV export).
+        Includes club site or own-credential routes.
         """
         if self.club and (self.club.uses_site_paypal or self.club.uses_own_paypal_credentials):
             return True
@@ -5094,10 +4593,8 @@ class Auction(CachedPropertiesMixin, models.Model):
 
     @cached_property
     def tos_qs(self):
-        """Return AuctionTOS queryset with has_ever_granted_permission annotation.
-
-        has_ever_granted_permission is True if the user has ever joined any auction
-        created by this auction's creator with manually_added=False.
+        """AuctionTOS rows with ``has_ever_granted_permission``: the user has joined any of this creator's
+        auctions themselves (manually_added=False).
         """
         return (
             AuctionTOS.objects.filter(auction=self.pk)
@@ -5126,13 +4623,7 @@ class Auction(CachedPropertiesMixin, models.Model):
 
     @cached_property
     def seller_tos_qs(self):
-        """AuctionTOS who submitted at least one live lot to this auction.
-
-        Removed (``banned``) and soft-deleted (``is_deleted``) lots are excluded, so a person whose
-        only lot was pulled from the sale no longer counts as a seller -- consistent with ``lots_qs``
-        and every money stat on this auction. ``.distinct()`` collapses sellers with multiple lots to
-        a single row.
-        """
+        """Participants with at least one live (not banned or deleted) lot here, distinct."""
         return AuctionTOS.objects.filter(
             auctiontos_seller__auction=self.pk,
             auctiontos_seller__banned=False,
@@ -5141,11 +4632,7 @@ class Auction(CachedPropertiesMixin, models.Model):
 
     @cached_property
     def buyer_tos_qs(self):
-        """AuctionTOS who won at least one sold, live lot in this auction.
-
-        A "buyer" won a lot with ``winning_price`` set that was not later removed (``banned``) or
-        soft-deleted (``is_deleted``). ``.distinct()`` collapses buyers of multiple lots to one row.
-        """
+        """Participants who won at least one sold, live lot, distinct."""
         return AuctionTOS.objects.filter(
             auctiontos_winner__auction=self.pk,
             auctiontos_winner__winning_price__isnull=False,
@@ -5161,23 +4648,13 @@ class Auction(CachedPropertiesMixin, models.Model):
     def number_of_sellers_who_didnt_buy(self):
         return self.seller_tos_qs.exclude(id__in=self.buyer_tos_qs.values_list("id", flat=True)).count()
 
-    # @property
-    # def number_of_unsuccessful_sellers(self):
-    # """This is the number of sellers who didn't sell ALL their lots"""
-    # 	users = User.objects.values('lot__user').annotate(Sum('lot')).filter(lot__auction=self.pk, lot__winner__isnull=True)
-    #   users = User.objects.filter(lot__auction=self.pk, lot__winner__isnull=True).distinct()
-    # 	return len(users)
-
     @cached_property
     def number_of_buyers(self):
         return self.buyer_tos_qs.count()
 
     @cached_property
     def median_lot_price(self):
-        # Only sold, non-banned lots count -- removed (banned) lots are never charged and are
-        # excluded from every other money stat on this auction (see ``total_sold_lots`` and
-        # ``add_price_info``). Price basis is the raw hammer price (``winning_price``), matching
-        # the sibling "median sell price" image chart; partial refunds are not netted out here.
+        # Sold, non-banned lots on hammer price; partial refunds not netted.
         lots = self.lots_qs.filter(winning_price__isnull=False).exclude(banned=True)
         if lots:
             return median_value(lots, "winning_price")
@@ -5196,17 +4673,8 @@ class Auction(CachedPropertiesMixin, models.Model):
 
     @cached_property
     def total_sold_lots_with_buy_now_percent(self):
-        """Percentage of sold lots that went via "buy now".
-
-        Online auctions have an explicit ``buy_now_used`` flag set when a bidder takes the
-        buy-now price, so that branch is exact.
-
-        In-person auctions have no such flag: admins enter results by typing the hammer price,
-        and when a lot sells at buy-now they simply type the buy-now amount. So "bought via buy
-        now" is inferred by ``winning_price == buy_now_price``. This is BY DESIGN, but note the
-        caveat that it also counts any lot whose hammer price *coincidentally* equals its
-        buy_now_price (e.g. bidding happened to land exactly on the buy-now amount). There is no
-        separate flag to disambiguate, so a small over-count is expected and accepted here.
+        """Percentage of sold lots via buy now. Online uses ``buy_now_used``; in person infers
+        ``winning_price == buy_now_price``, which over-counts coincidental matches.
         """
         if not self.total_sold_lots:
             return 0
@@ -5235,8 +4703,7 @@ class Auction(CachedPropertiesMixin, models.Model):
 
     @cached_property
     def number_of_lots_with_scanned_qr(self):
-        # Count a lot as "scanned" when its page was opened from a QR scan (src=qr) or from AR mode
-        # (src=ar) — the app opens lots it recognises in AR as lot_link?src=ar.
+        # "Scanned": opened from a QR code (src=qr) or AR (src=ar).
         return (
             self.lots_qs.filter(
                 Q(pageview__source__icontains="qr") | Q(pageview__source__iexact="ar"),
@@ -5248,8 +4715,7 @@ class Auction(CachedPropertiesMixin, models.Model):
 
     @cached_property
     def number_of_lots_added_to_queue(self):
-        # How much the in-person "Lot queue" tool was used: count lots that were ever queued.
-        # Sticky Lot.added_to_queue, so it survives the queue entry being popped when the lot sells.
+        # Lots ever queued (sticky Lot.added_to_queue).
         return self.lots_qs.filter(added_to_queue=True).count()
 
     @cached_property
@@ -5265,19 +4731,14 @@ class Auction(CachedPropertiesMixin, models.Model):
 
     @property
     def percent_unsold_lots(self):
-        # An auction with zero lots has nothing unsold, so report 0% -- not the 100% the old
-        # bare `except` returned on the ZeroDivisionError, which nonsensically flagged a lotless
-        # auction as entirely unsold. This matches the sibling percent properties on this model
-        # (reminder_email_clicks/_joins, weekly_promo_email_click_rate), which all return 0 on an
-        # empty base (Item 21).
+        # No lots means 0% unsold, like the sibling percentages.
         if not self.total_lots:
             return 0
         return self.total_unsold_lots / self.total_lots * 100
 
     @cached_property
     def lots_sold_per_minute(self):
-        """Calculate the average lots sold per minute for in-person auctions.
-        This uses the same logic as the auctioneer speed graph, ignoring the first and last 10% of lots."""
+        """Average lots sold per minute in person, ignoring the first and last 10% of lots (as the speed graph)."""
         if self.is_online:
             return 0  # Not applicable for online auctions
 
@@ -5317,7 +4778,7 @@ class Auction(CachedPropertiesMixin, models.Model):
 
     @cached_property
     def total_auction_duration(self):
-        """For in-person auctions, this also uses the same logic as the auctioneer speed graph, ignoring the first and last 10% of lots."""
+        """In person, ignoring the first and last 10% of lots, as the speed graph."""
         if self.is_online:
             return 0  # Not applicable for online auctions
 
@@ -5356,7 +4817,7 @@ class Auction(CachedPropertiesMixin, models.Model):
 
     @property
     def template_lot_link(self):
-        """Not directly used in templates, use template_lot_link_first_column and template_lot_link_separate_column instead"""
+        """Not used directly; see template_lot_link_first_column and template_lot_link_separate_column."""
         if timezone.now() > self.lot_submission_start_date:
             result = f"<a href='{self.view_lot_link}'>View lots</a>"
         else:
@@ -5389,13 +4850,7 @@ class Auction(CachedPropertiesMixin, models.Model):
 
     @cached_property
     def number_of_participants(self):
-        """
-        Number of AuctionTOS who bought or sold at least one live lot in this auction.
-
-        This is the union of buyers and sellers: banned/soft-deleted lots are excluded via
-        ``buyer_tos_qs``/``seller_tos_qs``, so a person whose only lot (bought or sold) was removed
-        does not count.
-        """
+        """Participants who bought or sold at least one live lot."""
         buyer_ids = self.buyer_tos_qs.values_list("id", flat=True)
         sellers_who_didnt_buy = self.seller_tos_qs.exclude(id__in=buyer_ids).count()
         return sellers_who_didnt_buy + self.buyer_tos_qs.count()
@@ -5454,16 +4909,12 @@ class Auction(CachedPropertiesMixin, models.Model):
 
     @cached_property
     def multi_location(self):
-        """
-        True if there's more than one location at this auction
-        """
+        """True with more than one location."""
         return self.number_of_locations > 1
 
     @cached_property
     def no_location(self):
-        """
-        True if there's no pickup location at all for this auction -- pickup by mail excluded
-        """
+        """True with no physical pickup location (mail excluded)."""
         return not self.locations_with_coordinates
 
     @property
@@ -5475,9 +4926,6 @@ class Auction(CachedPropertiesMixin, models.Model):
 
     @cached_property
     def paypal_invoices(self):
-        # all drafts and ready:
-        # return Invoice.objects.filter(auction=self).exclude(status="PAID")
-        # only ready:
         return Invoice.objects.filter(auction=self, status="UNPAID")
 
     @cached_property
@@ -5487,27 +4935,14 @@ class Auction(CachedPropertiesMixin, models.Model):
 
     @property
     def paypal_invoices_to_export(self):
-        """The UNPAID invoices that actually get written to the PayPal bulk-invoice CSV.
-
-        A row is written (and the export loop advances its chunk counter) for exactly those
-        invoices whose rounded balance still owes the club money -- ``rounded_net_after_payments
-        < 0``. This is the single source of truth shared by ``paypal_invoice_chunks`` and the
-        export view (``AuctionInvoicesPayPalCSV``), so with >150 invoices every billed invoice
-        lands in a chunk number the UI offers.
-
-        Previously the two disagreed: the chunk count filtered ``calculated_total < 0`` while the
-        export loop advanced its counter for every non-payout invoice (``not user_should_be_paid``,
-        which includes settled $0 invoices), so the loop's counter ran ahead of the offered chunk
-        count and tail invoices could land in a chunk the UI never listed (Item 21).
+        """The UNPAID invoices written to the PayPal bulk CSV: those still owing (``rounded_net_after_payments <
+        0``). Shared by ``paypal_invoice_chunks`` and the export view so chunk counts agree.
         """
         return [invoice for invoice in self.paypal_invoices if invoice.rounded_net_after_payments < 0]
 
     @property
     def paypal_invoice_chunks(self):
-        """
-        Needed to know how many chunks to split the invoice list to
-        chunk size 150 per https://www.paypal.com/invoice/batch
-        """
+        """Chunks for the PayPal invoice export (150 per https://www.paypal.com/invoice/batch)."""
         invoices_count = len(self.paypal_invoices_to_export)
         chunk_size = 150
         chunks = (invoices_count + chunk_size - 1) // chunk_size
@@ -5515,7 +4950,7 @@ class Auction(CachedPropertiesMixin, models.Model):
 
     @cached_property
     def set_location_link(self):
-        """If there's a location without a lat and lng, this link will let you edit the first one found"""
+        """Edit link for the first location missing coordinates."""
         location = next(
             (
                 candidate
@@ -5538,7 +4973,6 @@ class Auction(CachedPropertiesMixin, models.Model):
             and self.admin_checklist_joined
             and self.admin_checklist_others_joined
         ):
-            # if self.is_online or (not self.is_online and self.admin_checklist_lots_added):
             return True
         return False
 
@@ -5605,23 +5039,10 @@ class Auction(CachedPropertiesMixin, models.Model):
 
     @cached_property
     def event_needing_custom_wording(self):
-        """This auction's calendar event, when it is worth asking an admin to reword it.
+        """This auction's calendar event when an admin should be asked to reword it, else None.
 
-        The prompt on the auction page is only honest when all four of these hold, which is why
-        this is one property rather than four template conditions:
-
-        * There is a club, and its **own website is showing our events** -- see
-          ``Club.embeds_events_on_website``. Without that the generated sentence is read here, on
-          a page the admin is already looking at, and nagging about it is noise.
-        * The event exists and is the generated one. A manual event was typed by a person, so
-          there is nothing to improve.
-        * **Neither** the title nor the description has been typed by hand. Either one is somebody
-          having already made this decision, and the answer "I only wanted to change the title" is
-          a legitimate one to leave alone.
-        * The auction hasn't happened yet. Rewording the calendar entry for last spring changes
-          what nobody is going to read.
-
-        Returns the event so the caller can link straight at it, or None.
+        The club's website shows our events, the event is generated, neither field is custom, and the auction
+        hasn't happened.
         """
         if self.dismissed_customize_event_banner or not self.club_id:
             return None
@@ -5668,8 +5089,7 @@ class Auction(CachedPropertiesMixin, models.Model):
 
     @cached_property
     def auction_admins_qs(self):
-        # user_id, not user: comparing model objects makes Django fetch the creator row to read
-        # its pk, once per Auction instance.
+        # user_id, not user, to avoid fetching the creator row.
         return AuctionTOS.objects.filter(
             Q(is_admin=True) | Q(user_id=self.created_by_id), auction__pk=self.pk
         ).order_by("name")
@@ -5681,34 +5101,22 @@ class Auction(CachedPropertiesMixin, models.Model):
 
     @property
     def auction_admins_user_pks(self):
-        """User pks of everyone on this auction's admin team, for ban enforcement.
-
-        Unlike auction_admins_pks this always includes the creator (who may not have an
-        AuctionTOS row of their own) and never contains None (admin TOS rows that aren't
-        linked to a user account)."""
+        """User pks of the whole admin team for ban enforcement: always the creator, never None."""
         pks = {pk for pk in self.auction_admins_pks if pk}
         if self.created_by_id:
             pks.add(self.created_by_id)
         return pks
 
     def user_banned_by_admins(self, user):
-        """True if `user` has been banned by anyone on this auction's admin team.
-
-        UserBans are personal ban lists, but they apply to every auction the banning user
-        administers, not just ones they created: the no-show flow's "ban this user from
-        future auctions" records the ban under the acting admin, and co-admins running a
-        club's auction expect their bans to hold there."""
+        """True if anyone on the admin team banned ``user``. Bans apply to every auction the banner administers."""
         if not user or not getattr(user, "pk", None):
             return False
         return UserBan.objects.filter(banned_user=user.pk, user__pk__in=self.auction_admins_user_pks).exists()
 
     def tos_for_user(self, user):
-        """Resolve the AuctionTOS for a signed-in user in this auction, or None.
-
-        The single source of truth for "which TOS is this user": matched on the user FK or
-        the account email (emails are verified at signup), newest record first. Bid
-        enforcement and the lot page UI must both use this so duplicate TOS records can't
-        make them disagree about whether someone can bid."""
+        """The AuctionTOS for a signed-in user, by user FK or account email, newest first, or None. Bid
+        enforcement and the lot page both use this.
+        """
         if not user or not getattr(user, "is_authenticated", False):
             return None
         query = Q(user=user)
@@ -5738,7 +5146,7 @@ class Auction(CachedPropertiesMixin, models.Model):
             date_start = self.date_start - timezone.timedelta(days=days_before)
             date_end = self.date_start + timezone.timedelta(days=days_after)
 
-        # if date_end is in the future, shift the graph to show the same range, but for the present
+        # A future date_end shifts the graph to the same range ending now.
         if date_end > timezone.now():
             time_difference = date_end - date_start
             date_end = timezone.now()
@@ -5841,18 +5249,8 @@ class Auction(CachedPropertiesMixin, models.Model):
         return {"labels": [], "providers": [], "data": []}
 
     def _lot_sell_price_bins(self):
-        """Single source of truth for the sell-price histogram.
-
-        Returns ``(start_bin, bin_width, num_bins)``. The bins are always whole-dollar,
-        equal width, and contiguous, so the labels built from ``(start_bin, bin_width)`` and
-        the counts produced by ``bin_data`` (whose bin_size == bin_width by construction, since
-        ``end_bin - start_bin == num_bins * bin_width``) describe exactly the same buckets.
-        Every bucket is left-inclusive/right-exclusive: a price of exactly ``bin_end`` lands in
-        the next bucket, and prices >= the final ``end_bin`` fall in the high-overflow bar.
-
-        Banned (removed) lots are excluded here to match ``total_unsold_lots`` and every other
-        money stat on the auction -- otherwise the "Not sold" bar would exclude banned lots while
-        the priced bars counted them.
+        """Sell-price histogram bins: ``(start_bin, bin_width, num_bins)``, whole-dollar and left-inclusive.
+        Labels and counts both derive from this. Banned lots excluded.
         """
         sold_lots = self.lots_qs.filter(winning_price__isnull=False).exclude(banned=True)
 
@@ -5862,8 +5260,7 @@ class Auction(CachedPropertiesMixin, models.Model):
             # Round up to nearest $10 for cleaner bins
             max_price = int((max_price + 9) // 10 * 10)
 
-            # Create bins with whole number intervals
-            # Use $2 intervals up to max price, ensuring bins align to whole dollars
+            # $2 bins aligned to whole dollars.
             bin_width = 2  # Each bin covers $2
             num_bins = min((max_price - 1) // bin_width, 30)  # Cap at 30 bins to avoid too many
             if num_bins < 10:
@@ -5877,11 +5274,7 @@ class Auction(CachedPropertiesMixin, models.Model):
         return 1, bin_width, num_bins
 
     def set_stat_lot_sell_prices(self):
-        """Calculate and return lot sell prices chart data.
-
-        Labels and counts are both derived from ``_lot_sell_price_bins`` so they can never
-        disagree about how many bars there are or where the boundaries fall.
-        """
+        """Lot sell price chart data, from ``_lot_sell_price_bins``."""
         sold_lots = self.lots_qs.filter(winning_price__isnull=False).exclude(banned=True)
         start_bin, bin_width, num_bins = self._lot_sell_price_bins()
         end_bin = start_bin + num_bins * bin_width
@@ -5895,8 +5288,7 @@ class Auction(CachedPropertiesMixin, models.Model):
             add_column_for_high_overflow=True,
         )
 
-        # Generate labels with whole number boundaries. One label per histogram bucket:
-        # "Not sold", then num_bins priced buckets, then the high-overflow "{end_bin}+" bar.
+        # "Not sold", the priced buckets, then "{end_bin}+".
         labels = ["Not sold"]
         for i in range(num_bins):
             bin_start = start_bin + i * bin_width
@@ -5956,10 +5348,7 @@ class Auction(CachedPropertiesMixin, models.Model):
         """Calculate and return images chart data"""
         from django.db.models import Avg
 
-        # Use the same sold-lot base as every other money stat (lots_qs excludes is_deleted and
-        # joins via auctiontos_seller__auction): exclude banned (removed) lots, otherwise a lot that
-        # was pulled from the sale -- or a soft-deleted one -- would still drag the displayed
-        # "median/average sell price" figures, which are computed only over lots that actually sold.
+        # Exclude banned lots, as the other money stats.
         lots = (
             self.lots_qs.filter(winning_price__isnull=False).exclude(banned=True).annotate(num_images=Count("lotimage"))
         )
@@ -6210,49 +5599,23 @@ class Auction(CachedPropertiesMixin, models.Model):
 
     @property
     def page_views(self):
-        """Every page view of this auction: its rules page, its lot list, and its lots.
+        """Every page view of this auction (rules page, lot list, lots).
 
-        The OR is across a join, which is the one shape MariaDB cannot serve from an index, so
-        every caller of this needs its own window or its own reason to be cheap.
-
-        It is here because rows written before 2026-09-09 named only the lot. A lot page (and an
-        AR scan) now sends its auction as well -- see ``base_page_view.html`` for why only the
-        three visitor-facing pages send anything at all. ``tasks.backfill_page_view_auctions`` is
-        walking the older rows in the background; when it has stamped itself finished, this can
-        become ``filter(auction=self)`` and the join goes away.
+        The OR across a join can't use an index, so callers need their own bound. Rows before 2026-09-09
+        name only the lot; once ``tasks.backfill_page_view_auctions`` finishes this can be
+        ``filter(auction=self)``.
         """
         return PageView.objects.filter(Q(auction=self) | Q(lot_number__auction=self))
 
     @cached_property
     def unique_views(self):
-        """Distinct visitors who viewed this auction's rules page or any of its lots.
-
-        PageView rows record identity two different ways (see the page-view tracking view in
-        ``views.py``): a logged-in visit stores ``user=<id>`` with ``session_id=NULL``, while an
-        anonymous visit stores ``user=NULL`` with ``session_id=<session key>``. A single person
-        who browses anonymously and *then* logs in therefore leaves behind both a session-only
-        row and a user row.
-
-        Naively counting ``distinct(session_id) + distinct(user)`` double-counts that login
-        transition, and also tacks on a bogus NULL bucket to each side (every logged-in row has a
-        NULL session, every anonymous row has a NULL user). Instead we count distinct logged-in
-        users, then add only the anonymous sessions that never appear alongside a user -- i.e.
-        ``distinct users + distinct sessions-that-never-have-a-user-row``. The anonymous session
-        key is not preserved once someone logs in, so a pre-login session cannot be perfectly
-        reunited with its eventual account, but this removes the *structural* double count of the
-        login transition (and the two stray NULL buckets).
-
-        Returns a dict with the total plus the logged-in / anonymous breakdown, reused by the
-        auction stats page and the participation funnel chart.
+        """Distinct visitors to the rules page or lots: distinct users plus anonymous sessions that never appear
+        with a user. Removes the structural double count of signing in. Returns total and breakdown.
         """
         all_views = self.page_views
         logged_in = all_views.filter(user__isnull=False).values("user").distinct().count()
-        # Count anonymous sessions that never also appear on a logged-in row. Expressing this as
-        # ``.exclude(session_id__in=<subquery over all_views>)`` makes MariaDB plan a
-        # ``NOT IN (SELECT ...)`` anti-join that repeatedly full-scans auctions_pageview -- on a
-        # large auction that ran for hours and pinned DB CPU. Instead pull the two distinct
-        # session-id sets and diff them in Python: each side is a single ``DISTINCT`` scan, and the
-        # sets are bounded by the number of distinct sessions (not the number of pageview rows).
+        # Not exclude(session_id__in=subquery): MariaDB's NOT IN anti-join full-scanned PageView. Two
+        # DISTINCT sets diffed in Python.
         user_sessions = set(
             all_views.filter(user__isnull=False, session_id__isnull=False)
             .values_list("session_id", flat=True)
@@ -6267,13 +5630,13 @@ class Auction(CachedPropertiesMixin, models.Model):
         return {"total": logged_in + anonymous, "logged_in": logged_in, "anonymous": anonymous}
 
     def get_stat_misc(self):
-        """A few one-off stats that are slow to calculate and/or dependent on page views"""
+        """Slow one-off stats that depend on page views."""
         if self.cached_stats and "misc" in self.cached_stats:
             return self.cached_stats["misc"]
         return {}
 
     def set_stat_misc(self):
-        """A few one-off stats that are slow to calculate and/or dependent on page views"""
+        """Slow one-off stats that depend on page views."""
 
         unique_views = self.unique_views
         total_views = unique_views["total"]
@@ -6281,10 +5644,7 @@ class Auction(CachedPropertiesMixin, models.Model):
         anonymous_views = unique_views["anonymous"]
 
         total_bidders = User.objects.filter(bid__lot_number__auction=self).annotate(c=Count("id")).count()
-        # Count winners via the winning AuctionTOS, not the Lot.winner User FK. Admin-declared
-        # winners (check-in mode, the set-lot-winner form) set auctiontos_winner + winning_price but
-        # never set the winner User FK, and winners with no user account have no User FK at all; both
-        # are missed by a winner__auction join. buyer_tos_qs captures every sold, live lot's winner.
+        # Winners via auctiontos_winner: admin-declared winners have no User FK.
         total_winners = self.buyer_tos_qs.count()
 
         # Additional email/reminder stats
@@ -6324,7 +5684,7 @@ class Auction(CachedPropertiesMixin, models.Model):
         }
 
     def _make_stats_json_serializable(self, obj):
-        """Recursively convert Decimal values to float so that cached_stats can be stored in a JSONField."""
+        """Recursively convert Decimals to float for the JSONField."""
         if isinstance(obj, dict):
             return {k: self._make_stats_json_serializable(v) for k, v in obj.items()}
         if isinstance(obj, list):
@@ -6334,10 +5694,7 @@ class Auction(CachedPropertiesMixin, models.Model):
         return obj
 
     def recalculate_stats(self):
-        """Recalculate and cache all auction statistics.
-        This method calls all the setter methods to calculate chart data
-        and stores it in the cached_stats JSONField to avoid expensive recalculations.
-        """
+        """Recalculate and cache all auction statistics in cached_stats."""
         stats = {}
 
         # Call all setter methods to calculate stats
@@ -6354,14 +5711,11 @@ class Auction(CachedPropertiesMixin, models.Model):
         stats["feature_use"] = self.set_stat_feature_use()
         stats["misc"] = self.set_stat_misc()
 
-        # Save the stats — convert any Decimal values to float so the JSONField can serialize them
+        # Decimals to float for the JSONField.
         self.cached_stats = self._make_stats_json_serializable(stats)
         self.last_stats_update = timezone.now()
 
-        # Smart scheduling based on auction age and status
-        # Active auctions (start date within a week): recalculate every 4 hours
-        # Other auctions: recalculate once per day
-        # Auctions > 90 days old: don't recalculate automatically
+        # Scheduling: within a week of the start every 4 hours, otherwise daily, never after 90 days.
         now = timezone.now()
 
         if self.date_start:
@@ -6371,7 +5725,6 @@ class Auction(CachedPropertiesMixin, models.Model):
             # Auctions > 90 days in the past aren't recalculated at all
             if days_since_start > 90:
                 self.next_update_due = None
-            # Active auctions (started within 7 days ago or start within 7 days) - every 4 hours
             elif -7 <= days_until_start <= 7:
                 self.next_update_due = now + timezone.timedelta(hours=4)
             # Other auctions - once per day
@@ -6397,8 +5750,8 @@ class Auction(CachedPropertiesMixin, models.Model):
         return before + [midpoint] + after
 
     def create_history(self, applies_to, action="Edited", user=None, form=None):
-        """Applies to can be RULES, USERS, INVOICES, LOTS, STATS, user should be the user making the change or None if it's a system change.
-        Action is a string describing the change, form is a form instance that has changed data
+        """Record auction history. ``applies_to``: RULES, USERS, INVOICES, LOTS, STATS; ``user`` is the actor
+        or None; ``form`` supplies changed data.
         """
         # Don't create history if the auction hasn't been saved yet
         if not self.pk:
@@ -6422,10 +5775,7 @@ class Auction(CachedPropertiesMixin, models.Model):
 
 
 class PickupLocation(InvalidatesRelatedCache, CachedPropertiesMixin, models.Model):
-    """
-    A pickup location associated with an auction
-    A given auction can have multiple pickup locations
-    """
+    """A pickup location for an auction; an auction can have several."""
 
     # Auction.locations, and the dozen properties derived from it
     invalidates_cache_on = ("auction",)
@@ -6434,7 +5784,6 @@ class PickupLocation(InvalidatesRelatedCache, CachedPropertiesMixin, models.Mode
     name.help_text = "Location name shown to users.  e.x. University Mall in VT"
     user = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL)
     auction = models.ForeignKey(Auction, null=True, blank=True, on_delete=models.CASCADE)
-    # auction.help_text = "If your auction isn't listed here, it may not exist or has already ended"
     description = models.CharField(max_length=300, blank=True, null=True)
     description.help_text = "Notes, shipping charges, etc.  For example: 'Parking lot near Sears entrance'"
     users_must_coordinate_pickup = models.BooleanField(default=False)
@@ -6541,7 +5890,7 @@ class PickupLocation(InvalidatesRelatedCache, CachedPropertiesMixin, models.Mode
 
     @cached_property
     def email_list(self):
-        """String of all email addresses associated with this location, used for bcc'ing all people at a location"""
+        """All emails at this location, for bcc."""
         return "".join(f"{tos.email}, " for tos in self.user_list.only("email") if tos.email)
 
     @cached_property
@@ -6571,8 +5920,9 @@ class AuctionIgnore(models.Model):
 
 
 class AuctionTOS(InvalidatesRelatedCache, CachedPropertiesMixin, models.Model):
-    """Models how a user engages with an auction and is the basis for the user view when running an auction
-    Usually this will correspond with a single person which may or may not also be a user"""
+    """How a person engages with an auction; the basis of the admin users view. Usually one person, who may
+    or may not have an account.
+    """
 
     # the auction caches its participant counts
     invalidates_cache_on = ("auction",)
@@ -6590,8 +5940,7 @@ class AuctionTOS(InvalidatesRelatedCache, CachedPropertiesMixin, models.Model):
         blank=True,
         db_index=True,
     )
-    # yes we are using a string to store a number
-    # this is actually important because some day, someone will ask to make the bidder numbers have characters like "1-234" or people's names
+    # A string on purpose: bidder numbers may one day contain characters.
     bidder_number = models.CharField(max_length=20, default="", blank=True, db_index=True)
     bidder_number.help_text = "Must be unique, blank to automatically generate"
     bidding_allowed = models.BooleanField(default=True, blank=True)
@@ -6634,8 +5983,6 @@ class AuctionTOS(InvalidatesRelatedCache, CachedPropertiesMixin, models.Model):
         """Add proper dashes to phone"""
         if not self.phone_number:
             return ""
-        # n = re.sub("[^0-9]", "", self.phone_number)
-        # return format(int(n[:-1]), ",").replace(",", "-") + n[-1]
         n = re.sub(r"\D", "", self.phone_number)
         if len(n) == 10:
             return f"{n[:3]}-{n[3:6]}-{n[6:]}"
@@ -6666,15 +6013,8 @@ class AuctionTOS(InvalidatesRelatedCache, CachedPropertiesMixin, models.Model):
 
     @staticmethod
     def annotate_lot_counts(queryset, auction=None):
-        """Add the per-person lot counts the users table renders, as subqueries.
-
-        Every row of that table shows "N lots sold", "N lots won" and a labels menu, and each of
-        those was its own ``COUNT`` -- 125 queries for 25 people. Subqueries rather than
-        ``Count(..., distinct=True)`` over joins, because several joins to the same table against
-        one another is a row explosion that ``distinct`` then has to undo.
-
-        Pass ``auction`` when every row belongs to one, so the label counts can apply that
-        auction's printing rule (an online auction only prints labels for lots that sold).
+        """Add per-person lot counts for the users table as subqueries (separate joins would explode rows).
+        Pass ``auction`` to apply its label printing rule.
         """
         lots = Lot.objects.exclude(is_deleted=True).filter(auction__isnull=False)
 
@@ -6691,7 +6031,7 @@ class AuctionTOS(InvalidatesRelatedCache, CachedPropertiesMixin, models.Model):
         unprinted = {"banned": False, "label_printed": False}
         printable = {"banned": False}
         if auction is not None and auction.is_online:
-            # print_labels_qs: an online auction only prints labels for lots that sold
+            # Online auctions print labels only for sold lots.
             sold = {"auctiontos_winner__isnull": False, "winning_price__isnull": False}
             unprinted |= sold
             printable |= sold
@@ -6705,7 +6045,7 @@ class AuctionTOS(InvalidatesRelatedCache, CachedPropertiesMixin, models.Model):
 
     @cached_property
     def bought_lots_count(self):
-        """Lots this person won. From the annotation when there is one -- see ``annotate_lot_counts``."""
+        """Lots this person won, from the annotation when present."""
         annotated = getattr(self, "annotated_bought_lots_count", None)
         return self.bought_lots_qs.count() if annotated is None else annotated
 
@@ -6716,14 +6056,8 @@ class AuctionTOS(InvalidatesRelatedCache, CachedPropertiesMixin, models.Model):
         return self.lots_qs.count() if annotated is None else annotated
 
     def lot_owner(self, added_by=None):
-        """The account to store in `Lot.user` for a lot sold by this TOS.
-
-        Normally `self.user`, but that is null whenever this record was created for someone who
-        had no account at the time (an imported bidder list) or was orphaned by the email-change
-        guard above. Saving their lots with `user=None` is what leaves a seller unable to edit
-        their own lots later (see `Lot.is_owned_by`), so `added_by` -- the signed-in person doing
-        the adding -- fills the gap when they are demonstrably this seller. An admin adding lots
-        for somebody else has a different email and is never recorded as the owner.
+        """The account for `Lot.user`: `self.user`, else `added_by` when the adder is demonstrably this seller
+        (same email). An admin adding for someone else is never the owner.
         """
         if self.user:
             return self.user
@@ -6864,9 +6198,7 @@ class AuctionTOS(InvalidatesRelatedCache, CachedPropertiesMixin, models.Model):
             },
         )
         result += f"<span class='dropdown-item {show_on_mobile_string}'><a href={bulk_add_images_url}><i class='bi bi-file-image me-1'></i>Quick add images</a></span>"
-        # For club-managed/check-in auctions, the participant is a ClubMember; surface the
-        # club membership actions (renew, set expiration, membership number) here so the
-        # users list doubles as the member list.
+        # Club-managed: surface membership actions here, so the users list doubles as the member list.
         if self.auction.is_club_managed and self.clubmember_id:
             club = self.auction.club
             cm = self.clubmember
@@ -6892,10 +6224,8 @@ class AuctionTOS(InvalidatesRelatedCache, CachedPropertiesMixin, models.Model):
                         f"<span class='dropdown-item'><a href='javascript:void(0)' hx-get='{resend_card_url}' "
                         f"hx-target='#modals-here'><i class='bi bi-send me-1'></i>Resend membership card</a></span>"
                     )
-            # Deactivating the *member* is not the same thing as the Delete above, which removes
-            # them from this one auction -- and the club page offers both halves of it, so this
-            # page has to as well or "managing members through the auction" quietly means "some of
-            # them". Reactivate is a bare POST with no confirmation, exactly as it is there.
+            # Deactivating the member differs from deleting them from this auction; offer both, as the
+            # club page does.
             if cm.is_deleted:
                 reactivate_url = reverse("club_member_reactivate", kwargs={"pk": cm.pk})
                 result += (
@@ -6934,13 +6264,7 @@ class AuctionTOS(InvalidatesRelatedCache, CachedPropertiesMixin, models.Model):
 
     @cached_property
     def invoice(self):
-        """This person's invoice for this auction, or None.
-
-        Reads the reverse relation so a list of people can
-        ``prefetch_related(Prefetch("auctiontos", queryset=Invoice.objects.order_by("-date")))``
-        and pay one query for the page. Sorted here rather than in SQL for the same reason: a
-        prefetch cannot carry a per-row ``.first()``.
-        """
+        """This person's invoice for this auction, or None, from the reverse relation (prefetchable)."""
         invoices = self.auctiontos.all()
         if invoices._result_cache is None:
             return invoices.order_by("-date").first()
@@ -6948,8 +6272,7 @@ class AuctionTOS(InvalidatesRelatedCache, CachedPropertiesMixin, models.Model):
 
     @cached_property
     def club_member_record(self):
-        """The ClubMember for this user in the auction's club, or None.
-        Uses the direct clubmember link first, then falls back to matching by user and email."""
+        """The ClubMember in the auction's club: the direct link, else by user and email. Or None."""
         if not self.auction.club_id:
             return None
         if self.clubmember and not self.clubmember.is_deleted:
@@ -6967,10 +6290,9 @@ class AuctionTOS(InvalidatesRelatedCache, CachedPropertiesMixin, models.Model):
         return member
 
     def update_alternate_split_from_membership(self, invoice=None):
-        """When the auction's alternate split is in club member discount mode, is_club_member is
-        managed automatically: paid club members (and users whose invoice will renew their
-        membership) get the alternate split.  Recalculates the invoice when the flag changes,
-        since the alternate split changes the seller's payout.  Returns True if the flag changed."""
+        """In club-member-discount mode, keep ``is_club_member`` in step with paid (or renewing) membership and
+        recalculate the invoice on change. True if changed.
+        """
         if self.auction.alternate_split_mode != "club_member":
             return False
         invoice = invoice or self.invoice
@@ -6997,7 +6319,7 @@ class AuctionTOS(InvalidatesRelatedCache, CachedPropertiesMixin, models.Model):
 
     @cached_property
     def invoice_link_html(self):
-        """HTML snippet with a link to the invoice for this auctionTOS, if set.  Otherwise, show create link"""
+        """A link to this person's invoice, or a create link."""
         if self.invoice:
             status = "bag"
             if self.invoice.status == "UNPAID":
@@ -7029,10 +6351,7 @@ class AuctionTOS(InvalidatesRelatedCache, CachedPropertiesMixin, models.Model):
         return 0
 
     def save(self, *args, **kwargs):
-        # Canonicalize a real email (strip + lowercase) so every downstream comparison (user lookup,
-        # bidder-number reuse, the exact-email merge below) and the stored value share one form. Guarded
-        # by `if self.email` so an empty value keeps its existing None/"" state (the "no email" filter
-        # relies on email__isnull, so we must not turn None into "").
+        # Normalize a real email; leave None/"" alone (the "no email" filter uses email__isnull).
         if self.email:
             self.email = normalize_email(self.email)
         if not self.pk:
@@ -7057,32 +6376,10 @@ class AuctionTOS(InvalidatesRelatedCache, CachedPropertiesMixin, models.Model):
             # no emails for in-person auctions, thankyouverymuch
             if not self.auction.is_online:
                 pass
-                # self.confirm_email_sent = True
-                # self.print_reminder_email_sent = True
-                # self.second_confirm_email_sent = True
             if self.email and not self.user:
                 self.user = User.objects.filter(is_active=True, email=self.email).first()
-        # fill out some fields from user, if set
-        # There is a huge security concern here:   <<<< ATTENTION!!!
-        # If someone creates an auction and adds every email address that's public
-        # We must avoid allowing them to collect addresses/phone numbers/locations from these people
-        # Having this code below run only on creation means that the user won't be filled out and prevents collecting data
-        # if making changes, remember that there's user_logged_in_callback in signals.py which sets the user field
-        # if self.user and not self.pk:
-        # moved to AuctionInfo.post()
-        # if not self.name:
-        # 	self.name = self.user.first_name + " " + self.user.last_name
-        # if not self.email:
-        # 	self.email = self.user.email
-        # userData, created = UserData.objects.get_or_create(
-        # 	user = self.user,
-        # 	defaults={},
-        # 	)
-        # if not self.phone_number:
-        # self.phone_number = userData.phone_number
-        # if not self.address:
-        # self.address = userData.address
-        # set the bidder number based on the phone, address, last used number, or just at random
+        # Only on creation: don't copy user details, so adding public emails can't harvest data. See
+        # user_logged_in_callback in signals.py. Then set a bidder number.
         if not self.bidder_number or self.bidder_number == "None":
             last_used = None
             if self.user or self.email:
@@ -7122,34 +6419,26 @@ class AuctionTOS(InvalidatesRelatedCache, CachedPropertiesMixin, models.Model):
                 and self.bidder_number != "ERROR"
             ):
                 user_data.preferred_bidder_number = self.bidder_number
-                # Write only this field: self.user.userdata is whatever instance was cached on the
-                # User object, which can predate changes another instance of the same row has
-                # already saved. A full save() here writes that stale copy back and silently
-                # reverts them -- it was wiping a userdata.address set moments earlier.
+                # Write only this field: the cached UserData may be stale and a full save reverts others.
                 UserData.objects.filter(pk=user_data.pk).update(preferred_bidder_number=self.bidder_number)
         if not self.bidder_number:
             # I don't ever want this to be null
             self.bidder_number = "ERROR"
         if str(self.memo) == "None":
             self.memo = ""
-        # update the email address as appropriate
-        # if you changed the email of this tos, reset the email status
+        # Email changes reset the email status.
         if not self.name:
             self.name = "Unknown"
         if self.pk:
             saved_tos = AuctionTOS.objects.filter(pk=self.pk).first()
             if saved_tos and saved_tos.email != self.email:
                 self.email_address_status = "UNKNOWN"
-                # Only unlink on a *real* email change to an address that isn't the linked user's own.
-                # Filling in a previously blank email (the auction-join flow) is not a change that
-                # invalidates the link, and unlinking so auto-matching can "find the correct user" is
-                # self-defeating when the new email already belongs to the linked user.
+                # Unlink only on a real change to an address the linked user doesn't own.
                 user_owns_new_email = bool(
                     self.user and self.user.email and normalize_email(self.user.email) == self.email
                 )
                 if not self.manually_added and saved_tos.email and not user_owns_new_email:
-                    # Clear the linked account so future auto-matching during auction joins can link this record
-                    # to the correct user for the updated email address.
+                    # Unlink so a later join can link the right user.
                     self.user = None
         # if this is a known address, update the status
         if self.email and self.email_address_status == "UNKNOWN":
@@ -7170,8 +6459,6 @@ class AuctionTOS(InvalidatesRelatedCache, CachedPropertiesMixin, models.Model):
             original_bidder_number = self.bidder_number
             self.bidder_number = self.bidder_number.replace("/", "")
 
-            # Check if the cleaned bidder_number would create a duplicate
-            # Exclude self from the check (if updating existing record)
             existing_tos = AuctionTOS.objects.filter(bidder_number=self.bidder_number, auction=self.auction)
             if self.pk:
                 existing_tos = existing_tos.exclude(pk=self.pk)
@@ -7202,8 +6489,7 @@ class AuctionTOS(InvalidatesRelatedCache, CachedPropertiesMixin, models.Model):
                 user=None,  # System change
             )
 
-        # Check for an exact email duplicate in this auction and merge immediately.
-        # iexact (not =) so a not-yet-normalized existing row still matches the normalized self.email.
+        # Exact email duplicate: merge now. iexact matches unnormalized existing rows.
         if self.email:
             email_duplicate = (
                 AuctionTOS.objects.filter(auction=self.auction, email__iexact=self.email)
@@ -7212,32 +6498,27 @@ class AuctionTOS(InvalidatesRelatedCache, CachedPropertiesMixin, models.Model):
                 .first()
             )
             if email_duplicate:
-                # Keep the older record; merge self (the newer) into it.
-                # merge_duplicate() preserves any non-empty fields (including user) from self onto email_duplicate.
+                # Keep the older record; merge_duplicate preserves self's non-empty fields.
                 email_duplicate.merge_duplicate(self, reason="same email")
                 return
 
-        # Flag name-based fuzzy matches as possible duplicates for admin review (no auto-merge)
+        # Name matches are flagged for review, not merged.
         duplicate_instance = self.auction.find_user(name=self.name, email="", exclude_pk=self.pk)
         if duplicate_instance:
-            # using update here avoids recursion because update does not call save()
+            # update() avoids recursion.
             AuctionTOS.objects.filter(pk=self.pk).update(possible_duplicate=duplicate_instance.pk)
             AuctionTOS.objects.filter(pk=duplicate_instance.pk).update(possible_duplicate=self.pk)
-            # keep this instance in sync with what update() just wrote, or the caller's next save()
-            # writes the stale value straight back over it
+            # Keep in sync with update().
             self.possible_duplicate = duplicate_instance
         else:
-            # no duplicate found
-            # possible_duplicate_id, not possible_duplicate: a dangling id (the row it pointed at was
-            # deleted by a merge) raises DoesNotExist on attribute access instead of being cleared here.
+            # Use the id: the flagged row may have been merged away.
             if self.possible_duplicate_id:
                 # remove ourselves from the duplicate if it was previously set
                 AuctionTOS.objects.filter(pk=self.possible_duplicate_id).update(possible_duplicate=None)
                 AuctionTOS.objects.filter(pk=self.pk).update(possible_duplicate=None)
                 self.possible_duplicate = None
 
-        # If the same user already has another AuctionTOS in this auction, keep the older one
-        # and merge the newer one (self) into it to prevent duplicates from race conditions or signal re-attaches.
+        # The same user's other row in this auction: keep the older, merge this one in.
         if self.user:
             existing = (
                 AuctionTOS.objects.filter(user=self.user, auction=self.auction)
@@ -7269,8 +6550,7 @@ class AuctionTOS(InvalidatesRelatedCache, CachedPropertiesMixin, models.Model):
 
     @cached_property
     def display_name(self):
-        """Use usernames for online auctions, and bidder numbers for in-person auctions"""
-        # return f"{self.user} will meet at {self.pickup_location} for {self.auction}"
+        """Usernames for online auctions, bidder numbers in person."""
         if self.auction.is_online:
             if self.user and not self.manually_added:
                 userData = self.user.userdata
@@ -7290,18 +6570,11 @@ class AuctionTOS(InvalidatesRelatedCache, CachedPropertiesMixin, models.Model):
         verbose_name_plural = "Users in auction"
 
     def force_set_bidder_number(self, number, via_barcode=False, acting_user=None):
-        """Forcefully assign *number* to this TOS record, displacing any existing holder.
+        """Assign *number* to this TOS, first renumbering any holder in the auction. Logs history; saves via
+        update_fields.
 
-        If another TOS in the same auction already has *number*, it is assigned a newly
-        generated unique number first. An AuctionHistory entry is created. The record is
-        saved via update_fields so no full-model side-effects (e.g. bidder-number
-        auto-generation) are triggered.
-
-        In club-managed mode the number belongs to the *member*, not to this row, so this hands off
-        to ``services.set_member_bidder_number`` -- the one place a bidder number is written in that
-        mode. Writing only this row would leave the club page, the member's card and every other
-        auction they are in on the old number, which is the same divergence the mode exists to
-        prevent. Check-in, the barcode scanner and the app's offline queue all arrive here.
+        In club-managed mode the number belongs to the member, so this hands off to
+        ``services.set_member_bidder_number``.
         """
         from django.db import transaction as _tx
 
@@ -7347,16 +6620,12 @@ class AuctionTOS(InvalidatesRelatedCache, CachedPropertiesMixin, models.Model):
             )
 
     def merge_duplicate(self, duplicate, reason="same email", user=None, preserve_missing_fields=True):
-        """Merge a duplicate AuctionTOS into self (self should be the older/canonical record).
-        Moves all won lots, sold lots, invoice adjustments, and payments from duplicate onto self's invoice,
-        preserves any non-empty fields from duplicate that are missing on self,
-        creates an AuctionHistory (or ClubHistory for club-managed auctions) entry, then deletes the duplicate.
-        For club-managed auctions, also merges the associated ClubMember records.
-        Pass user=request.user when this is triggered by an admin action.
+        """Merge a duplicate AuctionTOS into self (the older record): move lots, adjustments and payments,
+        keep missing fields, log history, delete the duplicate. Club-managed auctions also merge ClubMembers.
+        ``user`` for admin-triggered merges.
         """
         if self.pk is None or duplicate.pk is None:
-            # Both records must already exist; an unsaved instance here means a caller merged in the
-            # wrong order and let a save()-time auto-merge delete one out from under it.
+            # Both must be saved; an unsaved one means a save-time merge already deleted it.
             msg = "Cannot merge AuctionTOS records that have not been saved (or were already deleted)."
             raise ValueError(msg)
         if duplicate == self:
@@ -7365,8 +6634,7 @@ class AuctionTOS(InvalidatesRelatedCache, CachedPropertiesMixin, models.Model):
         if duplicate.auction != self.auction:
             msg = "Cannot merge AuctionTOS records from different auctions."
             raise ValueError(msg)
-        # Preserve non-empty fields from duplicate onto self where self has no value.
-        # Explicit None/"" check rather than `not self_val` to avoid unexpected falsy matches.
+        # Keep duplicate's values where self has none (explicit None/"" check).
         if preserve_missing_fields:
             fields_to_preserve = [
                 "user",
@@ -7395,20 +6663,18 @@ class AuctionTOS(InvalidatesRelatedCache, CachedPropertiesMixin, models.Model):
         invoice = Invoice.objects.filter(auctiontos_user=self).first()
         if not invoice:
             invoice = Invoice.objects.create(auctiontos_user=self, auction=self.auction)
-        # Move invoice adjustments and payments from duplicate's invoice to self's invoice
         duplicate_invoice = Invoice.objects.filter(auctiontos_user=duplicate).first()
         if duplicate_invoice:
             InvoiceAdjustment.objects.filter(invoice=duplicate_invoice).update(invoice=invoice)
             InvoicePayment.objects.filter(invoice=duplicate_invoice).update(invoice=invoice)
         invoice.recalculate()
-        # For club-managed auctions, also merge the associated ClubMember records
         merge_action = f"Merged {duplicate.name} (bidder #{duplicate.bidder_number}) into {self.name} (bidder #{self.bidder_number}): {reason}"
         if self.auction.is_club_managed and self.auction.club_id:
             self_club_member = self.clubmember
             dup_club_member = duplicate.clubmember
             if dup_club_member and dup_club_member != self_club_member:
                 if self_club_member:
-                    # Merge: move all other TOS records that point to the duplicate ClubMember
+                    # Move other TOS rows pointing at the duplicate ClubMember.
                     AuctionTOS.objects.filter(clubmember=dup_club_member).exclude(pk=duplicate.pk).update(
                         clubmember=self_club_member
                     )
@@ -7418,9 +6684,7 @@ class AuctionTOS(InvalidatesRelatedCache, CachedPropertiesMixin, models.Model):
                         dup_val = getattr(dup_club_member, field, None)
                         if (self_val is None or self_val == "") and dup_val:
                             setattr(self_club_member, field, dup_val)
-                    # Membership dates: keep whichever row is paid through the later date.  The
-                    # duplicate is often the row that was renewed, and a merge must never shorten
-                    # (or silently end) someone's membership.
+                    # Keep the later paid-through date; a merge must never shorten a membership.
                     for field in ("membership_last_paid", "membership_expiration_date"):
                         self_val = getattr(self_club_member, field, None)
                         dup_val = getattr(dup_club_member, field, None)
@@ -7452,11 +6716,7 @@ class AuctionTOS(InvalidatesRelatedCache, CachedPropertiesMixin, models.Model):
                 action=merge_action,
                 user=user,
             )
-        # possible_duplicate is a self-FK, and the row about to be deleted is usually the one self is
-        # flagged against - that flag is how an admin finds a merge in the first place. The delete
-        # below SET_NULLs the column in the database, but not on this in-memory copy of self, so
-        # clear it here: callers (the merge review form) save self afterwards, and writing the
-        # dangling id back is a foreign key error.
+        # Clear a possible_duplicate pointing at the row being deleted, or saving self fails on the FK.
         if self.possible_duplicate_id == duplicate.pk:
             self.possible_duplicate = None
         # Delete the duplicate (cascades to delete its now-empty invoice)
@@ -7482,7 +6742,6 @@ class AuctionTOS(InvalidatesRelatedCache, CachedPropertiesMixin, models.Model):
             if self.closest_location_for_this_user == self.pickup_location:
                 return True
             return False
-        # single location auction, or user's location not set; anyway, not a problem
         return True
 
     @cached_property
@@ -7652,23 +6911,15 @@ class Lot(CachedPropertiesMixin, models.Model):
             "REPRESENTATIVE",
             "My photo, but not of this exact item.  e.x. This is the parents of these fry",
         ),
-        # Was "This picture is from the internet", which is a confession rather than an answer: it
-        # asked a user to record, in a column, that we are hosting somebody else's photograph -- and
-        # it is what a blank field is silently set to (see LotPage's image handling), so most rows
-        # said it whether the seller meant them to or not.  512(c) does not require a site to police
-        # what its users upload, but it does fall away on red-flag knowledge, and a database column
-        # full of self-reported infringement is the worst possible exhibit.  The category still has
-        # to exist -- it is the catch-all -- so it asks for the thing that actually needs to be true.
+        # Was "This picture is from the internet": a stored self-report of infringement, and the value
+        # blanks default to. The catch-all now asks for what must be true.
         ("RANDOM", "Not my photo - I have permission to use it"),
     )
-    # 3 lot numbers follow, in general use the property lot_number_display which will select the appropriate one
-    # all have the verbose name lot number, and to users they are all essentially the same, but they are used differently
-    # below is the database pk
+    # Three lot numbers; use lot_number_display. This is the pk.
     lot_number = models.AutoField(primary_key=True)
     # below is an automatically assigned int for use in auctions
     lot_number_int = models.IntegerField(null=True, blank=True, verbose_name="Lot number", db_index=True)
-    # below is an override of the other lot numbers, it was the default for use in auctions until 2025, but now lot_number_int is used instead
-    # see https://github.com/iragm/fishauctions/issues/269
+    # The auction lot number until 2025; lot_number_int is used now (issue #269).
     custom_lot_number = models.CharField(max_length=9, blank=True, null=True, verbose_name="Lot number", db_index=True)
     custom_lot_number.help_text = "You can override the default lot number with this"
     lot_name = models.CharField(max_length=40)
@@ -7684,14 +6935,6 @@ class Lot(CachedPropertiesMixin, models.Model):
     i_bred_this_fish = models.BooleanField(default=False, verbose_name=settings.I_BRED_THIS_FISH_LABEL)
     i_bred_this_fish.help_text = "Check to get breeder points for this lot"
     summernote_description = models.TextField(verbose_name="Description", default="", blank=True)
-    # description = MarkdownField(
-    #     rendered_field="description_rendered",
-    #     validator=VALIDATOR_STANDARD,
-    #     blank=True,
-    #     null=True,
-    # )
-    # description.help_text = "To add a link: [Link text](https://www.google.com)"
-    # description_rendered = RenderedMarkdownField(blank=True, null=True)
     reference_link = models.URLField(blank=True, null=True)
     reference_link.help_text = (
         "A URL with additional information about this lot.  YouTube videos will be automatically embedded."
@@ -7794,7 +7037,7 @@ class Lot(CachedPropertiesMixin, models.Model):
         "when the queue entry is removed or the lot sells) so the auction stats can report how much "
         "the queue was used."
     )
-    # seller and buyer invoice are no longer needed and can safely be removed in a future migration
+    # Unused; remove in a future migration.
     seller_invoice = models.ForeignKey(
         "Invoice",
         null=True,
@@ -7814,8 +7057,7 @@ class Lot(CachedPropertiesMixin, models.Model):
     promoted.help_text = "This does nothing right now lol"
     promotion_budget = models.PositiveIntegerField(default=2, validators=[MinValueValidator(0), MaxValueValidator(5)])
     promotion_budget.help_text = "The most money you're willing to spend on ads for this lot."
-    # promotion weight started out as a way to test how heavily a lot should get promoted, but it's now used as a random number generator
-    # to allow some stuff that's not in your favorite cateogy to show up in the recommended list
+    # Now a random number so some lots outside favourite categories appear in recommendations.
     promotion_weight = models.PositiveIntegerField(default=0, validators=[MinValueValidator(0), MaxValueValidator(20)])
     feedback_rating = models.IntegerField(default=0, validators=[MinValueValidator(-1), MaxValueValidator(1)])
     feedback_text = models.CharField(max_length=500, blank=True, null=True)
@@ -7828,13 +7070,12 @@ class Lot(CachedPropertiesMixin, models.Model):
     )
     buy_now_used = models.BooleanField(default=False)
 
-    # Location, populated from userdata.  This is needed to prevent users from changing their address after posting a lot
+    # Copied from userdata, so a seller can't move after posting.
     latitude = models.FloatField(blank=True, null=True, db_index=True)
     longitude = models.FloatField(blank=True, null=True, db_index=True)
     address = models.CharField(max_length=500, blank=True, null=True)
 
-    # Payment and shipping options, populated from last submitted lot
-    # Only show these fields if auction is set to none
+    # Payment and shipping options from the last lot; only shown when not in an auction.
     payment_paypal = models.BooleanField(default=False, verbose_name="PayPal accepted")
     payment_cash = models.BooleanField(default=False, verbose_name="Cash accepted")
     payment_other = models.BooleanField(default=False, verbose_name="Other payment method accepted")
@@ -7866,10 +7107,8 @@ class Lot(CachedPropertiesMixin, models.Model):
         User, null=True, blank=True, on_delete=models.SET_NULL, related_name="max_bid_revealed_by"
     )
     admin_validated = models.BooleanField(default=False)
-    # use_images_from allows a lot to delegate image management to another lot.
-    # When set, the `images` and `thumbnail` properties return images from the source lot.
-    # Note: lot copying (cloning) deep-copies images rather than using this field — it is
-    # primarily set/read for programmatic use (e.g. to show "images managed from" on the lot detail page).
+    # Delegates image management to another lot (``images`` and ``thumbnail`` read the source). Lot
+    # copying deep-copies images instead.
     use_images_from = models.ForeignKey(
         "self",
         null=True,
@@ -7900,8 +7139,7 @@ class Lot(CachedPropertiesMixin, models.Model):
     def save(self, *args, **kwargs):
         from django.db import transaction
 
-        # for old and new auctions, generate a lot number int or custom_lot_number
-        # Use database-level locking to prevent race conditions when assigning lot numbers
+        # Assign lot_number_int or custom_lot_number under a row lock to avoid races.
         needs_lock = self.auction and (
             (self.lot_number_int is None)  # Standard mode needs lot_number_int
             or (
@@ -7912,15 +7150,13 @@ class Lot(CachedPropertiesMixin, models.Model):
         if needs_lock:
             # We need to wrap the entire save in a transaction with locking
             with transaction.atomic():
-                # Lock the auction row using SELECT FOR UPDATE
-                # This will block other transactions trying to lock the same row until this transaction completes
                 Auction.objects.select_for_update().get(pk=self.auction.pk)
 
                 # Assign lot_number_int if needed
                 if self.lot_number_int is None:
                     # Now safely get the max lot_number_int while holding the lock
                     minimum_lot_number = 1
-                    # This is deliberately not excluding deleted and removed lots -- don't use auction.lots_qs here
+                    # Deliberately includes deleted and removed lots.
                     max_number = Lot.objects.filter(auction=self.auction).aggregate(Max("lot_number_int"))[
                         "lot_number_int__max"
                     ]
@@ -7933,12 +7169,7 @@ class Lot(CachedPropertiesMixin, models.Model):
             self._do_save(*args, **kwargs)
 
     def invalidate_cached_properties(self, *names):
-        """Drop this lot's caches, and the counts the people and auction behind it are holding.
-
-        A lot changing hands (sold, banned, label printed) changes ``AuctionTOS.lots_count``,
-        ``unprinted_label_count`` and friends -- which the users table caches per row. Reached
-        through fields_cache, so this only touches instances the caller is already holding.
-        """
+        """Drop this lot's caches and the counts its participants and auction hold (reached via fields_cache)."""
         super().invalidate_cached_properties(*names)
         for relation in ("auctiontos_seller", "auctiontos_winner", "auction"):
             related = self._state.fields_cache.get(relation)
@@ -7947,7 +7178,7 @@ class Lot(CachedPropertiesMixin, models.Model):
 
     def _do_save(self, *args, **kwargs):
         """Internal method to complete the save operation"""
-        # custom lot number set for old auctions: bidder_number-lot_number format
+        # Seller-dash auctions: bidder_number-lot_number.
         if not self.custom_lot_number and self.auction and self.auction.use_seller_dash_lot_numbering:
             if self.auctiontos_seller:
                 custom_lot_number = 1
@@ -7969,15 +7200,9 @@ class Lot(CachedPropertiesMixin, models.Model):
             fix_category = True
         if self.category_checked:
             fix_category = False
-        # A species that knows its category overrules a guess, and keeps overruling it when the
-        # seller changes the species later -- the picker is on the same screen as the lot name, so
-        # "category_checked" from a previous save is about a name, not about this species.  A
-        # category a *person* chose is never touched: category_automatically_added is how we know.
-        #
-        # "Uncategorized" counts as nothing rather than as a choice.  It is where a lot lands when
-        # the guesser had no idea, and a lot sitting there while its species knows the answer is
-        # the exact case this is for -- including the one that reaches it, adding a species from
-        # the admin gaps page to lots that were categorised (as nothing) long ago.
+        # A species' category overrides a guessed category, even after the species changes. A
+        # person's choice (category_automatically_added unset) is never touched. "Uncategorized"
+        # counts as no choice.
         uncategorised = not self.species_category or self.species_category.name == "Uncategorized"
         from_species = self.category_from_species
         if from_species and (fix_category or uncategorised or self.category_automatically_added):
@@ -8003,10 +7228,6 @@ class Lot(CachedPropertiesMixin, models.Model):
         if not self.reference_link:
             search = self.lot_name.replace(" ", "%20")
             self.reference_link = f"https://www.google.com/search?q={search}&tbm=isch"
-        # These lines would make it so you can't set a reserve price (for in person bidding)
-        # when an auction is set to be buy now only
-        # if self.auction and self.auction.online_bidding == "buy_now_only":
-        #    self.reserve_price = self.buy_now_price
         if (
             self.auction
             and self.auction.force_donation_threshold
@@ -8028,16 +7249,11 @@ class Lot(CachedPropertiesMixin, models.Model):
                     "unsubscribed": not self.user.userdata.email_me_when_people_comment_on_my_lots,
                 },
             )
-        # make sure lot_number_display is unique within the auction
-        # This handles both lot_number_int and custom_lot_number (seller_dash_lot_numbering)
-        # reported in a large auction where two lots had the same number but I have not been able to reproduce it
-        # https://github.com/iragm/fishauctions/issues/420
-        # Note: Only check after first save (when pk exists). Race conditions during initial save
-        # are prevented by the SELECT FOR UPDATE locking in the save() method above.
+        # lot_number_display must be unique in the auction (issue #420). Only after the first save;
+        # the initial save is protected by the row lock.
         if self.auction and self.pk:
             # Check for duplicates based on lot_number_display
             if self.auction.use_seller_dash_lot_numbering and self.custom_lot_number:
-                # Check for duplicate custom_lot_number in seller_dash_lot_numbering mode
                 duplicate_lot = (
                     Lot.objects.filter(
                         auction=self.auction,
@@ -8119,8 +7335,9 @@ class Lot(CachedPropertiesMixin, models.Model):
         return get_currency_symbol(self.currency)
 
     def add_winner_message(self, user, tos, winning_price):
-        """Create a lot history message when a winner is declared (or changed)
-        It's critical that this function is called every time the winner is changed so that invoices get recalculated"""
+        """A lot history message when a winner is set or changed. Must be called on every change so invoices
+        recalculate.
+        """
         message = (
             f"{user.username} has set bidder {tos} as the winner of this lot ({self.currency_symbol}{winning_price})"
         )
@@ -8160,8 +7377,7 @@ class Lot(CachedPropertiesMixin, models.Model):
             serialized = {k: float(v) if isinstance(v, Decimal) else v for k, v in message.items()}
             async_to_sync(channel_layer.group_send)(f"lot_{self.pk}", serialized)
         except Exception:
-            # Channel layer failures must never prevent a winner from being declared
-            # or a lot from being marked sold.
+            # Channel failures never block declaring a winner.
             logger.exception("Failed to send websocket message for lot %s", self.pk)
 
     def send_ending_very_soon_message(self):
@@ -8177,7 +7393,7 @@ class Lot(CachedPropertiesMixin, models.Model):
             self.send_websocket_message(result)
 
     def send_lot_end_message(self):
-        """Send websocket message and create LotHistory when lot ends with or without a winner"""
+        """Websocket message and LotHistory when a lot ends, with or without a winner."""
         info = None
         bidder = None
 
@@ -8190,7 +7406,7 @@ class Lot(CachedPropertiesMixin, models.Model):
             current_high_bid = self.high_bid
             message = f"Won by {self.high_bidder_display}"
 
-        # at this point, the lot should have a winner filled out if it's sold.  If it still doesn't:
+        # Unsold at this point: find the high bidder.
         if not self.sold:
             high_bidder_pk = None
             high_bidder_name = None
@@ -8219,7 +7435,7 @@ class Lot(CachedPropertiesMixin, models.Model):
                     current_price=self.high_bid,
                 )
             except Exception:
-                # LotHistory is for the activity feed; never block the lot from ending.
+                # Activity feed only; never block ending the lot.
                 logger.exception("Failed to create lot end LotHistory for lot %s", self.pk)
         self.save()
 
@@ -8243,11 +7459,7 @@ class Lot(CachedPropertiesMixin, models.Model):
             )
 
     def process_relist_logic(self):
-        """Handle automatic relisting logic for non-auction lots
-
-        Returns:
-            tuple: (relist: bool, sendNoRelistWarning: bool)
-        """
+        """Automatic relisting for non-auction lots: ``(relist, sendNoRelistWarning)``."""
         relist = False
         sendNoRelistWarning = False
 
@@ -8270,11 +7482,7 @@ class Lot(CachedPropertiesMixin, models.Model):
         return relist, sendNoRelistWarning
 
     def relist_lot(self):
-        """Create a duplicate lot for relisting purposes
-
-        Returns:
-            Lot: The newly created lot
-        """
+        """Create a relisted copy of this lot and return it."""
         originalImages = LotImage.objects.filter(lot_number=self.pk)
         originalPk = self.pk
         self.pk = None  # create a new, duplicate lot
@@ -8302,9 +7510,9 @@ class Lot(CachedPropertiesMixin, models.Model):
             )
             if originalImage.image:
                 newImage.image = get_thumbnailer(originalImage.image)
-                # both rows now share the same file, so they can share the same Cloudflare image
+                # Shared file, shared Cloudflare image.
                 newImage.cloudflare_image_id = originalImage.cloudflare_image_id
-            # if the original lot sold, this picture sure isn't of the actual item
+            # A sold lot's picture isn't of the new item.
             if originalImage.image_source == "ACTUAL":
                 newImage.image_source = "REPRESENTATIVE"
             newImage.save()
@@ -8312,8 +7520,7 @@ class Lot(CachedPropertiesMixin, models.Model):
         return self
 
     def refund(self, amount, user, message=None):
-        """Call this to add a message when refunding a lot
-        If square_refund_possible, automatically processes Square refund"""
+        """Record a refund message; processes a Square refund when possible."""
         if amount and amount != self.partial_refund_percent:
             # Check if we should process a Square refund automatically
             if self.square_refund_possible and not self.no_more_refunds_possible:
@@ -8341,12 +7548,7 @@ class Lot(CachedPropertiesMixin, models.Model):
 
     @cached_property
     def winner_invoice(self):
-        """Get the Invoice for this lot's winner, or None.
-
-        The ``AuctionTOS`` route first, because that one is prefetchable
-        (``prefetch_related("auctiontos_winner__auctiontos")``) and the auction's lot table renders it
-        once per row -- it was a query per lot, twice, for seller and winner alike.
-        """
+        """The winner's Invoice, or None; via AuctionTOS first, which is prefetchable."""
         from auctions.models import Invoice
 
         if self.auctiontos_winner_id:
@@ -8359,12 +7561,7 @@ class Lot(CachedPropertiesMixin, models.Model):
 
     @cached_property
     def sellers_invoice(self):
-        """Get the Invoice for this lot's seller, or None.
-
-        The ``AuctionTOS`` route first, because that one is prefetchable
-        (``prefetch_related("auctiontos_seller__auctiontos")``) and the auction's lot table renders it
-        once per row -- it was a query per lot, twice, for seller and winner alike.
-        """
+        """The seller's Invoice, or None; via AuctionTOS first, which is prefetchable."""
         from auctions.models import Invoice
 
         if self.auctiontos_seller_id:
@@ -8377,8 +7574,7 @@ class Lot(CachedPropertiesMixin, models.Model):
 
     @cached_property
     def square_refund_possible(self):
-        """Returns True if there's a Square payment associated with this lot's invoice
-        with enough funds to cover the lot's cost and no refund has been issued yet"""
+        """True with a Square payment on the winner's invoice that covers the lot and no refund yet."""
         if not self.winning_price or self.winning_price <= 0:
             return False
 
@@ -8410,12 +7606,7 @@ class Lot(CachedPropertiesMixin, models.Model):
         return payment.amount_available_to_refund >= lot_cost
 
     def square_refund(self, percent):
-        """Create a Square refund for this lot
-        Args:
-            percent: Percentage of lot winning_price to refund (0-100)
-        Returns:
-            Error message string or None on success
-        """
+        """Create a Square refund for ``percent`` of the winning price. Error string or None."""
         from decimal import Decimal
 
         from auctions.models import InvoicePayment, SquareSeller
@@ -8482,21 +7673,11 @@ class Lot(CachedPropertiesMixin, models.Model):
         self.save()
 
     def is_owned_by(self, user):
-        """See if `user` is the seller of this lot, and so may edit, delete or add images to it.
+        """Whether `user` is the seller and may edit, delete or add images.
 
-        `Lot.user` is the direct link, but it is null on plenty of lots their owner really did
-        create: a lot added through an auction takes its owner from `auctiontos_seller.user`, and
-        that field is null whenever the TOS wasn't attached to an account at the moment the lot
-        was saved -- an admin-imported bidder list, or a record orphaned by the email-change guard
-        in `AuctionTOS.save()` (see the `relink_auctiontos_users` command). Linking the TOS
-        afterwards doesn't backfill the lots, so the lot keeps `user=None` forever and its seller
-        gets told the lot isn't theirs, even though it's on their invoice and their selling
-        dashboard. The seller TOS has to be consulted too, matched the way `InvoiceView` decides
-        an invoice is yours: by account, or by email (verification is mandatory, so a matching
-        `User.email` is proof of the address).
-
-        `backfill_lot_users` repairs the stored `Lot.user` for existing rows; this is what keeps
-        the answer right regardless of whether that has been run.
+        `Lot.user` is null on many real sellers' lots (created through an unlinked TOS), so the seller TOS is
+        checked too, by account or verified email, as `InvoiceView` does. `backfill_lot_users` repairs stored
+        rows.
         """
         if not user or not user.is_authenticated:
             return False
@@ -8518,7 +7699,7 @@ class Lot(CachedPropertiesMixin, models.Model):
             return False
         if not user.is_authenticated:
             return False
-        # Check if any auction lots using this lot's images have can_add_images=False (e.g., sold lots)
+        # Lots borrowing this lot's images that can't take images (e.g. sold).
         dependent_lots = Lot.objects.filter(use_images_from=self, is_deleted=False)
         for dependent_lot in dependent_lots:
             if dependent_lot.auction and not dependent_lot.can_add_images:
@@ -8528,11 +7709,7 @@ class Lot(CachedPropertiesMixin, models.Model):
         if user.is_superuser:
             return True
         if self.auction:
-            # Whoever may run the auction may fix its pictures.  This used to ask half of
-            # Auction.permission_check by hand -- the is_admin participant row and the creator --
-            # and so missed the club half of it entirely: in a club-managed auction admin comes
-            # from ClubMember.permission_admin / permission_manage_auctions, and the officer
-            # running it was refused on every lot but their own.
+            # Auction.permission_check, which includes club admins of club-managed auctions.
             return self.auction.permission_check(user)
         return False
 
@@ -8678,8 +7855,7 @@ class Lot(CachedPropertiesMixin, models.Model):
 
     @property
     def auction_show_high_bidder_template(self):
-        """A div that admins can click on to show the high bidder.  Include only if view is admin
-        Returns safe html for inclusion in a template"""
+        """Admin-only HTML to reveal the high bidder. Returns safe HTML."""
         if (
             self.auction
             and self.high_bidder
@@ -8733,7 +7909,7 @@ class Lot(CachedPropertiesMixin, models.Model):
 
     @property
     def bap_placeholder(self):
-        """Label for the points field: Culture, HAP, or BAP depending on club settings and category."""
+        """Points label: Culture, HAP or BAP by club settings and category."""
         if self.auction and self.auction.club:
             club = self.auction.club
             cat = self.species_category.name if self.species_category else None
@@ -8745,8 +7921,9 @@ class Lot(CachedPropertiesMixin, models.Model):
 
     @cached_property
     def unsold_lot_no_bap_reason(self):
-        """Return a BAP_REASON_CHOICES key if this lot is ineligible for BAP points, or None if eligible.
-        Ignores whether the lot has sold — use sold_lot_no_bap_reason for that check."""
+        """A BAP_REASON_CHOICES key if ineligible for points, or None. Ignores whether sold (see
+        sold_lot_no_bap_reason).
+        """
         if not self.auction or not self.auction.club:
             return "not_eligible"
         club = self.auction.club
@@ -8761,16 +7938,15 @@ class Lot(CachedPropertiesMixin, models.Model):
         if club.no_min_bids and self.reserve_price > self.auction.minimum_bid:
             return "has_min_bid"
         category_name = self.species_category.name if self.species_category else None
-        # Live food cultures are only eligible when CAP is enabled (they go to Culture track).
-        # When CAP is disabled they have no BAP track, so treat them as ineligible.
+        # Live food is eligible only when CAP is on.
         if not club.separate_cap and category_name == "Live food cultures":
             return "category_not_eligible"
-        # Compute seller identity early so not_long_enough can be checked before low_quantity.
+        # Seller identity, needed before the low_quantity check.
         seller_user = self.user or (self.auctiontos_seller.user if self.auctiontos_seller else None)
         seller_email = (self.auctiontos_seller.email if self.auctiontos_seller else None) or (
             seller_user.email if seller_user else None
         )
-        # Check not_long_enough before low_quantity so it takes priority when both conditions are true.
+        # not_long_enough takes priority over low_quantity.
         if club.days_between_same_name_lots > 0 and (seller_user or seller_email):
             cutoff = timezone.now() - datetime.timedelta(days=club.days_between_same_name_lots)
             base_prior = Lot.objects.filter(
@@ -8788,13 +7964,7 @@ class Lot(CachedPropertiesMixin, models.Model):
                 ).exists()
             if prior:
                 return "not_long_enough"
-        # The same rule again, on the species rather than on what the seller typed.  Two lots
-        # called "yellow labs" and "Labidochromis caeruleus" are one fish bred twice, and the name
-        # rule cannot see that; this can, because the scientific name is picked from a list.
-        #
-        # Matched on the species row itself, never on its parent: a strain is a row of its own, so
-        # blue and red cherry shrimp are two different things to breed and both earn points.  That
-        # is the whole reason the strains are rows -- see Species.variety.
+        # The same rule on the species row (not its parent): strains are separate things to breed.
         if club.days_between_same_species_lots > 0 and self.species_id and (seller_user or seller_email):
             cutoff = timezone.now() - datetime.timedelta(days=club.days_between_same_species_lots)
             base_prior = Lot.objects.filter(
@@ -8812,7 +7982,7 @@ class Lot(CachedPropertiesMixin, models.Model):
                 ).exists()
             if prior:
                 return "not_long_enough"
-        # HAP/culture categories (plants, snails, live food) are never blocked by quantity minimums.
+        # Plants, snails and live food ignore quantity minimums.
         ignore_quantity = category_name in ("Aquatic plants", "Live food cultures", "Snails and other inverts")
         if not ignore_quantity and self.quantity < club.min_quantity:
             return "low_quantity"
@@ -8843,7 +8013,7 @@ class Lot(CachedPropertiesMixin, models.Model):
 
     @property
     def sold_lot_no_bap_reason(self):
-        """Return a BAP_REASON_CHOICES key if ineligible for awarded points, or None if eligible."""
+        """A BAP_REASON_CHOICES key if ineligible for awarded points, or None."""
         if not self.sold:
             club = self.auction.club if self.auction else None
             if not club or club.only_sold_lots:
@@ -8851,11 +8021,8 @@ class Lot(CachedPropertiesMixin, models.Model):
         return self.unsold_lot_no_bap_reason
 
     def bap_points_for_club(self, club):
-        """How many points this lot is worth to *club*, before any custom checkbox bonus.
-
-        Most specific rule wins: a genus override beats a category override, which beats the
-        club's flat rate, which beats the category's own default.  The genus rule is what lets a
-        club say "*Tropheus* is worth 15" without splitting Cichlids into its own category.
+        """Points this lot is worth to *club* before the checkbox bonus: genus override, category override,
+        club flat rate, category default.
         """
         if self.species and self.species.genus:
             genus_override = ClubBapGenusOverride.objects.filter(club=club, genus=self.species.genus).first()
@@ -8867,26 +8034,14 @@ class Lot(CachedPropertiesMixin, models.Model):
             ).first()
             if category_override is not None:
                 return category_override.points
-        # `is not None`, not `or`: a club that deliberately sets 0 points per lot means zero, and
-        # falling through to the category default there would quietly award points it said not to.
+        # `is not None`: 0 means zero.
         if club.points_per_lot is not None:
             return club.points_per_lot
         return self.species_category.bap_points if self.species_category else 5
 
     def default_bap_points(self, club):
-        """What the Approve button offers for this lot: :meth:`bap_points_for_club` plus the bonus.
-
-        The bonus is the club's ``points_for_custom_checkbox`` -- "was this fish spawned in a
-        species tank", or whatever else the auction put on that checkbox -- and it is part of the
-        default rather than a separate figure because it is part of what the lot is worth.
-
-        One method because there were three answers to this question and only one of them was
-        right.  ``auto_award_bap_points`` had it; ``LotBapPointsView._render_buttons`` checked the
-        category override but not the genus one, so approving a *Tropheus* re-rendered the row with
-        a different number than the table had just shown; and ``BapAwardAdminView._lot_initial``
-        had the overrides but dropped the bonus.  ``ClubBapLotHTMxTable.render_actions`` is the one
-        deliberate copy -- it runs once per row on a page that shows hundreds, so it reads the same
-        precedence off two prefetched dicts rather than off two queries per lot.
+        """What Approve offers: :meth:`bap_points_for_club` plus ``points_for_custom_checkbox`` if ticked. The
+        one definition; ``ClubBapLotHTMxTable.render_actions`` is a deliberate prefetched copy.
         """
         points = self.bap_points_for_club(club)
         if club.points_for_custom_checkbox > 0 and self.custom_checkbox:
@@ -8894,9 +8049,8 @@ class Lot(CachedPropertiesMixin, models.Model):
         return points
 
     def auto_award_bap_points(self):
-        """Always store bap_auto_reason when a winner is set; also create a BapAward if auto_add_points is on.
-
-        Safe to call unconditionally on set_winner — skips silently if no club, or if an award already exists.
+        """Store bap_auto_reason when a winner is set, and create a BapAward if auto_add_points. Safe to call
+        repeatedly.
         """
         if not (self.auction and self.auction.club):
             return
@@ -8904,8 +8058,7 @@ class Lot(CachedPropertiesMixin, models.Model):
         if BapAward.objects.filter(lot=self).exists():
             return
         club = self.auction.club
-        # Always compute and persist the eligibility reason so the pending table can display it without
-        # falling back to live queries.  Empty string = eligible (no blocking reason).
+        # Always stored so the pending table needs no live queries; "" is eligible.
         reason = self.sold_lot_no_bap_reason
         self.bap_auto_reason = reason or ""
         self.bap_points_awarded = 0
@@ -8914,7 +8067,7 @@ class Lot(CachedPropertiesMixin, models.Model):
             # Ineligible — reason stored above; nothing more to do
             return
         if not club.auto_add_points:
-            # Eligible but club requires manual approval — reason is "" (eligible), award created by admin
+            # Eligible, manual approval: the admin creates the award.
             return
         # Eligible + auto_add_points: create the BapAward now
         points = self.default_bap_points(club)
@@ -8961,41 +8114,29 @@ class Lot(CachedPropertiesMixin, models.Model):
         dynamic_end = datetime.timedelta(minutes=60)
         if self.auction:
             return self.auction.dynamic_end
-        # there is currently no hard endings on lots not associated with an auction
-        # as soon as the lot is saved, date_end will be set to dynamic_end (by bidding.reset_lot_end_time)
-        # a new field hard_end could be added to lot to accomplish this, but I do not think it makes sense to have a hard end at this point
-        # collect stats from a couple auctions with dynamic endings and re-assess
+        # No hard end for non-auction lots; date_end is extended by bidding.reset_lot_end_time.
         return self.date_end + dynamic_end
 
     @property
     def calculated_end(self):
-        """Return datetime object for when this lot will end.
-
-        A good alternative is lot.calculated_end_for_templates which returns either a string or a datetime
-        """
+        """When this lot ends. See calculated_end_for_templates for display."""
         # for in-person auctions only
         if self.is_part_of_in_person_auction:
             return self.auction.date_start + datetime.timedelta(days=364)
         # online auctions update lot.date_end (rolling endings)
         if self.date_end:
             return self.date_end
-        # I would hope we never get here...but it it theoretically possible that a bug could cause self.date_end to be blank
+        # Shouldn't happen: date_end blank.
         return timezone.now()
 
     @property
     def ends_when_sold(self):
-        """True when this lot has no end time to show, only "when the auctioneer gets to it".
-
-        An in-person lot ends when the room ends it, so until it has a winner there is no date to
-        print -- which is what calculated_end_for_templates says in words. Templates that put a
-        label in front of it ("Ends ...") need to know which of the two they are about to render.
-        """
+        """True when an in-person lot has no end to show yet, only "when the auctioneer gets to it"."""
         return self.is_part_of_in_person_auction and not (self.winner_as_str and self.date_end)
 
     @property
     def calculated_end_for_templates(self):
-        """For models, use self.calculated_end which always returns a date
-        But for places where a user can see this, we need a friendly reminder that the auction admin needs to manually end lots"""
+        """calculated_end for display: in-person lots say they end when the admin ends them."""
         if self.is_part_of_in_person_auction:
             if self.winner_as_str and self.date_end:
                 # a sold lot that's part of an in-person auction
@@ -9014,7 +8155,7 @@ class Lot(CachedPropertiesMixin, models.Model):
     @property
     def bids_can_be_removed(self):
         """True or False"""
-        # sometimes people use buy now, in which case self.ended = True, but the auction itself hasn't ended yet
+        # Buy now ends the lot before the auction closes.
         if self.auction and self.ended and not self.auction.closed:
             return True
         if self.ended:
@@ -9042,18 +8183,14 @@ class Lot(CachedPropertiesMixin, models.Model):
         if self.cannot_change_reason:
             return self.cannot_change_reason
         if self.auction:
-            # if this lot is part of an auction, allow changes right up until lot submission ends
+            # Editable until lot submission ends.
             if timezone.now() > self.auction.lot_submission_end_date:
                 return "Lot submission is over for this auction"
-        # if we are getting here, there are no bids or this lot is not part of an auction
-        # lots that are not part of an auction can always be edited as long as there are no bids
         return False
 
     @property
     def can_be_edited(self):
-        """Check to see if this lot can be edited.
-        This is needed to prevent people making lots a donation right before the auction ends
-        Actually, by request from many people, there's nothing at all preventing that right at this moment..."""
+        """Whether this lot can be edited."""
         if self.cannot_be_edited_reason:
             return False
         return True
@@ -9063,7 +8200,7 @@ class Lot(CachedPropertiesMixin, models.Model):
         if self.cannot_change_reason:
             return self.cannot_change_reason
         if self.auction and self.auction.is_online and self.auction.unsold_lot_fee:
-            # if this lot is part of an auction, allow changes until 24 hours before the lot submission end
+            # Deletable until 24 hours before lot submission ends.
             if timezone.now() > self.auction.lot_submission_end_date - datetime.timedelta(hours=24):
                 return "It's too late to delete lots in this auction"
         if self.auction and self.auction.unsold_lot_fee:
@@ -9077,8 +8214,7 @@ class Lot(CachedPropertiesMixin, models.Model):
 
     @property
     def can_be_deleted(self):
-        """Check to see if this lot can be deleted.
-        This is needed to prevent people deleting lots that don't sell right before the auction ends"""
+        """Whether this lot can be deleted (not right before the auction ends)."""
         if self.cannot_be_deleted_reason:
             return False
         return True
@@ -9101,7 +8237,7 @@ class Lot(CachedPropertiesMixin, models.Model):
 
     @property
     def bidding_error(self):
-        """Return false if bidding is allowed, or an error message.  Used when trying to bid on lots."""
+        """False if bidding is allowed, else an error message."""
         if self.banned:
             if self.ban_reason:
                 return f"This lot has been removed: {self.ban_reason}"
@@ -9149,10 +8285,7 @@ class Lot(CachedPropertiesMixin, models.Model):
 
     @property
     def is_part_of_in_person_auction(self):
-        # but, see https://github.com/iragm/fishauctions/issues/116
-        # all we would need for this request is to configure Auction.date_end
-        # and a new view to set it to X date (probably 1 minute in the future)
-        # the biggest issue I see is lack of an undo on this option
+        # Issue #116: an early auction end would need Auction.date_end and a view to set it.
         if self.auction:
             if self.auction.is_online:
                 return False
@@ -9162,8 +8295,7 @@ class Lot(CachedPropertiesMixin, models.Model):
 
     @cached_property
     def ended(self):
-        """Used by the view for display of whether or not the auction has ended
-        See also the database field active, which is set (based on this field) by a system job (endauctions.py)"""
+        """Whether the lot has ended, for display. ``active`` is set from this by endauctions."""
         # lot attached to in person auctions do not end unless manually set
         if self.sold or self.banned or self.is_deleted:
             return True
@@ -9177,7 +8309,7 @@ class Lot(CachedPropertiesMixin, models.Model):
 
     @property
     def minutes_to_end(self):
-        """Number of minutes until bidding ends, as an int.  Returns 0 if bidding has ended"""
+        """Minutes until bidding ends; 0 if ended."""
         if self.is_part_of_in_person_auction:
             return 999
         timedelta = self.calculated_end - timezone.now()
@@ -9200,18 +8332,14 @@ class Lot(CachedPropertiesMixin, models.Model):
 
     @property
     def ending_very_soon(self):
-        """
-        If a lot is about to end in less than a minute, notification will be pushed to the channel
-        """
+        """True when ending within a minute, so a notification is pushed."""
         if self.minutes_to_end < 1:
             return True
         return False
 
     @property
     def within_dynamic_end_time(self):
-        """
-        Return true if a lot will end in the next 15 minutes.  This is used to update the lot end time when last minute bids are placed.
-        """
+        """True when ending within 15 minutes, so late bids extend it."""
         if self.is_part_of_in_person_auction:
             return False
         if self.minutes_to_end < 15:
@@ -9237,9 +8365,7 @@ class Lot(CachedPropertiesMixin, models.Model):
         return self.max_bid
 
     def _latest_bid_per_user_subquery(self):
-        """Return a subquery that identifies the pk of the latest bid per user for this lot.
-        Used to deduplicate bids when a user has placed multiple bids (keeping only the latest).
-        Using pk (ordered by -bid_time, -pk) avoids false matches when two bids share a timestamp."""
+        """Subquery for each user's latest bid pk (by -bid_time, -pk), to dedupe bids."""
         return (
             Bid.objects.exclude(is_deleted=True)
             .filter(
@@ -9252,7 +8378,7 @@ class Lot(CachedPropertiesMixin, models.Model):
 
     @cached_property
     def max_bid(self):
-        """returns the highest bid amount for this lot - this number should not be visible to the public"""
+        """The highest bid amount. Never public."""
         allBids = (
             Bid.objects.exclude(is_deleted=True)
             .filter(
@@ -9272,25 +8398,17 @@ class Lot(CachedPropertiesMixin, models.Model):
 
     @cached_property
     def bids(self):
-        """Bids on this lot, highest first, one per user (their latest bid). A **list**, not a queryset.
+        """Bids, highest first, one per user (their latest), as a list.
 
-        Read through ``self.bid_set`` and narrowed here rather than in SQL, so a lot list can
-        ``prefetch_related("bid_set")`` and pay one query per page instead of one per row. Same
-        rule as the old subquery, in the same order: of a user's bids only their **latest** counts,
-        and only if placed by the time the lot ended and at least the reserve -- a late or
-        under-reserve latest bid drops that user rather than falling back to an earlier one. A list
-        because callers index it twice; cached (``Bid.save()`` drops it) because a lot list row
-        reads ``high_bid``, ``high_bidder_display`` and ``ended``, all of which come through here.
+        From ``self.bid_set`` so lists can prefetch. A user's latest bid counts only if placed by the end and
+        at least the reserve. Cached; ``Bid.save()`` clears it.
         """
         if self.pk is None:
-            # an unsaved lot has no bids, and self.bid_set would raise rather than say so
+            # Unsaved: no bids (bid_set would raise).
             return []
         related = self.bid_set.all()
         if related._result_cache is None:
-            # Not prefetched, so this is going to be a query either way -- take the bidders with it,
-            # because every caller that shows bids shows who placed them. When it *is* prefetched
-            # (a lot list does `bid_set__user`) the rows are already here and re-fetching them with
-            # a join would throw that away, which is what the check is for.
+            # Not prefetched: fetch users with the bids.
             related = related.select_related("user")
         latest_per_user = {}
         for bid in related:
@@ -9325,11 +8443,11 @@ class Lot(CachedPropertiesMixin, models.Model):
                 return ""
             try:
                 bids = self.bids
-                # highest bid is the winner, but the second highest determines the price
+                # The highest bid wins; the second sets the price.
                 if bids[0].amount == bids[1].amount:
                     return bids[0].amount
                 else:
-                    # 1 cent more than the second highest bidder (or $1 more for whole-dollar auctions)
+                    # One cent over the second, or $1 in whole-dollar auctions.
                     if self.auction and not self.auction.only_whole_dollar_bids:
                         bidPrice = bids[1].amount + Decimal("0.01")
                     else:
@@ -9351,7 +8469,7 @@ class Lot(CachedPropertiesMixin, models.Model):
 
     @cached_property
     def all_page_views(self):
-        """Return a set of all users who have viewed this lot, and how long they looked at it for"""
+        """All page views of this lot."""
         return PageView.objects.filter(lot_number=self.lot_number)
 
     @cached_property
@@ -9360,12 +8478,7 @@ class Lot(CachedPropertiesMixin, models.Model):
 
     @cached_property
     def page_views(self):
-        """Total page views from all users.
-
-        From the queryset annotation when there is one -- a lot list showing this column would
-        otherwise count rows of the biggest table on the site once per row. COUNT(*) rather than
-        len() of a queryset either way.
-        """
+        """Total page views, from the annotation when present; COUNT(*) otherwise."""
         annotated = getattr(self, "annotated_page_views", None)
         if annotated is not None:
             return annotated
@@ -9373,13 +8486,8 @@ class Lot(CachedPropertiesMixin, models.Model):
 
     @cached_property
     def ar_interaction_counts(self):
-        """How many distinct users scanned / zoomed in on / zoomed all the way in on this lot in AR.
-
-        The app posts these to ``/api/mobile/ar/events/``; each is stored as a PageView tagged with an
-        ``ar_*`` source, so they already count toward :attr:`page_views` — this breaks them out so the
-        lot page can list them separately. One row is stored per (user, lot, source), so the counts are
-        distinct users by construction. Returns a dict with ``scanned``/``zoomed``/``zoomed_full`` and
-        a ``total`` (any AR interaction) for cheap template gating; one query.
+        """Distinct users who scanned, zoomed or fully zoomed this lot in AR (``ar_*`` PageView sources), plus
+        a ``total``. One query.
         """
         rows = (
             PageView.objects.filter(lot_number=self.lot_number, source__in=("ar_scan", "ar_zoom", "ar_zoom_full"))
@@ -9395,9 +8503,7 @@ class Lot(CachedPropertiesMixin, models.Model):
         counts["total"] = sum(counts.values())
         return counts
 
-    # Labels for the ``src`` values the site sets itself, for the seller's page view breakdown.
-    # Anything else (an AuctionCampaign uuid from a promo email, a hand-made link) is shown as the
-    # raw src, which is still the most useful thing we can say about it.
+    # Labels for our own ``src`` values; anything else shows raw.
     PAGE_VIEW_SOURCE_LABELS = {
         "": "Opened the lot page directly",
         "ar": '"Open lot page" from lot scanning',
@@ -9413,23 +8519,13 @@ class Lot(CachedPropertiesMixin, models.Model):
         "userpage": "From a user's page",
         "ban_page": "From the no-show page",
     }
-    # The AR sources are one row per (user, lot) rather than one per visit, so "views" and "people"
-    # are the same number by construction and a repeat look never inflates them.
+    # AR sources are one row per (user, lot), so views equal people.
     AR_PAGE_VIEW_SOURCES = ("ar_scan", "ar_zoom", "ar_zoom_full")
 
     @cached_property
     def page_view_source_breakdown(self):
-        """Page views on this lot grouped by ``src``, with a unique-viewer count for each.
-
-        Shown to the seller of a lot in an in-person auction so they can see how people are finding
-        it — above all the AR sources, which are events rather than visits (see
-        :attr:`ar_interaction_counts` and ``AR_EVENT_SOURCES`` in ``auctions.mobile.services.ar``).
-
-        A unique viewer is a distinct signed-in user, plus a distinct session for anonymous views, so
-        one person reloading counts once. (Unlike :meth:`Auction.unique_views` this doesn't subtract
-        anonymous sessions that later signed in — per source that's noise, and it would cost a second
-        pass over the rows.) Rows are ordered most views first; one query. Sources of ``None`` and
-        ``""`` are the same thing (no ``src`` on the URL) and are merged.
+        """Page views grouped by ``src`` with unique viewers (users plus anonymous sessions), most first. One
+        query. None and "" are merged.
         """
         rows = (
             PageView.objects.filter(lot_number=self.lot_number)
@@ -9474,7 +8570,7 @@ class Lot(CachedPropertiesMixin, models.Model):
 
     @property
     def view_to_bid_ratio(self):
-        """A low number here represents something interesting but not wanted.  A high number (closer to 1) represents more interest"""
+        """Bids per view: low means interesting but unwanted."""
         if self.page_views:
             return self.number_of_bids / self.page_views
         else:
@@ -9487,10 +8583,6 @@ class Lot(CachedPropertiesMixin, models.Model):
         if self.auction:
             if not self.auction.is_chat_allowed:
                 return False
-        # only allow chat for an hour after an auction ends
-        # date_chat_end = self.calculated_end + datetime.timedelta(minutes=60)
-        # if timezone.now() > date_chat_end:
-        # 	return False
         return True
 
     @cached_property
@@ -9500,7 +8592,7 @@ class Lot(CachedPropertiesMixin, models.Model):
 
     @property
     def multimedia_count(self):
-        """Count the number of images + reference link if video associated with this lot"""
+        """Images plus a video reference link."""
         count = 0
         if self.video_link:
             count = 1
@@ -9508,15 +8600,10 @@ class Lot(CachedPropertiesMixin, models.Model):
 
     @cached_property
     def images(self):
-        """All images associated with this lot; delegates to use_images_from if set.
-
-        A **list**, read through the reverse relation and sorted here rather than filtered in SQL,
-        so a list view can ``prefetch_related("lotimage_set")`` and pay one query per page rather
-        than one per row (the lot page iterates it twice and counts it twice: four trips before).
-        """
+        """All images, from use_images_from if set, as a list sorted primary first (prefetchable)."""
         source = self.use_images_from if self.use_images_from_id else self
         if source.pk is None:
-            # an unsaved lot has no images, and source.lotimage_set would raise rather than say so
+            # Unsaved: no images.
             return []
         return sorted(source.lotimage_set.all(), key=lambda image: (not image.is_primary, image.createdon))
 
@@ -9533,11 +8620,7 @@ class Lot(CachedPropertiesMixin, models.Model):
 
     @cached_property
     def thumbnail(self):
-        """The image to show for this lot in a list, or None.
-
-        Cached: the tile template asks three times per row. self.images is sorted primary-first, so
-        this is the row the old ``filter(is_primary=True).first()`` returned, without its query.
-        """
+        """The list thumbnail or None, cached (templates ask three times)."""
         for image in self.images:
             if image.is_primary:
                 return image
@@ -9560,7 +8643,7 @@ class Lot(CachedPropertiesMixin, models.Model):
     @cached_property
     def lot_link(self):
         """Simplest link to access this lot with"""
-        # Prefer real PK URLs; fall back to lot_number only for unsaved instances.
+        # Real pk URLs; lot_number only for unsaved instances.
         lot_pk = self.pk if self.pk is not None else self.lot_number
         if self.auction:
             lot_number_display = self.lot_number_display
@@ -9582,7 +8665,7 @@ class Lot(CachedPropertiesMixin, models.Model):
                     },
                 )
             except NoReverseMatch:
-                # Fall back to PK-based lot URLs for lots with invalid custom_lot_number/slug route pieces.
+                # Invalid route pieces: fall back to a pk URL.
                 logger.debug("Falling back to PK lot URL for lot=%s auction=%s", self.pk, self.auction_id)
         if self.slug:
             return reverse("lot_by_pk_and_slug", kwargs={"pk": lot_pk, "slug": self.slug})
@@ -9649,7 +8732,7 @@ class Lot(CachedPropertiesMixin, models.Model):
             if self.auctiontos_winner:
                 return self.auctiontos_winner.pickup_location
             else:
-                # this is not sold -- allow the auctioneer to check the appropriate pickup location
+                # Unsold: let the auctioneer choose the pickup location.
                 locations = self.auction.location_qs
                 for location in locations:
                     result += "  __" + location.short_name
@@ -9732,26 +8815,17 @@ class Lot(CachedPropertiesMixin, models.Model):
 
     @property
     def category(self):
-        """string of a shortened species_category.  This is for labels, usually you want to use `lot.species_category` instead"""
+        """Short category name for labels; usually use `lot.species_category`."""
         if self.species_category and self.species_category.name != "Uncategorized":
             return self.species_category.name_on_label or self.species_category
         return ""
 
     @property
     def scientific_name(self):
-        """The lot's scientific name, or an empty string when there is nothing to show.
+        """The lot's scientific name, or "" (no species, or the auction has the field off).
 
-        Nothing to show means either that the lot has no species -- hardware, mixed lots -- or that
-        its auction has the scientific-name field switched off.  One rule, everywhere: the setting
-        is how a club says it doesn't want scientific names, and it now governs the lot page, the
-        AR overlay, the lot map, the CSV export and the printed label alike, instead of only the
-        two of those that happened to check it.  A lot outside an auction has no setting to obey.
-
-        The species itself is *kept* when the setting is off -- see ``clean_species_for_auction``.
-        This is a display rule, so switching the setting back on brings the names back.
-
-        Includes the cultivar when the seller picked a variety row -- *Neocaridina davidi* 'Blue
-        Dream' is what they are selling, and the bare species would read as a plain cherry shrimp.
+        One rule for the lot page, AR, map, CSV and label. The species is kept when the setting is off.
+        Includes the cultivar.
         """
         if not self.species:
             return ""
@@ -9761,17 +8835,8 @@ class Lot(CachedPropertiesMixin, models.Model):
 
     @property
     def lot_name_says_the_species(self):
-        """True when the seller already typed the scientific name into the lot name.
-
-        Plenty of them do -- "Chindongo saulosi F1", "Cryptocoryne wendtii red", "Tropheus duboisi
-        maswa" -- and for those lots every page on the site printed the same words twice, once as
-        the lot name and once again underneath in italics.
-
-        Matched on the *normalised* names, with a space either side, so it is a match on whole words
-        and "Corydoras" does not find itself inside "Corydorases".  A genus-only species row
-        ("Bucephalandra") counts, because for those the genus *is* the scientific name.  The
-        cultivar is not required: somebody who wrote "Neocaridina davidi blue dream" has said the
-        binomial, and repeating it back with the strain quoted differently is not new information.
+        """True when the lot name already contains the scientific name (whole normalized words; genus-only
+        species count; cultivar optional).
         """
         if not self.scientific_name or not self.lot_name:
             return False
@@ -9783,49 +8848,28 @@ class Lot(CachedPropertiesMixin, models.Model):
 
     @property
     def scientific_name_line(self):
-        """The scientific name to print *under the lot name*, or "" when it would be a repeat.
-
-        The pair of this and :attr:`common_name_line` is one rule with two halves: show the seller's
-        own words in the big slot, and put the *other* name underneath.  A lot called "Yellow lab"
-        gets *Labidochromis caeruleus* under it, exactly as before; a lot called "Labidochromis
-        caeruleus" gets "Yellow lab" instead of the same two words again.
-
-        Everything that stores or exports the name -- the CSV columns, the API, the lot map -- goes
-        on using :attr:`scientific_name`, which is the data.  These two are the display rule, and
-        the reason it lives on the model rather than in six templates is that the lot page, the
-        printed label and the AR overlay all have to agree about it.
+        """The scientific name to print under the lot name, or "" when it would repeat it. Storage and exports
+        use :attr:`scientific_name`.
         """
         return "" if self.lot_name_says_the_species else self.scientific_name
 
     @property
     def common_name_line(self):
-        """The common name to print under the lot name, for a lot named after the species.
-
-        Blank whenever the seller used a common name themselves, which is the point: they have
-        already said what this fish is called, and a *second* common name for the same species --
-        FishBase lists nineteen for the guppy -- reads as a correction rather than as help.
-
-        A cultivar falls back to its parent's name, for the same reason the category does: nobody
-        is going to write a common name for every strain, and "cherry shrimp" is the honest answer
-        for a *Neocaridina davidi* 'Blue Dream' row that hasn't got one of its own.
+        """The common name to print under a lot named after its species; blank when the seller used a common
+        name. Cultivars fall back to the parent's name.
         """
         if not self.scientific_name or not self.lot_name_says_the_species:
             return ""
         species = self.species
         name = species.common_name or (species.parent.common_name if species.parent_id else "")
-        # Nothing gained by printing the common name when it is the words already on the lot.
+        # Don't print the words already on the lot.
         if name and normalize_species_name(name) in normalize_species_name(self.lot_name):
             return ""
         return name
 
     @property
     def category_from_species(self):
-        """The category this lot's species implies, or None.
-
-        A variety inherits its parent's category: nobody is going to map every cultivar by hand,
-        and a Blue Dream shrimp belongs wherever a cherry shrimp belongs.  ``Uncategorized`` is
-        treated as "no answer" so it can never beat the name-based guess.
-        """
+        """The category the species implies, or None. Varieties inherit their parent's; Uncategorized counts as none."""
         if not self.species_id:
             return None
         category = self.species.category or (self.species.parent.category if self.species.parent_id else None)
@@ -9884,10 +8928,6 @@ class Lot(CachedPropertiesMixin, models.Model):
         """Strip all html except <br> from summernote description"""
         return re.sub(r"(?!<br\s*/?>)<.*?>", "", self.summernote_description)
 
-    # @property
-    # def description_cleaned(self):
-    #     return re.sub(r'(style="[^"]*?)color:[^;"]*;?([^"]*")', r"\1\2", self.summernote_description)
-
 
 class BapAward(models.Model):
     """A record of BAP/HAP/CAP points awarded to a club member for a lot."""
@@ -9935,13 +8975,10 @@ class BapAward(models.Model):
 
     @staticmethod
     def recalculate_member_points(member):
-        """Recalculate and persist all-time and YTD BAP/HAP/CAP totals for a club member."""
+        """Recalculate a member's all-time and YTD BAP/HAP/CAP totals."""
         from django.utils import timezone
 
-        # localtime, not now(): `date` is a DateField somebody typed in their own calendar, so the
-        # year it belongs to is the site's, not UTC's. now() disagreed with it -- and with
-        # tasks.reset_yearly_bap_counters -- for the five hours between 7pm Eastern on New Year's
-        # Eve and midnight UTC, which is the one evening of the year this is read.
+        # localtime: `date` is a DateField in the site's calendar (matches reset_yearly_bap_counters).
         this_year = timezone.localtime().year
         awards = BapAward.objects.filter(club_member=member).exclude(lot__is_deleted=True).exclude(lot__banned=True)
         bap = hap = cap = bap_ytd = hap_ytd = cap_ytd = 0
@@ -9977,7 +9014,7 @@ class BapAward(models.Model):
 
 
 class ClubBapCategoryOverride(models.Model):
-    """Per-club, per-category BAP point overrides. When present, these take precedence over Club.points_per_lot."""
+    """Per-club, per-category point overrides; precede Club.points_per_lot."""
 
     club = models.ForeignKey(Club, on_delete=models.CASCADE, related_name="bap_category_overrides")
     category = models.ForeignKey(Category, on_delete=models.CASCADE, related_name="bap_overrides")
@@ -9992,17 +9029,10 @@ class ClubBapCategoryOverride(models.Model):
 
 
 class ClubBapGenusOverride(models.Model):
-    """Per-club, per-genus BAP point overrides -- the finer-grained sibling of
-    :class:`ClubBapCategoryOverride`, for clubs that award "Cichlids" a flat rate but want
-    *Tropheus* worth triple.
+    """Per-club, per-genus point overrides (a genus rule beats a category rule).
 
-    A genus rather than a species so a club writes one rule instead of forty, and because that is
-    how breeder award programs are actually written up.  Deliberately a separate model instead of
-    a nullable ``genus`` column on the category override: MariaDB treats NULLs as distinct in a
-    unique constraint, so one table covering both would silently accept duplicate rules.
-
-    Matching is on :attr:`Species.genus`, the column FishBase gives us, not on the first word of
-    the scientific name.
+    A separate model, not a nullable genus column on the category override: MariaDB treats NULLs as
+    distinct in unique constraints. Matches :attr:`Species.genus`.
     """
 
     club = models.ForeignKey(Club, on_delete=models.CASCADE, related_name="bap_genus_overrides")
@@ -10012,7 +9042,7 @@ class ClubBapGenusOverride(models.Model):
     created_on = models.DateField(auto_now_add=True)
 
     def save(self, *args, **kwargs):
-        # Stored capitalised the way FishBase writes it, so admin typing "tropheus" still matches.
+        # Capitalized as FishBase writes it.
         self.genus = self.genus.strip().capitalize()
         super().save(*args, **kwargs)
 
@@ -10025,9 +9055,7 @@ class ClubBapGenusOverride(models.Model):
 
 
 class Invoice(CachedPropertiesMixin, models.Model):
-    """
-    The total amount you get paid or owe to the club for an auction
-    """
+    """The amount you get paid or owe the club for an auction."""
 
     auction = models.ForeignKey(Auction, blank=True, null=True, on_delete=models.SET_NULL)
     auctiontos_user = models.ForeignKey(
@@ -10082,16 +9110,14 @@ class Invoice(CachedPropertiesMixin, models.Model):
 
     class Meta:
         indexes = [
-            # AuctionTOS.invoice: "this person's most recent invoice". The FK index found every
-            # invoice they have and left the ordering to a filesort.
+            # "Most recent invoice" without a filesort.
             models.Index(fields=["auctiontos_user", "-date"], name="invoice_tos_recent_idx"),
         ]
 
     @cached_property
     def currency(self):
-        """Get the currency for this invoice based on the auction creator or club's connected seller"""
-        # For club-managed auctions (or club-only invoices), derive currency from the club's seller
-        # so that PayPal/Square orders are created with the correct currency for the receiving account.
+        """This invoice's currency, from the club's seller or the auction creator."""
+        # Club invoices use the club seller's currency for PayPal/Square orders.
         club = self.club or (self.auction.club if self.auction else None)
         if club:
             seller = club.effective_paypal_seller or club.effective_square_seller
@@ -10108,20 +9134,14 @@ class Invoice(CachedPropertiesMixin, models.Model):
 
     @cached_property
     def paypal_credentials(self):
-        """Club-supplied PayPal app credentials governing this invoice, or ``None``.
-
-        When the invoice's club (membership) or its auction's club is in non-OAuth
-        PayPal mode, returns that club's ``(client_id, secret)``; otherwise ``None`` so
-        callers fall back to the site's platform PayPal app.
-        """
+        """The club's own PayPal credentials governing this invoice, or ``None`` (use the site app)."""
         club = self.club or (self.auction.club if self.auction else None)
         return club.paypal_credentials if club else None
 
     @cached_property
     def show_payment_button(self):
         """True if we can show the PayPal or Square button"""
-        # Check PayPal -- a club using its own (non-OAuth) credentials counts as configured
-        # even when the site has no platform PayPal keys.
+        # A club's own credentials count even without site PayPal keys.
         paypal_configured = bool((settings.PAYPAL_CLIENT_ID and settings.PAYPAL_SECRET) or self.paypal_credentials)
         # Square now requires OAuth - just check if OAuth is configured
         square_configured = getattr(settings, "SQUARE_APPLICATION_ID", None) and getattr(
@@ -10132,16 +9152,14 @@ class Invoice(CachedPropertiesMixin, models.Model):
             return False
         if self.status == "PAID":
             return False
-        # Respect invoice rounding: a buyer who only owes a rounded-away residual owes nothing.
+        # A rounded-away residual owes nothing.
         if self.rounded_net_after_payments >= 0:
             return False
         if self.club:
             return self.show_paypal_button or self.show_square_button
         if not self.auction:
             return False
-        # Club-managed auctions: delegate to individual checks so club-level payment
-        # configuration (e.g. uses_site_paypal) is honoured without requiring the
-        # per-auction enable_online_payments flag.
+        # Club auctions use club-level payment config, not the per-auction flag.
         if self.auction.club:
             return self.show_paypal_button or self.show_square_button
 
@@ -10173,12 +9191,12 @@ class Invoice(CachedPropertiesMixin, models.Model):
     @cached_property
     def show_paypal_button(self):
         """True if we can show specifically the PayPal button"""
-        # The site's platform app, or a club's own (non-OAuth) credentials, must be available.
+        # Site app or club credentials required.
         if not (settings.PAYPAL_CLIENT_ID and settings.PAYPAL_SECRET) and not self.paypal_credentials:
             return False
         if self.status == "PAID":
             return False
-        # Respect invoice rounding: a buyer who only owes a rounded-away residual owes nothing.
+        # A rounded-away residual owes nothing.
         if self.rounded_net_after_payments >= 0:
             return False
         if self.club:
@@ -10192,9 +9210,7 @@ class Invoice(CachedPropertiesMixin, models.Model):
             return True
         if not self.auction:
             return False
-        # For club-managed auctions using the site's PayPal account or the club's own
-        # credentials, the club-level configuration supersedes the per-auction
-        # enable_online_payments flag.
+        # Club site or own-credential PayPal supersedes the per-auction flag.
         if self.auction.club and (self.auction.club.uses_site_paypal or self.auction.club.uses_own_paypal_credentials):
             return True
         if not self.auction.enable_online_payments:
@@ -10211,13 +9227,12 @@ class Invoice(CachedPropertiesMixin, models.Model):
 
     @cached_property
     def show_square_button(self):
-        """True if we can show specifically the Square button
-        Square requires OAuth - seller must have linked their account"""
+        """True if the Square button can show (OAuth-linked seller required)."""
         if not (getattr(settings, "SQUARE_APPLICATION_ID", None) and getattr(settings, "SQUARE_CLIENT_SECRET", None)):
             return False
         if self.status == "PAID":
             return False
-        # Respect invoice rounding: a buyer who only owes a rounded-away residual owes nothing.
+        # A rounded-away residual owes nothing.
         if self.rounded_net_after_payments >= 0:
             return False
         if self.club:
@@ -10229,8 +9244,7 @@ class Invoice(CachedPropertiesMixin, models.Model):
             return True
         if not self.auction:
             return False
-        # For club-managed auctions where the club has a linked Square seller, the
-        # club-level configuration supersedes the per-auction enable_square_payments flag.
+        # A club's linked Square seller supersedes the per-auction flag.
         if self.auction.club:
             seller = self.auction.club.effective_square_seller
             if seller and seller.square_merchant_id and seller.user.userdata.is_trusted:
@@ -10247,9 +9261,7 @@ class Invoice(CachedPropertiesMixin, models.Model):
 
     @cached_property
     def reason_for_payment_not_available(self):
-        """Always use this after invoice.show_payment_button
-        This assumes that the button will show up, but be grayed out
-         We will return a string reason to the user"""
+        """Why payment isn't available (use after show_payment_button, when the button is greyed out)."""
         if not self.auction:
             return None
         if self.auction.is_online and not self.auction.closed and self.status == "DRAFT":
@@ -10259,19 +9271,14 @@ class Invoice(CachedPropertiesMixin, models.Model):
                 minutes = seconds // 60
                 return f"This auction hasn't ended yet.  You'll be able to pay in {minutes} minutes."
         if not self.auction.is_online:
-            # in person auctions, users will see a pay button on any invoice
-            # even ones with online bidding enabled.  Not sure if this is a good idea or not,
-            # we can change it later
+            # In-person invoices always show a pay button.
             pass
 
     @cached_property
     def soft_descriptor(self):
-        """Used for PayPal payments -- short string describing the merchant
-        https://developer.paypal.com/docs/multiparty/embedded-integration/reference/#soft-descriptors
-        """
+        """Short merchant descriptor for PayPal (soft descriptor)."""
         if self.auction and self.auction.paypal_information == "admin":
             return settings.NAVBAR_BRAND
-        # could add some logic here to return the club short name or the auction name
         return None
 
     def sum_adjusments(self, adjustment_type):
@@ -10279,11 +9286,7 @@ class Invoice(CachedPropertiesMixin, models.Model):
 
     @cached_property
     def adjustment_totals(self):
-        """Every adjustment type's total, in one GROUP BY.
-
-        There are four types and each was its own ``SUM``; the invoice page asked for all four
-        several times over while deriving the net, which was 54 aggregate queries for one invoice.
-        """
+        """Every adjustment type's total in one GROUP BY."""
         return {
             row["adjustment_type"]: row["total"]
             for row in self.adjustments.values("adjustment_type").order_by().annotate(total=Sum("amount"))
@@ -10303,12 +9306,7 @@ class Invoice(CachedPropertiesMixin, models.Model):
 
     @cached_property
     def changed_adjustments(self):
-        """The adjustments worth showing, each already holding this invoice.
-
-        ``InvoiceAdjustment.display`` reads a currency symbol off ``self.invoice``; without the
-        back-reference every line of the table fetched its own copy of this invoice and re-derived
-        the currency from the auction's creator -- four queries per adjustment.
-        """
+        """Non-zero adjustments with ``invoice`` set, so their display doesn't re-fetch this invoice."""
         adjustments = list(self.adjustments.exclude(amount=0))
         for adjustment in adjustments:
             adjustment.invoice = self
@@ -10323,25 +9321,20 @@ class Invoice(CachedPropertiesMixin, models.Model):
 
     @cached_property
     def club_member_for_auction(self):
-        """The ClubMember record for this invoice's user in the auction's club, or None."""
+        """The ClubMember for this invoice's user in the auction's club, or None."""
         if not self.auction or not self.auction.club or not self.auctiontos_user:
             return None
         return self.auctiontos_user.club_member_record
 
     @cached_property
     def member_has_paypal_subscription(self):
-        """True when this invoice's club member auto-renews via a PayPal subscription.
-
-        Used to disable the membership-renewal checkbox on the invoice — a PayPal subscription
-        renews the membership on its own, so the manual fee should not be applied here."""
+        """True when the member auto-renews through PayPal (disables the renewal checkbox)."""
         member = self.club_member_for_auction
         return bool(member and member.paypal_subscription_id)
 
     @cached_property
     def treat_as_club_member(self):
-        """True when club member benefits (club member discount, automatic alternate split) apply
-        to this invoice's user: either their membership is current, or this invoice will renew it
-        (the renew membership checkbox is checked)."""
+        """True when club member benefits apply: membership current, or this invoice renews it."""
         if not self.auction or not self.auction.club:
             return False
         if self.renewal_needed:
@@ -10371,39 +9364,22 @@ class Invoice(CachedPropertiesMixin, models.Model):
         return f"Active (expires in {days_until_expiration} day(s))"
 
     def recalculate(self):
-        """Store the current net in the calculated_total field -- unless the invoice is frozen.
+        """Store the current net in calculated_total, unless the invoice is PAID (frozen).
 
-        Call this method every time you add or remove a lot from this invoice. It has side
-        effects (it saves), so call it explicitly rather than reading it as a property.
-
-        Freeze rule: once an invoice is PAID it is *settled*, and its ``calculated_total`` is
-        booked history. This method will NOT re-derive that total while the invoice is PAID in
-        the database. That stops a mere view of the invoice (``InvoiceView.get`` calls
-        ``recalculate``) or any incidental re-save from silently rewriting the stored total from
-        *current* auction/club settings -- e.g. a later change to ``membership_annual_fee`` or
-        the auction's tax rate. The settled number is captured once, at the PAID transition (see
-        ``save``), and only an admin un-paying the invoice (PAID -> UNPAID, the correction escape
-        hatch) thaws it so it can be recalculated again.
-
-        Refunds are deliberately unaffected by the freeze. A refund arrives as a negative
-        ``InvoicePayment`` (see the PayPal/Square webhooks, which call ``recalculate`` afterwards),
-        and ``calculated_total`` is the invoice's line-item net -- it never included payments -- so
-        refusing to re-derive it drops no refund information. Refund state lives on the payment
-        rows (``amount_available_to_refund``); the frozen line-item total is exactly what should
-        be preserved. Refunds that must actually re-book the ledger (e.g. a lot's
-        ``partial_refund_percent``) require the invoice to be un-paid first.
+        Call it whenever lots change; it saves. A PAID total is booked history and isn't re-derived from
+        current settings; only un-paying thaws it. Refunds are unaffected: they're negative payments, and
+        ``calculated_total`` never included payments.
         """
         if self.pk and Invoice.objects.filter(pk=self.pk, status="PAID").exists():
             return
-        # "work it out again" is the whole job: every number below is cached on the instance, and
-        # the caller is here because something they hold has changed.
+        # Everything is cached on the instance, and the caller is here because something changed.
         self.invalidate_cached_properties()
         self.calculated_total = self.rounded_net
         self.save()
 
     @cached_property
     def total_adjustment_amount(self):
-        """There's a difference between the subtotal and the rounded net -- rounding, manual adjustments, fist bid payouts, etc"""
+        """Subtotal minus rounded net: rounding, adjustments, first-bid payouts."""
         return Decimal(self.subtotal) - Decimal(self.rounded_net)
 
     @cached_property
@@ -10423,8 +9399,7 @@ class Invoice(CachedPropertiesMixin, models.Model):
 
     @cached_property
     def club_member_discount(self):
-        """Like first_bid_payout, but only for paid club members (or a user whose membership
-        will be renewed by this invoice) who have purchased at least one lot."""
+        """Like first_bid_payout, for paid (or renewing) club members who bought at least one lot."""
         if not self.auction or not self.auction.club_member_discount:
             return 0
         if not self.lots_bought:
@@ -10435,11 +9410,9 @@ class Invoice(CachedPropertiesMixin, models.Model):
 
     @cached_property
     def registration_fee_amount(self):
-        """Flat registration fee charged on every invoice for the auction ("Added to all invoices").
-
-        A user on the alternate split (``AuctionTOS.is_club_member`` while the auction's alternate
-        split is on) gets the alternate registration fee instead — mirroring the alternate lot-entry
-        fee. Unlike the club-member discount, this applies whether or not the user bought a lot."""
+        """Flat registration fee on every invoice; the alternate fee for alternate-split users. Applies whether
+        or not they bought.
+        """
         auction = self.auction
         if not auction:
             return Decimal("0.00")
@@ -10467,15 +9440,9 @@ class Invoice(CachedPropertiesMixin, models.Model):
 
     @cached_property
     def manual_adjustment_amount(self):
-        """Net dollar value of the manual invoice adjustments (flat + legacy percent).
-
-        The legacy percent adjustment is applied to the SAME running base ``net`` builds up before
-        it reaches the adjustments -- the subtotal plus the first-bid payout, the club-member
-        discount and the flat adjustments -- NOT to the bare subtotal. ``net`` and the club-ledger
-        booking (``sync_club_money``) both read this one property, so the two always agree to the
-        penny and the ledger's ``rounding`` category only ever absorbs genuine sub-cent rounding
-        instead of silently absorbing a percent-base mismatch (Item 21). All arithmetic stays in
-        ``Decimal``.
+        """Net value of manual adjustments (flat plus legacy percent). The percent applies to the running base
+        ``net`` builds (subtotal, first-bid payout, member discount, flat adjustments), shared with
+        ``sync_club_money`` so they agree. Decimal.
         """
         percent_base = (
             Decimal(self.subtotal)
@@ -10489,24 +9456,16 @@ class Invoice(CachedPropertiesMixin, models.Model):
 
     @cached_property
     def net(self):
-        """Factor in:
-        Total bought
-        Total sold
-        Any auction-wide payout promotions
-        Any manual adjustments made to this invoice
+        """Total bought and sold, payout promotions, member discount, manual adjustments, membership and
+        registration fees.
         """
         subtotal = Decimal(self.subtotal)
-        # if this auction is using the first bid payout system to encourage people to bid
         subtotal += Decimal(self.first_bid_payout)
-        # if this auction gives paid club members a discount on their purchases
         subtotal += Decimal(self.club_member_discount)
-        # flat + legacy percent manual adjustments; the percent is applied to the running base
-        # above (subtotal + first-bid payout + club-member discount + flat), and the ledger books
-        # this exact figure -- see manual_adjustment_amount.
+        # Flat and legacy percent adjustments on the running base (see manual_adjustment_amount).
         subtotal += Decimal(self.manual_adjustment_amount)
         subtotal -= Decimal(self.membership_fee_amount)
         subtotal -= Decimal(self.tax)
-        # flat registration fee charged on every invoice (alternate amount for alternate-split users)
         subtotal -= Decimal(self.registration_fee_amount)
         if not subtotal:
             subtotal = 0
@@ -10519,12 +9478,7 @@ class Invoice(CachedPropertiesMixin, models.Model):
 
     @cached_property
     def user_should_be_paid(self):
-        """Return True if the CLUB owes the user money (the user should be paid out).
-
-        A positive net means money flows from the club to the user -- e.g. a seller/vendor whose
-        payout exceeds their purchases. Most invoices are negative (the user owes the club), so
-        this is False for them.
-        """
+        """True when the club owes the user (positive net)."""
         if self.net > 0:
             return True
         else:
@@ -10532,7 +9486,7 @@ class Invoice(CachedPropertiesMixin, models.Model):
 
     @cached_property
     def rounded_net(self):
-        """Always round in the customer's favor (against the club) to make sure that the club doesn't need to deal with change, only whole dollar amounts"""
+        """Rounded in the customer's favor, so the club handles whole dollars only."""
         if not self.auction or not self.auction.invoice_rounding:
             return self.net
         rounded = round(self.net)
@@ -10564,8 +9518,7 @@ class Invoice(CachedPropertiesMixin, models.Model):
                 auction=self.auction,
                 is_deleted=False,
             )
-            # every row of the invoice prints a lot number (which reads the auction), a category,
-            # and where its winner is collecting it
+            # Each row prints a lot number, category and winner's pickup location.
             .select_related(
                 "auction",
                 "species_category",
@@ -10583,8 +9536,7 @@ class Invoice(CachedPropertiesMixin, models.Model):
                 winning_price__isnull=False,
                 auctiontos_winner=self.auctiontos_user,
                 is_deleted=False,
-                # Removed (banned) lots are not charged -- a buyer never pays for a lot that
-                # was pulled, so it must not appear in (nor be summed into) their purchases.
+                # Banned lots are never charged.
                 banned=False,
             )
             .select_related(
@@ -10635,7 +9587,7 @@ class Invoice(CachedPropertiesMixin, models.Model):
 
     @cached_property
     def lots_sold(self):
-        """Return number of lots the user attempted to sell in this invoice (unsold lots included)"""
+        """Lots the user tried to sell on this invoice, unsold included."""
         return len(self.sold_lots_queryset)
 
     @cached_property
@@ -10645,12 +9597,12 @@ class Invoice(CachedPropertiesMixin, models.Model):
 
     @cached_property
     def lots_sold_successfully_count(self):
-        """Return number of lots the user sold in this invoice (unsold lots not included)"""
+        """Lots the user sold on this invoice."""
         return self.lots_sold_successfully.count()
 
     @cached_property
     def lot_labels(self):
-        """For online auctions, only sold lots will have printed labels.  For in-person auctions, all submitted lots get printed"""
+        """Online auctions label only sold lots; in-person, all submitted lots."""
         if self.is_online:
             return self.lots_sold_successfully
         else:
@@ -10658,15 +9610,15 @@ class Invoice(CachedPropertiesMixin, models.Model):
 
     @cached_property
     def unsold_lots(self):
-        """Return number of lots the user did not sell. This may be simply lots whose winner has not been set yet."""
+        """Lots not sold (possibly winner not set yet)."""
         return self.sold_lots_queryset.exclude(auctiontos_winner__isnull=False).count()
 
     @cached_property
     def unsold_non_donation_lots(self):
-        """For non-online auctions only.  Return number of lots the user did not sell. This may be simply lots whose winner has not been set yet."""
+        """In person only: unsold non-donation lots (possibly winner not set yet)."""
         if self.is_online:
             return 0
-        # leave active = True here, this is used for the warning on the invoice page.  If you mark a lot unsold, it'll be set not active
+        # active=True: marking unsold deactivates a lot; this drives the invoice warning.
         return self.sold_lots_queryset.filter(
             active=True, auctiontos_winner__isnull=True, donation=False, banned=False
         ).count()
@@ -10734,20 +9686,16 @@ class Invoice(CachedPropertiesMixin, models.Model):
 
     @cached_property
     def rounded_net_after_payments(self):
-        """
-        Calculate net_after_payments with rounding for cash payments.
-        When invoice_rounding is enabled and there are refunds with fractional amounts,
-        round to whole dollars for display purposes.
+        """net_after_payments rounded for cash: with refunds and under $1 it's $0; otherwise rounded in the
+        customer's favor.
         """
         if not self.auction or not self.auction.invoice_rounding:
             return self.net_after_payments
 
-        # If there are refunds and the absolute amount is less than $1, round to $0
         if self.has_refunds and abs(self.net_after_payments) < 1:
             return Decimal("0.00")
 
-        # Otherwise apply standard rounding in customer's favor
-        # Note: Python's round() uses banker's rounding (round half to even)
+        # round() is banker's rounding.
         rounded = round(self.net_after_payments)
 
         if self.net_after_payments > 0:  # Club owes user (positive)
@@ -10761,19 +9709,15 @@ class Invoice(CachedPropertiesMixin, models.Model):
             if self.net_after_payments <= rounded:
                 return Decimal(rounded)
             else:
-                # net_after_payments is between rounded and rounded+1 (e.g., -1.5 between -2 and -1)
                 return Decimal(rounded + 1)
 
     @cached_property
     def rounding_adjustment(self):
-        """
-        Calculate the rounding adjustment to display as a line item.
-        Returns None if no adjustment needed, otherwise the adjustment amount.
-        """
+        """The rounding adjustment line item, or None."""
         if not self.auction or not self.auction.invoice_rounding:
             return None
 
-        # Only show adjustment when we have refunds and fractional amounts less than $1
+        # Only with refunds and a fraction under $1.
         if self.has_refunds and abs(self.net_after_payments) < 1 and self.net_after_payments != 0:
             # The adjustment is the difference between exact and rounded
             return self.net_after_payments - self.rounded_net_after_payments
@@ -10794,7 +9738,7 @@ class Invoice(CachedPropertiesMixin, models.Model):
             return result + f"needs to be paid ${abs(display_amount):.2f}"
         if display_amount < 0:
             return result + f"owes the club ${abs(display_amount):.2f}"
-        # A fully settled ($0) invoice owes nothing -- don't render "owes the club $0.00".
+        # A $0 invoice is settled, not "owes $0.00".
         return result + "is settled up"
 
     @cached_property
@@ -10853,51 +9797,36 @@ class Invoice(CachedPropertiesMixin, models.Model):
             previous_status = Invoice.objects.filter(pk=self.pk).values_list("status", flat=True).first()
         if not self.auction and self.auctiontos_user:
             self.auction = self.auctiontos_user.auction
-        # Freeze settled numbers. When an invoice transitions INTO paid we snapshot its total and
-        # (once) stamp the cash date; from then on neither recalculate() nor a plain re-save may
-        # re-derive them from live auction/club settings. See recalculate() and the sync guard at
-        # the end of this method for the rest of the freeze.
-        # ``self.pk`` guards the very first insert: rounded_net reads related rows
-        # (InvoiceAdjustment.objects.filter(invoice=self)), which cannot be queried before this
-        # row exists. A brand-new invoice created directly as PAID is not a real settlement path
-        # (production always flips an existing invoice), so it simply skips the snapshot here.
+        # Entering PAID snapshots the total and stamps the paid date once; afterwards nothing
+        # re-derives them from live settings. ``self.pk`` guards the first insert, when related rows
+        # can't be queried.
         entering_paid = self.status == "PAID" and previous_status != "PAID" and self.pk is not None
         newly_written_fields = []
         if entering_paid:
-            # Capture the exact settled net now, from the live line items, so a later change to
-            # membership_annual_fee or the auction's tax/fees can never rewrite this stored total.
             self.calculated_total = self.rounded_net
             newly_written_fields.append("calculated_total")
-        # Stamp the cash-basis paid date the first time this invoice is PAID and never overwrite
-        # it. Keeping the *first* paid date (rather than clearing it on un-pay) means an invoice
-        # toggled PAID -> UNPAID -> PAID keeps booking to one stable date, so the ledger stays
-        # deterministic across re-syncs and never fragments an invoice across reporting periods.
+        # First paid date only, so PAID -> UNPAID -> PAID books to one stable date.
         if self.status == "PAID" and self.date_paid is None:
             self.date_paid = timezone.now()
             newly_written_fields.append("date_paid")
-        # If the caller restricted the columns being written (e.g. save(update_fields=["status"]))
-        # make sure the freshly-set fields above are persisted alongside them.
+        # Persist the new fields with a restricted update_fields.
         update_fields = kwargs.get("update_fields")
         if update_fields is not None and newly_written_fields:
             update_fields = list(update_fields)
             kwargs["update_fields"] = update_fields + [f for f in newly_written_fields if f not in update_fields]
         super().save(*args, **kwargs)
-        # Ensure there is only one invoice per AuctionTOS.
-        # Keep the oldest; move payments and adjustments from any duplicates into it, then delete them.
-        # Club-only invoices (no auctiontos_user) skip this deduplication, but must still fall through
-        # to the ledger sync below so that un-paying a membership/dues invoice reverses its booked
-        # entries (the direct booking in _process_invoice_membership_renewal has no reversal of its own).
+        # One invoice per AuctionTOS: keep the oldest, move payments and adjustments in, delete this
+        # one. Club-only invoices skip this but still reach the ledger sync below.
         if self.auctiontos_user:
             oldest = Invoice.objects.filter(auctiontos_user=self.auctiontos_user).order_by("date").first()
             if oldest and oldest.pk != self.pk:
-                # self is a newer duplicate — migrate its data to the older invoice and delete the duplicate row
+                # Newer duplicate: migrate into the older invoice.
                 duplicate_pk = self.pk
                 InvoiceAdjustment.objects.filter(invoice=self).update(invoice=oldest)
                 InvoicePayment.objects.filter(invoice=self).update(invoice=oldest)
                 oldest._absorb_duplicate_ledger(self)
                 Invoice.objects.filter(pk=duplicate_pk).delete()
-                # Rebind this in-memory instance to the canonical (oldest) invoice so callers
-                # do not hold a reference to a deleted object.
+                # Rebind to the canonical invoice.
                 self.pk = oldest.pk
                 self.id = oldest.pk
                 self._state.adding = False
@@ -10914,29 +9843,15 @@ class Invoice(CachedPropertiesMixin, models.Model):
                     self._absorb_duplicate_ledger(dup)
                 newer.delete()
                 self.recalculate()
-        # Keep the club ledger in step with the invoice, but only across a genuine status
-        # transition: non-PAID -> PAID books the settled amounts once, and PAID -> non-PAID
-        # reverses them (the admin un-pay escape hatch). A save of an already-PAID invoice that
-        # stays PAID must NOT re-sync -- re-deriving the amounts from current club/auction
-        # settings would silently rewrite booked accounting the next time a settled invoice is
-        # merely touched. Deliberate post-payment corrections go through un-pay -> edit -> re-pay.
+        # Sync the ledger only on a status transition; re-syncing a PAID invoice would rewrite booked
+        # accounting from current settings.
         if previous_status != self.status or previous_status is None:
             self.sync_club_money()
 
     def _absorb_duplicate_ledger(self, duplicate):
-        """Re-home a soon-to-be-deleted duplicate invoice's ClubMoney rows onto this canonical
-        invoice and cancel their net effect.
-
-        ClubMoney.invoice is SET_NULL, so deleting a duplicate that carries booked ledger rows
-        would orphan them (invoice=NULL) and break ledger<->invoice traceability; if that
-        duplicate was PAID it would also leave the club double-booked. We re-point the rows at
-        the canonical (no orphans, audit trail preserved) and append an exact reversal of the
-        duplicate's own contribution, so the canonical ends up reflecting only its own booking.
-
-        The reversal deliberately mirrors the duplicate's booked rows rather than re-deriving the
-        canonical via sync_club_money: a re-derive would recompute the canonical from *current*
-        auction/club settings and silently rewrite a settled (PAID) canonical's frozen ledger.
-        The canonical's own rows are never touched, so it stays frozen (see save/sync_club_money).
+        """Re-point a duplicate invoice's ClubMoney rows at this invoice and append an exact reversal, so rows
+        aren't orphaned and nothing is double-booked. Mirrors the duplicate's rows rather than re-deriving,
+        so a frozen canonical ledger isn't rewritten.
         """
         rows = list(ClubMoney.objects.filter(invoice=duplicate))
         if not rows:
@@ -10957,25 +9872,8 @@ class Invoice(CachedPropertiesMixin, models.Model):
         ClubMoney.objects.bulk_create(reversals)
 
     def _ledger_date(self):
-        """The cash-basis date to book this invoice's ClubMoney entries under.
-
-        The ledger records money when it actually changes hands, so an invoice's entries date
-        to when it was *settled*, not when its auction opened (an online invoice can be paid
-        weeks after ``auction.date_start``; booking it to the start date misattributes the
-        revenue to the wrong treasurer-report period). In order of preference:
-
-          1. the date of an entry already booked for this invoice — so a later re-sync appends
-             its deltas under the *original* booking date instead of shifting them to a new
-             period. This makes re-syncs deterministic and keeps an invoice's rows together;
-          2. the date of the most recent recorded payment (``InvoicePayment``) — the moment the
-             balance was actually cleared, the most accurate cash signal when one exists;
-          3. ``date_paid`` — stamped the first time the invoice flipped to PAID, covering cash
-             paid at the door with no recorded online payment;
-          4. today, only as a last resort (e.g. a legacy PAID invoice with neither a recorded
-             payment nor a stamped ``date_paid``).
-
-        Every branch after the first reads a stable underlying signal, so repeated syncs of the
-        same invoice state always resolve to the same date.
+        """The cash-basis date for this invoice's ledger entries: an existing entry's date, else the latest
+        payment, else ``date_paid``, else today. Stable across re-syncs.
         """
         booked_date = (
             ClubMoney.objects.filter(invoice=self).order_by("date", "pk").values_list("date", flat=True).first()
@@ -10990,46 +9888,19 @@ class Invoice(CachedPropertiesMixin, models.Model):
         return timezone.localdate()
 
     def sync_club_money(self, acting_user=None):
-        """Reconcile this invoice's entries in the club ledger (ClubMoney) with its state.
+        """Reconcile this invoice's ClubMoney entries with its state (cash basis, ``+`` into the club).
 
-        The ledger is **cash basis**: it records money that actually changes hands when an
-        invoice is settled, broken out so a treasurer can see where every dollar came from
-        or went, and so the running balance matches the club's bank account. A PAID invoice
-        contributes one entry per component (club-cash sign, ``+`` means money into the club):
+        A PAID invoice books sale, seller payout, tax, dues, adjustments, first-bid payout, member discount
+        and rounding, summing to the rounded total. Commission is ``sales - payouts``, not stored. Unpaid
+        invoices book nothing. Club-only dues invoices book their dues entry.
 
-            + auction sale ......... what the buyer paid for lots they won (pre-tax)
-            - seller payout ........ what the club pays this seller for lots sold
-            + sales tax ............ tax collected from the buyer (a liability to remit)
-            + membership dues ...... renewal fee collected on the invoice
-            +/- invoice adjustment . manual surcharges (+) and discounts (-)
-            - first-bid payout ..... promotional payout to the bidder
-            - club member discount . automatic discount for paid club members
-            +/- rounding ........... the whole-dollar rounding applied to the invoice
-
-        These sum to the cash that moves (the rounded invoice total). The club's auction
-        commission is intentionally **not** a stored entry — it is ``sales - payouts`` — so
-        the gross money in/out always reconciles to the bank. A draft/unpaid invoice
-        contributes nothing; outstanding invoices are reported separately rather than booked
-        as receivables.
-
-        Club-only membership/dues invoices have no auction; their single membership-dues entry is
-        reconciled here too -- booked when the invoice becomes PAID and reversed when it is
-        un-paid -- under the same append-only, delta-reconciling rules (Item 11).
-
-        Reconciliation books, per category, only the *difference* between what the current
-        state should show and what is already booked. That keeps the ledger:
-          * self-correcting if lots, adjustments or status change,
-          * exactly reversible — paid -> unpaid -> paid nets to zero, unpaid -> paid is a
-            net change of the invoice total,
-          * append-only — existing rows are never edited or deleted.
+        Only the per-category delta is appended: self-correcting, reversible, append-only.
         """
         auction = self.auction or (self.auctiontos_user.auction if self.auctiontos_user else None)
         if auction and auction.club_id:
             club = auction.club
         else:
-            # Club-only membership/dues invoice (no auction-club): reconcile against its own club so
-            # its dues entry is booked on the PAID transition and reversed on un-pay, exactly like an
-            # auction invoice. An invoice with neither an auction-club nor a club books nothing.
+            # Club-only dues invoice: reconcile against its own club.
             auction = None
             club = self.club
         if not club:
@@ -11050,26 +9921,20 @@ class Invoice(CachedPropertiesMixin, models.Model):
             who = f"invoice #{self.pk}"
         where = f" in {auction}" if auction else ""
 
-        # What the ledger SHOULD show for this invoice, per category, given its current state.
+        # What the ledger should show now, per category.
         desired = {}
         descriptions = {}
         if self.status == "PAID" and auction:
-            # All amounts are club-cash (+ into the club) and sum to the cash that moves, i.e.
-            # the rounded invoice total. Adjustments fold in both the flat and (legacy) percent
-            # forms so they net to the invoice; rounding is the remainder so the entries always
-            # reconcile to the penny against rounded_net.
+            # Club-cash amounts summing to the rounded total; rounding is the remainder.
             sale = _q(self.total_bought)
             payout = -_q(self.total_sold)
             tax = _q(self.tax)
             membership = _q(self.membership_fee_amount)
             first_bid = -_q(self.first_bid_payout)
             member_discount = -_q(self.club_member_discount)
-            # Registration fee is a charge to the user, so it's cash into the club (positive), like tax.
+            # Registration fee is cash in.
             registration = _q(self.registration_fee_amount)
-            # Book the flat + legacy percent adjustment on the SAME base net uses
-            # (manual_adjustment_amount), so the percent isn't computed on the bare subtotal here
-            # while net computes it on the running base. Otherwise the difference would be silently
-            # swept into the rounding category below (Item 21).
+            # Same base as net (manual_adjustment_amount), so rounding doesn't absorb a mismatch.
             adjustment = -_q(self.manual_adjustment_amount)
             rounding = -_q(self.rounded_net) - (
                 sale + payout + tax + membership + first_bid + member_discount + registration + adjustment
@@ -11097,12 +9962,7 @@ class Invoice(CachedPropertiesMixin, models.Model):
                 ClubMoney.CATEGORY_ROUNDING: f"Invoice rounding for {who} in {auction}",
             }
         elif self.status == "PAID":
-            # Club-only membership/dues invoice: the only cash it moves is the renewal fee. Booking
-            # it through the same delta-reconciliation as the auction path makes it reversible --
-            # un-paying appends a negated MEMBERSHIP row (net zero) and re-paying books a fresh one.
-            # This replaces the fire-and-forget direct booking _process_invoice_membership_renewal
-            # used to do, which could never be reversed (the Item 11 bug). membership_fee_amount is
-            # 0 unless this invoice actually renews dues, so a non-renewal invoice books nothing.
+            # Club-only: only the renewal fee, booked and reversed by delta.
             membership = _q(self.membership_fee_amount)
             if membership:
                 desired = {ClubMoney.CATEGORY_MEMBERSHIP: membership}
@@ -11113,11 +9973,7 @@ class Invoice(CachedPropertiesMixin, models.Model):
         for row in ClubMoney.objects.filter(invoice=self).values("category").annotate(total=Sum("amount")):
             booked[row["category"]] = row["total"] or Decimal("0.00")
 
-        # Only ever reconcile the current categories. A database carried over from the old
-        # ledger can hold rows in retired categories (e.g. ``auction_profit``,
-        # ``unpaid_invoices``); reversing those here would just write *more* rows in those dead
-        # categories. We leave them alone — migration 0305 rebuilds legacy ledger data — and
-        # never emit an unknown category string.
+        # Only current categories; legacy rows are left alone (migration 0305 rebuilds them).
         known_categories = {choice[0] for choice in ClubMoney.CATEGORY_CHOICES}
         default_description = f"Ledger correction for {who}{where}"
         entries = []
@@ -11156,9 +10012,6 @@ class InvoiceAdjustment(InvalidatesRelatedCache, models.Model):
         choices=(
             ("ADD", "Charge extra"),
             ("DISCOUNT", "Discount"),
-            # so confusing and not used by most users
-            # ("ADD_PERCENT", "Charge extra percent"),
-            # ("DISCOUNT_PERCENT", "Discount percent"),
         ),
         default="ADD",
     )
@@ -11173,8 +10026,7 @@ class InvoiceAdjustment(InvalidatesRelatedCache, models.Model):
     def display(self):
         """for templates"""
         result = ""
-        # Show an explicit sign so a line reads "+$10.00" (added to the invoice) vs
-        # "-$10.00" (subtracted), instead of a bare amount that gives no direction.
+        # Explicit sign: "+$10.00" added, "-$10.00" subtracted.
         if self.adjustment_type in ["ADD", "ADD_PERCENT"]:
             result += "+"
         if self.adjustment_type in ["DISCOUNT", "DISCOUNT_PERCENT"]:
@@ -11189,10 +10041,7 @@ class InvoiceAdjustment(InvalidatesRelatedCache, models.Model):
 
 
 class InvoicePayment(InvalidatesRelatedCache, models.Model):
-    """
-    Record of a payment applied to an Invoice (supports partial payments).
-    Payments are kept separate from InvoiceAdjustments.
-    """
+    """A payment applied to an Invoice (partial payments allowed), separate from adjustments."""
 
     # total_payments, and everything downstream of it
     invalidates_cache_on = ("invoice",)
@@ -11216,7 +10065,6 @@ class InvoicePayment(InvalidatesRelatedCache, models.Model):
     amount = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal("0.00"))
     amount_available_to_refund = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal("0.00"))
     currency = models.CharField(max_length=10, default="USD")
-    # status = models.CharField(max_length=20, choices=PAYMENT_STATUS, default="COMPLETED", db_index=True)
     external_id = models.CharField(max_length=255, blank=True, null=True, help_text="Provider transaction id")
     receipt_number = models.CharField(
         max_length=10, blank=True, null=True, help_text="Short receipt number (4 chars for Square)", db_index=True
@@ -11225,38 +10073,19 @@ class InvoicePayment(InvalidatesRelatedCache, models.Model):
     payer_email = models.CharField(max_length=200, blank=True, null=True)
     payer_address = models.CharField(max_length=500, blank=True, null=True)
     memo = models.CharField(max_length=500, blank=True, null=True)
-    # metadata = models.JSONField(blank=True, null=True)  # store provider payload if needed
     payment_method = models.CharField(
         max_length=50, blank=True, null=True, default="PayPal"
     )  # e.g. 'paypal', 'stripe', 'cash'
     createdon = models.DateTimeField(auto_now_add=True)
 
-    # def __str__(self):
-    #     return f"Payment {self.pk} for Invoice {self.invoice_id}: {self.amount} {self.currency} ({self.status})"
-
 
 class TapToPayAttempt(models.Model):
-    """One on-device Tap to Pay charge attempt, from ``payments/create/`` until the app says how it
-    ended.
+    """One on-device Tap to Pay attempt, from create until the app reports how it ended.
 
-    The window this closes is the only one left, and it is a real one: the Mobile Payments SDK
-    charges the card **on the device**, so a capture whose ``confirm`` never reaches us -- the app
-    is killed, the network drops in a hall with bad wifi -- leaves the invoice unpaid with nothing
-    to stop the next tap charging the same card again.
-
-    That used to be blocked by accident. ``create`` handed out a *stable* per-invoice
-    ``idempotency_key``, described in the comment as Square's server-side dedup key; the app passes
-    it to the SDK as ``paymentAttemptId``, which is a different concept with the opposite
-    behaviour -- it names one attempt, and reusing it is an error. On hardware that meant a
-    declined card could not be retried at all: Square answered "please contact the developer of
-    this app -- error code payment_attempt_id_reused", which is a failure precisely when Tap to Pay
-    is needed. Declines are routine, so the stable key had to go, and with it the accidental
-    protection, because it could not tell "already charged" from "the last card was declined".
-
-    This row can. An attempt is open from create until the app closes it (cancel, decline, timeout,
-    any SDK error) or ``confirm`` captures it, and while one is open ``create`` refuses with a 409
-    telling the cashier the one thing that matters: check Square before charging again. Attempts
-    age out after ``OPEN_ATTEMPT_TIMEOUT`` so a wedged record can never strand an invoice.
+    The SDK charges the card on the device, so a capture whose confirm never arrives would leave the
+    invoice unpaid and open to a second charge. A stable per-invoice key once blocked that by accident,
+    but broke declined-card retries (``payment_attempt_id_reused``). While an attempt is open, create
+    refuses with a 409 saying to check Square. Attempts age out after ``OPEN_ATTEMPT_TIMEOUT``.
     """
 
     #: Outcomes. "" means still open -- the state the refusal is about.
@@ -11271,17 +10100,15 @@ class TapToPayAttempt(models.Model):
         (OUTCOME_EXPIRED, "Expired"),
     )
 
-    # 45 characters is Square's cap on both idempotency_key and paymentAttemptId, and this value is
-    # handed to the SDK verbatim. Unique so two devices cannot open the same attempt.
+    # Square's 45-character cap; unique so two devices can't share an attempt.
     attempt_id = models.CharField(max_length=45, unique=True)
     invoice = models.ForeignKey("Invoice", related_name="tap_to_pay_attempts", on_delete=models.CASCADE)
-    # Kept when the account goes: this is evidence about money, and an attempt with no name on it
-    # is still the record that says a card may have been charged.
+    # Kept if the account goes: evidence about money.
     created_by = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL)
     createdon = models.DateTimeField(auto_now_add=True, db_index=True)
     closed_at = models.DateTimeField(blank=True, null=True)
     outcome = models.CharField(max_length=20, choices=OUTCOME_CHOICES, blank=True, default="")
-    # Square's payment id, once confirm has verified one against this invoice.
+    # Square's payment id once confirm verifies it.
     payment_id = models.CharField(max_length=255, blank=True, default="")
 
     def __str__(self):
@@ -11291,7 +10118,7 @@ class TapToPayAttempt(models.Model):
 class ClubMoney(models.Model):
     DESCRIPTION_MAX_LENGTH = 500
 
-    # Booked automatically from invoices by Invoice.sync_club_money (cash basis).
+    # Booked from invoices by Invoice.sync_club_money.
     CATEGORY_AUCTION_SALE = "auction_sale"
     CATEGORY_AUCTION_SELLER_PAYOUT = "auction_seller_payout"
     CATEGORY_TAX = "tax"
@@ -11308,8 +10135,7 @@ class ClubMoney(models.Model):
     CATEGORY_REFUNDS = "refunds"
     CATEGORY_ADJUSTMENT = "adjustment"
 
-    # These are reconciled from invoices, so a treasurer must not add them by hand (a manual
-    # entry would be silently undone the next time the invoice's ledger is reconciled).
+    # Reconciled from invoices, so not enterable by hand.
     AUTO_CATEGORIES = (
         CATEGORY_AUCTION_SALE,
         CATEGORY_AUCTION_SELLER_PAYOUT,
@@ -11360,8 +10186,7 @@ class ClubMoney(models.Model):
 class Bid(InvalidatesRelatedCache, models.Model):
     """Bids apply to lots"""
 
-    # bid_on_lot builds its Bid with the Lot *object* and then asks that same object who the high
-    # bidder is now, so this write has to drop lot.bids -- saving a Bid is not a Lot.save().
+    # Saving a Bid must drop lot.bids.
     invalidates_cache_on = ("lot_number",)
 
     user = models.ForeignKey(User, on_delete=models.CASCADE)
@@ -11371,9 +10196,7 @@ class Bid(InvalidatesRelatedCache, models.Model):
     amount = models.DecimalField(max_digits=10, decimal_places=2, validators=[MinValueValidator(Decimal("0.01"))])
     was_high_bid = models.BooleanField(default=False)
     is_deleted = models.BooleanField(default=False)
-    # note: there is not AuctionTOS field here - this means that bids can only be placed by Users
-    # AuctionTOSs CAN be declared the winners of lots without placing a single bid
-    # time will tell if this is a mistake or not
+    # Bids come from Users only; AuctionTOS can win without bidding.
 
     def __str__(self):
         return str(self.user) + " bid " + str(self.amount) + " on lot " + str(self.lot_number)
@@ -11384,18 +10207,13 @@ class Bid(InvalidatesRelatedCache, models.Model):
 
 
 class Watch(InvalidatesRelatedCache, models.Model):
-    """
-    Users can watch lots.
-    This adds them to a list on the users page, and sends an email 2 hours before the auction ends
-    """
+    """Users can watch lots: listed on their page, with an email before the end."""
 
     # Lot.number_of_watchers
     invalidates_cache_on = ("lot_number",)
 
     user = models.ForeignKey(User, on_delete=models.CASCADE)
     lot_number = models.ForeignKey(Lot, on_delete=models.CASCADE)
-    # not doing anything with createdon field right now
-    # but might be interesting to track at what point in the auction users watch lots
     createdon = models.DateTimeField(auto_now_add=True, blank=True)
 
     def __str__(self):
@@ -11406,11 +10224,8 @@ class Watch(InvalidatesRelatedCache, models.Model):
 
 
 class UserBan(models.Model):
-    """
-    Users can ban other users from bidding on their lots
-    This will prevent the banned_user from bidding on the banning user's lots and in any
-    auction the banning user administers (created, or is an AuctionTOS admin of) -- see
-    Auction.user_banned_by_admins
+    """A user's ban on another user bidding on their lots and in any auction they administer
+    (Auction.user_banned_by_admins).
     """
 
     user = models.ForeignKey(User, on_delete=models.CASCADE)
@@ -11422,9 +10237,7 @@ class UserBan(models.Model):
 
 
 class UserIgnoreCategory(models.Model):
-    """
-    Users can choose to hide all lots from all views
-    """
+    """A category a user hides from all lot views."""
 
     user = models.ForeignKey(User, on_delete=models.CASCADE)
     category = models.ForeignKey(Category, on_delete=models.CASCADE)
@@ -11435,24 +10248,14 @@ class UserIgnoreCategory(models.Model):
 
 
 class PageView(CachedPropertiesMixin, models.Model):
-    """One row per page opened: the site's memory of what anybody looked at.
+    """One row per page opened.
 
-    **Repeat views are history, not duplicates.** A ``remove_duplicate_views`` job used to merge
-    them every fifteen minutes and was removed, because it could only ever reach *anonymous* rows
-    (a signed-in view stores ``session_id=NULL``, and the matcher skipped those) and it had no time
-    window at all -- with ``SESSION_COOKIE_AGE`` set to about four years, one anonymous person's
-    every visit to a page, however far apart, folded into a single row. That deleted exactly the
-    return visits this table exists to record, and it left every raw-row count on the stats pages
-    reading anonymous and signed-in traffic by different rules.
+    **Repeat views are history, not duplicates.** ``remove_duplicate_views`` merged them and was removed:
+    it only reached anonymous rows and had no time window. Nothing purges this table; its readers carry
+    a window and an owner.
 
-    Nothing purges this table and nothing is meant to. It is the largest one here and it is the
-    only record of what somebody did before they did anything countable; the queries that read it
-    carry a window and an owner instead (see ``page_view_history``, ``usability_report``).
-
-    Four columns are inert, left in place rather than dropped from a table this size:
-    ``total_time`` and ``counter`` were only ever raised by a ten-second heartbeat that is
-    commented out in ``base_page_view.html`` and ``views/ajax.py``, ``notification_sent`` has never
-    had a writer, and ``duplicate_check_completed`` belonged to the merge job above.
+    Inert columns: ``total_time`` and ``counter`` (disabled heartbeat), ``notification_sent`` (no
+    writer), ``duplicate_check_completed`` (the removed job).
     """
 
     user = models.ForeignKey(User, on_delete=models.CASCADE, null=True, blank=True)
@@ -11496,10 +10299,7 @@ class PageView(CachedPropertiesMixin, models.Model):
 
     def save(self, *args, **kwargs):
         if not self.latitude and self.ip_address:
-            # values_list, not first(): this needs two floats, and hydrating a whole PageView to
-            # read them is the expensive half of a query that runs on every save of every row whose
-            # latitude is still 0. The (ip_address, -date_start) index is what keeps the rest of it
-            # cheap -- ip_address alone left MariaDB sorting the matches by hand.
+            # values_list: two floats, not a hydrated row. The (ip_address, -date_start) index keeps it cheap.
             nearby = (
                 PageView.objects.exclude(latitude=0, longitude=0)
                 .filter(ip_address=self.ip_address)
@@ -11516,28 +10316,16 @@ class PageView(CachedPropertiesMixin, models.Model):
 
     class Meta:
         indexes = [
-            # For the lookup in save() above. ip_address was indexed on its own, which found the
-            # rows but left the "-date_start" ordering to a filesort over all of them -- on the
-            # largest table on the site, from a query that runs on every page view.
+            # For the save() lookup above, without a filesort.
             models.Index(fields=["ip_address", "-date_start"], name="pageview_ip_recent_idx"),
-            # Same shape, different question: every lot list a signed-in person opens asks for the
-            # date of their most recent lot view, to badge lots as new. The FK index on user found
-            # every page view they have ever made and sorted them to return one row.
+            # Each lot list asks for the user's latest view.
             models.Index(fields=["user", "-date_start"], name="pageview_user_recent_idx"),
         ]
 
 
 class ChunkedJobState(models.Model):
-    """Where a long-running chunked job got to, so a run resumes instead of starting over.
-
-    One row per job, named by the job. It exists for ``tasks.backfill_page_view_auctions``, and the
-    reason it is a table rather than a cache key is the table that job walks: the only way to work
-    out "where did I get to" without recording it is to ask ``PageView``, and every query that could
-    answer that is the full scan the chunking exists to avoid. Losing a cached position would not be
-    incorrect -- the work is idempotent -- but it would restart a walk that takes days, and a cache
-    is flushed by things as ordinary as a deploy.
-
-    Delete the row, and this model, when the job that owns it is done for good.
+    """Where a chunked job got to, so it resumes. A table, not a cache key: finding the position otherwise
+    means scanning PageView, and a flushed cache would restart a days-long walk. Delete with the job.
     """
 
     name = models.CharField(max_length=100, primary_key=True)
@@ -11608,11 +10396,8 @@ class UserLabelPrefs(models.Model):
         "to a printer configured on your phone. Bluetooth prints directly to a "
         "thermal label printer. System printer and Bluetooth only work in the app."
     )
-    # Printing from a desktop to the phone's Bluetooth printer. Separate from print_method rather
-    # than a fourth choice in it, because it is about the *other* device: someone who prints from
-    # both their phone and their computer wants Bluetooth in the app and this on the web, and a
-    # single dropdown cannot say both. Only offered to an account with a phone that has reported a
-    # paired printer -- see MobileDevice.ever_print_ready and UserLabelPrefsView.
+    # Printing from a desktop to the phone's Bluetooth printer, separate from print_method (it's about
+    # the other device). Only offered with a phone that has reported a paired printer.
     print_from_computer = models.BooleanField(default=False, verbose_name="Print from my computer to my phone")
     print_from_computer.help_text = (
         "When you print labels on a computer, send them to the printer paired with your phone "
@@ -11635,7 +10420,7 @@ def get_default_paypal_enabled():
 
 
 def get_default_use_llm_search():
-    """Whether new users get the assistant. On unless a site turns it off -- see ASSISTANT_ENABLED_FOR_USERS."""
+    """Whether new users get the assistant (ASSISTANT_ENABLED_FOR_USERS)."""
     return getattr(settings, "ASSISTANT_ENABLED_FOR_USERS", True)
 
 
@@ -11648,9 +10433,7 @@ def get_default_is_trusted():
 
 
 class UserData(CachedPropertiesMixin, models.Model):
-    """
-    Extension of user model to store additional info
-    """
+    """Additional per-user data."""
 
     user = models.OneToOneField(User, on_delete=models.CASCADE)
     phone_number = models.CharField(max_length=20, blank=True, null=True)
@@ -11802,9 +10585,7 @@ class UserData(CachedPropertiesMixin, models.Model):
     show_running_total_notification.help_text = (
         "Show your total amount purchased in real time in the app.  In person auctions only."
     )
-    # One notification per person, ever: the first running total they receive is followed by a second
-    # notification saying the setting above exists.  Without this marker that tip would arrive after
-    # every lot, which is precisely the noise the running total's collapse key avoids.
+    # The running-total tip is sent once, not after every lot.
     running_total_tip_sent = models.BooleanField(default=False)
     running_total_tip_sent.help_text = (
         "Whether this user has been told, once, where to turn the running total notification off"
@@ -11858,7 +10639,7 @@ class UserData(CachedPropertiesMixin, models.Model):
 
     @property
     def account_deletion_due(self):
-        """The day this account's pending deletion runs, or None. Drives the site-wide warning."""
+        """When a pending deletion runs, or None."""
         from auctions.account_deletion import deletion_due_date
 
         return deletion_due_date(self)
@@ -12176,8 +10957,7 @@ class UserData(CachedPropertiesMixin, models.Model):
         return target_userdata
 
     def set_next_promo(self):
-        """Set next_promo_email_at to the next Wednesday at 10 AM in user's local time,
-        or advance the existing value by 7 days (ensuring it's in the future)."""
+        """Next Wednesday 10 AM in the user's time, or the existing value plus 7 days, in the future."""
         try:
             tz = pytz_timezone(self.timezone)
         except pytz.exceptions.UnknownTimeZoneError:
@@ -12226,15 +11006,7 @@ class UserData(CachedPropertiesMixin, models.Model):
 
     @cached_property
     def species_sold(self):
-        """Total different species that this user has bred and sold in auctions.
-
-        This used to return nothing useful, because nothing ever set ``Lot.species``.  Lots now
-        carry a species again (see :class:`Species`), so the number is real -- but the
-        breederboard columns that consumed it (``rank_unique_species``,
-        ``number_unique_species``, and the commented-out block in
-        ``manage.py update_breederboard``) are still switched off, and turning a public
-        leaderboard back on is a decision rather than a side effect.
-        """
+        """Distinct species this user bred and sold. The breederboard columns using it are still off."""
         return self.my_lots_qs.filter(i_bred_this_fish=True, winner__isnull=False).values("species").distinct().count()
 
     @cached_property
@@ -12273,11 +11045,7 @@ class UserData(CachedPropertiesMixin, models.Model):
 
     @cached_property
     def lots_viewed(self):
-        """Total lots viewed by this user.
-
-        COUNT(*), not len(): PageView is the biggest table on the site, and the user page asks for
-        this five times while working out its ratios.
-        """
+        """Lots viewed by this user (COUNT(*); PageView is huge)."""
         return PageView.objects.filter(user=self.user.pk).count()
 
     @cached_property
@@ -12290,7 +11058,7 @@ class UserData(CachedPropertiesMixin, models.Model):
 
     @cached_property
     def bid_to_view(self):
-        """Ratio of lots viewed to lots bought.  Lower number is indicative of tire kicking, higher number means business"""
+        """Bids per lot viewed: low means browsing, high means buying."""
         if self.lots_viewed:
             return self.total_bids / self.lots_viewed
         else:
@@ -12359,15 +11127,8 @@ class UserData(CachedPropertiesMixin, models.Model):
 
     @cached_property
     def auctions_i_admin(self):
-        """Every auction this user may make changes to, as a queryset.
-
-        The set form of :meth:`Auction.permission_check`, which answers the same question one
-        auction at a time and so can't be used to *scope* anything.  The three routes are the same
-        three: they created it, they are an admin on its TOS list, or they hold a club permission
-        over the club running it.
-
-        Superusers are not special-cased here.  This is "which auctions are yours", and a view
-        that means "everybody's" should say so rather than getting it by accident.
+        """Every auction this user may change, as a queryset: created, TOS admin, or club permission. The set
+        form of ``permission_check``. Superusers aren't special-cased.
         """
         user = self.user
         if not user.is_authenticated:
@@ -12384,16 +11145,8 @@ class UserData(CachedPropertiesMixin, models.Model):
 
     @cached_property
     def only_club(self):
-        """The club this user obviously belongs to, or None.  Never a guess.
-
-        "Which club is this person from" has no reliable answer on this site: somebody can belong
-        to three clubs or to none, and an auction need not have a club at all.  So this answers
-        only when the answer is not in doubt -- the site is running as a single club, or the user
-        belongs to exactly one -- and every caller has to cope with None.
-
-        Used to fill in :attr:`Species.club` when somebody adds a species, so the rest of their
-        club can see it before it is approved.  Getting None back is a normal outcome, not a
-        failure: the species is still visible to the person who added it.
+        """The club this user obviously belongs to (single-club mode or exactly one club), else None. Used for
+        ``Species.club``; None is normal.
         """
         from .site_setup import get_single_club
 
@@ -12405,16 +11158,8 @@ class UserData(CachedPropertiesMixin, models.Model):
 
     @property
     def can_take_card_payments(self):
-        """True when this person administers something a card payment could be collected for.
-
-        The gate on whether the Square pages are worth offering at all. Not a permission --
-        ``square_enabled`` is what decides whether they may connect an account, and
-        ``SquareConnectView`` is what enforces it. This answers the prior question: is there any
-        auction or club here whose money this person handles? Somebody with no answer to that has
-        nothing to connect Square *for*, and the menu entry would be noise.
-
-        Shares its definition with the Tap to Pay warm-up endpoint on purpose, so "the site offers
-        you Square" and "the app hands you a reader token" can never come apart.
+        """True when this person administers an auction or club that could take card payments. Not a
+        permission (``square_enabled`` is); shares its definition with the Tap to Pay warm-up.
         """
         from auctions.mobile.services.payments import PaymentService
 
@@ -12422,13 +11167,8 @@ class UserData(CachedPropertiesMixin, models.Model):
 
     @property
     def square_access_request_mailto_query(self):
-        """Pre-encoded subject/body for the 'ask for card payments to be enabled' mailto link.
-
-        The same shape as ``Auction.promotion_request_mailto_query``, and for the same reason: a
-        gate somebody can see but not ask about is a dead end. ``square_enabled`` is off by default
-        (``SQUARE_ENABLED_FOR_USERS``) because letting anyone who signs up start an OAuth flow to
-        collect money from strangers is a fraud control worth keeping -- so the way through it has
-        to be a button, not an email address the organizer has to go and find.
+        """Pre-encoded mailto subject/body to request card payments. ``square_enabled`` is off by default as a
+        fraud control, so the way through is a button.
         """
         admin_email = settings.ADMINS[0][1]
         subject = "Request access to accept card payments"
@@ -12443,15 +11183,7 @@ class UserData(CachedPropertiesMixin, models.Model):
 
     @cached_property
     def runs_an_auction(self):
-        """True when this user is an admin of *any* auction.
-
-        The standing test for "may add a species to the list".  Adding one is a check-in-table
-        job: somebody is standing there with a bag of fish that isn't in the picker, and until
-        this existed only a site superuser could add it -- which at a real auction means it does
-        not get added, the lot goes out with no scientific name, and the gap is still there next
-        year.  What an auction admin adds is theirs alone until somebody approves it; see
-        :attr:`Species.approved`.
-        """
+        """True when this user administers any auction: the bar for adding a species (it stays theirs until approved)."""
         return self.user.is_superuser or self.auctions_i_admin.exists()
 
     @property
@@ -12468,7 +11200,7 @@ class UserData(CachedPropertiesMixin, models.Model):
 
     @property
     def subscriptions_with_new_message_annotation(self):
-        """For templates: A list of all subscriptions annotated with a `new_message_count` property"""
+        """Subscriptions annotated with ``new_message_count``."""
         return self.subscriptions.annotate(
             new_message_count=Count(
                 "lot__lothistory",
@@ -12529,10 +11261,7 @@ class UserData(CachedPropertiesMixin, models.Model):
 
     def save(self, *args, **kwargs):
         if not self.email_me_about_new_chat_replies:
-            # One UPDATE rather than a SELECT and a save per row. UserData is saved on ordinary
-            # page views (the location context processor, the lot page), so this ran on requests
-            # that were not changing anything. ChatSubscription.save() only fills in timestamps
-            # that are null, and a row that exists has them.
+            # One UPDATE; UserData saves on ordinary page views.
             ChatSubscription.objects.exclude(lot__user=self.user).filter(user=self.user, unsubscribed=False).update(
                 unsubscribed=True
             )
@@ -12581,30 +11310,21 @@ class UserData(CachedPropertiesMixin, models.Model):
 
     @property
     def has_push_device(self):
-        """True when the user has at least one push-enabled device carrying an FCM token."""
+        """True with a push-enabled device carrying an FCM token."""
         return self.user.mobile_devices.filter(push_enabled=True).exclude(fcm_token="").exists()
 
     @property
     def has_app_push(self):
-        """True when a notification can be delivered to this user's app right now.
-
-        Deliberately ignores ``push_notifications_instead_of_email``: that toggle governs mail we
-        would otherwise send by email. Notifications that were never email in the first place (the
-        "a lot you're watching is selling" browser push) route to the app whenever the app can
-        receive them. We can't tell a browser subscription apart from the app on the same phone, so
-        sending both would just buzz the same person twice.
+        """True when the app can receive a notification now. Ignores
+        ``push_notifications_instead_of_email``, which is about email; browser and app push on one phone
+        can't be told apart.
         """
         from auctions.notifications import push_configured
 
         return push_configured() and self.has_push_device
 
     def user_prefers_push(self):
-        """Whether notifications for this user should go to the app (FCM) instead of email.
-
-        True only when the user opted in, has a registered device with a live token, and
-        push is configured globally. Any of these being false falls back to email — the same
-        graceful-degradation pattern as email routing.
-        """
+        """Whether notifications go to the app instead of email: opted in, live device, push configured."""
         from auctions.notifications import push_configured
 
         if not self.push_notifications_instead_of_email:
@@ -12615,11 +11335,7 @@ class UserData(CachedPropertiesMixin, models.Model):
 
 
 class PayPalSeller(models.Model):
-    """Extension of user model to store PayPal info for sellers
-    Initially it seemed like there would be a lot of data here so I created a model for it
-    but the reality is there's basically just one field
-    Still, this is at least easy to delete in a callback if the user disconnects their PayPal account
-    """
+    """A seller's PayPal info (basically one field), deleted when they disconnect."""
 
     user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
     club = models.OneToOneField(
@@ -12659,7 +11375,7 @@ class PayPalSeller(models.Model):
             )
             auction.enable_online_payments = False
             auction.save()
-        # Disable PayPal on club auctions if this seller was linked to the club
+        # Disable PayPal on club auctions if linked to the club.
         if self.club_id:
             club = self.club
             club_auctions = Auction.objects.filter(club=club, enable_online_payments=True)
@@ -12680,10 +11396,8 @@ class PayPalSeller(models.Model):
         return super().delete()
 
 
-# Square OAuth scopes we request. PAYMENTS_WRITE_IN_PERSON powers Tap to Pay; sellers who
-# connected before it was added hold tokens without it and must reconnect (refreshing keeps the
-# original scopes). This is the single source of truth for the authorize request and for what we
-# record as granted on the seller.
+# Square OAuth scopes. PAYMENTS_WRITE_IN_PERSON powers Tap to Pay; older tokens lack it and must
+# reconnect.
 SQUARE_TAP_TO_PAY_SCOPE = "PAYMENTS_WRITE_IN_PERSON"
 SQUARE_OAUTH_SCOPES = (
     "PAYMENTS_WRITE",
@@ -12696,31 +11410,20 @@ SQUARE_OAUTH_SCOPES = (
 
 
 def sanitize_square_phone(raw):
-    """Return a Square-acceptable phone string for the checkout pre-fill hint, or "".
-
-    Square validates ``buyer_phone_number`` strictly and rejects the *entire* payment-link
-    request with INVALID_PHONE_NUMBER on a malformed value -- so a junk stored number
-    ("call me", a bare extension, a 7-digit number missing its area code) must be dropped
-    rather than allowed to block checkout, since the field is only a convenience pre-fill
-    the buyer can edit anyway. Keeps a leading "+" (E.164) plus digits and requires a
-    plausible length (10-15 digits); anything else returns "".
+    """A Square-acceptable phone for the checkout pre-fill, or "". Square rejects the whole request on a bad
+    phone, so junk is dropped. "+" and 10-15 digits.
     """
     if not raw:
         return ""
     has_plus = raw.strip().startswith("+")
     digits = re.sub(r"\D", "", raw)
-    # E.164 caps at 15 digits; a 10-digit floor drops short partials (the most common
-    # INVALID_PHONE_NUMBER trigger) while keeping US 10/11-digit and country-code numbers.
     if not (10 <= len(digits) <= 15):
         return ""
     return f"+{digits}" if has_plus else digits
 
 
 class SquareSeller(models.Model):
-    """Extension of user model to store Square info for sellers
-    Similar to PayPalSeller, stores Square merchant information and OAuth tokens
-    OAuth tokens are encrypted at rest for security using django-encrypted-model-fields
-    """
+    """A seller's Square merchant info and OAuth tokens (encrypted at rest)."""
 
     user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
     club = models.OneToOneField(
@@ -12769,7 +11472,7 @@ class SquareSeller(models.Model):
             )
             auction.enable_square_payments = False
             auction.save()
-        # Disable Square on club auctions if this seller was linked to the club
+        # Disable Square on club auctions if linked to the club.
         if self.club_id:
             club = self.club
             club_auctions = Auction.objects.filter(club=club, enable_square_payments=True)
@@ -12791,11 +11494,7 @@ class SquareSeller(models.Model):
 
     @property
     def supports_tap_to_pay(self):
-        """True if this seller's stored OAuth grant includes the in-person scope Tap to Pay needs.
-
-        Sellers connected before the scope was added have empty/legacy ``scopes`` and must
-        reconnect; refreshing their token keeps the original (non-in-person) scopes.
-        """
+        """True if the stored grant includes the Tap to Pay scope; older sellers must reconnect."""
         return SQUARE_TAP_TO_PAY_SCOPE in (self.scopes or "").split()
 
     def is_token_expired(self):
@@ -12808,9 +11507,7 @@ class SquareSeller(models.Model):
         return timezone.now() + buffer_time >= self.token_expires_at
 
     def refresh_access_token(self):
-        """Refresh the Square access token using the refresh token
-        Returns True if successful, False otherwise
-        """
+        """Refresh the Square access token. True on success."""
         if not self.refresh_token:
             logger.error("Cannot refresh Square token: no refresh_token available for user %s", self.user.pk)
             return False
@@ -12837,7 +11534,7 @@ class SquareSeller(models.Model):
 
             # Update tokens
             self.access_token = result.access_token
-            # Square returns the same refresh_token in code flow, new one in PKCE flow
+            # Code flow returns the same refresh token; PKCE a new one.
             if hasattr(result, "refresh_token") and result.refresh_token:
                 self.refresh_token = result.refresh_token
             if hasattr(result, "expires_at") and result.expires_at:
@@ -12858,9 +11555,7 @@ class SquareSeller(models.Model):
             return False
 
     def get_valid_access_token(self):
-        """Get a valid access token, refreshing if necessary
-        Returns the access token or None if unable to get a valid token
-        """
+        """A valid access token, refreshing if needed, or None."""
         if self.is_token_expired():
             logger.info("Square token expired for user %s, attempting refresh", self.user.pk)
             if not self.refresh_access_token():
@@ -12869,9 +11564,7 @@ class SquareSeller(models.Model):
         return self.access_token
 
     def get_square_client(self):
-        """Initialize and return Square SDK client using this seller's OAuth token
-        Returns Square client or None if token is invalid
-        """
+        """A Square client using this seller's token, or None."""
         access_token = self.get_valid_access_token()
         if not access_token:
             logger.error("No valid OAuth token for user %s", self.user.pk)
@@ -12890,9 +11583,7 @@ class SquareSeller(models.Model):
             return None
 
     def get_location_id(self):
-        """Get the first active location ID for this merchant
-        Returns location_id string or None if no active location found
-        """
+        """The first active location id, or None."""
         client = self.get_square_client()
         if not client:
             return None
@@ -12921,14 +11612,8 @@ class SquareSeller(models.Model):
             return None
 
     def create_payment_link(self, invoice, request, member_pk=""):
-        """Create a Square payment link for the given invoice
-        Args:
-            invoice: Invoice object to create payment for
-            request: HttpRequest object for building redirect URL
-            member_pk: Optional ClubMember pk; when set on a club invoice the
-                Square redirect lands on that member's member-number page.
-        Returns:
-            tuple: (payment_url, error_message) - payment_url is None if error occurs
+        """Create a Square payment link for an invoice. ``member_pk`` sends a club invoice's redirect to that
+        member's page. Returns ``(payment_url, error_message)``.
         """
         client = self.get_square_client()
         if not client:
@@ -12942,8 +11627,7 @@ class SquareSeller(models.Model):
         try:
             from decimal import Decimal
 
-            # Charge the rounded balance so the amount matches the invoice total the buyer sees
-            # (rounded_net_after_payments falls back to the exact amount when rounding is off).
+            # The rounded balance the buyer sees.
             amount_decimal = Decimal("0.00") - Decimal(invoice.rounded_net_after_payments)
             amount_cents = int(max(amount_decimal, Decimal("0.00")) * 100)
         except Exception:
@@ -12970,7 +11654,7 @@ class SquareSeller(models.Model):
             else:
                 buyer_email = getattr(getattr(invoice, "auctiontos_user", None), "email", None)
 
-            # Validate email domain - Square blocks certain domains like example.com
+            # Square blocks some domains, like example.com.
             if buyer_email:
                 from django.conf import settings
 
@@ -12985,9 +11669,7 @@ class SquareSeller(models.Model):
                 if invoice.auctiontos_user.pickup_location.pickup_by_mail:
                     ask_for_shipping_address = True
 
-            # Pre-populate buyer info from auctiontos
-            # Note: These are hints for the Square checkout form and users can edit them.
-            # String truncation is used to meet Square API field length limits.
+            # Pre-fill hints, truncated to Square's limits.
             pre_populated_data = {}
             if buyer_email:
                 pre_populated_data["buyer_email"] = buyer_email
@@ -13000,10 +11682,7 @@ class SquareSeller(models.Model):
                         if len(name_parts) >= 2:
                             buyer_name["family_name"] = name_parts[1][:50]
                         pre_populated_data["buyer_name"] = buyer_name
-                # Add phone number only when it looks like a real phone (20 char limit per
-                # Square API). This is just a checkout pre-fill hint, but Square rejects the
-                # whole payment-link request with INVALID_PHONE_NUMBER for a malformed value,
-                # so a junk stored number is dropped here rather than allowed to block checkout.
+                # Only a plausible phone; a bad one fails the whole request.
                 buyer_phone = sanitize_square_phone(invoice.auctiontos_user.phone_number)
                 if buyer_phone:
                     pre_populated_data["buyer_phone_number"] = buyer_phone
@@ -13074,22 +11753,14 @@ class SquareSeller(models.Model):
                     if error_code == "INVALID_EMAIL_ADDRESS":
                         error_msg = "The email address on your account is not valid for Square payments. Please contact the auction organizer to update your email address."
                     elif error_code == "INVALID_PHONE_NUMBER":
-                        # Backstop: sanitize_square_phone should already omit bad numbers, but if
-                        # one slips through, tell the buyer what to fix instead of a raw Square code.
+                        # Backstop: explain a phone problem rather than show Square's code.
                         error_msg = "The phone number on your account is not valid for Square payments. Please contact the auction organizer to update your phone number."
                     elif error_detail:
                         error_msg = f"Square error: {error_detail}"
             return None, error_msg
 
     def process_refund(self, payment, refund_amount, reason):
-        """Process a Square refund
-        Args:
-            payment: InvoicePayment object with external_id for the payment
-            refund_amount: Decimal amount to refund
-            reason: String reason for the refund
-        Returns:
-            Error message string or None on success
-        """
+        """Process a Square refund. Error string or None."""
         client = self.get_square_client()
         if not client:
             return "Failed to initialize Square client"
@@ -13121,9 +11792,7 @@ class SquareSeller(models.Model):
 
 
 class UserInterestCategory(models.Model):
-    """
-    How interested is a user in a given category
-    """
+    """How interested a user is in a category."""
 
     user = models.ForeignKey(User, on_delete=models.CASCADE)
     category = models.ForeignKey(Category, on_delete=models.CASCADE)
@@ -13135,14 +11804,9 @@ class UserInterestCategory(models.Model):
 
     @classmethod
     def add_interest(cls, user, category, weight):
-        """Increment a user's interest in a category, creating the row if it doesn't exist.
-
-        Deliberately uses filter().first() instead of get_or_create: there is no
-        unique constraint on (user, category) (duplicates are tolerated here and
-        reconciled by the deduplicate_user_interest task), so get_or_create's get()
-        would raise MultipleObjectsReturned the moment a duplicate exists. A double
-        click might briefly create a second row; that's harmless soft data and gets
-        merged on the next dedupe pass.
+        """Increment a user's interest in a category, creating the row if needed. filter().first(), not
+        get_or_create: duplicates are tolerated (no unique constraint) and merged by
+        deduplicate_user_interest.
         """
         interest = cls.objects.filter(user=user, category=category).first()
         if interest is None:
@@ -13153,9 +11817,7 @@ class UserInterestCategory(models.Model):
         return interest
 
     def save(self, *args, **kwargs):
-        """
-        Normalize the user's interest in a category relative to all of this user's interests
-        """
+        """Normalize interest relative to the user's strongest interest."""
         try:
             maxInterest = UserInterestCategory.objects.filter(user=self.user).order_by("-interest")[0].interest
             self.as_percent = int(((self.interest + 1) / maxInterest) * 100)  # + 1 for the times maxInterest is 0
@@ -13203,8 +11865,7 @@ class AuctionHistory(models.Model):
     auction = models.ForeignKey(Auction, on_delete=models.CASCADE)
     user = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL)
     action = models.CharField(max_length=800, blank=True, null=True)
-    # The queryable half of `action`: {field_name: {"from": x, "to": y}}. auctions/history.py says
-    # why prose alone could not answer "has anybody ever changed this setting".
+    # {field_name: {"from": x, "to": y}}; see auctions/history.py.
     changed_fields = models.JSONField(default=dict, blank=True)
     timestamp = models.DateTimeField(auto_now_add=True)
     applies_to = models.CharField(
@@ -13216,11 +11877,8 @@ class AuctionHistory(models.Model):
             ("USERS", "Users"),
             ("INVOICES", "Invoices"),
             ("LOTS", "Lots"),
-            # LOT_WINNERS was here and nothing ever wrote it -- a sale is recorded under LOTS by
-            # DynamicSetLotWinner.commit_winner ("Set lot 14 as sold"). A choice nobody writes is
-            # worse than absent: it is what an admin filtering for sales picks, and it answers
-            # nothing. STATS is the mirror image, written by tasks.update_auction_stats and never
-            # declared, so a row of it read back as a raw column value with no label.
+            # LOT_WINNERS removed (sales are logged under LOTS); STATS added (written by
+            # update_auction_stats, previously undeclared).
             ("STATS", "Stats"),
         ),
     )
@@ -13243,14 +11901,7 @@ class AdCampaignGroup(CachedPropertiesMixin, models.Model):
 
     @staticmethod
     def annotate_totals(queryset):
-        """Add the three counts the changelist prints for every group, as subqueries.
-
-        ``list_display`` shows the campaigns, the impressions and the clicks, and each was its own
-        ``COUNT`` -- over ``AdCampaignResponse``, which holds a row per ad ever shown. Subqueries
-        rather than ``Count(..., distinct=True)`` over joins, for the reason
-        ``AuctionTOS.annotate_lot_counts`` gives: two multi-valued joins in one query multiply each
-        other's rows, and ``distinct`` then has to undo that.
-        """
+        """Add campaign, impression and click counts as subqueries for the changelist."""
         campaigns = AdCampaign.objects.filter(campaign_group=OuterRef("pk"))
         responses = AdCampaignResponse.objects.filter(campaign__campaign_group=OuterRef("pk"))
 
@@ -13334,12 +11985,7 @@ class AdCampaign(CachedPropertiesMixin, CloudflareImageMixin, models.Model):
 
     @staticmethod
     def annotate_response_counts(queryset):
-        """Add the two counts the changelist prints for every campaign, as subqueries.
-
-        Same shape and the same reason as ``AdCampaignGroup.annotate_totals``: ``list_display``
-        prints the impressions, the clicks and the rate between them, and each was a ``COUNT`` over
-        ``AdCampaignResponse`` per row.
-        """
+        """Add impression and click counts as subqueries for the changelist."""
         responses = AdCampaignResponse.objects.filter(campaign=OuterRef("pk"))
 
         def count_of(**extra):
@@ -13372,11 +12018,7 @@ class AdCampaign(CachedPropertiesMixin, CloudflareImageMixin, models.Model):
 
     @cached_property
     def number_of_impressions(self):
-        """How many times this ad has been viewed.
-
-        From the queryset annotation when there is one -- the campaign-group admin page prints this
-        for every campaign in the group, which would otherwise be a COUNT per row.
-        """
+        """Times this ad was viewed, from the annotation when present."""
         annotated = getattr(self, "annotated_impressions", None)
         if annotated is not None:
             return annotated
@@ -13477,13 +12119,7 @@ class LotImage(InvalidatesRelatedCache, CloudflareImageMixin, models.Model):
             "REPRESENTATIVE",
             "My photo, but not of this exact item.  e.x. This is the parents of these fry",
         ),
-        # Was "This picture is from the internet", which is a confession rather than an answer: it
-        # asked a user to record, in a column, that we are hosting somebody else's photograph -- and
-        # it is what a blank field is silently set to (see LotPage's image handling), so most rows
-        # said it whether the seller meant them to or not.  512(c) does not require a site to police
-        # what its users upload, but it does fall away on red-flag knowledge, and a database column
-        # full of self-reported infringement is the worst possible exhibit.  The category still has
-        # to exist -- it is the catch-all -- so it asks for the thing that actually needs to be true.
+        # Was "This picture is from the internet"; see LotImage.
         ("RANDOM", "Not my photo - I have permission to use it"),
     )
     lot_number = models.ForeignKey(Lot, on_delete=models.CASCADE)
@@ -13504,8 +12140,7 @@ class LotImage(InvalidatesRelatedCache, CloudflareImageMixin, models.Model):
 
     @property
     def display_url(self):
-        """Return the URL to display this image; prefer uploaded image (from Cloudflare
-        when migrated) over the url field"""
+        """The display URL: the uploaded image (Cloudflare when migrated), else the url field."""
         return cloudflare_images.image_url(self.image, self.cloudflare_image_id) or self.url or None
 
     @property
@@ -13515,15 +12150,8 @@ class LotImage(InvalidatesRelatedCache, CloudflareImageMixin, models.Model):
 
     @property
     def source_display(self):
-        """The image source as a page shows it, which is not always the label that was picked.
-
-        ``RANDOM``'s label is a promise made to us on the way in -- "Not my photo - I have
-        permission to use it" -- and it is also what a blank field is silently set to (see
-        LotPage's image handling), so it sits on most rows whether the seller ever chose it.  Under
-        the picture it told a bidder nothing they were deciding on, and told everybody else that
-        this site is where other people's photographs live.  The question is worth asking, so the
-        category stays on the form; the answer is for us, not for the lot page.  The other two say
-        who took the photo and of what, which is exactly what a bidder is reading, so they show.
+        """The source label shown under a picture. ``RANDOM`` shows nothing: it's also the blank default and
+        tells a bidder nothing.
         """
         if self.image_source == "RANDOM":
             return ""
@@ -13531,7 +12159,7 @@ class LotImage(InvalidatesRelatedCache, CloudflareImageMixin, models.Model):
 
 
 class FAQ(models.Model):
-    """Questions...constantly questions.  Maintained in the admin site, and used only on the FAQ page"""
+    """FAQ entries, maintained in the admin."""
 
     category_text = models.CharField(max_length=100)
     question = models.CharField(max_length=200)
@@ -13565,12 +12193,7 @@ class SearchHistory(models.Model):
 
 
 class CommandPalettePage(models.Model):
-    """Maps a generic phrase typed in the command palette to a destination page.
-
-    Populated by data migrations and managed in the Django admin only (no front-end UI).
-    For example "sell lots" -> the set-lot-winners page for the user's most recent auction.
-    A single phrase may map to several pages (several rows with the same ``search_term``).
-    """
+    """Maps a phrase typed in the command palette to destination pages. Managed in migrations and the admin."""
 
     search_term = models.CharField(
         max_length=200, db_index=True, help_text="The phrase people type, e.g. 'sell lots' or 'address'."
@@ -13610,11 +12233,8 @@ class CommandPalettePage(models.Model):
 
 
 class CommandPaletteSearch(models.Model):
-    """One row per command-palette search session (not per keystroke).
-
-    The front end updates a single row as the user refines their query, then records
-    whether they clicked a result or abandoned the search. Only stored for logged-in users.
-    Built to be flexible so we can mine the data later and grow CommandPalettePage mappings.
+    """One row per command-palette search session, updated as the query is refined, recording click,
+    abandon or bounce. Signed-in users only.
     """
 
     RESULT_PENDING = "pending"
@@ -13647,13 +12267,7 @@ class CommandPaletteSearch(models.Model):
 
 
 class LLMUsage(models.Model):
-    """One row per language-model call made by the command palette's natural-language assist.
-
-    Exists to answer "what is this costing and is it working?" -- token totals per user, which
-    actions get run, and how often a query ends in an error. Written by ``palette_assist`` for
-    every provider call, including failed ones (``success=False``), and summarized on the
-    command palette analytics page.
-    """
+    """One row per command palette language-model call, including failures, for cost and success analytics."""
 
     user = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL)
     createdon = models.DateTimeField(auto_now_add=True)
@@ -13753,33 +12367,22 @@ class MobileDevice(models.Model):
     device_name = models.CharField(max_length=200, blank=True)
     platform = models.CharField(max_length=10, choices=PLATFORM_CHOICES, blank=True)
     app_version = models.CharField(max_length=50, blank=True)
-    # FCM registration token for push. Blank = no push target for this device (signed out, or the app
-    # never registered one). Tokens follow the app install, not the user, so signing out clears it.
+    # FCM token; blank means no push target. Follows the install; signing out clears it.
     fcm_token = models.TextField(blank=True, default="", db_index=False)
     fcm_token_updated_at = models.DateTimeField(null=True, blank=True)
     push_enabled = models.BooleanField(default=True)  # per-device kill switch
     created_at = models.DateTimeField(auto_now_add=True)
     last_seen = models.DateTimeField(auto_now=True)
-    # Presence, for printing from a computer to this phone's Bluetooth printer. The phone cannot be
-    # summoned -- Android forbids starting an Activity from the background and iOS silent pushes are
-    # best-effort and dead once the app is force-quit -- so the honest contract is "the app has to be
-    # open", and these three fields are how the website measures that instead of firing a push into
-    # the void and timing out. Posted by the app at shell mount, on resume, and every 5 minutes while
-    # foregrounded (POST /api/mobile/devices/heartbeat/).
+    # Presence for remote printing: the phone can't be summoned, so the app must be open. Posted at
+    # mount, on resume, and every 5 minutes (POST /api/mobile/devices/heartbeat/).
     last_heartbeat = models.DateTimeField(null=True, blank=True, db_index=True)
-    # The app saying "this phone has a printer paired and a profile that resolves for it, right now".
-    # Deliberately not derived from UserLabelPrefs.print_method: a user can have Bluetooth selected on
-    # an account whose phone has nothing paired, and advertising that would promise a print that fails.
+    # The app says a printer is paired and a profile resolves now. Not derived from print_method.
     print_ready = models.BooleanField(default=False)
     printer_name = models.CharField(max_length=100, blank=True, default="")
-    # Sticky: has this device EVER reported print_ready? ``print_ready`` is the current state and goes
-    # back to False the moment a printer is unpaired or the app is closed, so it cannot answer "is
-    # this feature worth offering to this account at all" -- which is what decides whether /printing/
-    # shows the checkbox. A switch with nothing behind it is worse than no switch.
+    # Sticky: has it ever been print-ready? Decides whether /printing/ offers remote printing.
     ever_print_ready = models.BooleanField(default=False)
 
-    # One missed beat of slack on the app's 5-minute interval. Everything that asks "can we print to
-    # this phone" keys off this and nothing else.
+    # One missed beat of slack.
     HEARTBEAT_GRACE = datetime.timedelta(minutes=6)
 
     class Meta:
@@ -13797,7 +12400,7 @@ class MobileDevice(models.Model):
 
     @classmethod
     def reachable_printers_for(cls, user):
-        """The user's phones that could print a job this second, freshest heartbeat first."""
+        """The user's phones that could print now, freshest heartbeat first."""
         if not user or not user.is_authenticated:
             return cls.objects.none()
         return cls.objects.filter(
@@ -13808,11 +12411,8 @@ class MobileDevice(models.Model):
 
     @classmethod
     def print_presence_for(cls, user):
-        """``(device, last_seen_datetime_or_None)`` for the "your phone was last seen…" line.
-
-        The device is the reachable one if there is one, otherwise the most recently heard-from phone
-        that has ever been print-ready — because the useful thing to tell someone whose phone is not
-        answering is how long ago it was, not that there is no device.
+        """``(device, last_seen_or_None)`` for "your phone was last seen...": the reachable device, else the
+        last print-ready one.
         """
         if not user or not user.is_authenticated:
             return None, None
@@ -13828,22 +12428,12 @@ class MobileDevice(models.Model):
 
 
 class RemotePrintJob(models.Model):
-    """One "print these labels on the phone paired to my printer" request, made from a computer.
+    """A request, from a computer, to print labels on the phone's paired Bluetooth printer.
 
-    The user is signed in on a desktop with the app open on their phone; they press print on the
-    website and the labels come out of the phone's Bluetooth printer. Everything about the shape of
-    this is decided by one constraint: **the phone cannot be summoned**. Android forbids starting an
-    Activity from the background, and this app's BLE connection lives in a UI-scoped provider on the
-    shell, so a headless isolate woken by a data message would have none of it; iOS silent pushes are
-    rate-limited, best-effort, and dropped entirely once the app is force-quit. So the app must
-    already be open, ``MobileDevice`` measures whether it is, and this row is what lets the *computer*
-    tell the user the truth about what happened rather than time out.
-
-    The row is the whole conversation: the website creates it and pushes it (R4), the phone posts
-    progress and a result against it (R6), and the waiting page polls it (R5). ``message`` is the
-    app's own failure text stored verbatim and shown verbatim -- the app already distinguishes "no
-    printer paired" from "couldn't connect" from "lost the link mid-print" from "label wider than the
-    printhead", and rewording those here would be two copies of the same vocabulary drifting apart.
+    The phone can't be summoned (Android and iOS both prevent it), so the app must already be open;
+    ``MobileDevice`` measures that, and this row lets the computer report what really happened. The
+    website creates and pushes it, the phone posts progress and a result, the page polls. ``message`` is
+    the app's own text, shown verbatim.
     """
 
     STATUS_QUEUED = "queued"
@@ -13862,24 +12452,18 @@ class RemotePrintJob(models.Model):
         (STATUS_CANCELLED, "Cancelled"),
         (STATUS_UNREACHABLE, "Couldn't reach the phone"),
     ]
-    # Statuses nothing further will happen to. Used by the retry/cancel paths and by the staleness
-    # rule, which must not reopen a job that already reported.
+    # Statuses nothing further happens to.
     TERMINAL_STATUSES = {STATUS_PRINTED, STATUS_FAILED, STATUS_CANCELLED, STATUS_UNREACHABLE}
-    # How long a pushed job may go without a word before the page stops waiting. The app posts
-    # progress per label, so silence this long means the message never landed -- the phone was
-    # force-quit, or lost its network between the push and the first label.
+    # Silence after a push before giving up: the app posts progress per label.
     SILENCE_BEFORE_UNREACHABLE = datetime.timedelta(seconds=20)
 
     uuid = models.UUIDField(primary_key=True, default=uuid_module.uuid4, editable=False)
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="remote_print_jobs")
-    # SET_NULL rather than CASCADE: a phone that unregisters after printing must not delete the
-    # record of what it printed.
+    # SET_NULL: keep the record if the phone unregisters.
     device = models.ForeignKey(
         MobileDevice, on_delete=models.SET_NULL, null=True, blank=True, related_name="print_jobs"
     )
-    # Lot pks in print order -- the order they come out of the printer, which is the same order the
-    # PDF would have laid them out. A JSON list rather than an m2m because order is the point and a
-    # through-model with a position column would buy nothing else.
+    # Lot pks in print order.
     lots = models.JSONField(default=list, blank=True)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_QUEUED)
     printed_count = models.IntegerField(default=0)
@@ -13902,27 +12486,18 @@ class RemotePrintJob(models.Model):
 
     @property
     def has_gone_quiet(self):
-        """Pushed, never answered, and out of time — the page should stop waiting.
-
-        Only counts from ``sent``: a job still ``queued`` has not been pushed yet, and one that has
-        reported anything at all has proved the phone is listening.
-        """
+        """Pushed, never answered, and out of time. Only from ``sent``."""
         if self.status != self.STATUS_SENT:
             return False
         return timezone.now() - self.updated_at > self.SILENCE_BEFORE_UNREACHABLE
 
     def lots_qs(self):
-        """The lots this job is for, in the stored print order (a plain ``filter`` would not be)."""
+        """The job's lots in stored print order."""
         by_pk = Lot.objects.in_bulk(self.lots)
         return [by_pk[pk] for pk in self.lots if pk in by_pk]
 
     def mark_labels_printed(self, count):
-        """Mark the first *count* lots printed — what the PDF path does by rendering.
-
-        Called from the app's result post so it does not have to post twice. The first *count* of
-        them because that is the order they printed in, so a batch that died halfway marks exactly
-        what came out.
-        """
+        """Mark the first *count* lots printed, from the app's result post."""
         if count <= 0:
             return 0
         lots = [lot for lot in self.lots_qs()[:count] if not lot.is_deleted]
@@ -13934,28 +12509,20 @@ class RemotePrintJob(models.Model):
 
 
 class MobileOfflineOp(models.Model):
-    """Idempotency ledger for offline-sync ops applied via POST /api/mobile/offline/sync/.
+    """Idempotency ledger for offline-sync ops (POST /api/mobile/offline/sync/).
 
-    The Flutter app queues add_user / add_lot / set_winner operations while an admin is running an
-    in-person sale disconnected, then replays the whole queue when the connection returns — possibly
-    more than once, because a dropped response makes it resend. One row per successfully-applied (or
-    already-applied) ``op_id`` lets a retry return the original result instead of duplicating the
-    row, and lets a later op reference an earlier offline-created row by ``op:<op_id>``.
-
-    Conflicted ops are deliberately NOT recorded: the server copy always wins, so a conflict must
-    re-evaluate on the next replay (the admin may have resolved it on the website in between).
+    The app replays its queue, possibly more than once; a row per applied ``op_id`` returns the original
+    result and resolves ``op:<op_id>`` references. Conflicts aren't recorded, so they re-evaluate.
     """
 
     op_id = models.CharField(max_length=64, unique=True, db_index=True)
     auction = models.ForeignKey(Auction, on_delete=models.CASCADE, related_name="offline_ops")
-    # The syncing admin the applied op is attributed to (matches the web equivalents' AuctionHistory).
+    # The syncing admin.
     user = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True)
     op_type = models.CharField(max_length=20)
-    # pk of the row this op created (AuctionTOS for add_user, Lot for add_lot); null for set_winner.
-    # Used to resolve `op:<op_id>` references from later ops.
+    # pk created (AuctionTOS for add_user, Lot for add_lot); null for set_winner.
     result_pk = models.IntegerField(null=True, blank=True)
-    # The result fields echoed to the app on the original apply (the honored bidder_number/lot_number),
-    # so a replay can return the same numbers alongside an ``already_applied`` status.
+    # Echoed result fields, returned again on replay.
     result_data = models.JSONField(default=dict, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
@@ -13967,40 +12534,29 @@ class MobileOfflineOp(models.Model):
 
 
 class ThermalPrinterProfile(models.Model):
-    """A Bluetooth thermal label printer the mobile app knows how to drive.
+    """A Bluetooth thermal printer the app can drive. Every byte sent is defined here; a new printer is a
+    row, not an app release.
+    """
 
-    The app downloads all enabled profiles and interprets them; every byte
-    sent to a printer is defined here, not in the app. Adding support for a new
-    printer means adding a row, no app release."""
-
-    # User-facing when the app has to ask which printer this is, so name the printer ("MUNBYN
-    # ITPP941"), not the protocol — the person choosing is looking at a box on a table.
+    # Name the printer, not the protocol: the person choosing is looking at a box.
     slug = models.SlugField(unique=True)  # stable id the app caches/reports
     name = models.CharField(max_length=100)  # "Fichero / AiYin D11s"
     enabled = models.BooleanField(default=True)
     priority = models.PositiveIntegerField(default=100)  # match order, low wins
     schema_version = models.PositiveIntegerField(default=1)  # command-program schema
-    # What the print program speaks. The app can infer this from the program's bytes (TSPL if it
-    # contains BITMAP, ESC/POS if 1d7630 …) and still does for older deployments, but stating it
-    # lets a command-language probe auto-select this profile when it is the only one that speaks
-    # the language the printer answered in — which is what removes the "pick your printer type"
-    # dialog for most printers.
+    # The print program's language; stating it lets a language probe auto-select this profile.
     command_language = models.CharField(
         max_length=20, choices=printer_programs.COMMAND_LANGUAGE_CHOICES, blank=True, default=""
     )
 
-    # ── Matching (how the app decides a scanned BLE device uses this profile) ──
-    # JSON list of case-insensitive regexes tested against the advertised name,
-    # e.g. ["^D11", "^Fichero"]. Empty list = never auto-matched (manual pick only).
-    # The BLE name is user-editable and resellers rename the same board freely, so a
-    # name miss is normal; the app then reads the GATT Device Information Service
-    # (0x180A) and matches what the *printer* reports against these two lists — same
-    # case-insensitive regex semantics, tested against model (0x2A24) and
-    # manufacturer (0x2A29). Empty list = that field never matches.
+    # ── Matching ──
+    # Case-insensitive regexes against the advertised BLE name (empty = manual only). Names are
+    # unreliable, so the app also matches GATT Device Information model (0x2A24) and manufacturer
+    # (0x2A29) against the next two lists.
     ble_name_patterns = models.JSONField(default=list, blank=True)
     model_patterns = models.JSONField(default=list, blank=True)
     manufacturer_patterns = models.JSONField(default=list, blank=True)
-    # Optional exact GATT ids; blank = discover (first writable characteristic).
+    # Optional exact GATT ids; blank discovers the first writable characteristic.
     service_uuid = models.CharField(max_length=40, blank=True, default="")
     write_characteristic_uuid = models.CharField(max_length=40, blank=True, default="")
     notify_characteristic_uuid = models.CharField(max_length=40, blank=True, default="")
@@ -14033,7 +12589,7 @@ class ThermalPrinterProfile(models.Model):
         return f"{self.name} ({self.slug})"
 
     def clean(self):
-        """Validate the command programs so an admin typo is rejected here, not on the printer."""
+        """Validate command programs so typos are rejected here, not on the printer."""
         from auctions.printer_programs import (
             ProgramValidationError,
             validate_match_patterns,
@@ -14056,85 +12612,58 @@ class ThermalPrinterProfile(models.Model):
 
 
 class ObservedPrinter(models.Model):
-    """One Bluetooth printer a user actually paired, and how the app identified it.
+    """A Bluetooth printer a user paired and how the app identified it: a work queue for printer support.
 
-    Posted fire-and-forget by the app on every successful pairing (see
-    POST /api/mobile/printers/observed/). This is a work queue, not analytics:
+    ``matched_by="manual"``: no profile matched; its model/manufacturer belong in a profile's patterns.
+    Blank ``profile_slug`` or ``model``: needs a BLE-name pattern or a new profile. ``characterized``
+    rows carry enough to draft a profile.
 
-    * ``matched_by="manual"`` rows are printers no profile claimed — the user had to be
-      asked. Whatever this row reports as ``model``/``manufacturer`` is exactly what
-      belongs in ``ThermalPrinterProfile.model_patterns`` / ``manufacturer_patterns``,
-      after which that printer pairs itself for everyone.
-    * ``deviceInfo`` / ``serviceUuid`` rows confirm the patterns work, and show which
-      printers people own.
-    * A blank ``profile_slug`` (user cancelled) or a blank ``model`` (the printer
-      identifies as nothing) means a BLE-name pattern or a brand-new profile is needed.
-    * ``characterized`` rows carry everything needed to write a profile — the printer's
-      GATT tree, its command language, and what each of its status codes means — so the
-      "Draft a profile from this observation" action can fill one in.
-
-    One row per (user, ble_name, model, profile_slug); re-pairing bumps times_seen."""
+    One row per (user, ble_name, model, profile_slug); re-pairing bumps times_seen.
+    """
 
     MATCHED_BY_CHOICES = [
-        # Values are the app's wire strings, stored verbatim so admin filters read the same
-        # thing the app sent.
+        # The app's wire strings, verbatim.
         ("bleName", "BLE name pattern"),
         ("deviceInfo", "Device Information Service (model/manufacturer)"),
         ("serviceUuid", "Service UUID"),
-        # "We worked out its language by asking it" — distinct from "the printer told us over
-        # GATT", which is what deviceInfo means. Without this the app had to report probe matches
-        # as deviceInfo and the two were indistinguishable here.
+        # Identified by probing its command language, distinct from GATT deviceInfo.
         ("probe", "Command-language probe"),
         ("manual", "User picked it manually"),
     ]
 
     user = models.ForeignKey(User, on_delete=models.CASCADE)
     ble_name = models.CharField(max_length=100, blank=True, default="")  # advertised, user-editable
-    # ── What the printer reported over GATT 0x180A; blank = it didn't say ──
+    # ── GATT 0x180A; blank = not reported ──
     manufacturer = models.CharField(max_length=100, blank=True, default="")  # 0x2A29
     model = models.CharField(max_length=100, blank=True, default="")  # 0x2A24
     firmware = models.CharField(max_length=100, blank=True, default="")  # 0x2A26
     hardware = models.CharField(max_length=100, blank=True, default="")  # 0x2A27
     service_uuids = models.JSONField(default=list, blank=True)  # advertised GATT services
 
-    # ── What the print engine itself answered ──
-    # The DIS often describes the radio module, not the printer (a Y486BT reports "Feasycom" /
-    # "FSC-BT986", a Bluetooth module that ships in dozens of unrelated products), which is not
-    # enough to author a profile from. So the app also sends the standard read-only status/identity
-    # query of each command language and records which ones answer: which query answers *is* the
-    # command language, and the payloads often carry a model string or media size.
-    # ``{"tspl_status": {"hex": "00", "ascii": "."}}`` — query id → what came back.
+    # ── Command-language probe replies ──
+    # DIS often names the radio module, so the app sends each language's status query; the one that
+    # answers is the language. ``{"tspl_status": {"hex": "00", "ascii": "."}}``.
     probe_replies = models.JSONField(default=dict, blank=True)
-    # tspl|escpos|zpl|cpcl|d11s, or blank when nothing answered / no probe ran. The single most
-    # useful column for triaging an unsupported printer: it says which profile family it belongs in.
+    # The answering language: which profile family a printer belongs in.
     probed_language = models.CharField(max_length=20, blank=True, default="", db_index=True)
-    # The full service/characteristic tree, which only a person holding the phone could see before.
-    # A profile's service/write/notify UUIDs can only be filled in from this, and picking them wrong
-    # is silent — the Y486BT's first *writable* characteristic is its radio module's control
-    # channel, so labels went nowhere at all.
+    # The full GATT tree, needed to pick service/write/notify UUIDs (the first writable one can be
+    # the radio's control channel).
     gatt = models.JSONField(default=list, blank=True)
 
-    # ── Characterization: what this printer's status byte means ──
-    # No query can discover this, so the app walks the user through four physical states (labels
-    # loaded / cover open / roll removed / cover closed still empty) and records the status reply in
-    # each. Because each state's meaning is known in advance, the resulting map is a derivation, not
-    # a guess. ``{"cover_open": {"tspl_status": {"hex": "01", …}}, …}`` — state id → replies.
+    # ── Characterization ──
+    # Status replies captured in four known physical states, so the status map is derived, not
+    # guessed. ``{"cover_open": {"tspl_status": {"hex": "01"}}}``.
     status_captures = models.JSONField(default=dict, blank=True)
-    # The status_flags.values map computed from those captures, ready to paste into a profile row.
+    # The derived status_flags.values map, ready for a profile.
     derived_status_values = models.JSONField(default=dict, blank=True)
-    # States this printer cannot tell apart, e.g. "01: cover_open and no_labels_cover_open are
-    # indistinguishable". Worth carrying into the profile's notes verbatim.
+    # States this printer can't distinguish; carry into the profile's notes.
     status_ambiguities = models.JSONField(default=list, blank=True)
-    # Set when status_captures is non-empty. The admin's work queue filter: a characterized row has
-    # everything needed to write a profile.
+    # Set when status_captures exist: the admin's work queue filter.
     characterized = models.BooleanField(default=False, db_index=True)
-    # Whether this user has been told their printer is supported now. When a profile is enabled
-    # that matches a printer somebody previously had to identify by hand, their next connect just
-    # starts working -- which, from where they are standing, looks exactly like nothing happened.
+    # Whether this user was told their printer is now supported.
     support_notified = models.BooleanField(default=False)
 
-    # Slug rather than a FK: it must survive a profile being renamed or deleted, and the app
-    # may report a slug this deployment has never had. Blank = the user cancelled the dialog.
+    # A slug, not a FK: survives profile renames and unknown slugs. Blank = cancelled.
     profile_slug = models.CharField(max_length=50, blank=True, default="", db_index=True)
     matched_by = models.CharField(max_length=20, choices=MATCHED_BY_CHOICES, db_index=True)
     printed_ok = models.BooleanField(default=False)  # a label actually came out, not just paired
@@ -14174,21 +12703,15 @@ class PushNotificationSent(models.Model):
 
 
 class LotObservation(models.Model):
-    """One AR sighting of a lot label from a phone camera frame.
-
-    Raw solver input, pruned aggressively — this is a rolling measurement buffer, not history. All
-    detections sharing (session_id, frame_id) were seen in the same camera frame, which is what
-    makes them mutually constraining (their bearing differences pin the lots relative to each other).
+    """One AR sighting of a lot label in a camera frame: a rolling solver buffer, pruned. Detections sharing
+    (session_id, frame_id) constrain each other.
     """
 
     auction = models.ForeignKey(Auction, on_delete=models.CASCADE, related_name="ar_observations")
     lot = models.ForeignKey(Lot, on_delete=models.CASCADE, related_name="ar_observations")
     user = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL)
-    # One per AR screen mount. An opaque client-generated token we only ever group/equality-match on
-    # (never parse), so it is a CharField, NOT a UUIDField: on MariaDB >= 10.7 Django runs UUIDField
-    # in native mode, and MariaDB's native `uuid` type rejects any UUID whose variant nibble (17th hex
-    # digit) is 0-7 with OperationalError 1292 — which silently killed ~half of the app's randomly
-    # generated session ids. A varchar accepts whatever the app sends.
+    # A CharField, not UUIDField: MariaDB's native uuid rejects variant nibbles 0-7 (error 1292),
+    # which killed half the app's session ids.
     session_id = models.CharField(max_length=36)
     frame_id = models.CharField(max_length=32)  # unique per camera frame within a session
     captured_at = models.DateTimeField()  # client clock, clamped to <= now on ingest
@@ -14197,30 +12720,16 @@ class LotObservation(models.Model):
     depression_deg = models.FloatField()  # ray angle below horizontal (gravity-referenced), +down
     quality = models.FloatField(default=1.0)  # 0..1, detection sharpness
     fov_calibrated = models.BooleanField(default=False)  # bearings from device-reported FOV?
-    # Phone's cumulative gyro heading at capture (deg, ccw-positive about gravity, zero at session
-    # start — same sign as the solver's θ). Null ⇒ the device gave no gyro data ("unknown", never
-    # "didn't turn"). Every detection row of a frame stores that frame's yaw. Heading odometry.
+    # Cumulative gyro heading (deg, ccw, zero at session start). Null = no gyro data.
     yaw_deg = models.FloatField(null=True, blank=True)
-    # Phone's absolute compass heading at capture: degrees CW from MAGNETIC north (0=N, 90=E),
-    # tilt-compensated, for the camera's forward axis. Null ⇒ the device gave no compass reading
-    # ("unknown", never "didn't point north"). Every detection row of a frame stores that frame's
-    # heading. Unlike the *relative* gyro yaw above, this is an *absolute* bearing: the solver uses it
-    # as a soft prior that fixes each disconnected island's absolute orientation (magnetic→true is
-    # corrected server-side via WMM declination); see ar_mapping.
+    # Compass heading (deg CW from magnetic north, camera forward). Null = no reading. Fixes island
+    # orientation; see ar_mapping.
     heading_deg = models.FloatField(null=True, blank=True)
-    # Phone GPS fix at capture (WGS84 degrees), or null when the device had no fix. Every detection
-    # row of a frame stores that frame's fix. GPS is far too coarse for a ≤10 m venue to place a lot OR
-    # separate two islands, so the solver no longer uses it to position/translate anything (islands are
-    # marched + compass-rotated). Its only remaining use is looking up magnetic declination for the
-    # heading_deg magnetic→true correction; the app may omit GPS entirely with no map impact.
+    # GPS fix; used only for magnetic declination, never to place lots.
     latitude = models.FloatField(null=True, blank=True)
     longitude = models.FloatField(null=True, blank=True)
-    # Phone's cumulative planar dead-reckoning displacement since session start (metres), in the same
-    # session-fixed frame as yaw_deg: origin at the session's first tracked position, +x = the camera's
-    # forward direction at yaw 0 (session start), +y = 90° ccw from +x (the camera's left). Null ⇒ no
-    # tracking ("unknown", never "didn't move"). Every detection row of a frame stores that frame's
-    # displacement. The solver uses consecutive frames' difference as translation odometry between
-    # frames (a measured walk, superseding the pace-cap guess); see ar_mapping.
+    # Cumulative dead-reckoning displacement (m) in the yaw session frame (+x forward at yaw 0, +y
+    # left). Null = no tracking. Translation odometry; see ar_mapping.
     odo_x_m = models.FloatField(null=True, blank=True)
     odo_y_m = models.FloatField(null=True, blank=True)
 
@@ -14235,11 +12744,8 @@ class LotObservation(models.Model):
 
 
 class LotPosition(models.Model):
-    """Solved 2D position of a lot in an auction-local frame.
-
-    Coordinates are meters in an arbitrary but solve-to-solve stable frame (origin/orientation
-    pinned by priors). Layout is bearing-accurate; absolute scale comes only from the soft
-    phone-height prior (±30%), so treat as a relative map.
+    """A lot's solved 2D position in an auction-local frame (metres, stable between solves). Bearing
+    accurate; scale is roughly ±30%.
     """
 
     lot = models.OneToOneField(Lot, on_delete=models.CASCADE, related_name="ar_position")
@@ -14248,10 +12754,8 @@ class LotPosition(models.Model):
     y = models.FloatField()
     confidence = models.FloatField(default=0)  # 0..1
     observation_count = models.IntegerField(default=0)
-    # Persistent island id: lots in the same connected component share it. Disconnected islands get
-    # distinct ids (and non-overlapping coordinates); when a scanning walk links two islands they
-    # merge and every row is rewritten with the surviving (smaller) id. The app treats positions in a
-    # different component than a target as unmapped (no cross-island fixes / ghost anchors).
+    # Persistent island id; merged islands take the smaller id. The app treats other components as
+    # unmapped.
     component = models.IntegerField(default=0)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -14260,10 +12764,7 @@ class LotPosition(models.Model):
 
 
 class CheckinNudge(models.Model):
-    """One-shot bookkeeping: which proximity nudge was already issued to whom.
-
-    Ensures a user who dismisses the sheet isn't re-nudged on every ping;
-    unique per (user, auction, kind)."""
+    """Which proximity nudge was already issued to whom, so a dismissed sheet isn't shown again."""
 
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
     auction = models.ForeignKey(Auction, on_delete=models.CASCADE)
@@ -14278,10 +12779,9 @@ class CheckinNudge(models.Model):
 
 
 class VolunteerJob(CachedPropertiesMixin, models.Model):
-    """A job an auction admin needs help with — announced to app users who can volunteer to do it.
-
-    A bounty (optional) is applied as an invoice discount to whoever signs up. Signups are
-    first-come, first-serve up to people_needed."""
+    """A job an auction admin needs help with, announced to app users. An optional bounty becomes an invoice
+    discount; first come, first served.
+    """
 
     auction = models.ForeignKey(Auction, on_delete=models.CASCADE, related_name="volunteer_jobs")
     created_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, on_delete=models.SET_NULL)
@@ -14311,11 +12811,9 @@ class VolunteerJob(CachedPropertiesMixin, models.Model):
 
 
 class VolunteerSignup(InvalidatesRelatedCache, models.Model):
-    """One person signing up for a VolunteerJob. Hangs off AuctionTOS (not User) because the bounty is
-    an invoice adjustment and invoices key off the in-auction identity."""
+    """One signup for a VolunteerJob, on AuctionTOS because the bounty is an invoice adjustment."""
 
-    # signups_count is cached on the job, and the signup view asks whether the job is full both
-    # before and after creating one of these
+    # The job caches signups_count.
     invalidates_cache_on = ("job",)
 
     job = models.ForeignKey(VolunteerJob, on_delete=models.CASCADE, related_name="signups")
@@ -14331,13 +12829,9 @@ class VolunteerSignup(InvalidatesRelatedCache, models.Model):
 
 
 class LotQueueEntry(models.Model):
-    """An ordered queue of lots about to be sold at an in-person auction.
-
-    Admins build this on the "Lot queue" page by scanning lot QR codes or typing lot numbers.
-    The set-lot-winners page pulls the head of the queue automatically, and a kiosk view projects
-    the current lot for the room. Watchers of a lot get a "coming up soon" push once it reaches the
-    top 10 of the queue, then an "about to be sold" push when it reaches the head; both dedupe on the
-    per-lot flags Lot.coming_up_push_sent / Lot.selling_push_notification_sent."""
+    """An in-person auction's ordered queue of lots about to be sold, built by scanning. Set winners pulls
+    the head; watchers get "coming up" and "about to be sold" pushes (deduped per lot).
+    """
 
     auction = models.ForeignKey(Auction, on_delete=models.CASCADE, related_name="lot_queue_entries")
     lot = models.OneToOneField(Lot, on_delete=models.CASCADE, related_name="queue_entry")
@@ -14353,38 +12847,24 @@ class LotQueueEntry(models.Model):
 
 
 class VoiceGrammar(models.Model):
-    """The grammar the mobile app listens with on the set-lot-winners page — one row, site-wide.
+    """The grammar the app listens with on set winners: one row, site-wide, served in ``/api/mobile/config/``
+    and merged over the app's defaults (:mod:`auctions.voice`).
 
-    Served in the ``voice`` block of ``GET /api/mobile/config/``; the app merges it over the
-    defaults it ships with. The whole point of keeping it here is that "the auctioneer says 'hammer'
-    where we expected 'sold'" is fixed by editing this row, not by shipping an app release. Defaults
-    live in :mod:`auctions.voice` and are what a freshly created row starts as.
-
-    Singleton by construction: ``save()`` pins the primary key, so adding a second one in the admin
-    edits the first instead of creating a rival. No row at all means the endpoint omits the block
-    entirely and the app runs on its bundled defaults — which is the state every deployment starts
-    in, and a perfectly good one.
-
-    ``enabled=False`` is the kill switch: the app reports ``supported: false`` and the set-winners
-    page hides its microphone button, without an app release or a deploy.
+    ``save()`` pins the pk (singleton). No row means app defaults. ``enabled=False`` hides the microphone.
     """
 
     SINGLETON_PK = 1
 
     enabled = models.BooleanField(default=True)
     enabled.help_text = "Uncheck to turn voice off everywhere; the app hides the microphone button."
-    # Matches the app's own default. The vocabulary-biased recognizer is the only one that can be
-    # told this auction's lot and bidder numbers before it listens, and a build or phone without the
-    # native half falls back to the plain platform recognizer by itself -- so asking for it costs
-    # nothing where it isn't available. Setting this to "Platform recognizer" is the kill switch.
+    # The vocabulary-biased recognizer, falling back to the platform one where unavailable.
     backend = models.CharField(max_length=20, choices=voice.BACKEND_CHOICES, default=voice.BACKEND_BIASED)
     backend.help_text = "What the app should listen with, if it can. It reports what it actually managed."
     locale = models.CharField(max_length=20, default="en_US")
     prefer_on_device = models.BooleanField(default=True)
     prefer_on_device.help_text = "On-device recognition keeps working when the hall's wifi doesn't."
 
-    # Word lists. All of these are merged over the app's bundled defaults, so a row that only
-    # changes `anchors` leaves everything else at whatever the installed app ships.
+    # Merged over the app's defaults.
     anchors = models.JSONField(default=voice.default_anchors, blank=True)
     anchors.help_text = 'Slot name → the words that introduce it, e.g. {"lot": ["lot", "item"]}. Lowercase.'
     number_words = models.JSONField(default=voice.default_number_words, blank=True)
@@ -14422,7 +12902,7 @@ class VoiceGrammar(models.Model):
 
     def save(self, *args, **kwargs):
         self.pk = self.SINGLETON_PK
-        # A forced pk on an INSERT-only save would try to insert over the existing row.
+        # Forced insert over the singleton would fail.
         kwargs.pop("force_insert", None)
         super().save(*args, **kwargs)
 
@@ -14433,21 +12913,10 @@ class VoiceGrammar(models.Model):
 
 
 class VoiceCommandLog(models.Model):
-    """One voice command the set-winners page acted on, and what the operator did about it.
+    """One voice command the set-winners page acted on, and any operator correction: the tuning data.
 
-    This is the tuning data. The first version of voice input died because when it misheard, there
-    was no way to find out *what* it was mishearing — so grammar changes were guesswork. A row here
-    is written when a command is accepted, and updated with ``corrected_to`` if the operator edits
-    that field before saving, which makes "the word we get wrong most often" a query rather than a
-    hunch, and every fix an edit to :class:`VoiceGrammar`.
-
-    A blank ``slot`` is the other half of that, and the more useful one: an utterance that matched
-    *nothing*. "Bitter" for "bidder" opens no slot, produces no command and reaches no table, so a
-    log of accepted commands can only ever return words we already handle. Group the blank-slot rows
-    by ``heard`` and order by count, and anything frequent is a word to add to ``anchors``.
-
-    Written by the page (it is the side that sees the command, the correction, and the transcript
-    that led nowhere), so it is session-authenticated and scoped to an auction the user administers.
+    A blank ``slot`` is an utterance that matched nothing; group those by ``heard`` to find words to add
+    to ``anchors``. Written by the page, session-authenticated, auction admins only.
     """
 
     auction = models.ForeignKey(Auction, on_delete=models.CASCADE)
@@ -14481,22 +12950,17 @@ class VoiceCommandLog(models.Model):
 
     @property
     def nothing_matched(self):
-        """No slot was opened: the recognizer heard this and the grammar had nothing for it."""
+        """True when no slot opened."""
         return not self.slot
 
 
-#: How long a speaker counts as a new arrival, for the "New" badge in the directory.
+#: How long a speaker counts as new.
 NEW_SPEAKER_DAYS = 30
 
 
 class SpeakerTopic(models.Model):
-    """A subject a speaker gives talks about, shared across all speakers.
-
-    Deliberately a canonical list rather than free text on each speaker: the NEC WordPress
-    export arrived with three spellings of "cichlids" and two of "africa", and a shared row
-    means fixing the name once fixes it everywhere and keeps the topic filter a clean list.
-    The rows come from the closed vocabulary in auctions/speaker_topics.py (migration 0374 and
-    `ensure_site_defaults` both create them); nothing in the UI adds to it.
+    """A shared talk topic. A canonical list from auctions/speaker_topics.py (the NEC export had three
+    spellings of "cichlids"); nothing in the UI adds to it.
     """
 
     name = models.CharField(max_length=100, unique=True)
@@ -14512,10 +12976,8 @@ class SpeakerTopic(models.Model):
 class Speaker(CachedPropertiesMixin, CloudflareImageMixin, models.Model):
     """Someone who gives talks to aquarium clubs.
 
-    Seeded from the Northeast Council's WordPress speaker database, but any user with a
-    permission in an NEC club can add more — including people who have no account on this
-    site.  `nec_only` scopes a speaker to NEC member clubs; the directory itself is NEC-only
-    for now, and that flag is what keeps the NEC roster private once it opens up more widely.
+    Seeded from the NEC WordPress database; anyone with a permission in an NEC club can add more,
+    including people without accounts. `nec_only` keeps a speaker to NEC clubs.
     """
 
     IMAGE_FIELD_NAME = "image"
@@ -14527,10 +12989,7 @@ class Speaker(CachedPropertiesMixin, CloudflareImageMixin, models.Model):
     bio.help_text = "A paragraph or two about the speaker."
     programs = models.TextField(blank=True, default="", verbose_name="Talks")
     programs.help_text = "The talks this speaker offers."
-    # Same shape as LotImage's photo handling -- upload resized on save, or a URL to an image
-    # somewhere else -- except a speaker gets exactly one, so it's a field here rather than a
-    # related model.  Uploads are validated with forms.validate_uploaded_image (see SpeakerForm)
-    # so a corrupt file is an inline field error instead of a 500 during thumbnailing.
+    # One photo: upload or URL. Uploads are validated in SpeakerForm.
     image = ThumbnailerImageField(
         upload_to="speakers/",
         blank=True,
@@ -14623,17 +13082,12 @@ class Speaker(CachedPropertiesMixin, CloudflareImageMixin, models.Model):
 
     @property
     def display_url(self):
-        """Full-size photo: the upload if there is one, otherwise the URL that was pasted in.
-
-        Identical to LotImage.display_url.  cloudflare_images.image_url falls back to locally
-        generated easy-thumbnails files whenever Cloudflare Images isn't configured, which is
-        the case in production today -- so this is the local thumbnailer in practice.
-        """
+        """Full-size photo: the upload, else the pasted URL."""
         return cloudflare_images.image_url(self.image, self.cloudflare_image_id) or self.url or None
 
     @property
     def thumbnail_url(self):
-        """Small square photo for the speaker list, map info windows and the panel header."""
+        """Small square photo for the list, map and panel."""
         return cloudflare_images.image_url(self.image, self.cloudflare_image_id, "speaker") or self.url or None
 
     @property
@@ -14642,16 +13096,8 @@ class Speaker(CachedPropertiesMixin, CloudflareImageMixin, models.Model):
 
     @property
     def is_recently_added(self):
-        """Whether to show the "New" badge beside this speaker in the list.
-
-        The directory is sorted newest first, so this is mostly for the person who scrolled:
-        it marks the recent arrivals wherever they end up once the list is re-sorted or
-        filtered.  `createdon` is auto_now_add, so an unsaved speaker has none yet.
-
-        The NEC import is excluded on purpose.  All 405 of those rows were written in one batch,
-        so for the month after an import a literal reading of "added recently" badges the entire
-        directory -- and a badge on every row marks nothing.  They are the directory's starting
-        contents, not arrivals; what this is for is the speakers a club has added since.
+        """Whether to show "New": added in the last NEW_SPEAKER_DAYS, excluding the NEC import (one batch would
+        badge everyone).
         """
         if not self.createdon or self.imported_from_nec:
             return False
@@ -14659,10 +13105,7 @@ class Speaker(CachedPropertiesMixin, CloudflareImageMixin, models.Model):
 
     @property
     def attribution(self):
-        """Where this record came from, for the bottom of the speaker panel.
-
-        Imported rows have no `created_by`, which is exactly what distinguishes them.
-        """
+        """Where this record came from; imported rows have no `created_by`."""
         if not self.created_by:
             return "Added from the NEC speaker database"
         name = self.created_by.get_full_name() or self.created_by.username
@@ -14672,7 +13115,7 @@ class Speaker(CachedPropertiesMixin, CloudflareImageMixin, models.Model):
 
     @cached_property
     def display_name(self):
-        """The NEC export stores names as "Last, First" — read it back the way people say it."""
+        """ "Last, First" as "First Last"."""
         if self.name.count(",") == 1:
             last, first = (part.strip() for part in self.name.split(","))
             if last and first:
@@ -14680,7 +13123,7 @@ class Speaker(CachedPropertiesMixin, CloudflareImageMixin, models.Model):
         return self.name
 
     def tag_counts(self):
-        """[(value, label, group, count), ...] for every tag that has at least one vote."""
+        """[(value, label, group, count)] for tags with at least one vote."""
         counts = dict(
             SpeakerTag.objects.filter(speaker=self)
             .values_list("tag")
@@ -14695,16 +13138,13 @@ class Speaker(CachedPropertiesMixin, CloudflareImageMixin, models.Model):
         return result
 
     def tags_by_user(self, user):
-        """The set of tag values this user has already applied, for rendering the toggles."""
+        """Tag values this user already applied."""
         if not user or not user.is_authenticated:
             return set()
         return set(SpeakerTag.objects.filter(speaker=self, user=user).values_list("tag", flat=True))
 
     def can_be_deleted_by(self, user):
-        """Only the person who added a speaker (or a superuser) may delete it.
-
-        Imported rows have no `created_by`, so nobody but a superuser can remove them.
-        """
+        """Only the creator or a superuser may delete; imported rows only a superuser."""
         if not user or not user.is_authenticated:
             return False
         if user.is_superuser:
@@ -14713,16 +13153,12 @@ class Speaker(CachedPropertiesMixin, CloudflareImageMixin, models.Model):
 
 
 class SpeakerTag(models.Model):
-    """One user's vote that a tag applies to a speaker.
-
-    A fixed list rather than a table of tag rows: nothing needs to create tags at runtime, and
-    choices can't be emptied out from under the tests the way seeded rows can.
-    """
+    """One user's vote that a tag applies to a speaker. Fixed choices, not rows."""
 
     GROUP_TALK = "How the talk went"
     GROUP_LOGISTICS = "Logistics"
 
-    #: (value, label, group).  Order within a group is the order they render in.
+    #: (value, label, group), in render order.
     TAG_DEFINITIONS = (
         ("engaging", "Engaging presenter", GROUP_TALK),
         ("visuals", "Great photos / visuals", GROUP_TALK),
@@ -14735,8 +13171,7 @@ class SpeakerTag(models.Model):
         ("remote", "Presents remotely", GROUP_LOGISTICS),
         ("travels", "Willing to travel", GROUP_LOGISTICS),
         ("brings_items", "Brings items for the auction", GROUP_LOGISTICS),
-        # Last on purpose: it's the one tag that says don't bother booking them, so it reads
-        # as a warning at the end of the list rather than as another endorsement.
+        # Last: the one warning tag.
         ("no_longer_speaking", "No longer speaking", GROUP_LOGISTICS),
     )
     TAG_CHOICES = tuple((value, label) for value, label, _group in TAG_DEFINITIONS)
@@ -14756,7 +13191,7 @@ class SpeakerTag(models.Model):
 
     @classmethod
     def grouped_definitions(cls):
-        """[(group_name, [(value, label), ...]), ...] preserving TAG_DEFINITIONS order."""
+        """[(group_name, [(value, label)])] in TAG_DEFINITIONS order."""
         groups = {}
         for value, label, group in cls.TAG_DEFINITIONS:
             groups.setdefault(group, []).append((value, label))
@@ -14781,7 +13216,7 @@ class SpeakerComment(models.Model):
 
     @property
     def author_display(self):
-        """Just the person.  The club is still recorded, but nobody reading wants it here."""
+        """Just the person."""
         if not self.user:
             return "Deleted user"
         return self.user.get_full_name() or self.user.username
@@ -14793,23 +13228,10 @@ class SpeakerComment(models.Model):
 
 
 class AssistantSkillRequest(CachedPropertiesMixin, models.Model):
-    """Something an agent tried to do here and could not, in the agent's own words.
+    """Something an agent tried to do and couldn't, in its own words.
 
-    The MCP endpoint has fifty-odd tools and every one of them was added because somebody said out
-    loud that it was missing. That feedback arrived by accident -- a message to the site owner, a
-    complaint at a meeting -- so the tools that exist are the ones whose absence happened to be
-    reported by somebody who knew where to report it. This is the same signal collected on purpose:
-    the assistant hits a wall, writes down what it was trying to do, and the wall is a row.
-
-    Written by the ``request_a_skill`` tool and read on ``/admin-dashboard/assistant-requests/``.
-    Deliberately not an email and not a ticket: a duplicate row is *evidence* (five clubs asking for
-    the same thing is the whole point of counting), where five duplicate emails are a nuisance
-    somebody deletes.
-
-    Everything in ``skill``, ``params`` and ``reason`` was written by a language model acting for a
-    member of this site. It is displayed to a superuser and read by a person deciding what to build;
-    it is never executed, never matched against the registry at write time, and the dashboard
-    escapes it like any other user-supplied text.
+    Written by ``request_a_skill``, read on ``/admin-dashboard/assistant-requests/``. Duplicates are
+    evidence and are counted. Content is model-written: displayed escaped, never executed or matched.
     """
 
     STATUS_NEW = "new"
@@ -14847,12 +13269,7 @@ class AssistantSkillRequest(CachedPropertiesMixin, models.Model):
 
     @cached_property
     def others_asking(self):
-        """How many other people have asked for something with the same name.
-
-        The number that decides whether a row is worth building, and the reason duplicates are kept
-        rather than merged. Matched on the normalised name only -- two agents will not phrase the
-        reason the same way, and requiring them to would count every request as unique.
-        """
+        """Other people asking for the same skill name (case-insensitive name only)."""
         return (
             AssistantSkillRequest.objects.filter(skill__iexact=self.skill.strip())
             .exclude(pk=self.pk)
@@ -14863,30 +13280,12 @@ class AssistantSkillRequest(CachedPropertiesMixin, models.Model):
 
 
 class SignInStitch(models.Model):
-    """The anonymous session somebody was holding at the moment they signed in.
+    """The anonymous session a person held when they signed in.
 
-    ``PageView`` stores a signed-in view as ``user=<id>, session_id=NULL`` and an anonymous one as
-    ``user=NULL, session_id=<key>``, so the same person browsing and then signing in is two actors
-    to every query that reads that table (``usability_report._actor``). For a buyer that seam falls
-    in the middle of their story: they arrive from a club's Facebook page anonymously, browse, and
-    only become a user -- if ever -- at the point of paying.
-
-    This is the exact key that closes it, and the only new row ``docs/phase_9.md`` asks for. It is
-    not a fingerprint and deliberately not one: an IP-and-user-agent match is least reliable exactly
-    where the seam is widest (fifty people on a venue's one wifi holding the same phone), it
-    over-merges and under-merges within a single evening on carrier CGNAT, and its error is
-    correlated with the number being measured. This is a session key the site already issued.
-
-    **It only works forwards.** A stitch cannot be reconstructed for a sign-in that has already
-    happened, so any before-and-after comparison that crosses the day this shipped is comparing a
-    stitched year against an unstitched one -- which is a fake improvement, not a real one.
-    :func:`auctions.lifecycle.stitching_began` is the date to mark on any such chart, and the
-    unstitched number stays available beside it.
-
-    The key comes from ``request.COOKIES``, not from ``request.session.session_key``:
-    ``django.contrib.auth.login`` calls ``cycle_key()`` *before* it sends ``user_logged_in``, so by
-    the time a receiver runs the session already has its new key and the anonymous one is gone. The
-    cookie the browser sent with the request still holds it.
+    PageView splits signed-in and anonymous views, so one person's visit is two actors. This session key
+    bridges that; not a fingerprint (IP and UA merges fail on shared venue wifi). **Forwards only**:
+    compare across :func:`auctions.lifecycle.stitching_began` with care. The key comes from
+    ``request.COOKIES``, since ``login()`` cycles the session key before the signal.
     """
 
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="sign_in_stitches")
@@ -14895,9 +13294,7 @@ class SignInStitch(models.Model):
     createdon = models.DateTimeField(auto_now_add=True, db_index=True)
 
     class Meta:
-        # One row per person per session, not one per sign-in: somebody who signs in every week
-        # from the same browser is the same stitch each time, and the first one is the one that
-        # says when the anonymous half ended.
+        # One row per user and session.
         constraints = [models.UniqueConstraint(fields=["user", "session_id"], name="one_stitch_per_user_session")]
         verbose_name = "Sign-in stitch"
         verbose_name_plural = "Sign-in stitches"

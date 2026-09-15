@@ -1,9 +1,4 @@
-"""
-Celery tasks for the auctions app.
-
-This module contains all Celery tasks that were previously run as cron jobs.
-Each task wraps a management command to maintain backward compatibility.
-"""
+"""Celery tasks for the auctions app. Many wrap the management command of the same name."""
 
 import datetime
 import json
@@ -35,18 +30,13 @@ BAP_RECALCULATION_TASK_PREFIX = "bap_recalculation_club_"
 CALENDAR_SYNC_LOCK_KEY = "sync_club_calendars_running"
 CALENDAR_SYNC_LOCK_SECONDS = 60 * 60
 
-# One endauctions at a time; see endauctions. Comfortably past CELERY_TASK_TIME_LIMIT so a worker
-# killed by the hard limit can't wedge the lock, and past the 60-second beat so a slow run blocks
-# the next tick rather than racing it.
+# One endauctions at a time. Past the hard time limit so a killed worker can't wedge the lock.
 ENDAUCTIONS_LOCK_KEY = "endauctions_running"
 ENDAUCTIONS_LOCK_SECONDS = 15 * 60
 
-# The one-shot backfill of PageView.auction; see backfill_page_view_auctions. CHUNK is rows
-# written per run and SCAN is primary keys looked at, and both matter: without the second, a run
-# that lands on a stretch of the table with no lot views scans to the end looking for its five
-# thousand, which is the full scan of PageView this is all trying to retire. The beat entry name
-# has to match the key in fishauctions/celery.py, because that is what the PeriodicTask row is
-# called and this task switches its own row off.
+# One-shot backfill of PageView.auction. SCAN bounds primary keys looked at, so a run over rows with
+# no lot views can't turn into a full scan. The beat name must match fishauctions/celery.py: the task
+# switches its own PeriodicTask row off.
 PAGE_VIEW_BACKFILL_JOB = "page_view_auction"
 PAGE_VIEW_BACKFILL_BEAT = "backfill_page_view_auctions"
 PAGE_VIEW_BACKFILL_CHUNK = 5000
@@ -58,19 +48,10 @@ logger = logging.getLogger(__name__)
 
 
 def _per_item(task, label, items, do_one, exceptions=(requests.RequestException,)):
-    """Run ``do_one`` over ``items``, keeping going past a failure, then retry the task once.
+    """Run ``do_one`` over ``items``, continuing past failures, then retry the task once.
 
-    The pattern ``delete_marketing_contact`` documents, factored out for the wallet tasks that were
-    doing the opposite. They re-raised on the first failing member, so everyone after the bad row
-    was never reached at all -- their pass kept saying "valid" after the membership lapsed. That is
-    what this fixes: one permanently broken row can no longer hide the whole rest of the list.
-
-    Failures are collected and re-raised once at the end, so a genuinely transient outage (every
-    item failing) still retries. What it does **not** change is that the retry re-runs the task from
-    the top, so the items that succeeded are done again -- more of them now than before, since the
-    list no longer stops early. That is the deliberate trade: every one of these is an idempotent
-    PATCH to Google or Apple, and up to six of those is cheaper than a member holding a pass that
-    lies about whether they are a member.
+    Re-raising on the first failure left everyone after it with a wallet pass still saying "valid". The
+    retry re-runs successful items too; they are idempotent PATCHes, which is the accepted trade.
     """
     failures = []
     for item in items:
@@ -100,9 +81,7 @@ def _greeting_name(member):
     return name or "Member"
 
 
-# Inline style for the wallet buttons in membership emails.  Email clients strip <style> blocks
-# and know nothing about Bootstrap, so this hand-rolls what btn-dark looks like on the web
-# membership card (see partials/club_member_uuid_card.html).
+# Inline style for wallet buttons in email: clients strip <style> and know no Bootstrap.
 _WALLET_BUTTON_STYLE = (
     "display:inline-block;padding:10px 16px;margin:0 8px 8px 0;background:#303030;color:#ffffff;"
     "text-decoration:none;border-radius:6px;font-family:sans-serif;font-size:14px;"
@@ -110,11 +89,8 @@ _WALLET_BUTTON_STYLE = (
 
 
 def wallet_links(member, current_site=None):
-    """Return (google_url, apple_url) for adding this member's card to a phone wallet.
-
-    Either is "" when that wallet isn't configured on this site, or when the club has member
-    barcodes turned off (there is no card to add).  Both links are UUID-keyed capability URLs,
-    so they work from an email without the recipient being logged in.
+    """Return (google_url, apple_url) for this member's wallet card. "" when unconfigured or barcodes are
+    off. UUID-keyed capability URLs, so they work from email without signing in.
     """
     if not member.club.show_member_barcode:
         return "", ""
@@ -147,15 +123,8 @@ def _wallet_buttons_html(google_url, apple_url):
 def next_event_fragment(club, current_site, *, include_event=True, as_links=True):
     """Return (text, html) for the "our next event" line, or ('', '').
 
-    Covers auctions and anything else on the club's calendar — meetings, swaps, talks. Shared by
-    the real emails and the settings-page preview so the two can't drift; the preview passes
-    ``as_links=False`` because a preview shouldn't contain working links.
-
-    It ends with a subscribe link, because one event in an email is a club's whole calendar in
-    miniature and the member is never going to be sent this email again — a welcome goes out once.
-    It rides on this fragment rather than sitting on its own so that a club which turned the next
-    event off (``welcome_include_auction`` and friends) gets no calendar pitch either: that switch
-    means "don't advertise what we're doing next", and a subscribe link is exactly that.
+    Shared by the emails and the settings preview (``as_links=False``). The calendar subscribe link
+    rides on it, so a club that turned the next event off gets no calendar pitch either.
     """
     from auctions import club_events
 
@@ -172,8 +141,7 @@ def next_event_fragment(club, current_site, *, include_event=True, as_links=True
         # An online auction runs for days, so a start time next to the date is just noise.
         show_time = False
     elif auction:
-        # An in-person auction gathers at its pickup location's time, which is the time members
-        # actually need; the auction's own date_start is only "when bidding opens".
+        # In-person: the pickup time is when members gather; date_start is when bidding opens.
         when = _in_person_auction_time(auction) or event.date_start
     date_str = f"{when:%B %-d, %Y}"
     if show_time:
@@ -202,9 +170,7 @@ def next_event_fragment(club, current_site, *, include_event=True, as_links=True
         else f" <span class='text-info'>{escape(details_label)}</span>."
     )
 
-    # The club's Google calendar when they've shared it, our own feed when they haven't — the same
-    # choice the club page's buttons make, for the same reason: a club that keeps its calendar in
-    # Google keeps things there we only see after the next pull.
+    # The club's Google calendar when shared, else our feed; same rule as the club page.
     subscribe_url = club.calendar_subscribe_url(current_site.domain)
     text += f" Add our calendar: {subscribe_url}"
     html += (
@@ -216,12 +182,7 @@ def next_event_fragment(club, current_site, *, include_event=True, as_links=True
 
 
 def _real_physical_locations(auction):
-    """The auction's physical locations, ignoring placeholders.
-
-    Switching an auction to in-person auto-creates a location with no address or coordinates.
-    It isn't somewhere anyone can go, so it must not count when deciding whether an auction has
-    a single location.
-    """
+    """The auction's physical locations, minus the placeholder an in-person switch auto-creates."""
     return [
         location
         for location in auction.physical_location_qs
@@ -230,10 +191,7 @@ def _real_physical_locations(auction):
 
 
 def _in_person_auction_time(auction):
-    """When an in-person auction actually gathers, or None.
-
-    Only meaningful with a single location — with several there's no one time to advertise.
-    """
+    """When an in-person auction gathers, or None. Only with a single location."""
     locations = [location for location in _real_physical_locations(auction) if location.pickup_time]
     if len(locations) == 1:
         return locations[0].pickup_time
@@ -241,13 +199,7 @@ def _in_person_auction_time(auction):
 
 
 def _event_directions_url(event):
-    """A map link for the event, falling back to the auction's single location.
-
-    Online auction events carry no location of their own — the addresses live on the pickup
-    events — but a member reading "our next event is the Spring Auction" still wants directions.
-    Only ever offered when the auction has exactly one real location: with several, a single
-    "Get directions" link would send people to the wrong one.
-    """
+    """A map link for the event, falling back to the auction's location only when it has exactly one."""
     if event.location:
         return event.map_url
     auction = event.related_auction
@@ -305,12 +257,7 @@ def _render_membership_email_html(
 
 
 def send_club_member_email(member, subject, message_text, email_type="welcome", force_email=False):
-    """Send one of the club's membership emails.
-
-    ``force_email`` skips the push-notification path in notify_user; use it when an admin has
-    explicitly asked for an email to go out (the resend-membership-card action), where silently
-    turning it into a push would not be what they confirmed.
-    """
+    """Send one of the club's membership emails. ``force_email`` skips push, for an admin-confirmed resend."""
     if not member.email or member.contact_status == "do_not_contact":
         return False
     current_site = Site.objects.get_current()
@@ -386,8 +333,7 @@ def send_club_member_email(member, subject, message_text, email_type="welcome", 
         _send_membership_email()
         return True
 
-    # A member may or may not be a linked site user; notify_user pushes only when that user opted in
-    # (and has a live device), otherwise it emails — so guest members always get the email.
+    # notify_user pushes only to opted-in users with a live device; everyone else is emailed.
     from auctions.notifications import notify_user
 
     notify_user(
@@ -402,10 +348,7 @@ def send_club_member_email(member, subject, message_text, email_type="welcome", 
 
 
 def send_membership_card_email(member):
-    """Email a member a link to their membership card (admin-triggered resend).
-
-    Returns True when the email was queued, False when the member can't be emailed.
-    """
+    """Email a member a link to their membership card. True when queued."""
     expiration_text = ""
     expiration = member.effective_expiration_date
     if expiration and member.club.membership_annual_fee:
@@ -435,8 +378,7 @@ def maybe_send_membership_renewal_confirmation(member):
         expiration_text = f"  Your membership is paid through {date_str}."
     message_text = f"Your {member.club.name} membership has been renewed.{expiration_text}"
     if member.paypal_subscription_id:
-        # PayPal-subscription renewal: tell them it's automatic and where to manage/cancel it.
-        # paypal.com/myaccount/autopay is PayPal's "Automatic payments" page for subscribers.
+        # PayPal subscription: renewal is automatic; link to PayPal's automatic payments page.
         message_text += (
             " This renews automatically through your PayPal subscription. To manage or cancel it, "
             "visit your PayPal automatic payments page: https://www.paypal.com/myaccount/autopay/"
@@ -448,8 +390,7 @@ def maybe_send_membership_renewal_confirmation(member):
         email_type="renewal",
     )
     if sent:
-        # Logged here rather than at the four call sites: each one already records the renewal
-        # itself, and this says whether the member was actually told about it.
+        # Logged here, not at the four call sites, because only this knows the member was told.
         from auctions.models import ClubHistory
 
         ClubHistory.objects.create(
@@ -462,19 +403,10 @@ def maybe_send_membership_renewal_confirmation(member):
 
 @shared_task(bind=True, ignore_result=True)
 def endauctions(self):
-    """
-    Set the winner and winning price on all ended lots.
-    Send lot ending soon and lot ended messages to websocket connected users.
-    Sets active to false on lots.
+    """Set winners and prices on ended lots, send lot-ending websocket messages, deactivate lots.
 
-    Previously run every minute via cron.
-
-    One at a time. The beat fires this every 60 seconds and the soft time limit is 300, so a run
-    that is slow -- which is precisely a run at the moment a big auction ends, when hundreds of lots
-    close at once -- overlaps the next one. Two runs read the same ``active=True`` rows, and both
-    see ``sold`` as False, so both send the lot-ended message and both write invoices. The lock is
-    the same shape as ``sync_club_calendars``: skipping a tick costs a minute, and the work is
-    picked up by the next one because it is driven off the lots' own state.
+    Locked: at a big auction's close a run can outlast the 60-second beat, and two runs would both
+    invoice the same lots. A skipped tick is picked up next minute from the lots' own state.
     """
     from django.core.cache import cache
 
@@ -489,48 +421,29 @@ def endauctions(self):
 
 @shared_task(bind=True, ignore_result=True)
 def sendnotifications(self):
-    """
-    Send notifications about watched items.
-
-    Previously run every 15 minutes via cron.
-    """
+    """Send notifications about watched items."""
     call_command("sendnotifications")
 
 
 @shared_task(bind=True, ignore_result=True)
 def auctiontos_notifications(self):
-    """
-    Welcome and print reminder emails.
-
-    Previously run every 15 minutes via cron.
-    """
+    """Welcome and print reminder emails."""
     call_command("auctiontos_notifications")
 
 
 @shared_task(bind=True, ignore_result=True)
 def refresh_club_health(self):
-    """Recompute every club's lifecycle rollup and the outreach queue that comes out of it.
-
-    Nightly, because nothing it measures moves faster than that: the fastest column is "days since
-    the last auction". See auctions/club_health.py for what the numbers mean.
-    """
+    """Recompute every club's lifecycle rollup and outreach queue. Nightly; see auctions/club_health.py."""
     from auctions import club_health
 
     written = club_health.refresh_all()
-    # The ladder snapshot rides on the same nightly run and is keyed on the month, so it writes
-    # this month's row the first time it runs and refreshes it every night after. A task that had
-    # to notice the first of the month would record nothing at all in the month it was deployed.
+    # Keyed on the month: written on the first run, refreshed nightly, never waits for the 1st.
     month = club_health.snapshot_ladder()
     logger.info("refreshed club health for %s clubs, ladder snapshot for %s", written, month)
 
 
 def _switch_off_beat_entry(name):
-    """Stop beat dispatching a job that has nothing left to do.
-
-    ``save()`` rather than ``update()``: django-celery-beat tells a running beat to reload through
-    the ``post_save`` signal, and a queryset update does not send one -- the row would read as
-    disabled while beat kept firing the old in-memory entry until it was next restarted.
-    """
+    """Disable a beat entry. ``save()``, not ``update()``: only ``post_save`` tells a running beat to reload."""
     row = PeriodicTask.objects.filter(name=name).first()
     if row and row.enabled:
         row.enabled = False
@@ -540,29 +453,13 @@ def _switch_off_beat_entry(name):
 
 @shared_task(bind=True, ignore_result=True)
 def backfill_page_view_auctions(self):
-    """Fill in ``PageView.auction`` on the lot views written before the beacon started sending it.
+    """Fill in ``PageView.auction`` on lot views written before the beacon sent it.
 
-    A page view of a lot now names the lot *and* its auction, so a reader can match an auction on
-    one indexed column. Older rows name only the lot, which is why ``Auction.page_views`` -- and so
-    ``unique_views``, both stat charts and both funnel queries -- has to ask for
-    ``auction_id OR lot.auction_id``: an OR across a join, the one shape MariaDB cannot serve from
-    an index, over the largest and least-purged table on the site. This walks the old rows so that
-    clause can eventually go.
-
-    One window of primary keys per run, `PAGE_VIEW_BACKFILL_SCAN` wide, up to
-    `PAGE_VIEW_BACKFILL_CHUNK` rows written -- a range scan on the primary key, which is the
-    cheapest thing this table can be asked for and is bounded whatever it finds. The position is
-    kept in ``ChunkedJobState`` because working it out from ``PageView`` itself is the scan being
-    avoided.
-
-    It stops on its own. The ceiling is the last primary key at the time of the first run: rows
-    above it were written by code that already sets the column, so chasing them would mean a job
-    that never finishes. When the cursor passes it the row is stamped ``finished`` and the beat
-    entry is switched off -- and a re-enabled entry costs one indexed `SELECT` before returning.
-
-    Rows whose lot has no auction at all are read and skipped rather than filtered out in SQL. They
-    can never be written, so leaving them in the window is what carries the cursor past them; asking
-    the database to exclude them would leave the job looking at the same rows forever.
+    Until done, ``Auction.page_views`` needs ``auction_id OR lot.auction_id``, an OR across a join no
+    index serves. Each run scans one primary-key window (``PAGE_VIEW_BACKFILL_SCAN``), writes up to
+    ``PAGE_VIEW_BACKFILL_CHUNK`` rows, and keeps its cursor in ``ChunkedJobState``. The ceiling is the
+    last pk at the first run; past it the job is marked finished and its beat entry switched off. Rows
+    whose lot has no auction are skipped in Python so the cursor moves past them.
     """
     from collections import defaultdict
 
@@ -602,8 +499,7 @@ def backfill_page_view_auctions(self):
         for auction_id, pks in by_auction.items():
             written += PageView.objects.filter(pk__in=pks).update(auction_id=auction_id)
 
-        # A short read means the whole window is done; a full one means we stopped mid-window and
-        # the next run picks up after the last row we looked at.
+        # A short read finishes the window; a full one resumes after the last row.
         state.cursor = rows[-1][0] + 1 if len(rows) == PAGE_VIEW_BACKFILL_CHUNK else window_end
         if state.cursor > state.ceiling:
             state.finished = timezone.now()
@@ -624,40 +520,22 @@ def backfill_page_view_auctions(self):
 
 @shared_task(bind=True, ignore_result=True)
 def flush_expired_tokens(self):
-    """
-    Delete expired JWT blacklist / outstanding-token rows.
-
-    Mobile JWT refresh-token rotation (ROTATE_REFRESH_TOKENS + BLACKLIST_AFTER_ROTATION) writes a row
-    per login and per refresh; without periodic cleanup the token_blacklist tables grow unbounded.
-    """
+    """Delete expired JWT blacklist and outstanding-token rows; rotation writes one per refresh."""
     call_command("flushexpiredtokens")
 
 
 @shared_task(bind=True, ignore_result=True)
 def delete_pending_accounts(self):
-    """
-    Delete accounts whose deletion grace period has expired.
-
-    Daily. Nothing happens on the day someone asks (see auctions.account_deletion); this is the task
-    that makes it real, so it must keep running for the site to keep its promise.
-    """
+    """Delete accounts whose deletion grace period has expired. The promise depends on this running."""
     call_command("delete_pending_accounts")
 
 
 @shared_task(bind=True, ignore_result=True, retry_backoff=True, retry_backoff_max=600, max_retries=5)
 def delete_marketing_contact(self, club_pk, email):
-    """Remove one address from a club's Mailchimp audience and Brevo list.
+    """Remove one address from a club's Mailchimp audience and Brevo list, on account deletion.
 
-    Account deletion only: an ordinary unsubscribe archives the contact (which still holds the
-    address), so it can't be reused here. Takes the address rather than a member pk because by the
-    time this runs the member row has been emptied or unlinked.
-
-    Each provider gets its own attempt and the retry is driven by hand rather than by
-    ``autoretry_for``. Both of them raise their own exception type for an API error (mailchimp's
-    ApiClientError, brevo's BrevoApiError) and neither descends from requests.RequestException, so a
-    provider-class list is the thing most likely to quietly stop matching. Whatever goes wrong, the
-    other provider still gets called and the whole task is retried — deleting an already-deleted
-    contact is a 404 both helpers swallow.
+    Takes the address because the member row is already emptied. Retried by hand: neither provider's
+    API error descends from ``RequestException``. Both are always attempted; a repeat delete is a 404.
     """
     from auctions import brevo
     from auctions import mailchimp as mc
@@ -682,24 +560,16 @@ def delete_marketing_contact(self, club_pk, email):
 
 @shared_task(bind=True, ignore_result=True)
 def cleanup_mail(self):
-    """
-    Delete sent mail (and its attachments) older than MAIL_RETENTION_DAYS.
-
-    post_office keeps every message it has ever sent, body and recipient address included, which
-    makes it the one place a deleted user's address would otherwise survive their deletion — and an
-    ever-growing table nobody reads. Recent mail is worth keeping: it's how a bounce, a missing
-    invoice or a "did the site email me?" question gets answered.
+    """Delete sent mail older than MAIL_RETENTION_DAYS, attachments included. Otherwise a deleted user's
+    address survives in post_office.
     """
     call_command("cleanup_mail", days=settings.MAIL_RETENTION_DAYS, delete_attachments=True)
 
 
 @shared_task(bind=True, ignore_result=True)
 def send_announcement_emails(self, announcement_pk):
-    """Mail one club announcement through whichever of Mailchimp/Brevo the club ticked.
-
-    Out of the request because it is four round trips to somebody else's API per provider. No
-    retry: a campaign that half-created and then failed would be sent twice by a retry, and the
-    failure is written onto the announcement where the admin can see it and press send again.
+    """Send one club announcement through the ticked provider. No retry: a half-created campaign would be
+    sent twice. Failures are written on the announcement.
     """
     from auctions import announcements
     from auctions.models import ClubAnnouncement
@@ -712,12 +582,8 @@ def send_announcement_emails(self, announcement_pk):
 
 @shared_task(bind=True, ignore_result=True)
 def send_scheduled_announcements(self):
-    """Deliver club announcements whose send time has arrived.
-
-    Queued twice over: once by the view with a ``countdown`` for the exact moment (which is what
-    makes a 30-second retract window 30 seconds), and once a minute by the beat as a backstop. It
-    is safe to run either way round or twice at once -- ``send_due`` claims each row with the same
-    UPDATE that marks it sent.
+    """Deliver due club announcements. Queued by the view with a countdown and by the beat each minute;
+    ``send_due`` claims rows atomically, so both are safe.
     """
     from auctions import announcements
 
@@ -735,22 +601,14 @@ def refresh_announcement_opens(self, announcement_pk):
         announcements.refresh_email_opens(announcement)
 
 
-# ignore_result: nothing reads the return value, and this is the highest-volume task on the site --
-# without it every push leaves a result row in the Redis result backend for a day.
+# ignore_result: the highest-volume task; results would pile up in Redis.
 @shared_task(ignore_result=True)
 def send_push_to_user(user_pk, *, title, body, url, category, collapse_key=None, auction_pk=None, invoice_pk=None):
-    """Send a push notification to every push-enabled device of a user; prune dead tokens.
+    """Push to every enabled device of a user, clearing dead tokens.
 
-    FCM data-message keys: title, body, url (absolute), category. On an unregistered / invalid
-    token the offending device's token is cleared. One ``PushNotificationSent`` row is logged per
-    successful device send (dedupe + stats). ``collapse_key`` folds chatty categories so a phone
-    that was off shows one notification, not many.
-
-    If nothing reaches a device, the notification is emailed instead rather than dropped. That
-    matters most the moment someone uninstalls the app: the send that *discovers* the dead token is
-    the one that would otherwise vanish, and by then the caller has already recorded the
-    notification as delivered (invoice.email_sent, tos.confirm_email_sent, ...) so nothing would
-    ever retry it. Categories in PUSH_ONLY_CATEGORIES have no email form and are dropped instead.
+    Logs one ``PushNotificationSent`` per device. ``collapse_key`` folds chatty categories. If no device
+    is reached the notification is emailed instead, since the caller already marked it delivered.
+    ``PUSH_ONLY_CATEGORIES`` are dropped instead.
     """
     from django.contrib.auth.models import User
 
@@ -774,7 +632,7 @@ def send_push_to_user(user_pk, *, title, body, url, category, collapse_key=None,
             collapse_key=collapse_key,
         )
         if result == notifications.SEND_INVALID_TOKEN:
-            # Token follows the app install; a dead one never comes back, so clear it.
+            # A dead token never comes back.
             device.fcm_token = ""
             device.save(update_fields=["fcm_token"])
             logger.info("Cleared dead FCM token for device %s (user %s)", device.pk, user_pk)
@@ -793,12 +651,7 @@ def send_push_to_user(user_pk, *, title, body, url, category, collapse_key=None,
 
 
 def _email_undelivered_push(user, *, title, body, url, category):
-    """Last-resort email for a push that reached no device (dead token, or FCM was down).
-
-    Plain text rather than the caller's original template -- by the time we get here the caller is
-    long gone and only the notification's own title/body/url survive. An unstyled email that arrives
-    beats a silent drop.
-    """
+    """Plain-text email for a push that reached no device; the caller's template is long gone."""
     from auctions import notifications
 
     if category in notifications.PUSH_ONLY_CATEGORIES or not user.email:
@@ -816,17 +669,7 @@ def get_invoice_notification_task_name(invoice_pk):
 
 
 def schedule_invoice_notification(invoice_pk, run_at):
-    """
-    Schedule a one-off task to send an invoice notification.
-
-    Uses django-celery-beat's ClockedSchedule and PeriodicTask to schedule
-    a task to run at a specific time. If a task already exists for this
-    invoice, it will be updated with the new scheduled time.
-
-    Args:
-        invoice_pk: The primary key of the invoice
-        run_at: datetime when the notification should be sent
-    """
+    """Schedule (or reschedule) a one-off invoice notification at ``run_at``."""
     schedule, _ = ClockedSchedule.objects.get_or_create(clocked_time=run_at)
 
     task_name = get_invoice_notification_task_name(invoice_pk)
@@ -844,32 +687,14 @@ def schedule_invoice_notification(invoice_pk, run_at):
 
 
 def cancel_invoice_notification(invoice_pk):
-    """
-    Cancel a scheduled invoice notification task.
-
-    Args:
-        invoice_pk: The primary key of the invoice
-    """
+    """Cancel a scheduled invoice notification."""
     task_name = get_invoice_notification_task_name(invoice_pk)
     PeriodicTask.objects.filter(name=task_name).delete()
 
 
 @shared_task(bind=True, ignore_result=True)
 def send_invoice_notification(self, invoice_pk):
-    """
-    Send an invoice notification for a specific invoice.
-
-    This task is scheduled as a one-off task when an invoice status changes
-    to "ready" or "paid". It will:
-    - Check if the invoice still needs notification (not already sent, not draft)
-    - Send email if conditions are met (trusted user, has email, notifications enabled)
-    - Mark the invoice as email_sent=True
-    - Add history entry if email was sent
-    - Clean up the PeriodicTask entry after execution
-
-    The task is idempotent - if called multiple times or after the notification
-    is already sent, it will simply do nothing.
-    """
+    """Send a scheduled invoice notification, if still needed. Idempotent; removes its PeriodicTask."""
     from auctions.models import AuctionHistory, Invoice
 
     try:
@@ -913,9 +738,7 @@ def send_invoice_notification(self, invoice_pk):
             subject = f"Thanks for being part of {invoice.label}"
         contact_email = invoice.auction.created_by.email
         current_site = Site.objects.get_current()
-        # When SES routing is active, replies go to the auction sender address
-        # automatically (Lambda routes them). Skip the Reply-To header so users
-        # reply to the routed address rather than the creator's personal inbox.
+        # With SES routing, replies go to the routed sender address, so no Reply-To.
         send_kwargs = {
             "sender": invoice.auction.sender_email_with_name,
             "template": "invoice_ready",
@@ -931,9 +754,7 @@ def send_invoice_notification(self, invoice_pk):
             send_kwargs["headers"] = {"Reply-to": contact_email}
             send_kwargs["context"]["reply_to_email"] = contact_email
 
-        # Route through the notify_user choke point: an app user who opted into push gets a
-        # notification instead of the email; everyone else is emailed exactly as before. The
-        # bookkeeping below (email_sent, AuctionHistory) is identical on both paths.
+        # notify_user: opted-in app users get a push instead; bookkeeping below is the same.
         from auctions.notifications import notify_user
 
         push_user = invoice.auctiontos_user.user
@@ -957,8 +778,7 @@ def send_invoice_notification(self, invoice_pk):
             applies_to="INVOICES",
         )
 
-    # Mark as sent regardless of whether we actually sent an email
-    # This prevents re-processing invoices that can't receive emails
+    # Marked sent either way, so an uncontactable invoice isn't reprocessed.
     invoice.email_sent = True
     invoice.invoice_notification_due = None
     invoice.save()
@@ -968,11 +788,7 @@ def send_invoice_notification(self, invoice_pk):
 
 
 def _cleanup_invoice_notification_task(invoice_pk):
-    """
-    Remove the PeriodicTask entry for an invoice notification.
-
-    This is called after the task runs to clean up the database.
-    """
+    """Remove the PeriodicTask for an invoice notification."""
     task_name = get_invoice_notification_task_name(invoice_pk)
     PeriodicTask.objects.filter(name=task_name).delete()
 
@@ -981,20 +797,8 @@ def _cleanup_invoice_notification_task(invoice_pk):
 def cleanup_oauth_tokens(self):
     """Delete expired OAuth tokens and stale registered clients. Daily.
 
-    Two things grow on their own here, and one of them grows because of a deliberate decision:
-
-    * **Expired access and refresh tokens.** Ordinary accumulation — an access token lives an hour
-      and Claude refreshes on a 401, so an active connection leaves a row behind several times a
-      day. ``cleartokens`` removes the ones past their expiry, which are already useless.
-    * **Registered clients.** Dynamic client registration is deliberately open (it has to be: DCR
-      is the first call a client makes, before anyone has signed in — see the OAUTH2_PROVIDER block
-      in settings.py), so anybody can POST to /o/register/ and create an Application row. CIMD is
-      advertised precisely so Claude does not need to, but the fallback is reachable.
-      ``clearcimdapplications`` removes CIMD entries whose cached metadata has expired and that
-      nothing holds a token for.
-
-    A no-op on an install that isn't an authorization server: without ``oauth2_provider`` in
-    INSTALLED_APPS the commands don't exist, and this returns rather than raising every night.
+    Dynamic client registration is open by necessity, so ``clearcimdapplications`` removes expired CIMD
+    clients holding no tokens. A no-op without ``oauth2_provider`` installed.
     """
     from django.apps import apps
     from django.core.management import call_command
@@ -1005,28 +809,19 @@ def cleanup_oauth_tokens(self):
         try:
             call_command(command)
         except Exception:
-            # One of the two failing must not stop the other, and neither is worth waking anyone
-            # for: the next run is in 24 hours and nothing is broken in the meantime.
+            # Neither failure stops the other or is worth an alert; it runs again tomorrow.
             logger.exception("OAuth cleanup command %s failed", command)
 
 
 @shared_task(bind=True, ignore_result=True)
 def cleanup_old_invoice_notification_tasks(self):
-    """
-    Clean up old invoice notification PeriodicTask entries from the database.
-
-    This task runs daily to remove any invoice_notification_* tasks that are
-    more than 24 hours old. These tasks should normally be cleaned up after
-    execution, but this provides a safety net for any orphaned entries.
-    """
+    """Daily safety net: delete invoice_notification_* tasks more than 24 hours old."""
     from datetime import timedelta
 
     from django.utils import timezone
 
     cutoff_time = timezone.now() - timedelta(hours=24)
 
-    # Find and delete old invoice notification tasks
-    # The clocked schedule's clocked_time indicates when the task was scheduled to run
     old_tasks = PeriodicTask.objects.filter(
         name__startswith="invoice_notification_",
         clocked__clocked_time__lt=cutoff_time,
@@ -1036,10 +831,7 @@ def cleanup_old_invoice_notification_tasks(self):
 
 @shared_task(bind=True, ignore_result=True)
 def sync_discord_member_roles_for_club(self, club_pk):
-    """Re-evaluate and push Discord roles for every member of a single club who has a discord_id.
-
-    Called after a role sync so that newly configured roles are immediately reflected.
-    """
+    """Push Discord roles for every member of one club with a discord_id, after a role sync."""
     from auctions.models import ClubMember
 
     members = (
@@ -1056,14 +848,7 @@ def sync_discord_member_roles_for_club(self, club_pk):
 
 
 def _safely(label, do_it):
-    """Run one step of a nightly job, logging and swallowing whatever it raises.
-
-    These steps used to be five jobs in one task body, in sequence, with nothing between them. One
-    member with a bad email address -- or simply the 300-second soft time limit arriving partway
-    down the list -- ended the task, and everything below the failure was skipped for the day. They
-    are separate beat tasks now; this is the belt for the braces, so a step that fails inside one
-    of them still can't take a sibling with it.
-    """
+    """Run one step of a nightly job, logging and swallowing whatever it raises."""
     try:
         do_it()
     except Exception:
@@ -1072,16 +857,9 @@ def _safely(label, do_it):
 
 @shared_task(bind=True, ignore_result=True)
 def update_expired_membership_discord_roles(self):
-    """Re-evaluate Discord roles for members whose auto-managed role no longer matches.
+    """Re-evaluate Discord roles for members whose auto-managed role no longer matches. Daily.
 
-    Runs daily. Only members whose computed role differs from last_discord_role_assigned trigger
-    Discord API calls.
-
-    This used to be five unrelated jobs in one task -- roles, the January BAP reset, welcome
-    emails, two expiration-reminder passes and the Mailchimp/Brevo backfills -- so the January
-    reset was downstream of a few thousand Discord API calls under a 300-second soft time limit.
-    Each is its own beat task now (see fishauctions/celery.py); this one kept the name because a
-    beat entry that changes name leaves an orphan PeriodicTask row behind.
+    Kept its name when the other nightly jobs split out: a renamed beat entry orphans its PeriodicTask.
     """
     from auctions.models import ClubMember
 
@@ -1102,34 +880,18 @@ def update_expired_membership_discord_roles(self):
 
 @shared_task(bind=True, ignore_result=True)
 def reset_yearly_bap_counters(self):
-    """Zero the year-to-date BAP/HAP/CAP counters at the start of each year.
+    """Zero year-to-date BAP/HAP/CAP counters once per year. Daily; a no-op most days.
 
-    Runs daily and is a no-op on 364 of them. It used to be an ``if today is January 1`` branch
-    buried in the middle of the Discord task, which meant it only happened if that whole task
-    reached its third statement on that one specific UTC day -- miss it (an exception above it, the
-    soft time limit, a worker down over the new year) and every club's year-to-date points carried
-    on accumulating from last year's totals until somebody noticed twelve months later.
-
-    ``Club.bap_ytd_reset_year`` is what makes it a fact rather than a date: a club whose recorded
-    year is behind the current one gets reset whenever this next runs, however late that is, and a
-    club already reset this year is skipped however many times this runs.
-
-    **A club with no recorded year is stamped, not zeroed.** ``NULL`` does not mean "overdue since
-    the beginning of time", it means "nobody has ever written this column" -- which is true of every
-    club that existed before the column did, and of every club for the first day after it is
-    created. Django's ``exclude(bap_ytd_reset_year=year)`` matches ``NULL`` rows (it renders as
-    ``NOT (col = year AND col IS NOT NULL)``), so without this the first run after deploy would
-    zero every club's year-to-date points in whatever month it happened to be, and a club created
-    this morning would lose a day's awards tonight. A club whose counters really are stale because
-    an old January was missed is repaired by ``recalculate_club_bap_points``, which rebuilds them
-    from the ``BapAward`` rows -- zeroing is the wrong answer there too.
+    Compares ``Club.bap_ytd_reset_year`` rather than checking for January 1, so a missed day catches up.
+    **A null year is stamped, not zeroed**: ``exclude(bap_ytd_reset_year=year)`` matches NULL, which
+    would wipe every pre-existing and brand-new club. Stale counters are for
+    ``recalculate_club_bap_points``.
     """
     from django.utils import timezone
 
     from auctions.models import Club, ClubMember
 
-    # localtime, not now(): award dates are DateFields a club admin typed in their own calendar, and
-    # BapAward.recalculate_member_points decides what "this year" means the same way.
+    # localtime: award dates are DateFields in the admin's calendar.
     year = timezone.localtime().year
     clubs = Club.objects.filter(enable_breeder_award_program=True).exclude(bap_ytd_reset_year=year)
     for club in clubs:
@@ -1190,12 +952,7 @@ def _send_one_welcome(member):
 
 @shared_task(bind=True, ignore_result=True)
 def send_membership_expiration_reminders(self):
-    """The 30-day and final "your membership expires" emails. Daily.
-
-    Both passes in one task because they are the same job at two offsets, and each member is
-    isolated: a bad address in the 30-day list used to skip the whole final-reminder pass, which is
-    the one that actually costs a club a renewal.
-    """
+    """The 30-day and final membership expiration emails. Daily. Each member isolated."""
     from django.utils import timezone
 
     now = timezone.now()
@@ -1230,8 +987,7 @@ def _run_reminder_pass(now, today, due_field, subject, message, label):
         membership_last_paid__isnull=False,
         membership_expiration_date__isnull=False,
         membership_expiration_date__gte=today,
-        # PayPal-subscription members auto-renew, so don't nag them to renew (their due timestamp is
-        # left intact, so reminders resume if the subscription is later cancelled).
+        # PayPal subscribers auto-renew; their due timestamp stays, so reminders resume if cancelled.
         paypal_subscription_id="",
         **{f"{due_field}__lte": now},
     ).select_related("club")
@@ -1264,20 +1020,13 @@ def _send_one_reminder(member, due_field, subject, message, label):
                 action=f"Sent {label} to {member} ({member.email})",
                 applies_to="MEMBERSHIP",
             )
-    # Cleared whether or not it sent: a club with reminders switched off must not be re-checked
-    # every night forever, and a send that failed is not worth retrying a year's worth of times.
+    # Cleared whether or not it sent, so nothing is re-checked nightly forever.
     type(member).objects.filter(pk=member.pk).update(**{due_field: None})
 
 
 @shared_task(bind=True, ignore_result=True)
 def backfill_marketing_contacts(self):
-    """Nightly Mailchimp/Brevo catch-up for connected clubs.
-
-    Re-syncs members so lifecycle tags (expiring-soon, expired, new-member -> long-term-member,
-    probably-inactive) stay accurate even when no edit happened. ``backfill()`` enqueues one async
-    task per member, so this is quick; it was last in the old monolith and therefore the first
-    thing to be skipped when anything above it failed.
-    """
+    """Nightly Mailchimp/Brevo re-sync so lifecycle tags stay accurate. Enqueues one task per member."""
     from auctions import brevo
     from auctions import mailchimp as mc
     from auctions.models import Club
@@ -1297,21 +1046,14 @@ def backfill_marketing_contacts(self):
 
 @shared_task(bind=True, ignore_result=True)
 def sync_club_calendars(self):
-    """Keep every club's events, Google Calendar, and Discord scheduled events in step.
+    """Keep every club's events, Google Calendar and Discord scheduled events in step.
 
-    Does three things per club: mirror promoted auctions into events, exchange changes with
-    Google Calendar (push ours, pull theirs), and reconcile Discord scheduled events. Each club
-    is isolated, so one broken connection doesn't stop the rest.
-
-    Only one run at a time: this is scheduled every 15 minutes but a slow Google or a big club
-    can take longer than that, and two runs racing would push the same event twice and could
-    provision two calendars for one club.
+    Each club isolated. One run at a time: two would push events twice or provision two calendars.
     """
     from django.core.cache import cache
 
     from auctions import club_events
 
-    # Times out well past the beat interval, so a worker that dies mid-run can't wedge the lock.
     if not cache.add(CALENDAR_SYNC_LOCK_KEY, "1", timeout=CALENDAR_SYNC_LOCK_SECONDS):
         logger.info("Club calendar sync is already running; skipping this run.")
         return
@@ -1324,96 +1066,55 @@ def sync_club_calendars(self):
 
 @shared_task(bind=True, ignore_result=True)
 def auction_emails(self):
-    """
-    Send auction-related drip marketing emails.
-
-    Previously run every 4 minutes via cron.
-    """
+    """Send auction-related drip marketing emails."""
     call_command("auction_emails")
 
 
 @shared_task(bind=True, ignore_result=True)
 def email_unseen_chats(self):
-    """
-    Send notifications about unread chat messages.
-
-    Previously run daily at 10:00 via cron.
-    """
+    """Send notifications about unread chat messages."""
     call_command("email_unseen_chats")
 
 
 @shared_task(bind=True, ignore_result=True)
 def weekly_promo(self):
-    """
-    Send weekly promotional email advertising auctions and lots near you.
-
-    Previously run weekly on Wednesday at 9:30 via cron.
-    """
+    """Send the weekly promotional email for nearby auctions and lots."""
     call_command("weekly_promo")
 
 
 @shared_task(bind=True, ignore_result=True)
 def promo_push_notifications(self):
-    """
-    Push promotions for nearby auctions to app users who opted into push instead of the weekly email.
-
-    Runs hourly; each promoted auction is pushed to each nearby opted-in user at most once, ever.
-    """
+    """Push nearby auction promotions to opted-in app users; each auction to each user at most once. Hourly."""
     call_command("promo_push_notifications")
 
 
 @shared_task(bind=True, ignore_result=True)
 def update_ar_positions(self):
-    """
-    Fuse AR lot sightings into a 2D map for flagged auctions, and prune the observation buffer.
-
-    Runs every 60 seconds; solves auctions the observations endpoint flagged dirty and deletes
-    LotObservation rows older than 24 hours.
-    """
+    """Fuse AR lot sightings for flagged auctions; prune observations older than 24 hours. Every minute."""
     call_command("update_ar_positions")
 
 
 @shared_task(bind=True, ignore_result=True)
 def set_user_location(self):
-    """
-    Set user lat/long based on their IP address.
-
-    Previously run every 2 hours via cron.
-    """
+    """Set user lat/long from IP address."""
     call_command("set_user_location")
 
 
 @shared_task(bind=True, ignore_result=True)
 def webpush_notifications_deduplicate(self):
-    """
-    Deduplicate web push notification subscriptions.
-
-    Previously run daily at 10:00 via cron.
-    """
+    """Deduplicate web push subscriptions."""
     call_command("webpush_notifications_deduplicate")
 
 
 @shared_task(bind=True, ignore_result=True)
 def deduplicate_user_interest(self):
-    """
-    Merge duplicate UserInterestCategory rows created by request races.
-
-    There's no unique constraint on (user, category); the write paths tolerate
-    the occasional duplicate and this reconciles them, summing the interest.
-    """
+    """Merge duplicate UserInterestCategory rows (no unique constraint; request races create them)."""
     call_command("deduplicate_user_interest")
 
 
 @shared_task(bind=True, ignore_result=True)
 def migrate_to_cloudflare_images(self):
-    """
-    Move all pending locally stored images (originals only, never the generated
-    thumbnails) to Cloudflare Images.
-
-    Runs every minute to pick up new uploads; a no-op unless the CLOUDFLARE_IMAGES_*
-    settings in .env are configured.  A large initial migration is chunked by the
-    task time limit and resumes on the next run.
-    """
+    """Move pending local original images to Cloudflare Images. Every minute; a no-op unless configured."""
     try:
         call_command("migrate_to_cloudflare_images")
     except SoftTimeLimitExceeded:
@@ -1422,10 +1123,7 @@ def migrate_to_cloudflare_images(self):
 
 @shared_task(bind=True, ignore_result=True)
 def delete_cloudflare_image(self, image_id):
-    """
-    Delete an image from Cloudflare Images, unless a row still references it
-    (lots copied with "relist" share the Cloudflare image of the original).
-    """
+    """Delete a Cloudflare image unless a row still references it (relisted lots share images)."""
     from auctions import cloudflare_images
     from auctions.models import AdCampaign, Club, LotImage, Speaker
 
@@ -1452,19 +1150,8 @@ def purge_edge_cache(self, urls):
 
 
 def schedule_auction_stats_update(run_at=None):
-    """
-    Schedule a one-off task to update auction stats.
-
-    Uses django-celery-beat's ClockedSchedule and PeriodicTask to schedule
-    a task to run at a specific time. Deletes and recreates the task to ensure
-    it's properly enabled and picked up by celery-beat.
-
-    This function uses a database transaction to ensure atomicity and prevent
-    race conditions, guaranteeing there is always exactly one task with the
-    given name.
-
-    Args:
-        run_at: datetime when the update should run. If None, runs immediately.
+    """Schedule the one-off stats update at ``run_at`` (now if None): delete and recreate atomically, so
+    exactly one enabled task exists.
     """
     from datetime import timedelta
 
@@ -1479,25 +1166,19 @@ def schedule_auction_stats_update(run_at=None):
     if run_at > max_run_at:
         run_at = max_run_at
 
-    # Use atomic transaction to ensure delete+create is atomic and prevent race conditions
-    # Moving ClockedSchedule creation inside the transaction to prevent race conditions
     with transaction.atomic():
         # Create or get the schedule for this run time
         schedule, _ = ClockedSchedule.objects.get_or_create(clocked_time=run_at)
 
-        # Delete the existing task if it exists to ensure clean state
-        # This prevents issues with one-off tasks being disabled by celery-beat
+        # Recreate rather than update: beat disables one-off tasks after they run.
         old_tasks = PeriodicTask.objects.filter(name=AUCTION_STATS_TASK_NAME)
         old_schedule_ids = [task.clocked_id for task in old_tasks if task.clocked_id]
         old_tasks.delete()
 
-        # Clean up orphaned ClockedSchedule objects from previous runs,
-        # but never delete the schedule we just created/fetched.
+        # Remove orphaned schedules, never the one just fetched.
         if old_schedule_ids:
             ClockedSchedule.objects.filter(id__in=old_schedule_ids).exclude(id=schedule.id).delete()
 
-        # Create a fresh task that's guaranteed to be enabled
-        # The transaction ensures this is atomic with schedule creation and cleanup above
         task = PeriodicTask.objects.create(
             name=AUCTION_STATS_TASK_NAME,
             task="auctions.tasks.update_auction_stats",
@@ -1517,28 +1198,12 @@ STATS_WATCHDOG_GRACE_SECONDS = 15 * 60
 
 @shared_task(bind=True, ignore_result=True)
 def ensure_auction_stats_task_scheduled(self):
-    """Re-arm the self-scheduling stats chain if it has stopped. Cheap, and runs on the beat.
+    """Re-arm the self-scheduling stats chain if it has stopped. One indexed lookup on the beat.
 
-    ``update_auction_stats`` is deliberately not on the beat: it schedules its own next run at the
-    end of each run. That is fine right up until a run doesn't reach the end. The soft time limit
-    raises an exception the task catches, but the **hard** limit (``CELERY_TASK_TIME_LIMIT``)
-    SIGKILLs the child process -- no exception, no rescheduling -- and django-celery-beat has
-    already disabled the one-off row that fired it. Nothing then re-arms the chain except a worker
-    restart (``worker_ready``) or somebody opening an auction's stats page, and for the first
-    quarter of an hour after the death even that page won't do it: ``recalculation_pending`` in
-    ``AuctionStats`` is true for the very auction that was mid-recalculation when it died.
-
-    So auction statistics silently stopped updating until someone noticed. This is the backstop:
-    one indexed lookup on the beat, and a re-arm only when the row is gone or overdue by more than
-    the grace period.
-
-    ``enabled`` is deliberately **not** part of "healthy". Disabling the row is what beat does the
-    moment it dispatches a one-off, so a disabled row with a recent ``clocked_time`` is a run in
-    flight, not a dead chain -- and re-arming one of those starts a second ``update_auction_stats``
-    alongside the first and makes two ``schedule_auction_stats_update`` calls race to delete and
-    recreate the same uniquely-named row. The scheduled time is the only thing that distinguishes
-    the two cases: a run killed by the 600-second hard limit leaves a row whose ``clocked_time``
-    keeps receding, and one grace period later it is re-armed.
+    A hard-limit SIGKILL skips the self-reschedule, and beat has already disabled the row, so stats
+    silently stopped. Re-armed when the row is missing or overdue by the grace period. ``enabled`` is
+    ignored: beat clears it on dispatch, so a disabled row with a recent ``clocked_time`` is a run in
+    flight, and re-arming it would start a second.
     """
     from django.utils import timezone
 
@@ -1553,13 +1218,7 @@ def ensure_auction_stats_task_scheduled(self):
 
 @shared_task(bind=True, ignore_result=True)
 def update_auction_stats(self):
-    """
-    Update cached auction statistics for auctions whose next_update_due is past due.
-
-    This task is self-scheduling: it processes one auction, then schedules itself
-    to run again when the next auction's stats are due, rather than running on a
-    fixed periodic interval.
-    """
+    """Update stats for the most overdue auction, then schedule the next run for when the next is due."""
     from datetime import timedelta
 
     from asgiref.sync import async_to_sync
@@ -1572,8 +1231,6 @@ def update_auction_stats(self):
 
     logger.info("Auction stats update task started at %s", now.strftime("%Y-%m-%d %H:%M:%S %Z"))
 
-    # Process only one auction per run, ordered by most overdue first
-    # Only process auctions that have next_update_due set and are past due
     auction = (
         Auction.objects.filter(
             next_update_due__lte=now,
@@ -1588,16 +1245,13 @@ def update_auction_stats(self):
         try:
             logger.info("Recalculating stats for auction: %s (%s)", auction.title, auction.slug)
 
-            # Set next_update_due before recalculating to prevent concurrent recalculations
-            # This ensures that if the recalculation takes longer than expected,
-            # subsequent task runs won't try to recalculate the same auction again
+            # Pushed out first so a concurrent run skips this auction.
             auction.next_update_due = now + timedelta(minutes=STATS_UPDATE_LOCK_MINUTES)
             auction.save(update_fields=["next_update_due"])
 
             auction.recalculate_stats()
 
-            # Send WebSocket notification to users viewing the stats page
-            # This is a best-effort notification - if it fails, we don't want to fail the entire stats update
+            # Best-effort websocket notice to anyone on the stats page.
             try:
                 logger.info("Sending WebSocket notification for auction: %s", auction.title)
                 auction_websocket = get_channel_layer()
@@ -1620,7 +1274,7 @@ def update_auction_stats(self):
                 auction.create_history("STATS", f"Stats update failed: {e}")
             except Exception:
                 logger.exception("Failed to record stats failure history for auction %s", auction.pk)
-            # Reschedule far enough out to skip this auction temporarily and unblock the queue
+            # Push it a day out so it doesn't block the queue.
             try:
                 auction.next_update_due = now + timedelta(days=1)
                 auction.save(update_fields=["next_update_due"])
@@ -1651,17 +1305,8 @@ def update_auction_stats(self):
 
 
 def schedule_bap_recalculation(club_pk, run_at):
-    """
-    Schedule a one-off BAP recalculation task for a club.
-
-    If a task already exists for this club:
-    - Same run_at: re-enable it in place (no delete/recreate).
-    - Different run_at: delete the task; delete the ClockedSchedule only if no other
-      task still references it (prevents disrupting sibling club tasks).
-
-    Args:
-        club_pk: Primary key of the Club to recalculate.
-        run_at: datetime when the recalculation should run.
+    """Schedule a one-off BAP recalculation for a club. An existing task with the same time is re-enabled;
+    otherwise it is replaced, keeping any ClockedSchedule another club still uses.
     """
     from django.db import transaction
 
@@ -1700,11 +1345,7 @@ def schedule_bap_recalculation(club_pk, run_at):
     max_retries=5,
 )
 def create_google_wallet_class_for_club(self, club_pk):
-    """Create the Google Wallet GenericClass for a club. Idempotent (409 = OK).
-
-    On success (Wallet confirms the class exists), flips the club's
-    `google_wallet_class_created` flag so we don't re-run on every save.
-    """
+    """Create a club's Google Wallet GenericClass (409 = exists), then set ``google_wallet_class_created``."""
     from auctions.google_wallet import create_generic_class, is_configured
     from auctions.models import Club
 
@@ -1749,13 +1390,7 @@ def update_google_wallet_objects_for_club(self, club_pk):
     max_retries=5,
 )
 def update_google_wallet_object_for_member(self, member_pk):
-    """Patch the Google Wallet GenericObject for a single club member.
-
-    Used when wallet-visible fields on ClubMember change (name,
-    membership_number, membership_expiration_date).  If the member has never
-    added the pass to their Wallet the object won't exist yet — that is fine,
-    update_generic_object_for_member returns False on 404 without raising.
-    """
+    """Patch one member's Google Wallet object after wallet-visible fields change. A 404 (never added) is fine."""
     from auctions.google_wallet import is_configured, update_generic_object_for_member
     from auctions.models import ClubMember
 
@@ -1780,11 +1415,8 @@ def update_google_wallet_object_for_member(self, member_pk):
     max_retries=5,
 )
 def sync_club_member_to_mailchimp(self, member_pk):
-    """Push one club member into their club's connected Mailchimp audience.
-
-    No-op when the club has no Mailchimp connection. Reused for member edits, auction joins,
-    paid invoices, the initial backfill, and the nightly catch-up. Deactivated/opted-out
-    members are archived by sync_member rather than skipped, so we don't filter is_deleted here.
+    """Push one member into the club's Mailchimp audience. Deleted/opted-out members are archived by
+    ``sync_member``, so they aren't filtered here.
     """
     from auctions import mailchimp as mc
     from auctions.models import ClubMember
@@ -1824,12 +1456,7 @@ def sync_club_member_email_change(self, member_pk, old_email):
     max_retries=5,
 )
 def sync_club_member_to_brevo(self, member_pk):
-    """Push one club member into their club's connected Brevo list.
-
-    The Brevo equivalent of sync_club_member_to_mailchimp: no-op when the club has no Brevo
-    connection. Reused for member edits, auction joins, paid invoices, the initial backfill, and
-    the nightly catch-up. Deactivated/opted-out members are archived by sync_member, not skipped.
-    """
+    """Push one member into the club's Brevo list. Same contract as ``sync_club_member_to_mailchimp``."""
     from auctions import brevo
     from auctions.models import ClubMember
 
@@ -1868,11 +1495,7 @@ def sync_club_member_email_change_brevo(self, member_pk, old_email):
     max_retries=5,
 )
 def expire_google_wallet_objects_for_club(self, club_pk, unpaid_only=False):
-    """Expire (state=EXPIRED) every active Wallet pass for a club's members.
-
-    When `unpaid_only=True` only members whose dues are currently lapsed are
-    touched — used when the club switches to "paid members only" mode.
-    """
+    """Expire every active Wallet pass for a club's members, or only lapsed ones with ``unpaid_only``."""
     from auctions.google_wallet import expire_generic_object_for_member, is_configured
     from auctions.models import Club, ClubMember
 
@@ -1898,14 +1521,8 @@ def expire_google_wallet_objects_for_club(self, club_pk, unpaid_only=False):
     max_retries=5,
 )
 def refresh_google_wallet_membership_status(self):
-    """Daily: refresh Google Wallet passes for members whose membership status just
-    changed by the passage of time (i.e. their membership recently expired).
-
-    Keeps the on-pass status line ("Valid through …" / "Unpaid/expired") and the
-    expired red styling accurate even when no member edit fired the change signal.
-    Only members who lapsed in the last few days are touched, so this stays cheap.
-
-    The Apple-side equivalent is refresh_apple_wallet_membership_status below.
+    """Daily: refresh Google Wallet passes for members who lapsed in the last few days, since no signal
+    fires when time passes. Apple's is ``refresh_apple_wallet_membership_status``.
     """
     from auctions.google_wallet import is_configured, update_generic_object_for_member
     from auctions.models import ClubMember
@@ -1913,9 +1530,7 @@ def refresh_google_wallet_membership_status(self):
     if not is_configured():
         return
     today = datetime.datetime.now(tz=datetime.timezone.utc).date()
-    # Members whose explicit expiration date passed in the last few days just flipped to
-    # expired (is_paid_member goes False the day after membership_expiration_date). The
-    # small window gives slack for a missed daily run.
+    # A three-day window gives slack for a missed run.
     window_start = today - datetime.timedelta(days=3)
     members = ClubMember.objects.filter(
         is_deleted=False,
@@ -1936,13 +1551,10 @@ def refresh_google_wallet_membership_status(self):
     max_retries=5,
 )
 def notify_apple_wallet_devices_for_member(self, member_pk):
-    """Bump a member's Apple pass version and poke every registered device via APNs.
+    """Bump a member's Apple pass version and notify registered devices via APNs.
 
-    The bump (apple_pass_updated=now) is what makes the PassKit web service serve
-    fresh content — Last-Modified on pass delivery and the passesUpdatedSince filter
-    both read it — so it happens even when no device is registered (a manual
-    pull-to-refresh on the pass must still see the change). Deleted members are NOT
-    skipped: the update they push is the voided pass.
+    The bump happens even with no devices, so a manual refresh sees it. Deleted members aren't skipped:
+    their update is the voided pass.
     """
     from django.utils import timezone
 
@@ -1971,11 +1583,7 @@ def notify_apple_wallet_devices_for_member(self, member_pk):
     max_retries=5,
 )
 def notify_apple_wallet_devices_for_club(self, club_pk):
-    """Club-wide Apple pass refresh: bump every member and poke every registered device.
-
-    Used when something on the club touches all passes at once — name/icon change
-    (pass visuals) or flipping show_member_barcode (which voids/unvoids every pass).
-    """
+    """Bump and notify every member's Apple pass, after a club-wide change (name, icon, barcode toggle)."""
     from django.utils import timezone
 
     from auctions.apple_wallet import is_configured, send_pass_update_notification
@@ -2003,13 +1611,7 @@ def notify_apple_wallet_devices_for_club(self, club_pk):
     max_retries=5,
 )
 def refresh_apple_wallet_membership_status(self):
-    """Daily: push Apple pass updates to members whose membership just lapsed.
-
-    The Apple analogue of refresh_google_wallet_membership_status — when a
-    membership expires by the mere passage of time no signal fires, but the pass's
-    status line and red styling need to change. Only members who lapsed in the last
-    few days AND have at least one registered device are touched, so this stays cheap.
-    """
+    """Daily: push Apple pass updates to members who lapsed in the last few days and have a device."""
     from django.utils import timezone
 
     from auctions.apple_wallet import is_configured, send_pass_update_notification
@@ -2030,8 +1632,7 @@ def refresh_apple_wallet_membership_status(self):
     if not member_pks:
         return
     ClubMember.objects.filter(pk__in=member_pks).update(apple_pass_updated=timezone.now())
-    # One query for every registration rather than one per member, and one failing device no longer
-    # leaves every member after it with a pass that still says "valid" -- see _per_item.
+    # One query for all registrations; one failing device can't block the rest (see _per_item).
     registrations = AppleDeviceRegistration.objects.filter(member_id__in=member_pks)
     _per_item(
         self,
@@ -2051,12 +1652,8 @@ def refresh_apple_wallet_membership_status(self):
     max_retries=3,
 )
 def geocode_club_member(self, pk):
-    """Geocode a ClubMember's address and store lat/lng.
-
-    Only runs when GOOGLE_MAPS_SERVER_API_KEY is configured. Skips members
-    with no address. Falls back to copying coordinates from the linked
-    user's UserData if the address is empty but the user has joined an
-    auction (manually_added=False).
+    """Geocode a ClubMember's address. With no address, copy coordinates from a linked user who joined an
+    auction themselves. Needs GOOGLE_MAPS_SERVER_API_KEY.
     """
     from auctions.models import AuctionTOS, ClubMember, UserData
 
@@ -2072,7 +1669,6 @@ def geocode_club_member(self, pk):
         if found:
             ClubMember.objects.filter(pk=pk).update(lat=found["latitude"], lng=found["longitude"])
     elif member.user_id and not (member.lat and member.lng):
-        # No address — copy coords from UserData if the user has voluntarily joined an auction
         has_self_joined = AuctionTOS.objects.filter(user=member.user, manually_added=False).exists()
         if has_self_joined:
             ud = UserData.objects.filter(user=member.user).values("latitude", "longitude").first()
@@ -2093,16 +1689,7 @@ def recalculate_club_bap_points(self, club_pk):
 
 
 def bootstrap_bap_recalculation_tasks(run_at):
-    """
-    Schedule BAP recalculation tasks for all eligible clubs on worker startup.
-
-    Only clubs with enable_breeder_award_program=True and next_bap_recalculation
-    set are scheduled. Overdue clubs are scheduled to run at run_at; future clubs
-    are scheduled at their next_bap_recalculation time.
-
-    Args:
-        run_at: datetime representing "now" — overdue clubs use this as their run time.
-    """
+    """Schedule BAP recalculations for eligible clubs at worker startup; overdue ones at ``run_at``."""
     from auctions.models import Club
 
     clubs = Club.objects.filter(
@@ -2125,12 +1712,8 @@ def bootstrap_bap_recalculation_tasks(run_at):
     max_retries=3,
 )
 def geocode_speaker(self, pk):
-    """Geocode a Speaker's free-text location into lat/lng.
-
-    Mirrors geocode_club_member: only runs when GOOGLE_MAPS_SERVER_API_KEY is configured,
-    and does nothing without a location to work from.  Speakers whose coordinates were
-    dropped on the map by hand already have a location_coordinates value, and the pre_save
-    signal has written those into lat/lng before this ever runs -- so this only fills gaps.
+    """Geocode a Speaker's free-text location. Hand-placed map coordinates are already set, so this only
+    fills gaps. Needs GOOGLE_MAPS_SERVER_API_KEY.
     """
     from auctions.models import Speaker
 

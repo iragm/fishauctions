@@ -1,35 +1,15 @@
 """The action registry, as MCP tools.
 
-One catalogue, two callers: :mod:`auctions.mcp.protocol` serves it over HTTP to outside agents,
-and the command palette's own model reads the same list in-process. Nothing here is written by
-hand -- every tool is generated from :data:`auctions.palette_actions.ACTIONS`, so registering an
-action is all it takes to expose it, and an action can never be described to one caller and not
-the other.
+Generated from :data:`auctions.palette_actions.ACTIONS`, which the palette's own model reads too,
+so both callers always see the same catalogue.
 
-**The schema comes out of the prose that was already there.** Every parameter in the registry is
-documented in the same shape -- ``"integer, optional, default 1."``, ``"string, required. The lot
-number."`` -- across all 117 of them, because that is what the old system prompt needed in order
-to be readable. :func:`param_schema` reads the type and the required flag straight off that
-prefix and keeps the whole sentence as the JSON Schema ``description``. So there is no second
-table of types to write, and none to forget to update: the schema is derived from the one
-description that has to be right anyway.
+Each parameter description opens with ``"<type>, required|optional."``; :func:`param_schema` reads
+the JSON Schema off that prefix, so there is no second type table.
 
-**Annotations come out of the danger tier**, which the registry has always carried:
+Annotations come from the danger tier: ``safe`` and ``navigate`` are read-only, ``confirm`` writes.
+There is deliberately no catch-all "execute" tool.
 
-    ``safe``      reads something                  -> ``readOnlyHint``
-    ``confirm``   writes to the database           -> a write tool
-    ``navigate``  resolves a URL and never acts    -> ``readOnlyHint``
-
-That is the read/write split an MCP host needs in order to decide what it may run without
-asking, and it is the same tier the palette uses to decide whether to show a countdown. One
-decision, two audiences. There is deliberately no catch-all "execute" tool: a single tool
-covering both reads and writes is exactly what a connector review rejects, and the registry has
-never had one.
-
-Permissions are **not** enforced here. :func:`palette_actions.run_action` calls the resolver,
-which re-checks every permission against the database, exactly as it does for the palette.
-:func:`tool_descriptors` filters the catalogue with ``palette_actions.actions_for`` for the same
-reason the prompt did -- relevance and size, not security.
+Permissions are not enforced here; the resolvers re-check them in ``run_action``.
 """
 
 from __future__ import annotations
@@ -45,33 +25,16 @@ from . import auth, icons, resources, widgets
 
 logger = logging.getLogger(__name__)
 
-#: How much of one tool result is worth sending back. Generous next to the palette's own
-#: ``MAX_LOOKUP_RESULT_CHARS`` (which has to leave room for several rounds inside one budget):
-#: an MCP host is showing this to a model with a whole context window, not squeezing it into a
-#: system prompt. Still bounded, because "do not return a full database dump" is a review
-#: criterion and because a runaway ``list_lots`` should not be able to fill somebody's window.
+#: Bounded, so a runaway ``list_lots`` can't fill a host's context.
 MAX_RESULT_CHARS = 20000
 
 #: How much of a too-big result's own summary line to echo back with the refusal.
 SUMMARY_CHARS = 500
 
-#: Result keys that are ours and not the caller's, stripped at **any depth**. ``undo`` is the
-#: instruction for reversing the action, which :func:`palette_actions.remember_undo` consumes on the
-#: way past; handing it to the caller would invite them to replay it themselves, bypassing
-#: ``undo_last``'s window and stack.
-#:
-#: ``lot_id`` is a database primary key, and no primary key belongs on this wire. A lot has a
-#: perfectly good public identifier -- ``lot_number_display``, the number printed on its label and
-#: in its URL -- and every result that carries a lot already carries it, through
-#: :func:`palette_actions._lot_echo`. Sending the pk alongside offered a second name for the same
-#: thing: one an agent could not have got from anywhere but us, that means nothing to the person
-#: reading the answer, that addresses a lot in *any* auction rather than a lot in this one, and that
-#: silently disagrees with the number on the label whenever an auction numbers its lots by hand.
-#: The resolvers still accept it (it is in their ``aliases``, and the palette reads it off the page
-#: context), so nothing that had one breaks -- but nothing is handed one any more.
-#:
-#: Nested, because the leak was mostly in rows: ``find_lot`` and ``points_queue`` put a ``lot_id``
-#: on every line of a list. ``test_mcp.NoPrimaryKeysTests`` is what keeps this honest.
+#: Result keys stripped at any depth before a result leaves. ``undo`` is consumed by
+#: ``remember_undo``; handing it out would let a caller bypass ``undo_last``. ``lot_id`` is a
+#: primary key: a lot's public name is ``lot_number_display`` (see ``_lot_echo``), and resolvers
+#: still accept ``lot_id`` as an alias.
 _INTERNAL_RESULT_KEYS = ("undo", "lot_id", *palette_actions.INTERNAL_RESULT_KEYS)
 
 #: The words the registry uses for a parameter's type, mapped onto JSON Schema's.
@@ -84,9 +47,7 @@ _JSON_TYPES = {
     "object": "object",
 }
 
-#: ``"<types>, required|optional"`` -- the prefix every parameter description in the registry
-#: opens with. ``<types>`` is one word, several joined by "or" ("string or boolean"), or an array
-#: spelled "array of <types>".
+#: The ``"<types>, required|optional"`` prefix every registry parameter description opens with.
 _PARAM_PREFIX = re.compile(
     r"^(?P<types>[a-z]+(?:\s+of\s+[a-z]+(?:\s+or\s+[a-z]+)*)?(?:\s+or\s+[a-z]+)*)\s*,\s*(?P<need>required|optional)\b",
     re.IGNORECASE,
@@ -104,9 +65,7 @@ def _types_to_schema(words: str) -> dict[str, Any]:
         return {"type": "array", "items": _types_to_schema(words[len("array of ") :])}
     names = [_JSON_TYPES[word] for word in re.split(r"\s+or\s+", words) if word in _JSON_TYPES]
     if not names:
-        # An unrecognised type word is a typo in the registry, and the audit test says so. Fall
-        # back to "any" rather than emitting an invalid schema: a tool that still works with a
-        # loose parameter beats a tools/list that a client refuses to parse.
+        # An unknown type word is a registry typo (the audit test catches it). Loose beats invalid.
         return {}
     if len(names) == 1:
         return {"type": names[0]}
@@ -114,15 +73,10 @@ def _types_to_schema(words: str) -> dict[str, Any]:
 
 
 def param_schema(description: str) -> tuple[dict[str, Any], bool]:
-    """One parameter's JSON Schema and whether it is required, read off its own description.
+    """One parameter's JSON Schema and whether it is required, read off its description.
 
-    The type prefix is *moved* into the schema rather than copied: once ``"type": "string"`` and
-    ``required: [...]`` say it, repeating "string, required" in the description is the same fact
-    twice in front of a model that is paying for both. Everything after the prefix stays, because
-    that is the half a type cannot express -- "default 1", "ADMINS ONLY", which values a dropdown
-    accepts. Fifteen of the registry's parameters are nothing but the prefix (``email``,
-    ``quantity``, ``donation``); those come back with no description at all, which is honest --
-    the name and the type are the whole of what there is to say.
+    The prefix moves into the schema rather than being repeated in the description. A description
+    that is only the prefix comes back with none.
     """
     match = _PARAM_PREFIX.match(description or "")
     if not match:
@@ -135,11 +89,9 @@ def param_schema(description: str) -> tuple[dict[str, Any], bool]:
 
 
 def input_schema(action: palette_actions.Action) -> dict[str, Any]:
-    """The ``inputSchema`` for one action: an object, one property per documented parameter.
+    """The ``inputSchema`` for one action.
 
-    ``Action.aliases`` is deliberately left out. It exists to catch a near-miss from a model that
-    was working off prose, and advertising it would widen the contract to spellings the registry
-    does not document. With a real schema in front of the caller there is nothing to miss.
+    ``Action.aliases`` is left out: aliases catch near-misses from prose, and a schema has none.
     """
     properties: dict[str, Any] = {}
     required: list[str] = []
@@ -150,29 +102,18 @@ def input_schema(action: palette_actions.Action) -> dict[str, Any]:
     schema: dict[str, Any] = {"type": "object", "properties": properties}
     if required:
         schema["required"] = required
-    # No extra keys: run_action refuses a parameter the action never advertised, so saying so in
-    # the schema turns a server-side refusal into something the client can catch first.
+    # run_action refuses unadvertised parameters, so say so up front.
     schema["additionalProperties"] = False
     return schema
 
 
 def read_only(action: palette_actions.Action) -> bool:
-    """True when running this tool changes nothing.
-
-    ``navigate`` counts as read-only, and that is not a fudge: a navigate-tier action resolves a
-    URL and returns it. The thing on the far side is what the tier exists to *avoid* doing.
-    """
+    """True when running this tool changes nothing. ``navigate`` only resolves a URL."""
     return action.danger != palette_actions.DANGER_CONFIRM
 
 
 def idempotent(action: palette_actions.Action) -> bool:
-    """Whether calling this twice with the same arguments leaves the same state as calling it once.
-
-    Read-only tools are idempotent by definition. A write is not, unless the registry says so:
-    ``add_lot`` twice is two lots, and a host that retried it on a dropped connection would sell
-    the same fish twice. Actions that set a value rather than append one declare
-    ``idempotent=True`` for themselves.
-    """
+    """Whether a repeat call leaves the same state. Writes aren't, unless the action says so."""
     if action.idempotent is not None:
         return action.idempotent
     return read_only(action)
@@ -187,8 +128,7 @@ def describe(action: palette_actions.Action) -> str:
     """The tool description: what the registry says, plus the examples it carries."""
     description = action.description.strip()
     if action.examples:
-        # Examples of what a person asks for, which is what the description is matched against.
-        # Phrased as data ("Examples:"), never as an instruction to the model reading it.
+        # Phrased as data, never as an instruction to the model.
         description += " Examples: " + "; ".join(f"“{example}”" for example in action.examples) + "."
     return description
 
@@ -196,28 +136,12 @@ def describe(action: palette_actions.Action) -> str:
 def descriptor(action: palette_actions.Action) -> dict[str, Any]:
     """One MCP tool descriptor.
 
-    Three things are deliberately *not* in here, and all three are the same decision: ``tools/list``
-    is ~47 KB, it is paid for in full, in context, by every host on every session, and a key that
-    says what the spec's own default already says is a key fifty-four times over.
-
-    ``destructiveHint`` and ``idempotentHint`` are omitted on a read-only tool, because the spec
-    defines them only when ``readOnlyHint`` is false. ``idempotentHint`` is omitted when it is
-    ``false``, which is the spec's default for it. And ``annotations.title`` is gone: the spec says
-    the top-level ``title`` takes precedence over it, so sending both is the same string twice, and
-    a host old enough to read only the annotation falls back to ``name`` -- which for
-    ``set_lot_winner`` differs from "Set lot winner" by two spaces and a capital letter.
-
-    ``openWorldHint`` stays even though it is usually the bare boolean ``false``, because the spec's
-    default for it is ``true`` and "this tool reaches out to the open internet" is the wrong thing
-    for a host to assume about a tool that only ever touches this site's own database. It is read
-    off the action rather than hard-coded, because exactly one of them -- ``read_source`` -- really
-    does reach out.
+    ``tools/list`` is paid for in context every session, so keys that restate the spec's default are
+    omitted: ``destructiveHint``/``idempotentHint`` on read-only tools, ``idempotentHint: false``, and
+    ``annotations.title``. ``openWorldHint`` is always sent because its default is ``true``.
     """
     annotations: dict[str, Any] = {
         "readOnlyHint": read_only(action),
-        # False for everything but ``read_source``: the catalogue reads and writes this site's own
-        # database and reaches nothing else. The one that does fetch this site's published source
-        # code from the repository it is deployed from says so here.
         "openWorldHint": action.open_world,
     }
     if not read_only(action):
@@ -230,25 +154,17 @@ def descriptor(action: palette_actions.Action) -> dict[str, Any]:
         "description": describe(action),
         "inputSchema": input_schema(action),
         "annotations": annotations,
-        # A URL rather than an inlined SVG, deliberately -- see :mod:`auctions.mcp.icons` for what
-        # that costs a list this size, and for why there are five of them and not fifty-four.
+        # A URL, not inline SVG; see auctions.mcp.icons.
         "icons": icons.for_action(action),
     }
-    # Four tools answer a question that is better looked at than read out, and say so here: a host
-    # with the apps surface renders one of ``auctions.mcp.widgets`` instead of the JSON. On the
-    # fifty that have no widget the key is absent rather than null, and on a host that has never
-    # heard of it the whole thing is ignored and the JSON is what shows -- which is why the widget
-    # draws itself from the same ``structuredContent`` the model reads, and not from a private
-    # payload only it can see. One answer, two ways of looking at it.
+    # Tools with a widget advertise it; the widget draws from the same structuredContent the model reads.
     ui = widgets.tool_meta(action.name)
     if ui:
         built["_meta"] = ui
     return built
 
 
-#: Which half of the site a tool belongs to, for the optional ``?tools=`` filter on the endpoint.
-#: Derived from the parameters an action already declares rather than kept as a table of 51 names,
-#: which would be a second list to forget to update.
+#: Which half of the site a tool belongs to, for ``?tools=``. Derived from the action's parameters.
 AREA_GENERAL = "general"
 AREA_AUCTION = "auction"
 AREA_CLUB = "club"
@@ -266,10 +182,7 @@ _AREA_OVERRIDES = {
     "undo_last": AREA_GENERAL,
     "renew_membership": AREA_CLUB,
     "send_membership_card": AREA_CLUB,
-    # The breeder award program belongs to a club, not to an auction. All three take an ``auction``
-    # -- as a filter, as a disambiguator, as the thing being forecast -- which is enough for the
-    # derivation to file them under auctions, next door to ``award_points``, which takes only a
-    # club and lands in the right place. Points are reviewed after the auction, by the club.
+    # BAP is a club's, though these three also take an ``auction``.
     "points_queue": AREA_CLUB,
     "review_points": AREA_CLUB,
     "my_points": AREA_CLUB,
@@ -294,11 +207,7 @@ def parse_areas(raw: str) -> set[str]:
 
 
 def wanted(action: palette_actions.Action, areas: set[str]) -> bool:
-    """Whether one tool survives a ``?tools=`` filter. An empty filter keeps everything.
-
-    ``general`` is always kept alongside an area, because the tools that orient a caller
-    (``my_context``, ``undo_last``, ``find_page``) are the ones a narrowed list most needs.
-    """
+    """Whether one tool survives a ``?tools=`` filter. ``general`` is always kept alongside an area."""
     if not areas:
         return True
     if AREA_READ in areas and not read_only(action):
@@ -312,20 +221,9 @@ def wanted(action: palette_actions.Action, areas: set[str]) -> bool:
 def tool_descriptors(user=None, *, writes: bool = True, areas: set[str] | None = None) -> list[dict[str, Any]]:
     """The catalogue for one caller.
 
-    ``user=None`` means every action, for the audit test. Otherwise the list is filtered by
-    ``palette_actions.actions_for`` -- a bidder who runs no club and no auction is not offered
-    club administration, exactly as they were not shown it in the prompt. That is a relevance and
-    size filter, not the security boundary: the resolvers are.
-
-    ``writes=False`` drops every write tool, for a credential that was only granted reads. It has
-    to be applied to the *list* as well as to the call, or a read-only agent spends its turn
-    picking a tool it is about to be refused.
-
-    ``areas`` is the optional ``?tools=`` filter on the endpoint URL -- ``?tools=club``,
-    ``?tools=auction,read``. The whole catalogue is a real cost: it is sent in full, in context, on
-    every session a host opens, and somebody who connected this to run their club's meetings has no
-    use for the lot-selling half. There is no way to ask for a subset in the protocol, so it is
-    part of the address instead, which is the one thing every client lets a person type.
+    ``user=None`` means every action (for the audit test). ``actions_for`` filters for relevance, not
+    security. ``writes=False`` drops write tools from the list as well as the call. ``areas`` is the
+    ``?tools=`` filter, since the protocol has no way to ask for a subset.
     """
     areas = areas or set()
     return [
@@ -344,23 +242,13 @@ def _payload(result: Any) -> Any:
     return result
 
 
-#: Which keys in a result hold a link. ``url`` is the common one; the suffix catches the rest.
-#: Matching only the exact name is what left ``renew_url`` on the membership card relative -- and a
-#: relative href handed to ``app.openLink`` inside a widget's iframe, or to a person in a chat
-#: window, is a button that does nothing at all. A suffix rule costs nothing and cannot be
-#: forgotten the next time a resolver returns a second link.
+#: Keys holding a link. A suffix rule, because matching only ``url`` left ``renew_url`` relative.
 def _is_url_key(key: Any) -> bool:
     return isinstance(key, str) and (key == "url" or key.endswith("_url"))
 
 
 def _absolute(value: Any, base) -> Any:
-    """Every link in a result made absolute, wherever it is nested.
-
-    The resolvers return site-relative paths because the palette is a page on this site and a
-    relative link is the right thing there. An agent is not on this site: it hands the link to a
-    person, or puts it in a message, and ``/lots/all/?q=shrimp`` is not a link anybody can follow.
-    Done here rather than in the resolvers so the palette keeps its relative ones.
-    """
+    """Every link in a result made absolute. Resolvers return relative paths for the palette."""
     if isinstance(value, dict):
         return {
             key: (
@@ -376,19 +264,11 @@ def _absolute(value: Any, base) -> Any:
 
 
 def _text(payload: Any) -> str:
-    """Serialise a result, bounded, and say so when it does not fit.
-
-    An over-budget result is replaced rather than cut. Slicing a JSON document at twenty thousand
-    characters stops it mid-string, so a host that parses tool output got a parse error where an
-    answer should have been -- and the one thing the caller needed, "ask for less and here is how",
-    was the part that got cut off.
-    """
+    """Serialise a result, replacing (never slicing) one over budget, so it stays valid JSON."""
     body = json.dumps(payload, indent=2, default=str)
     if len(body) <= MAX_RESULT_CHARS:
         return body
-    # The summary is echoed because it is the one line that says what the answer *was* -- but it
-    # is a resolver's own string and can itself be the thing that blew the budget, so it is capped
-    # here rather than trusted. Whatever this function returns has to fit, unconditionally.
+    # The summary is a resolver's string and may itself be the oversized part.
     summary = payload.get("summary") if isinstance(payload, dict) else None
     if isinstance(summary, str) and len(summary) > SUMMARY_CHARS:
         summary = summary[:SUMMARY_CHARS] + "…"
@@ -408,30 +288,12 @@ def _text(payload: Any) -> str:
 def _result(
     text: str, *, is_error: bool = False, structured: Any = None, links: list[dict[str, Any]] | None = None
 ) -> dict[str, Any]:
-    """One ``CallToolResult``: the text block every host can read, plus the parsed object.
+    """One ``CallToolResult``: a text block plus ``structuredContent`` (object only).
 
-    ``structuredContent`` is MCP 2025-06-18's answer to the thing that was wrong here: the result
-    was a JSON document inside a string, so every host had to parse a string to get at it and none
-    of them could be sure it was JSON at all. It is sent alongside the text rather than instead of
-    it -- the spec asks for both, because a host on an older protocol version reads only the text
-    and because the text is what a model actually sees.
-
-    It is only ever an object. The spec requires ``structuredContent`` to be a JSON object, and
-    every resolver returns a dict, so the guard here is for the two error paths whose whole payload
-    is one sentence: those stay text-only rather than being wrapped in an invented key.
-
-    There is deliberately **no** ``outputSchema``. Declaring one obliges every result to conform to
-    it, and these results are one small envelope (``ok``/``found``/``summary``/``followups``) plus
-    whatever the tool is about -- fifteen participant rows, a club's fee table, a lot's live price.
-    A schema loose enough to be true of all fifty-four validates nothing, and fifty-four copies of
-    it is seven kilobytes on every session for that nothing. If a tool ever grows a result worth
-    validating, it can declare its own.
+    No ``outputSchema``: one loose enough to fit every result validates nothing.
     """
     result: dict[str, Any] = {"content": [{"type": "text", "text": text}], "isError": is_error}
     if links:
-        # ``resource_link`` blocks (2025-06-18): "there is more about this, at this address". A host
-        # that has never heard of the type ignores an unknown content block, which is what the spec
-        # asks of it, so this is free where it is not understood. See ``resources.links_for``.
         result["content"].extend(links)
     if isinstance(structured, dict):
         result["structuredContent"] = structured
@@ -439,21 +301,9 @@ def _result(
 
 
 def _needs_more_information(action: palette_actions.Action, result: dict[str, Any]) -> dict[str, Any]:
-    """ "Which bob?" is not a failure, and sending it as one is what made it look like a broken tool.
+    """A disambiguation is a successful result, not ``isError``: the tool hasn't tried yet.
 
-    ``isError`` is for a tool that tried and could not. A disambiguation is a tool that has *not
-    tried yet* and is one parameter short -- an entirely ordinary turn, which hosts render in red
-    and some stop on when it arrives as an error.
-
-    MCP's own answer to this is elicitation, and it is genuinely not available here: elicitation is
-    a **server-to-client request** raised in the middle of a tool call, so it needs the call to
-    stay open across a round trip. This server answers one POST with one JSON body and holds no
-    session (see :mod:`auctions.mcp.transport`), so there is nowhere for that request to go.
-    Supporting it means an SSE stream and per-call state, which is a transport decision and not a
-    tools one.
-
-    What is sent instead says three things a model cannot misread: nothing was changed, here is the
-    question with its candidates, and here is the parameter to put the answer in.
+    Elicitation would be MCP's answer, but it needs a session this transport doesn't hold.
     """
     options = [option for option in result.get("options") or [] if isinstance(option, dict)]
     payload: dict[str, Any] = {
@@ -470,25 +320,14 @@ def _needs_more_information(action: palette_actions.Action, result: dict[str, An
             {"answer": option.get("value") or option.get("label"), "label": option.get("label")} for option in options
         ]
     body = _text(payload)
-    # Round-tripped for the same reason ``call_tool`` does it: whatever the text says is what the
-    # structure says, even in the (unlikely, for a question) case where the payload was too big.
     return _result(body, structured=json.loads(body))
 
 
 def call_tool(request, name: str, arguments: Any, *, writes: bool = True) -> dict[str, Any]:
     """Run one tool for the user on ``request`` and return an MCP ``CallToolResult``.
 
-    Every path through here goes to :func:`palette_actions.run_action`, which is the same single
-    entry point the palette's execute endpoint uses: it re-checks the permissions and re-validates
-    the parameters against the database, whatever the caller believed a moment ago.
-
-    The three shapes a resolver can return map onto MCP like this:
-
-    ``{"error": …}``            -> ``isError``. The message is already written for a person and
-                                   says what to do instead, which is what makes it recoverable.
-    ``{"more_info_needed": …}`` -> a **successful** result that says the tool did not act and names
-                                   what it needs. See :func:`_needs_more_information`.
-    ``{"ok": True, …}``         -> the result as JSON, summary included.
+    Everything goes through :func:`palette_actions.run_action`. ``{"error"}`` becomes ``isError``;
+    ``{"more_info_needed"}`` is a successful result (:func:`_needs_more_information`).
     """
     if not isinstance(arguments, dict):
         arguments = {}
@@ -504,32 +343,23 @@ def call_tool(request, name: str, arguments: Any, *, writes: bool = True) -> dic
         )
     credential = getattr(request, "mcp_credential", None)
     if credential is not None and not read_only(action) and not auth.within_write_budget(credential):
-        # See ``auth.within_write_budget``: this is the ceiling on how far an instruction hidden in
-        # somebody else's lot description can get before it runs out of room.
+        # Caps how far an instruction hidden in someone's lot description can get.
         return _result(
             f"This connection has changed {credential.write_budget} things in the last hour, which "
             "is its limit. Reads still work. If this wasn't you, disconnect it at "
             "/ai/.",
             is_error=True,
         )
-    # Resolvers read this to work out which auction the caller means from the page they are
-    # looking at. An agent is not looking at a page, so the answer is "nothing", set explicitly
-    # rather than left to whatever else may have touched this request.
+    # Agents have no page to infer an auction from.
     request.palette_page = {}
     result = palette_actions.run_action(request, action.name, arguments)
     if "error" in result:
         return _result(str(result["error"]), is_error=True)
     if "more_info_needed" in result:
         return _needs_more_information(action, result)
-    # Same call the palette's execute endpoint makes, so "undo that" works across both surfaces:
-    # the stack is per user, and a lot added by an agent is a lot the same person can undo.
+    # Same undo stack as the palette.
     palette_actions.remember_undo(request.user, action.name, result)
     links = resources.links_for(action.name, result.get(palette_actions.KEY_ABOUT))
     body = _text(_absolute(_payload(result), request.build_absolute_uri))
-    # The structure is parsed back out of the text rather than handed over alongside it, for two
-    # reasons. It guarantees the two are the same answer -- when ``_text`` refuses an over-budget
-    # payload and replaces it with an explanation, the structure is that explanation and not the
-    # twenty thousand characters the refusal exists to withhold. And it guarantees the structure is
-    # JSON-safe: ``_text`` serialises Decimals and datetimes with ``default=str``, and a Decimal
-    # left in ``structuredContent`` would blow up when the transport serialises the whole response.
+    # Parsed back from the text so both say the same thing and the structure is JSON-safe (Decimals).
     return _result(body, structured=json.loads(body), links=links)

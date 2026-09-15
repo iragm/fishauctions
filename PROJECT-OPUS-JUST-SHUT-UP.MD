@@ -12,86 +12,58 @@ If it is 100% essential, say it with fewer words.
   in `palette_actions.py`, MCP tool descriptions and assertion messages reach a user or the model.
 - A module over 300 lines keeps a docstring (`auctions/module_map.py` enforces it) and its **first
   line** is published into `docs/module_map.md`. Regenerate with `python3 auctions/module_map.py
-  --write` after a pass -- reformatting changes the line counts the map records.
+  --write` **on the host** after a pass (the django container can't write `docs/`).
 - `test_palette_skills.py` greps resolver docstrings for ``ViewName`` + "'s own body". That phrasing
   survives verbatim.
 - `.env.example` keeps its comments: env vars are documented there on purpose.
 - A `.py` anywhere but `swag/ .git/ .github/ logs/ mediafiles/ staticfiles/` enters the module map
   and the linter. That is why `docs/ses_inbound_router.py.txt` has that extension.
-- After any batch of edits: compile-check every file, `--format`, regenerate the map, `--ci`, then
-  `manage.py test`. Never two suites at once.
+- After any batch of edits: compile-check every file, `--format`, `--lint`, regenerate the map,
+  then `manage.py test --parallel`. Never two suites at once.
 
-## Files to work through
+## Still to do
 
-### Markdown (not user facing -- cut freely)
+### Python
 
-| Lines | File | Why it is on the list |
-|---|---|---|
-| 350 | `docs/mcp_skills.md` | Catalogue written as prose; most of it is derivable |
-| 253 | `docs/club_announcements.md` | Overlaps `.claude/skills/club-announcements/SKILL.md` |
-| 192 | `docs/app_oauth_connect_flows.md` | |
-| 192 | `.claude/skills/species-list/SKILL.md` | |
-| 167 | `docs/mcp_next.md` | Ideas list; no code depends on it |
-| 138 | `docs/app_printing_contract.md` | |
-| 135 | `docs/club_event_details.md` | |
-| 77 | `.claude/skills/club-announcements/SKILL.md` | |
-| 75 | `auctions/templates/CLAUDE.md` | |
-| 70 | `.claude/skills/club-api/SKILL.md` | |
-| 65 | `.claude/skills/celery-tasks/SKILL.md` | |
-| 42 | `.claude/skills/mobile-app/SKILL.md` | |
-| 41 | `auctions/views/CLAUDE.md` | |
-| 29 | `.claude/skills/voice-set-winners/SKILL.md` | |
-
-`docs/module_map.md` is generated -- it shrinks on its own. `readme.md` is done.
-
-### Python -- untouched so far
-
-Prose = comment + docstring lines, measured before any of this started.
+Prose = comment + docstring lines, measured 2026-09-15 after the passes below. Total 26,681
+(17,013 in code, 9,668 in tests).
 
 | Prose | % | File |
 |---|---|---|
-| 3449 | 22% | `auctions/palette_actions.py` -- the single biggest target left |
-| 1155 | 17% | `auctions/forms.py` |
-| 862 | 54% | `auctions/species_matching.py` |
-| 616 | 29% | `auctions/tasks.py` |
-| 567 | 37% | `auctions/palette_assist.py` |
-| 473 | 33% | `auctions/services.py` |
-| 445 | 32% | `fishauctions/settings.py` |
-| 344 | 26% | `auctions/views/club_api.py` |
-| 322 | 25% | `auctions/tests_selenium.py` |
-| 316 | 42% | `auctions/mobile/services/payments.py` |
-| 279 | 26% | `auctions/ar_mapping.py` |
-| 277 | 20% | `auctions/test_stats.py` |
-| 276 | 21% | `auctions/test_tap_to_pay.py` |
-| 275 | 15% | `auctions/filters.py` |
-| 273 | 24% | `auctions/signals.py` |
-| 270 | 18% | `auctions/views/lot_pages.py` |
-| 251 | 47% | `auctions/mcp/tools.py` |
-| 251 | 35% | `auctions/lifecycle.py` |
-| 246 | 26% | `auctions/donations.py` |
-| 231 | 13% | `auctions/test_ar.py` |
-| 222 | 19% | `auctions/test_celery_tasks.py` |
-| 217 | 14% | `auctions/command_palette.py` |
-| 216 | 34% | `auctions/views/species.py` |
-| 213 | 20% | `auctions/views/selling.py` |
-| 210 | 16% | `auctions/test_auction_props.py` |
-| 209 | 18% | `auctions/views/payments.py` |
-| 204 | 40% | `auctions/apple_notifications.py` |
-| 204 | 26% | `auctions/google_calendar.py` |
-| 203 | 7% | `auctions/test_club_events.py` |
-| 202 | 16% | `auctions/test_bulk_add_lots.py` |
-| 198 | 16% | `auctions/test_models_misc.py` |
-| 197 | 12% | `auctions/admin.py` |
-| 195 | 10% | `auctions/palette_routes.py` |
-| 193 | 20% | `auctions/serializers.py` |
-| 191 | 19% | `auctions/views/webhooks.py` |
-| 186 | 17% | `auctions/views/base.py` |
+| 1405 | 11% | `auctions/models.py` -- one pass done; the rest is mostly short and load-bearing |
+| 1164 | 9% | `auctions/palette_actions.py` -- one pass done |
+| 303 | 18% | `auctions/mobile/views.py` |
+| 222 | 35% | `auctions/mobile/serializers.py` |
+| 202 | 13% | `auctions/tables.py` |
+| 185 | 37% | `auctions/club_health.py` |
+| 181 | 31% | `auctions/views/palette.py` |
+| 181 | 24% | `auctions/views/embeds.py` |
+| 180 | 40% | `auctions/mobile/services/social_auth.py` |
+| 177 | 14% | `auctions/views/auction_stats.py` |
+| 168 | 22% | `auctions/printer_programs.py` |
+| 167 | 13% | `auctions/views/club_integrations.py` |
+| 165 | 19% | `auctions/views/ajax.py` |
+| 161 | 17% | `auctions/views/bulk_add.py` |
+| 154 | 21% | `auctions/mailchimp.py` |
+| 150 | 33% | `auctions/llm.py` |
+| 147 | 29% | `auctions/species_categories.py` |
+| 143 | 24% | `auctions/views/printing.py` |
+| 140 | 22% | `auctions/brevo.py` |
+| 139 | 41% | `auctions/mcp/auth.py` |
+| 135 | 37% | `auctions/usability_report.py` |
+| 126 | 34% | `auctions/views/usability.py` |
+| 123 | 34% | `auctions/context_processors.py` |
+| 116 | 29% | `auctions/mcp/resources.py` |
+| 115 | 32% | `auctions/notifications.py` |
+| 114 | 30% | `auctions/apple_wallet.py` |
 
-Also untouched: the rest of `auctions/views/`, `auctions/management/commands/` (2 of ~20 done),
-`auctions/static/js/*.js` (excluding vendor), `auctions/tables.py`, `auctions/urls.py`,
-`auctions/club_health.py`, `auctions/species_categories.py`, and the infra scripts
-(`entrypoint.sh`, `update.sh`, `docker-compose.yaml`, `.github/workflows/`). `auctions/models.py`
-had 3279 prose lines and only 280 came off -- it is barely started.
+Also untouched: the rest of `auctions/views/`, `auctions/management/commands/`,
+`auctions/static/js/*.js` (excluding vendor), `auctions/urls.py`, and the infra scripts
+(`entrypoint.sh`, `update.sh`, `docker-compose.yaml`, `.github/workflows/`).
+
+Tests, all untouched this round: `test_species.py` (601), `test_palette_assist.py` (441),
+`tests_selenium.py` (322), `test_mobile_features.py` (294), `test_stats.py` (277),
+`test_tap_to_pay.py` (244), `test_ar.py` (219), `test_palette_skills.py` (213), and ~60 more.
 
 ### User facing -- Ira reviews every change, do not edit unasked
 
@@ -129,15 +101,14 @@ Templates by visible word count (90 templates carry over 120 words):
 
 Strings in Python that reach a user or the model:
 
-- `help_text=` -- 436 in `auctions/models.py`, 154 in `auctions/forms.py`, 10 in
-  `auctions/mobile/serializers.py`. Many run past 200 characters.
+- `help_text=` -- 533 across `models.py`, `forms.py` and `mobile/serializers.py`; 103 over 120
+  characters, 38 over 200. About a third of the long ones are on forms a user sees; the rest are
+  Django-admin only.
 - `Action(description=...)` in `palette_actions.py` and the MCP tool descriptions -- read by the
   model, so shortening changes behaviour.
 - Admin setup checklist: wordy, but no user sees it. Leave.
 
 ## Done
-
-5,645 lines removed. Suite green (6060 tests), `--ci` passes, module map regenerated.
 
 | File | Was | Now |
 |---|---|---|
@@ -155,8 +126,31 @@ Strings in Python that reach a user or the model:
 | `.github/copilot-instructions.md` | 122 | deleted (stale copy of CLAUDE.md) |
 | `AR.md` | 0 | deleted (empty) |
 | `auctions/mcp/*.py` | | most trimmed, 300+ lines off |
-| `auctions/models.py` | 15173 | 14893 (barely started) |
 | various tests | | ~600 lines off, partial |
+
+Second pass, 2026-09-15 (suite green, `--ci` passes, map regenerated):
+
+| File | Was | Now |
+|---|---|---|
+| `docs/mcp_skills.md` | 350 | 76 |
+| `docs/club_announcements.md` | 253 | deleted (folded into the club-announcements skill) |
+| `docs/club_event_details.md` | 135 | deleted (folded into the club-announcements skill) |
+| `docs/app_oauth_connect_flows.md` | 192 | 51 |
+| `docs/mcp_next.md` | 167 | 27 |
+| `docs/app_printing_contract.md` | 138 | 56 |
+| `.claude/skills/*/SKILL.md` (six) | 475 | 247 |
+| `auctions/templates/CLAUDE.md` | 75 | 30 |
+| `auctions/views/CLAUDE.md` | 41 | 16 |
+| `auctions/palette_actions.py` | 15451 | 13167 |
+| `auctions/models.py` | 14907 | 13304 |
+| `auctions/forms.py` | 6865 | 6117 |
+| `auctions/species_matching.py` | 1608 | 1035 |
+| `auctions/tasks.py` | 2146 | 1730 |
+| `auctions/palette_assist.py` | 1518 | 1147 |
+| `auctions/services.py` | 1433 | 1152 |
+| `fishauctions/settings.py` | 1388 | 1117 |
+| `auctions/views/club_api.py` | 1343 | 1135 |
+| plus `ar_mapping`, `signals`, `lifecycle`, `donations`, `mobile/services/payments`, `mcp/tools`, `filters`, `views/{lot_pages,species,selling,payments,webhooks,base}`, `apple_notifications`, `google_calendar`, `command_palette`, `admin`, `palette_routes`, `serializers` | | |
 
 Judgement calls made while cutting:
 
@@ -166,7 +160,12 @@ Judgement calls made while cutting:
   really under `auctions/partials/`). Fixed rather than carried forward.
 - `USABILITY.md`'s pass log is gone -- that is what `git log` is for. Every decision marked "do not
   reopen" was kept, because those exist to stop somebody re-proposing them.
+- Decision records ("deliberately not done, and why") were kept in short form everywhere; the
+  narrative of how each was discovered was cut.
+- Commented-out code blocks in `models.py` and `forms.py` were deleted outright.
+- `plain_text`'s docstring in `palette_actions.py` carried a stray line ("Human: ah, to be an llm
+  and write that last line") -- removed.
 
-Process note: nine parallel agents were killed mid-edit by a rate limit and left 12 test files with
-unterminated docstrings. They were reverted to HEAD, which is why several tests are back on the
-list. Compile-check before trusting any batch.
+Process note: nine parallel agents were killed mid-edit by a rate limit in the first pass and left
+12 test files with unterminated docstrings. The second pass ran inline with a dump/replace helper
+that verifies each block's hash before writing and parses the result; nothing broke.

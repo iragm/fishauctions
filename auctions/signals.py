@@ -32,10 +32,8 @@ FOLLOWUP_EMAIL_DELAY_HOURS = 24
 
 
 def _associate_auctions_for_member(member):
-    """Associate unlinked auctions created by this member's user with the club.
-
-    Only runs when the user has chosen this club in their preferences — prevents
-    clubs from claiming auctions by granting a user a permission.
+    """Link this member's user's unlinked auctions to the club, only if they chose this club themselves,
+    so a granted permission can't claim auctions.
     """
     if not member.user:
         return
@@ -56,8 +54,7 @@ def _associate_auctions_for_member(member):
             action=f"Automatically associated with club '{club}' because {member.display_name} was granted a club permission.",
             applies_to="RULES",
         )
-        # The bulk update above bypasses Auction.save(), so book the club ledger for this
-        # auction's already-settled invoices the same way save() would on a fresh assignment.
+        # The bulk update skips Auction.save(), so book the ledger by hand.
         auction.backfill_club_money()
 
 
@@ -176,12 +173,7 @@ def update_user_location(sender, instance, **kwargs):
 
 @receiver(pre_save, sender="auctions.Club")
 def stash_previous_club_state(sender, instance, **kwargs):
-    """Snapshot prev field values so post_save handlers can detect transitions.
-
-    Currently tracks: show_member_barcode (revocation logic), icon name
-    (re-push the Wallet class so new logos propagate), and club name
-    (refresh member wallet object metadata on rename).
-    """
+    """Snapshot barcode flag, icon and name so post_save handlers can detect changes."""
     if instance.pk:
         from .models import Club
 
@@ -197,12 +189,8 @@ def stash_previous_club_state(sender, instance, **kwargs):
 
 @receiver(post_save, sender="auctions.Club")
 def revoke_wallet_passes_on_mode_change(sender, instance, created, **kwargs):
-    """When barcodes are toggled, update all active Wallet passes.
-
-    Google: disabling barcodes expires every member's Wallet object (no un-expire
-    on re-enable — the object is recreated on next save-to-wallet).
-    Apple: installed passes void/unvoid based on show_member_barcode at build time,
-    so a flip in either direction pushes an update to every registered device.
+    """When barcodes are toggled, update Wallet passes. Google expires objects on disable; Apple pushes
+    void/unvoid either way.
     """
     if created:
         return
@@ -219,11 +207,8 @@ def revoke_wallet_passes_on_mode_change(sender, instance, created, **kwargs):
 
 @receiver(post_save, sender="auctions.Auction")
 def mirror_auction_to_club_calendar(sender, instance, **kwargs):
-    """Keep the auction's entry on its club's calendar in step with the auction itself.
-
-    Deliberately a plain DB write in the same transaction: if the auction save rolls back, so
-    does its calendar entry. Pushing the result on to Google Calendar and Discord is the periodic
-    sync task's job, so no network call happens here.
+    """Mirror the auction onto its club's calendar in the same transaction. Pushing to Google and Discord
+    is the periodic sync's job.
     """
     if not instance.club_id:
         return
@@ -239,8 +224,7 @@ def mirror_auction_to_club_calendar(sender, instance, **kwargs):
 
 @receiver(post_save, sender="auctions.PickupLocation")
 def refresh_calendar_pickups(sender, instance, **kwargs):
-    """Pickup locations are usually saved after the auction, so the auction's calendar entries
-    start out incomplete. Re-mirror whenever a location or one of its times changes."""
+    """Re-mirror when a pickup location or its times change; they're usually saved after the auction."""
     if not instance.auction_id:
         return
     from auctions import club_events
@@ -266,11 +250,7 @@ DISCORD_AUCTION_FIELDS = (
 
 @receiver(pre_save, sender="auctions.Auction")
 def stash_previous_auction_discord_state(sender, instance, **kwargs):
-    """Snapshot what Discord is showing for this auction, so post_save can tell if it's stale.
-
-    Only auctions that actually have a scheduled event pay for the lookup — everything else
-    saves as often as it always did, with no extra query.
-    """
+    """Snapshot what Discord shows for this auction. Only auctions with an event pay for the query."""
     instance._previous_discord_state = None
     if not instance.pk or not instance.discord_event_id:
         return
@@ -281,8 +261,7 @@ def stash_previous_auction_discord_state(sender, instance, **kwargs):
 
 @receiver(post_save, sender="auctions.Auction")
 def flag_stale_auction_discord_event(sender, instance, **kwargs):
-    """Queue a Discord update when an auction with a scheduled event moves, is renamed, or stops
-    being promoted. discord_events.sync_auction_events() sends it on the next sync."""
+    """Flag an auction's Discord event for update when it moves, is renamed or is unpromoted."""
     if not instance.discord_event_id:
         return
     previous = getattr(instance, "_previous_discord_state", None)
@@ -296,8 +275,7 @@ def flag_stale_auction_discord_event(sender, instance, **kwargs):
 
 @receiver(pre_delete, sender="auctions.Auction")
 def remove_auction_discord_event(sender, instance, **kwargs):
-    """An auction's own Discord event is tracked on the auction, not on a ClubEvent, so a club
-    that doesn't mirror auctions onto its calendar has nothing else to clean it up."""
+    """Remove an auction's own Discord event, which isn't tracked on a ClubEvent."""
     if not instance.club_id or not instance.club.discord_server_id:
         return
     from auctions import discord_events
@@ -315,12 +293,7 @@ def remove_auction_discord_event(sender, instance, **kwargs):
 
 @receiver(pre_delete, sender="auctions.ClubEvent")
 def remove_event_from_calendars(sender, instance, **kwargs):
-    """Take an event off Google and Discord before its row goes — once it's gone we'd have no
-    record of what to clean up.
-
-    Deleting a pickup location, an auction or a whole club cascades these rows away, so catching
-    it here covers every one of those without a handler per parent.
-    """
+    """Take an event off Google and Discord before its row is gone. Catches every cascade."""
     from auctions import club_events
 
     try:
@@ -331,13 +304,7 @@ def remove_event_from_calendars(sender, instance, **kwargs):
 
 @receiver(pre_save, sender="auctions.ClubMember")
 def stash_previous_clubmember_state(sender, instance, **kwargs):
-    """Snapshot per-club auction-permission fields so post_save can detect changes
-    and propagate them to linked shadow AuctionTOS records.
-
-    Also snapshots wallet-relevant fields (name, membership_number,
-    membership_expiration_date, is_deleted) so update_wallet_passes_on_member_change
-    can detect when the member's Google/Apple Wallet passes need refreshing.
-    """
+    """Snapshot auction-permission and wallet-relevant fields for the post_save handlers."""
     if instance.pk:
         from .models import ClubMember
 
@@ -388,29 +355,17 @@ def stash_previous_clubmember_state(sender, instance, **kwargs):
 def propagate_clubmember_to_shadow_tos(sender, instance, created, **kwargs):
     """Push a changed ClubMember onto every participant row that is the same person.
 
-    Managing members through the club means there is one record of a person, not one per auction:
-    their name, email, phone, address and bidder number are the same everywhere, in auctions that
-    are over as well as the one running tonight. Anything a human types is pushed; what stays with
-    the auction is what the auction did to them -- checked_in, the invoice, the reminder flags.
+    Shared details and the bidder number go everywhere, finished auctions included. A bidder number
+    first displaces whoever holds it (``services.clear_bidder_number_in``), with history, rather than
+    being silently skipped.
 
-    A bidder number takes whoever is holding it off it first (``services.clear_bidder_number_in``),
-    with a history entry in that auction, rather than being skipped: a skip is invisible, and what
-    it looks like from the floor is the member's page showing the new number, the users table
-    showing the old one, and a lot knocked down to whoever still holds it.
-
-    When a new member is created, auto-create shadow TOS records in any active
-    club-managed auctions that auto-add members ("all" or "checkin" mode). Both paths check the
-    number against the auction as well as the club, because those are two different scopes and a
-    club-managed auction can still hold people who joined it directly.
+    A new member gets shadow rows in club-managed auctions that auto-add ("all" or "checkin"), with the
+    number checked against both club and auction.
     """
     from .models import AuctionTOS, PickupLocation
 
     if created:
-        # Every club-managed auction, finished ones included: joining the club makes somebody
-        # manageable from any of the club's auctions, which is the promise the mode makes. Rows in
-        # an auction that is over carry no checked_in and no invoice, so they are a person the
-        # admin can find there, not an attendee -- check-in auctions count attendance off
-        # checked_in, not off the row existing.
+        # Finished auctions too: the member is findable there, and attendance counts checked_in.
         for auction in club_managed_auctions_for(instance.club):
             default_location = PickupLocation.objects.filter(auction=auction).order_by("-is_default", "pk").first()
             if not default_location:
@@ -431,7 +386,6 @@ def propagate_clubmember_to_shadow_tos(sender, instance, created, **kwargs):
                 bidding_allowed=bidding,
                 selling_allowed=instance.selling_allowed,
                 manually_added=True,
-                # Cut to the AuctionTOS widths, which are narrower than the ClubMember ones.
                 **shared_member_values(instance),
             )
         return
@@ -444,10 +398,7 @@ def propagate_clubmember_to_shadow_tos(sender, instance, created, **kwargs):
 
     if prev_bidding is not None and prev_bidding != instance.bidding_allowed:
         if instance.bidding_allowed:
-            # Check-in mode hands out the right to bid at the door and nowhere else. A member who
-            # has not checked in yet has to stay unable to bid however their club record changes --
-            # the same rule the auto-add path above and ``services.apply_club_member_to_tos``
-            # already enforce, and the one thing the mode is for.
+            # Check-in mode: no bidding until checked in, whatever the club record says.
             shadows.exclude(
                 auction__manage_users_through_club="checkin",
                 auction__club__isnull=False,
@@ -464,19 +415,10 @@ def propagate_clubmember_to_shadow_tos(sender, instance, created, **kwargs):
 
 @receiver(post_save, sender="auctions.ClubMember")
 def update_wallet_passes_on_member_change(sender, instance, created, **kwargs):
-    """When wallet-visible member fields change, refresh the member's Wallet passes.
+    """Refresh a member's Wallet passes when wallet-visible fields change.
 
-    Google: PATCH the member's GenericObject. Apple: bump the pass version and poke
-    registered devices via APNs (notify_apple_wallet_devices_for_member).
-
-    Watches: name, membership_number, membership_expiration_date, membership_last_paid,
-    is_deleted. last_paid matters because the on-pass status ("Valid through …" /
-    "Unpaid/expired") derives from the effective expiration date, which falls back to
-    last_paid when no explicit expiration date is set (e.g. rolling renewals).
-    is_deleted matters only for Apple (a deactivated member's pass is served voided);
-    the Google task skips deleted members, so including it here is harmless there.
-    New members have no Wallet pass yet (they haven't clicked "Add to Wallet") —
-    both tasks no-op safely in that case.
+    Watches name, membership_number, membership_expiration_date, membership_last_paid (expiry falls back
+    to it) and is_deleted (Apple voids the pass). New members have no pass; both tasks no-op.
     """
     if created:
         return
@@ -503,11 +445,7 @@ def update_wallet_passes_on_member_change(sender, instance, created, **kwargs):
 
 @receiver(post_save, sender="auctions.ClubMember")
 def geocode_club_member_on_address_change(sender, instance, created, **kwargs):
-    """Trigger geocoding when a ClubMember's address is new or has changed.
-
-    Also triggers for new members with no address so the task can attempt
-    the UserData coordinate fallback.
-    """
+    """Geocode when a member's address is new or changed, or for a new member with none (UserData fallback)."""
     from .tasks import geocode_club_member
 
     prev_address = getattr(instance, "_previous_address", "")
@@ -538,11 +476,7 @@ def _club_member_brevo_connected(member_id):
 
 @receiver(post_save, sender="auctions.ClubMember")
 def sync_clubmember_to_mailchimp(sender, instance, created, **kwargs):
-    """Keep the member's Mailchimp contact in sync after any change.
-
-    Email changes go through a dedicated task so the existing contact is moved instead of
-    duplicated. No-op when the club has no Mailchimp connection.
-    """
+    """Keep the member's Mailchimp contact in sync; an email change moves the contact instead of duplicating."""
     club = instance.club
     if not club or not club.mailchimp_connected:
         return
@@ -574,8 +508,7 @@ def sync_clubmember_to_brevo(sender, instance, created, **kwargs):
         transaction.on_commit(lambda: sync_club_member_to_brevo.delay(pk))
 
 
-#: What ``AuctionTOS.save()`` writes into a field that was left blank. These are the absence of an
-#: answer rather than an answer, and carrying one up would overwrite the member's real name with it.
+#: Placeholders ``AuctionTOS.save()`` writes into blank fields; never carried up to the member.
 BLANK_MARKERS = {"name": {"", "Unknown"}, "bidder_number": {"", "ERROR"}}
 
 
@@ -586,24 +519,10 @@ def _worth_carrying_up(field, value):
 
 @receiver(post_save, sender="auctions.AuctionTOS")
 def sync_auctiontos_up_to_clubmember(sender, instance, **kwargs):
-    """The other direction: an edit made in an auction is an edit to the club member.
+    """Carry an auction-side edit up to the club member, which then flows to every other auction.
 
-    ``propagate_clubmember_to_shadow_tos`` carries a change down from the club page. This carries
-    one up, so it does not matter where the admin happened to be standing when they fixed somebody's
-    email -- the CSV import, the bulk-add form, ``update_person``, the app's offline queue and the
-    plain participant form all reach the same record. Writing the member then pushes it back down to
-    every other auction, which is what makes "there is one of each person" true rather than aspirational.
-
-    Only when something actually differs, because this runs on every AuctionTOS save -- including
-    the ones the downward propagation and check-in make.
-
-    ``update_fields`` is honoured, and not as an optimisation. A save that names its fields is
-    saying what changed, while the rest of the in-memory row is whatever it held when it was loaded
-    -- which the club member form makes stale on purpose: it loads the participant row, saves the
-    member (propagating the new details down with ``update()``, which cannot refresh an object
-    somebody else is holding), and then saves the row for ``is_club_member`` and the pickup
-    location. Carrying that row's fields up would push the *pre-edit* name and email back onto the
-    member and from there onto every other auction, silently undoing the edit that request was for.
+    Only when something differs. ``update_fields`` is honoured on purpose: the club member form saves
+    a participant row it loaded before the member edit, and carrying its stale fields up would undo it.
     """
     from .models import ClubMember
 
@@ -626,8 +545,7 @@ def sync_auctiontos_up_to_clubmember(sender, instance, **kwargs):
     if changed:
         for field in changed:
             setattr(member, field, getattr(instance, field) or "")
-        # update() rather than save(): the member's own post_save would push these straight back
-        # down, and this row already has them. sync_member_to_shadows reaches the other auctions.
+        # update(): the member's post_save would push these back down.
         ClubMember.objects.filter(pk=member.pk).update(**{field: getattr(member, field) for field in changed})
         sync_member_to_shadows(member)
     if number_changed:
@@ -693,11 +611,7 @@ def stash_previous_user_email(sender, instance, **kwargs):
 
 @receiver(post_save, sender=User)
 def propagate_user_email_change_to_members(sender, instance, created, **kwargs):
-    """Move a user's club memberships to their new account email.
-
-    Saving each member triggers the per-member Mailchimp email-change sync above. We never
-    touch other clubs' records or memberships whose email differs from the old account email.
-    """
+    """Move a user's club memberships (with the old email only) to their new account email."""
     if created:
         return
     old_email = getattr(instance, "_previous_email", "") or ""
@@ -709,7 +623,7 @@ def propagate_user_email_change_to_members(sender, instance, created, **kwargs):
     for member in ClubMember.objects.filter(user=instance, email__iexact=old_email, is_deleted=False):
         member.email = new_email
         member.save(update_fields=["email"])
-        # The club never sees the account-side change, so tell it where the new address came from
+        # The club never sees the account change, so record it.
         ClubHistory.objects.create(
             club=member.club,
             user=instance,
@@ -740,17 +654,9 @@ def update_lot_info(sender, instance, **kwargs):
 
 
 def link_unattached_tos_for_user(user, reason="duplicate detected on login"):
-    """Link any AuctionTOS rows that match this user's email but have no user FK yet.
-
-    When the user already has a TOS in the same auction, the two are merged (oldest kept as
-    canonical) via AuctionTOS.merge_duplicate; otherwise the orphan row is linked directly.
-    Shared by the login signal (user_logged_in_callback) and the relink_auctiontos_users
-    management command so both repair paths behave identically.
-
-    Lots sold through a TOS while it was unlinked were saved with user=None; linking the TOS
-    doesn't fix those on its own, so they're claimed here too. Without that they stay invisible
-    to everything keyed on Lot.user (the CSV report, breederboard, chat notifications) even
-    though Lot.is_owned_by now lets the seller manage them.
+    """Link AuctionTOS rows matching this user's email with no user, merging with an existing row in the
+    same auction. Shared by the login signal and ``relink_auctiontos_users``. Also claims lots sold
+    while unlinked, which have ``user=None``.
     """
     from auctions.models import AuctionTOS, Lot
 
@@ -777,16 +683,12 @@ def link_unattached_tos_for_user(user, reason="duplicate detected on login"):
 
 @receiver(user_logged_in)
 def user_logged_in_callback(sender, user, request, **kwargs):
-    """When a user signs in: cancel a pending account deletion, and link unattached AuctionTOS and
-    ClubMember records to their account."""
-    # Signing in is how a pending account deletion is called off -- coming back is the clearest
-    # statement that they didn't mean it, and it's the only undo there is once the grace period ends.
+    """On sign-in: cancel a pending account deletion, link unattached AuctionTOS and ClubMember rows."""
+    # Signing in is how a pending deletion is called off.
     from auctions.account_deletion import cancel_deletion
 
     if cancel_deletion(user) and request is not None and hasattr(request, "_messages"):
-        # Not every sign-in comes through the message middleware -- the mobile API issues JWTs, and
-        # the WebView handoff logs in on a bare request -- and the cancellation matters more than
-        # telling them about it here (the confirmation email says so too).
+        # Not every sign-in has message middleware (JWT, WebView handoff); the email says it too.
         from django.contrib import messages
 
         messages.info(
@@ -799,28 +701,16 @@ def user_logged_in_callback(sender, user, request, **kwargs):
 
     from auctions.models import ClubMember
 
-    # Bulk update — no ClubHistory here because this is an automatic system action on login
-    # and there is no meaningful "who did this" actor to record.
+    # No ClubHistory: automatic, no actor.
     ClubMember.objects.filter(user__isnull=True, email=user.email, is_deleted=False).update(user=user)
     ensure_single_club_membership_for_user(user)
 
 
 def record_sign_in_stitch(user, request):
-    """Remember which anonymous session this person was holding when they signed in.
+    """Remember which anonymous session this person held when they signed in (see ``SignInStitch``).
 
-    The one row ``docs/phase_9.md`` asks anybody to add, and the whole of its argument is in
-    ``SignInStitch``'s docstring: it closes the anonymous-to-identified seam with a key the site
-    issued itself, rather than with an IP-and-user-agent guess that is least reliable in exactly the
-    room this site's buyers are standing in.
-
-    **From the cookie, not from the session.** ``django.contrib.auth.login`` calls
-    ``request.session.cycle_key()`` before it sends ``user_logged_in``, so a receiver reading
-    ``request.session.session_key`` gets the key issued a moment ago and stitches the sign-in to
-    itself. ``request.COOKIES`` is what the browser sent, which is the key every anonymous
-    ``PageView`` in this visit was written under.
-
-    Silent on every path that has no session cookie at all -- the mobile API's JWT logins, the
-    WebView handoff, a management command -- because there is no anonymous half to attach.
+    Read from the cookie, not the session: ``login()`` cycles the key before this signal. Silent with
+    no session cookie (JWT, handoff, commands).
     """
     from django.conf import settings
 
@@ -831,8 +721,7 @@ def record_sign_in_stitch(user, request):
     key = (request.COOKIES or {}).get(settings.SESSION_COOKIE_NAME)
     if not key:
         return
-    # get_or_create rather than create: signing in again from the same browser is the same stitch,
-    # and the row already there is the one that says when the anonymous half ended.
+    # Same browser again is the same stitch.
     SignInStitch.objects.get_or_create(user=user, session_id=key[:600])
 
 
@@ -847,14 +736,7 @@ def create_user_userdata(sender, instance, created, **kwargs):
 
 @receiver(post_save, sender="auctions.Club")
 def ensure_google_wallet_class(sender, instance, created, **kwargs):
-    """Create the Google Wallet GenericClass once per club.
-
-    The class is essentially a static template (per-pass visuals live on the
-    GenericObject, not here), so we only need to create it the first time —
-    icon / name changes are handled by refresh_google_wallet_objects_for_club.
-    Dispatched via transaction.on_commit so a rolled-back Club.save() doesn't leak
-    a task that then tries to create a Wallet class for a nonexistent club.
-    """
+    """Create the Google Wallet class once per club (visuals are per object), on commit."""
     if instance.google_wallet_class_created:
         return
     from .tasks import create_google_wallet_class_for_club
@@ -864,12 +746,8 @@ def ensure_google_wallet_class(sender, instance, created, **kwargs):
 
 @receiver(post_save, sender="auctions.Club")
 def refresh_wallet_passes_on_club_change(sender, instance, created, **kwargs):
-    """Refresh all member wallet passes when the club's name or icon changes.
-
-    Google: logo and background color are GenericObject fields (per-pass), not class
-    fields, so a club-level visual change requires PATCHing every active member.
-    Apple: the club name and icon are baked into each .pkpass, so registered
-    devices get an APNs poke to re-fetch.
+    """Refresh member passes when the club's name or icon changes: Google keeps visuals on each object,
+    Apple bakes them into each pass.
     """
     if created:
         return
@@ -891,8 +769,7 @@ def bounce_handler(sender, mail_obj, bounce_obj, raw_message, *args, **kwargs):
     from auctions.models import AuctionTOS, ClubMember
 
     AuctionTOS.objects.filter(email=email).update(email_address_status="BAD")
-    # Bulk update — no ClubHistory here because this is an automatic SES bounce notification;
-    # the "actor" is the email provider, not a club admin.
+    # No ClubHistory: the actor is the email provider.
     ClubMember.objects.filter(email=email, is_deleted=False).update(email_address_status="BAD")
 
 
@@ -942,11 +819,8 @@ def on_club_member_saved(sender, instance, **kwargs):
 @receiver(post_delete, sender="auctions.AdCampaign")
 @receiver(post_delete, sender="auctions.Speaker")
 def on_cloudflare_image_row_deleted(sender, instance, **kwargs):
-    """Queue deletion of the Cloudflare copy of an image when its row is deleted.
-
-    The task itself skips deletion if another row still references the same
-    Cloudflare image (copied lots share images).  Local files are not deleted,
-    matching how they were treated before Cloudflare Images was added.
+    """Queue deletion of the Cloudflare copy when an image row is deleted. The task skips it if another
+    row still uses the image. Local files aren't touched.
     """
     from . import cloudflare_images
 
@@ -957,11 +831,8 @@ def on_cloudflare_image_row_deleted(sender, instance, **kwargs):
     ):
         from .tasks import delete_cloudflare_image
 
-        # on_commit, like every other .delay() in this file. post_delete fires *inside* the
-        # transaction Django wraps every delete in (and inside the enclosing one, for a cascade),
-        # so enqueuing here directly meant a rollback could leave the row alive and pointing at an
-        # image that had already been deleted from Cloudflare -- unrecoverable, and invisible until
-        # somebody opened the lot.
+        # on_commit: post_delete is inside the delete transaction, and a rollback would leave the row
+        # pointing at a deleted Cloudflare image.
         transaction.on_commit(lambda image_id=instance.cloudflare_image_id: delete_cloudflare_image.delay(image_id))
 
 
@@ -971,30 +842,13 @@ def on_cloudflare_image_row_deleted(sender, instance, **kwargs):
 @receiver(post_delete, sender="auctions.AdCampaign")
 @receiver(post_delete, sender="auctions.Speaker")
 def on_uploaded_image_deleted(sender, instance, **kwargs):
-    """Delete the uploaded file itself, its thumbnails, and the copy cached at the edge.
+    """Delete the uploaded file, its thumbnails, and the edge-cached copy.
 
-    Django has never deleted files when a row goes, and for most of this site's life that was
-    harmless: an orphaned JPEG under ``mediafiles/`` cost a few kilobytes and nothing else. It
-    stopped being harmless when the question became whether a photograph somebody else owns is
-    still on the internet. ``/media/`` is unauthenticated and the filename does not change, so a
-    "deleted" image was still being served at the URL the takedown notice quoted --
-    17 U.S.C. 512(c)(1)(C) asks for expeditious removal, and that was not removal at all.
+    ``/media/`` is unauthenticated, so a "deleted" image stayed at the URL a takedown quoted, which is
+    not the expeditious removal 17 U.S.C. 512(c)(1)(C) asks for. The edge purge is queued
+    (:func:`auctions.tasks.purge_edge_cache`); Cloudflare Images is handled above.
 
-    Three copies have to go, and they live in three places:
-
-    * the original under ``mediafiles/``, deleted here;
-    * every easy-thumbnails derivative of it, also here -- they are separate files under separate
-      names and deleting the source leaves them behind;
-    * the copy Cloudflare's edge is holding, which ``nginx_fishauctions.conf`` told it to keep for
-      thirty days. That one is a network call, so it is queued (:func:`auctions.tasks.purge_edge_cache`).
-
-    The Cloudflare *Images* copy is the fourth, and is handled by
-    :func:`on_cloudflare_image_row_deleted` above.
-
-    **A file two rows point at is left alone.** ``clone_lot_images`` gives the copy the original's
-    file rather than duplicating it, so relisting a lot means two ``LotImage`` rows and one JPEG:
-    deleting the first row must not take the second row's picture with it. The same check is why
-    the Cloudflare deletion is a task that re-checks rather than an immediate call.
+    **A file two rows share is left alone**: ``clone_lot_images`` reuses the file.
     """
     from easy_thumbnails.files import get_thumbnailer
 
@@ -1013,8 +867,7 @@ def on_uploaded_image_deleted(sender, instance, **kwargs):
         for thumbnail in thumbnailer.get_thumbnails():
             urls.append(thumbnail.url)
     except Exception:
-        # A missing source file, or no thumbnail cache for it. The file still has to go; only the
-        # purge list is poorer for it.
+        # The file still goes; only the purge list is shorter.
         logger.exception("Could not list files to purge for %s %s", sender.__name__, name)
     try:
         thumbnailer.delete_thumbnails()
@@ -1033,22 +886,14 @@ def on_uploaded_image_deleted(sender, instance, **kwargs):
     if absolute:
         from .tasks import purge_edge_cache
 
-        # on_commit for the same reason the Cloudflare deletion above uses it: post_delete fires
-        # inside the delete transaction, and a rollback would otherwise leave a live row whose
-        # image had already been purged.
+        # on_commit, as above.
         transaction.on_commit(lambda purge=absolute: purge_edge_cache.delay(purge))
 
 
 @receiver(post_save, sender="auctions.ThermalPrinterProfile")
 def notify_users_their_printer_is_supported(sender, instance, **kwargs):
-    """Tell people whose hand-identified printer this profile has just started claiming.
-
-    Without this the loop never visibly closes: their next connect silently starts matching
-    properly, which from where they are standing looks exactly like nothing happened. The push
-    tells them to go reconnect it.
-
-    Only ``manual`` observations (and ones that matched nothing at all) are considered -- those are
-    the printers somebody had to identify by hand, i.e. the ones this is news for.
+    """Push to users whose hand-identified printer this profile now matches, so they reconnect. Only
+    ``manual`` or unmatched observations.
     """
     from auctions.models import ObservedPrinter
     from auctions.printer_drafts import profile_matches_observation
@@ -1069,11 +914,7 @@ def notify_users_their_printer_is_supported(sender, instance, **kwargs):
 
 
 def _push_printer_supported(observation, profile):
-    """Enqueue the push for one observation. False (leave it unnotified) if the user can't get it.
-
-    Left unnotified rather than marked-and-dropped so the news still reaches them if they turn
-    push on later -- the scan is a cheap indexed query on an already-small table.
-    """
+    """Enqueue the push for one observation; False leaves it unnotified so it arrives if push is enabled later."""
     from auctions import notifications
     from auctions.tasks import send_push_to_user
 
@@ -1089,14 +930,12 @@ def _push_printer_supported(observation, profile):
                 body=f"{printer} works with label printing now. Open the printing page and reconnect it.",
                 url="/printing/",
                 category=notifications.CATEGORY_PRINTER,
-                # One per user even if a profile is saved repeatedly while being tuned.
                 collapse_key=f"printer-supported-{profile.slug}",
             )
         except Exception:
-            # A courtesy notification must never be the reason an admin can't enable a profile.
+            # A notification must never block enabling a profile.
             logger.exception("Could not enqueue the printer-supported push for user %s", observation.user_id)
 
-    # On commit so a rolled-back save can't push about a profile that was never enabled.
     transaction.on_commit(enqueue)
     return True
 
@@ -1115,11 +954,7 @@ def stash_previous_speaker_location(sender, instance, **kwargs):
 
 @receiver(post_save, sender="auctions.Speaker")
 def geocode_speaker_on_location_change(sender, instance, created, **kwargs):
-    """Geocode a speaker whose location text is new or has changed.
-
-    Skipped when the save already produced coordinates for this exact location -- someone who
-    placed the marker themselves shouldn't have it moved by the geocoder.
-    """
+    """Geocode a speaker whose location text changed, unless this save already placed coordinates by hand."""
     from .tasks import geocode_speaker
 
     current_location = instance.location or ""

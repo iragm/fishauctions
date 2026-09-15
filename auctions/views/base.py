@@ -1,15 +1,9 @@
-"""Shared machinery for every view on the site: the mixins that decide who may see a page.
+"""Shared view machinery: the mixins that decide who may see a page.
 
-Nothing here is a page. :class:`AuctionViewMixin` and :class:`ClubViewMixin` are the two big ones --
-between them they resolve the auction or club a URL names, load the viewer's role in it, and refuse
-the ones they should. Every other module in this package imports from here and none of them import
-from each other in a circle, which is the property that let ``views.py`` be split at all.
-
-:func:`check_club_permission` is the single gate for "may this user do this to this club", shared
-with the club API and the command palette so a permission cannot be checked two different ways.
-The membership-renewal helpers below it (``_process_invoice_membership_renewal`` and friends) live
-here rather than with the invoices because payments, webhooks, invoices and the club member pages
-all four reach for them.
+:class:`AuctionViewMixin` and :class:`ClubViewMixin` resolve the URL's auction or club and the
+viewer's role. Every views module imports from here, never from each other.
+:func:`check_club_permission` is the one club permission gate. The membership-renewal helpers live
+here because payments, webhooks, invoices and member pages all use them.
 """
 
 import collections
@@ -62,7 +56,7 @@ from auctions.tasks import (
 # Distance conversion constant
 MILES_TO_KM = 1.60934
 
-# Invoice notification delay in seconds (allows for undo before email is sent)
+# Delay before an invoice email, allowing undo.
 INVOICE_NOTIFICATION_DELAY_SECONDS = 15
 
 # Maximum length for feedback text fields
@@ -114,12 +108,9 @@ class HTMxTableView(SingleTableMixin, FilterView):
 
 
 class AuctionViewMixin:
-    """For auction permissions, this will try to set self.auction based on the url's slug,
-    then see if the user has permission or not
-    """
+    """Sets self.auction from the URL slug and checks the user's permission."""
 
-    # this can be set to true for views that are shared between admins and regular users, while providing a different view to each.
-    # often used in get_context_data, as: context['is_auction_admin'] = self.is_auction_admin
+    # True for views shared by admins and others, which then branch on is_auction_admin.
     allow_non_admins = False
 
     # set automatically in dispatch, unless you manually set it
@@ -136,19 +127,14 @@ class AuctionViewMixin:
 
     @cached_property
     def _auction_permission(self):
-        """Whether this request's user may change this auction. One answer per request.
-
-        The *result* is cached here, not `is_auction_admin` itself: that one raises
-        PermissionDenied depending on `allow_non_admins`, which `can_add_edit_people` flips while
-        it asks. Caching the decision instead of the query would let a read after that flip return
-        an answer without raising.
+        """Whether this user may change this auction, once per request. The result is cached, not
+        ``is_auction_admin``, which raises depending on ``allow_non_admins``.
         """
         return self.auction.permission_check(self.request.user)
 
     @property
     def is_auction_admin(self):
-        """Helper function used to check and see if request.user is the creator of the auction or is someone who has been made an admin of the auction.
-        Returns False on no permission or True if the user has permission to access the auction"""
+        """Whether request.user created or administers the auction."""
         if not self.auction:
             msg = "you must set self.auction (typically in dispatch) for self.is_auction_admin to be available"
             raise requests.HTTPError(msg) from None
@@ -160,16 +146,14 @@ class AuctionViewMixin:
             else:
                 raise PermissionDenied()
         else:
-            # logger.debug("allowing user %s to view %s", self.request.user, self.auction)
             pass
         return result
 
     @property
     def can_add_edit_people(self):
-        """For club-managed auctions, gate people-management actions behind the club's
-        permission_add_edit (or permission_admin). Otherwise falls back to is_auction_admin.
-        Always allows the auction creator, superusers, and AuctionTOS admins through is_auction_admin.
-        Raises PermissionDenied when neither path grants access (matching is_auction_admin)."""
+        """Club-managed auctions gate people management on the club's permission_add_edit; otherwise
+        is_auction_admin. Raises PermissionDenied when neither grants it.
+        """
         prev_allow_non_admins = self.allow_non_admins
         self.allow_non_admins = True
         try:
@@ -189,19 +173,14 @@ class AuctionViewMixin:
 
     @property
     def club_sidebar_can_view(self):
-        """Whether the current user may see the club sidebar on an auction page.
-        Non-raising (unlike is_auction_admin) so it's safe to call from templates."""
+        """Whether the user may see the club sidebar on an auction page. Non-raising, for templates."""
         if not self.auction or not self.auction.club_id:
             return False
         return bool(self.auction.permission_check(self.request.user))
 
 
 def check_club_permission(user, club, permission_name):
-    """Check if a user has a specific permission for a club.
-
-    Returns True if the user is a superuser or has the named permission (or permission_admin,
-    which acts as a wildcard granting all permissions).
-    """
+    """Whether the user is a superuser or has the named club permission (permission_admin is a wildcard)."""
     if not user.is_authenticated:
         return False
     if user.is_superuser:
@@ -214,8 +193,7 @@ def check_club_permission(user, club, permission_name):
     return bool(getattr(member, permission_name, False))
 
 
-#: Every per-member permission flag on ClubMember.  "Has some permission in a club" is the
-#: bar for the speaker directory, so it needs the whole list rather than one named flag.
+#: Every ClubMember permission flag; "any permission" gates the speaker directory.
 CLUB_PERMISSION_FIELDS = (
     "permission_admin",
     "permission_view",
@@ -231,12 +209,8 @@ CLUB_PERMISSION_FIELDS = (
 
 
 def clubs_with_any_permission(user, nec_only=True):
-    """Clubs where this user holds at least one permission.
-
-    The permission filters and the user filter go in a single ``filter()`` call on purpose:
-    across a multi-valued relation that constrains one ClubMember row to satisfy all of them,
-    which is the question being asked.  Split across two calls it would instead match a club
-    where the user is a member and *somebody* has a permission.
+    """Clubs where this user holds at least one permission. One ``filter()`` call on purpose, so a single
+    ClubMember row must satisfy all conditions.
     """
     if not user.is_authenticated:
         return Club.objects.none()
@@ -250,12 +224,8 @@ def clubs_with_any_permission(user, nec_only=True):
 
 
 def user_can_add_edit_people(user, auction):
-    """Can this user manage participants in this auction? (non-raising)
-
-    The club-managed half of ``AuctionViewMixin.can_add_edit_people``, split out so the command
-    palette's ``check_in`` action asks exactly the same question the check-in modal does without
-    having to build a view. Callers that also accept plain auction admins should check
-    ``auction.permission_check(user)`` first, as the mixin does.
+    """Whether this user may manage participants in a club-managed auction (non-raising). Shared with the
+    palette's ``check_in``; callers also allowing auction admins check ``permission_check`` first.
     """
     if not auction or not auction.is_club_managed:
         return False
@@ -297,9 +267,7 @@ def _upsert_clubmember_shadow_tos(
     tos.user = member.user
     tos.pickup_location = pickup_location
     tos.clubmember = member
-    # The member's number, and nobody else in this auction may still be on it -- one person, one
-    # number, here and in the club and in every other auction. Two rows sharing a number made every
-    # later lookup pick one of them, and setting a lot winner is a lookup by number.
+    # One person, one number: a shared number made winner lookups pick either.
     if member.bidder_number:
         clear_bidder_number_in(auction, member.bidder_number, keep_tos=tos)
         tos.bidder_number = member.bidder_number
@@ -321,11 +289,8 @@ _SCRIPT_JSON_ESCAPES = {ord("<"): "\\u003C", ord(">"): "\\u003E", ord("&"): "\\u
 
 
 def script_json(value):
-    """``json.dumps`` for a value that gets embedded in an inline ``<script>``.
-
-    json.dumps escapes quotes and backslashes but leaves ``<`` alone, so a value containing
-    ``</script>`` closes the tag early and everything after it runs as markup.  Escape the same
-    three characters Django's ``|json_script`` filter does, which keeps the payload inert.
+    """``json.dumps`` safe inside an inline ``<script>``: escapes the characters Django's
+    ``|json_script`` does, so ``</script>`` can't close the tag.
     """
     return json.dumps(value).translate(_SCRIPT_JSON_ESCAPES)
 
@@ -340,17 +305,9 @@ def close_modal_response(
     toast=None,
     toast_type="success",
 ):
-    """Ask the active HtmxModal to close (with optional action) after a successful POST.
+    """Close the active HtmxModal after a successful POST, with an inline ``window.closeModal`` script.
 
-    The response body is a tiny ``<script>`` that calls ``window.closeModal`` — HTMX evaluates
-    inline scripts in swapped content, which gives us a single, reliable invocation point that
-    works regardless of whether an HX-Trigger response-header listener is attached.
-
-    Pass ``extra_triggers={"event_name": detail, ...}`` to fire additional HTMX triggers (e.g.
-    a separate table-refresh event) in the same response via the ``HX-Trigger`` header.
-
-    Pass ``toast="Something happened"`` to also raise a toast as the modal closes — the modal is
-    gone by the time the user looks, so anything they need to read afterwards goes here.
+    ``extra_triggers`` fires more HTMX events via ``HX-Trigger``; ``toast`` shows a message as it closes.
     """
     detail = {"action": action} if action else {}
     if event_name is not None:
@@ -361,15 +318,13 @@ def close_modal_response(
         detail["tableSelector"] = table_selector
     body = ""
     if toast:
-        # The toast plugin in base.html builds its markup by string concatenation, so the title
-        # lands in the DOM as HTML — escape it here, since callers pass names and emails.
+        # The toast plugin concatenates HTML, so escape names and emails.
         toast_options = script_json({"title": escape(toast), "type": toast_type, "delay": 8000})
         body += f"<script>window.jQuery && window.jQuery.toast({toast_options});</script>"
     body += f"<script>window.closeModal({script_json(detail)});</script>"
     headers = {}
     if extra_triggers:
-        # A header value rather than markup, and Django rejects CR/LF in headers, so plain
-        # json.dumps is safe here — no HTML escaping wanted.
+        # A header, not markup: plain json.dumps.
         headers["HX-Trigger"] = json.dumps(extra_triggers)
     return HttpResponse(body, headers=headers)
 
@@ -419,19 +374,14 @@ def _invoice_membership_candidate(invoice):
     user = invoice.auctiontos_user.user
     email = _invoice_membership_lookup_email(invoice)
     if not user and not email:
-        # Fall back to the ClubMember directly linked on the TOS (no email/user needed).
+        # Else the ClubMember linked on the TOS.
         return getattr(invoice.auctiontos_user, "clubmember", None)
     return _find_club_member(invoice.auction.club, user, email)
 
 
 def _compute_member_renewal_expiration(club, member, today):
-    """Compute the new membership expiration date when renewing.
-
-    - Rolling clubs: extend one year from the current expiration if it is
-      still in the future; otherwise extend from today (same month/day).
-    - January-1st clubs: extend one year from the current expiration if it is
-      still in the future; otherwise extend from today.  Either way the result
-      always lands on January 1 so the whole-club calendar stays aligned.
+    """The new expiration when renewing: one year from a future expiration, else from today. January-1st
+    clubs always land on January 1.
     """
     import datetime as _dt
 
@@ -465,16 +415,14 @@ def _should_mark_invoice_renewal_needed(invoice):
         return False
     if not club.membership_annual_fee:
         return False
-    # Without a usable email or user we cannot reliably look up or create a ClubMember;
-    # don't auto-add the fee in that case (an admin can still toggle it on manually).
-    # Exception: if the TOS already has a directly linked ClubMember, proceed.
+    # No email or user: don't auto-add the fee, unless the TOS already links a ClubMember.
     if not _invoice_membership_lookup_email(invoice) and not (invoice.auctiontos_user and invoice.auctiontos_user.user):
         if not (invoice.auctiontos_user and invoice.auctiontos_user.clubmember_id):
             return False
     member = _invoice_membership_candidate(invoice)
     if not member:
         return True
-    # A PayPal subscription auto-renews the membership, so never auto-add the manual renewal fee.
+    # PayPal subscriptions auto-renew.
     if member.paypal_subscription_id:
         return False
     expiration_date = member.membership_expiration_date
@@ -484,7 +432,7 @@ def _should_mark_invoice_renewal_needed(invoice):
 
 
 def _sync_tos_alternate_split(tos, invoice=None):
-    """See AuctionTOS.update_alternate_split_from_membership; this just adds a None guard."""
+    """None-guarded ``AuctionTOS.update_alternate_split_from_membership``."""
     if tos:
         tos.update_alternate_split_from_membership(invoice)
 
@@ -493,9 +441,9 @@ def _ensure_invoice_renewal_state(invoice):
     if not invoice:
         return
     if not invoice.auction:
-        # Club-only renewal invoices have renewal_needed set explicitly at creation; don't override.
+        # Club-only renewal invoices set renewal_needed at creation.
         return
-    # Skip processed renewals, and respect a checkbox an admin has explicitly set.
+    # Skip processed renewals and admin-set checkboxes.
     if not invoice.renewal_processed and not invoice.renewal_manually_set:
         should_need = _should_mark_invoice_renewal_needed(invoice)
         if invoice.renewal_needed != should_need:
@@ -505,16 +453,12 @@ def _ensure_invoice_renewal_state(invoice):
 
 
 def _process_invoice_membership_renewal(invoice, acting_user=None, payment_method="Invoice", external_id=None):
-    """Process a membership renewal triggered by an invoice payment.
-
-    Wrapped in a try/except + atomic block so a failure (e.g. Discord API outage)
-    cannot bubble out and break the caller that just marked the invoice paid.
-    """
+    """Process a membership renewal from an invoice payment. Never raises into the caller that marked it paid."""
     if not invoice or not invoice.renewal_needed:
         return
     try:
         with transaction.atomic():
-            # Re-fetch under the row lock so concurrent webhooks can't double-process.
+            # Locked, so concurrent webhooks can't double-process.
             locked = Invoice.objects.select_for_update().filter(pk=invoice.pk).first()
             if not locked or not locked.renewal_needed or locked.renewal_processed:
                 return
@@ -528,10 +472,9 @@ def _process_invoice_membership_renewal(invoice, acting_user=None, payment_metho
             if locked.club_member:
                 member = locked.club_member
             elif tos_member:
-                # AuctionTOS has a linked ClubMember even without user/email — use it.
                 member = tos_member
             elif not user and not email and not locked.auctiontos_user:
-                # Nothing reliable to identify the buyer by; do not create a junk member.
+                # Nothing to identify the buyer; don't create a junk member.
                 logger.warning(
                     "Skipping renewal on invoice %s: no linked user and no email available",
                     locked.pk,
@@ -558,7 +501,7 @@ def _process_invoice_membership_renewal(invoice, acting_user=None, payment_metho
                     source=source,
                 )
             elif user and not member.user:
-                # Link the existing email-only member to the user now that we know them.
+                # Link the email-only member to the user.
                 member.user = user
                 member.save(update_fields=["user"])
             today = timezone.now().date()
@@ -589,11 +532,7 @@ def _process_invoice_membership_renewal(invoice, acting_user=None, payment_metho
                 if external_id
                 else f"Renewal from invoice #{locked.pk}",
             )
-            # Membership dues are NOT booked to the club ledger here. Both auction and club-only
-            # invoices book (and reverse) their membership ClubMoney entry through
-            # Invoice.sync_club_money on the PAID/un-pay status transition (Item 11). Booking it here
-            # too would double-count, and for club-only invoices it would leave an entry that
-            # un-paying the invoice could never reverse -- the bug this replaces.
+            # Dues aren't booked here: Invoice.sync_club_money books and reverses them on status change.
             locked.renewal_processed = True
             locked.save(update_fields=["renewal_processed"])
             # Keep the in-memory invoice in sync for the caller.
@@ -602,8 +541,7 @@ def _process_invoice_membership_renewal(invoice, acting_user=None, payment_metho
     except Exception:
         logger.exception("Failed to process membership renewal for invoice %s", invoice.pk)
         return
-    # Discord role assignment is best-effort: a network/API failure must not
-    # roll back the renewal nor crash the caller.
+    # Best-effort; must not roll back the renewal.
     try:
         member.maybe_assign_discord_role()
     except Exception:
@@ -655,9 +593,8 @@ def _user_can_manage_club_payments(user, club):
 
 
 def _stash_club_for_payment_oauth(request):
-    """If the request includes ?club=<slug> and the user can manage that club's payments,
-    store the slug in the session so the OAuth callback can link the new seller to it.
-    Returns the Club instance for callers that need it, or None.
+    """With ``?club=<slug>`` and payment permission, store the club in the session so the OAuth callback
+    can link the seller. Returns the Club or None.
     """
     slug = request.GET.get("club")
     if not slug:
@@ -695,10 +632,8 @@ def club_ids_available_for_contact_autofill(user):
 
 
 def auctions_available_for_contact_autofill(user, extra_created_by=None):
-    """Return auctions whose participant history can be used to auto-fill contact details.
-
-    extra_created_by lets callers include auctions created by another user, even if the
-    authenticated user would not otherwise have that auction in their own access scope.
+    """Auctions whose participant history may autofill contact details. ``extra_created_by`` adds another
+    user's auctions.
     """
     if not user.is_authenticated:
         return Auction.objects.none()
@@ -711,12 +646,8 @@ def auctions_available_for_contact_autofill(user, extra_created_by=None):
 
 
 def _bap_leaderboard(club, field, current_member):
-    """Return a leaderboard list for display on the club detail page.
-
-    Each entry is a (rank, member, is_current_user) tuple.
-    Top 10 are always included; if current_member is not in the top 10,
-    they are appended at the end with their actual rank.
-    Only members with points > 0 are ranked.
+    """Leaderboard ``(rank, member, is_current_user)`` tuples: top 10 with points, plus the current member
+    at their rank if lower.
     """
     qs = ClubMember.objects.filter(club=club, is_deleted=False, **{f"{field}__gt": 0}).order_by(f"-{field}")
     top10 = list(qs[:10])
@@ -755,11 +686,7 @@ def _ytd_month_starts():
 
 
 def _club_top10_chart_data(club, rank_field, award_field, current_member, months, is_ytd=False):
-    """Cumulative points-over-time chart for the top 10 members.
-
-    Color scheme: green = current_member, red = first place (when not current), blue = everyone else.
-    Returns a Chart.js-compatible dict or None if no members have points.
-    """
+    """Cumulative points chart for the top 10 (green = you, red = first, blue = others), or None."""
     top10 = list(
         ClubMember.objects.filter(club=club, is_deleted=False, **{f"{rank_field}__gt": 0}).order_by(f"-{rank_field}")[
             :10
@@ -771,9 +698,7 @@ def _club_top10_chart_data(club, rank_field, award_field, current_member, months
     start_month = months[0]
     member_ids = [m.pk for m in top10]
 
-    # Mirror BapAward.recalculate_member_points: awards tied to a deleted or banned lot
-    # do not count toward a member's standings, so the chart must drop them too or its
-    # running totals will disagree with the leaderboard numbers shown alongside it.
+    # Skip awards on deleted or banned lots, as the leaderboard does.
     awards = (
         BapAward.objects.filter(club_member_id__in=member_ids).exclude(lot__is_deleted=True).exclude(lot__banned=True)
     )
@@ -933,9 +858,7 @@ class ClubViewMixin:
         return super().dispatch(request, *args, **kwargs)
 
     def record_last_club_used(self, request):
-        """Remember which club this member most recently looked at so the command palette
-        can scope its club shortcuts to it. Only members get tracked, and we only write when
-        the value actually changes to keep this dispatch hook cheap."""
+        """Record the club a member last viewed, for palette club shortcuts. Writes only on change."""
         user = request.user
         if not user.is_authenticated or not self.club:
             return
@@ -982,7 +905,7 @@ class ClubViewMixin:
 
     @property
     def can_send_announcements(self):
-        """Writes announcements. Its own permission -- see ClubAnnouncementsView.dispatch."""
+        """Writes announcements (its own permission)."""
         return self.user_has_club_permission("permission_send_announcements")
 
     @property
@@ -996,11 +919,8 @@ class ClubViewMixin:
 
     @property
     def club_sidebar_can_view(self):
-        """Whether the current user may see the club sidebar on a club page.
-
-        Mirrors the union of permissions that gated the old club_ribbon tabs, plus donations and
-        announcements: the sidebar is the only way to reach those pages, so leaving either out
-        would make its permission one that grants access to a page nobody can find.
+        """Whether the user may see the club sidebar. The union of every sidebar page's permission, since the
+        sidebar is the only way to those pages.
         """
         if not self.club:
             return False
@@ -1016,8 +936,7 @@ class ClubViewMixin:
 
 
 class AdminOnlyViewMixin:
-    """Include to make this view only visible to super users on the website
-    Despite the name, this has nothing to do with auction admins"""
+    """Superusers only. Not auction admins, despite the name."""
 
     permission_denied_message = "Only admins can view this page"
     redirect_url = "/"
@@ -1030,12 +949,8 @@ class AdminOnlyViewMixin:
 
 
 class AuctionAdminAnywhereViewMixin:
-    """Include to let anyone who runs an auction see this page, plus superusers.
-
-    A deliberately weaker gate than :class:`AdminOnlyViewMixin`, for the one thing that has to be
-    doable while somebody is standing at a check-in table: adding a species the list is missing.
-    The standing comes from :attr:`UserData.runs_an_auction`; what it buys is a species only its
-    author can see until it is approved, not a write to everybody's picker.
+    """Anyone who runs an auction (``UserData.runs_an_auction``), plus superusers. For adding species at a
+    check-in table; what they add is private until approved.
     """
 
     permission_denied_message = "Only auction admins can view this page"
@@ -1053,8 +968,7 @@ class AuctionStatsPermissionsMixin:
 
     @property
     def is_auction_admin(self):
-        """Helper function used to check and see if request.user is the creator of the auction or is someone who has been made an admin of the auction.
-        Returns False on no permission or True if the user has permission to access the auction"""
+        """Whether request.user created or administers the auction."""
         if not self.auction:
             msg = "you must set self.auction (typically in dispatch) for self.is_auction_admin to be available"
             raise Exception(msg)
@@ -1071,15 +985,14 @@ class AuctionStatsPermissionsMixin:
 
 
 class LocationMixin:
-    """For location aware views, adds a `get_coordinates()` function which returns a tuple of `latitude, longitude` based on self.request.cookies or userdata
+    """Location-aware views: ``get_coordinates()`` returns (latitude, longitude) from cookies or userdata.
+    Call it before get_context_data; set ``no_location_message``.
+    """
 
-    get_coordinates() should be called before get_context_data
-    make sure to set `view.no_location_message`"""
-
-    # override this message in your view, it'll be shown to users without a location
+    # Shown to users without a location.
     no_location_message = "Click here to set your location"
 
-    # don't set this, it'll get set automatically by get_coordinates() if the user does not have a cookie
+    # Set automatically by get_coordinates().
     _location_message = None
 
     def get_coordinates(self):

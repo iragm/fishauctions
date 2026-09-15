@@ -1,24 +1,14 @@
-"""Every form on the site: what a person is allowed to type, and what it means when they do.
+"""Every form on the site.
 
-Django forms, `crispy_forms` helpers and the validators they share. Four things here are
-load-bearing beyond the usual:
-
-* **``configure_species_field``** is the single place a species picker is set up, and its
-  ``picker=`` and ``dal_for=`` arguments are the difference between the three surfaces: the lot form
-  gets a picker that opens itself when a name is ambiguous, quick-add pages get no picker at all
-  (one certain match goes into a hidden input, anything less is left blank), and the auction admin's
-  lot editor gets one `dal` picker over every species including strains.
-* **``ChangeUserPreferencesForm`` and ``ChangeUserNotificationsForm`` partition the ``UserData``
-  fields between them** -- no field on both. That is why neither page needs any JavaScript:
-  ``distance_unit`` stayed on preferences and the three radii went to notifications, so nothing on
-  either page can change a unit a field beside it must be converted against. Distances are stored in
-  **miles** always; the notifications form converts once in ``__init__`` and once in ``clean()``.
-  A field added to neither form disappears from the ``update_preferences`` assistant tool.
-* **A field removed from a model must come off every form here in the same commit.** A form naming a
-  dropped field raises ``FieldError`` at import, which takes ``urls.py`` with it and crash-loops the
-  container behind an entrypoint that will not serve a half-migrated database.
-* **``clean_summernote`` and the image validators are the trust boundary** for anything a member of
-  the public types or uploads.
+* ``configure_species_field`` sets up every species picker: a self-opening picker on the lot form,
+  none on quick-add pages (a single certain match in a hidden input), a dal picker in the admin lot
+  editor.
+* ``ChangeUserPreferencesForm`` and ``ChangeUserNotificationsForm`` partition ``UserData`` fields.
+  Distances are stored in miles; the notifications form converts in ``__init__`` and ``clean()``.
+  A field on neither form is unreachable by ``update_preferences``.
+* A field removed from a model must come off every form in the same commit, or ``urls.py`` fails to
+  import.
+* ``clean_summernote`` and the image validators are the trust boundary for public input.
 """
 
 import datetime
@@ -113,8 +103,6 @@ from .validators import validate_username_no_at_symbol
 # Distance conversion constant
 MILES_TO_KM = 1.60934
 
-# class DateInput(forms.DateInput):
-#     input_type = 'datetime-local'
 
 logger = logging.getLogger(__name__)
 
@@ -136,18 +124,13 @@ def apply_price_input_constraints(fields, field_names, only_whole_dollar_bids):
         fields[field_name].widget.attrs["step"] = step
 
 
-#: What the empty option on every species picker says.  "No species" rather than a blank line,
-#: because leaving it blank is a legitimate answer -- hardware, plants, mixed bags -- and should
-#: look like a choice the user made rather than one they forgot.
+#: The empty species option. "No species" is a legitimate answer, not an omission.
 NO_SPECIES_LABEL = "No species"
 
 
-#: The manual search that sits under the picker.  One script for the whole page however many
-#: pickers are on it, so it is delegated and guarded by a flag rather than emitted per widget.
-#: Results come from ``species-autocomplete`` -- the same endpoint the "strain of" field uses --
-#: with ``varieties=1``, because a strain ("Blue Dream", "Halfmoon") is exactly the sort of thing
-#: somebody falls back to searching for.  Picking one appends it to the ``<select>`` and selects
-#: it, so the posted value is still a pk out of the Species table and validation is unchanged.
+#: The manual species search under the picker: one delegated script per page, querying ``species-
+#: autocomplete?varieties=1``. A pick adds and selects the option, so the posted value is still a
+#: Species pk.
 SPECIES_SEARCH_SCRIPT = """
 <script>
 if (!window.speciesSearchWired) {
@@ -220,23 +203,10 @@ if (!window.speciesSearchWired) {
 
 
 class SpeciesSelect(forms.Select):
-    """A ``<select>`` that renders only the option already chosen, plus "No species".
+    """A ``<select>`` rendering only the chosen option plus "No species"; suggestions fill in as the lot
+    name is typed. Validation is still a ``ModelChoiceField`` over the whole table.
 
-    The Species table has tens of thousands of rows and rendering them all into every lot form
-    would add megabytes to the page.  The browser gets the current value and nothing else; the
-    suggestions endpoint (``species_suggestions``) fills in a handful of options as the user types
-    the lot name.
-
-    This is a rendering trick only.  The field is still an ordinary ``ModelChoiceField`` over the
-    whole table, so validation is unchanged: a posted pk that isn't a real species is rejected,
-    and no amount of DOM editing gets free text into the column.
-
-    ``searchable`` adds a search box underneath, and is what stops the picker being a dead end.
-    Everything in the ``<select>`` comes from the lot *name*, so a name the matcher can't place --
-    FishBase files *Labidochromis caeruleus* under "Blue streak hap", so "Yellow lab" finds
-    nothing -- left the right species unreachable, for the seller and for the auction admin
-    editing the lot afterwards.  Deliberately off by default: the bulk-add forms have plenty on
-    them already, and there the fix is to correct one lot afterwards on a form that has it.
+    ``searchable`` adds a search box for species the matcher can't reach from the name. Off by default.
     """
 
     def __init__(self, attrs=None, choices=(), *, searchable=False, can_add=False):
@@ -284,27 +254,10 @@ def configure_species_field(
 ):
     """Set up the scientific-name picker on a lot form, or hide it.
 
-    Hidden rather than removed when the auction has the field turned off, so every lot form keeps
-    the same field list and the templates don't have to branch.  ``clean_species_for_auction``
-    is what actually stops a hidden field from being posted into.
-
-    ``always_render`` is for the one form where the auction is chosen *in the form itself*.  There
-    the picker has to exist in the DOM whatever the auction on page load says, because the user
-    can switch to an auction that does use scientific names and JavaScript can only show a field
-    that is already there -- the same reason ``custom_field_1`` and the custom dropdown are
-    rendered unconditionally and hidden with CSS.  Nothing about validation changes: the auction
-    the form ends up with still decides, in ``clean_species_for_auction``.
-
-    ``can_add`` offers "add it to the list" when the search finds nothing, and is for forms whose
-    every user is an auction admin by construction -- there is no per-user check here, so the
-    caller is asserting it.  ``SpeciesCreateView`` enforces the same thing again on the way in.
-
-    ``picker=False`` is the quick-add pages: no control at all, just a hidden input the page fills
-    in from the lot name when the matcher gives exactly one answer, shown to the seller as a line
-    of text under the name.  Somebody adding forty lots at a check-in table is not choosing a
-    binomial forty times, and a dropdown they have to look at for every row is the thing that
-    makes them stop filling it in.  Still a real field: it posts, and the pk in it is validated
-    against the Species table like any other, so nothing here loosens what can be saved.
+    Hidden (not removed) when the auction has the field off; ``clean_species_for_auction`` ignores
+    posted values. ``always_render`` is for the form where the auction is chosen in the form.
+    ``can_add`` offers "add to the list" and assumes an auction-admin audience. ``picker=False`` is the
+    quick-add pages: a hidden input filled from one certain match, still validated.
     """
     field = fields.get(field_name)
     if field is None:
@@ -321,13 +274,8 @@ def configure_species_field(
         field.help_text = ""
         return
     if dal_for is not None:
-        # One search box over the whole list, and nothing filled in for you.  The seller-facing
-        # forms guess a species from the lot name because the seller is not going to look one up;
-        # the auction admin's lot editor is the opposite situation -- somebody is on this form
-        # *because* a lot has the wrong species or none, and a guess is what they came to overrule.
-        # ``varieties=1`` because a strain ("Blue Dream", "Longfin") is exactly what gets searched
-        # for here.  The query string is why the URL is reversed rather than passed by name: dal
-        # uses a url containing a slash as it stands and reverses anything else.
+        # The admin editor: one search box over all species, strains included, and no guessing.
+        # Reversed URL because it carries a query string.
         field.widget = autocomplete.ModelSelect2(
             url=f"{reverse('species-autocomplete')}?varieties=1",
             attrs={
@@ -336,10 +284,8 @@ def configure_species_field(
                 "data-species-select": "1",
             },
         )
-        # Re-assigning the queryset is what rebinds widget.choices to it -- see SpeciesAdminForm,
-        # where leaving it alone made re-rendering the form die inside dal.  The auction's club is
-        # passed as well as the user, so a species another admin at the same club added but nobody
-        # has approved yet is still pickable on that club's lots.
+        # Re-assigning the queryset rebinds widget.choices (see SpeciesAdminForm). The auction's club
+        # makes that club's unapproved species pickable.
         field.queryset = visible_species(dal_for, getattr(auction, "club", None))
         field.help_text = "Search by scientific name, common name or strain.  Leave blank for equipment and mixed lots."
         return
@@ -354,16 +300,8 @@ def configure_species_field(
 
 
 def note_category_chosen_by_person(instance, cleaned_data, field_name="species_category"):
-    """Clear ``category_automatically_added`` when the submitted category isn't the stored one.
-
-    That flag is the only record of *who* put a lot in its category, and ``Lot._do_save``
-    re-derives the category from the species on every save while it is set.  So a person picking a
-    category on a lot that has a species has to turn it off, or their choice is silently reverted
-    by the next save -- which is what happened before this existed.
-
-    Only a *change* counts.  Re-saving a form without touching the dropdown is not a decision
-    about the category, and treating it as one would freeze a machine-set category the first time
-    anybody edited anything else on the lot.
+    """Clear ``category_automatically_added`` when the submitted category differs from the stored one, so
+    ``Lot._do_save`` doesn't revert a person's choice. Only a change counts.
     """
     if instance is None or field_name not in cleaned_data:
         return
@@ -373,35 +311,20 @@ def note_category_chosen_by_person(instance, cleaned_data, field_name="species_c
 
 
 def clean_species_for_auction(cleaned_data, auction, field_name="species", *, derive_category=False, instance=None):
-    """Ignore a posted species when the auction doesn't use scientific names.
+    """Ignore a posted species when the auction doesn't use scientific names, keeping the stored value.
 
-    Belt and braces against a stale form or a hand-rolled POST: the field is hidden in that case,
-    so anything arriving in it is noise rather than intent.  What is already *stored* is kept --
-    turning the setting off hides the field, it does not throw the column away.  Wiping it would
-    mean a club that switched the setting off to see what it did, or off and back on, lost the
-    species from every lot anybody touched in between, and their labels and CSV exports stayed
-    blank afterwards.
-
-    ``derive_category`` says "this form hides its category field once a species is picked", which
-    is true of the two seller-facing forms and not of the admin's lot-edit modal.  Where the field
-    is hidden, whatever ``species_category`` arrives is a leftover from before the species was
-    chosen rather than a choice anybody made, and the species' own category -- from the family
-    FishBase records -- is the better answer.  Where an admin can still *see* the category field,
-    what they put in it is left alone.
-
-    ``instance`` is the lot being edited, when the caller has one.  It is what makes both of those
-    possible: the stored species to fall back on, and the lot to record a human's category choice
-    on (see :func:`note_category_chosen_by_person`).
+    ``derive_category``: the form hides its category once a species is picked, so the posted category is
+    a leftover and the species' category replaces it. ``instance`` supplies the stored species and the
+    lot to record a human category choice on.
     """
     if not auction or not auction.use_scientific_name:
         cleaned_data[field_name] = getattr(instance, field_name, None)
         note_category_chosen_by_person(instance, cleaned_data)
         return cleaned_data
     species = cleaned_data.get(field_name)
-    # The one case where the category on this form is not a person's answer: the form hides the
-    # picker once a species is chosen, so nobody saw the value that arrived in it.
+    # The hidden category isn't a person's answer.
     if derive_category and species and "species_category" in cleaned_data:
-        # A cultivar inherits its parent's category; nobody is going to map every strain by hand.
+        # A cultivar inherits its parent's category.
         category = species.category or (species.parent.category if species.parent_id else None)
         if category and category.name != "Uncategorized":
             cleaned_data["species_category"] = category
@@ -426,11 +349,7 @@ def add_bootstrap_classes(form):
 
 
 def validate_image_url(url):
-    """Validate that `url` uses http/https and points to a file with an image extension.
-
-    Raises forms.ValidationError on failure; returns the url unchanged on success.
-    Extension-based validation is used instead of making an HTTP request to avoid SSRF.
-    """
+    """Validate that `url` is http(s) with an image extension. No request is made (avoids SSRF)."""
     from urllib.parse import urlparse
 
     parsed = urlparse(url)
@@ -446,15 +365,8 @@ def validate_image_url(url):
     return url
 
 
-# Exceptions that mean "the image the user gave us is unusable" (bad/unknown format,
-# truncated/corrupt data, or an oversized decompression bomb) rather than "something is
-# wrong with the server". These are safe to show to the uploader as a fixable problem.
-#
-# Note that ``UnidentifiedImageError`` is a subclass of ``OSError`` but bare ``OSError`` is
-# deliberately NOT listed here: Pillow/easy_thumbnails raise plain ``OSError`` (e.g.
-# ``PermissionError`` / ``[Errno 13]``, out-of-disk-space) when *writing* the resized file,
-# and those are server problems that must surface as 500s so the admins get emailed rather
-# than being blamed on the user's photo.
+# The uploader's problem: bad format, corrupt data, decompression bomb. Bare OSError is deliberately
+# excluded: writing the resized file can raise it for server problems, which must 500.
 IMAGE_PROCESSING_EXCEPTIONS = (
     UnidentifiedImageError,
     Image.DecompressionBombError,
@@ -465,15 +377,8 @@ IMAGE_PROCESSING_EXCEPTIONS = (
 
 
 def validate_uploaded_image(uploaded_image):
-    """Confirm `uploaded_image` is a real image that Pillow can fully decode.
-
-    This mirrors how easy_thumbnails opens the source when generating the thumbnail on
-    save (a full ``load()`` with ``LOAD_TRUNCATED_IMAGES`` enabled) so we reject exactly
-    the files that would otherwise blow up during thumbnailing -- but we do it here, up
-    front, where we can show the uploader a friendly, actionable message instead of a 500.
-
-    Raises ``forms.ValidationError`` for anything that isn't a usable image. The file's
-    read position is reset to the start so the subsequent model save can re-read it.
+    """Confirm `uploaded_image` fully decodes, as easy_thumbnails will on save, so a bad file is a field
+    error instead of a 500. Resets the read position.
     """
     try:
         uploaded_image.seek(0)
@@ -481,14 +386,12 @@ def validate_uploaded_image(uploaded_image):
         pass
     previous_truncated_setting = ImageFile.LOAD_TRUNCATED_IMAGES
     try:
-        # Match easy_thumbnails' tolerance so we don't reject images it would happily
-        # process (and vice-versa).
+        # Match easy_thumbnails' tolerance.
         ImageFile.LOAD_TRUNCATED_IMAGES = True
         with Image.open(uploaded_image) as img:
             img.load()
     except (*IMAGE_PROCESSING_EXCEPTIONS, ValueError, OSError) as e:
-        # We are only *reading* the uploaded file here, so an OSError means the image
-        # data itself is bad -- not a disk/permission problem (those happen on write).
+        # Reading only: an OSError means bad image data.
         logger.info("Rejected uploaded image: %s", e)
         msg = (
             "We couldn't read that image -- it may be corrupt or in a format we don't support. "
@@ -505,38 +408,23 @@ def validate_uploaded_image(uploaded_image):
 
 
 def jpeg_safe_upload(uploaded_image):
-    """Return `uploaded_image` re-encoded as a plain JPEG when Pillow couldn't write one from it.
+    """`uploaded_image` re-encoded as JPEG when Pillow couldn't write it as one (animated GIF, MPO).
 
-    Our image fields set `resize_source`, so easy_thumbnails resizes the file on every save and
-    writes the result as a JPEG unless the source is transparent.  Pillow refuses to write some
-    modes as JPEG, and one of them reaches us: an *animated* GIF.  easy_thumbnails' colorspace
-    processor converts each frame and then round-trips the lot back through GIF, which hands
-    back a palette ("P") image, and saving that blows up with `cannot write mode P as JPEG` --
-    a plain OSError, so it is a 500 rather than a field error.  Odd JPEG flavours (MPO, from a
-    phone's burst mode) are the other case.
-
-    Converting once, here on the way in, means every save of the model -- and every thumbnail
-    generated from the stored file later -- has something Pillow can actually write.  An
-    animated upload keeps its first frame, and transparency is flattened onto white rather than
-    the black a bare `convert("RGB")` gives.
-
-    Returns a `ContentFile` named `<original>.jpg` when a conversion happened, otherwise the
-    file unchanged -- including when it can't be read, since `validate_uploaded_image` and the
-    views' own error handling already cover an unusable upload.
+    easy_thumbnails resizes to JPEG on every save, and a palette image raises ``cannot write mode P as
+    JPEG``. Converted once on the way in: the first frame, transparency flattened onto white. Returns a
+    `ContentFile` when converted, otherwise the file unchanged.
     """
     if not isinstance(uploaded_image, UploadedFile):
         return uploaded_image
     previous_truncated_setting = ImageFile.LOAD_TRUNCATED_IMAGES
     try:
-        # Same tolerance easy_thumbnails loads the source with, so a file it would have
-        # accepted doesn't fall through to it unconverted.
+        # easy_thumbnails' tolerance.
         ImageFile.LOAD_TRUNCATED_IMAGES = True
         uploaded_image.seek(0)
         with Image.open(uploaded_image) as img:
             if img.format == "JPEG" and img.mode in ("RGB", "L", "CMYK") and getattr(img, "n_frames", 1) == 1:
                 return uploaded_image
-            # Re-encoding drops the EXIF, so bake in the rotation easy_thumbnails would
-            # otherwise have applied from it (`source_generators.pil_image`).
+            # Re-encoding drops EXIF, so apply its rotation.
             img = ImageOps.exif_transpose(img)
             if img.mode in ("P", "PA", "RGBA", "LA"):
                 img = img.convert("RGBA")
@@ -544,7 +432,7 @@ def jpeg_safe_upload(uploaded_image):
             converted = BytesIO()
             img.convert("RGB").save(converted, format="JPEG", quality=95)
     except (*IMAGE_PROCESSING_EXCEPTIONS, ValueError, OSError) as e:
-        # Reading only, so this is the file being unusable rather than a disk problem.
+        # Reading only: the file is unusable.
         logger.info("Could not convert uploaded image to JPEG: %s", e)
         return uploaded_image
     finally:
@@ -558,7 +446,7 @@ def jpeg_safe_upload(uploaded_image):
 
 
 def clean_summernote(html, max_length=16383):
-    """Helper function to shorten summernote fields, which can contain thousands of formatting characters"""
+    """Sanitize and shorten a summernote field."""
     html = sanitize_summernote_html(html)
     if html is None:
         return ""
@@ -567,10 +455,8 @@ def clean_summernote(html, max_length=16383):
     return html
 
 
-# The AuctionTOS fields the quick-add form edits. ``QuickAddTOS.__init__`` configures
-# ``is_club_member``, which its own Meta.fields leaves out, so the form is only usable when built
-# with exactly this list. Shared by the bulk-add page's formset factory and by the command palette's
-# add_person action, so both build the identical form.
+# The AuctionTOS fields quick-add edits; QuickAddTOS configures is_club_member, so it needs exactly
+# these. Shared with the palette's add_person.
 QUICK_ADD_TOS_FIELDS = (
     "bidder_number",
     "name",
@@ -614,8 +500,7 @@ class QuickAddTOS(forms.ModelForm):
             self.fields["pickup_location"].widget = HiddenInput()
         self.fields["is_club_member"].label = self.auction.alternative_split_label
         if self.auction.alternate_split_mode != "custom":
-            # Off: the alternate split doesn't apply.  Club member discount: the flag is
-            # managed automatically based on club membership.
+            # Off: no alternate split. Club member discount: managed automatically.
             self.fields["is_club_member"].disabled = True
             self.fields["is_club_member"].widget = HiddenInput()
 
@@ -645,19 +530,10 @@ class QuickAddTOS(forms.ModelForm):
         name = cleaned_data.get("name")
         if not name:
             self.add_error("name", "Name is required")
-        # # duplicate name check for new users only
-        # else:
-        #     if not cleaned_data.get('pk'):
-        #         existing_tos = AuctionTOS.objects.filter(name=name, auction=self.auction).first()
-        #         if existing_tos:
-        #             self.add_error('name', "This name is already in use, add a middle name or a number or something to make it unique")
         return cleaned_data
 
 
-# The Lot fields the quick-add form edits. ``QuickAddLot.__init__`` reaches for several of these
-# by name (including ``summernote_description``, which its own Meta.fields leaves out), so the form
-# is only usable when built with exactly this list. Shared by the bulk-add page's formset factory
-# and by the command palette's add_lot action, so both build the identical form.
+# The Lot fields quick-add edits (QuickAddLot needs exactly these). Shared with the palette's add_lot.
 QUICK_ADD_LOT_FIELDS = (
     "lot_name",
     "summernote_description",
@@ -694,40 +570,23 @@ class QuickAddLot(forms.ModelForm):
             "custom_field_1",
             "custom_dropdown",
         ]
-        widgets = {
-            # "summernote_description": SummernoteWidget(
-            #     attrs={
-            #         "summernote": {
-            #             "width": "100%",
-            #             "height": "100px",
-            #             "toolbar": [],
-            #         }
-            #     }
-            # ),
-            # "description": forms.Textarea(attrs={"rows": 2}),
-        }
+        widgets = {}
 
     def __init__(self, *args, **kwargs):
         self.auction = kwargs.pop("auction")
-        # self.custom_lot_numbers_used = kwargs.pop("custom_lot_numbers_used")
         self.is_admin = kwargs.pop("is_admin")
         self.tos = kwargs.pop("tos")
         self.new_lot_count = 0
-        # we need to work around the case where a user enters duplicate custom lot numbers
         super().__init__(*args, **kwargs)
         # self.fields["custom_lot_number"].help_text = ""
         self.fields["lot_name"].label = "Lot name"
         self.fields["lot_name"].widget.attrs.update({"class": "auto-image-check"})
         self.fields["lot_name"].help_text = ""
-        # if not self.is_admin:
-        #    self.fields["custom_lot_number"].widget = HiddenInput()
-        # if not self.auction.use_categories:
         if True:  # hide category field, it's automatically set now
             self.fields["species_category"].widget = HiddenInput()
         self.fields["species_category"].label = "Category"
         self.fields["species_category"].help_text = ""
-        # No picker here: see configure_species_field.  The bulk-add pages fill this in from the
-        # lot name and show what they filled in as text, with a button to clear it.
+        # No picker; see configure_species_field.
         configure_species_field(self.fields, self.auction, picker=False)
         if self.auction.use_custom_checkbox_field and self.auction.custom_checkbox_name:
             self.fields["custom_checkbox"].label = self.auction.custom_checkbox_name
@@ -800,18 +659,6 @@ class QuickAddLot(forms.ModelForm):
     def clean(self):
         cleaned_data = super().clean()
         clean_species_for_auction(cleaned_data, self.auction, derive_category=True, instance=self.instance)
-        # custom_lot_number = cleaned_data.get("custom_lot_number")
-        # if custom_lot_number:
-        #     existing_lots = Lot.objects.exclude(is_deleted=True).filter(
-        #         custom_lot_number=custom_lot_number, auction=self.auction
-        #     )
-        #     lot_number = cleaned_data.get("lot_number")
-        #     if lot_number:
-        #         existing_lots = existing_lots.exclude(lot_number=lot_number.pk)
-        #     else:
-        #         self.custom_lot_numbers_used.append(custom_lot_number)
-        #     if existing_lots.count() or self.custom_lot_numbers_used.count(custom_lot_number) > 1:
-        #         self.add_error("custom_lot_number", "This lot number is already in use")
         if not self.is_admin:
             if self.auction.reserve_price == "disable":
                 cleaned_data["reserve_price"] = self.auction.minimum_bid
@@ -887,21 +734,12 @@ class QuickAddLot(forms.ModelForm):
 
 
 def quick_add_lot_form_class():
-    """The concrete quick-add lot form, with the same fields the bulk-add page builds it with.
-
-    Use this instead of instantiating :class:`QuickAddLot` directly -- on its own it is missing
-    the fields its ``__init__`` configures, and raises ``KeyError``.
-    """
+    """The concrete quick-add lot form. Instantiating QuickAddLot directly raises KeyError."""
     return modelform_factory(Lot, form=QuickAddLot, fields=QUICK_ADD_LOT_FIELDS)
 
 
 def quick_add_tos_form_class():
-    """The concrete quick-add participant form, as the bulk-add page's formset builds it.
-
-    The counterpart to :func:`quick_add_lot_form_class`, and required for the same reason:
-    :class:`QuickAddTOS` configures ``is_club_member``, which its ``Meta.fields`` leaves out, so
-    instantiating it directly raises ``KeyError``.
-    """
+    """The concrete quick-add participant form. Instantiating QuickAddTOS directly raises KeyError."""
     return modelform_factory(AuctionTOS, form=QuickAddTOS, fields=QUICK_ADD_TOS_FIELDS)
 
 
@@ -911,20 +749,6 @@ class TOSFormSetHelper(FormHelper):
         super().__init__(*args, **kwargs)
         self.form_method = "post"
 
-        # self.layout = Layout(
-        #     Div(
-        #         Div('custom_lot_number',css_class='col-sm-5',),
-        #         Div('lot_name',css_class='col-sm-7',),
-        #         css_class='row',
-        #     ),
-        #     Div(
-        #         Div('quantity',css_class='col-sm-4',),
-        #         Div('donation',css_class='col-sm-4',),
-        #         Div('i_bred_this_fish',css_class='col-sm-4',),
-        #         css_class='row',
-        #     ),
-        # )
-        # self.add_input(Submit('submit', 'Save'))
         self.template = "auctions/bulk_add_users_row.html"
 
 
@@ -934,20 +758,6 @@ class LotFormSetHelper(FormHelper):
         super().__init__(*args, **kwargs)
         self.form_method = "post"
 
-        # self.layout = Layout(
-        #     Div(
-        #         Div('custom_lot_number',css_class='col-sm-5',),
-        #         Div('lot_name',css_class='col-sm-7',),
-        #         css_class='row',
-        #     ),
-        #     Div(
-        #         Div('quantity',css_class='col-sm-4',),
-        #         Div('donation',css_class='col-sm-4',),
-        #         Div('i_bred_this_fish',css_class='col-sm-4',),
-        #         css_class='row',
-        #     ),
-        # )
-        # self.add_input(Submit('submit', 'Save'))
         self.template = "auctions/bulk_add_lots_row.html"
 
 
@@ -959,8 +769,7 @@ class InvoiceAdjustmentFormSetHelper(FormHelper):
         self.layout = Layout(
             Div(
                 Div("adjustment_type", css_class="col-md-4"),
-                # Whole dollars only (amount is an integer field), so no ".00" suffix that
-                # would imply cents can be entered.
+                # Whole dollars only.
                 Div(PrependedText("amount", "$"), css_class="col-md-4"),
                 Div("notes", css_class="col-md-4"),
                 css_class="row",
@@ -972,9 +781,6 @@ class InvoiceAdjustmentForm(forms.ModelForm):
     class Meta:
         model = InvoiceAdjustment
         fields = ["adjustment_type", "amount", "notes"]
-        # widgets = {
-        #     'notes': forms.Textarea(attrs={'rows': 1, 'cols': 40}),
-        # }
 
     def __init__(self, *args, **kwargs):
         self.invoice = kwargs.pop("invoice")
@@ -994,9 +800,9 @@ class InvoiceAdjustmentForm(forms.ModelForm):
 
 
 class WinnerLot(forms.Form):
-    """Used to quickly set the winners on lots.  Note that this does not use forms.ModelForm"""
+    """Quickly set lot winners. Not a ModelForm."""
 
-    # note the use of CharFields here; if we use ChoiceFields instead, we get validation errors on submit
+    # CharFields: ChoiceFields fail validation on submit.
 
     lot = forms.CharField(
         widget=autocomplete.Select2(
@@ -1045,12 +851,6 @@ class WinnerLot(forms.Form):
             "lot",
             "winner",
             PrependedAppendedText("winning_price", currency_symbol, price_suffix),
-            # Div(
-            #     Div('lot',css_class='col-md-5',),
-            #     Div('winner',css_class='col-md-3',),
-            #     Div('winning_price',css_class='col-md-3',),
-            #     css_class='row',
-            # ),
             Div(
                 HTML('<button type="submit" class="btn btn-success text-dark ms-2">Save</button>'),
                 css_class="row",
@@ -1104,8 +904,6 @@ class WinnerLotSimpleImages(WinnerLotSimple):
         self.helper.layout = Layout(
             "invoice",
             "auction",
-            # 'lot',
-            # 'winner',
             Div(
                 Div("lot", css_class="col-md-3"),
                 Div(
@@ -1253,9 +1051,7 @@ class DeleteAuctionTOS(forms.Form):
                 "delete_lots"
             ].help_text = "Uncheck if this is a duplicate user.  Lot numbers will not be changed."
             self.fields["merge_with"].label = "To keep these lots, select a user to assign them to"
-        # An invoice records payment/adjustment history that a plain delete would
-        # cascade away. Deleting is blocked in that case; a merge (which moves the
-        # invoice, adjustments, and payments onto another user) is the only way out.
+        # Deleting would cascade away invoice history; only a merge is allowed.
         self.invoice_exists = Invoice.objects.filter(auctiontos_user=self.auctiontos).exists()
         if self.invoice_exists:
             self.fields["delete_lots"].widget = HiddenInput()
@@ -1270,7 +1066,7 @@ class DeleteAuctionTOS(forms.Form):
         delete_lots = cleaned_data.get("delete_lots")
         merge_with = cleaned_data.get("merge_with")
         if self.invoice_exists and (delete_lots or not merge_with):
-            # Force the merge path; the destructive branches would erase the invoice.
+            # Force the merge path.
             self.add_error(
                 "merge_with",
                 "This user has an invoice. Select another user to merge them into so their payment history is preserved.",
@@ -1336,9 +1132,7 @@ class AuctionTOSMergeReviewForm(forms.ModelForm):
 
 
 class EditLot(forms.ModelForm):
-    """Used for HTMX calls to update Lot.
-    For auction admins only.
-    Note that unlike AuctionTOS (which has a similar form), this form will ONLY update lots, not create them"""
+    """HTMX lot editing for auction admins. Updates only; never creates."""
 
     def __init__(self, user, lot, auction, *args, **kwargs):
         self.user = user
@@ -1351,27 +1145,13 @@ class EditLot(forms.ModelForm):
         self.helper.form_class = "form"
         self.helper.form_id = "lot-form"
         self.helper.form_tag = True
-        # Everything an auction has turned off is a HiddenInput by the end of this method, and a
-        # hidden field left in the layout still renders the grid column that wrapped it -- an
-        # empty col-sm-3 is a quarter of a row of nothing.  So the layout is built at the *bottom*
-        # of __init__, once the widgets are settled, and it leaves those fields out; this puts
-        # their inputs back at the end of the form so the values still post.
+        # Turned-off fields become HiddenInputs; a hidden field left in the layout still renders an
+        # empty column. The layout is built at the end without them, and this renders their inputs.
         self.helper.render_hidden_fields = True
-        # self.fields['species_category'].queryset = auction.location_qs #PickupLocation.objects.filter(auction=self.auction).order_by('name')
-        # self.fields["custom_lot_number"].initial = self.lot.custom_lot_number
         self.fields["auction"].initial = self.lot.auction
-        # if self.lot.label_printed:
-        #     self.fields[
-        #         "custom_lot_number"
-        #     ].help_text = (
-        #         "<span class='text-warning'>Label already printed!</span> Make sure to reprint it if you change this"
-        #     )
-        # else:
-        #    self.fields["custom_lot_number"].help_text = "Leave blank to automatically generate"
         self.fields["lot_name"].initial = self.lot.lot_name
         # self.fields["description"].initial = self.lot.description
         self.fields["summernote_description"].initial = self.lot.summernote_description
-        # self.fields['auctiontos_seller'].initial = self.lot.auctiontos_seller
         self.fields["quantity"].initial = self.lot.quantity
         self.fields["donation"].initial = self.lot.donation
         self.fields["winning_price"].initial = self.lot.winning_price
@@ -1386,10 +1166,7 @@ class EditLot(forms.ModelForm):
         if not self.auction.use_i_bred_this_fish_field:
             self.fields["i_bred_this_fish"].widget = HiddenInput()
         self.fields["species_category"].initial = self.lot.species_category
-        # A dal picker, and no guessing: see configure_species_field.  The "New" button beside it
-        # is the way out when the list really is missing the fish -- LotAdmin, the only view that
-        # renders this form, is auction admins only, which is exactly the standing
-        # SpeciesCreateView asks for.
+        # A dal picker, no guessing (see configure_species_field). LotAdmin is auction-admin only.
         configure_species_field(self.fields, self.auction, dal_for=self.user)
         self.fields["species"].initial = self.lot.species
         self.fields["i_bred_this_fish"].initial = self.lot.i_bred_this_fish
@@ -1447,8 +1224,6 @@ class EditLot(forms.ModelForm):
         if lot.high_bidder:
             winner_help_test = f"High bidder: <span class='text-warning'>{lot.high_bidder_for_admins}</span> Bid: <span class='text-warning'>${lot.high_bid}</span> {lot.auction_show_high_bidder_template}"
         self.fields["auctiontos_winner"].help_text = winner_help_test
-        # self.fields['auctiontos_seller'].label = "Seller"
-        # self.fields['auctiontos_seller'].help_text = ""
         self.fields["quantity"].help_text = ""
         self.fields["donation"].help_text = ""
         self.fields["i_bred_this_fish"].label = "Breeder points"
@@ -1457,42 +1232,28 @@ class EditLot(forms.ModelForm):
         self.helper.layout = Layout("auction", *self._layout_rows(post_url))
 
     def _hidden(self, field_name):
-        """True when the auction has this field turned off.  See ``render_hidden_fields``."""
+        """True when the auction has this field off."""
         return isinstance(self.fields[field_name].widget, HiddenInput)
 
     def _column(self, field_name, css_class, *extra):
-        """A grid column for one field, or nothing at all when that field is turned off."""
+        """A grid column for one field, or None when it's off."""
         if self._hidden(field_name):
             return None
         return Div(field_name, *extra, css_class=css_class)
 
     @staticmethod
     def _row(*columns, css_class="row"):
-        """A row of whichever columns survived.  No columns means no row, rather than an empty one."""
+        """A row of the surviving columns, or None."""
         kept = [column for column in columns if column is not None]
         return Div(*kept, css_class=css_class) if kept else None
 
     def _species_block(self):
-        """The category and the scientific name, behind a Change button.
-
-        The two of them together are one decision -- ``Species.category`` answers the category and
-        the server re-derives it on save -- and on a lot that already has the right answer they are
-        two full-width controls the admin scrolls past on the way to the price.  So the modal shows
-        what the lot says now in one line and opens the controls when somebody wants to argue with
-        it, which is the same bargain the seller's own lot form strikes (``refreshSpeciesUI`` in
-        lot_form.html).  Bootstrap's collapse data-api is delegated from the document, so this
-        works in a modal HTMX swapped in long after page load with no javascript of ours.
+        """Category and scientific name behind a Change button: one line summarizing the current answer, and the
+        controls on demand (as lot_form.html does). Bootstrap's delegated collapse works in an HTMX modal.
         """
         category = self._column("species_category", "col-sm-5")
-        # The buttons open in a new tab on purpose: this form is an HTMX modal, and navigating away
-        # from it would throw away everything else the admin has typed.  The lot name goes with
-        # them, so both forms arrive half filled in, and the species can be attached to every lot
-        # called that in one go.
-        #
-        # Two buttons because there are two different problems behind an empty picker, and the
-        # commoner one is not a missing species: it is a species that is on the list under a name
-        # nobody types.  Naming that one is first, because adding a second copy of it is the
-        # mistake this pair of buttons exists to head off.
+        # New tabs, so the modal's edits survive; the lot name goes with them. Naming an existing
+        # species comes first, since a duplicate species is the mistake to avoid.
         lot_list = reverse("auction_lot_list", kwargs={"slug": self.auction.slug})
         buttons = HTML(
             f'<a class="btn btn-sm btn-primary mb-2" target="_blank" rel="noopener" '
@@ -1512,8 +1273,7 @@ class EditLot(forms.ModelForm):
         if category is not None:
             summary.append(f"Category: <strong>{escape(self.lot.species_category or 'Uncategorized')}</strong>")
         if species is not None:
-            # full_scientific_name, never scientific_name: a strain and a cross are only themselves
-            # under the name the trade uses for them.
+            # full_scientific_name, never scientific_name.
             name = self.lot.species.full_scientific_name if self.lot.species else ""
             summary.append(f"Scientific name: <strong>{escape(name or 'none')}</strong>")
         return Div(
@@ -1525,9 +1285,7 @@ class EditLot(forms.ModelForm):
                 'aria-expanded="false" aria-controls="lot-species-fields">Change</button>'
                 "</div>"
             ),
-            # Open on a re-render, because the only reason this form comes back bound is that
-            # something failed validation, and an error message inside a collapsed block is an
-            # error message nobody reads.
+            # Open on re-render, when there's a validation error to see.
             Div(
                 fields,
                 css_class="col-sm-12 collapse" + (" show" if self.is_bound else ""),
@@ -1596,8 +1354,6 @@ class EditLot(forms.ModelForm):
         ]
         widgets = {
             "summernote_description": SummernoteWidget(attrs={"summernote": {"width": "100%", "height": "300px"}}),
-            # "description": forms.Textarea(attrs={"rows": 2}),
-            # 'auctiontos_seller': autocomplete.ModelSelect2(url='auctiontos-autocomplete', forward=['auction'], attrs={'data-html': True, 'data-container-css-class': ''}),
             "auctiontos_winner": autocomplete.ModelSelect2(
                 url="auctiontos-autocomplete",
                 forward=["auction"],
@@ -1709,9 +1465,7 @@ class CreateEditAuctionTOS(forms.ModelForm):
             ),
         )
         self.fields["name"].required = True
-        self.fields[
-            "pickup_location"
-        ].queryset = auction.location_qs  # PickupLocation.objects.filter(auction=self.auction).order_by('name')
+        self.fields["pickup_location"].queryset = auction.location_qs
         if self.is_edit_form:
             # hide fields if editing
             self.fields["bidder_number"].initial = self.auctiontos.bidder_number
@@ -1774,12 +1528,11 @@ class CreateEditAuctionTOS(forms.ModelForm):
         self.fields["memo"].widget.attrs["placeholder"] = "Only visible to admins"
         self.fields["bidder_number"].widget.attrs["placeholder"] = "Auto generate"
         if self.auction.alternate_split_mode != "custom":
-            # Off: the alternate split doesn't apply.  Club member discount: the flag is
-            # managed automatically based on club membership.
+            # Off: no alternate split. Club member discount: managed automatically.
             self.fields["is_club_member"].disabled = True
             self.fields["is_club_member"].widget = HiddenInput()
         if self.auction.is_club_managed:
-            # In club-managed mode, these fields live on ClubMember and are managed via the club admin.
+            # Club-managed: these live on ClubMember.
             for field_name in ("bidder_number", "bidding_allowed", "selling_allowed", "is_admin", "is_club_member"):
                 self.fields[field_name].disabled = True
                 self.fields[field_name].widget = HiddenInput()
@@ -1842,15 +1595,6 @@ class CreateBid(forms.ModelForm):
         self.fields["user"].widget = HiddenInput()
         self.fields["lot_number"].widget = HiddenInput()
 
-    # def save(self, *args, **kwargs):
-    #     kwargs['commit']=False
-    #     obj = super().save(*args, **kwargs)
-    #     logger.debug(self.req.user.id)
-    #     #obj.user = self.req.user.id
-    #     #logger.debug(str(obj.user)+ " has placed a bid on " + str(obj.lot_number))
-    #     obj.save()
-    #     return obj
-
     class Meta:
         model = Bid
         fields = [
@@ -1858,40 +1602,6 @@ class CreateBid(forms.ModelForm):
             "lot_number",
             "amount",
         ]
-
-
-# class InvoiceUpdateForm(forms.ModelForm):
-#     def __init__(self, *args, **kwargs):
-#         super().__init__(*args, **kwargs)
-#         self.helper = FormHelper()
-#         self.helper.form_method = 'post'
-#         self.helper.form_class = 'form'
-#         self.helper.form_id = 'invoice-form'
-#         self.helper.form_tag = True
-#         self.helper.layout = Layout(
-#             'memo',
-#             HTML("<h5>Adjust</h5>"),
-#             Div(
-#             Div('adjustment_direction',css_class='col-lg-3',),
-#             PrependedAppendedText('adjustment', '$', '.00',wrapper_class='col-lg-3', ),
-#             Div('adjustment_notes',css_class='col-lg-6',),
-#             css_class='row',
-#             ),
-#             Submit('submit', 'Save', css_class='btn-success'),
-#         )
-#         self.fields['adjustment_direction'].label = ""
-#         self.fields['adjustment'].label = ""
-#         self.fields['adjustment_notes'].label = ""
-#         self.fields['adjustment_notes'].help_text = f"Adjustment reason will be visible to the user"
-
-#     class Meta:
-#         model = Invoice
-#         fields = [
-#             'adjustment_direction',
-#             'adjustment',
-#             'adjustment_notes',
-#             'memo',
-#         ]
 
 
 class AuctionNoShowForm(forms.Form):
@@ -1971,7 +1681,6 @@ class BulkSellLotsToOnlineHighBidder(forms.Form):
     def __init__(self, auction, query, queryset, *args, **kwargs):
         self.auction = auction
         self.queryset = queryset
-        # submit_button_html = f'<button hx-vals="{query":"{query}"} hx-post="{reverse("bulk_set_lots_won", kwargs={"slug": self.auction.slug})}" hx-target="#modals-here" type="submit" class="btn btn-success text-dark">Mark {self.queryset.count()} lots sold</button>'
         submit_button_html = f'<button hx-vals=\'{{"query": "{query}"}}\' hx-post="{reverse("bulk_set_lots_won", kwargs={"slug": self.auction.slug})}" hx-target="#modals-here" type="submit" class="btn btn-success text-dark">Mark {self.queryset.count()} lots sold</button>'
         super().__init__(*args, **kwargs)
         self.helper = FormHelper()
@@ -2050,7 +1759,7 @@ class ChangeInvoiceStatusForm(forms.Form):
 
 
 class EnableBiddingForAllForm(forms.Form):
-    """Confirmation dialog for the bulk 'enable bidding' action on the auction users page."""
+    """Confirmation for bulk-enabling bidding on the auction users page."""
 
     def __init__(self, auction, user_count, *args, **kwargs):
         self.auction = auction
@@ -2163,8 +1872,7 @@ class AuctionJoin(forms.ModelForm):
         self.helper.form_tag = True
         self.helper.form_action = reverse("auction_main", kwargs={"slug": auction.slug})
         if next_url:
-            # Carry ?next= through the POST so get_success_url() (which reads request.GET["next"])
-            # can return the user to where they came from (e.g. the lot page they joined from).
+            # Carry ?next= through the POST for get_success_url().
             from urllib.parse import quote
 
             self.helper.form_action = f"{self.helper.form_action}?next={quote(next_url, safe='')}"
@@ -2174,9 +1882,7 @@ class AuctionJoin(forms.ModelForm):
             "pickup_location",
             Submit("submit", "Join auction", css_class="agree_tos btn-success text-dark"),
         )
-        self.fields[
-            "pickup_location"
-        ].queryset = auction.location_qs  # PickupLocation.objects.filter(auction=self.auction).order_by('name')
+        self.fields["pickup_location"].queryset = auction.location_qs
         self.fields["time_spent_reading_rules"].widget = HiddenInput()
         if self.auction.multi_location:
             self.fields["i_agree"].initial = True
@@ -2185,7 +1891,7 @@ class AuctionJoin(forms.ModelForm):
         else:
             # single location auction
             self.fields["pickup_location"].widget = HiddenInput()
-            if self.auction.all_location_count == 1:  # note: number_of_locations only gives you non-default locations
+            if self.auction.all_location_count == 1:  # # number_of_locations excludes the default location
                 location = auction.location_qs[0]
                 self.fields["pickup_location"].initial = location
                 if location.pickup_by_mail:
@@ -2250,14 +1956,8 @@ class PickupLocationForm(forms.ModelForm):
             self.fields["name"].widget = forms.HiddenInput()
             self.fields["contact_person"].widget = forms.HiddenInput()
         if not self.auction.multi_location:
-            # to keep things simple when creating a new auction with only one location
+            # Single-location auctions hide the second pickup time.
             self.fields["second_pickup_time"].widget = forms.HiddenInput()
-            # self.fields['description'].widget=forms.HiddenInput()
-            # these have been removed in favor of 'contact_person'
-            # self.fields['pickup_location_contact_name'].widget=forms.HiddenInput()
-            # self.fields['pickup_location_contact_phone'].widget=forms.HiddenInput()
-            # self.fields['pickup_location_contact_email'].widget=forms.HiddenInput()
-            # self.fields['users_must_coordinate_pickup'].widget=forms.HiddenInput()
         self.fields["mail_or_not"].initial = "False"
         if self.instance.pk:
             if self.instance.pickup_by_mail:
@@ -2271,10 +1971,6 @@ class PickupLocationForm(forms.ModelForm):
                 "description"
             ].help_text = "Directions or notes about this location.  This text will be shown to users."
 
-        # if self.user.is_superuser:
-        #     self.fields['auction'].queryset = Auction.objects.filter(date_end__gte=timezone.now()).order_by('date_end')
-        # else:
-        #     self.fields['auction'].queryset = Auction.objects.filter(created_by=self.user).filter(date_end__gte=timezone.now()).order_by('date_end')
         self.fields["contact_person"].queryset = self.auction.auction_admins_qs
         self.fields["contact_person"].label_from_instance = lambda obj: f"{obj.name}"
         delete_button_html = ""
@@ -2301,13 +1997,6 @@ class PickupLocationForm(forms.ModelForm):
                     css_class="row",
                 ),
                 "auction",
-                # HTML("<h4>Contact info</h4>"),
-                # Div(
-                #     Div('pickup_location_contact_name',css_class='col-md-6',),
-                #     Div('pickup_location_contact_phone',css_class='col-md-6',),
-                #     Div('pickup_location_contact_email',css_class='col-md-6',),
-                #     css_class='row',
-                # ),
                 Div(
                     Div(
                         "users_must_coordinate_pickup",
@@ -2330,8 +2019,6 @@ class PickupLocationForm(forms.ModelForm):
                         "The pin on the map must be at the <span class='text-warning'>exact location of the pickup location!</span><br><small>People will get directions based on this pin, and will get lost if it's not in the right place</small>"
                     ),
                 ),
-                # 'allow_selling_by_default',
-                # 'allow_bidding_by_default',
                 css_id="non-mail",
             ),
             "description",
@@ -2377,9 +2064,7 @@ class CreateImageForm(forms.ModelForm):
             "Select an image to upload, or paste one from your clipboard (Ctrl+V) anywhere on this "
             "page.  Only upload photos you took yourself, or that you have permission to use."
         )
-        # Marking the input as image-only lets the native app's WebView file chooser offer the camera
-        # (many WebViews only surface "Take photo" when accept is set to an image type). We deliberately
-        # do NOT set `capture`, so picking from the photo library stays available too.
+        # accept="image/*" lets the app's WebView offer the camera; no `capture`, so the library stays.
         self.fields["image"].widget.attrs["accept"] = "image/*"
         self.helper = FormHelper()
         self.helper.form_method = "post"
@@ -2417,16 +2102,11 @@ class CreateImageForm(forms.ModelForm):
         return validate_image_url(url)
 
     def clean_image(self):
-        """Reject corrupt/unsupported uploads with a friendly message before they hit save.
-
-        Django's ImageField only runs Pillow's ``verify()`` (a header check), which passes
-        truncated or otherwise broken files that then explode during thumbnail generation.
-        Here we fully decode a freshly uploaded file so image problems become a nice inline
-        field error rather than a server error blamed on the user's photo.
+        """Fully decode a new upload so a broken image is a field error rather than a 500 (ImageField only
+        checks headers).
         """
         image = self.cleaned_data.get("image")
-        # Only validate a newly uploaded file; leave an unchanged, already-stored image
-        # (on the edit view) alone.
+        # Only a newly uploaded file.
         if isinstance(image, UploadedFile):
             validate_uploaded_image(image)
             image = jpeg_safe_upload(image)
@@ -2462,7 +2142,7 @@ class CreateAuctionForm(forms.ModelForm):
 
     def __init__(self, *args, **kwargs):
         self.user = kwargs.pop("user")
-        self.auction = None  # this will be the instance of Auction to clone from
+        self.auction = None  # # the Auction to clone from
         self.cloned_from = kwargs.pop("cloned_from")  # slug only at this point
         timezone.activate(kwargs.pop("user_timezone"))
         super().__init__(*args, **kwargs)
@@ -2474,13 +2154,13 @@ class CreateAuctionForm(forms.ModelForm):
         last_auction_state = "disabled"  # class of the copy my last auction button
         self.auction = None
         if self.cloned_from:
-            # did this user ACTUALLY create this auction, or are they stealing rules from someone else?
+            # Only an auction this user created.
             self.auction = Auction.objects.exclude(is_deleted=True).filter(slug=self.cloned_from).first()
             if self.auction:
                 if not self.auction.permission_check(self.user):
                     self.auction = None
         if not self.auction:
-            # either ?copy was not set, or the user didn't make that auction - doesn't matter
+            # No ?copy, or not theirs.
             self.auction = auction_to_copy(self.user)
         if self.auction:
             self.fields["cloned_from"].initial = str(self.auction.slug)
@@ -2537,17 +2217,8 @@ class CreateAuctionForm(forms.ModelForm):
         )
 
     def _seed_picker_time_from(self, auction):
-        """Open the date picker on today at *auction*'s start time, instead of at the time of day
-        the form happens to be open.
-
-        A club's auction is at the same hour every time it runs, so "7:00 PM" is nearly always the
-        right answer and "2:14 PM, because that is when I clicked" never is. Two picker options do
-        it: ``viewDate`` is the moment the calendar opens on, and ``selectDay`` keeps the viewDate's
-        *time* and only replaces its day — so whichever day is clicked comes back at the old
-        auction's time. ``useCurrent: false`` is what stops the picker stamping the current time
-        into the empty field the moment it opens, which is the behaviour being replaced; the field
-        stays blank until a day is actually picked, so nobody creates an auction dated today by
-        accident.
+        """Open the date picker today at *auction*'s start time. ``viewDate`` sets the opening moment,
+        ``selectDay`` keeps its time, and ``useCurrent: false`` leaves the field blank until a day is picked.
         """
         if not auction.date_start:
             return
@@ -2646,15 +2317,14 @@ class AuctionEditForm(forms.ModelForm):
             "email_users_when_invoices_ready"
         ].help_text = "Send an email to users when their invoice is ready or paid"
         self.fields["alternative_split_label"].widget.attrs = {"placeholder": "Club Member"}
-        # Hidden via js unless a club is selected; don't block submission when it's not shown.
+        # Hidden by JS without a club; don't block submission.
         self.fields["club_member_discount"].required = False
-        # Optional fees: leaving them blank means "no fee", not a validation error. The model default
-        # is already 0 and the column is NOT NULL, so clean() coerces a blank submission back to 0.
+        # Blank means no fee; clean() coerces to 0 (NOT NULL).
         self.fields["registration_fee"].required = False
         self.fields["registration_fee_for_club_members"].required = False
         self.fields["invoice_payment_instructions"].widget.attrs = {"placeholder": "Send money to paypal.me/yourpaypal"}
 
-        # Build club queryset: clubs where the user has admin/edit/manage_auctions permission
+        # Clubs where the user has admin, edit or manage_auctions permission.
         if self.user.is_superuser:
             permitted_club_ids = list(Club.objects.values_list("pk", flat=True))
         else:
@@ -2666,7 +2336,7 @@ class AuctionEditForm(forms.ModelForm):
                 .filter(Q(permission_admin=True) | Q(permission_edit_club=True) | Q(permission_manage_auctions=True))
                 .values_list("club_id", flat=True)
             )
-        # Always include the currently saved club so admins without club membership can still edit
+        # Always include the saved club.
         club_id_set = set(permitted_club_ids)
         if self.instance and self.instance.pk and self.instance.club_id:
             club_id_set.add(self.instance.club_id)
@@ -2675,9 +2345,7 @@ class AuctionEditForm(forms.ModelForm):
         single_club = get_single_club(create=False)
         self.single_club_mode = bool(getattr(settings, "SINGLE_CLUB_MODE", False) and single_club)
         if self.single_club_mode:
-            # Only one club exists on the whole site: hide the club picker and pin
-            # this auction to it. Participants are always managed through that club,
-            # so drop the "Off" option but still let admins choose how (all/check-in).
+            # One club site-wide: hide the picker, pin the auction, drop the "Off" option.
             self.fields["club"].queryset = Club.objects.filter(pk=single_club.pk)
             self.fields["club"].initial = single_club
             self.fields["club"].widget = forms.HiddenInput()
@@ -2689,9 +2357,7 @@ class AuctionEditForm(forms.ModelForm):
             if not (self.instance.pk and self.instance.manage_users_through_club):
                 self.fields["manage_users_through_club"].initial = SINGLE_CLUB_DEFAULT_MANAGE_MODE
 
-        # Resolve which payment accounts apply to this auction:
-        # - club auctions: the club's linked sellers (or site PayPal if enabled).
-        # - non-club auctions: the auction creator's personal sellers.
+        # Payment accounts: the club's sellers for club auctions, else the creator's.
         club = self.instance.club if (self.instance and self.instance.pk) else None
         effective_creator = self.instance.created_by if (self.instance and self.instance.created_by) else self.user
 
@@ -2710,7 +2376,7 @@ class AuctionEditForm(forms.ModelForm):
             )
 
         if club:
-            # When auction is tied to a club, payments are controlled by club settings
+            # Club auctions use club payment settings.
             self.fields["enable_online_payments"].widget = forms.HiddenInput()
             self.fields["enable_square_payments"].widget = forms.HiddenInput()
         else:
@@ -2728,18 +2394,16 @@ class AuctionEditForm(forms.ModelForm):
                 # Square requires an actual linked seller record (no site fallback).
                 self.fields["enable_square_payments"].widget = forms.HiddenInput()
 
-        # These fields are shown/hidden via JavaScript based on the club selection.
-        # We always render real widgets so the JS can toggle them; server validation
-        # already rejects the combination of no-club + enabled flag.
+        # Shown and hidden by JS by club; server validation rejects enabling without a club.
         if self.instance.pk and self.instance.manage_users_through_club:
-            # When club-managed, copy_users is irrelevant — the new auction gets members from the club
+            # Club-managed: members come from the club, not a copy.
             self.fields["copy_users_when_copying_this_auction"].widget = forms.HiddenInput()
             has_activity = (
                 Lot.objects.filter(auction=self.instance, is_deleted=False).exists()
                 or Invoice.objects.filter(auction=self.instance).exists()
             )
             if has_activity:
-                # Lock club-managed mode once lots or invoices exist to prevent disabling it
+                # Locked once lots or invoices exist.
                 self.fields["manage_users_through_club"].disabled = True
                 self.fields["manage_users_through_club"].help_text = "Cannot be changed once lots or invoices exist."
                 self.fields["club"].disabled = True
@@ -2754,12 +2418,9 @@ class AuctionEditForm(forms.ModelForm):
         else:
             # Membership fee only applies when club-managed mode is enabled
             self.fields["add_membership_fee_to_invoices_for_expired_members"].widget = forms.HiddenInput()
-        # clean_manage_users_through_club rejects enabling on non-empty auctions
-        # self.fields['notes'].help_text = "Foo"
+        # clean_manage_users_through_club rejects enabling on non-empty auctions.
         if self.instance.is_online and not self.single_club_mode:
-            # Check-in mode only applies to in-person events, so don't offer it for online auctions.
-            # Single-club mode is the exception: it always manages participants through the club and
-            # defaults to check-in, so we keep that option even for online single-club auctions.
+            # Check-in mode is in-person only, except single-club mode, which defaults to it.
             self.fields["manage_users_through_club"].choices = [
                 choice for choice in self.fields["manage_users_through_club"].choices if choice[0] != "checkin"
             ]
@@ -2790,7 +2451,7 @@ class AuctionEditForm(forms.ModelForm):
         self.fields["user_cut"].initial = 100 - self.instance.winning_bid_percent_to_club
         self.fields["club_member_cut"].initial = 100 - self.instance.winning_bid_percent_to_club_for_club_members
 
-        # Get currency symbol from the auction creator (when editing) or current user (when creating)
+        # Currency from the auction creator when editing, else the current user.
         if self.instance and self.instance.pk and self.instance.created_by:
             # Editing an existing auction - use the auction creator's currency
             currency = self.instance.created_by.userdata.currency
@@ -2811,17 +2472,13 @@ class AuctionEditForm(forms.ModelForm):
 
     @property
     def advanced_open(self):
-        """Whether the Advanced section renders already open. See auctions/auction_form_layout.py.
-
-        Read from the template at render time, not built into the layout, because two of the three
-        answers are not known when __init__ runs.
-        """
+        """Whether Advanced renders open (auctions/auction_form_layout.py). Read at render time."""
         advanced = self.advanced_fields
         if any(name in advanced for name in self.errors):
             return True
         if auction_form_layout.advanced_fields_in_use(self.instance, advanced):
             return True
-        # An organizer on their third auction knows what is down there and goes looking for it.
+        # Experienced organizers get it open.
         user = self.user or getattr(self.instance, "created_by", None)
         return bool(user and hasattr(user, "userdata") and user.userdata.is_experienced)
 
@@ -2830,12 +2487,11 @@ class AuctionEditForm(forms.ModelForm):
         use_seller_dash_lot_numbering = cleaned_data.get("use_seller_dash_lot_numbering")
         existing_instance = self.instance
 
-        # Both registration fees are optional (see __init__): a blank submission is "no fee". The
-        # columns are NOT NULL, so fold the resulting None back to the model default of 0.
+        # Blank fees become 0.
         for fee_field in ("registration_fee", "registration_fee_for_club_members"):
             cleaned_data[fee_field] = cleaned_data.get(fee_field) or 0
 
-        # When a club is selected, payments are controlled by club settings, not auction settings
+        # With a club, payments follow club settings.
         single_club = get_single_club(create=False)
         if getattr(settings, "SINGLE_CLUB_MODE", False) and single_club:
             cleaned_data["club"] = single_club
@@ -2859,8 +2515,7 @@ class AuctionEditForm(forms.ModelForm):
                     "Associate this auction with a club to use the club member discount.",
                 )
             else:
-                # The label field is hidden in this mode; the people getting the alternate
-                # split are always club members.
+                # The label is hidden; the alternate split is always club members here.
                 cleaned_data["alternative_split_label"] = "Club member"
 
         if existing_instance and existing_instance.pk:
@@ -2909,8 +2564,7 @@ class AuctionEditForm(forms.ModelForm):
         instance = self.instance
         currently_enabled = bool(instance and instance.pk and instance.manage_users_through_club)
         target_enabled = bool(target)
-        # Check-in mode is an in-person concept (members are added as they arrive at the event);
-        # it has no meaning for online auctions.
+        # Check-in mode is in-person only.
         if target == "checkin" and instance and instance.is_online:
             msg = "Check-in mode is only available for in-person auctions."
             raise forms.ValidationError(msg)
@@ -2941,10 +2595,8 @@ class AuctionEditForm(forms.ModelForm):
 
     @staticmethod
     def _rebuild_auctiontos_from_club(auction, bidding_allowed_override=None):
-        """Delete existing AuctionTOS and recreate from club members (used when enabling or re-enabling club-managed mode).
-
-        If bidding_allowed_override is False, all created TOS records will have bidding disabled (used for check-in mode).
-        If None (default), each member's own bidding_allowed setting is used.
+        """Recreate AuctionTOS rows from club members. ``bidding_allowed_override=False`` disables bidding
+        (check-in mode); None uses each member's setting.
         """
         AuctionTOS.objects.filter(auction=auction).delete()
         default_location = PickupLocation.objects.filter(auction=auction).order_by("-is_default", "pk").first()
@@ -2978,16 +2630,14 @@ class AuctionEditForm(forms.ModelForm):
         was_only_whole_dollar_bids = bool(
             self.initial.get("only_whole_dollar_bids", self.instance.only_whole_dollar_bids)
         )
-        # self.initial is populated from model_to_dict(instance) by BaseModelForm.__init__
-        # BEFORE _post_clean() mutates self.instance, so it holds the original DB values.
-        # Never read self.instance.<field> here — it already has the new POST value.
+        # self.initial holds the original DB values; self.instance already has the POST.
         old_manage_value = self.initial.get("manage_users_through_club") or ""
         was_managed_through_club = bool(old_manage_value)
         was_manage_all = old_manage_value == "all"
         target_manage_value = self.cleaned_data.get("manage_users_through_club") or ""
         target_managed_through_club = bool(target_manage_value)
         target_manage_all = target_manage_value == "all"
-        # self.initial["club"] is the old club pk (int/None) from model_to_dict
+        # The old club pk.
         was_club_id = self.initial.get("club")
         target_club = self.cleaned_data.get("club")
         target_club_id = target_club.pk if target_club else None
@@ -3005,7 +2655,7 @@ class AuctionEditForm(forms.ModelForm):
             and target_managed_through_club
             and target_club_id != was_club_id
         )
-        # Rebuild from club when switching to "all" from "checkin" (or any non-all managed state)
+        # Rebuild when switching to "all".
         switching_to_all = (
             commit
             and self.instance.pk
@@ -3038,7 +2688,7 @@ class AuctionEditForm(forms.ModelForm):
                 if target_manage_all:
                     self._rebuild_auctiontos_from_club(auction)
                 else:
-                    # check-in mode: add all members with bidding disabled until they check in
+                    # Check-in: all members, bidding off until they check in.
                     self._rebuild_auctiontos_from_club(auction, bidding_allowed_override=False)
         elif disabling_club_management:
             with db_transaction.atomic():
@@ -3075,7 +2725,7 @@ class AuctionEditForm(forms.ModelForm):
             with db_transaction.atomic():
                 locked = Auction.objects.select_for_update().get(pk=self.instance.pk)
                 auction = super().save(commit=commit)
-                # Rebuild all members with bidding disabled; check-in enables bidding one at a time
+                # All members, bidding off.
                 self._rebuild_auctiontos_from_club(auction, bidding_allowed_override=False)
         else:
             auction = super().save(commit=commit)
@@ -3088,9 +2738,7 @@ class AuctionEditForm(forms.ModelForm):
                     value = getattr(lot, field_name)
                     if value is None:
                         continue
-                    # A price whose column never got migration 0227's DECIMAL type reads back as
-                    # an int, whatever the field says; migration 0437 repairs the column, and an
-                    # int is a whole number of dollars already.
+                    # An unmigrated int column reads back as int (0437 repairs it).
                     if not isinstance(value, Decimal):
                         value = Decimal(str(value))
                     if value != value.to_integral_value():
@@ -3105,8 +2753,7 @@ class AuctionEditForm(forms.ModelForm):
             and auction.alternate_split_mode == "club_member"
             and (self.initial.get("alternate_split_mode") or "") != "club_member"
         ):
-            # Switching to the automatic club member mode: sync the flag for everyone
-            # already in the auction so paid members immediately get the alternate split.
+            # Automatic club member mode: sync the flag for current participants.
             for tos in AuctionTOS.objects.filter(auction=auction).select_related("clubmember", "user"):
                 tos.update_alternate_split_from_membership()
         return auction
@@ -3193,24 +2840,9 @@ class AuctionCustomFieldsForm(forms.ModelForm):
 class CreateLotForm(forms.ModelForm):
     """Form for creating or updating of lots"""
 
-    # Fields needed to add new species
-    # species_search = forms.CharField(max_length=200, required = False)
-    # species_search.help_text = "Search here for a latin or common name, or the name of a product"
-    # create_new_species = forms.BooleanField(required = False)
-    # new_species_name = forms.CharField(max_length=200, required = False, label="Common name")
-    # new_species_name.help_text = "You can enter synonyms here, separate by commas"
-    # new_species_scientific_name = forms.CharField(max_length=200, required = False, label="Scientific name")
-    # new_species_scientific_name.help_text = "Enter the Latin name of this species"
-    # new_species_category = ModelChoiceField(queryset=Category.objects.all().order_by('name'), required=False,label="Category")
     cloned_from = forms.IntegerField(required=False, widget=forms.HiddenInput())
-    #: Set by refreshSpeciesUI() in lot_form.html when the category picker is actually on screen.
-    #:
-    #: Both pickers start closed, and while the category one is closed whatever it posts is a
-    #: leftover from before the species was chosen -- so ``clean_species_for_auction`` overwrites
-    #: it with the species' own category.  Once somebody has opened the pickers that stops being
-    #: true: what is in the box is what they chose, and deriving over the top of it would revert a
-    #: deliberate answer on save, silently.  Hence one bit saying which of the two situations this
-    #: post is.
+    #: Set by refreshSpeciesUI() in lot_form.html when the category picker is on screen. While closed,
+    #: its posted value is a leftover and gets derived; once opened, it's the user's answer.
     category_shown = forms.BooleanField(required=False, widget=forms.HiddenInput())
 
     show_payment_pickup_info = forms.BooleanField(required=False, label="Show payment/pickup info")
@@ -3269,8 +2901,6 @@ class CreateLotForm(forms.ModelForm):
         exclude = ["user", "image", "image_source"]
         widgets = {
             "summernote_description": SummernoteWidget(),
-            # 'species': forms.HiddenInput(),
-            # 'cloned_from': forms.HiddenInput(),
             "shipping_locations": forms.CheckboxSelectMultiple(),
             "image_url": forms.HiddenInput(),
         }
@@ -3280,35 +2910,21 @@ class CreateLotForm(forms.ModelForm):
         self.cloned_from = kwargs.pop("cloned_from")
         self.auction = kwargs.pop("auction")
         super().__init__(*args, **kwargs)
-        # self.fields["description"].widget.attrs = {"rows": 3}
-        # self.fields['species_category'].required = True
         self.fields["auction"].queryset = self.user.userdata.available_auctions_to_submit_lots
         if self.auction:
             if self.fields["auction"].queryset.filter(pk=self.auction.pk).exists():
                 self.fields["auction"].queryset = Auction.objects.exclude(is_deleted=True).filter(pk=self.auction.pk)
-        # Default auction selection:
-        # try:
-        #     auctions = Auction.objects.filter(lot_submission_end_date__gte=timezone.now()).filter(date_start__lte=timezone.now()).order_by('date_end')
-        # #    self.fields['auction'].initial = auctions[0] # this would set a default value.  We should make users pick this manually so they don't accidentally submit to the wrong auction
-        # except:
-        #     # no non-ended auctions
-        #     pass
         if self.instance.pk:
-            # existing lot
-            # set run_duration - this does not have to be super precise as it will be recalculated when the form is validated
+            # Existing lot; run_duration is recalculated on validation.
             self.fields["run_duration"].initial = 21
             if self.instance.date_end:
                 if (self.instance.date_end - self.instance.date_posted).days < 15:
                     self.fields["run_duration"].initial = 10
-            self.fields[
-                "show_payment_pickup_info"
-            ].initial = False  # this doesn't really matter, it just gets overridden by javascript anyway
+            self.fields["show_payment_pickup_info"].initial = False  # # overridden by JavaScript
             if self.instance.auction:
                 self.fields["part_of_auction"].initial = "True"
             else:
                 self.fields["part_of_auction"].initial = "False"
-            # if self.instance.species:
-            #    self.fields['species_search'].initial = self.instance.species.common_name.split(",")[0]
         else:
             if self.cloned_from:
                 clone_from_lot = Lot.objects.filter(pk=self.cloned_from, is_deleted=False).first()
@@ -3321,7 +2937,7 @@ class CreateLotForm(forms.ModelForm):
             self.fields["part_of_auction"].initial = "True"
             self.fields["run_duration"].initial = 10
             try:
-                # try to get the last lot shipping/payment info and use that, set show_payment_pickup_info as needed
+                # Reuse the last lot's shipping and payment info.
                 lastLot = (
                     Lot.objects.exclude(is_deleted=True)
                     .filter(user=self.user, auction__isnull=True)
@@ -3347,8 +2963,7 @@ class CreateLotForm(forms.ModelForm):
                 self.fields["auction"].initial = self.auction
             else:
                 try:
-                    # see if this user's last auction is still available
-                    # UserData is auto-created when user is saved
+                    # Default to the user's last auction if it still takes lots.
                     lastUserAuction = self.user.userdata.last_auction_used
                     if lastUserAuction and lastUserAuction.lot_submission_end_date > timezone.now():
                         self.fields["auction"].initial = lastUserAuction
@@ -3368,10 +2983,7 @@ class CreateLotForm(forms.ModelForm):
         self.fields["custom_dropdown"].widget = forms.Select(choices=[("", "---------")])
         self.fields["custom_dropdown"].required = False
         self.fields["custom_dropdown"].help_text = ""
-        # Always rendered here, and shown or hidden by the same JavaScript that handles the other
-        # per-auction fields -- this is the form where the auction is a dropdown, so what the
-        # picker should do isn't known until the user picks one.  A standalone lot has no auction
-        # at all, and clean_species_for_auction drops whatever was posted in that case.
+        # Always rendered, shown and hidden by JS with the chosen auction.
         configure_species_field(self.fields, selected_auction, always_render=True, searchable=True)
         if selected_auction:
             apply_price_input_constraints(
@@ -3384,7 +2996,7 @@ class CreateLotForm(forms.ModelForm):
             )
             validated_dropdown_value = self.instance.custom_dropdown or self.fields["custom_dropdown"].initial or ""
             if validated_dropdown_value and validated_dropdown_value not in custom_dropdown_options:
-                # When copying from another lot/auction, only prefill dropdown values that exist in destination options.
+                # Only prefill dropdown values the destination offers.
                 validated_dropdown_value = ""
             if (
                 selected_auction.use_custom_dropdown_field != "disable"
@@ -3403,29 +3015,6 @@ class CreateLotForm(forms.ModelForm):
         self.helper.form_class = "form"
         self.helper.form_tag = True
         self.helper.layout = Layout(
-            # Div(
-            #     'species',
-            #     'create_new_species',
-            #     css_class='d-none',
-            # ),
-            # HTML("<span id='species_selection'>"),
-            # HTML("<h4>Species</h4>"),
-            # HTML('<div class="btn-group" role="group" aria-label="Species Selection">\
-            #     <button id="useExistingSpeciesButton" type="button" onclick="useExistingSpecies();" class="btn btn-secondary selected">Use existing species</button>\
-            #     <button id="createNewSpeciesButton" type="button" onclick="createNewSpecies();" class="btn btn-secondary">Create new species</button>\
-            #     <button id="skipSpeciesButton" type="button" onclick="skipSpecies();" class="btn btn-secondary mr-3">Skip choosing a species</button></div><br>\
-            #     <span class="text-muted">You can search for products as well as species.  If you can\'t find your exact species/morph/collection location, create a new one.<br><br></span>'),
-            # Div(
-            #     Div('species_search',css_class='col-md-12',),
-            #     css_class='row',
-            # ),
-            # Div(
-            #     # Div('new_species_name',css_class='col-md-4',),
-            #     # Div('new_species_scientific_name',css_class='col-md-4',),
-            #     # Div('new_species_category',css_class='col-md-4',),
-            #     css_class='row',
-            # ),
-            # HTML("</span><span id='details_selection'><h4>Details</h4><br>"),
             "cloned_from",
             "image_url",
             Div(
@@ -3449,20 +3038,13 @@ class CreateLotForm(forms.ModelForm):
                     "relist_if_sold",
                     css_class="col-md-4",
                 ),
-                # Div(
-                #     "promoted",
-                #     css_class="col-md-4",
-                # ),
                 Div(
                     "show_payment_pickup_info",
                     css_class="col-md-12",
                 ),
                 Div(
                     "lot_name",
-                    # What the lot name was understood as, and the way back to the controls.  Both
-                    # pickers below start hidden and refreshSpeciesUI() in lot_form.html decides
-                    # what this says: the scientific name when one was identified, the category
-                    # when it wasn't.  Rendered here, under the name it is talking about.
+                    # What the lot name was understood as, filled by refreshSpeciesUI().
                     HTML(
                         "<div id='species-summary' class='form-text text-muted mb-3 d-none'>"
                         "<span id='species-summary-text'></span>"
@@ -3475,9 +3057,7 @@ class CreateLotForm(forms.ModelForm):
                     "species",
                     css_class="col-md-12",
                 ),
-                # Directly under the scientific name, and shown and hidden with it: they are two
-                # halves of one question ("what is this?"), and a category picker that appears on
-                # its own halfway down the form reads as an unrelated chore.
+                # Next to the scientific name, shown and hidden with it.
                 Div(
                     "species_category",
                     css_class="col-md-12",
@@ -3568,32 +3148,14 @@ class CreateLotForm(forms.ModelForm):
 
     def clean(self):
         cleaned_data = super().clean()
-        # create_new_species = cleaned_data.get("create_new_species")
-        # new_species_name = cleaned_data.get("new_species_name")
-        # new_species_scientific_name = cleaned_data.get("new_species_scientific_name")
-        # new_species_category = cleaned_data.get("new_species_category")
-        # if create_new_species:
-        #     if not new_species_name:
-        #         self.add_error('new_species_name', "Enter the common name of the new species to create")
-        #     if not new_species_scientific_name:
-        #         self.add_error('new_species_scientific_name', "Enter the scientific name of the new species to create")
-        #     if not new_species_category:
-        #         self.add_error("new_species_category", "Pick a category")
 
-        # this is now handled more seamlessly in LotValidation.form_valid -- the user can always edit it later
-        # image = cleaned_data.get("image")
-        # image_source = cleaned_data.get("image_source")
-        # if image and not image_source:
-        #    self.add_error('image_source', "Is this your picture?")
-
-        # this doesn't really matter either - if the user screws with the client side validation, the lot simply won't be available
+        # Client-side validation bypass just leaves the lot unavailable.
         auction = cleaned_data.get("auction")
         part_of_auction = cleaned_data.get("part_of_auction")
         clean_species_for_auction(
             cleaned_data,
             auction if part_of_auction == "True" else None,
-            # Only when the picker was closed, which is when what it posted is a leftover rather
-            # than an answer.  See category_shown.
+            # Only when the picker was closed; see category_shown.
             derive_category=not cleaned_data.get("category_shown"),
             instance=self.instance,
         )
@@ -3657,7 +3219,7 @@ class CreateLotForm(forms.ModelForm):
             except UserBan.DoesNotExist:
                 pass
             # thisAuction = Auction.objects.get(pk=auction)
-            if not self.instance.pk:  # only run this check when creating a lot, not when editing
+            if not self.instance.pk:  # # only when creating a lot
                 if auction.max_lots_per_user:
                     if auction.allow_additional_lots_as_donation:
                         numberOfLots = (
@@ -3689,7 +3251,7 @@ class CreateLotForm(forms.ModelForm):
                                 f"You can't add more lots to this auction (Limit: {auction.max_lots_per_user})",
                             )
             else:
-                # that special case when someone is editing a lot to get around the limit
+                # Editing a lot to get around the limit.
                 is_saved = Lot.objects.filter(pk=self.instance.pk, donation=True).first()
                 if is_saved and auction.allow_additional_lots_as_donation and not cleaned_data.get("donation"):
                     lot_count = (
@@ -3710,14 +3272,6 @@ class CreateLotForm(forms.ModelForm):
         else:
             cleaned_data["custom_dropdown"] = ""
 
-        # check to see if this lot exists already
-        # this code is no longer needed since we disable the submit button on click; if there start being problems with duplicate lots, I'll uncomment the below
-        # try:
-        #     existingLot = Lot.objects.exclude(is_deleted=True).filter(user=self.user, lot_name=cleaned_data.get("lot_name"), description=cleaned_data.get("description"), active = True).exclude(pk=self.instance.pk)
-        #     if existingLot:
-        #         self.add_error('description', "You've already added a lot exactly like this.  If you mean to submit another lot, change something here so it's unique")
-        # except:
-        #     pass
         return cleaned_data
 
 
@@ -3744,22 +3298,11 @@ class CustomSignupForm(SignupForm):
 
 
 class ContactForm(forms.Form):
-    """Send the site owner a message without having an account.
+    """Contact the site owner without an account.
 
-    The FAQ used to end with the site owner's address for signed-in users and the words
-    "(Sign in to see email)" for everybody else, which is the exact shape of an App Store
-    Guideline 1.5 metadata rejection: App Review opens the Support URL in a plain browser with no
-    session, and finds no way to contact anyone. Hiding the address from anonymous visitors is a
-    real anti-scraping measure and stays; this form is the way through it.
-
-    reCAPTCHA is the same invisible v2 the signup and password-reset forms use, and is dropped the
-    same way when the site has no keys configured -- otherwise every local and CI run would have to
-    solve one.
-
-    Signed in, the form is one box. The site already knows who they are and where to write back, so
-    ``name`` and ``email`` are removed rather than prefilled, and :attr:`sender_name` /
-    :attr:`sender_email` read the account instead of the POST. Signed out, both are asked for and
-    both are required -- there is nothing else to answer.
+    The FAQ hid the owner's address from signed-out visitors (anti-scraping, kept), which App Review
+    rejects under Guideline 1.5; this is the way through. reCAPTCHA as on signup, off without keys.
+    Signed in with an email: one box, name and address read from the account.
     """
 
     name = forms.CharField(max_length=100, label="Your name")
@@ -3777,29 +3320,23 @@ class ContactForm(forms.Form):
         if not recaptcha_is_configured():
             self.fields.pop("captcha", None)
             logger.debug("reCAPTCHA is not configured; removing captcha from the contact form.")
-        # Somebody signed in has already told us both of these, so the form is one box: write the
-        # message. They are dropped rather than prefilled -- a prefilled field is still a field to
-        # read past, and it is one whose answer we are not going to trust anyway. The reply goes to
-        # the address on the account, which is the address they can actually receive mail at.
+        # Dropped, not prefilled: replies go to the account's address.
         if self.sender_is_known:
             self.fields.pop("name", None)
             self.fields.pop("email", None)
         self.helper = FormHelper()
         self.helper.form_method = "post"
         self.helper.add_input(Submit("submit", "Send", css_class="btn-success text-dark"))
-        # No explicit Layout: the invisible reCAPTCHA has to render to produce a token, and a layout
-        # naming the visible fields would silently leave it out and fail every submission.
+        # No explicit Layout: the invisible reCAPTCHA must render.
 
     @property
     def sender_is_known(self) -> bool:
-        """Signed in *and* with an address to reply to. An account with no email on it still gets
-        asked for one, because the whole value of this form is that somebody writes back."""
+        """Signed in with an email to reply to."""
         return self.user is not None and self.user.is_authenticated and bool(self.user.email)
 
     @property
     def sender_name(self) -> str:
-        """Who wrote in. Read off the account when there is one, so it cannot be posted as somebody
-        else, and out of the form when there is not."""
+        """The account's name when known (can't be spoofed), else the form's."""
         if self.sender_is_known:
             return self.user.get_full_name() or self.user.username
         return self.cleaned_data.get("name", "")
@@ -3822,10 +3359,7 @@ class CustomResetPasswordForm(ResetPasswordForm):
 
 
 class UserLocation(forms.ModelForm):
-    """
-    We need to have a form based on userdata in order to set the latitude and longitude correctly.
-    But from a user's standpoint, it makes sense to set their name on the same form
-    """
+    """A UserData form for location, with the user's name on it too."""
 
     first_name = forms.CharField(max_length=30, label="First name", required=True)
     last_name = forms.CharField(max_length=150, label="Last name", required=True)
@@ -3843,10 +3377,7 @@ class UserLocation(forms.ModelForm):
         )
 
     def __init__(self, *args, **kwargs):
-        # Set by the gate on creating an auction, which refuses a blank phone number where the one
-        # on adding a lot does not: an organizer is somebody their participants have to be able to
-        # reach.  Required here as well as there, or saving the page sends them straight back to
-        # the gate that sent them.  See ``services.missing_contact_info``.
+        # The auction gate needs a phone; require it here too, or saving loops back to the gate.
         self.require_phone = kwargs.pop("require_phone", False)
         super().__init__(*args, **kwargs)
         self.fields["address"].widget = forms.Textarea()
@@ -3945,20 +3476,10 @@ class ChangeUsernameForm(forms.ModelForm):
 
 
 class DisabledOptionSelect(forms.Select):
-    """A ``<select>`` that renders specific option values as ``disabled``.
+    """A ``<select>`` rendering specific values as disabled (app-only print methods on the web).
 
-    The options are still shown (so the user can see the choice exists) but can't be picked. Used for
-    print methods that only work in the native app when the page is viewed on the web.
-
-    **The option that is currently selected is never disabled**, whatever ``disabled_values`` says.
-    That is not a nicety: HTML's form-submission algorithm appends an entry for a ``<select>``'s
-    selected option *only if that option is not disabled*, so a field whose stored value is one of
-    the disabled ones submits **nothing at all**. On a required field that is a validation error the
-    user cannot see the cause of ("this field is required" on a dropdown that is plainly showing a
-    value), and re-rendering the page then leaves no option selected -- so the browser shows the
-    first one instead, and the second attempt "works" by silently overwriting the setting the user
-    never touched. Leaving the selected option enabled keeps the value round-tripping; it still
-    can't be *chosen* here, because it is only ever enabled when it is already the answer.
+    **The selected option is never disabled**: a disabled selected option isn't submitted, which caused
+    an invisible required-field error and then silently reset the setting.
     """
 
     def __init__(self, *args, disabled_values=(), **kwargs):
@@ -3984,15 +3505,11 @@ class UserLabelPrefsForm(forms.ModelForm):
         self.helper.form_id = "printing-prefs"
         self.helper.form_class = "form"
         self.helper.form_tag = True
-        # The print-method dropdown is the primary choice on the page, but "System printer" /
-        # "Bluetooth" only mean anything in the app, so it's hidden for pure-web users who have no
-        # device (see UserLabelPrefsView). When hidden, drop the field so the form leaves it as-is.
+        # Print method is hidden for web users without a device, and dropped so it stays as-is.
         print_method_layout = []
         if show_print_method:
             if not is_mobile_app:
-                # On the web those two methods do nothing (they need the native app), so show them
-                # disabled with a note that only PDF works from a browser. PDF stays selectable, and a
-                # value the user set in the app (e.g. bluetooth) is preserved on save.
+                # App-only methods shown disabled on the web; a stored app value is preserved.
                 self.fields["print_method"].widget = DisabledOptionSelect(
                     choices=UserLabelPrefs.PRINT_METHODS,
                     disabled_values=("system", "bluetooth"),
@@ -4001,28 +3518,19 @@ class UserLabelPrefsForm(forms.ModelForm):
                     "System printer and Bluetooth printing only work in the app. "
                     "Only PDF labels are available from the web."
                 )
-                # Belt and braces for the same problem the widget fixes: a POST that carries no
-                # print_method at all must leave the stored one alone rather than fail validation.
-                # Anything that can produce that -- an older cached page rendered before the widget
-                # fix, a browser that drops the value for its own reasons, a script posting only the
-                # fields it means to change -- would otherwise put a required-field error on a
-                # dropdown the user never touched. See clean_print_method.
+                # A POST without print_method leaves it alone (see clean_print_method).
                 self.fields["print_method"].required = False
             print_method_layout = [
                 Div(
                     Div("print_method", css_class="col-sm-7"),
                     css_class="row",
                 ),
-                # Warnings alert + (in-app) Bluetooth connect card + the live-warning JS map. Kept in
-                # a template so the UX/copy iterates server-side without an app release.
+                # In a template so copy changes need no app release.
                 HTML('{% include "printing_extras.html" %}'),
             ]
         else:
             del self.fields["print_method"]
-        # "Print from my computer to my phone" is only shown to an account with a phone that has ever
-        # reported a paired printer -- otherwise it is a switch with nothing behind it. Dropped from
-        # the form entirely when hidden, so a save from a browser that has never seen it leaves the
-        # stored value alone.
+        # Only for accounts whose phone has reported a paired printer; dropped otherwise.
         print_from_computer_layout = []
         if show_print_from_computer:
             print_from_computer_layout = [
@@ -4030,9 +3538,7 @@ class UserLabelPrefsForm(forms.ModelForm):
                     Div("print_from_computer", css_class="col-sm-12"),
                     css_class="row",
                 ),
-                # The "your phone was last seen…" line. In a template because it is the one fact that
-                # decides whether the feature will work at all, and the copy for it wants to change
-                # without a form edit.
+                # The "last seen" line, in a template for easy copy changes.
                 HTML('{% include "printing_remote_extras.html" %}'),
             ]
         else:
@@ -4125,12 +3631,7 @@ class UserLabelPrefsForm(forms.ModelForm):
         )
 
     def clean_print_method(self):
-        """An omitted print method means "leave it as it is", never "set it to blank".
-
-        The field is only optional on the web (see ``__init__``), where the app-only methods can't
-        be chosen anyway. Falling back to the instance keeps a Bluetooth user's setting through a
-        save made from a computer -- which is the whole point of showing them the value at all.
-        """
+        """An omitted print method keeps the stored one."""
         method = self.cleaned_data.get("print_method")
         if not method:
             return self.instance.print_method or "pdf"
@@ -4138,13 +3639,8 @@ class UserLabelPrefsForm(forms.ModelForm):
 
 
 class ChangeUserPreferencesForm(forms.ModelForm):
-    """What the site shows you: /preferences/.
-
-    Everything about being *notified* moved to :class:`ChangeUserNotificationsForm` and its own
-    page. Splitting them took the page's JavaScript with it -- ``distance_unit`` lives here and the
-    three radii live there, so changing the unit can no longer need to convert a field on the same
-    screen. Distances are stored in miles whatever this says; the unit only decides how the
-    notifications page renders and reads them.
+    """What the site shows you: /preferences/. Notifications are a separate form and page; distances are
+    stored in miles.
     """
 
     class Meta:
@@ -4210,14 +3706,8 @@ class ChangeUserPreferencesForm(forms.ModelForm):
 
 
 class ChangeUserNotificationsForm(forms.ModelForm):
-    """When the site is allowed to contact you: /notifications/.
-
-    These were the bottom half of the preferences page. They are a page of their own now because
-    they are what people come to change -- and because ``distance_unit`` staying behind on
-    /preferences/ is what let the last of this page's JavaScript go. The unit is fixed for the life
-    of the page, so a km user's radii are converted once in ``__init__`` for display and once in
-    ``clean`` on the way back to the miles the database stores. There is nothing left for a
-    ``change`` handler to keep in step.
+    """When the site may contact you: /notifications/. Radii are converted from miles in ``__init__`` and
+    back in ``clean``; the unit can't change on this page.
     """
 
     class Meta:
@@ -4238,8 +3728,7 @@ class ChangeUserNotificationsForm(forms.ModelForm):
             "email_me_about_new_lots_ship_to_location",
         )
 
-    #: The radii, and the fields whose help text names the unit. One list so the two conversions
-    #: and the help text cannot fall out of step with each other.
+    #: Radii and fields whose help text names the unit.
     DISTANCE_FIELDS = (
         "email_me_about_new_auctions_distance",
         "email_me_about_new_in_person_auctions_distance",
@@ -4250,8 +3739,7 @@ class ChangeUserNotificationsForm(forms.ModelForm):
         self.user = user
         super().__init__(*args, **kwargs)
         self.in_km = bool(self.instance and self.instance.distance_unit == "km")
-        # Stored in miles, always. A km user sees kilometres in the boxes and `clean` puts miles
-        # back; nothing on this page can change the unit underneath them mid-edit.
+        # Stored in miles; shown in km for km users.
         if self.in_km:
             for field in self.DISTANCE_FIELDS:
                 value = getattr(self.instance, field, None)
@@ -4271,18 +3759,12 @@ class ChangeUserNotificationsForm(forms.ModelForm):
         self.fields[
             "email_me_about_new_chat_replies"
         ].help_text = f"Only for lots that don't belong to you.  Unchecking this will turn off notifications for {self.subscriptions} lot(s) you've already commented on."
-        # Push notifications need a signed-in app install with a live FCM token. Always show the
-        # toggle so users know it exists, but disable it (with an explanatory note) when there's no
-        # device to push to — disabling keeps the stored value unchanged on save.
+        # Push needs a live device: always shown, disabled without one (value kept).
         if not (self.instance and self.instance.pk and self.instance.has_push_device):
             self.fields["push_notifications_instead_of_email"].disabled = True
-            # The running total exists only inside the app, so the same gate applies. Disabling
-            # leaves the stored value untouched, which is what lets installing the app resume it.
+            # App-only; disabled keeps the stored value.
             self.fields["show_running_total_notification"].disabled = True
-            # Someone whose phone has gone quiet needs a different sentence than someone who never
-            # had the app: the box stays ticked (their stored choice is untouched, so reinstalling
-            # just resumes push) and telling them to "enable this" would be nonsense. A device row
-            # outlives an uninstall -- only the token is cleared -- so it's what tells them apart.
+            # A past device (token cleared) gets different wording than never having the app.
             had_the_app = self.instance and self.instance.pk and MobileDevice.objects.filter(user=user).exists()
             if had_the_app:
                 self.fields["push_notifications_instead_of_email"].help_text = (
@@ -4295,10 +3777,7 @@ class ChangeUserNotificationsForm(forms.ModelForm):
                     "Install the app and sign in on a device to enable this. Then you'll get "
                     "notifications in the app instead of emails, for everything except account emails."
                 )
-        # The watched-lot "bidding is starting" alert goes to the app whenever the app can receive
-        # it (see notify_watchers_lot_selling_soon), so for those users the browser-subscribe prompt
-        # this field's help text carries would point at the wrong device. There's nothing to
-        # subscribe to inside the app's own WebView either -- it has no Push API.
+        # App users get lot alerts in the app; no browser subscribe prompt (or in the WebView).
         has_app_push = bool(self.instance and self.instance.pk and self.instance.has_app_push)
         self.can_subscribe_to_webpush = not has_app_push and not is_mobile_app
         if has_app_push:
@@ -4397,9 +3876,7 @@ class ChangeUserNotificationsForm(forms.ModelForm):
 
     def clean(self):
         cleaned_data = super().clean()
-        # Everything is stored in miles. `self.in_km` is the unit the boxes were *rendered* in, read
-        # off the instance rather than off a field on this form -- the unit lives on /preferences/
-        # and cannot have changed while this page was open.
+        # Convert back to miles; the unit came from the instance.
         if self.in_km:
             for field in self.DISTANCE_FIELDS:
                 if cleaned_data.get(field):
@@ -4421,10 +3898,8 @@ class LabelPrintFieldsForm(forms.Form):
         super().__init__(*args, **kwargs)
 
         self.available_fields = [
-            # if updating this:
-            # also update models.Auction.label_print_fields if a new field should be enabled by default
-            # a short one-line fact goes in printing.LABEL_TAG_FIELDS; anything else needs a band in
-            # label_template.html -- the layout rules are in auctions/printing.py's docstring
+            # Updating: also models.Auction.label_print_fields for defaults; short facts in
+            # printing.LABEL_TAG_FIELDS, anything else a band in label_template.html (see printing.py).
             {
                 "value": "qr_code",
                 "description": "QR Code",
@@ -4545,13 +4020,8 @@ class LabelPrintFieldsForm(forms.Form):
 
 
 class MarksClubMemberAdminEditedMixin:
-    """Saving one of the club admin's member forms hands the record to the club.
-
-    ``ClubMember.admin_edited`` decides what happens to a row when the person deletes their site
-    account: one an admin has created or edited is the club's own record and keeps its details,
-    losing only the account link (see :mod:`auctions.account_deletion`). Every form using this mixin
-    is reachable only with club admin permissions, so a save through one is exactly that event.
-    Deliberately not used by ClubMemberSelfServiceForm, which is the member editing themselves.
+    """Saving a club admin member form marks the record ``admin_edited``, so account deletion keeps it as
+    the club's. Not used by ClubMemberSelfServiceForm.
     """
 
     def save(self, commit=True):
@@ -4568,19 +4038,10 @@ class ClubMemberSelfServiceForm(forms.ModelForm):
 
 
 class ClubEventForm(forms.ModelForm):
-    """Add or edit an event on a club's calendar.
+    """Add or edit a club calendar event. Only title and start are required.
 
-    Kept deliberately short — title and a start time are the only things required, everything
-    else is optional, so posting a meeting takes a few seconds.
-
-    On a **generated** event (an auction, or one of its pickup times) the form narrows itself to
-    the title and the description, because those are the only two things a club owns there. A
-    club's monthly meeting is often the auction, and "In-person auction." is not what they want
-    members reading on their phone — but the dates, the location and whether the event exists at
-    all belong to the auction, and an event whose date disagrees with its auction is worse than no
-    feature at all. Typing either field sets the matching ``*_is_custom`` flag, which is what stops
-    ``club_events.sync_one_auction_event`` writing over it on the auction's next save; typing the
-    generated wording back in clears the flag again.
+    A generated event (auction or pickup) narrows to title and description; typing either sets its
+    ``*_is_custom`` flag so sync won't overwrite it, and typing the generated wording clears it.
     """
 
     class Meta:
@@ -4601,18 +4062,14 @@ class ClubEventForm(forms.ModelForm):
     def __init__(self, *args, **kwargs):
         user_timezone = kwargs.pop("user_timezone", None)
         if user_timezone:
-            # The form is rendered inside base.html's {% timezone %} block, so an admin sees these
-            # times in their own timezone. Read them back the same way, or every save shifts the
-            # event by the difference between their timezone and the site's.
+            # Rendered in the admin's timezone; parse the same way.
             timezone.activate(user_timezone)
         super().__init__(*args, **kwargs)
         self.fields["date_end"].required = False
         is_edit = bool(self.instance and self.instance.pk)
         self.is_generated = bool(is_edit and self.instance.is_automatic)
         if self.is_generated:
-            # Imported here rather than at the top: club_events pulls in google_calendar and
-            # discord_events, and forms.py is imported early enough that doing it up there is
-            # asking for an import cycle the day one of those wants a form.
+            # Imported here to avoid an import cycle.
             from auctions import club_events
 
             self.generated_title, self.generated_description = club_events.generated_wording(self.instance)
@@ -4634,7 +4091,7 @@ class ClubEventForm(forms.ModelForm):
                 "description",
             ]
             if is_edit:
-                # Only worth offering once the event exists — you don't add an event to call it off.
+                # Cancelling only makes sense for an existing event.
                 layout_fields.append("cancelled")
             else:
                 del self.fields["cancelled"]
@@ -4645,8 +4102,7 @@ class ClubEventForm(forms.ModelForm):
         """Drop every field the auction owns, and label the two that are left."""
         for name in ("date_start", "date_end", "location", "cancelled"):
             del self.fields[name]
-        # Both stay required exactly as the model has them — a generated event with a blank title
-        # would show up blank in every member's calendar.
+        # Still required: a blank title shows blank in calendars.
         title_field = self.fields["title"]
         title_field.help_text = (
             f"What members see on their calendar. The auction's own title is “{self.generated_title}”."
@@ -4666,16 +4122,14 @@ class ClubEventForm(forms.ModelForm):
         return cleaned_data
 
     def save(self, commit=True):
-        """Record which of the two fields the club typed, so the next sync leaves them alone."""
+        """Set the ``*_is_custom`` flags for fields the club typed."""
         event = super().save(commit=False)
         if self.is_generated:
             for field, generated in (
                 ("title", self.generated_title),
                 ("description", self.generated_description),
             ):
-                # Typing the generated wording back in by hand is not a custom value — there
-                # would be nothing for the flag to protect, and a flag set here would quietly stop
-                # the event following a later rename.
+                # Generated wording typed back isn't custom.
                 setattr(event, f"{field}_is_custom", getattr(event, field) != generated)
         if commit:
             event.save()
@@ -4683,18 +4137,10 @@ class ClubEventForm(forms.ModelForm):
 
 
 class ClubAnnouncementForm(forms.ModelForm):
-    """Say one thing to a club's members, in as many places at once as the club has set up.
+    """Send one message to a club's members through the channels it picks.
 
-    The checkboxes are the whole design: an announcement isn't a channel, it's a message, and the
-    club decides per message whether it goes to the people in Discord, the people with the app, the
-    club's mailing list, or the club's own website. Each one is offered honestly — Discord is
-    switched off with a reason when there is no channel to post in, and the push box carries the
-    number of members it would actually reach, because "12 of 143" is the fact that stops a club
-    believing a push was the whole announcement.
-
-    Mailchimp and Brevo are the one pair that are mutually exclusive rather than merely independent
-    (see clean): they are two boxes because they are two accounts, not because a club has two
-    different sets of people.
+    Unavailable channels are disabled with a reason; the push box shows how many members it reaches.
+    Mailchimp and Brevo are mutually exclusive (see clean).
     """
 
     class Meta:
@@ -4712,9 +4158,7 @@ class ClubAnnouncementForm(forms.ModelForm):
             "text": forms.Textarea(
                 attrs={"rows": 3, "placeholder": "Bring a plant to Saturday's meeting — we're doing a swap."}
             ),
-            # A native datetime-local input rather than the site's DateTimePickerInput: that widget
-            # initializes on DOMContentLoaded, and the native one is the same control every phone
-            # already knows. See the datepicker note in CLAUDE.md.
+            # Native datetime-local: DateTimePickerInput doesn't initialize in modals.
             "scheduled_for": forms.DateTimeInput(attrs={"type": "datetime-local"}, format="%Y-%m-%dT%H:%M"),
         }
 
@@ -4724,8 +4168,7 @@ class ClubAnnouncementForm(forms.ModelForm):
         from auctions import announcements as announcements_module
 
         self.fields["text"].label = "Announcement"
-        # The attribute is the browser's cap; clean_text below is the one that actually holds,
-        # because assigning max_length after the field is built never adds its validator.
+        # Browser cap only; clean_text enforces it.
         self.fields["text"].widget.attrs["maxlength"] = announcements_module.MAX_LENGTH
 
         self.discord_ready = announcements_module.discord_ready(self.club)
@@ -4736,10 +4179,7 @@ class ClubAnnouncementForm(forms.ModelForm):
         if self.discord_ready:
             discord.help_text = "The channel you set with /announcements_here."
         else:
-            # A checkbox that cannot do anything is disabled here rather than left clickable: this
-            # is a form field whose value would be silently dropped, not an action button, so the
-            # "unavailable actions stay clickable" rule in style_reference.md doesn't apply. The
-            # help text carries the fix, which is the part that matters.
+            # Disabled (a silently dropped value), with the fix in the help text.
             discord.disabled = True
             discord.initial = False
             if not self.club.discord_server_id:
@@ -4763,10 +4203,7 @@ class ClubAnnouncementForm(forms.ModelForm):
 
         website = self.fields["show_on_website"]
         website.label = "Website"
-        # Nothing is ticked when the form opens, including this one -- the model default is True
-        # because a row created any other way should still reach the club's page, but on this form
-        # a pre-ticked box is a channel nobody chose. clean() already refuses a send with no
-        # channel at all, so the cost of forgetting is an error message, not a silent publish.
+        # Nothing ticked by default: a pre-ticked box is a channel nobody chose.
         website.initial = False
         website.help_text = format_html(
             "Your club page, and the <a href='{}'>snippets</a> for your own site.",
@@ -4775,10 +4212,7 @@ class ClubAnnouncementForm(forms.ModelForm):
 
         self.mailchimp_ready = announcements_module.mailchimp_ready(self.club)
         self.brevo_ready = announcements_module.brevo_ready(self.club)
-        # A club that has connected one provider is not shopping for the other, and a permanently
-        # disabled "Connect Brevo" box next to a working Mailchimp one is a box that can only ever
-        # be wrong. Offer both only while neither is connected, which is the case where the pair is
-        # a menu rather than a distraction.
+        # With one provider connected, don't offer the other.
         mailchimp_connected = bool(self.club.mailchimp_access_token)
         brevo_connected = bool(self.club.brevo_api_key)
         if mailchimp_connected and not brevo_connected:
@@ -4806,9 +4240,7 @@ class ClubAnnouncementForm(forms.ModelForm):
         scheduled.required = False
         scheduled.help_text = ""
 
-        # No subject box at all: the emailed version is always "<Club> announcement"
-        # (ClubAnnouncement.email_subject). A club given the box wrote its one-sentence
-        # announcement into it a second time, and the inbox showed the same words twice.
+        # No subject box: always "<Club> announcement".
         self.helper = FormHelper()
         self.helper.form_method = "post"
         layout_fields = ["text"]
@@ -4828,15 +4260,10 @@ class ClubAnnouncementForm(forms.ModelForm):
         self.helper.add_input(Submit("submit", "Send announcement", css_class="btn-success text-dark"))
 
     def _configure_email_channel(self, field_name, provider, *, ready, connected, config_urlname, list_word):
-        """Offer one email provider honestly: what it would reach, or why it can't.
-
-        Same shape as the Discord checkbox above — a box that cannot do anything is disabled with
-        the fix in its help text, because a form field whose value gets silently dropped is not the
-        "unavailable actions stay clickable" case.
-        """
+        """Offer one email provider: what it would reach, or disabled with the fix."""
         field = self.fields.get(field_name)
         if field is None:
-            # The club has the other provider connected, so this one was dropped above.
+            # Dropped above: the other provider is connected.
             return
         field.label = provider
         if ready:
@@ -4859,12 +4286,7 @@ class ClubAnnouncementForm(forms.ModelForm):
             )
 
     def clean_text(self):
-        """Cap the length here rather than on the model.
-
-        Discord refuses a message over 2000 characters outright and a phone's lock screen shows
-        maybe two lines, so a long announcement is not a long announcement -- it is one that
-        arrives truncated in three different places, each cut somewhere different.
-        """
+        """Cap length: Discord refuses over 2000 characters and lock screens show two lines."""
         from auctions import announcements as announcements_module
 
         text = (self.cleaned_data.get("text") or "").strip()
@@ -4878,12 +4300,7 @@ class ClubAnnouncementForm(forms.ModelForm):
         return text
 
     def clean_scheduled_for(self):
-        """A time in the past is somebody meaning "now", or getting the date wrong. Neither is safe.
-
-        Sending it immediately would surprise them; storing it would have the beat send it on its
-        next tick, which is the same surprise a few minutes later. A grace minute covers the clock
-        skew between the phone that filled the box in and this server.
-        """
+        """Refuse a past time (beyond a minute of clock skew): it would send immediately, a surprise."""
         when = self.cleaned_data.get("scheduled_for")
         if when and when < timezone.now() - datetime.timedelta(minutes=1):
             msg = "That time has already passed. Pick a time in the future, or leave it blank to send now."
@@ -4901,15 +4318,11 @@ class ClubAnnouncementForm(forms.ModelForm):
                 cleaned_data.get("show_on_website"),
             )
         ):
-            # An announcement with no channel is a diary entry. Refuse it here rather than saving a
-            # row that reaches nobody and leaves the admin thinking they told their club something.
+            # Refuse a send to no channel.
             msg = "Pick at least one place to send this."
             raise forms.ValidationError(msg)
         if cleaned_data.get("send_to_mailchimp") and cleaned_data.get("send_to_brevo"):
-            # Members are synced to every connected provider, so both lists hold the same people
-            # and both campaigns would land in the same inboxes. A club keeps two providers
-            # connected while it moves between them; that is a reason to have both configured, not
-            # a reason to send to both at once.
+            # Members are on both lists; both would double-mail.
             msg = (
                 "Pick one email provider, not both — your members are on both lists, so sending "
                 "through both puts two copies of this in the same inbox."
@@ -4976,12 +4389,7 @@ class ClubEditForm(forms.ModelForm):
 
 
 class LotCategoryForm(forms.ModelForm):
-    """The BAP admin's "set category" modal.  One field, and one side effect.
-
-    The side effect is :func:`note_category_chosen_by_person`: this form exists so a person can
-    overrule where a lot landed, and without clearing ``category_automatically_added`` the next
-    save would re-derive the category from the lot's species and put it straight back.
-    """
+    """The BAP admin's set-category modal; clears ``category_automatically_added`` so the choice sticks."""
 
     class Meta:
         model = Lot
@@ -5021,11 +4429,7 @@ class _ClubEmailMemberChoiceField(forms.ModelChoiceField):
 
 
 class ClubMembershipSettingsForm(forms.ModelForm):
-    """Form for club admins to configure membership and payment settings.
-
-    The PayPal/Square seller for the club is managed separately (via the seller info
-    cards rendered on the same template), not as a field on this form.
-    """
+    """Club membership and payment settings. The PayPal/Square seller is managed separately on the page."""
 
     class Meta:
         model = Club
@@ -5046,8 +4450,7 @@ class ClubMembershipSettingsForm(forms.ModelForm):
 
     def __init__(self, *args, show_paypal_subscriptions=True, **kwargs):
         kwargs.pop("current_user", None)
-        # The full, copyable URL to paste into PayPal; falls back to the path if the view didn't
-        # supply it (e.g. in a unit test that builds the form directly).
+        # The copyable webhook URL, with a path fallback.
         webhook_url = kwargs.pop("webhook_url", "") or "/clubs/paypal/webhook"
         super().__init__(*args, **kwargs)
         self.helper = FormHelper()
@@ -5100,10 +4503,8 @@ class ClubMembershipSettingsForm(forms.ModelForm):
                 ),
             ]
         else:
-            # Subscriptions can only be verified for site-PayPal or own-credential clubs (see
-            # Club.supports_paypal_subscriptions). Drop the field entirely for everyone else so it
-            # isn't rendered -- and, since it's no longer part of the form, a previously saved value
-            # is preserved rather than blanked on submit.
+            # Only site-PayPal or own-credential clubs can verify subscriptions; drop it otherwise
+            # (keeping any saved value).
             self.fields.pop("paypal_webhook_id", None)
 
         self.helper.layout = Layout(*layout_fields)
@@ -5114,11 +4515,10 @@ class ClubMembershipSettingsForm(forms.ModelForm):
         membership_system = cleaned_data.get("membership_system")
         fee = cleaned_data.get("membership_annual_fee")
         if membership_system == "none":
-            # "No membership fees" always means a zero fee, regardless of what was submitted.
+            # No membership fees means zero.
             cleaned_data["membership_annual_fee"] = Decimal(0)
         elif not fee or fee <= 0:
-            # A paid membership system requires a real fee — a zero fee would silently
-            # disable dues, payment buttons, and reminders while still showing as "paid".
+            # A paid system needs a real fee.
             self.add_error(
                 "membership_annual_fee",
                 'Enter a fee greater than 0, or choose "No membership fees" above.',
@@ -5127,11 +4527,8 @@ class ClubMembershipSettingsForm(forms.ModelForm):
 
 
 class ClubPayPalCredentialsForm(forms.ModelForm):
-    """Lets a club using non-OAuth PayPal enter its own REST API credentials.
-
-    Only used when ``Club.allow_non_oauth_paypal`` is set (an admin-only flag); the
-    membership settings template renders this in place of the PayPal OAuth UI. The secret
-    is write-only -- it is never rendered back, and leaving it blank keeps the saved value.
+    """A non-OAuth club's PayPal REST credentials (``allow_non_oauth_paypal`` only). The secret is
+    write-only; blank keeps it.
     """
 
     paypal_secret = forms.CharField(
@@ -5150,19 +4547,17 @@ class ClubPayPalCredentialsForm(forms.ModelForm):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        # Stop Firefox/Chrome from offering the admin's own login here: the client ID/secret
-        # pair otherwise looks like a username/password login form. "new-password" is the only
-        # value browsers reliably honor on a password field ("off" is ignored for logins).
+        # Stop browsers offering the admin's login here.
         self.fields["paypal_client_id"].widget.attrs["autocomplete"] = "off"
         self.fields["paypal_secret"].widget.attrs["autocomplete"] = "new-password"
         self.helper = FormHelper()
-        # The template renders the <form> tag itself so it can point at the dedicated endpoint.
+        # The template renders the <form> tag.
         self.helper.form_tag = False
         self.helper.layout = Layout("paypal_client_id", "paypal_secret")
         self.helper.add_input(Submit("submit", "Save PayPal credentials", css_class="btn-primary"))
 
     def clean_paypal_secret(self):
-        # Blank means "keep what's stored" so the saved secret is never echoed back to the page.
+        # Blank keeps the stored secret.
         secret = self.cleaned_data.get("paypal_secret")
         if not secret:
             return self.instance.paypal_secret
@@ -5198,9 +4593,7 @@ class ClubEmailSettingsForm(forms.ModelForm):
         club = self.instance
         self.helper = FormHelper()
         self.helper.form_method = "post"
-        # The template renders the <form> tag itself so it can wrap both the
-        # crispy fields and the email-preview mockup (which embeds the welcome
-        # text textarea inline).
+        # The template renders the <form> tag around the fields and the email preview.
         self.helper.form_tag = False
         self.helper.disable_csrf = True
         payments_enabled = bool(club and club.membership_payment_emails_enabled)
@@ -5215,18 +4608,15 @@ class ClubEmailSettingsForm(forms.ModelForm):
                 )
             )
         else:
-            # When SES routing is off there is no per-member routing; expose the
-            # plain reply-to address here instead of on the membership settings page.
+            # Without SES routing, show the reply-to address here.
             layout_fields.append(
                 Fieldset(
                     "Reply-to address",
                     "contact_email",
                 )
             )
-        # The four toggles are rendered by crispy. The email opening/closing fields
-        # and include_auction checkboxes are rendered manually in the template
-        # (inside the preview mockup) — they are excluded from the layout here
-        # but still in Meta.fields so they post.
+        # Crispy renders the toggles; the email text and include checkboxes are in the preview
+        # template but still in Meta.fields.
         outgoing_fields = [
             "send_welcome_email_to_new_members",
             "send_membership_expiration_reminders_30_days",
@@ -5236,8 +4626,7 @@ class ClubEmailSettingsForm(forms.ModelForm):
         layout_fields.append(Fieldset("Outgoing emails", *outgoing_fields))
         self.helper.layout = Layout(*layout_fields)
         if show_email_routing:
-            # The contact_email field is hidden when SES routing is enabled — it is
-            # not exposed in the layout and members route via contact_email_member.
+            # With SES routing, members route via contact_email_member instead.
             self.fields.pop("contact_email", None)
         else:
             # Drop the dropdown routing fields entirely so they are not posted.
@@ -5257,9 +4646,7 @@ class ClubEmailSettingsForm(forms.ModelForm):
             )
             auction_qs = base_qs.filter(Q(permission_admin=True) | Q(permission_manage_auctions=True))
             contact_qs = base_qs.filter(Q(permission_admin=True) | Q(permission_add_edit=True))
-            # Donation replies go to whoever may open the vendor pages, which is its own permission
-            # now -- offering a membership manager here would name a recipient that
-            # Club.donation_email_recipient then refuses, and the setting would look silently broken.
+            # Only people who may open vendor pages can receive donation replies.
             donation_qs = base_qs.filter(Q(permission_admin=True) | Q(permission_manage_donations=True))
             # Determine the fallback person shown in the help text
             auction_fallback = club._first_email_member_by_priority(Q(permission_manage_auctions=True))
@@ -5303,10 +4690,7 @@ class ClubEmailSettingsForm(forms.ModelForm):
             )
             donation_enabled = bool(club and club.pk and club.enable_donation_tracking)
             if donation_enabled:
-                # Short on purpose: the page carries the whole explanation in a note above this
-                # field (see club_email_settings.html), shown under exactly the same condition.
-                # Saying it twice on one screen made the recommendation easier to skim past, not
-                # harder.
+                # Short: the page explains it above.
                 donation_help = (
                     "Leave blank (recommended) — see the note above. Set it only if someone needs "
                     "a copy of vendor replies in their own inbox."
@@ -5352,10 +4736,7 @@ class ClubEmailSettingsForm(forms.ModelForm):
         "expiring_soon_opening",
         "expiring_soon_closing",
     ]
-    # ``<`` is excluded as well as ``>`` so an unterminated "<" stops at the next one instead of
-    # scanning to the end of the value from every "<" in it, which is quadratic (see the same fix in
-    # auctions/donations.py). A real tag never contains a bare "<", so nothing this rejected before
-    # gets through now.
+    # Excludes "<" too, to avoid quadratic scanning (as in donations.py).
     _HTML_TAG_RE = re.compile(r"<[^<>]+>")
     _URL_RE = re.compile(r"https?://", re.IGNORECASE)
 
@@ -5432,27 +4813,12 @@ class ClubBapCategoryOverrideForm(forms.ModelForm):
 
 
 class SpeciesAdminForm(forms.ModelForm):
-    """Add a species -- or a strain of one -- from the site, without opening the Django admin.
+    """Add a species, strain or hybrid from the site.
 
-    The species list is imported, not typed, and that is the point: 36,000 rows nobody has to
-    maintain.  But the imported list will always be missing things a club sells -- an undescribed
-    *Ancistrus* with an L-number, this year's shrimp colour, a plant the trade renamed -- and the
-    lot form deliberately refuses to accept a name that isn't on the list.  So there has to be a
-    way to *add to the list*, and it has to be quick enough to use while somebody is standing at
-    the check-in table.
-
-    Two things make it quick.  The scientific name is one box, split on the space rather than
-    asked for twice.  And a strain is the same form with a parent picked, which is what keeps
-    "Blue Dream" out of the genus column -- see :class:`~auctions.models.Species`.
-
-    A **hybrid** is the third shape and the only one with no scientific name at all: tick the box,
-    name the cross, and leave the rest.  It is a checkbox rather than "a strain with no parent"
-    because a strain with no parent is the commonest way to fill this form in wrong, and the two
-    have to be told apart by something the person actually said.
-
-    Everything created here is ``source="admin"``, which is *not* the same as the ``manual`` rows
-    left over from the old Product table: those get folded into the imported list by
-    ``import_fishbase``, and a row somebody added on purpose last week must not be.
+    The list is imported and will always miss things clubs sell, and lot forms accept only listed names.
+    The scientific name is one box, split on the space. A strain is a picked parent. A hybrid is a
+    checkbox with a trade name and no scientific name. Rows are ``source="admin"``, never folded by
+    ``import_fishbase``.
     """
 
     scientific_name_input = forms.CharField(
@@ -5511,12 +4877,8 @@ class SpeciesAdminForm(forms.ModelForm):
             url="species-autocomplete",
             attrs={"data-placeholder": "Search the species list…", "style": "width: 100%"},
         )
-        # Re-assigning the queryset is what rebinds widget.choices to it.  Without this the
-        # autocomplete widget is left holding the plain list Django built for the old widget, and
-        # re-rendering the form -- which only happens when there is a validation error to show --
-        # dies inside dal trying to filter it.
-        # Nominal species only, and no hybrids: a strain of a strain is not a thing, and a strain
-        # of a cross would inherit a genus the cross deliberately hasn't got.
+        # Re-assign the queryset to rebind widget.choices, or re-rendering after an error dies in dal.
+        # Nominal species only, no hybrids.
         self.fields["parent"].queryset = visible_species(added_by).filter(parent__isnull=True, is_hybrid=False)
         self.fields["parent"].help_text = (
             "Leave blank for an ordinary species. A strain keeps its parent's genus and epithet, so "
@@ -5566,9 +4928,7 @@ class SpeciesAdminForm(forms.ModelForm):
         variety = (cleaned_data.get("variety") or "").strip()
         is_hybrid = bool(cleaned_data.get("is_hybrid"))
         if is_hybrid:
-            # The whole of a cross's identity is the name the trade gave it.  Anything else on the
-            # form is a contradiction rather than extra detail, so it is an error and not a field
-            # quietly thrown away on save.
+            # A hybrid has only a name; anything else is a contradiction.
             if parent:
                 self.add_error("parent", "A hybrid is not a strain of one species — that is what makes it a hybrid.")
             if typed:
@@ -5589,7 +4949,7 @@ class SpeciesAdminForm(forms.ModelForm):
                 )
             if parent and not variety:
                 self.add_error("variety", "Give the strain a name, e.g. Blue Dream.")
-            # A strain takes its parent's name; there is nothing to type and nothing to disagree about.
+            # A strain takes its parent's name.
             if parent:
                 cleaned_data["genus"] = parent.genus
                 cleaned_data["species"] = parent.species
@@ -5604,8 +4964,7 @@ class SpeciesAdminForm(forms.ModelForm):
             cleaned_data["genus"], cleaned_data["species"], variety, user=self.added_by, is_hybrid=is_hybrid
         )
         if clash:
-            # Not an error to fix by editing the name -- the answer is to go and use the row that
-            # already exists, so say where it is.
+            # Point at the existing row.
             if self.added_by and self.added_by.is_superuser:
                 message = mark_safe(  # noqa: S308 - the only interpolation is a URL we build and an escaped name
                     f"{escape(clash.label)} is already on the list. "
@@ -5620,30 +4979,21 @@ class SpeciesAdminForm(forms.ModelForm):
         species = super().save(commit=False)
         species.genus = self.cleaned_data["genus"]
         species.species = self.cleaned_data["species"]
-        # A cross with the common-name box left empty would have no name a person could type: the
-        # picker shows "Hybrid 'Tibee'" and every lookup reads the name table, not the variety
-        # column.  The trade name is the answer to both.
+        # A hybrid needs a common name to be typeable.
         if species.is_hybrid and not species.common_name:
             species.common_name = species.variety[:255]
         species.source = "admin"
-        # Somebody is adding this because a club is selling one, which is better evidence than
-        # FishBase's column -- see Species.in_aquarium_trade.
+        # A club selling one beats FishBase's column.
         species.in_trade_override = True
         species.added_by = self.added_by
-        # Filled in when there is an obvious club and left blank otherwise, which is most of the
-        # reason the visibility rule is "user *or* club": a species with no club is still visible
-        # to whoever added it.  See UserData.only_club and species_matching.visible_species.
+        # The obvious club, if any (UserData.only_club).
         species.club = self.added_by.userdata.only_club if self.added_by else None
-        # A superuser is adding to everybody's list and knows it.  An auction admin is solving a
-        # problem in front of them, which is a different and much narrower claim -- so their row
-        # is theirs until somebody approves it.  See Species.approved and visible_species().
+        # Superusers add for everyone; others' rows are private until approved.
         species.approved = bool(self.added_by and self.added_by.is_superuser)
         if commit:
             species.save()
             names = re.split(r"[,\n]+", self.cleaned_data.get("other_names") or "")
-            # A hybrid's strain name is the only name it has, and the matcher reads names out of
-            # SpeciesCommonName -- nothing looks at the variety column.  So it goes in the list
-            # too, or a cross would be on the picker and unreachable by typing what it is called.
+            # A hybrid's strain name goes in the name table, which matching reads.
             wanted = [species.common_name] + [name.strip() for name in names]
             if species.is_hybrid and species.variety:
                 wanted.append(species.variety)
@@ -5659,8 +5009,7 @@ class SpeciesAdminForm(forms.ModelForm):
                     language="English",
                     is_preferred=(index == 0),
                     source="admin",
-                    # Stamped like the species itself: these names arrived with it, and they
-                    # become everybody's at the same moment it does.  See SpeciesApproveView.
+                    # Names share the species' approval.
                     approved=species.approved,
                     added_by=species.added_by,
                     club=species.club,
@@ -5670,21 +5019,8 @@ class SpeciesAdminForm(forms.ModelForm):
 
 
 class SpeciesCommonNameForm(forms.Form):
-    """Teach the site a name for a species that is **already** on the list.
-
-    The other half of :class:`SpeciesAdminForm`, and the commoner of the two jobs.  Most lot names
-    with no scientific name are not a missing species at all -- they are a species the list has
-    had all along, under a name nobody in the hobby uses.  FishBase files *Labidochromis
-    caeruleus* under "Blue streak hap"; the answer to "yellow lab" matching nothing is a name, and
-    adding a second *Labidochromis caeruleus* to get one is how the duplicate table fills up.
-
-    Until this existed the only way to add a name was the Django admin, which auction admins
-    cannot open -- so the workflow they were left with was the one that makes duplicates.
-
-    Everything written here is scoped exactly like a species, and it has to be: a common name is
-    read *ahead* of everything else the matcher does, so an unscoped one would let one club teach
-    every other club a name for the wrong fish.  See
-    :func:`~auctions.species_matching.visible_common_names`.
+    """Add a common name to a species already on the list: the usual fix for an unmatched lot name, instead
+    of a duplicate species. Scoped like species, since names are read first.
     """
 
     species = forms.ModelChoiceField(
@@ -5711,13 +5047,7 @@ class SpeciesCommonNameForm(forms.Form):
             url=f"{reverse('species-autocomplete')}?varieties=1",
             attrs={"data-placeholder": "Search the species list…", "style": "width: 100%"},
         )
-        # After the widget, not before: re-assigning the queryset is what rebinds widget.choices to
-        # it, and a dal widget left holding the plain list Django built for the old widget dies
-        # inside filter_choices_to_render the moment the form is rendered.  Same trap as
-        # SpeciesAdminForm's "strain of" field.
-        #
-        # The strains and the hybrids too: "blue dream" and "tibee" are exactly the kind of name
-        # this page exists for, and both of those live on a variety row.
+        # After the widget, to rebind choices (as SpeciesAdminForm). Strains and hybrids included.
         self.fields["species"].queryset = visible_species(added_by)
         if lot_name:
             self.fields["lot_name"].initial = lot_name
@@ -5760,9 +5090,7 @@ class SpeciesCommonNameForm(forms.Form):
         if species is None:
             return cleaned_data
         for name in wanted:
-            # One name on two species is the loss of a name rather than the gain of one -- the
-            # matcher answers on it before anything else runs, so a shared name turns a lookup
-            # that used to be unambiguous into a picklist.  Same rule as the club API.
+            # A name on two species makes lookups ambiguous.
             clash = species_carrying_common_name(name, user=self.added_by, exclude=species)
             if clash:
                 self.add_error(
@@ -5776,10 +5104,7 @@ class SpeciesCommonNameForm(forms.Form):
     def save(self):
         """Create the names, and return the ones that were really new."""
         species = self.cleaned_data["species"]
-        # A name added to a species that is already shared has no species approval to ride on, so
-        # it needs one of its own.  A superuser is adding to everybody's list and knows it; an
-        # auction admin gets a name their own club is answered with until somebody approves it,
-        # which is the SpeciesCommonName page in the Django admin.
+        # Superusers approve their own; others need admin approval.
         approved = bool(self.added_by and self.added_by.is_superuser)
         created = []
         for name in self.cleaned_data["names"]:
@@ -5801,12 +5126,7 @@ class SpeciesCommonNameForm(forms.Form):
 
 
 class ClubBapGenusOverrideForm(forms.ModelForm):
-    """Inline form for adding/updating a per-genus BAP point override for a club.
-
-    Free text rather than a picklist: there are thousands of genera, and a club admin writing a
-    BAP rule already knows the one they mean.  :meth:`clean_genus` is what keeps a typo from
-    becoming a rule that silently never fires.
-    """
+    """Add or update a club's per-genus point override. Free text; :meth:`clean_genus` rejects typos."""
 
     class Meta:
         model = ClubBapGenusOverride
@@ -5910,12 +5230,8 @@ class BapAwardForm(forms.ModelForm):
 
 
 class ClubMemberAdminForm(MarksClubMemberAdminEditedMixin, forms.ModelForm):
-    """Form for club admins to edit a club member's details.
-
-    When ``auctiontos`` is passed the form is rendered in the context of a
-    specific auction.  Auction-scoped fields (pickup_location, is_club_member)
-    are added; contact_status and Discord role fields are hidden because those
-    are club-wide settings that don't belong in the per-auction workflow.
+    """Club admin edit form for a member. With ``auctiontos``, adds auction fields (pickup location,
+    is_club_member) and hides club-wide ones (contact status, Discord).
     """
 
     # Extra fields for auction context (not on ClubMember model)
@@ -5944,7 +5260,7 @@ class ClubMemberAdminForm(MarksClubMemberAdminEditedMixin, forms.ModelForm):
             "address": forms.Textarea(attrs={"placeholder": "123 Main St, City, State", "rows": 3}),
             "bidder_number": forms.TextInput(attrs={"placeholder": "Auto"}),
         }
-        # All help texts stripped; only is_club_member retains its help text (set dynamically below)
+        # Help texts stripped; is_club_member's is set below.
         help_texts = dict.fromkeys(fields, "")
 
     def __init__(self, *args, post_url=None, read_only=False, club=None, auctiontos=None, auction=None, **kwargs):
@@ -5954,12 +5270,10 @@ class ClubMemberAdminForm(MarksClubMemberAdminEditedMixin, forms.ModelForm):
         self._club = club
         self._auctiontos = auctiontos
 
-        # --- Auction-context extra fields ---
-        # auctiontos is set when editing; auction is set when creating in check-in mode
+        # auctiontos when editing; auction when creating in check-in mode.
         auction = auctiontos.auction if auctiontos else auction
         show_pickup = bool(auction and auction.multi_location)
-        # Only offer the manual alternate-fees checkbox for auctions using the custom split;
-        # off = never applies, club member discount = applied automatically to paid members.
+        # Manual alternate-fees checkbox only for the custom split.
         show_alt_fees = bool(auction and auction.alternate_split_mode == "custom")
         in_auction_context = bool(auctiontos or auction)
 
@@ -5990,8 +5304,7 @@ class ClubMemberAdminForm(MarksClubMemberAdminEditedMixin, forms.ModelForm):
         else:
             self.fields["is_club_member"].widget = forms.HiddenInput()
 
-        # contact_status is excluded from the layout in auction context but is still a required field
-        # (no blank=True). Make it a hidden input so a valid value is always submitted.
+        # Required but hidden in auction context: a hidden input keeps it valid.
         if in_auction_context:
             self.fields["contact_status"].widget = forms.HiddenInput()
             self.fields["contact_status"].initial = (
@@ -6011,9 +5324,7 @@ class ClubMemberAdminForm(MarksClubMemberAdminEditedMixin, forms.ModelForm):
             if not (self.instance and self.instance.pk):
                 self.fields["send_welcome_email"].initial = True
 
-        # In auction context, hide bidding_allowed/selling_allowed when the auction doesn't use them.
-        # BooleanField has required=True by default; set required=False so an absent/False value
-        # doesn't fail validation when the field is hidden.
+        # Hide unused permission fields; not required so hidden values validate.
         if in_auction_context and auction:
             if not auction.only_approved_sellers:
                 self.fields["selling_allowed"].widget = forms.HiddenInput()
@@ -6021,7 +5332,7 @@ class ClubMemberAdminForm(MarksClubMemberAdminEditedMixin, forms.ModelForm):
             if not auction.only_approved_bidders:
                 self.fields["bidding_allowed"].widget = forms.HiddenInput()
                 self.fields["bidding_allowed"].required = False
-            # Initialise from auctiontos when editing; default to member/True for new check-ins.
+            # From auctiontos when editing; True for new check-ins.
             if auctiontos:
                 self.fields["selling_allowed"].initial = auctiontos.selling_allowed
                 self.fields["bidding_allowed"].initial = auctiontos.bidding_allowed
@@ -6030,18 +5341,9 @@ class ClubMemberAdminForm(MarksClubMemberAdminEditedMixin, forms.ModelForm):
                 self.fields["selling_allowed"].initial = instance_obj.selling_allowed if instance_obj else True
                 self.fields["bidding_allowed"].initial = instance_obj.bidding_allowed if instance_obj else True
 
-        # Layout:
-        #   Row: bidder_number (left) | memo (right)
-        #   name
-        #   Row: email | phone
-        #   address (textarea)
-        #   contact_status (hidden in auction context)
-        #   Row: bidding_allowed | selling_allowed  (hidden when not applicable)
-        #   is_club_member (alt fees, auction context only)
-        #   pickup_location (multi-location auction only)
-        # In auction context contact_status is hidden but still in the form — it MUST appear in the
-        # layout so crispy renders it as a hidden input (crispy only auto-renders hidden fields that
-        # are somewhere in the layout).
+        # Layout: bidder_number | memo; name; email | phone; address; contact_status (hidden in auction
+        # context, but must be in the layout for crispy to render it); bidding | selling;
+        # is_club_member; pickup_location.
         if in_auction_context:
             contact_status_fields: list = [Field("contact_status")]
         else:
@@ -6119,12 +5421,8 @@ class ClubMemberAdminForm(MarksClubMemberAdminEditedMixin, forms.ModelForm):
         if clash:
             msg = f"Bidder number '{bidder_number}' is already used by another member in this club."
             raise forms.ValidationError(msg)
-        # Deliberately no check against the club's auctions. A member's number is one number, in
-        # the club and in every auction they are in, so saving it here takes it from whoever is
-        # holding it there and gives them another -- ``services.set_member_bidder_number``, the same
-        # thing the check-in dialog does and says it does. The live validation on this field names
-        # that person before you save; refusing instead would leave the member's page showing one
-        # number and the auction another, which is the bug this mode exists to not have.
+        # No check against the club's auctions: saving takes the number from its holder
+        # (services.set_member_bidder_number); the live validation names them first.
         return bidder_number
 
 
@@ -6156,7 +5454,7 @@ class ClubMemberDiscordForm(MarksClubMemberAdminEditedMixin, forms.ModelForm):
 
         self.fields["discord_role_auto_managed"].required = False
 
-        # Discord ID: readonly when set (with Clear button), editable when blank
+        # Discord ID: read-only with Clear when set, editable when blank.
         from django.utils.html import format_html
 
         has_discord_id = bool(instance and instance.discord_id)
@@ -6257,9 +5555,7 @@ class ClubMemberPermissionsForm(MarksClubMemberAdminEditedMixin, forms.ModelForm
         }
         for field_name, label in labels.items():
             self.fields[field_name].label = label
-        # The donation permission is worth nothing until the club turns donation tracking on, so say
-        # so where the checkbox is rather than letting an admin grant it and wonder why the person
-        # they granted it to still sees no Donation Tracking link.
+        # Explain that the permission needs donation tracking on.
         club = getattr(self.instance, "club", None)
         self.fields["permission_manage_donations"].help_text = (
             "Allow the user to add and email vendors and manage club donations"
@@ -6411,16 +5707,8 @@ class VolunteerJobForm(forms.ModelForm):
 
 
 class SpeakerForm(forms.ModelForm):
-    """Add or edit a speaker in the directory.
-
-    Anyone with a permission in an NEC club can add a speaker, and the speaker doesn't need
-    an account here -- most of them don't have one.  Only `name` is required; the rest is
-    whatever the person filling it in happens to know.
-
-    No club picker: `Speaker.club` is still recorded, but SpeakerCreateView works it out from
-    the club whose page the person came from, or their only NEC club.  Asking made the form
-    longer to answer a question almost nobody had a second answer to -- the same reasoning as
-    SpeakerCommentView, which has never asked either.
+    """Add or edit a directory speaker (who needn't have an account). Only `name` is required. No club
+    picker: SpeakerCreateView infers it.
     """
 
     class Meta:
@@ -6459,17 +5747,13 @@ class SpeakerForm(forms.ModelForm):
         super().__init__(*args, **kwargs)
         self.fields["topics"].required = False
         self.fields["topics"].queryset = SpeakerTopic.objects.all()
-        # Topics are a closed vocabulary (see auctions/speaker_topics.py). Nothing here creates
-        # one, which is what stops the list drifting into three spellings of "cichlids" again.
+        # A closed vocabulary (auctions/speaker_topics.py).
         self.fields["topics"].help_text = "Pick everything they talk about. Use Other if nothing fits."
-        # A speaker with no location can't appear on the map or in the distance filter, which is
-        # most of what the directory is for -- so it's required when adding someone. Editing an
-        # imported speaker who never had one stays possible.
+        # Required when adding: no location means no map or distance filter.
         if not (self.instance and self.instance.pk):
             self.fields["location"].required = True
         self.fields["url"].required = False
-        # Marking the input image-only lets the app's WebView file chooser offer the camera; not
-        # setting `capture` keeps the photo library available too. Copied from CreateImageForm.
+        # Image-only accept lets the WebView offer the camera.
         self.fields["image"].widget.attrs["accept"] = "image/*"
         self.helper = FormHelper()
         self.helper.form_method = "post"
@@ -6522,13 +5806,9 @@ class SpeakerForm(forms.ModelForm):
         return validate_image_url(url)
 
     def clean_image(self):
-        """Reject a corrupt upload with a friendly message instead of a 500 during thumbnailing.
-
-        Django's ImageField only runs Pillow's header check, which lets truncated files through
-        to blow up later. See CreateImageForm.clean_image -- this is the same guard.
-        """
+        """Reject corrupt uploads as a field error (see CreateImageForm.clean_image)."""
         image = self.cleaned_data.get("image")
-        # Only a freshly uploaded file needs decoding; an unchanged stored image is fine.
+        # Only fresh uploads.
         if isinstance(image, UploadedFile):
             validate_uploaded_image(image)
             image = jpeg_safe_upload(image)
@@ -6593,8 +5873,7 @@ class ClubDonationSettingsForm(forms.ModelForm):
         self.helper.form_tag = False
         self.helper.disable_csrf = True
         self.fields["enable_donation_tracking"].label = "Enable donation tracking"
-        # The terms live in a modal on the settings page (club_donation_settings.html): a club is
-        # agreeing to them by switching this on, so they have to be readable from right here.
+        # Agreeing to the terms (in a modal on the page) is switching this on.
         self.fields["enable_donation_tracking"].help_text = mark_safe(  # noqa: S308 - literal
             "Track which vendors you've asked for donations, and what they said. By using this "
             "feature you confirm that your club has read and accepted the "
@@ -6602,19 +5881,15 @@ class ClubDonationSettingsForm(forms.ModelForm):
             "conditions</a> that go along with it."
         )
         self.fields["donation_email_mode"].label = "How to send donation emails"
-        # RadioSelect renders each choice's label, so the routed option has to name the real
-        # address here rather than leaning on help_text the way the other fields do.
+        # Radio labels must name the real address.
         club = self.instance
-        # Must match DONATION_ALIAS_RE in email_routing.py: the club slug leads, matching the
-        # existing -auctions / -contact aliases, and the trailing digits identify the vendor.
+        # Matches DONATION_ALIAS_RE in email_routing.py.
         routed_example = (
             f"{club.slug}-donations-1234567890@{settings.EMAIL_ROUTING_DOMAIN}"
             if club and club.pk and settings.EMAIL_ROUTING_DOMAIN
             else "a tracked address on this site"
         )
-        # mark_safe so each option can carry its own help line underneath. Django escapes choice
-        # labels with conditional_escape, so a SafeString passes through and anything else can't
-        # inject markup. Nothing user-supplied is interpolated here.
+        # Choice labels are escaped, so SafeStrings pass and nothing user-supplied is interpolated.
         self.fields["donation_email_mode"].choices = [
             (
                 Club.DONATION_EMAIL_MODE_ROUTED,
@@ -6631,8 +5906,7 @@ class ClubDonationSettingsForm(forms.ModelForm):
             ),
         ]
         if not routing_enabled:
-            # Without SES routing there is no tracked address to send from, so copy/paste is the
-            # only mode that can work. Leave it visible but fixed rather than silently switching.
+            # Without SES routing, copy/paste is the only mode: shown, fixed.
             self.fields["donation_email_mode"].disabled = True
             self.fields["donation_email_mode"].help_text = (
                 "Email routing is not enabled on this site, so donation emails have to be "
@@ -6640,22 +5914,18 @@ class ClubDonationSettingsForm(forms.ModelForm):
             )
             self.initial["donation_email_mode"] = Club.DONATION_EMAIL_MODE_COPY
         add_bootstrap_classes(self)
-        # form-select on a radio group makes each radio render as a dropdown-sized box.
+        # form-select would make each radio a dropdown-sized box.
         self.fields["donation_email_mode"].widget.attrs["class"] = "form-check-input"
 
     def clean_donation_email_mode(self):
-        # A disabled field returns its initial value, but be explicit: nothing should be able to
-        # persist "send from this site" on an install that has no address to send from.
+        # Never persist sending from this site without an address to send from.
         mode = self.cleaned_data.get("donation_email_mode")
         if not settings.SES_ROUTE_EMAILS_ENABLED:
             return Club.DONATION_EMAIL_MODE_COPY
         return mode
 
     def clean(self):
-        # Every donation email carries the club's postal address, whichever way it goes out: US
-        # law wants one on a solicitation sent in bulk, and donations.send_request refuses without
-        # it. Ask for it here, where it can still be typed, rather than at the end of the contact
-        # dialog once an admin has written an email they can't send.
+        # Every donation email needs the club's postal address; ask here.
         cleaned_data = super().clean()
         if (
             cleaned_data.get("enable_donation_tracking")
@@ -6672,10 +5942,7 @@ class ClubDonationSettingsForm(forms.ModelForm):
 class DonationVendorForm(forms.ModelForm):
     """Add or edit a vendor. Rendered in the modal that opens from the vendor's name."""
 
-    #: A plain ``<input type="date">`` rather than the site's usual DateTimePickerInput. That
-    #: widget wires itself up on DOMContentLoaded, which has long since fired by the time HTMX
-    #: swaps this form into a modal, so its calendar never appeared here. The native control needs
-    #: no JavaScript at all, and gives phones their own date wheel.
+    #: A native date input: DateTimePickerInput doesn't initialize in HTMX modals.
     followup_due = forms.DateField(
         required=False,
         label="Follow up on",
@@ -6715,12 +5982,10 @@ class DonationVendorForm(forms.ModelForm):
         self.fields["email"].required = False
         vendor = self.instance if self.instance and self.instance.pk else None
         if vendor and vendor.followup_due:
-            # The stored value is a datetime; a date input can only render "YYYY-MM-DD", and the
-            # day it belongs to is the one the club would read off a calendar, not the UTC one.
+            # A date input shows the local day of the stored datetime.
             self.initial["followup_due"] = timezone.localtime(vendor.followup_due).date()
         if vendor and vendor.unsubscribed:
-            # The vendor asked us to stop. A club admin editing this row must not be able to
-            # click the status back to something contactable.
+            # Unsubscribed vendors can't be made contactable again.
             self.fields["status"].disabled = True
             self.fields[
                 "status"
@@ -6729,15 +5994,11 @@ class DonationVendorForm(forms.ModelForm):
         add_bootstrap_classes(self)
         base_fields = ["name", "contact_name", "email", "status", "followup_due", "context"]
         if not vendor:
-            # Nothing has happened to a vendor being typed in for the first time, so there is no
-            # date to choose: save() starts their clock today, which puts them straight onto the
-            # follow-up list as somebody who still needs a first email.
+            # New vendors start their clock today via save().
             del self.fields["followup_due"]
             base_fields.remove("followup_due")
         if post_url:
-            # Submitted over HTMX, like the club member and AuctionTOS modals: the POST answers
-            # with the script that closes the modal, which only makes sense swapped into the page.
-            # A plain Submit here would navigate to that script as if it were a page.
+            # Submitted over HTMX; the response script closes the modal.
             self.helper.layout = Layout(
                 *base_fields,
                 Div(
@@ -6770,11 +6031,7 @@ class DonationVendorForm(forms.ModelForm):
         return email
 
     def clean_followup_due(self):
-        """Turn the picked day into the datetime the model stores.
-
-        Pinned to the start of that day locally, so a vendor picked for today reads as due today
-        rather than at some hour of it.
-        """
+        """The picked day as the start of that local day."""
         day = self.cleaned_data.get("followup_due")
         if not day:
             return None
@@ -6795,7 +6052,7 @@ class DonationVendorForm(forms.ModelForm):
 class DonationContactForm(forms.Form):
     """Step one of the contact dialog: what the model should know before it writes."""
 
-    #: What the "last email" box holds, when it was filled in from the vendor's history.
+    #: Directions a prefilled "last email" can have.
     KNOWN_DIRECTIONS = (DonationEmail.DIRECTION_INCOMING, DonationEmail.DIRECTION_OUTGOING)
 
     context = forms.CharField(
@@ -6813,17 +6070,13 @@ class DonationContactForm(forms.Form):
         label="Last email",
         help_text="Paste their last message here if you've been emailing them outside this site.",
     )
-    #: Which way the prefilled message went. Carried through the POST because the prompt reads
-    #: differently for each: a reply of theirs is something to answer, and a request of ours they
-    #: ignored is something to nudge about. Anything unrecognised means "typed in by hand", never a
-    #: validation error -- the box is hidden, so an error on it would be an invisible dead end.
+    #: The prefilled message's direction: a reply to answer vs a request to nudge. Unknown means typed
+    #: by hand, never an error (the field is hidden).
     last_email_direction = forms.CharField(required=False, widget=forms.HiddenInput())
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        # A prefilled box is not the same box as an empty one: the label has to say where the text
-        # came from, or an admin reads "paste their last message here" over the top of an email
-        # they are already looking at and wonders what it wants from them.
+        # Label the box by where its text came from.
         direction = self._direction()
         if direction == DonationEmail.DIRECTION_INCOMING:
             self.fields["last_email"].label = "Their last message"
@@ -6848,8 +6101,7 @@ class DonationEmailEditForm(forms.Form):
     """Step two: the generated email, before it is sent or copied."""
 
     subject = forms.CharField(max_length=200, widget=forms.TextInput())
-    # Seven rows, not sixteen: the dialog's Send and Copy buttons sit under this box, and a taller
-    # one pushed them off the bottom of the modal on an ordinary laptop window. The box scrolls.
+    # Seven rows keep the dialog's buttons on screen.
     body = forms.CharField(widget=forms.Textarea(attrs={"rows": 7}))
 
     def __init__(self, *args, **kwargs):

@@ -1,23 +1,13 @@
-"""Donation tracking: asking vendors for donations, and reading what they write back.
+"""Donation tracking: asking vendors for donations and reading their replies.
 
-Three jobs live here, all of them wrapped around :mod:`auctions.llm`:
+* :func:`summarize_incoming`: a 200-character summary and, when clear, a new vendor status.
+* :func:`draft_request`: write the request from the admin's context and the club's details.
+* :func:`send_request` / :func:`record_copied_request`: record an outgoing message, a follow-up date
+  and a history line.
 
-  * :func:`summarize_incoming` -- turn a vendor's reply into a 200-character summary and, when the
-    reply is clear enough, a new vendor status.
-  * :func:`draft_request` -- write the donation request itself, given whatever context the club
-    admin typed plus what the club has already told us about itself.
-  * :func:`send_request` / :func:`record_copied_request` -- commit an outgoing message: one
-    :class:`~auctions.models.DonationEmail` row, a new follow-up date, and a club history line.
-
-Everything the model returns is untrusted and is validated here before it reaches the database --
-a status it invents is discarded, and a summary it pads out is truncated.  Both prompts truncate
-their inputs hard: a vendor can put a megabyte of quoted history in a reply, and none of it is
-worth paying for.
-
-Rate limiting is per club per day rather than per user, because the thing being protected is the
-API bill, and a club with ten admins is still one club.  Outgoing work -- drafting and sending --
-shares one allowance, so the number the vendor page shows is the whole story; incoming replies are
-budgeted separately, since a club should not be able to spend its way out of reading its own mail.
+Model output is validated before it reaches the database, and prompt inputs are truncated. Limits
+are per club per day (it protects the API bill): drafting and sending share one allowance, incoming
+summaries have their own.
 """
 
 from __future__ import annotations
@@ -40,23 +30,17 @@ logger = logging.getLogger(__name__)
 
 # --- limits ------------------------------------------------------------------
 
-#: Incoming messages we'll pay to summarize, per club per day. Anything past this is still stored,
-#: just without a summary or an automatic status change -- the record is the important part.
-#: Kept separate from the outgoing allowance below so a club being written to can still write.
+#: Incoming messages summarized per club per day; extras are still stored.
 MAX_INCOMING_LLM_CALLS_PER_DAY = 30
 
-#: Donation emails a club may send -- or record as copied, or ask the model to write -- in one day.
-#: It is what keeps donation tracking from being usable as a mailing tool, and it is also what caps
-#: the API bill: asking for a draft spends one whether or not the email is ever sent, because the
-#: call was made and paid for either way. Thirty is more vendors than a volunteer-run club
-#: approaches in a week.
+#: Donation emails a club may send, record as copied, or have drafted per day. Keeps this from
+#: being a mailing tool and caps the bill; a draft counts whether or not it is sent.
 MAX_DONATION_EMAILS_PER_DAY = 30
 
-#: How much of an incoming email to send for summarizing. Real replies say yes or no in the first
-#: paragraph; past this it's quoted threads and signatures.
+#: Characters of an incoming email summarized; the rest is quoted threads and signatures.
 INCOMING_BODY_LIMIT = 4000
 
-#: How much of the previous message to include when drafting. Same reasoning.
+#: Characters of the previous message included when drafting.
 LAST_EMAIL_LIMIT = 2000
 
 #: How much admin-typed context to pass through.
@@ -64,29 +48,23 @@ CONTEXT_LIMIT = 2000
 
 SUMMARY_LENGTH = 200
 
-# Roughly one day, but pinned to the clock so "30 per day" doesn't drift into "30 per rolling day"
-# and let a caller double up across a boundary.
+# Pinned to the local date so "30 per day" doesn't become a rolling window.
 _RATE_LIMIT_WINDOW_SECONDS = 60 * 60 * 24
 
 
 def _rate_limit_key(club, bucket):
-    # Local date, not UTC: this has to name the same day as _day_bounds below, or the counter a
-    # club can see on the page and the counter behind it would roll over hours apart.
+    # Local date, matching _day_bounds, so both counters roll over together.
     return f"donation_llm_{bucket}_{club.pk}_{timezone.localtime():%Y%m%d}"
 
 
 def check_rate_limit(club, bucket="incoming", limit=MAX_INCOMING_LLM_CALLS_PER_DAY):
-    """Consume one unit of *club*'s daily budget. Returns True when the call may proceed.
-
-    ``cache.add`` then ``cache.incr`` is the same atomic pattern the command palette uses for its
-    per-user budget: one round trip, no read-modify-write race between two workers.
-    """
+    """Consume one unit of *club*'s daily budget. True when the call may proceed. ``add`` + ``incr``, no race."""
     key = _rate_limit_key(club, bucket)
     cache.add(key, 0, timeout=_RATE_LIMIT_WINDOW_SECONDS)
     try:
         used = cache.incr(key)
     except ValueError:
-        # Expired between add and incr; treat as the first call of a new window.
+        # Expired between add and incr: first call of a new window.
         cache.set(key, 1, timeout=_RATE_LIMIT_WINDOW_SECONDS)
         used = 1
     return used <= limit
@@ -143,11 +121,7 @@ class DonationEmailQuota:
 
 
 def _day_bounds(now=None):
-    """The start of today and the moment it rolls over, both in the site's own timezone.
-
-    Local rather than UTC because the club reads "today" off a wall clock, and a limit that
-    resets in the middle of their afternoon reads as a bug.
-    """
+    """Start of today and the rollover, in the site timezone, so limits reset at the club's midnight."""
     local = timezone.localtime(now or timezone.now())
     start = local.replace(hour=0, minute=0, second=0, microsecond=0)
     return start, start + datetime.timedelta(days=1)
@@ -156,19 +130,8 @@ def _day_bounds(now=None):
 def donation_email_quota(club, *, now=None):
     """How much of *club*'s daily donation-email allowance is gone.
 
-    Two things spend it, and the larger of the two counts:
-
-      * emails that actually went out, counted in the database -- this one gates real mail going to
-        real businesses, so it has to survive a cache flush and be auditable afterwards, and
-        copy/paste requests count too, because the club still asked a vendor for something;
-      * drafts the model was asked to write, counted in the cache -- asking for one costs an API
-        call whether or not the admin goes on to send it, so cancelling the dialog does not hand
-        the allowance back.
-
-    The larger rather than the sum: an ordinary send is one draft *and* one email, and charging
-    twice for one message would halve a limit the page states plainly. Where the two disagree it is
-    because drafts were thrown away (drafts lead) or because the cache was flushed under us (sends
-    lead), and in both cases the bigger number is the honest one.
+    The larger of emails recorded in the database (auditable, copies included) and drafts counted in
+    the cache (paid for even if cancelled). Not the sum: a normal send is one of each.
     """
     start, end = _day_bounds(now)
     sent = DonationEmail.objects.filter(
@@ -183,14 +146,8 @@ def donation_email_quota(club, *, now=None):
 # --- text handling -----------------------------------------------------------
 
 #
-# Every pattern here runs over a body written by whoever emailed the vendor, so each one has to
-# fail *fast* as well as match correctly. That is why the tag patterns exclude ``<`` as well as
-# ``>``: with a plain ``[^>]*``, a body of "<img<img<img..." makes the engine scan from every
-# ``<img`` to the end of the string looking for a ``>`` that isn't there, which is quadratic in the
-# length of the body -- a few megabytes of that is a CPU burn triggered by sending an email. With
-# ``<`` excluded, an unterminated tag stops at the next one and costs nothing. A tag whose
-# attribute holds a raw unescaped ``<`` is malformed anyway, and the worst that happens to it is
-# that it survives as text.
+# Every pattern runs on a stranger's email, so it must fail fast: tag patterns exclude "<" as well
+# as ">", or "<img<img<img..." scans quadratically.
 _IMG_TAG_RE = re.compile(r"<img[^<>]*>", re.IGNORECASE)
 _TAG_RE = re.compile(r"<[^<>]+>")
 _SCRIPT_STYLE_OPEN_RE = re.compile(r"<(script|style)\b[^<>]*>", re.IGNORECASE)
@@ -201,7 +158,7 @@ _SCRIPT_STYLE_CLOSE_RE = {
 _DATA_URI_RE = re.compile(r"data:[^\s\"'>]{40,}", re.IGNORECASE)
 _BLANK_LINES_RE = re.compile(r"\n{3,}")
 
-#: Lines that start a quoted reply chain. Everything from here down is a copy of what we sent.
+#: Lines that start a quoted reply chain.
 _QUOTE_MARKERS = (
     "-----original message-----",
     "________________________________",
@@ -212,15 +169,8 @@ _ON_WROTE_RE = re.compile(r"^\s*On .{0,120}\bwrote:\s*$", re.IGNORECASE | re.MUL
 def _strip_script_and_style(text):
     """Drop ``<script>``/``<style>`` blocks, contents included.
 
-    Walked by hand rather than matched with one ``<script.*?</script>`` pattern for the same reason
-    the patterns above exclude ``<``: that regex re-scans from every opening tag to a closing tag
-    that may not exist, so "<script>" repeated across a megabyte costs a megabyte of scanning per
-    repeat. Here each region of the body is scanned once, and the first time a closing tag turns out
-    to be missing, that tag name is written off -- there is no closer later in the body either, so
-    every remaining opening tag of that name is ordinary text and needs no second search.
-
-    An unclosed opening tag is left alone rather than swallowing the rest of the message: a vendor
-    who writes about HTML in a reply should still be read, and :data:`_TAG_RE` removes the tag.
+    Walked by hand to stay linear on repeated unclosed tags; a tag name with no closer is written off.
+    An unclosed tag is left for :data:`_TAG_RE` rather than swallowing the message.
     """
     pieces = []
     position = 0
@@ -244,11 +194,7 @@ def _strip_script_and_style(text):
 
 
 def strip_email_html(raw):
-    """Reduce an HTML (or plain) email body to readable plain text.
-
-    Images go entirely -- both the tags and any inline ``data:`` payloads, which can be megabytes
-    of base64 that would otherwise be stored and, worse, billed for as prompt tokens.
-    """
+    """Reduce an email body to plain text. Images and inline ``data:`` payloads go entirely."""
     text = raw or ""
     text = _strip_script_and_style(text)
     text = _IMG_TAG_RE.sub(" ", text)
@@ -256,7 +202,6 @@ def strip_email_html(raw):
     text = re.sub(r"<br\s*/?>", "\n", text, flags=re.IGNORECASE)
     text = re.sub(r"</p\s*>", "\n\n", text, flags=re.IGNORECASE)
     text = _TAG_RE.sub("", text)
-    # Unescape the handful of entities that survive tag stripping and actually show up in mail.
     for entity, char in (("&nbsp;", " "), ("&amp;", "&"), ("&lt;", "<"), ("&gt;", ">"), ("&quot;", '"')):
         text = text.replace(entity, char)
     text = _BLANK_LINES_RE.sub("\n\n", text)
@@ -264,11 +209,7 @@ def strip_email_html(raw):
 
 
 def strip_quoted_reply(text):
-    """Drop the quoted copy of our own message from the bottom of a reply.
-
-    Best-effort and deliberately conservative: this only saves tokens, so a missed marker costs
-    nothing but a slightly longer prompt, while an over-eager cut would hide what the vendor said.
-    """
+    """Drop our quoted message from the bottom of a reply. Conservative: a missed cut only costs tokens."""
     body = text or ""
     cut = len(body)
     lowered = body.lower()
@@ -279,7 +220,7 @@ def strip_quoted_reply(text):
     match = _ON_WROTE_RE.search(body)
     if match:
         cut = min(cut, match.start())
-    # A reply that is *entirely* quoted text is more likely a bad match than a real cut.
+    # All quoted text is more likely a bad match.
     trimmed = body[:cut].strip()
     return trimmed or body.strip()
 
@@ -301,9 +242,7 @@ def sender_address(raw):
     return (parseaddr(raw or "")[1] or "").strip().lower()
 
 
-#: One reply or forward marker at the front of a subject line. Applied in a loop rather than with a
-#: trailing ``+`` on the group: a repeated group whose parts can each match nothing is the classic
-#: shape that backtracks exponentially, and subject lines arrive from strangers.
+#: One reply/forward prefix. Applied in a loop: a repeated optional group backtracks exponentially.
 _REPLY_PREFIX_RE = re.compile(r"^\s*(?:re|fwd?)\s*(?:\[\d+\])?\s*:\s*", re.IGNORECASE)
 
 
@@ -318,12 +257,8 @@ def strip_reply_prefix(subject):
 
 
 def followup_subject(previous_subject, fallback=""):
-    """The subject for a second email in an existing conversation, or "" when there isn't one.
-
-    Everything after the first email to a vendor is part of one thread -- a nudge about the request
-    we sent, or an answer to what they wrote back -- so it goes out as ``RE:`` the subject the
-    thread already has. Mail clients group on the subject as well as the message headers, and a
-    fresh subject line every time reads to the vendor as a fresh cold approach.
+    """The ``RE:`` subject for a follow-up in an existing conversation, or "". A fresh subject reads as
+    a new cold approach.
     """
     base = strip_reply_prefix(previous_subject) or strip_reply_prefix(fallback)
     if not base:
@@ -411,16 +346,14 @@ def summarize_incoming(email_row, *, user=None):
 
 
 def apply_incoming_status(vendor, status, *, user=None):
-    """Move *vendor* to *status* unless it is pinned. Returns True when the status changed.
-
-    "Do not contact" is a floor, not a stage: once a club (or the vendor themselves) has said stop,
-    a cheerful-sounding reply must not undo it. The same goes for a vendor who has unsubscribed.
+    """Move *vendor* to *status* unless pinned. True when changed. "Do not contact" and unsubscribed are
+    floors a cheerful reply can't undo.
     """
     if status not in DonationVendor.LLM_ASSIGNABLE_STATUSES:
         return False
     if vendor.status == DonationVendor.STATUS_DO_NOT_CONTACT or vendor.unsubscribed:
         return False
-    # A received donation is a stronger fact than anything inferred from a later email.
+    # A received donation outranks anything inferred from later mail.
     if vendor.status == DonationVendor.STATUS_RECEIVED:
         return False
     if vendor.status == status:
@@ -438,10 +371,8 @@ def apply_incoming_status(vendor, status, *, user=None):
 
 
 def record_incoming(vendor, *, sender, recipients, subject, body, message_id="", date=None):
-    """Store an inbound message against *vendor* and reset its follow-up clock.
-
-    Returns ``(email_row, created)``. A repeat delivery of the same Message-ID is ignored -- SES
-    retries, and a duplicate row would both double-count the rate limit and confuse the history.
+    """Store an inbound message and reset the follow-up clock. Returns ``(email_row, created)``. A repeated
+    Message-ID (SES retries) is ignored.
     """
     if message_id:
         existing = DonationEmail.objects.filter(vendor=vendor, message_id=message_id).first()
@@ -458,7 +389,7 @@ def record_incoming(vendor, *, sender, recipients, subject, body, message_id="",
         message_id=(message_id or "")[:500],
         date=date or now,
     )
-    # They wrote back, so there is nothing to chase: the ball is in the club's court now.
+    # They wrote back; the club owes the next move.
     vendor.last_contact = now
     vendor.followup_due = now
     vendor.save(update_fields=["last_contact", "followup_due"])
@@ -473,16 +404,15 @@ def record_incoming(vendor, *, sender, recipients, subject, body, message_id="",
 
 # --- drafting ----------------------------------------------------------------
 
-#: Which of three quite different emails is being written. Derived from the conversation so far by
-#: :func:`draft_mode`, and read by both the system prompt and the user turn so the two cannot
-#: disagree about what the model is doing.
+#: Which of three emails is being written, from :func:`draft_mode`, shared by system prompt and
+#: user turn.
 DRAFT_MODE_FIRST = "first"
 DRAFT_MODE_FOLLOWUP = "followup"
 DRAFT_MODE_REPLY = "reply"
 
 
 def draft_mode(last_email="", last_email_is_outgoing=False):
-    """First approach, nudge, or reply -- decided by what came last in the conversation."""
+    """First approach, nudge, or reply, by what came last."""
     if not (last_email or "").strip():
         return DRAFT_MODE_FIRST
     return DRAFT_MODE_FOLLOWUP if last_email_is_outgoing else DRAFT_MODE_REPLY
@@ -507,11 +437,8 @@ way.
   - Do not write a subject line, headers, or an unsubscribe line in the body; those are added \
 separately. Every message already carries the club's postal address in its footer."""
 
-#: One of these is appended to the base. Keeping them apart is the whole point: the first-approach
-#: rules -- introduce the club, state the event, make the ask, list what the business gets -- are
-#: exactly what makes a *reply* read as though nobody at the club opened the vendor's message. A
-#: heading in the user turn asking for a reply does not undo a system prompt that describes writing
-#: a solicitation, so the system prompt has to change too.
+#: Appended to the base prompt. The system prompt must change per mode: first-approach rules make a
+#: reply read as though nobody opened the vendor's message.
 _DRAFT_RULES = {
     DRAFT_MODE_FIRST: """
 This is the first approach to this business. They have never heard from the club.
@@ -557,12 +484,8 @@ def draft_system_prompt(mode):
 
 
 def build_draft_prompt(vendor, *, context="", last_email="", last_email_is_outgoing=False):
-    """Assemble the user-turn prompt for a donation request. Public so tests can read it.
-
-    *last_email* is whatever came last in this conversation, and *last_email_is_outgoing* says who
-    wrote it. The difference matters: answering a vendor who wrote back and nudging one who never
-    did are different emails, and a nudge that re-introduces the club from scratch reads as though
-    nobody at the club remembers sending the first one.
+    """The user-turn prompt for a donation request. Public for tests. *last_email_is_outgoing* separates a
+    nudge from a reply.
     """
     club = vendor.club
     mode = draft_mode(last_email, last_email_is_outgoing)
@@ -575,9 +498,7 @@ def build_draft_prompt(vendor, *, context="", last_email="", last_email_is_outgo
     if club.donation_context.strip():
         lines.append(f"About the club: {truncate_for_model(club.donation_context, CONTEXT_LIMIT)}")
     if club.donation_mailing_address.strip():
-        # Handed over with the rule attached: every email already carries this address in its
-        # footer, so repeating it in the body is noise -- until the vendor asks how to get the
-        # donation to the club, at which point the footer is the wrong place to answer from.
+        # The address is in every footer; the body needs it only if they ask where to send.
         instruction = (
             "Club mailing address. Put it in the body if their message asks where or how to send a "
             "donation, or what happens next; it is in the footer either way:"
@@ -606,11 +527,7 @@ def build_draft_prompt(vendor, *, context="", last_email="", last_email_is_outgo
 
 
 def _next_event_line(club):
-    """A one-line description of the club's next event, or "" when there isn't one.
-
-    Gives the model something concrete to ask *for*, which is the difference between "we hold
-    events" and "our spring auction is on the 14th of March".
-    """
+    """One line about the club's next event, or "", so the model has something concrete to ask for."""
     try:
         event = club.events.filter(date_start__gte=timezone.now()).order_by("date_start").first()
     except Exception:
@@ -624,24 +541,17 @@ def _next_event_line(club):
 
 
 def draft_request(vendor, *, context="", last_email="", last_email_is_outgoing=False, user=None):
-    """Ask the model for a donation request. Returns ``(subject, body)``.
-
-    Raises :class:`LLMError` when the model can't be reached or won't answer -- the caller shows
-    that to the admin, who can still write the email themselves.
-    """
+    """Ask the model for a donation request. Returns ``(subject, body)``; raises :class:`LLMError`."""
     club = vendor.club
     quota = donation_email_quota(club)
     if quota.exhausted:
         raise LLMError(quota.exhausted_message)
     provider = get_provider()
     if not provider.is_configured():
-        # Checked before charging: nothing was asked of anyone, so nothing is owed.
+        # Before charging: nothing was asked.
         msg = "Automatic email writing is not set up on this site."
         raise LLMError(msg)
-    # Charged up front and never refunded. The call is made and paid for the moment it is asked
-    # for, so an admin who reads the draft and hits Cancel has still spent one, and the number on
-    # the vendor page has to say so -- otherwise a club can burn the whole day's API budget while
-    # the page insists nothing has been used.
+    # Charged up front, never refunded: the call is paid even if the draft is cancelled.
     check_rate_limit(club, "draft", MAX_DONATION_EMAILS_PER_DAY)
 
     prompt = build_draft_prompt(
@@ -681,13 +591,7 @@ def _check_contactable(vendor):
 
 
 def contact_blocked_reason(vendor, quota=None):
-    """Why an admin can't write to *vendor* right now, or "" when they can.
-
-    One place for both kinds of "no" -- something about the vendor, and the club's daily
-    allowance -- so the table button, the vendor panel and the dialog all say the same thing.
-    Pass *quota* when rendering a list, so a page of vendors doesn't count the same rows again
-    for every row.
-    """
+    """Why an admin can't write to *vendor* now, or "". Covers the vendor and the quota; pass *quota* in lists."""
     reason = vendor.cannot_contact_reason
     if reason:
         return reason
@@ -696,32 +600,21 @@ def contact_blocked_reason(vendor, quota=None):
 
 
 def _check_daily_quota(club):
-    """Refuse a request that would take the club past its daily allowance.
-
-    Checked here rather than only in the view so every path -- sent from the site, copied out by
-    hand, or anything added later -- is held to the same number.
-    """
+    """Refuse past the daily allowance, on every path, not only in the view."""
     quota = donation_email_quota(club)
     if quota.exhausted:
         raise DonationSendError(quota.exhausted_message)
 
 
-#: The line that opens the footer below. Named once so :func:`strip_donation_footer` can find it
-#: again in a stored message without the two drifting apart.
+#: The footer's first line, shared with :func:`strip_donation_footer`.
 FOOTER_MARKER = "This message is a donation request from:"
 
-#: The separator drawn above the footer, plus any trailing whitespace, so cutting the footer off a
-#: stored message doesn't leave a dangling rule behind.
+#: The rule above the footer, so stripping leaves no dangling separator.
 _FOOTER_SEPARATOR_RE = re.compile(r"\n\s*-{2,}\s*$")
 
 
 def strip_donation_footer(text):
-    """Cut the footer this site appends off a message we stored.
-
-    Used when an earlier email is fed back in as context for the next one: the address block and
-    opt-out link are added again on the way out, so carrying them into the prompt only pays for
-    tokens and invites the model to write its own version of them.
-    """
+    """Cut our appended footer off a stored message before it's reused as prompt context."""
     body = text or ""
     index = body.find(FOOTER_MARKER)
     if index == -1:
@@ -730,16 +623,9 @@ def strip_donation_footer(text):
 
 
 def unsubscribe_footer(vendor):
-    """The physical address and opt-out line every donation email must carry.
+    """The physical address and opt-out line US bulk commercial email must carry.
 
-    This is not decoration: US bulk commercial email has to name a physical mailing address for the
-    sender and give a working, no-cost way to opt out. Both live here so no caller can send a
-    donation request without them.
-
-    The club is named once, as the first line of the address block. Almost every club types its own
-    name at the top of that address, and a separate "a donation request from <club>" sentence above
-    it read as a stutter; when a club has left its name out, it goes in here instead, so the sender
-    is always identified either way.
+    The club is named once, as the first line of the address block, added only if the club left it out.
     """
     from django.contrib.sites.models import Site
 
@@ -785,12 +671,8 @@ def _record_outgoing(vendor, *, subject, body, user, sender, recipients, message
 
 
 def _thread_headers(vendor):
-    """``In-Reply-To``/``References`` pointing at the vendor's last message, when there is one.
-
-    A ``RE:`` subject alone leaves it to the mail client to guess; these headers are what actually
-    file the email under the vendor's own message instead of starting a second thread beside it.
-    Only their messages are referenced -- ours are handed to post_office without a Message-ID, so
-    there is nothing of ours to point at.
+    """``In-Reply-To``/``References`` for the vendor's last message, so replies thread. Ours have no
+    Message-ID to reference.
     """
     previous = (
         vendor.emails.filter(direction=DonationEmail.DIRECTION_INCOMING).exclude(message_id="").first()
@@ -801,17 +683,14 @@ def _thread_headers(vendor):
         return {}
     message_id = previous.message_id.strip()
     if not message_id.startswith("<"):
-        # Stored as it arrived, and not every relay brackets it. An unbracketed msg-id is not a
-        # valid header value, and a mail client that can't parse it ignores the threading entirely.
+        # Some relays drop the brackets; an unbracketed msg-id breaks threading.
         message_id = f"<{message_id.strip('<>')}>"
     return {"In-Reply-To": message_id, "References": message_id}
 
 
 def send_request(vendor, *, subject, body, user):
-    """Send a donation request through the site and record it.
-
-    The From address is the club's per-vendor donation alias, so a reply comes back to
-    ``resolve_donation_alias`` and lands on this vendor's row.
+    """Send a donation request and record it. From is the club's per-vendor alias, so replies land on this
+    vendor.
     """
     from post_office import mail
 
@@ -825,10 +704,7 @@ def send_request(vendor, *, subject, body, user):
     if not from_address:
         msg = "Email routing is not enabled on this site, so donation email can't be sent from here."
         raise DonationSendError(msg)
-    # A postal address for the sender is not optional on a US solicitation sent in bulk, and when
-    # the message leaves this site we are the one putting it on the wire. Refuse rather than send
-    # something the club would have to answer for. Copy/paste mode is the admin's own message from
-    # their own mail client, so it only warns (see the settings page).
+    # A US bulk solicitation needs a postal address, and here we send it. Copy/paste mode only warns.
     if not club.donation_mailing_address.strip():
         msg = (
             "Add a donation mailing address in donation settings first — a postal address for the "
@@ -840,8 +716,7 @@ def send_request(vendor, *, subject, body, user):
     try:
         mail.send(
             [vendor.email],
-            # Display name as well as address: the From line has to identify who is actually
-            # asking, and the bare relay address on this site's domain does not.
+            # The display name identifies who's asking; the relay address doesn't.
             sender_with_display_name(club.name, from_address),
             subject=subject,
             message=text,
@@ -870,12 +745,7 @@ def send_request(vendor, *, subject, body, user):
 
 
 def record_copied_request(vendor, *, subject, body, user):
-    """Record a request the admin copied out to send from their own mail client.
-
-    The site never sees whether it was really sent, so this is the admin asserting that it was --
-    which is the whole trade-off of copy/paste mode, and why the settings page says replies to it
-    can't be tracked.
-    """
+    """Record a request the admin copied to send themselves. The site can't verify it was sent."""
     _check_contactable(vendor)
     _check_daily_quota(vendor.club)
     email_row = _record_outgoing(
@@ -899,13 +769,8 @@ def record_copied_request(vendor, *, subject, body, user):
 
 
 def unsubscribe_vendor(vendor):
-    """Honour an unsubscribe: this vendor, and this address everywhere else on the site.
-
-    One-way by design. There is no club-facing undo, because the person who clicked it doesn't
-    read the club's admin pages and can't argue with what they find there.
-    """
-    # A vendor with no address can't have been mailed a link, but guard anyway: a blank row in the
-    # unsubscribe table would match nothing and confuse anyone reading it.
+    """Honour an unsubscribe for this vendor and this address site-wide. No club-facing undo."""
+    # Guard: a blank unsubscribe row matches nothing and confuses readers.
     if vendor.email:
         DonationUnsubscribe.objects.get_or_create(
             email=vendor.email,
