@@ -454,6 +454,20 @@ class CommandPaletteLogSerializer(serializers.Serializer):
 # ---------------------------------------------------------------------------
 
 
+class FiniteOrNullFloatField(serializers.FloatField):
+    """A float where a non-finite value (``inf``, ``nan``, or the strings ``"Infinity"``/``"NaN"``)
+    means "unknown" and becomes None. Plain FloatField rejects those since DRF 3.18.1, which would 400
+    the whole AR batch over one bad sensor reading."""
+
+    def to_internal_value(self, data):
+        try:
+            if not math.isfinite(float(data)):
+                return None
+        except (TypeError, ValueError, OverflowError):
+            pass  # let FloatField raise its own error
+        return super().to_internal_value(data)
+
+
 class ArDetectionSerializer(serializers.Serializer):
     """One QR sighting inside a camera frame. Angle bounds are checked in the service (a junk
     detection is dropped, not a 400), so only structure is validated here."""
@@ -473,26 +487,26 @@ class ArFrameSerializer(serializers.Serializer):
     # Phone's integrated gyro heading at capture (deg, ccw-positive about gravity, zero at session
     # start, cumulative/unwrapped). Absent/null ⇒ no gyro data ("unknown", never "didn't turn"); the
     # solver uses it as heading odometry between frames.
-    yaw_deg = serializers.FloatField(required=False, allow_null=True)
+    yaw_deg = FiniteOrNullFloatField(required=False, allow_null=True)
     # Phone's absolute compass heading at capture: degrees CW from MAGNETIC north (0=N, 90=E),
     # tilt-compensated, for the camera's forward axis. Absent/null ⇒ no compass reading ("unknown").
     # The server corrects magnetic→true (WMM declination) and uses it to fix each island's absolute
     # orientation. Unlike yaw_deg (relative gyro odometry), this is an absolute bearing.
-    heading_deg = serializers.FloatField(required=False, allow_null=True)
+    heading_deg = FiniteOrNullFloatField(required=False, allow_null=True)
     # Phone GPS fix at capture (WGS84 degrees). Send both or neither; absent/null ⇒ no fix. The solver
     # no longer positions/translates anything with GPS (a ≤10 m venue is finer than any consumer fix);
     # it is used only to look up magnetic declination for the heading correction, so a single coarse
     # fix is plenty and the app may omit GPS entirely. Never send (0, 0); just omit when there's no fix.
-    latitude = serializers.FloatField(required=False, allow_null=True)
-    longitude = serializers.FloatField(required=False, allow_null=True)
+    latitude = FiniteOrNullFloatField(required=False, allow_null=True)
+    longitude = FiniteOrNullFloatField(required=False, allow_null=True)
     # Phone's cumulative planar dead-reckoning displacement since session start (metres), in the same
     # session-fixed frame as yaw_deg: origin at the session's first tracked position, +x = camera
     # forward at yaw 0, +y = 90° ccw from +x (camera's left). Send both or neither; absent/null ⇒ no
     # tracking ("unknown", never "didn't move"). Unlike GPS, (0, 0) is a VALID value — the session's
     # origin, which the first frame legitimately reports. The solver uses consecutive frames'
     # difference as measured translation odometry.
-    odo_x_m = serializers.FloatField(required=False, allow_null=True)
-    odo_y_m = serializers.FloatField(required=False, allow_null=True)
+    odo_x_m = FiniteOrNullFloatField(required=False, allow_null=True)
+    odo_y_m = FiniteOrNullFloatField(required=False, allow_null=True)
     detections = ArDetectionSerializer(many=True, max_length=MAX_DETECTIONS_PER_FRAME)
 
     def validate_yaw_deg(self, value):
@@ -503,12 +517,12 @@ class ArFrameSerializer(serializers.Serializer):
         return value
 
     def validate_heading_deg(self, value):
-        # Same "junk is dropped, never 400" philosophy as yaw: null passes through, and any
-        # non-finite (json accepts NaN/Infinity literals) or wildly out-of-range value is discarded
-        # as "unknown". A survivor is normalized to [0, 360) since it is an absolute compass bearing.
+        # Same "junk is dropped, never 400" philosophy as yaw: null (or non-finite, nulled by the
+        # field) passes through, and a wildly out-of-range value is discarded as "unknown". A survivor
+        # is normalized to [0, 360) since it is an absolute compass bearing.
         if value is None:
             return None
-        if not math.isfinite(value) or not (-360.0 <= value <= 360.0):
+        if not (-360.0 <= value <= 360.0):
             return None
         return value % 360.0
 
@@ -530,16 +544,12 @@ class ArFrameSerializer(serializers.Serializer):
             attrs["longitude"] = None
 
         # Odometry is all-or-nothing too, but — unlike GPS — (0, 0) is legitimate (the session origin),
-        # so it is never treated as a "no data" sentinel. A half-supplied pair, any non-finite value
-        # (json parsers accept NaN/Infinity literals) or an implausible magnitude (>10 km of walking is
-        # junk) drops BOTH to null ("unknown"), never 400.
+        # so it is never treated as a "no data" sentinel. A half-supplied pair (a non-finite value was
+        # already nulled by the field, so it lands here) or an implausible magnitude (>10 km of walking
+        # is junk) drops BOTH to null ("unknown"), never 400.
         ox = attrs.get("odo_x_m")
         oy = attrs.get("odo_y_m")
-        odo_bad = (
-            (ox is None) != (oy is None)
-            or (ox is not None and (not math.isfinite(ox) or not math.isfinite(oy)))
-            or (ox is not None and (abs(ox) > 10000.0 or abs(oy) > 10000.0))
-        )
+        odo_bad = (ox is None) != (oy is None) or (ox is not None and (abs(ox) > 10000.0 or abs(oy) > 10000.0))
         if odo_bad:
             attrs["odo_x_m"] = None
             attrs["odo_y_m"] = None
