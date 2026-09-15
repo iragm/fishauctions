@@ -54,23 +54,23 @@ in an info window whose name is that link. Why is in auctions/views/club_finder.
 
 {% comment %} Wrapped in a div because hx-swap-oob needs an element it can replace wholesale; the htmx table response ships the same wrapper so filtering redraws the map markers. {% endcomment %}
 <div id="club-map-payload">{{ clubs_json|json_script:"club-map-data" }}</div>
+{% if google_maps_api_key %}
+{% include "auctions/partials/google_maps_loader.html" %}
+{% else %}
+<script>console.error('Google Maps is not configured; the club map will stay empty.');</script>
+{% endif %}
 <script src="{% static 'js/map_list_panel.js' %}"></script>
 <script>
 initMapListPanel({
   prefix: 'club',
   pageUrl: function (slug) { return '/clubs/' + encodeURIComponent(slug) + '/'; },
+  mapId: '{{ google_maps_map_id|escapejs }}',
   origin: {% if has_origin %}{lat: {{ origin_latitude }}, lng: {{ origin_longitude }}}{% else %}null{% endif %},
   originLabel: 'your location',
   defaultView: '{{ default_view }}',
-  callbackName: 'initClubMap',
   menuLabelId: 'interest-filter-label',
   menuOptionClass: 'interest-filter-option',
   menuFallbackLabel: 'Interests'
 });
 </script>
-{% if google_maps_api_key %}
-<script async src="https://maps.googleapis.com/maps/api/js?key={{ google_maps_api_key }}&amp;callback=initClubMap"></script>
-{% else %}
-<script>console.error('Google Maps is not configured; the club map will stay empty.');</script>
-{% endif %}
 {% endblock %}

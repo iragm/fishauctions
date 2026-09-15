@@ -82,24 +82,24 @@ of it on the page.{% endcomment %}
 {% comment %} Wrapped in a div because hx-swap-oob needs an element it can replace wholesale;
 the htmx table response ships the same wrapper so filtering redraws the map markers. {% endcomment %}
 <div id="speaker-map-payload">{{ speakers_json|json_script:"speaker-map-data" }}</div>
+{% if google_maps_api_key %}
+{% include "auctions/partials/google_maps_loader.html" %}
+{% else %}
+<script>console.error('Google Maps is not configured; the speaker map will stay empty.');</script>
+{% endif %}
 <script src="{% static 'js/map_list_panel.js' %}"></script>
 <script>
 initMapListPanel({
   prefix: 'speaker',
   panelUrl: function (slug) { return '/speakers/' + encodeURIComponent(slug) + '/panel/'; },
   pageUrl: function (slug) { return '/speakers/' + encodeURIComponent(slug) + '/'; },
+  mapId: '{{ google_maps_map_id|escapejs }}',
   origin: {% if has_origin %}{lat: {{ origin_latitude }}, lng: {{ origin_longitude }}}{% else %}null{% endif %},
   originLabel: '{{ origin_label|escapejs }}',
   defaultView: '{{ default_view }}',
-  callbackName: 'initSpeakerMap',
   menuLabelId: 'topic-filter-label',
   menuOptionClass: 'topic-filter-option',
   menuFallbackLabel: 'Topics'
 });
 </script>
-{% if google_maps_api_key %}
-<script async src="https://maps.googleapis.com/maps/api/js?key={{ google_maps_api_key }}&amp;callback=initSpeakerMap"></script>
-{% else %}
-<script>console.error('Google Maps is not configured; the speaker map will stay empty.');</script>
-{% endif %}
 {% endblock %}

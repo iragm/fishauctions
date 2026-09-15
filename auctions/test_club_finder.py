@@ -17,6 +17,7 @@ import datetime
 import json
 import re
 
+from django.conf import settings
 from django.test import TestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
@@ -109,6 +110,23 @@ class ClubFinderTests(TestCase):
         response = self.client.get(reverse("clubs"))
         self.assertNotContains(response, "Wilma Fingerdoo")
         self.assertNotContains(response, "wilma@example.com")
+
+    @override_settings(
+        # No hyphen: escapejs writes one as -, which is the same string to JavaScript but not to
+        # assertContains.
+        LOCATION_FIELD={**settings.LOCATION_FIELD, "provider.google.api_key": "testkey123"},
+        GOOGLE_MAPS_MAP_ID="abc123",
+    )
+    def test_the_map_uses_googles_bootstrap_loader_and_a_map_id(self):
+        """Per Google's docs: the dynamic library import bootstrap loader is the recommended way to
+        load the API, and advanced markers cannot load without a Map ID. The key is pinned because
+        the loader is only included when there is one, and CI has none."""
+        response = self.client.get(reverse("clubs"))
+        self.assertContains(response, 'l="importLibrary"', count=1)
+        self.assertContains(response, 'key: "testkey123"')
+        self.assertContains(response, "mapId: 'abc123'")
+        # The direct script-tag loader is not on the page as well: the API only loads once.
+        self.assertNotContains(response, "maps.googleapis.com/maps/api/js?key=")
 
     def test_the_map_payload_carries_only_what_a_pin_needs(self):
         rows = map_payload(self.client.get(reverse("clubs")))
