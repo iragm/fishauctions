@@ -51,7 +51,7 @@ from auctions.models import (
     VolunteerSignup,
     Watch,
 )
-from auctions.notifications import CATEGORY_LOT_SELLING, user_has_app_push
+from auctions.notifications import CATEGORY_LOT_SELLING, notify_running_total, user_has_app_push
 from auctions.tasks import (
     send_push_to_user,
 )
@@ -238,6 +238,12 @@ class DynamicSetLotWinner(LoginRequiredMixin, AuctionViewMixin, TemplateView):
             lot.add_winner_message(self.request.user, winning_tos, winning_price)
         except Exception:
             logger.exception("add_winner_message failed for lot %s", lot.pk)
+        # Strictly after add_winner_message: that is what creates and recalculates the invoice this
+        # running total is read off, so the other order would notify a buyer of a stale figure.
+        try:
+            notify_running_total(lot)
+        except Exception:
+            logger.exception("notify_running_total failed for lot %s", lot.pk)
         if lot.auction and lot.auction.club and not lot.bap_points_awarded and not lot.manually_approved:
             try:
                 lot.auto_award_bap_points()

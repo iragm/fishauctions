@@ -2003,6 +2003,140 @@ class PreferencesWebpushVisibilityTests(TestCase):
         self.assertFalse(self._form(is_mobile_app=True).can_subscribe_to_webpush)
 
 
+@override_settings(FIREBASE_CREDENTIALS_JSON=FAKE_FIREBASE)
+class RunningTotalNotificationTests(StandardTestCase):
+    """The in-person running total: one notification per auction, rewritten as each lot sells."""
+
+    def setUp(self):
+        super().setUp()
+        self.buyer = self.user_with_no_lots  # the account behind self.in_person_buyer
+        MobileDevice.objects.create(user=self.buyer, device_uuid=uuid.uuid4(), fcm_token="tok", push_enabled=True)
+        self._sell(self.in_person_lot, 12)
+
+    def _sell(self, lot, price):
+        """Record a sale the way set_winner does, without notifying -- the test does that itself."""
+        from auctions.models import Invoice
+
+        lot.auctiontos_winner = self.in_person_buyer
+        lot.winning_price = price
+        lot.active = False
+        lot.save()
+        invoice, _ = Invoice.objects.get_or_create(auctiontos_user=self.in_person_buyer, auction=self.in_person_auction)
+        invoice.recalculate()
+        return lot
+
+    def _notify(self, lot=None):
+        """Run the helper and hand back the mocked task. Patch stays outside captureOnCommitCallbacks
+        so it is still in place when the on_commit callback actually fires."""
+        with patch("auctions.tasks.send_push_to_user.delay") as push:
+            with self.captureOnCommitCallbacks(execute=True):
+                sent = notifications.notify_running_total(lot or self.in_person_lot)
+        return sent, push
+
+    def test_the_winner_is_told_what_they_have_spent(self):
+        sent, push = self._notify()
+        self.assertTrue(sent)
+        # The first sale also carries the one-time tip, so the running total is the first of two.
+        total_call = push.call_args_list[0]
+        self.assertEqual(total_call.args[0], self.buyer.pk)
+        self.assertEqual(total_call.kwargs["category"], notifications.CATEGORY_RUNNING_TOTAL)
+        self.assertIn(self.in_person_lot.lot_name, total_call.kwargs["title"])
+        self.assertIn("12", total_call.kwargs["title"])
+        self.assertIn("12.00", total_call.kwargs["body"])
+        # Tapping it opens their invoice for this auction.
+        self.assertIn(
+            reverse("my_auction_invoice", kwargs={"slug": self.in_person_auction.slug}),
+            total_call.kwargs["url"],
+        )
+
+    def test_one_notification_per_auction_rather_than_one_per_lot(self):
+        """The collapse key is the auction, so the second lot rewrites the first lot's alert."""
+        _, first = self._notify()
+        second_lot = Lot.objects.create(
+            lot_name="a second test lot",
+            auction=self.in_person_auction,
+            auctiontos_seller=self.admin_in_person_tos,
+            quantity=1,
+            custom_lot_number="101-2",
+        )
+        self._sell(second_lot, 8)
+        _, second = self._notify(second_lot)
+        key = f"running_total_{self.in_person_auction.pk}"
+        self.assertEqual(first.call_args_list[0].kwargs["collapse_key"], key)
+        self.assertEqual(second.call_args_list[0].kwargs["collapse_key"], key)
+        # ...and the total accumulates rather than restarting at the newest lot.
+        self.assertIn("20.00", second.call_args_list[0].kwargs["body"])
+
+    def test_the_tip_is_sent_once_and_only_once(self):
+        _, first = self._notify()
+        self.assertEqual(len(first.call_args_list), 2)
+        tip = first.call_args_list[1]
+        self.assertEqual(tip.kwargs["category"], notifications.CATEGORY_RUNNING_TOTAL_TIP)
+        self.assertEqual(tip.kwargs["title"], "Notifications as you win lots")
+        # Tapping the tip lands on the page carrying the setting it names.
+        self.assertIn(reverse("notification_preferences"), tip.kwargs["url"])
+        self.buyer.userdata.refresh_from_db()
+        self.assertTrue(self.buyer.userdata.running_total_tip_sent)
+        # The next lot gets the running total alone.
+        _, second = self._notify()
+        self.assertEqual(len(second.call_args_list), 1)
+        self.assertEqual(second.call_args_list[0].kwargs["category"], notifications.CATEGORY_RUNNING_TOTAL)
+
+    def test_the_preference_turns_it_off(self):
+        userdata = self.buyer.userdata
+        userdata.show_running_total_notification = False
+        userdata.save()
+        sent, push = self._notify()
+        self.assertFalse(sent)
+        push.assert_not_called()
+
+    def test_it_is_on_by_default(self):
+        self.assertTrue(UserData.objects.get(user=self.buyer).show_running_total_notification)
+
+    def test_nothing_is_sent_without_the_app(self):
+        MobileDevice.objects.filter(user=self.buyer).delete()
+        sent, push = self._notify()
+        self.assertFalse(sent)
+        push.assert_not_called()
+
+    def test_online_auctions_are_left_alone(self):
+        """In-person only: an online auction's winners find out by email when the auction ends."""
+        sent, push = self._notify(self.lot)  # self.lot belongs to the online auction
+        self.assertFalse(sent)
+        push.assert_not_called()
+
+    def test_a_bidder_with_no_account_is_skipped(self):
+        self.in_person_buyer.user = None
+        self.in_person_buyer.save()
+        sent, push = self._notify()
+        self.assertFalse(sent)
+        push.assert_not_called()
+
+    def test_setting_a_winner_sends_it(self):
+        """The wiring, not the helper: selling a lot on the set-winners screen notifies the buyer."""
+        from auctions.views import DynamicSetLotWinner
+
+        view = DynamicSetLotWinner()
+        view.request = type("R", (), {"user": self.admin_user})()
+        view.auction = self.in_person_auction
+        with patch_views("notify_running_total") as notify:
+            view.set_winner(self.in_person_lot, self.in_person_buyer, 12)
+        notify.assert_called_once_with(self.in_person_lot)
+
+    def test_the_toggle_is_greyed_out_without_a_device(self):
+        from auctions.forms import ChangeUserNotificationsForm
+
+        MobileDevice.objects.filter(user=self.buyer).delete()
+        form = ChangeUserNotificationsForm(self.buyer, instance=self.buyer.userdata)
+        self.assertTrue(form.fields["show_running_total_notification"].disabled)
+
+    def test_the_toggle_is_usable_with_a_device(self):
+        from auctions.forms import ChangeUserNotificationsForm
+
+        form = ChangeUserNotificationsForm(self.buyer, instance=self.buyer.userdata)
+        self.assertFalse(form.fields["show_running_total_notification"].disabled)
+
+
 class QueueRespectsTheAuctionNotificationSettingTests(StandardTestCase):
     """The lot queue must honour message_users_when_lots_sell like the set-winners screen does.
 
@@ -2266,7 +2400,7 @@ class UninstallFallbackTests(TestCase):
 class MobileNotificationPrefsApiTests(TestCase):
     """/api/mobile/notifications/prefs/ — the third step of the app's "Enable notifications".
 
-    The app raises the OS permission, registers the device, then writes these two toggles. Without
+    The app raises the OS permission, registers the device, then writes these toggles. Without
     this endpoint the app could only get the permission and send the user to /notifications/, where
     the checkbox is greyed out until the page is reloaded with a live device.
     """
@@ -2275,12 +2409,17 @@ class MobileNotificationPrefsApiTests(TestCase):
         self.user = User.objects.create_user(username="prefs_api", password="x")
         self.url = reverse("mobile-notification-prefs")
 
-    def test_get_returns_both_toggles(self):
+    def test_get_returns_every_toggle(self):
         response = self.client.get(self.url, **_bearer(self.user))
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json(), {"push_instead_of_email": False, "push_when_lots_sell": False})
+        # running_total is the one that ships on rather than off: a buyer who installed the app is
+        # already saying they want the auction on their phone.
+        self.assertEqual(
+            response.json(),
+            {"push_instead_of_email": False, "push_when_lots_sell": False, "running_total": True},
+        )
 
-    def test_patch_writes_both(self):
+    def test_patch_writes_them(self):
         response = self.client.patch(
             self.url,
             data=json.dumps({"push_instead_of_email": True, "push_when_lots_sell": True}),
@@ -2288,10 +2427,25 @@ class MobileNotificationPrefsApiTests(TestCase):
             **_bearer(self.user),
         )
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json(), {"push_instead_of_email": True, "push_when_lots_sell": True})
+        # A partial write leaves the toggle it didn't name alone, rather than defaulting it off.
+        self.assertEqual(
+            response.json(),
+            {"push_instead_of_email": True, "push_when_lots_sell": True, "running_total": True},
+        )
         userdata = UserData.objects.get(user=self.user)
         self.assertTrue(userdata.push_notifications_instead_of_email)
         self.assertTrue(userdata.push_notifications_when_lots_sell)
+
+    def test_patch_can_turn_the_running_total_off(self):
+        response = self.client.patch(
+            self.url,
+            data=json.dumps({"running_total": False}),
+            content_type="application/json",
+            **_bearer(self.user),
+        )
+        self.assertEqual(response.status_code, 200)
+        self.user.userdata.refresh_from_db()
+        self.assertFalse(self.user.userdata.show_running_total_notification)
 
     def test_patch_is_partial(self):
         UserData.objects.filter(user=self.user).update(push_notifications_when_lots_sell=True)

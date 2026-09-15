@@ -40,6 +40,13 @@ CATEGORY_VOLUNTEER = "volunteer"
 # "A lot you're watching is being sold right now." Distinct from CATEGORY_WATCHED (the nightly
 # "watched lots ending soon" mail): this one has no email form and is worthless minutes later.
 CATEGORY_LOT_SELLING = "lot_selling"
+# "You just won a lot, and here's what you've spent so far." One per auction, not one per lot: the
+# collapse key is the auction, so each sale rewrites the same notification in place. Push-only by
+# nature -- it is a running total, worthless once the auction is over and absurd as a per-lot email.
+CATEGORY_RUNNING_TOTAL = "running_total"
+# The one-time "this is a setting you can turn off" tip that follows a person's first running total.
+# Separate category so it is never folded into the running total's own collapse key.
+CATEGORY_RUNNING_TOTAL_TIP = "running_total_tip"
 # "Tap to Pay on iPhone is here." Apple's marketing requirements ask for a launch email (6.1) AND an
 # in-app push (6.3) with different, separately-specified copy, so the push must not fall back to
 # emailing its own text -- that would be a third message that is neither of the two required ones,
@@ -59,6 +66,8 @@ PUSH_ONLY_CATEGORIES = frozenset(
         CATEGORY_PRINTER,
         CATEGORY_VOLUNTEER,
         CATEGORY_LOT_SELLING,
+        CATEGORY_RUNNING_TOTAL,
+        CATEGORY_RUNNING_TOTAL_TIP,
         CATEGORY_TAP_TO_PAY_LAUNCH,
         CATEGORY_CLUB_ANNOUNCEMENT,
     }
@@ -134,6 +143,90 @@ def notify_user(user, *, category, title, body, url, send_email, auction_pk=None
         auction_pk=auction_pk,
         invoice_pk=invoice_pk,
     )
+    return True
+
+
+def notify_running_total(lot):
+    """Push the winner their updated total the moment a lot is knocked down to them.
+
+    In-person auctions only, and only to a winner whose account can receive an app notification:
+    this is a number somebody wants while they are still standing in the room, and the same figure
+    delivered by email hours later is noise. **One notification per auction, not per lot** -- the
+    collapse key is the auction, so every sale rewrites the same alert in place and the phone shows
+    the newest lot and the newest total rather than a column of them.
+
+    The first running total a person ever receives is followed by a second, separate notification
+    saying the setting exists. ``UserData.running_total_tip_sent`` is what holds that to once per
+    person: without it the tip would arrive after every lot. It is set before the push is enqueued
+    rather than after it lands, because a failed send that re-armed the tip would eventually deliver
+    it twice, and a tip nobody sees costs less than one that repeats.
+
+    This lives here rather than in the set-winners view because two callers need it -- that view and
+    the app's offline sync (``mobile.services.offline``), which mirrors it. Returns True when a push
+    was enqueued.
+    """
+    from django.contrib.sites.models import Site
+    from django.db import transaction
+    from django.urls import reverse
+
+    from auctions.models import Invoice
+    from auctions.tasks import send_push_to_user
+
+    auction = lot.auction if lot else None
+    if not auction or auction.is_online:
+        return False
+    tos = lot.auctiontos_winner
+    user = tos.user if tos else None
+    if not user:
+        # In-person bidders often have no account at all; there is nobody to notify.
+        return False
+    userdata = getattr(user, "userdata", None)
+    if userdata is None or not userdata.show_running_total_notification:
+        return False
+    if not userdata.has_app_push:
+        return False
+    invoice = Invoice.objects.filter(auctiontos_user=tos, auction=auction).first()
+    if not invoice:
+        return False
+
+    symbol = lot.currency_symbol
+    title = f"{lot.lot_name} {symbol}{lot.winning_price}"
+    bought = invoice.lots_bought
+    body = f"Your total so far: {symbol}{invoice.total_bought:.2f} for {bought} lot{'' if bought == 1 else 's'}"
+    domain = Site.objects.get_current().domain
+    invoice_url = f"https://{domain}{reverse('my_auction_invoice', kwargs={'slug': auction.slug})}"
+    tip_url = f"https://{domain}{reverse('notification_preferences')}"
+    send_tip = not userdata.running_total_tip_sent
+    if send_tip:
+        userdata.running_total_tip_sent = True
+        userdata.save(update_fields=["running_total_tip_sent"])
+
+    def _enqueue():
+        send_push_to_user.delay(
+            user.pk,
+            title=title,
+            body=body,
+            url=invoice_url,
+            category=CATEGORY_RUNNING_TOTAL,
+            collapse_key=f"running_total_{auction.pk}",
+            auction_pk=auction.pk,
+            invoice_pk=invoice.pk,
+        )
+        if send_tip:
+            # Deliberately no collapse key: this must not replace, or be replaced by, the running
+            # total it arrives alongside.
+            send_push_to_user.delay(
+                user.pk,
+                title="Notifications as you win lots",
+                body="Turn this off in preferences",
+                url=tip_url,
+                category=CATEGORY_RUNNING_TOTAL_TIP,
+                auction_pk=auction.pk,
+            )
+
+    # The invoice this total was read off is written in the caller's transaction; enqueueing inside
+    # it would let the task run against rows that are still uncommitted.
+    transaction.on_commit(_enqueue)
     return True
 
 

@@ -11796,6 +11796,19 @@ class UserData(CachedPropertiesMixin, models.Model):
     auto_add_images.help_text = "If another lot with the same name has been added previously.  Images are only added to lots that are part of an auction."
     push_notifications_when_lots_sell = models.BooleanField(default=False, blank=True)
     push_notifications_when_lots_sell.help_text = "For in-person auctions, get a notification when bidding starts on a lot that you've watched<span class='d-none' id='subscribe_message_area'></span>"
+    show_running_total_notification = models.BooleanField(
+        default=True, blank=True, verbose_name="Show running total notification"
+    )
+    show_running_total_notification.help_text = (
+        "Show your total amount purchased in real time in the app.  In person auctions only."
+    )
+    # One notification per person, ever: the first running total they receive is followed by a second
+    # notification saying the setting above exists.  Without this marker that tip would arrive after
+    # every lot, which is precisely the noise the running total's collapse key avoids.
+    running_total_tip_sent = models.BooleanField(default=False)
+    running_total_tip_sent.help_text = (
+        "Whether this user has been told, once, where to turn the running total notification off"
+    )
     distance_unit = models.CharField(
         max_length=10,
         choices=[("mi", "Miles"), ("km", "Kilometers")],

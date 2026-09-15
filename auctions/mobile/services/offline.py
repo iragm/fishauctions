@@ -491,6 +491,15 @@ class _OpApplier:
             lot.add_winner_message(self.user, winning_tos, winning_price)
         except Exception:
             logger.exception("add_winner_message failed for lot %s", lot.pk)
+        # Same running-total push the web set-winners screen sends. A queue that syncs late collapses
+        # into one notification carrying the correct final total, because the collapse key is the
+        # auction rather than the lot -- so a reconnect after five sales buzzes the buyer once.
+        try:
+            from auctions.notifications import notify_running_total
+
+            notify_running_total(lot)
+        except Exception:
+            logger.exception("notify_running_total failed for lot %s", lot.pk)
         if lot.auction and lot.auction.club and not lot.bap_points_awarded and not lot.manually_approved:
             try:
                 lot.auto_award_bap_points()

@@ -655,8 +655,9 @@ body .select2-container {
     }
 }
 
-/* The page behind the panel shouldn't scroll while the panel is open. */
-body.speaker-panel-open {
+/* The page behind the panel shouldn't scroll while the panel is open. Named for the module
+   rather than the page because auctions/static/js/map_list_panel.js is what adds it. */
+body.detail-panel-open {
     overflow: hidden;
 }
 

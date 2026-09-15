@@ -285,6 +285,11 @@ class AddToCalendarView(LoginRequiredMixin, View):
     """Redirect or generate an 'Add to Calendar' link for a pickup location"""
 
     def dispatch(self, request, *args, **kwargs):
+        # LoginRequiredMixin only checks inside super().dispatch(), and everything below runs first:
+        # without this an anonymous visitor reached the AuctionTOS query with an AnonymousUser and
+        # got a 500 instead of the login page.
+        if not request.user.is_authenticated:
+            return self.handle_no_permission()
         # Extract query params
         self.calendar_type = request.GET.get("type")
         self.second = request.GET.get("second") in ("1", "true", "yes", "True")

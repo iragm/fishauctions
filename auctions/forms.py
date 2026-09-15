@@ -4225,6 +4225,7 @@ class ChangeUserNotificationsForm(forms.ModelForm):
         fields = (
             "push_notifications_instead_of_email",
             "push_notifications_when_lots_sell",
+            "show_running_total_notification",
             "email_me_when_people_comment_on_my_lots",
             "email_me_about_new_chat_replies",
             "send_reminder_emails_about_joining_auctions",
@@ -4275,6 +4276,9 @@ class ChangeUserNotificationsForm(forms.ModelForm):
         # device to push to — disabling keeps the stored value unchanged on save.
         if not (self.instance and self.instance.pk and self.instance.has_push_device):
             self.fields["push_notifications_instead_of_email"].disabled = True
+            # The running total exists only inside the app, so the same gate applies. Disabling
+            # leaves the stored value untouched, which is what lets installing the app resume it.
+            self.fields["show_running_total_notification"].disabled = True
             # Someone whose phone has gone quiet needs a different sentence than someone who never
             # had the app: the box stays ticked (their stored choice is untouched, so reinstalling
             # just resumes push) and telling them to "enable this" would be nonsense. A device row
@@ -4338,6 +4342,10 @@ class ChangeUserNotificationsForm(forms.ModelForm):
                 ),
                 Div(
                     "push_notifications_when_lots_sell",
+                    css_class="col-md-12",
+                ),
+                Div(
+                    "show_running_total_notification",
                     css_class="col-md-12",
                 ),
                 css_class="row",

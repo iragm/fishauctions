@@ -28,7 +28,7 @@ ONE_TAP_ALWAYS_SHOWN_ON = frozenset({"account_login", "account_signup"})
 # of something it cannot share the screen with -- the club map, the promo page's video, a long FAQ,
 # the terms somebody is reading, and the two big browse lists where it reads as noise rather than an
 # offer. Keyed on the view rather than the URL name, so a second path onto the same page is covered.
-ONE_TAP_NEVER_SHOWN_ON = frozenset({"AllAuctions", "AllLots", "ClubMap", "FAQ", "PromoSite", "UserAgreement"})
+ONE_TAP_NEVER_SHOWN_ON = frozenset({"AllAuctions", "AllLots", "ClubFinderView", "FAQ", "PromoSite", "UserAgreement"})
 CRAWLER_USER_AGENTS = ("Googlebot", "Baiduspider")
 
 

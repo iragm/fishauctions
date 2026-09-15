@@ -21,6 +21,7 @@ from .models import (
     AuctionHistory,
     AuctionTOS,
     BapAward,
+    Club,
     ClubBapCategoryOverride,
     ClubBapGenusOverride,
     ClubHistory,
@@ -1276,6 +1277,111 @@ class SpeakerHTMxTable(tables.Table):
             "<span class='badge bg-primary'>{} {}</span>",
             ((label, count) for _value, label, _group, count in counts),
         )
+
+
+class ClubHTMxTable(tables.Table):
+    """The list half of the public club finder.
+
+    Clicking a row loads the club's card over htmx (see `clubs.html`), which is also what the map
+    pins do, so both views open the same thing.
+
+    Every column here is public: the club's name, what it has coming up, what it is into, and how
+    far away it is. There is deliberately no column for the club's address -- this page has never
+    printed one, only a pin -- and none for anything about its members. The distance is measured
+    from the pin to a location the reader supplied, so it says something to them without saying
+    anything about the club.
+    """
+
+    hide_string = "d-md-table-cell d-none"
+    icon = tables.Column(accessor="pk", verbose_name="", orderable=False)
+    name = tables.Column(accessor="name", verbose_name="Club", orderable=True)
+    next_event = tables.Column(
+        accessor="pk",
+        verbose_name="Coming up",
+        orderable=False,
+        attrs={"th": {"class": hide_string}, "cell": {"class": hide_string}},
+    )
+    interests = tables.Column(
+        accessor="pk",
+        verbose_name="Interests",
+        orderable=False,
+        attrs={"th": {"class": hide_string}, "cell": {"class": hide_string}},
+    )
+    distance = tables.Column(accessor="pk", verbose_name="Distance", orderable=True, empty_values=())
+
+    class Meta:
+        model = Club
+        fields = ("icon", "name", "next_event", "interests", "distance")
+        # Same template every other table on the site uses; see SpeakerHTMxTable for why the
+        # django-tables2 default is not an option here.
+        template_name = "tables/bootstrap_htmx.html"
+        row_attrs = {"class": "club-row"}
+
+    def __init__(self, *args, **kwargs):
+        # With no origin the Distance column still renders, it just has nothing to put in it.
+        self.has_origin = kwargs.pop("has_origin", False)
+        super().__init__(*args, **kwargs)
+
+    def order_distance(self, queryset, is_descending):
+        """Sort by distance when there is somewhere to measure from, otherwise by name.
+
+        nulls_last matters: the annotation is NULL for every club without coordinates, and an
+        ascending sort without it fills page one with clubs whose distance is unknown.
+        """
+        if not self.has_origin:
+            return queryset.order_by(("-" if is_descending else "") + "name"), True
+        distance = F("distance").desc(nulls_last=True) if is_descending else F("distance").asc(nulls_last=True)
+        return queryset.order_by(distance, "name"), True
+
+    def render_icon(self, record):
+        if not record.icon:
+            return format_html(
+                "<span class='d-inline-flex align-items-center justify-content-center bg-secondary rounded' "
+                "style='width:40px;height:40px;'><i class='bi bi-people-fill'></i></span>"
+            )
+        return format_html(
+            "<img src='{}' alt='' class='rounded' style='width:40px;height:40px;object-fit:cover;'>",
+            record.icon_thumbnail_url,
+        )
+
+    def render_name(self, value, record):
+        """A plain link to the club's own page.
+
+        Unlike the speaker table this opens no panel, and deliberately: a summary beside the list
+        would be a second public surface carrying the same privacy rules as the club page, and
+        finding a club is a find-one task where the page load it would save is not worth that. See
+        :mod:`auctions.views.club_finder`.
+        """
+        link = format_html(
+            "<a href='{}'>{}</a>",
+            reverse("club_detail", kwargs={"slug": record.slug}),
+            record.name,
+        )
+        if not record.allow_joining:
+            return link
+        # text-dark because bg-success is light enough that white text fails AA on it --
+        # see style_reference.md.
+        return format_html("{} <span class='badge bg-success text-dark'>Taking members</span>", link)
+
+    def render_next_event(self, record):
+        title = getattr(record, "next_event_title", None)
+        if not title:
+            return format_html("<span class='text-muted'>—</span>")
+        return format_html(
+            "{} <small class='text-muted'>{}</small>", title, naturalday(getattr(record, "next_event_start", None))
+        )
+
+    def render_interests(self, record):
+        names = [interest.name for interest in record.interests.all()[:3]]
+        if not names:
+            return format_html("<span class='text-muted'>—</span>")
+        return format_html_join(" ", "<span class='badge bg-secondary'>{}</span>", ((name,) for name in names))
+
+    def render_distance(self, record):
+        distance = getattr(record, "distance", None)
+        if distance is None:
+            return format_html("<span class='text-muted'>—</span>")
+        return format_html("{} miles", int(distance))
 
 
 class DonationVendorHTMxTable(tables.Table):

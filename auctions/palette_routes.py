@@ -111,7 +111,12 @@ ROUTE_LIST: list[Route] = [
     _r("allLots", "Browse all lots for sale", "Browsing", keywords=["lots", "shop", "buy", "search lots"]),
     _r("auctions", "Browse all auctions", "Browsing", keywords=["upcoming auctions", "find an auction"]),
     _r("all_auctions", "Browse all auctions (full list)", "Browsing", keywords=["every auction"]),
-    _r("clubs", "Map of clubs", "Browsing", keywords=["club map", "find a club near me"]),
+    _r(
+        "clubs",
+        "Find a fish club",
+        "Browsing",
+        keywords=["club map", "find a club near me", "clubs near me", "aquarium society", "club list"],
+    ),
     _r("leaderboard", "Leaderboard", "Browsing", keywords=["top sellers", "rankings"]),
     _r("my_last_auction_lots", "Lots in my most recent auction", "Browsing", keywords=["lots near me"]),
     _r("user_lots", "Lots grouped by seller", "Browsing", keywords=["sellers", "who is selling"]),

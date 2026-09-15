@@ -195,7 +195,7 @@ urlpatterns = [
         name="delete_auction_chat",
     ),
     path("leaderboard/", views.Leaderboard.as_view(), name="leaderboard"),
-    path("clubs/", views.ClubMap.as_view(), name="clubs"),
+    path("clubs/", views.ClubFinderView.as_view(), name="clubs"),
     path("admin-usermap/", views.UserMap.as_view(), name="admin_user_map"),
     path("admin-dashboard/", views.AdminDashboard.as_view(), name="admin_dashboard"),
     path("admin-setup-checklist/", views.AdminSetupChecklistView.as_view(), name="admin_setup_checklist"),

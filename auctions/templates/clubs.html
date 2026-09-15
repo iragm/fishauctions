@@ -1,88 +1,76 @@
-{% extends "base.html" %}
-{% load crispy_forms_tags %}
-{% block title %} Find a fish club near you {% endblock %}
+{% extends "auctions/htmx_table_view.html" %}
 {% load static %}
+{% block title %}Find a fish club near you{% endblock %}
+
+{% comment %}
+The public club finder, built the way the speaker directory is: the shared htmx table page, so the
+filter box, chips and pagination behave like every other table on the site, plus a map of the same
+filtered set, kept in sync by an out-of-band payload the htmx table response carries (see
+partials/club_table.html). Driven by static/js/map_list_panel.js, which the speaker directory uses
+too.
+
+No detail panel, unlike the speaker directory: rows link to the club page, and a pin names the club
+in an info window whose name is that link. Why is in auctions/views/club_finder.py.
+{% endcomment %}
+
+{% comment %}Empty on purpose: the search box is rendered by club_table_header.html, above the interest and filter menus. Rendering the crispy form here as well would put a second, unwired copy of it on the page.{% endcomment %}
+{% block htmx_table_filter_form %}{% endblock %}
+
+{% block htmx_table %}
+{% comment %}Directly above the results rather than beside the heading, per style_reference.md.{% endcomment %}
+<div class="btn-group mb-2" role="group" aria-label="List or map">
+  <button type="button" class="btn btn-secondary" id="club-view-list"><i class="bi bi-list-ul"></i> List</button>
+  <button type="button" class="btn btn-secondary" id="club-view-map"><i class="bi bi-map"></i> Map</button>
+</div>
+
+<div id="club-map-wrapper" class="card mb-3 d-none">
+  <div class="card-body p-0">
+    {% if google_maps_api_key %}
+    <div id="club-map" style="height: 60vh; min-height: 320px; width: 100%;"></div>
+    {% else %}
+    <div class="alert alert-warning text-dark m-3">Club maps are unavailable until a Google Maps API key is configured.</div>
+    {% endif %}
+  </div>
+  {% if unmapped_count %}
+  <div class="card-footer py-1">
+    <small class="text-muted">
+      <i class="bi bi-info-circle me-1"></i>{{ unmapped_count }} of {{ result_count }} matching club{{ result_count|pluralize }}
+      {{ unmapped_count|pluralize:"has,have" }} no location set, so {{ unmapped_count|pluralize:"it isn't,they aren't" }} on the map.
+    </small>
+  </div>
+  {% endif %}
+</div>
+
+<div id="club-list-wrapper">
+  {{ block.super }}
+</div>
+
+{% comment %}Was: sign in to see the address. That asked somebody to make an account before they could report a wrong pin on a map, and printed the address to every account that did. /support/ takes the message from either.{% endcomment %}
+<div class="mt-3">Something missing? <a href="{% url 'support' %}">Let us know</a>.</div>
+{% endblock %}
 
 {% block extra_js %}
-{% if google_maps_api_key %}
-<script
-src="https://maps.googleapis.com/maps/api/js?key={{google_maps_api_key}}&callback=initMap&libraries=&v=weekly&libraries=marker"
-async
-></script>
+{{ block.super }}
+
+{% comment %} Wrapped in a div because hx-swap-oob needs an element it can replace wholesale; the htmx table response ships the same wrapper so filtering redraws the map markers. {% endcomment %}
+<div id="club-map-payload">{{ clubs_json|json_script:"club-map-data" }}</div>
+<script src="{% static 'js/map_list_panel.js' %}"></script>
 <script>
-//     let map;
-// function initMap() {
-//   map = new google.maps.Map(document.getElementById("map_canvas"), {
-//     center: { lat: -34.397, lng: 150.644 },
-//     zoom: 8,
-//   });
-// }
-
-function initMap() {
-    var map;
-    var bounds = new google.maps.LatLngBounds();
-    var mapOptions = {mapId:"club_map"};
-    map = new google.maps.Map(document.getElementById("map_canvas"), mapOptions);
-    {% if has_user_location %}
-    map.setZoom(8);
-    map.setCenter({lat:{{ latitude }}, lng:{{ longitude }}});
-    {% else %}
-    map.setZoom(4);
-    map.setCenter({lat:39, lng:-97});
-    {% endif %}
-    // Multiple Markers
-    var markers = [
-        {% for club in clubs %}
-        ["{{ club.name }}", {{ club.latitude }}, {{ club.longitude }}],
-        {% endfor %}
-    ];
-
-    var infoWindowContent = [
-        {% for club in clubs %}
-        ['<div class="info_content" style="color:black;">' +
-        '<h5>{{ club.name }}</h5>' +
-        '<p>{% if request.user.is_superuser %}<a href="/admin/auctions/club/{{ club.pk }}/change/" target="_blank">Admin</a><br>{% endif%}' +
-        '{% if club.slug %}<a href="/clubs/{{club.slug}}/">Club page</a><br>{% endif%}' +
-        '{% if club.homepage %}<a href="{{club.homepage}}" target="_blank">Website</a><br>{% endif%}' +
-        '{% if club.facebook_page %}<a href="{{club.facebook_page}}" target="_blank">Facebook page</a><br>{% endif%}' +
-        '<br><b>Interests:</b><br>{% for interest in club.interests.all %}{{interest}}<br>{%endfor%}</p>' +
-        '</div>'],
-        {% endfor %}
-    ];
-    var infoWindow = new google.maps.InfoWindow(), marker, i;
-    for( i = 0; i < markers.length; i++ ) {
-        var position = new google.maps.LatLng(markers[i][1], markers[i][2]);
-        bounds.extend(position);
-        marker = new google.maps.marker.AdvancedMarkerElement({
-            position: position,
-            map: map,
-            title: markers[i][0]
-        });
-        google.maps.event.addListener(marker, 'click', (function(marker, i) {
-            return function() {
-                infoWindow.setContent(infoWindowContent[i][0]);
-                infoWindow.open(map, marker);
-            }
-        })(marker, i));
-    }
-}
+initMapListPanel({
+  prefix: 'club',
+  pageUrl: function (slug) { return '/clubs/' + encodeURIComponent(slug) + '/'; },
+  origin: {% if has_origin %}{lat: {{ origin_latitude }}, lng: {{ origin_longitude }}}{% else %}null{% endif %},
+  originLabel: 'your location',
+  defaultView: '{{ default_view }}',
+  callbackName: 'initClubMap',
+  menuLabelId: 'interest-filter-label',
+  menuOptionClass: 'interest-filter-option',
+  menuFallbackLabel: 'Interests'
+});
 </script>
+{% if google_maps_api_key %}
+<script async src="https://maps.googleapis.com/maps/api/js?key={{ google_maps_api_key }}&amp;callback=initClubMap"></script>
 {% else %}
-<script>console.error("Google Maps is not configured; skipping club map rendering.");</script>
+<script>console.error('Google Maps is not configured; the club map will stay empty.');</script>
 {% endif %}
-{% endblock %}
-{% block content %}
-            <h1>Find a fish club near you</h1>
-            <div id="map_wrapper" style='height: 400px;'>
-                {% if google_maps_api_key %}
-                <div id="map_canvas" class="mapping" style='width: 100%; height: 100%;'></div>
-                {% else %}
-                <div class="alert alert-warning m-3">Club maps are unavailable until a Google Maps API key is configured.</div>
-                {% endif %}
-            </div>
-            {% if not has_user_location and not request.is_mobile_app %}
-            <span><a href="#" onclick="setLocation()">{{ location_message }}</a></span>
-            {% endif %}
-            {% comment %}Was: sign in to see the address. That asked somebody to make an account before they could report a wrong pin on a map, and printed the address to every account that did. /support/ takes the message from either.{% endcomment %}
-            <div>Something missing? <a href="{% url 'support' %}">Let us know</a>.</div>
 {% endblock %}
