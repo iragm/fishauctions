@@ -285,9 +285,25 @@
      * typed in. Google's info window is white whatever the page's theme, so the links carry their
      * own color -- the site's primary blue, which is the one brand color that stays legible on it.
      */
+    /* The href only if it is an http(s) URL or a path on this site, else null. The payload is read
+       back out of the page's DOM, and the server already prefixes a club's typed-in links -- this
+       is the check at the sink itself, so a `javascript:` URL can never become a link whatever
+       reaches it. */
+    function safeHref(href) {
+      try {
+        var url = new URL(href, window.location.origin);
+        return url.protocol === "https:" || url.protocol === "http:" ? url.href : null;
+      } catch (error) {
+        return null;
+      }
+    }
+
     function infoLink(href, text, external) {
       var link = document.createElement("a");
-      link.href = href;
+      var safe = safeHref(href);
+      if (safe) {
+        link.href = safe;
+      }
       link.textContent = text;
       link.style.color = ORIGIN_COLOR;
       if (external) {
