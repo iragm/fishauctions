@@ -48,6 +48,7 @@ from auctions.models import (
     Invoice,
     normalize_email,
 )
+from auctions.services import attachment_filename
 from auctions.tables import (
     ClubHistoryHTMxTable,
 )
@@ -388,7 +389,8 @@ class ClubTreasurerReportExportView(LoginRequiredMixin, ClubViewMixin, View):
         start_date = form.cleaned_data["start_date"] or timezone.localdate().replace(day=1)
         end_date = form.cleaned_data["end_date"] or timezone.localdate()
         response = HttpResponse(content_type="text/csv")
-        response["Content-Disposition"] = f'attachment; filename="{self.club.slug}-treasurer-report.csv"'
+        filename = attachment_filename(f"{self.club.slug}-treasurer-report")
+        response["Content-Disposition"] = f'attachment; filename="{filename}.csv"'
         writer = csv.writer(response)
         writer.writerow(["date", "amount", "description", "category"])
         for entry in ClubMoney.objects.filter(club=self.club, date__range=(start_date, end_date)).order_by(
@@ -731,7 +733,8 @@ class ClubMemberCSVExportView(LoginRequiredMixin, ClubViewMixin, View):
         from auctions.filters import ClubMemberFilter
 
         response = HttpResponse(content_type="text/csv")
-        response["Content-Disposition"] = f'attachment; filename="{self.club.slug}-members.csv"'
+        filename = attachment_filename(f"{self.club.slug}-members")
+        response["Content-Disposition"] = f'attachment; filename="{filename}.csv"'
         writer = csv.writer(response)
         # The column is omitted entirely when the club has membership numbers off: nothing in the
         # UI may reference a number that isn't in use.

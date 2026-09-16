@@ -54,6 +54,7 @@ from auctions.models import (
     add_price_info,
     find_image,
 )
+from auctions.services import attachment_filename
 from auctions.species_matching import (
     suggest_species,
 )
@@ -75,9 +76,8 @@ class MyWonLotCSV(LoginRequiredMixin, View):
         )
         current_site = Site.objects.get_current()
         response = HttpResponse(content_type="text/csv")
-        response["Content-Disposition"] = (
-            f'attachment; filename="my_won_lots_from_{current_site.domain.replace(".", "_")}.csv"'
-        )
+        domain = attachment_filename(current_site.domain.replace(".", "_"))
+        response["Content-Disposition"] = f'attachment; filename="my_won_lots_from_{domain}.csv"'
         writer = csv.writer(response)
         writer.writerow(["Lot number", "Name", "Scientific name", "Auction", "Winning price", "Link"])
         for lot in lots:
@@ -106,9 +106,8 @@ class MyLotReportView(LoginRequiredMixin, View):
         )
         current_site = Site.objects.get_current()
         response = HttpResponse(content_type="text/csv")
-        response["Content-Disposition"] = (
-            f'attachment; filename="my_lots_from_{current_site.domain.replace(".", "_")}.csv"'
-        )
+        domain = attachment_filename(current_site.domain.replace(".", "_"))
+        response["Content-Disposition"] = f'attachment; filename="my_lots_from_{domain}.csv"'
         writer = csv.writer(response)
         writer.writerow(
             [
@@ -230,7 +229,7 @@ class AuctionReportView(LoginRequiredMixin, AuctionViewMixin, View):
             filename = self.auction.slug + "-report-" + end
         else:
             filename = self.auction.slug + "-report-" + query + "-" + end
-        response["Content-Disposition"] = f'attachment; filename="{filename}.csv"'
+        response["Content-Disposition"] = f'attachment; filename="{attachment_filename(filename)}.csv"'
         writer = csv.writer(response)
         writer.writerow(
             [
@@ -610,7 +609,8 @@ class AuctionInvoicesPayPalCSV(LoginRequiredMixin, AuctionViewMixin, View):
         response = HttpResponse(content_type="text/csv")
         due_date = timezone.now().strftime("%m/%d/%Y")
         current_site = Site.objects.get_current()
-        response["Content-Disposition"] = f'attachment; filename="{self.auction.slug}-paypal-{chunk}.csv"'
+        filename = attachment_filename(f"{self.auction.slug}-paypal-{chunk}")
+        response["Content-Disposition"] = f'attachment; filename="{filename}.csv"'
         writer = csv.writer(response)
         writer.writerow(
             [
@@ -702,7 +702,8 @@ class AuctionLotsCSV(LoginRequiredMixin, AuctionViewMixin, View):
         else:
             filename = "lot-list-" + query
             query = unquote(query)
-        response["Content-Disposition"] = f'attachment; filename="{self.auction.slug}-{filename}.csv"'
+        filename = attachment_filename(f"{self.auction.slug}-{filename}")
+        response["Content-Disposition"] = f'attachment; filename="{filename}.csv"'
         writer = csv.writer(response)
         custom_dropdown_enabled = (
             self.auction.use_custom_dropdown_field != "disable"

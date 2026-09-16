@@ -440,6 +440,9 @@ class Leaderboard(ListView):
         return context
 
 
+VALID_LOT_ORDERS = frozenset(key for key, label in LotFilter.ORDER)
+
+
 class AllLots(LotListView, AuctionViewMixin):
     """Show all lots"""
 
@@ -453,8 +456,11 @@ class AllLots(LotListView, AuctionViewMixin):
     def render_to_response(self, context, **response_kwargs):
         """Add a cookie so the ordering is remembered for later views."""
         response = super().render_to_response(context, **response_kwargs)
-        if hasattr(self, "ordering"):
-            response.set_cookie("lot_order", self.ordering)
+        ordering = getattr(self, "ordering", "")
+        if ordering:
+            response.set_cookie("lot_order", ordering)
+        elif getattr(self, "clear_order_cookie", False):
+            response.delete_cookie("lot_order")
         return response
 
     def get_context_data(self, **kwargs):
@@ -465,12 +471,22 @@ class AllLots(LotListView, AuctionViewMixin):
         # I don't love having this in two places, but it seems necessary
         if self.request.GET.get("page"):
             del data["page"]  # required for pagination to work
+        # Only a real sort choice is filtered on or remembered: set_cookie() raises CookieError on
+        # control characters, so echoing ?order= into the cookie let any junk value 500 this page.
+        self.clear_order_cookie = False
         if "order" in data:
-            self.ordering = data["order"]
-        else:
-            if "lot_order" in self.request.COOKIES:
-                data["order"] = self.request.COOKIES["lot_order"]
+            if data["order"] in VALID_LOT_ORDERS:
                 self.ordering = data["order"]
+            else:
+                del data["order"]
+                self.clear_order_cookie = True
+        else:
+            cookie_order = self.request.COOKIES.get("lot_order")
+            if cookie_order in VALID_LOT_ORDERS:
+                data["order"] = cookie_order
+                self.ordering = cookie_order
+            elif cookie_order is not None:
+                self.clear_order_cookie = True
         if self.ordering == "unloved":
             can_show_unloved_tip = False
             if randint(1, 10) > 9:

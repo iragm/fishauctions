@@ -29,7 +29,7 @@ this only quotes its opening sentence.
 - **`account_nav.py`** (199 lines)
   The **Account setup** menu: which pages are in it, which one you're on, and where /account/setup/ lands.
   `Row`, `Group`, `active_page`, `remember`, `landing_url`, `groups_for`
-- **`admin.py`** (1566 lines)
+- **`admin.py`** (1567 lines)
   The Django admin: staff-only, and the few jobs that only live here.
 - **`admin_paginator.py`** (50 lines)
   Paginate the admin's biggest changelists without counting the whole table.
@@ -202,7 +202,7 @@ this only quotes its opening sentence.
 - **`routing.py`** (9 lines)
 - **`serializers.py`** (855 lines)
   DRF serializers for the club API.
-- **`services.py`** (1151 lines)
+- **`services.py`** (1163 lines)
   Operations that are the same whoever asks: web page, API, app or assistant.
 - **`signals.py`** (965 lines)
   Signal handlers for the auctions app.
@@ -436,9 +436,9 @@ this only quotes its opening sentence.
   `QueryGrowthMixin`, `AuctionUsersTableQueryCountTests`, `AuctionLotAdminTableQueryCountTests`, `LotDetailQueryCountTests`, `InvoiceQueryCountTests`, `SellerAndFeedbackQueryCountTests`, `LongLivedInstanceTests`, `CachedPropertyWiringTests`, `LotListQueryCountTests`, `LotCachedPropertyTests`
 - **`test_remote_print.py`** (539 lines)
   Printing from a computer to the phone's Bluetooth label printer.
-- **`test_security.py`** (309 lines)
+- **`test_security.py`** (402 lines)
   Tests that AuctionTOS and user data are protected: unauthenticated and non-admin users can't reach
-  `AuctionTOSSecurityTestCase`
+  `AuctionTOSSecurityTestCase`, `LotOrderCookieTestCase`, `AttachmentFilenameTestCase`, `ExportFilenameTestCase`
 - **`test_site_config.py`** (782 lines)
   Site-wide configuration: currency, email fields, locations, demo data and defaults.
   `CurrencyCustomizationTests`, `AuctionEmailFieldsTest`, `UserLocationUpdateTests`, `LoadDemoDataTests`, `EnsureSiteDefaultsCommandTests`, `AdminReadonlyFieldsTests`
@@ -742,7 +742,7 @@ Every view on the site, split by the part of it the view belongs to.
   The small endpoints pages call: POST targets, HTMx fragments and moderation actions.
 - **`auction_admin.py`** (1218 lines)
   Setting an auction up and running the room: pickup locations, users, check-in.
-- **`auction_extras.py`** (658 lines)
+- **`auction_extras.py`** (659 lines)
   The rest of an auction's admin surface: label config, bulk printing, no-shows, chat.
 - **`auction_pages.py`** (1010 lines)
   The auction as a thing you join: the TOS, creating one, and the auction's own page.
@@ -774,14 +774,14 @@ Every view on the site, split by the part of it the view belongs to.
 - **`club_finder.py`** (196 lines)
   The public club finder: a map of clubs, and the same clubs as a filtered list.
   `ClubFinderView`
-- **`club_integrations.py`** (1241 lines)
+- **`club_integrations.py`** (1243 lines)
   The outside accounts a club connects: Mailchimp, Brevo, Google Calendar, Square links.
-- **`club_members.py`** (1068 lines)
+- **`club_members.py`** (1071 lines)
   The club's list of people: joining, renewing, permissions, cards.
 - **`club_pages.py`** (577 lines)
   A club's public page, and the two links that identify a member on it.
   `ClubDetailView`, `ClubMemberByUUIDView`, `ClubMemberByNumberView`, `ClubAdminView`
-- **`club_reports.py`** (809 lines)
+- **`club_reports.py`** (812 lines)
   What a club's officers read: history, stats, the treasurer's report, money in and out.
   `ClubHistoryView`, `ClubStatsView`, `ClubTreasurerReportView`, `ClubTreasurerReportExportView`, `ClubMoneyCreateView`, `ClubMoneyBalanceView`, `ClubMemberCSVImportView`, `ClubMemberCSVExportView`
 - **`discord.py`** (940 lines)
@@ -789,7 +789,7 @@ Every view on the site, split by the part of it the view belongs to.
   `InboundEmailRoutingView`, `verify_discord_signature`, `assign_discord_role`, `DiscordInteractionsView`, `LotBapPointsView`, `ClubDiscordConfigView`, `ClubDiscordFetchRolesView`, `ClubDiscordEditRoleView`, `ClubDiscordSetDefaultRoleView`, `ClubDiscordSendJoinMessageView`
 - **`embeds.py`** (624 lines)
   The snippets a club puts on its own website, and the pages behind them.
-- **`exports.py`** (974 lines)
+- **`exports.py`** (975 lines)
   Taking data back out: the CSV exports, the reports, and the mailing list.
 - **`invoices.py`** (384 lines)
   Invoices as a person reads them: the list, one invoice, and the no-login link.
@@ -810,7 +810,7 @@ Every view on the site, split by the part of it the view belongs to.
   Auction night: setting winners, the lot queue, and volunteers.
 - **`site_admin.py`** (477 lines)
   The superuser's dashboard: traffic, signups, referrers, the user map.
-- **`site_pages.py`** (559 lines)
+- **`site_pages.py`** (575 lines)
   Pages that belong to the site rather than to an auction or club: the FAQ, support, the promo site,
 - **`speakers.py`** (482 lines)
   The speaker directory: who will come and talk to a club, and what about.

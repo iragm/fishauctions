@@ -73,12 +73,13 @@ from .models import (
     Watch,
     guess_category,
 )
+from .services import attachment_filename
 
 
 def export_to_csv(modeladmin, request, queryset):
     opts = modeladmin.model._meta
     response = HttpResponse(content_type="text/csv")
-    response["Content-Disposition"] = f"attachment;filename={opts.verbose_name}.csv"
+    response["Content-Disposition"] = f'attachment;filename="{attachment_filename(opts.verbose_name)}.csv"'
     writer = csv.writer(response)
     fields = [field for field in opts.get_fields() if not field.many_to_many and not field.one_to_many]
     # Write a first row with header information

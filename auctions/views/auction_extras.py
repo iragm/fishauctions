@@ -57,6 +57,7 @@ from auctions.models import (
     add_price_info,
     guess_category,
 )
+from auctions.services import attachment_filename
 
 from .base import AuctionViewMixin, close_modal_response
 from .printing import LotLabelView
@@ -221,7 +222,7 @@ class PickupLocationsIncoming(View, AuctionViewMixin):
         # Each row prints the winner, the seller and where the lot is coming from.
         queryset = _lots_with_people(self.location.incoming_lots).order_by("-auctiontos_seller__name")
         response = HttpResponse(content_type="text/csv")
-        name = self.location.name.lower().replace(" ", "_")
+        name = attachment_filename(self.location.name.lower().replace(" ", "_"))
         response["Content-Disposition"] = f'attachment; filename="incoming_lots_destined_for_{name}.csv"'
         csv_writer = csv.writer(response)
         csv_writer.writerow(
@@ -261,7 +262,7 @@ class PickupLocationsOutgoing(View, AuctionViewMixin):
         # each row prints the winner, the seller and where the lot is going
         queryset = _lots_with_people(self.location.outgoing_lots).order_by("-auctiontos_winner__pickup_location__name")
         response = HttpResponse(content_type="text/csv")
-        name = self.location.name.lower().replace(" ", "_")
+        name = attachment_filename(self.location.name.lower().replace(" ", "_"))
         response["Content-Disposition"] = f'attachment; filename="outgoing_lots_coming_from_{name}.csv"'
         csv_writer = csv.writer(response)
         csv_writer.writerow(["Lot number", "Seller name", "Lot name", "Destination", "Winner name"])
@@ -399,7 +400,7 @@ class AddToCalendarView(LoginRequiredMixin, View):
 
         else:
             ics_content = self._generate_ics(title, details, start, end, loc)
-            filename = f"{self.location.auction.slug}.ics"
+            filename = f"{attachment_filename(self.location.auction.slug)}.ics"
             response = HttpResponse(ics_content, content_type="text/calendar")
             response["Content-Disposition"] = f'attachment; filename="{filename}"'
             return response

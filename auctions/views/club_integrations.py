@@ -44,6 +44,7 @@ from auctions.models import (
     Invoice,
     SquareSeller,
 )
+from auctions.services import attachment_filename
 
 from .base import ClubViewMixin, check_club_permission
 from .payments import SquareAPIMixin
@@ -690,7 +691,8 @@ class ClubEventsICalView(View):
             lines.append("END:VEVENT")
         lines.append("END:VCALENDAR")
         response = HttpResponse("\r\n".join(lines), content_type="text/calendar; charset=utf-8")
-        response["Content-Disposition"] = f'inline; filename="{club.slug}-events.ics"'
+        filename = attachment_filename(f"{club.slug}-events")
+        response["Content-Disposition"] = f'inline; filename="{filename}.ics"'
         return response
 
 

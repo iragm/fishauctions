@@ -49,6 +49,7 @@ from auctions.models import (
     ClubMoney,
 )
 from auctions.services import (
+    attachment_filename,
     bidder_number_holder_in,
     club_managed_auctions_for,
     club_managed_shadows_for,
@@ -977,7 +978,8 @@ class ClubMemberAppleWalletPassView(LoginRequiredMixin, View):
             raise Http404
         pkpass_bytes = generate_pkpass_for_member(member)
         response = HttpResponse(pkpass_bytes, content_type="application/vnd.apple.pkpass")
-        response["Content-Disposition"] = f'attachment; filename="{member.club.slug}-membership.pkpass"'
+        filename = attachment_filename(f"{member.club.slug}-membership")
+        response["Content-Disposition"] = f'attachment; filename="{filename}.pkpass"'
         # Wallet passes are personalized.
         response["Cache-Control"] = "private, no-store"
         return response
@@ -997,7 +999,8 @@ class ClubMemberAppleWalletByUUIDView(View):
         member.update_last_club_activity()
         pkpass_bytes = generate_pkpass_for_member(member)
         response = HttpResponse(pkpass_bytes, content_type="application/vnd.apple.pkpass")
-        response["Content-Disposition"] = f'attachment; filename="{member.club.slug}-membership.pkpass"'
+        filename = attachment_filename(f"{member.club.slug}-membership")
+        response["Content-Disposition"] = f'attachment; filename="{filename}.pkpass"'
         response["Cache-Control"] = "private, no-store"
         return response
 

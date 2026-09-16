@@ -5,6 +5,7 @@ in only one of them. Permission checks are the caller's job.
 """
 
 import logging
+import re
 
 from django.utils import timezone
 
@@ -14,6 +15,17 @@ logger = logging.getLogger(__name__)
 
 # ClubMember fields accepted by API ingest. ``first_name``/``last_name`` are combined into ``name``.
 INGEST_ALLOWED_FIELDS = frozenset({"name", "email", "phone_number", "address", "memo"})
+
+
+def attachment_filename(value, fallback="download"):
+    """Reduce a name to characters that are safe in a Content-Disposition header.
+
+    A header value can't contain a control character: Django raises BadHeaderError, so a newline in
+    a search query or a location name interpolated into ``filename=`` is a 500. Quotes and
+    semicolons would end the filename early, and a slash would suggest a path.
+    """
+    cleaned = re.sub(r"[^A-Za-z0-9._-]+", "-", str(value or "")).strip("-._")
+    return cleaned[:80] or fallback
 
 
 def map_fields(data: dict, api_key) -> dict:
