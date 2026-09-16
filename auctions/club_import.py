@@ -1,40 +1,26 @@
-"""Getting a list of aquarium clubs onto this site from a CSV somebody curated.
+"""Getting a list of aquarium clubs onto this site from a curated CSV.
 
-**This replaced a web crawler, and the reason is worth keeping.**  Phase 8 originally found clubs by
-fetching umbrella directories, crawling out from club links pages and reading search results, with a
-language model extracting names from each page.  It was built, tested and then run against the real
-internet on 2026-09-09, and the run is what killed it:
+**This replaced a web crawler.** Phase 8 originally found clubs by fetching umbrella directories and
+crawling club links pages, with a language model extracting names. The run on 2026-09-09 killed it:
+five of seven directories were gone (one federation had folded and lost its domain to a gambling
+site), the two that survived couldn't be read by ``requests`` (one list lives inside a hashed JS
+bundle, another 403s any honest User-Agent), and deciding which names were really clubs took four
+rounds of widening a regex, each finding real clubs the last had discarded.
 
-* Five of seven umbrella directories were gone.  One federation had folded and lost its domain to a
-  gambling site; its successor is a mailing list with no club list; another's rebuilt site has no
-  affiliates page at all.  Working out what any of that meant needed a person, not a retry.
-* The two sources that still existed could not be read by ``requests``: one club list lives only
-  inside a hashed JavaScript bundle, and another returns 403 to any honest User-Agent.
-* Deciding which extracted names were really clubs turned into four rounds of widening a regex,
-  each round finding more real clubs -- "Enthusiasts", "Exchange", "Aquaria", Spanish and French
-  names -- that the previous round had silently discarded.
+Those are judgement calls a person with a browser makes in an afternoon, and the population is
+nearly static, so this is a one-off with a long tail rather than a feed.
 
-Every one of those is a judgement call, and a person with a browser makes them in an afternoon.  The
-population is also nearly static: aquarium societies are mostly decades old and new ones are rare,
-so this is a one-off with a long tail rather than a feed, and an unattended pipeline had nothing to
-be unattended *for*.
+So acquisition is a person, and this module is everything after it -- the half that is hard by hand:
 
-**So the acquisition half is a human with a research tool, and this module is everything after it.**
-That is the half that was always worth having, because it is the half that is hard to do by hand:
+* :func:`find_existing` -- domain first, then a fuzzy name (:mod:`auctions.club_matching`), since a
+  list of three hundred clubs overlaps what is already here.
+* :func:`ingest` -- creates at ``PROSPECT``, which is the map gate, and only ever fills in blanks.
+  What a person typed is never overwritten by a CSV.
 
-* :func:`find_existing` -- **domain first, then a fuzzy name** (:mod:`auctions.club_matching`).  A
-  list of three hundred clubs overlaps whatever is already here, and typing that comparison out by
-  hand is how a club ends up in the table twice.
-* :func:`ingest` -- creates at ``PROSPECT``, which is the map gate, and only ever *fills in* blanks
-  on a club that already exists.  What a person typed is never overwritten by a CSV.
-
-**A row in the file is a claim, and nothing here checks it.**  There was a link verifier that
-fetched each club's homepage and recorded what answered; it went the same way as the crawler, for
-the same reason -- this site does not make outbound requests to other people's servers.  So the
-confident-looking URL that 404s, which is the characteristic failure of research done by a machine,
-is caught by a person opening the link.  That person is already in the loop: a club stays at
-``PROSPECT`` and off the map until somebody has looked at its website, which is exactly the moment
-a dead link shows itself.
+**A row is a claim, and nothing here checks it.** The link verifier went the same way as the
+crawler: this site does not make outbound requests to other people's servers. A confident-looking
+URL that 404s is caught by the person who has to look at the website before a club leaves
+``PROSPECT``.
 """
 
 from __future__ import annotations
@@ -50,8 +36,8 @@ from . import club_matching
 
 logger = logging.getLogger(__name__)
 
-#: Hosts that are never a club's own site, so never worth storing as a homepage.  A CSV is curated,
-#: but "the club's website" and "the club's Facebook page" are easy to put in the wrong column.
+#: Hosts that are never a club's own site. A CSV is curated, but "the club's website" and "its
+#: Facebook page" are easy to put in the wrong column.
 _NOT_A_CLUB_HOST = (
     "facebook.com",
     "twitter.com",
@@ -69,9 +55,8 @@ _NOT_A_CLUB_HOST = (
     "tiktok.com",
 )
 
-#: The columns :func:`read_csv` will read.  ``name`` is the only one that has to be there; a club
-#: with nothing but a name is still a lead, and demanding more would mean dropping the hardest
-#: clubs to find -- which are exactly the ones worth having.
+#: The columns :func:`read_csv` reads. Only ``name`` is required: a club with nothing but a name is
+#: still a lead, and demanding more would drop the hardest clubs to find.
 CSV_COLUMNS = (
     "name",
     "homepage",
@@ -90,12 +75,11 @@ class ImportedClub:
     homepage: str = ""
     location: str = ""
     facebook_page: str = ""
-    #: How this club can be reached: see ``Club.CONTACT_METHOD_CHOICES``.  A club with only a
-    #: Facebook page is reached differently from one with a contact form, and outreach is a person
-    #: working a queue, so the queue has to say which door to knock on.
+    #: How the club can be reached (``Club.CONTACT_METHOD_CHOICES``): outreach is a person working a
+    #: queue, so the queue has to say which door to knock on.
     contact_method: str = ""
     contact_email: str = ""
-    #: Which file and which row this came from, recorded on the club so a bad import can be traced.
+    #: Which file and row this came from, so a bad import can be traced.
     source: str = ""
 
 
@@ -116,11 +100,10 @@ class IngestReport:
 
 
 def domain_of(url: str) -> str:
-    """The registrable-ish host of a URL, lowercased and without ``www.``.  ``""`` if there is none.
+    """The registrable-ish host of a URL, lowercased and without ``www.``; ``""`` if there is none.
 
-    Not a public-suffix implementation on purpose: this is used to decide whether two rows are the
-    same club, and for that "the host without www" is both sufficient and much easier to reason
-    about than a rule that treats ``co.uk`` specially.
+    Not a public-suffix implementation: this decides whether two rows are the same club, and "the host
+    without www" is sufficient and easier to reason about than special-casing ``co.uk``.
     """
     if not url:
         return ""
@@ -137,11 +120,11 @@ def is_a_club_host(url: str) -> bool:
 
 
 def read_csv(handle, *, source: str = "") -> tuple[list[ImportedClub], list[str]]:
-    """Read a curated club list.  Returns the rows and a list of complaints about the ones it didn't.
+    """Read a curated club list; returns the rows and complaints about the ones it skipped.
 
-    The complaints are returned rather than raised because a three-hundred-row file with four bad
-    rows should import two hundred and ninety-six clubs and *tell* somebody about the four.  Failing
-    the whole file on one typo means the typo gets fixed by deleting the row.
+    Complaints are returned rather than raised: a three-hundred-row file with four bad rows should
+    import 296 clubs and say so, since failing the whole file means the typo gets fixed by deleting the
+    row.
     """
     from .models import Club
 
@@ -165,7 +148,7 @@ def read_csv(handle, *, source: str = "") -> tuple[list[ImportedClub], list[str]
             )
             method = ""
         if values["homepage"] and not is_a_club_host(values["homepage"]):
-            # Overwhelmingly a Facebook URL in the homepage column.  Move it rather than drop it.
+            # Overwhelmingly a Facebook URL in the homepage column: move it rather than drop it.
             if not values["facebook_page"]:
                 values["facebook_page"] = values["homepage"]
             complaints.append(f"Row {number} ({values['name']}): homepage is not a club's own site, moved")
@@ -187,11 +170,9 @@ def read_csv(handle, *, source: str = "") -> tuple[list[ImportedClub], list[str]
 def find_existing(found: ImportedClub, clubs):
     """The club already on this site that ``found`` is, or ``None``.
 
-    **Domain first, name second, and the order is the whole point.**  Two clubs can be called
-    "Aquarium Society of Virginia" in two different decades' spellings, but a domain is a fact: if
-    two rows point at the same host they are the same club.  Only when there is no domain to
-    compare does this fall back to comparing names, and that comparison has a threshold high enough
-    that "Boston Aquarium Society" and "Bristol Aquarium Society" are two clubs.
+    Domain first, name second: two rows pointing at the same host are the same club, whatever decade's
+    spelling they use. The name fallback's threshold is high enough that "Boston" and "Bristol Aquarium
+    Society" stay two clubs.
     """
     domain = domain_of(found.homepage)
     if domain:
@@ -203,12 +184,11 @@ def find_existing(found: ImportedClub, clubs):
 
 
 def ingest(found_clubs, *, source: str, update_existing: bool = True) -> IngestReport:
-    """Turn what a CSV claims into ``Club`` rows, without ever publishing one.
+    """Turn what a CSV claims into ``Club`` rows, without publishing one.
 
-    New clubs are created at ``PROSPECT``, which is the map gate: nothing imported appears anywhere
-    on this site until a person moves it to ``LISTED``.  An existing club is only ever *filled in*
-    -- a homepage or an email it did not have -- and never overwritten, because what is already here
-    was typed by somebody who knew and what is arriving was researched from outside.
+    New clubs are created at ``PROSPECT``, the map gate, so nothing imported appears until a person
+    moves it to ``LISTED``. An existing club is only ever filled in, never overwritten: what is here was
+    typed by somebody who knew.
     """
     from .models import Club
 

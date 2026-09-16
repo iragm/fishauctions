@@ -1,8 +1,4 @@
-"""
-Celery configuration for fishauctions project.
-
-This module sets up Celery for handling asynchronous tasks and periodic tasks.
-"""
+"""Celery configuration: the app, its beat schedule, and the self-scheduling tasks started at boot."""
 
 import os
 
@@ -17,10 +13,8 @@ os.environ.setdefault("DJANGO_SETTINGS_MODULE", "fishauctions.settings")
 
 app = Celery("fishauctions")
 
-# Using a string here means the worker doesn't have to serialize
-# the configuration object to child processes.
-# - namespace='CELERY' means all celery-related configuration keys
-#   should have a `CELERY_` prefix.
+# A string, so the worker doesn't serialize the config to child processes; the CELERY namespace
+# means every setting is prefixed CELERY_.
 app.config_from_object("django.conf:settings", namespace="CELERY")
 
 # Load task modules from all registered Django apps.
@@ -38,7 +32,7 @@ app.conf.beat_schedule = {
         "task": "auctions.tasks.sendnotifications",
         "schedule": 900.0,  # Run every 15 minutes
     },
-    # Fuse AR lot sightings into a 2D map + prune the observation buffer - every minute
+    # Fuse AR sightings into a 2D map and prune the observation buffer.
     "update_ar_positions": {
         "task": "auctions.tasks.update_ar_positions",
         "schedule": 60.0,  # Run every minute
@@ -48,33 +42,29 @@ app.conf.beat_schedule = {
         "task": "auctions.tasks.auctiontos_notifications",
         "schedule": 900.0,  # Run every 15 minutes
     },
-    # One-shot: fill in PageView.auction on the lot views written before the beacon sent it, so
-    # the `auction_id OR lot.auction_id` in Auction.page_views can eventually go. Switches its own
-    # row off when the cursor passes the last row that needs it - every 15 minutes until then.
+    # One-shot: fill in PageView.auction on lot views written before the beacon sent it, so the
+    # `auction_id OR lot.auction_id` in Auction.page_views can go. Disables its own row when done.
     "backfill_page_view_auctions": {
         "task": "auctions.tasks.backfill_page_view_auctions",
         "schedule": 900.0,  # Run every 15 minutes
     },
-    # Club lifecycle rollup and the outreach queue - daily. Nothing it measures moves faster than
-    # that: the quickest column on it is "days since the last auction".
+    # Club lifecycle rollup and the outreach queue; nothing it measures moves faster than daily.
     "refresh_club_health": {
         "task": "auctions.tasks.refresh_club_health",
         "schedule": 86400.0,  # Run every 24 hours
     },
-    # Send queued mail (post_office) - every 10 minutes (retry failed emails)
+    # Send queued mail (post_office), retrying failures.
     "send_queued_mail": {
         "task": "post_office.tasks.send_queued_mail",
         "schedule": 600.0,  # Run every 10 minutes
     },
-    # Two-way Google Calendar sync + Discord events for club events - every 15 minutes
+    # Two-way Google Calendar sync and Discord events for club events.
     "sync_club_calendars": {
         "task": "auctions.tasks.sync_club_calendars",
         "schedule": 900.0,  # Run every 15 minutes
     },
-    # Club announcements waiting to go out. This is the backstop, not the timer: the view queues a
-    # countdown task for the exact moment, and every announcement now waits a few seconds first so
-    # it can be retracted (announcements.GRACE_SECONDS). A minute so that a lost countdown task
-    # costs a short delay rather than five of them; the query is one indexed lookup.
+    # The backstop for club announcements: the view queues a countdown task for the exact moment
+    # (announcements.GRACE_SECONDS), so a lost one costs a short delay. One indexed lookup.
     "send_scheduled_announcements": {
         "task": "auctions.tasks.send_scheduled_announcements",
         "schedule": 60.0,  # Run every minute
@@ -89,12 +79,12 @@ app.conf.beat_schedule = {
         "task": "auctions.tasks.email_unseen_chats",
         "schedule": 86400.0,  # Run every 24 hours
     },
-    # Weekly promo email - every hour (per-user scheduling via next_promo_email_at allows local timezone delivery)
+    # Weekly promo email; per-user scheduling via next_promo_email_at gives local-timezone delivery.
     "weekly_promo": {
         "task": "auctions.tasks.weekly_promo",
         "schedule": 3600.0,  # Run every hour
     },
-    # Promo push notifications for nearby auctions (push analogue of weekly_promo) - every hour
+    # Promo push notifications for nearby auctions, the push analogue of weekly_promo.
     "promo_push_notifications": {
         "task": "auctions.tasks.promo_push_notifications",
         "schedule": 3600.0,  # Run every hour
@@ -109,7 +99,7 @@ app.conf.beat_schedule = {
         "task": "auctions.tasks.webpush_notifications_deduplicate",
         "schedule": 86400.0,  # Run every 24 hours
     },
-    # Merge duplicate user interest categories from request races - every 24 hours
+    # Merge duplicate user interest categories from request races.
     "deduplicate_user_interest": {
         "task": "auctions.tasks.deduplicate_user_interest",
         "schedule": 86400.0,  # Run every 24 hours
@@ -119,81 +109,72 @@ app.conf.beat_schedule = {
         "task": "auctions.tasks.cleanup_old_invoice_notification_tasks",
         "schedule": 86400.0,  # Run every 24 hours
     },
-    # Update Discord roles for members whose membership has expired or been renewed - every 24 hours
+    # Discord roles for expired or renewed memberships.
     #
-    # The four entries below it were all part of this one task until they were split out. They ran
-    # in sequence in a single body under CELERY_TASK_SOFT_TIME_LIMIT, so a slow Discord sync -- or
-    # one member with a bad email address -- silently skipped everything after it, including the
-    # once-a-year award-points reset. Separate entries mean one failing is one failing.
+    # The four entries below were part of this task until they were split out: run in one body under
+    # the soft time limit, a slow Discord sync silently skipped everything after it.
     "update_expired_membership_discord_roles": {
         "task": "auctions.tasks.update_expired_membership_discord_roles",
         "schedule": 86400.0,  # Run every 24 hours
     },
-    # Zero the year-to-date award counters at the start of each year - every 24 hours (a no-op on
-    # 364 of them; it catches up whenever it runs, rather than needing to land on January 1)
+    # Zero the year-to-date award counters at the start of each year; a no-op on 364 days, and it
+    # catches up whenever it runs.
     "reset_yearly_bap_counters": {
         "task": "auctions.tasks.reset_yearly_bap_counters",
         "schedule": 86400.0,  # Run every 24 hours
     },
-    # Welcome letters for members who joined more than 24 hours ago - every 24 hours
+    # Welcome letters for members who joined more than 24 hours ago.
     "send_club_member_welcome_emails": {
         "task": "auctions.tasks.send_club_member_welcome_emails",
         "schedule": 86400.0,  # Run every 24 hours
     },
-    # "your membership expires in 30 days" and "expires tomorrow" - every 24 hours
+    # "Your membership expires in 30 days" and "expires tomorrow".
     "send_membership_expiration_reminders": {
         "task": "auctions.tasks.send_membership_expiration_reminders",
         "schedule": 86400.0,  # Run every 24 hours
     },
-    # Nightly Mailchimp/Brevo catch-up so lifecycle tags stay accurate - every 24 hours
+    # Nightly Mailchimp/Brevo catch-up so lifecycle tags stay accurate.
     "backfill_marketing_contacts": {
         "task": "auctions.tasks.backfill_marketing_contacts",
         "schedule": 86400.0,  # Run every 24 hours
     },
-    # Refresh Google Wallet passes for members who recently expired so the pass status/color updates - every 24 hours
+    # Refresh Google Wallet passes for recently expired members.
     "refresh_google_wallet_membership_status": {
         "task": "auctions.tasks.refresh_google_wallet_membership_status",
         "schedule": 86400.0,  # Run every 24 hours
     },
-    # Same for Apple Wallet: push updates to registered devices of recently-expired members - every 24 hours
+    # The same for Apple Wallet: push updates to registered devices.
     "refresh_apple_wallet_membership_status": {
         "task": "auctions.tasks.refresh_apple_wallet_membership_status",
         "schedule": 86400.0,  # Run every 24 hours
     },
-    # Flush expired JWT blacklist/outstanding tokens (mobile rotation writes a row per refresh) - daily
+    # Flush expired JWT blacklist and outstanding tokens (mobile rotation writes one per refresh).
     "flush_expired_tokens": {
         "task": "auctions.tasks.flush_expired_tokens",
         "schedule": 86400.0,  # Run every 24 hours
     },
-    # Delete accounts whose deletion grace period has expired - every 24 hours
+    # Delete accounts whose deletion grace period has expired.
     "delete_pending_accounts": {
         "task": "auctions.tasks.delete_pending_accounts",
         "schedule": 86400.0,  # Run every 24 hours
     },
-    # Delete sent mail older than settings.MAIL_RETENTION_DAYS - every 24 hours
+    # Delete sent mail older than settings.MAIL_RETENTION_DAYS.
     "cleanup_mail": {
         "task": "auctions.tasks.cleanup_mail",
         "schedule": 86400.0,  # Run every 24 hours
     },
-    # Move one local image to Cloudflare Images - every minute (no-op unless CLOUDFLARE_IMAGES_* is set in .env)
+    # Move one local image to Cloudflare Images; a no-op unless CLOUDFLARE_IMAGES_* is set.
     "migrate_to_cloudflare_images": {
         "task": "auctions.tasks.migrate_to_cloudflare_images",
         "schedule": 60.0,  # Run every minute
     },
-    # Expired OAuth tokens and stale registered clients from the MCP endpoint's authorization
-    # server - every 24 hours (no-op unless oauth2_provider is installed)
+    # Expired OAuth tokens and stale clients from the MCP authorization server.
     "cleanup_oauth_tokens": {
         "task": "auctions.tasks.cleanup_oauth_tokens",
         "schedule": 86400.0,  # Run every 24 hours
     },
-    # Note: update_auction_stats is NOT in beat_schedule as it's self-scheduling.
-    # It starts on worker_ready and schedules itself based on when the next
-    # auction's stats are due for update.
-    #
-    # This is the watchdog for that chain, and it is on the beat precisely because the chain is
-    # not: a run killed by the hard time limit never reaches its own rescheduling call, and until
-    # this existed the only things that re-armed it were a worker restart and an admin opening a
-    # stats page. One indexed lookup every 15 minutes.
+    # update_auction_stats is not here: it is self-scheduling, starting on worker_ready. This is the
+    # watchdog for that chain, since a run killed by the hard time limit never re-arms itself.
     "ensure_auction_stats_task_scheduled": {
         "task": "auctions.tasks.ensure_auction_stats_task_scheduled",
         "schedule": 900.0,  # Run every 15 minutes
@@ -203,12 +184,7 @@ app.conf.beat_schedule = {
 
 @worker_ready.connect
 def start_auction_stats_task(sender, **kwargs):
-    """
-    Start the self-scheduling auction stats update task when the worker is ready.
-
-    This ensures the task begins running after the worker starts up, and then
-    it will continue to schedule itself based on when the next auction update is due.
-    """
+    """Start the self-scheduling auction stats task once the worker is ready; it reschedules itself."""
     # Schedule the task to run shortly after worker is fully ready
     from datetime import timedelta
 
@@ -221,9 +197,7 @@ def start_auction_stats_task(sender, **kwargs):
 
 @worker_ready.connect
 def start_bap_recalculation_tasks(sender, **kwargs):
-    """
-    Bootstrap BAP self-scheduling recalculation tasks when the worker is ready.
-    """
+    """Bootstrap the self-scheduling BAP recalculation tasks when the worker is ready."""
     from datetime import timedelta
 
     from django.utils import timezone

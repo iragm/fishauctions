@@ -26,13 +26,11 @@ websocket_error_logger = logging.getLogger("auctions.websocket")
 class LogWebsocketExceptions:
     """Email admins on unhandled exceptions in the websocket app.
 
-    ASGI exceptions otherwise only reach uvicorn's own logger and never hit
-    Django's AdminEmailHandler, so a crashing consumer (e.g. the channel-layer
-    read timeout that silently broke in-person bidding) failed invisibly. This
-    logs with a traceback to the ``auctions.websocket`` logger -- which is wired
-    to mail_admins -- then re-raises so connection behavior is unchanged. Only
-    ``Exception`` is caught, so normal task cancellation (CancelledError, a
-    BaseException) passes through untouched.
+    ASGI exceptions otherwise only reach uvicorn's own logger and never Django's AdminEmailHandler, so a
+    crashing consumer -- the channel-layer read timeout that silently broke in-person bidding, for one
+    -- failed invisibly. This logs with a traceback to the ``auctions.websocket`` logger, which is wired
+    to mail_admins, then re-raises, so connection behavior is unchanged. Only ``Exception`` is caught,
+    so task cancellation passes through untouched.
     """
 
     def __init__(self, app):

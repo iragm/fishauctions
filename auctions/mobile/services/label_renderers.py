@@ -1,19 +1,15 @@
 """Fallback label rendering for the mobile app.
 
-The mobile app prints lot labels over Bluetooth by sending the printer a rendered *image*: the
-server owns layout/rendering so every platform prints identical labels and the app needs no font or
-layout logic. This module deliberately produces images only — it does NOT emit printer command
-languages (TSPL / ZPL / ESC/POS).
+The app prints over Bluetooth by sending the printer a rendered *image*, so the server owns layout
+and every platform prints the same label. Images only -- never TSPL / ZPL / ESC/POS.
 
 **This is not the label users normally get.** A PNG is a raster of the same WeasyPrint PDF the
-website prints (``label_raster``), so there is one layout, defined once in ``label_template.html``
-and honouring ``Auction.label_print_fields`` and the user's ``UserLabelPrefs``. What follows is the
-fallback for the cases that can't produce a PDF — chiefly a lot with no auction, which has no label
-configuration to render against. It draws an approximation of a lot label and will not match the
-PDF; that is the trade for still printing something.
+website prints (``label_raster``), so there is one layout, in ``label_template.html``, honouring
+``Auction.label_print_fields`` and the user's ``UserLabelPrefs``. What follows is the fallback for
+what can't produce a PDF -- chiefly a lot with no auction, which has no label configuration to
+render against. It approximates a lot label and will not match the PDF.
 
-Renderers are pluggable: implement :class:`LabelRenderer` and register it in ``LABEL_RENDERERS`` to
-add a new output format without touching the view or the service.
+Renderers are pluggable: implement :class:`LabelRenderer` and register it in ``LABEL_RENDERERS``.
 """
 
 import io
@@ -115,7 +111,7 @@ class PngLabelRenderer(LabelRenderer):
         if price_bits:
             draw.text((x, y), "   ".join(price_bits), fill="black", font=font(24))
 
-        # Barcode of the lot number, pinned bottom-right (best-effort — never break the label over it).
+        # Barcode of the lot number, bottom-right; best-effort, never break the label over it.
         self._draw_barcode(img, lot_number, width, height, margin)
 
         # Auction name, bottom-left.

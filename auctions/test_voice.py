@@ -1,16 +1,12 @@
 """Voice-driven set winners.
 
-VOICE-1 — the first implementation is gone: no Vosklet, no cross-origin isolation, and the
-set-winners page gets its analytics/ads/CDN assets back.
-VOICE-2 — the per-auction vocabulary the app matches against, and the rules that make it useful:
-strings verbatim, unsold only, auction-scoped, ETagged.
-VOICE-3 — the grammar block in mobile config, and its kill switch.
-VOICE-4 — the page: a mic button that stays hidden until the app says voice is supported.
-VOICE-5 — the tuning log, which is the thing v1 never had.
-VOICE-6 — the other half of that log: the utterances that matched nothing, which is where the words
-we don't know yet are, rate-limited so a room full of talking doesn't fill the table.
-VOICE-7 — the settings panel, so voice is tuned during an auction on the phone in the operator's
-hand. The app owns and stores those settings; Django stores nothing.
+VOICE-1: the Vosklet implementation and cross-origin isolation are gone.
+VOICE-2: the per-auction vocabulary endpoint.
+VOICE-3: the grammar block in mobile config.
+VOICE-4: the set-winners page.
+VOICE-5: the tuning log.
+VOICE-6: logging utterances that matched nothing, rate-limited.
+VOICE-7: the in-app settings panel; the app stores the settings, Django stores nothing.
 """
 
 import datetime
@@ -57,11 +53,7 @@ class VoiceV1RemovedTests(StandardTestCase):
         self.url = reverse("auction_lot_winners_dynamic", kwargs={"slug": self.in_person_auction.slug})
 
     def test_set_winners_page_is_no_longer_cross_origin_isolated(self):
-        """COEP existed only so SharedArrayBuffer would work for the speech WASM. Nothing else on
-        the site uses SharedArrayBuffer, and the isolation cost this page its ads and analytics.
-
-        COOP is not part of this: it's set site-wide in settings so OAuth popups work, so the check
-        is that this page is now no more special than any other."""
+        """COEP is gone from the set-winners page; COOP is site-wide for OAuth popups."""
         response = self.client.get(self.url)
         self.assertEqual(response.status_code, 200)
         self.assertNotIn("Cross-Origin-Embedder-Policy", response)
@@ -110,8 +102,7 @@ class VoiceVocabularyTests(StandardTestCase):
         self.assertEqual(self.client.get(self.url).status_code, 401)
 
     def test_web_session_is_not_enough(self):
-        """Mobile endpoints deliberately refuse session auth, so a logged-in browser can't call one
-        (403 rather than 401: the request is authenticated, it just isn't a JWT)."""
+        """Session auth is refused with 403: mobile endpoints need a JWT."""
         self.client.login(username="admin_user", password="testpassword")
         self.assertEqual(self.client.get(self.url).status_code, 403)
 
@@ -130,8 +121,7 @@ class VoiceVocabularyTests(StandardTestCase):
         self.assertEqual(response.data["currency_symbol"], self.in_person_auction.currency_symbol)
 
     def test_lot_numbers_are_strings_kept_verbatim(self):
-        """Seller-dash numbering puts the seller's bidder number into the lot number, so `BOB-1` is
-        an ordinary lot number. Normalizing to digits would make it unmatchable."""
+        """Lot numbers stay verbatim strings, since seller-dash numbers like `BOB-1` exist."""
         lot = self.in_person_auction.lots_qs.filter(winning_price__isnull=True).first()
         lot.custom_lot_number = "BOB-1"
         lot.save()
@@ -141,8 +131,7 @@ class VoiceVocabularyTests(StandardTestCase):
             self.assertIsInstance(number, str)
 
     def test_sold_lots_are_left_out(self):
-        """A sold lot is refused by validate_lot, so offering it can only produce a rejected command
-        -- and leaving it out sharpens every other match."""
+        """Sold lots are left out; validate_lot would refuse them."""
         lot = Lot.objects.create(
             lot_name="already sold",
             auction=self.in_person_auction,
@@ -156,8 +145,7 @@ class VoiceVocabularyTests(StandardTestCase):
         self.assertNotIn(lot.lot_number_display, self._get(self.admin_user).data["lot_numbers"])
 
     def test_lots_ended_unsold_are_still_offered(self):
-        """The page will happily sell a lot that ended with no winner, so voice has to be able to
-        name one."""
+        """Lots that ended unsold are still offered."""
         lot = Lot.objects.create(
             lot_name="ended unsold",
             auction=self.in_person_auction,
@@ -191,8 +179,7 @@ class VoiceVocabularyTests(StandardTestCase):
         self.assertNotIn(deleted.lot_number_display, numbers)
 
     def test_bidder_numbers_come_from_this_auction_only(self):
-        """A bidder number that isn't legal here is a wrong answer the matcher would produce with
-        full confidence, so the online auction's bidders must not leak in."""
+        """Bidder numbers come only from this auction."""
         numbers = self._get(self.admin_user).data["bidder_numbers"]
         self.assertIn("555", numbers)
         online_only = AuctionTOS.objects.filter(auction=self.online_auction).exclude(bidder_number="")
@@ -201,8 +188,7 @@ class VoiceVocabularyTests(StandardTestCase):
                 self.assertNotIn(tos.bidder_number, numbers)
 
     def test_blank_and_error_bidder_numbers_are_skipped(self):
-        """ "ERROR" is what AuctionTOS.save() writes when it can't generate a number: a broken row,
-        not a bidder, and a word an auctioneer might well say out loud."""
+        """Blank and "ERROR" bidder numbers are skipped."""
         AuctionTOS.objects.filter(pk=self.in_person_buyer.pk).update(bidder_number="ERROR")
         numbers = self._get(self.admin_user).data["bidder_numbers"]
         self.assertNotIn("ERROR", numbers)
@@ -216,8 +202,7 @@ class VoiceVocabularyTests(StandardTestCase):
         self.assertEqual(again.status_code, 304)
 
     def test_etag_changes_when_a_bidder_is_added(self):
-        """Bidders get added at the check-in desk while selling runs; a vocabulary that kept its
-        ETag through that would be stale within minutes."""
+        """The ETag changes when a bidder is added at check-in."""
         etag = self._get(self.admin_user)["ETag"]
         AuctionTOS.objects.create(
             user=self.userB,
@@ -230,9 +215,7 @@ class VoiceVocabularyTests(StandardTestCase):
 
 
 class VoiceVocabularyClubManagedTests(TestCase):
-    """In club-managed auctions the source of truth for bidder numbers is ClubMember, and
-    validate_winner falls back to it (creating a shadow AuctionTOS on the spot). Voice has to be
-    able to fill a bidder the page would accept."""
+    """Club-managed auctions take bidder numbers from ClubMember too, which validate_winner accepts."""
 
     def setUp(self):
         now = timezone.now()
@@ -255,9 +238,7 @@ class VoiceVocabularyClubManagedTests(TestCase):
         self.url = reverse("mobile-voice-vocabulary", kwargs={"slug": self.auction.slug})
 
     def _drop_shadow_tos(self):
-        """Creating a member in a club-managed auction also creates its shadow AuctionTOS. Removing
-        those rows leaves ClubMember as the only place "BOB" could come from, which is what these
-        tests are actually about."""
+        """Delete the shadow AuctionTOS rows, leaving ClubMember as the only source."""
         AuctionTOS.objects.filter(auction=self.auction).delete()
 
     def test_club_members_are_included(self):
@@ -280,8 +261,7 @@ class VoiceVocabularyClubManagedTests(TestCase):
         self.assertNotIn("BOB", response.data["bidder_numbers"])
 
     def test_duplicate_numbers_appear_once(self):
-        """The shadow AuctionTOS and the ClubMember it came from carry the same number; the app
-        would treat two identical entries as two bidders to disambiguate between."""
+        """A number on both the shadow AuctionTOS and ClubMember appears once."""
         self.assertTrue(AuctionTOS.objects.filter(auction=self.auction, bidder_number="BOB").exists())
         self.assertEqual(voice_service.bidder_numbers(self.auction).count("BOB"), 1)
 
@@ -296,9 +276,7 @@ class VoiceConfigBlockTests(TestCase):
         return self.client.get(reverse("mobile-config")).data
 
     def test_the_defaults_are_served_when_nobody_has_configured_a_grammar(self):
-        """The page has always matched against these functions, so the app has to score by them too.
-        A block that appeared only once somebody had visited the admin left the two sides scoring
-        the same utterance differently until they did."""
+        """The default grammar is served when none is configured, so app and page score alike."""
         block = self._config()["voice"]
         self.assertEqual(block["anchors"], voice.default_anchors())
         self.assertEqual(block["thresholds"], voice.default_thresholds())
@@ -321,16 +299,14 @@ class VoiceConfigBlockTests(TestCase):
         self.assertEqual(block["commit_after_ms"], voice.DEFAULT_COMMIT_AFTER_MS)
 
     def test_how_long_a_value_waits_to_settle_is_a_row_edit(self):
-        """VOICE-8. Waiting for the recognizer's final result put five or six seconds between "lot
-        one" and a filled field, so values are written from a settled partial instead -- and how
-        long "settled" is wants tuning in a hall, which makes it a row and not an app constant."""
+        """VOICE-8: commit_after_ms (how long a partial must settle) is a row setting."""
         grammar = VoiceGrammar.objects.create()
         grammar.commit_after_ms = 450
         grammar.save()
         self.assertEqual(self._config()["voice"]["commit_after_ms"], 450)
 
     def test_zero_hands_the_app_back_to_final_results_only(self):
-        """The kill switch if early values misbehave: the old behaviour, without an app release."""
+        """Zero restores final-results-only behaviour."""
         VoiceGrammar.objects.create(commit_after_ms=0)
         self.assertEqual(self._config()["voice"]["commit_after_ms"], 0)
 
@@ -352,7 +328,7 @@ class VoiceConfigBlockTests(TestCase):
         self.assertEqual(VoiceGrammar.load().locale, "en_GB")
 
     def test_config_stays_public(self):
-        """The app reads config before sign-in; the grammar is word lists, not secrets."""
+        """Config stays public; the grammar is word lists."""
         VoiceGrammar.objects.create()
         response = self.client.get(reverse("mobile-config"))
         self.assertEqual(response.status_code, 200)
@@ -375,14 +351,11 @@ class VoicePageTests(StandardTestCase):
         self.assertNotIn("fishauctionsVoice", page)
 
     def test_web_does_not_even_build_the_config(self):
-        """Nothing on the web page can use it, and this page is the busiest one in a live auction."""
+        """The web page doesn't build the voice config."""
         self.assertNotIn("voice_config", self.client.get(self.url).context)
 
     def test_app_gets_the_bridge_and_a_hidden_button(self):
-        """is_mobile_app alone isn't enough to *show* the button: an app build with no voice
-        handlers, or a phone with no recognizer, would get a dead control. It's revealed by
-        voiceGetState(), which reports the capability rather than whether the microphone permission
-        is already held -- so a first visit (permission: false) still gets a button to tap."""
+        """The app gets the bridge and a hidden button, revealed by voiceGetState() capability."""
         page = self.client.get(self.url, HTTP_USER_AGENT=APP_UA).content.decode()
         self.assertIn('id="voice-btn"', page)
         self.assertIn('class="btn btn-sm btn-primary ms-2 d-none"', page)
@@ -408,12 +381,7 @@ class VoicePageTests(StandardTestCase):
         self.assertFalse(response.context["voice_config"]["enabled"])
 
     def test_the_page_can_match_a_transcript_on_its_own(self):
-        """The app is supposed to match; when it doesn't, "heard: lot one" must not be the end.
-
-        The page gets the grammar and this auction's vocabulary so it can parse a transcript the
-        app sent no command for. Asserted on the page rather than only on the context, because the
-        matcher is JS and the config being present but unread is exactly the failure it fixes.
-        """
+        """The page can match a transcript itself when the app sends no command."""
         page = self.client.get(self.url, HTTP_USER_AGENT=APP_UA).content.decode()
         self.assertIn("voiceMatchLocally", page)
         self.assertIn("voiceParse", page)
@@ -425,20 +393,16 @@ class VoicePageTests(StandardTestCase):
         self.assertEqual(config["number_words"]["one"], 1)
         self.assertIn("lot_numbers", config)
         self.assertIn("bidder_numbers", config)
-        # The vocabulary is this auction's, never the site's: a bidder number that is not legal
-        # here is a wrong answer the matcher would produce with full confidence.
         self.assertIn(self.in_person_buyer.bidder_number, config["bidder_numbers"])
 
     def test_an_admin_grammar_reaches_the_matcher_too(self):
-        """The whole reason the grammar is a database row: a new anchor word ships without an app
-        release, and the page-side matcher has to hear about it as well as the app."""
+        """An admin-configured grammar reaches the page matcher too."""
         VoiceGrammar.objects.create(anchors={"lot": ["lot", "item", "number"], "sold": ["sold"]})
         config = self.client.get(self.url, HTTP_USER_AGENT=APP_UA).context["voice_config"]
         self.assertIn("number", config["anchors"]["lot"])
 
     def test_first_run_help_is_on_the_page(self):
-        """A phone in a pocket 20 ft from the podium can't hear an auctioneer and no software fixes
-        that, so say it the first time rather than letting someone conclude voice is broken."""
+        """First-run help is on the page."""
         page = self.client.get(self.url, HTTP_USER_AGENT=APP_UA).content.decode()
         self.assertIn("voice-first-run", page)
         self.assertIn("Bluetooth headset", page)
@@ -471,8 +435,7 @@ class VoiceCommandLogTests(StandardTestCase):
         self.assertFalse(row.was_corrected)
 
     def test_a_correction_lands_on_the_same_row(self):
-        """This is the whole point: "we heard X, filled in Y, and the operator changed it to Z" is
-        one fact, and split across two rows nobody can pair it back up."""
+        """A correction lands on the same row as the original command."""
         log_id = self.client.post(
             self.url,
             {"slot": "bidder", "heard": "bidder fifty", "chosen": "50", "confidence": "0.6"},
@@ -492,7 +455,7 @@ class VoiceCommandLogTests(StandardTestCase):
         self.assertEqual(VoiceCommandLog.objects.count(), 0)
 
     def test_garbage_confidence_does_not_lose_the_row(self):
-        """Telemetry never gets to interrupt a sale, so bad input degrades instead of 500ing."""
+        """Bad confidence input degrades instead of 500ing."""
         response = self.client.post(self.url, {"slot": "lot", "heard": "lot four", "confidence": "banana"})
         row = VoiceCommandLog.objects.get(pk=response.json()["id"])
         self.assertIsNone(row.confidence)
@@ -526,19 +489,13 @@ class VoiceCommandLogTests(StandardTestCase):
 
 @isolated_cache("voice-unmatched")
 class VoiceUnmatchedLogTests(StandardTestCase):
-    """The rows a log of *accepted* commands can never hold.
-
-    "Bitter" for "bidder" opens no slot, produces no command and reaches no table, so before this
-    the tuning query could only ever return words that already worked. Grouping these by ``heard``
-    is what turns "the word we get wrong most often" into a query.
-    """
+    """Utterances that matched nothing, grouped by ``heard`` to find unknown words."""
 
     def setUp(self):
         super().setUp()
         self.url = reverse("auction_voice_command_log", kwargs={"slug": self.in_person_auction.slug})
         self.client.login(username="admin_user", password="testpassword")
-        # The rate limit lives in the cache, and these tests write several rows in well under its
-        # five seconds.
+        # The rate limit is in the cache.
         cache.clear()
 
     def _post(self, **data):
@@ -559,16 +516,14 @@ class VoiceUnmatchedLogTests(StandardTestCase):
         self.assertTrue(row.nothing_matched)
 
     def test_a_near_miss_keeps_its_score(self):
-        """A command below the unsure cutoff is logged with the score it got: null means nothing
-        matched at all, and the two are different findings."""
+        """A near miss keeps its score; null means nothing matched."""
         response = self._post(heard="bitter forty two", confidence="0.31")
         row = VoiceCommandLog.objects.get(pk=response.json()["id"])
         self.assertAlmostEqual(row.confidence, 0.31)
         self.assertEqual(row.slot, "")
 
     def test_one_word_is_not_worth_a_row(self):
-        """A continuous recognizer hears the room. One word is as likely to be someone walking past
-        the phone as anything addressed to the app."""
+        """Single words aren't logged."""
         response = self._post(heard="yeah")
         self.assertIsNone(response.json()["id"])
         self.assertEqual(VoiceCommandLog.objects.count(), 0)
@@ -579,8 +534,7 @@ class VoiceUnmatchedLogTests(StandardTestCase):
         self.assertEqual(VoiceCommandLog.objects.count(), 0)
 
     def test_rate_limited_per_session(self):
-        """Every phrase in a busy room must not become a row; the server decides, because the table
-        is the thing being protected."""
+        """Unmatched utterances are rate-limited per session."""
         first = self.client.post(self.url, {"heard": "one for the money"})
         second = self.client.post(self.url, {"heard": "two for the show"})
         self.assertIsNotNone(first.json()["id"])
@@ -596,15 +550,14 @@ class VoiceUnmatchedLogTests(StandardTestCase):
         self.assertEqual(VoiceCommandLog.objects.count(), 2)
 
     def test_an_accepted_command_is_never_rate_limited(self):
-        """The room sets the pace of unmatched utterances; the operator sets the pace of commands,
-        and dropping one of those would lose the correction that pairs with it."""
+        """Accepted commands are never rate-limited."""
         for index in range(5):
             response = self.client.post(self.url, {"slot": "bidder", "heard": f"bidder {index}", "chosen": str(index)})
             self.assertIsNotNone(response.json()["id"])
         self.assertEqual(VoiceCommandLog.objects.filter(slot="bidder").count(), 5)
 
     def test_an_unknown_slot_is_still_ignored(self):
-        """Blank means "nothing matched". A slot we don't have is still a bug, not a finding."""
+        """An unknown slot is ignored."""
         self.assertIsNone(self._post(slot="reserve_price", heard="reserve is forty").json()["id"])
         self.assertEqual(VoiceCommandLog.objects.count(), 0)
 
@@ -614,7 +567,7 @@ class VoiceUnmatchedLogTests(StandardTestCase):
         self.assertEqual(VoiceCommandLog.objects.count(), 0)
 
     def test_the_tuning_query_is_group_by_heard(self):
-        """The whole point: what the auctioneer keeps saying that the grammar has never heard of."""
+        """The tuning query groups by heard."""
         for _ in range(3):
             self._post(heard="bitter forty two")
         self._post(heard="going once going twice")
@@ -623,8 +576,7 @@ class VoiceUnmatchedLogTests(StandardTestCase):
         self.assertEqual(counts[0]["times"], 3)
 
     def test_the_page_logs_what_matched_nothing(self):
-        """No app change was needed for this -- the app already pushes every transcript to the page,
-        so the page is the side that can tell "no command followed" from "a command did"."""
+        """The page logs transcripts that produced no command."""
         page = self.client.get(
             reverse("auction_lot_winners_dynamic", kwargs={"slug": self.in_person_auction.slug}),
             HTTP_USER_AGENT=APP_UA,
@@ -636,8 +588,6 @@ class VoiceUnmatchedLogTests(StandardTestCase):
 
 
 class VoiceLogAdminTests(StandardTestCase):
-    """The admin end of VOICE-6: reaching the unmatched pile, and counting what's in it."""
-
     def setUp(self):
         super().setUp()
         User.objects.create_superuser(username="voice_admin", password="testpassword", email="va@example.com")
@@ -651,8 +601,7 @@ class VoiceLogAdminTests(StandardTestCase):
         )
 
     def test_nothing_matched_is_reachable(self):
-        """Blank isn't one of the slot field's choices, so without its own filter the pile worth
-        reading first would be the one pile the admin can't ask for."""
+        """The admin can filter to unmatched rows."""
         response = self.client.get(self.url, {"outcome": "unmatched"})
         self.assertEqual(response.status_code, 200)
         self.assertEqual([row.heard for row in response.context["cl"].queryset], ["bitter forty two"] * 2)
@@ -684,11 +633,7 @@ class VoiceLogAdminTests(StandardTestCase):
 
 
 class VoiceSettingsPanelTests(StandardTestCase):
-    """Tuning voice happens during an auction, on the phone in the operator's hand.
-
-    The app owns and stores the settings, per device on purpose -- they describe this phone in this
-    room. Django stores nothing here; the page is the whole feature.
-    """
+    """The in-app voice settings panel; settings are per device and stored by the app."""
 
     def setUp(self):
         super().setUp()
@@ -716,8 +661,7 @@ class VoiceSettingsPanelTests(StandardTestCase):
         self.assertIn("voiceGetState", page)
 
     def test_the_slider_shows_no_number(self):
-        """0.72 means nothing to anyone. The ends of the track ask the question the operator
-        actually has, which is how often they want to retype a field."""
+        """The confidence slider shows no number, just labelled ends."""
         page = self.app_page()
         self.assertIn('type="range"', page)
         self.assertIn("Fill it in, I'll check", page)
@@ -738,48 +682,35 @@ class VoiceSettingsPanelTests(StandardTestCase):
         self.assertIn("If in doubt, guess 17 instead of 70. Only for sell prices.", page)
 
     def test_bias_is_rendered_whatever_the_platform_says(self):
-        """bias_supported is a note, not a gate: the half that works everywhere -- picking the
-        smaller of two readings the recognizer already returned -- needs nothing from the platform.
-        It is also false until Listen has been tapped once."""
+        """Bias settings render regardless of bias_supported."""
         page = self.app_page()
         self.assertIn("bias_low_prices", page)
         self.assertIn("bias_supported", page)
         self.assertIn("voice-bias-note", page)
 
     def test_the_slider_sends_on_release(self):
-        """Send on release, not on every input event: a drag is dozens of events and each one is a
-        platform call."""
+        """The slider sends on release, not on every input event."""
         page = self.app_page()
         self.assertIn("$(\"#voice-confident\").on('change'", page)
         self.assertNotIn("$(\"#voice-confident\").on('input'", page)
 
     def test_the_slider_moves_what_this_page_calls_sure(self):
-        """Otherwise the operator drags the one control that matters and watches nothing change:
-        the app would fill fields at the new cutoff while the amber flag here kept using the
-        admin's. The site's grammar is the starting value, not the last word."""
+        """The slider also moves the page's own confidence cutoff."""
         page = self.app_page()
         self.assertIn("voiceConfidentAt = voiceConfig.confident", page)
         self.assertIn("confidence >= voiceConfidentAt", page)
         self.assertNotIn("confidence >= voiceConfig.confident", page)
 
     def test_nothing_is_stored_server_side(self):
-        """Settings describe this phone in this room, and syncing them to the account would fight
-        an operator running two handsets."""
+        """Nothing is stored server-side."""
         self.assertNotIn("confident_at", self.client.get(self.url, HTTP_USER_AGENT=APP_UA).context["voice_config"])
 
 
 class PriceAnchorCanonicalWordTests(TestCase):
-    """VOICE-8 — the first word of ``anchors["price"]`` is load-bearing.
+    """VOICE-8: the first word of ``anchors["price"]`` is canonical.
 
-    Both recognizers format money out of the transcript before the app sees it: "twenty five dollars"
-    arrives as ``$25`` from iOS ``SFTranscription.formattedString`` and from Android's
-    ``RESULTS_RECOGNITION``, so the spoken anchor is absent from almost every real utterance and the
-    price slot never filled. The app now reads a currency symbol in front of a number as the price
-    anchor and substitutes the **canonical** (first) word of this list, which is what lets a
-    deployment rename the anchor without breaking.
-
-    Nothing about that is visible from the server, which is exactly why it is pinned here: a
-    well-meaning alphabetisation of this list is a silent regression in the app.
+    Both platforms format "twenty five dollars" as ``$25``, so the app substitutes this word for a
+    currency symbol. Reordering the list would silently break the app.
     """
 
     def test_dollars_is_the_canonical_price_anchor(self):

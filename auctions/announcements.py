@@ -1,15 +1,14 @@
-"""Club announcements: one message, sent to the places a club's members actually look.
+"""Club announcements: one message, sent to the places a club's members look.
 
-An admin types one sentence, ticks channels (Discord, push, email, website), and each is delivered
+An admin types a sentence, ticks channels (Discord, push, email, website), and each is delivered
 here with its own failure mode kept separate.
 
-Email goes out through the club's own Mailchimp or Brevo, as a campaign addressed to the club's
-list -- never through this site's mail server, since the provider owns the unsubscribe list. Only
-one provider may send a given announcement: members are synced to both, so ticking both would mail
-everyone twice (see ClubAnnouncementForm.clean).
+Email goes through the club's own Mailchimp or Brevo as a campaign to the club's list, never this
+site's mail server, since the provider owns the unsubscribe list. Only one provider may send a given
+announcement: members sync to both, so ticking both would mail everyone twice (see
+ClubAnnouncementForm.clean).
 
-Every channel carries the announcement text and nothing else -- no "read more" link, since an
-announcement is a sentence or two by design.
+Every channel carries the text and nothing else -- no "read more" link.
 """
 
 from __future__ import annotations
@@ -27,16 +26,17 @@ from auctions import discord_events
 
 logger = logging.getLogger(__name__)
 
-# Discord hard-limits messages to 2000 chars; push bodies truncate well before that.
+# Discord hard-limits messages to 2000 characters; push bodies truncate well before that.
 MAX_LENGTH = 1000
 
-# How long an unscheduled announcement waits before sending, so a wrong date can still be retracted.
+# How long an unscheduled announcement waits, so a wrong date can still be retracted.
 GRACE_SECONDS = 30
 
 
 def reachable_members(club):
-    """Club members a push notification can actually be delivered to right now: linked to a site
-    account, with a push-enabled device holding a live FCM token, not opted out of contact."""
+    """Members a push can reach now: a linked account with a push-enabled device holding a live FCM token,
+    not opted out of contact.
+    """
     from auctions.models import ClubMember
 
     members = ClubMember.objects.filter(club=club, is_deleted=False, user__isnull=False).exclude(
@@ -76,8 +76,9 @@ def brevo_ready(club):
 
 
 def email_recipient_counts(club):
-    """(mailchimp contacts, brevo contacts) as this site last synced them -- an estimate of the
-    provider's list, not the provider's own answer."""
+    """(mailchimp contacts, brevo contacts) as last synced: an estimate of the provider's list, not the
+    provider's own answer.
+    """
     from auctions.models import ClubMember
 
     base = ClubMember.objects.filter(club=club, is_deleted=False)
@@ -93,7 +94,7 @@ def club_url(club):
 
 
 def _discord_body(announcement):
-    """The announcement text, and nothing else -- no link, no club name (the server IS the club)."""
+    """The announcement text and nothing else: no link, no club name (the server is the club)."""
     return announcement.text.strip()
 
 
@@ -123,7 +124,7 @@ def deliver(announcement):
     if fields:
         announcement.save(update_fields=fields)
     if announcement.send_to_mailchimp or announcement.send_to_brevo:
-        # Out of the request: campaign send is several round trips to a third-party API.
+        # Out of the request: a campaign send is several round trips to a third-party API.
         from auctions.tasks import send_announcement_emails
 
         try:
@@ -142,10 +143,10 @@ def _record_email_error(announcement, message):
 
 
 def render_email(announcement, *, greeting):
-    """(html, plain text) for one provider -- same words, that provider's merge tag in the greeting.
+    """(html, plain text) for one provider: the same words with that provider's merge tag in the greeting.
 
-    ``greeting`` is our own constant marked safe here rather than in the template, so Django
-    doesn't escape the provider's merge-tag syntax.
+    ``greeting`` is our own constant, marked safe here rather than in the template so Django doesn't
+    escape the provider's merge-tag syntax.
     """
     club = announcement.club
     icon = club.icon_thumbnail_url or ""
@@ -162,7 +163,7 @@ def render_email(announcement, *, greeting):
     return html, text
 
 
-# Mailchimp merge tag / Brevo filter for "first name, or something sensible when we haven't got one".
+# Mailchimp merge tag and Brevo filter for "first name, or something sensible without one".
 MAILCHIMP_GREETING = "*|IF:FNAME|*Hi *|FNAME|*,*|ELSE:|*Hi there,*|END:IF|*"
 BREVO_GREETING = 'Hi {{ contact.FIRSTNAME | default : "there" }},'
 
@@ -170,8 +171,8 @@ BREVO_GREETING = 'Hi {{ contact.FIRSTNAME | default : "there" }},'
 def send_emails(announcement):
     """Send the announcement through whichever email providers were ticked. Never raises.
 
-    Independent on purpose: one failing must not stop the other. Errors go to ``email_error``,
-    since this runs in a task long after the admin has left the page.
+    Independent on purpose: one failing must not stop the other. Errors go to ``email_error``, since
+    this runs long after the admin has left the page.
     """
     from auctions import brevo as brevo_module
     from auctions import mailchimp as mc
@@ -212,8 +213,8 @@ def send_emails(announcement):
 def refresh_email_opens(announcement):
     """Ask the provider how many people opened the emailed version, and store it.
 
-    Pulled on view rather than pushed at send time. ``None`` from a provider means "no report yet",
-    not "nobody opened it", so the stored number is left alone.
+    Pulled on view rather than pushed at send. ``None`` means "no report yet", not "nobody opened it",
+    so the stored number is left alone.
     """
     from auctions import brevo as brevo_module
     from auctions import mailchimp as mc
@@ -238,9 +239,10 @@ def refresh_email_opens(announcement):
 
 
 def _send_pushes(announcement):
-    """Enqueue one push per reachable member. Returns how many members it was handed to (delivery
-    count, not readership). Queued rather than sent inline so a 400-member club doesn't hold the
-    request open for 400 FCM calls."""
+    """Enqueue one push per reachable member; returns how many it was handed to, not readership.
+
+    Queued rather than sent inline, so a 400-member club doesn't hold the request open.
+    """
     from auctions.notifications import CATEGORY_CLUB_ANNOUNCEMENT
     from auctions.tasks import send_push_to_user
 
@@ -267,8 +269,8 @@ def _send_pushes(announcement):
 def queue(announcement, *, acting_user=None):
     """Save a just-built announcement, schedule its send, and say where it is going.
 
-    Extracted from ``views.ClubAnnouncementView.post`` so any caller sends through the grace window
-    and the same Celery task, never straight into ``deliver``. Returns ``(chose_a_time, where)``.
+    Extracted from ``views.ClubAnnouncementView.post`` so every caller goes through the grace window and
+    the same Celery task rather than straight into ``deliver``. Returns ``(chose_a_time, where)``.
     """
     from django.template.defaultfilters import pluralize
     from django.utils import timezone
@@ -281,7 +283,7 @@ def queue(announcement, *, acting_user=None):
     if acting_user is not None and announcement.created_by_id is None:
         announcement.created_by = acting_user
     announcement.save()
-    # The beat is the backstop; this is what makes the grace window actually end on time.
+    # The beat is the backstop; this is what makes the grace window end on time.
     try:
         from auctions.tasks import send_scheduled_announcements
 
@@ -313,10 +315,9 @@ def queue(announcement, *, acting_user=None):
 
 
 def send_due(now=None):
-    """Deliver every scheduled announcement whose time has come. Returns how many went out.
+    """Deliver every scheduled announcement whose time has come; returns how many went.
 
-    Run from the beat (auctions.tasks.send_scheduled_announcements). Each is delivered on its own
-    so one club's broken Discord can't stop the rest.
+    Run from the beat. Each is delivered on its own, so one club's broken Discord can't stop the rest.
     """
     from django.utils import timezone
 
@@ -328,8 +329,8 @@ def send_due(now=None):
     ).select_related("club")
     sent = 0
     for announcement in due:
-        # Claim with the same UPDATE that marks it sent, so two overlapping beat workers can't
-        # both send it -- whoever loses the race gets 0 rows back.
+        # Claimed with the same UPDATE that marks it sent, so two overlapping beat workers can't
+        # both send it.
         claimed = ClubAnnouncement.objects.filter(pk=announcement.pk, sent_at__isnull=True).update(sent_at=now)
         if not claimed:
             continue
@@ -350,9 +351,10 @@ def send_due(now=None):
 
 
 def retract(announcement):
-    """Take an announcement back as far as it can be: a not-yet-sent one never goes, the Discord
-    post is deleted, the website stops showing it. A push or email already delivered cannot be
-    recalled. Returns what is still out there, for the caller to tell the admin honestly."""
+    """Take an announcement back as far as it can go: an unsent one never goes, the Discord post is
+    deleted, and the website stops showing it. A delivered push or email cannot be recalled, so this
+    returns what is still out there for the caller to say honestly.
+    """
     from auctions.models import ClubAnnouncement
 
     club = announcement.club
@@ -375,8 +377,9 @@ def retract(announcement):
 
 
 def record_website_views(shown):
-    """Count one impression per announcement actually rendered on a website (a render count, not a
-    read count). One UPDATE for the whole page, ``F()`` so concurrent embeds don't lose a count."""
+    """Count one impression per announcement rendered on a website: a render count, not a read count. One
+    UPDATE for the page, with ``F()`` so concurrent embeds don't lose a count.
+    """
     from auctions.models import ClubAnnouncement
 
     ids = [announcement.pk for announcement in shown if getattr(announcement, "pk", None)]
@@ -386,10 +389,10 @@ def record_website_views(shown):
 
 
 def latest_for_website(club, count=1):
-    """The most recent announcements a club chose to publish (``show_on_website``), newest first.
+    """The most recent announcements a club chose to publish, newest first.
 
-    One function read by the club page, embed and API, so they can't disagree. ``sent_at`` keeps a
-    scheduled announcement off the website until its time.
+    One function for the club page, the embed and the API. ``sent_at`` keeps a scheduled announcement
+    off the website until its time.
     """
     from auctions.models import ClubAnnouncement
 

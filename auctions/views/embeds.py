@@ -1,11 +1,8 @@
 """The snippets a club puts on its own website, and the pages behind them.
 
-Five embeds -- events, past events, the current auction, the latest announcement and the BAP
-leaderboard -- sharing one shell, each with a styled and an ``_unstyled`` template.
-``embed_mode_from_request`` is the one reader of ``?format=``. The snippet a club copies is a bare
-``<script src>`` (``?format=js``) that writes the unstyled rows into the page where it sits; the
-iframe formats are still served for snippets pasted before that, and still measure themselves for
-the height listener those carried.
+Events, past events, current auction, latest announcement and BAP leaderboard, each with a styled
+and an ``_unstyled`` template. ``embed_mode_from_request`` reads ``?format=``. The snippet is a
+``<script src>`` (``?format=js``); iframe formats remain for older snippets.
 """
 
 import json
@@ -53,12 +50,9 @@ logger = logging.getLogger(__name__)
 
 
 def embed_mode_from_request(request):
-    """Which representation a club asked for: "light", "dark", "unstyled", "script", or None for JSON.
+    """Which representation was asked for: "light", "dark", "unstyled", "script", or None for JSON.
 
-    One reader for the ?format= every embed takes, so the four of them can't drift into
-    supporting slightly different spellings. Anything unrecognised falls through to JSON rather
-    than to a page -- a typo in a snippet must never hand a stranger's website an unexpected
-    document.
+    Unrecognised values fall through to JSON.
     """
     fmt = (request.GET.get("format") or "json").strip().lower()
     if fmt in ("iframelight", "iframedark", "iframdark"):
@@ -70,10 +64,8 @@ def embed_mode_from_request(request):
     return None
 
 
-#: What ?format=js puts on the club's page next to the rows. Layout only -- no font, no colour, no
-#: size -- so the rows read in the host site's own type, light theme or dark. Each selector is two
-#: classes deep so a theme's ``.entry-content ul`` bullets and indent lose to it, and no deeper, so a
-#: club that wants something else can still win with ``.club-embed .club-event``.
+#: The CSS ?format=js adds. Layout only, so rows take the host site's type and colours. Two classes
+#: deep to beat theme list styles while staying overridable.
 SCRIPT_EMBED_CSS = (
     ".club-embed .club-events,.club-embed .club-announcements{list-style:none;margin:0;padding:0}"
     ".club-embed .club-event,.club-embed .club-announcement,.club-embed .club-events-empty,"
@@ -90,10 +82,8 @@ SCRIPT_EMBED_CSS = (
     "border-bottom:1px solid rgba(128,128,128,.3)}"
 )
 
-#: The whole of ?format=js: find the <script> tag that loaded this and put the rows in front of it.
-#: ``currentScript`` is null only when something re-ran the code outside a tag of its own, so the
-#: fallback takes the last ?format=js tag not yet used; ``data-club-embed`` stops two embeds on one
-#: page both landing at the same tag.
+#: ?format=js: insert the rows before the script tag that loaded it. Falls back to the last unused
+#: ?format=js tag when ``currentScript`` is null; ``data-club-embed`` marks tags as used.
 SCRIPT_EMBED_JS = """(function () {
   var html = %s;
   var here = document.currentScript;
@@ -115,16 +105,10 @@ SCRIPT_EMBED_JS = """(function () {
 
 
 def embed_response(template_stem, embed_mode, context):
-    """Render one of auctions/embeds/*, with the framing headers a third-party site needs.
+    """Render one of auctions/embeds/*, with the headers a third-party site needs.
 
-    ``Access-Control-Allow-Origin`` is set on every embed response so a club's own JavaScript can
-    fetch one instead of iframing it; the views themselves are GET-only and public, so there is
-    nothing here CORS could leak that the page it mirrors doesn't already show.
-
-    "script" is the unstyled markup wrapped in a ``club-embed`` div with ``SCRIPT_EMBED_CSS``,
-    handed back as JavaScript that writes it into the page. It is what the website-integration
-    page hands out: a ``<script src>`` carries no inline code for a CMS to rewrite, and the rows
-    it writes are part of the page, so they are as tall as they are with nothing to measure.
+    ``Access-Control-Allow-Origin`` is set on every response; these views are public and GET-only.
+    "script" wraps the unstyled markup and ``SCRIPT_EMBED_CSS`` in JavaScript that writes it in.
     """
     suffix = "" if embed_mode in ("light", "dark") else "_unstyled"
     html = render_to_string(f"auctions/embeds/{template_stem}{suffix}.html", context)
@@ -145,11 +129,7 @@ def embed_json(payload):
 
 
 def _bap_embed_leaderboard(club, program):
-    """Top-10 leaderboard rows for a program: rank, display name, and points only.
-
-    Deliberately exposes no PII — never emails, member numbers, or database ids. When a
-    member has no name we fall back to a generic "Member N" label keyed off their rank.
-    """
+    """Top-10 rows for a program: rank, display name and points only, "Member N" when unnamed."""
     field = BAP_EMBED_PROGRAM_FIELDS[program]
     members = ClubMember.objects.filter(club=club, is_deleted=False, **{f"{field}__gt": 0}).order_by(
         f"-{field}", "name"
@@ -163,14 +143,9 @@ def _bap_embed_leaderboard(club, program):
 
 @method_decorator(xframe_options_exempt, name="dispatch")
 class BapEmbedView(View):
-    """Public, embeddable top-10 BAP/HAP/CAP leaderboard for a club.
+    """Public, embeddable top-10 BAP/HAP/CAP leaderboard. ?format= and ?program= (bap, hap, cap).
 
-    A single endpoint serves several representations via ?format= (json, iframelight,
-    iframedark, unstyledhtml) and picks the program with ?program= (bap, hap, cap).
-    Only the top-10 leaderboard is exposed, and only names + points — never emails,
-    member numbers, or other PII. Framing (xframe_options_exempt) and cross-origin
-    fetches (Access-Control-Allow-Origin) are allowed so third-party sites can embed it.
-    GET-only and public, so CSRF never applies.
+    Names and points only. Framing and cross-origin fetches allowed; GET-only.
     """
 
     def _json_response(self, club, program, label, rows):
@@ -186,8 +161,7 @@ class BapEmbedView(View):
         program = (request.GET.get("program") or "bap").strip().lower()
         if program not in BAP_EMBED_PROGRAM_FIELDS:
             program = "bap"
-        # HAP/CAP only have their own standings when the club tracks them separately;
-        # otherwise those points roll into BAP and a dedicated board would be misleading.
+        # Without separate tracking, HAP/CAP points roll into BAP.
         if (program == "hap" and not club.separate_hap) or (program == "cap" and not club.separate_cap):
             raise Http404
 
@@ -208,23 +182,14 @@ class BapEmbedView(View):
         )
 
 
-# How many events the embed will ever hand out. Clubs paste this into a sidebar; past ten it
-# stops being "what's coming up" and turns into a second copy of the club page.
+# Most events the embed returns.
 CLUB_EVENTS_EMBED_MAX = 10
 
 
 def _club_events_embed_rows(request, club, count, *, past=False):
-    """The club's next few events, flattened for the embed: what, when, where, and a link back.
+    """The club's next events for the embed, without pickup events. Public data only.
 
-    Everything here is already on the public club page and in the public iCal feed — no member
-    data of any kind. Pickup events are left out for the same reason
-    ``club_events.next_member_facing_event`` drops them: they're logistics for people who
-    already won lots, not something to put on the club's website.
-
-    ``past=True`` is the same rows in the other direction, newest first, so ``count=1`` is the
-    thing that happened most recently. One function rather than two because a club pasting both
-    embeds onto one page must get two lists that look alike — the moment the formatting lives in
-    two places, one of them grows a field the other doesn't.
+    ``past=True`` returns the most recent past events instead, formatted identically.
     """
     if past:
         events = club_events.past_events(club, limit=count, exclude_pickups=True)
@@ -236,8 +201,7 @@ def _club_events_embed_rows(request, club, count, *, past=False):
         rows.append(
             {
                 "title": event.title,
-                # Same one-line "when" the club page shows, so a multi-day online auction reads as
-                # one on somebody's website too. See ClubEvent.when_display.
+                # See ClubEvent.when_display.
                 "when": event.when_display,
                 "starts": start.isoformat(),
                 "all_day": event.all_day,
@@ -251,18 +215,12 @@ def _club_events_embed_rows(request, club, count, *, past=False):
 
 
 def _viewer_runs_this_club(request, club):
-    """True when the person asking for an embed is one of the people who pasted it.
-
-    Used to keep an admin checking their own snippet out of ``events_website_views``. The same
-    three permissions gate the website-integration page the URLs are copied from, so this is
-    exactly "somebody who could have been testing it".
-    """
+    """Whether the viewer can manage the club's embeds, so their views aren't counted."""
     if not request.user.is_authenticated:
         return False
     if request.user.is_superuser:
         return True
-    # One query rather than three calls to check_club_permission: this runs on a public endpoint
-    # that a club's own home page hits on every page load.
+    # One query: public endpoint hit on every page load of the club's site.
     return (
         ClubMember.objects.filter(club=club, user=request.user, is_deleted=False)
         .filter(Q(permission_admin=True) | Q(permission_manage_auctions=True) | Q(permission_edit_club=True))
@@ -272,26 +230,17 @@ def _viewer_runs_this_club(request, club):
 
 @method_decorator(xframe_options_exempt, name="dispatch")
 class ClubEventsEmbedView(View):
-    """Public, embeddable list of a club's next few events, for WordPress and the like.
+    """Public, embeddable list of a club's next events. ?format= and ?count= (1 to
+    CLUB_EVENTS_EMBED_MAX). Framing and cross-origin fetches allowed; GET-only.
 
-    Same shape as ``BapEmbedView``: ?format= picks the representation (json, iframelight,
-    iframedark, unstyledhtml) and ?count= how many events, 1 to CLUB_EVENTS_EMBED_MAX. count=1
-    is the "next event" banner clubs put at the top of a page; the default is the full list.
-    Framing and cross-origin fetches are allowed so a third-party site can use it. GET-only and
-    public, so CSRF never applies; the snippets that produce these URLs are admin-only, but the
-    URLs themselves show nothing the club page doesn't.
-
-    ``ClubPastEventsEmbedView`` is the same view pointed the other way; everything that differs
-    between them is one of the three class attributes below.
+    ``ClubPastEventsEmbedView`` overrides the three class attributes below.
     """
 
     #: Newest-first history instead of what's coming up.
     past = False
-    #: What to say when there is nothing to list. The two directions are empty for opposite
-    #: reasons, and "nothing coming up" under a heading that says "past events" reads as a bug.
+    #: Shown when there's nothing to list.
     empty_message = "Nothing coming up right now."
-    #: The key the JSON representation uses. Named for what it holds, so a club's own script
-    #: doesn't have to know which endpoint it fetched.
+    #: The JSON representation's key.
     json_key = "events"
 
     def get(self, request, slug):
@@ -306,10 +255,7 @@ class ClubEventsEmbedView(View):
         count = max(1, min(count, CLUB_EVENTS_EMBED_MAX))
 
         rows = _club_events_embed_rows(request, club, count, past=self.past)
-        # Every format counts, JSON included, and an empty answer counts too: what is being
-        # recorded is that somebody's website asked us for this club's calendar, which is as true
-        # of a club with nothing on as of a club with ten meetings. Admins are left out so that
-        # checking your own snippet doesn't look like your members reading it.
+        # Every format and empty results count; the club's own admins don't.
         if not _viewer_runs_this_club(request, club):
             club_events.record_website_view(club)
         embed_mode = embed_mode_from_request(request)
@@ -330,30 +276,19 @@ class ClubEventsEmbedView(View):
 
 @method_decorator(xframe_options_exempt, name="dispatch")
 class ClubPastEventsEmbedView(ClubEventsEmbedView):
-    """The same embed looking backwards: what this club has been up to, newest first.
-
-    A club's own website usually has room for both — "what's on" at the top of a page and "what
-    we've been doing" further down — and the second one is the half a visitor deciding whether to
-    join actually reads. ``count=1`` is the thing that happened last.
-    """
+    """The same embed for past events, newest first."""
 
     past = True
     empty_message = "Nothing here yet."
     json_key = "past_events"
 
 
-# A club pasting this into a sidebar wants "what's new", not an archive. Past three it stops being
-# an announcement and starts being a blog nobody asked us to build.
+# Most announcements the embed returns.
 CLUB_ANNOUNCEMENTS_EMBED_MAX = 3
 
 
 def _club_announcements_embed_rows(club, count):
-    """The club's most recent published announcements, flattened for the embed.
-
-    Only announcements the club ticked "show on website" for ever reach this — the other channels
-    are opt-in one at a time on the same form, and a club that chose Discord only must not find
-    its message on its own home page.
-    """
+    """The club's latest announcements marked "show on website", for the embed."""
     rows = []
     shown = announcements.latest_for_website(club, count)
     for announcement in shown:
@@ -365,21 +300,14 @@ def _club_announcements_embed_rows(club, count):
                 "posted": created.isoformat(),
             }
         )
-    # Every format counts, JSON included: a club whose site fetches the JSON and renders it itself
-    # has put the announcement on a page exactly as much as one using the styled iframe.
+    # Every format counts, JSON included.
     announcements.record_website_views(shown)
     return rows
 
 
 @method_decorator(xframe_options_exempt, name="dispatch")
 class ClubAnnouncementsEmbedView(View):
-    """Public, embeddable list of a club's latest announcements.
-
-    Same shape as the events and BAP embeds: ?format= picks the representation and ?count= how
-    many, defaulting to **one** — the common use is a single line at the top of a club's home
-    page saying what is going on this month. Nothing here is member data; it is the same text the
-    club page shows to the public.
-    """
+    """Public, embeddable list of a club's latest announcements; ?count= defaults to one."""
 
     def get(self, request, slug):
         club = Club.objects.filter(Q(slug=slug) | Q(abbreviation=slug)).order_by("pk").first()
@@ -407,13 +335,7 @@ class ClubAnnouncementsEmbedView(View):
 
 
 def _club_current_auction(club):
-    """The auction a club would want advertised on its own website, or None.
-
-    The pinned ``current_auction`` first, because an admin picked it on purpose; otherwise the
-    soonest promoted auction that hasn't finished. Unpromoted auctions are never offered — that
-    flag is the club saying "this one isn't for the public yet", and an embed is as public as it
-    gets.
-    """
+    """The pinned ``current_auction``, else the soonest promoted auction that hasn't finished, or None."""
     now = timezone.now()
     pinned = club.current_auction
     if pinned and not pinned.is_deleted and pinned.promote_this_auction and not pinned.pretty_much_over:
@@ -452,14 +374,7 @@ def _club_auction_embed_row(request, auction):
 
 @method_decorator(xframe_options_exempt, name="dispatch")
 class ClubAuctionEmbedView(View):
-    """Public, embeddable "our auction is on" strip for a club's own website.
-
-    Overlaps the events embed on purpose: this one names *the auction*, where the events embed
-    shows whatever happens to be next, which for most of the year is a meeting. It is only ever
-    the auction that is still ahead or still running -- see _club_current_auction, which drops a
-    pinned auction once it is pretty_much_over -- so a club's front page goes quiet between
-    auctions rather than advertising last spring's.
-    """
+    """Public, embeddable strip for the club's current auction; empty between auctions."""
 
     def get(self, request, slug):
         club = Club.objects.filter(Q(slug=slug) | Q(abbreviation=slug)).order_by("pk").first()
@@ -481,22 +396,14 @@ class ClubAuctionEmbedView(View):
 
 
 class ClubAnnouncementsView(LoginRequiredMixin, ClubViewMixin, TemplateView):
-    """Write an announcement, and see where the last ones went.
-
-    One page rather than a list plus a form, because posting is the reason anybody comes here and
-    the history is what tells them whether last month's went anywhere. Each past row carries an
-    icon per channel with the only number that channel can honestly report, which for Discord is
-    none at all.
-    """
+    """Write an announcement, and see where past ones went, with each channel's reportable numbers."""
 
     template_name = "auctions/club_announcements.html"
     active_tab = "announcements"
 
     def dispatch(self, request, *args, **kwargs):
         self.get_club(kwargs.get("slug", ""))
-        # Its own permission rather than "manages auctions": posting here reaches Discord, every
-        # member's phone and the club's mailing list in one press, with nobody between the person
-        # writing and the people reading. That is not the same trust as adding a lot to an auction.
+        # Its own permission: one press reaches Discord, phones and the mailing list.
         if not self.user_has_club_permission("permission_send_announcements"):
             raise PermissionDenied()
         return super().dispatch(request, *args, **kwargs)
@@ -508,14 +415,10 @@ class ClubAnnouncementsView(LoginRequiredMixin, ClubViewMixin, TemplateView):
         context = super().get_context_data(**kwargs)
         context["club"] = self.club
         context.setdefault("form", self.get_form())
-        # Retracted ones are listed too, struck through. is_deleted is what hides an announcement
-        # from the public; hiding it from the club as well would make Retract look like Delete and
-        # leave the admin who pressed it with nothing on screen saying it worked.
+        # Retracted ones are listed struck through, so Retract doesn't look like Delete.
         rows = list(ClubAnnouncement.objects.filter(club=self.club)[:50])
         context["announcements"] = rows
-        # A row inside its retract window says "Sending — retract it now", which stops being true
-        # a few seconds later. Reload once when it does, so the page ends up showing what actually
-        # happened rather than a promise the reader has to refresh to check.
+        # Reload once the retract window closes.
         pending = [r.scheduled_for for r in rows if r.is_in_grace_period]
         if pending:
             seconds = (min(pending) - timezone.now()).total_seconds() + 3
@@ -524,12 +427,7 @@ class ClubAnnouncementsView(LoginRequiredMixin, ClubViewMixin, TemplateView):
         return context
 
     def _queue_open_refresh(self, rows):
-        """Ask the email providers for open counts in the background, never during the page load.
-
-        Opens arrive hours after a send, so the number on screen is always the stored one and this
-        only updates it for next time. Bounded to the few recent rows that could still change: an
-        admin opening this page must never pay for 50 rows' worth of somebody else's API.
-        """
+        """Refresh open counts for the few recent rows in the background, never during the page load."""
         from auctions.tasks import refresh_announcement_opens
 
         cutoff = timezone.now() - timedelta(days=30)
@@ -548,8 +446,7 @@ class ClubAnnouncementsView(LoginRequiredMixin, ClubViewMixin, TemplateView):
         announcement = form.save(commit=False)
         announcement.club = self.club
         announcement.created_by = request.user
-        # Saving, scheduling and describing where it goes are ``announcements.queue`` -- shared
-        # with the assistant, so an announcement is sent one way rather than two.
+        # ``announcements.queue`` is shared with the assistant.
         chose_a_time, where = announcements.queue(announcement, acting_user=request.user)
         if chose_a_time:
             when = timezone.localtime(announcement.scheduled_for)
@@ -568,14 +465,7 @@ class ClubAnnouncementsView(LoginRequiredMixin, ClubViewMixin, TemplateView):
 
 
 class ClubAnnouncementRetractView(LoginRequiredMixin, ClubViewMixin, View):
-    """Take an announcement back, and say honestly how much of it could be taken back.
-
-    Clubs send the wrong date, and the first thing they ask for is a way to unsend it. What that
-    can mean is different per channel -- the Discord post goes, the page goes, the website listing
-    goes with it; the push notification is already on a lock screen and the email is already in an
-    inbox -- so the message afterwards names what is still out there instead of saying "retracted"
-    and letting the admin believe it was all undone.
-    """
+    """Retract an announcement, and say what couldn't be taken back (push, email)."""
 
     def dispatch(self, request, *args, **kwargs):
         self.get_club(kwargs.get("slug", ""))
@@ -615,16 +505,7 @@ class ClubAnnouncementRetractView(LoginRequiredMixin, ClubViewMixin, View):
 
 
 class ClubWebsiteIntegrationView(LoginRequiredMixin, ClubViewMixin, TemplateView):
-    """Every "put this on your own website" snippet the site offers, in one place.
-
-    They used to be a collapsed panel on whichever page happened to own the data — the calendar
-    for events, the BAP page for the leaderboard — which meant a club had to already know a
-    feature existed to find the snippet for it, and a club with the Breeder Award Program turned
-    off could never see that one at all. They are all listed here whether or not the feature is
-    switched on, with the ones that would currently render nothing labelled as such: a club
-    deciding what to put on its website is exactly the person who should find out that turning
-    BAP on would give them a leaderboard.
-    """
+    """Every "put this on your website" snippet in one place, including ones for features that are off."""
 
     template_name = "auctions/club_website_integration.html"
     active_tab = "website_integration"
@@ -720,9 +601,7 @@ class ClubWebsiteIntegrationView(LoginRequiredMixin, ClubViewMixin, TemplateView
                     "adds your calendar to somebody's own; the second is the raw feed, for "
                     "anything that reads one."
                 ),
-                # Google's when the club has shared its calendar, ours when it hasn't. Same rule
-                # as the buttons on the club page: the shared Google calendar is the copy the club
-                # itself keeps, so it has whatever an admin typed straight into it, pull or no pull.
+                # The club's shared Google calendar if there is one, otherwise ours.
                 "links": [
                     {
                         "label": "Add to calendar",

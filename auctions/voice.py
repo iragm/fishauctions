@@ -1,18 +1,18 @@
 """Voice-driven set winners: the grammar the mobile app listens with.
 
-The app does the listening (native speech recognition), but the grammar lives here as data, like
-:class:`~auctions.models.ThermalPrinterProfile`: which words an auctioneer actually says is an admin
-edit, not an app release. ``GET /api/mobile/config/`` serves this from
-:class:`~auctions.models.VoiceGrammar`; the app merges it over its own bundled defaults.
+The app listens, but the grammar is data here, like
+:class:`~auctions.models.ThermalPrinterProfile`: which words an auctioneer says is an admin edit,
+not an app release. ``GET /api/mobile/config/`` serves it from
+:class:`~auctions.models.VoiceGrammar`, and the app merges it over its bundled defaults.
 
-No model imports at module level -- ``models.py`` uses these functions as JSONField defaults, and
-migrations reference them by dotted path, so they must stay importable and stay put.
+No model imports at module level: ``models.py`` uses these as JSONField defaults and migrations
+reference them by path.
 """
 
 from django.core.cache import cache
 
-# 'platform' = phone's own recognizer; 'biased' = platform + vocabulary hint; 'cloud' = server-side
-# recognizer; 'spotter' = keyword-spotting only. The app decides what it can honour; not a guarantee.
+# 'platform' = the phone's recognizer, 'biased' = platform plus a vocabulary hint, 'cloud' =
+# server-side, 'spotter' = keyword spotting. The app decides what it can honour.
 BACKEND_PLATFORM = "platform"
 BACKEND_BIASED = "biased"
 BACKEND_CLOUD = "cloud"
@@ -24,7 +24,7 @@ BACKEND_CHOICES = [
     (BACKEND_SPOTTER, "Keyword spotter"),
 ]
 
-# Slots a command event can fill. Both sides ignore slots they don't know.
+# Slots a command event can fill; both sides ignore ones they don't know.
 SLOT_LOT = "lot"
 SLOT_BIDDER = "bidder"
 SLOT_PRICE = "price"
@@ -45,31 +45,28 @@ SLOT_CHOICES = [
 ]
 SLOTS = [slot for slot, _label in SLOT_CHOICES]
 
-# An utterance that opened no slot is stored with the slot blank. Group by `heard`, order by
-# count -- a frequent miss is a candidate anchor synonym to add via VoiceGrammar.
+# An utterance that opened no slot is stored with a blank slot. Group by `heard` to find candidate
+# anchor synonyms.
 SLOT_UNMATCHED = ""
 
-# The recognizer hears the whole room continuously, so most transcribed phrases aren't commands.
-# Log one row per session per interval, only for something long enough to plausibly be a command.
+# The recognizer hears the whole room, so most phrases aren't commands: log one row per session per
+# interval, and only for something long enough to be a command.
 UNMATCHED_MIN_SECONDS = 5
 UNMATCHED_MIN_TOKENS = 2
 
 
 def default_anchors():
-    """Words that say which field the number that follows belongs to.
+    """Words that say which field the number after them belongs to.
 
-    Order doesn't matter; keep entries lowercase (the app lowercases before comparing). The first
-    word of ``price`` must stay ``dollars``: both recognizers format money before the app sees it
-    ("twenty five dollars" arrives as ``$25``), so the app reads a currency symbol as the price
-    anchor and substitutes this list's first word -- making that entry load-bearing.
+    Lowercase; order doesn't matter, except that the first word of ``price`` must stay ``dollars``:
+    both recognizers format money before the app sees it, so the app substitutes this list's first word
+    for a currency symbol.
 
-    Keep in step with the app's bundled copy (``bundled_voice_grammar.dart``): a served list
-    replaces the app's for that slot.
+    Keep in step with the app's bundled copy (``bundled_voice_grammar.dart``).
     """
     return {
         "lot": ["lot", "lot number", "item"],
-        # "bitter"/"bidder": American English flaps the consonant in both, so no acoustic model
-        # will ever tell them apart. Listed outright rather than left to the fuzzy pass.
+        # "bitter"/"bidder": American English flaps both, so no acoustic model tells them apart.
         "bidder": ["bidder", "buyer", "bidder number", "paddle", "bitter"],
         "price": ["dollars", "dollar", "bucks"],
         "sold": ["sold", "hammer"],
@@ -81,7 +78,7 @@ def default_anchors():
 
 
 def default_number_words():
-    """Spoken number to digit value. "oh" is here because bidder numbers get read digit by digit."""
+    """Spoken number to digit. "oh" is here because bidder numbers are read digit by digit."""
     return {
         "zero": 0,
         "oh": 0,
@@ -118,7 +115,7 @@ def default_number_words():
 
 
 def default_homophones():
-    """Pairs that are a coin flip acoustically: teens vs. tens differ by an unstressed syllable."""
+    """Pairs that are a coin flip acoustically: teens and tens differ by an unstressed syllable."""
     return [
         ["13", "30"],
         ["14", "40"],
@@ -131,39 +128,34 @@ def default_homophones():
 
 
 def default_weights():
-    """How much each signal contributes to a command's confidence score.
+    """How much each signal contributes to a command's confidence.
 
-    Exponents, not multipliers: ``asr**asr x keyword**keyword x match**match x
-    ((1 - agreement) + agreement * agreed)``. 0 switches a signal off, 1 lets it count in full.
+    Exponents: ``asr**asr x keyword**keyword x match**match x ((1 - agreement) + agreement * agreed)``.
 
-    ``asr`` = recognizer's own confidence, ``keyword`` = anchor word quality (1.0 canonical, 0.8
-    synonym, 0.6 fuzzy), ``match`` = how well the value matched this auction's data, ``agreement``
-    = two passes landing on the same answer.
-
-    asr is weighted low (0.2): platforms report their own confidence badly, so a low ``asr`` should
-    shade the score, not decide it. keyword is weighted low (0.5): at 1.0 no synonym could ever
-    clear the ``unsure`` cutoff.
+    ``asr`` is the recognizer's own confidence (weighted 0.2, since platforms report it badly),
+    ``keyword`` the anchor word quality (0.5, or no synonym could clear the ``unsure`` cutoff),
+    ``match`` how well the value matched this auction's data, and ``agreement`` two passes agreeing.
     """
     return {"asr": 0.2, "keyword": 0.5, "match": 1.0, "agreement": 0.4}
 
 
 def default_thresholds():
-    """Score cutoffs: >= ``confident`` fills green, >= ``unsure`` fills amber and asks, else no command.
+    """Score cutoffs: >= ``confident`` fills green, >= ``unsure`` fills amber and asks, else nothing.
 
-    The gap between a canonical anchor with a value one edit away (0.765) and the 0.77 cutoff is
-    deliberately thin: an almost-right value must ask, a deployment-configured word must not.
+    The gap between a canonical anchor with a value one edit away (0.765) and the cutoff is thin on
+    purpose: an almost-right value must ask, a configured word must not.
     """
     return {"confident": 0.77, "unsure": 0.5}
 
 
-# Milliseconds a spoken value (lot, bidder, price) must stop changing before the app commits it
-# early, instead of waiting for the recognizer's final result (~3s silence window). Actions
-# ("sold", "undo") always wait for finals. The app clamps this to 200-2500; 0 means finals only.
+# Milliseconds a spoken value must stop changing before the app commits it early, rather than
+# waiting for the recognizer's final result. Actions always wait for finals. The app clamps to
+# 200-2500; 0 means finals only.
 DEFAULT_COMMIT_AFTER_MS = 700
 
 
 def _as_confidence(value):
-    """A score as a float, or None for anything that isn't one. Never raises: see ``log_command``."""
+    """A score as a float, or None for anything else. Never raises: see ``log_command``."""
     try:
         return None if value in (None, "") else float(value)
     except (TypeError, ValueError):
@@ -171,13 +163,10 @@ def _as_confidence(value):
 
 
 def log_command(user, auction, *, log_id=None, slot="", heard="", chosen="", confidence=None, corrected_to=""):
-    """Record (or amend) one voice command the set-winners page acted on. Returns the row's id.
+    """Record or amend one voice command the set-winners page acted on; returns the row id.
 
-    Pass ``log_id`` to amend a row this operator already wrote, so a correction lands on the same
-    row rather than as an orphan. Scoped to the caller's own rows in this auction.
-
-    Never raises for bad input: this is telemetry, and losing a sale to a logging error would be
-    worse than losing the sample.
+    ``log_id`` amends a row this operator wrote, so a correction lands on it rather than as an orphan.
+    Never raises for bad input: losing a sale to a logging error would be worse than losing the sample.
     """
     from auctions.models import VoiceCommandLog
 
@@ -202,14 +191,14 @@ def log_command(user, auction, *, log_id=None, slot="", heard="", chosen="", con
     return VoiceCommandLog.objects.create(auction=auction, user=user, slot=slot, **fields).pk
 
 
-# Slots that are a whole command on their own: see :func:`_is_action_word`.
+# Slots that are a whole command on their own; see :func:`_is_action_word`.
 ACTION_SLOTS = (SLOT_SOLD, SLOT_UNSOLD, SLOT_UNDO, SLOT_CLEAR, SLOT_CONFIRM)
 
 
 def _is_action_word(word, anchors=None):
-    """Whether one word alone is (or is the plural of) an anchor for an action slot.
+    """Whether one word alone is (or pluralises) an anchor for an action slot.
 
-    Exempt from the two-token floor below: "sold" said alone is a real command, not room noise.
+    Exempt from the two-token floor: "sold" said alone is a command, not room noise.
     """
     word = " ".join(str(word or "").split()).lower()
     if not word:
@@ -226,14 +215,11 @@ def _is_action_word(word, anchors=None):
 
 
 def log_unmatched(user, auction, *, heard="", confidence=None, session_key=""):
-    """Record one utterance that matched nothing, for a final transcript with no command at all
-    or one that scored below the ``unsure`` cutoff -- a near miss naming a word the grammar almost
-    knows. Slot and ``chosen`` stay blank.
+    """Record one utterance that matched nothing, or scored below the ``unsure`` cutoff. Slot and
+    ``chosen`` stay blank.
 
-    Dropped when shorter than :data:`UNMATCHED_MIN_TOKENS` words, or when this session already
-    logged one within :data:`UNMATCHED_MIN_SECONDS`. Returns the row's id, or None if dropped.
-
-    Never raises for bad input, same reason as :func:`log_command`.
+    Dropped when shorter than :data:`UNMATCHED_MIN_TOKENS` words, or when this session logged one
+    within :data:`UNMATCHED_MIN_SECONDS`. Returns the row id, or None. Never raises.
     """
     from auctions.models import VoiceCommandLog, VoiceGrammar
 
@@ -243,8 +229,8 @@ def log_unmatched(user, auction, *, heard="", confidence=None, session_key=""):
         grammar = VoiceGrammar.load()
         if not _is_action_word(words[0], (grammar.anchors if grammar else None) or default_anchors()):
             return None
-    # cache.add rate-limits with no window stored anywhere. Per session, not per user: two
-    # handsets are two microphones in two parts of the room.
+    # cache.add rate-limits with no stored window. Per session, not per user: two handsets are two
+    # microphones in two parts of the room.
     scope = session_key or f"user-{getattr(user, 'pk', '')}"
     if not cache.add(f"voice-unmatched:{auction.pk}:{scope}", 1, UNMATCHED_MIN_SECONDS):
         return None
@@ -258,11 +244,10 @@ def log_unmatched(user, auction, *, heard="", confidence=None, session_key=""):
 
 
 def serialize_grammar(grammar):
-    """Shape a :class:`~auctions.models.VoiceGrammar` for the ``voice`` block of mobile config.
+    """Shape a :class:`~auctions.models.VoiceGrammar` for mobile config's ``voice`` block.
 
-    ``None`` (no row saved) serves the defaults in this module rather than omitting the block --
-    the server's defaults are the grammar; the app's bundled copy is only for before it first hears
-    from us.
+    ``None`` serves this module's defaults rather than omitting the block: the server's defaults are
+    the grammar, and the app's bundled copy is only for before it first hears from us.
     """
     if grammar is None:
         from .models import VoiceGrammar
@@ -285,15 +270,11 @@ def serialize_grammar(grammar):
 
 
 def page_config(auction, grammar=None):
-    """Everything the set-winners page needs to match a spoken command on its own.
+    """Everything the set-winners page needs to match a spoken command itself.
 
-    The app is what listens, but it can hear something and produce no command -- "it says heard:
-    lot one and then nothing happens" -- with nothing on the page able to tell a grammar gap from a
-    matcher that never ran. So the page gets the grammar plus this auction's own vocabulary and
-    matches the transcript itself when no command arrives, the same way the app does.
-
-    ``grammar`` is passed when the caller already loaded the singleton; ``None`` loads it, and no
-    row at all falls back to defaults.
+    The app listens, but it can hear something and produce no command, with nothing on the page able to
+    tell a grammar gap from a matcher that never ran. So the page gets the grammar plus this auction's
+    vocabulary. ``grammar`` is passed when the caller loaded the singleton.
     """
     from .mobile.services import voice as voice_service
     from .models import VoiceGrammar

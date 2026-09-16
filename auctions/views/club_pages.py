@@ -79,9 +79,8 @@ class ClubDetailView(ClubViewMixin, TemplateView):
         if requested_member_uuid:
             member = ClubMember.objects.filter(club=self.club, uuid=requested_member_uuid, is_deleted=False).first()
         context["member"] = member
-        # Only the actual owner — not a holder of the UUID renewal link — may see the
-        # Google Wallet save button, since adding to a wallet should never be done on
-        # behalf of someone else.
+        # Only the owner -- not a holder of the UUID renewal link -- sees the Google Wallet save
+        # button: adding to a wallet should never be done on somebody's behalf.
         context["is_membership_owner"] = bool(
             member and self.request.user.is_authenticated and member.user_id == self.request.user.id
         )
@@ -156,9 +155,8 @@ class ClubDetailView(ClubViewMixin, TemplateView):
                     club=club, is_deleted=False, hap_points__gt=0
                 ).order_by("-hap_points")[:10]
         context["active_club_tab"] = requested_tab if requested_tab in available_tabs else "auctions"
-        # Four or more tabs ("Events BAP HAP Culture My Points") run off the side of a phone, so
-        # everything past BAP moves into a More menu -- the same shape the auction ribbon uses.
-        # Three still fit, and a More menu holding one item is worse than the tab it replaced.
+        # Four or more tabs run off the side of a phone, so everything past BAP moves into a More
+        # menu. Three still fit, and a More menu holding one item is worse than the tab.
         context["club_tabs_overflow"] = len(available_tabs) > 3
         context["can_access_admin"] = self.user_has_club_permission(
             "permission_admin"
@@ -198,28 +196,23 @@ class ClubDetailView(ClubViewMixin, TemplateView):
             context["club_map_directions_url"] = "https://www.google.com/maps/search/?api=1&query=" + quote_plus(
                 directions_query
             )
-        # The club page shows a calendar, not a bare auction list: auctions are mirrored into
-        # ClubEvents (by signal, and by the periodic task) alongside meetings, swaps, and
-        # anything pulled in from the club's Google Calendar.
+        # The club page shows a calendar: auctions are mirrored into ClubEvents alongside meetings,
+        # swaps and anything from the club's Google Calendar.
         upcoming, past = club_events.upcoming_events(
             self.club, limit=CLUB_DETAIL_EVENT_LIMIT, include_past=True, past_limit=CLUB_DETAIL_PAST_EVENT_LIMIT
         )
         context["upcoming_events"] = upcoming
         context["past_events"] = past
-        # The one announcement worth putting at the top of the page. Only the "show on website"
-        # ones are eligible; see announcements.latest_for_website.
+        # Only "show on website" announcements are eligible; see announcements.latest_for_website.
         latest = announcements.latest_for_website(self.club, 1)
         context["latest_announcement"] = latest[0] if latest else None
-        # The club's own page here counts as "on your website" -- it is what the globe icon on the
-        # announcements page has always meant. Admins are not counted: somebody reloading the page
-        # they just posted from would otherwise be most of the number.
+        # The club's own page counts as "on your website". Admins aren't counted: somebody
+        # reloading the page they posted from would otherwise be most of the number.
         if latest and not self.club_sidebar_can_view:
             announcements.record_website_views(latest)
         context["has_any_events"] = bool(upcoming or past)
-        # Both of these *subscribe*, so the calendar keeps updating: webcal:// hands the feed to
-        # the desktop or phone calendar app, and Google takes the https URL through its
-        # "add by URL" screen. There's deliberately no plain link to the .ics — a relative one
-        # only downloads the file, which is a one-time import of events that then never changes.
+        # Both of these subscribe, so the calendar keeps updating. There's deliberately no plain
+        # link to the .ics: that only downloads a one-time import.
         absolute_ical_url = self.request.build_absolute_uri(
             reverse("club_events_ical", kwargs={"slug": self.club.slug})
         )
@@ -234,8 +227,7 @@ class ClubDetailView(ClubViewMixin, TemplateView):
         from auctions.email_routing import email_routing_enabled
 
         if email_routing_enabled():
-            # SES routing active: show button only when a real recipient is configured
-            # (permission_add_edit member, admin, or manual override).
+            # SES routing active: only show the button when a real recipient is configured.
             contact_recipient = self.club.contact_email_recipient
             has_club_contact = bool(contact_recipient)
             context["club_contact_email"] = self.club.contact_sender_email if has_club_contact else None
@@ -285,8 +277,8 @@ class ClubDetailView(ClubViewMixin, TemplateView):
                 name=f"{request.user.first_name} {request.user.last_name}".strip(),
                 email=request.user.email,
                 source="joined",
-                # The member made this row about themselves: until an admin edits it, it goes away
-                # with their account rather than staying in the club's records.
+                # The member made this row about themselves, so until an admin edits it, it goes
+                # with their account.
                 admin_edited=False,
             )
             ClubHistory.objects.create(
@@ -301,10 +293,9 @@ class ClubDetailView(ClubViewMixin, TemplateView):
 
 def _get_or_create_membership_invoice(club, member):
     """Find or create an unpaid renewal invoice for this member's club."""
-    # Match on club_member first: that is what we set when creating the invoice below, so this
-    # is the only lookup guaranteed to find a previously created renewal invoice. Without it,
-    # members with an email but no linked user account never match the lookups below and a new
-    # UNPAID invoice is created on every page view.
+    # Match on club_member first: that is what the invoice below is created with, so it is the only
+    # lookup guaranteed to find an existing renewal invoice. Without it, members with an email but
+    # no account never match and a new UNPAID invoice is created on every page view.
     invoice = Invoice.objects.filter(
         club=club,
         auction=None,
@@ -351,10 +342,8 @@ def _membership_renewal_state(club, member):
 
 
 def _process_pending_membership_renewal_for_member(club, member):
-    """Process any PAID-but-unprocessed renewal invoice for this member.
-
-    Called on member page load so Square payments (webhook may arrive after redirect)
-    are picked up synchronously when the member views their page.
+    """Process any PAID-but-unprocessed renewal invoice for this member, on member page load, so a Square
+    payment whose webhook arrives after the redirect is picked up.
     """
     if not member.user:
         return
@@ -370,11 +359,7 @@ def _process_pending_membership_renewal_for_member(club, member):
 
 
 class ClubMemberByUUIDView(ClubViewMixin, TemplateView):
-    """Public, UUID-keyed page that shows a member's name and wallet-add buttons.
-
-    Anyone with the UUID link can view this page and add the membership to their
-    Google/Apple wallet — the UUID is the capability token.
-    """
+    """Public, UUID-keyed page showing a member's name and wallet-add buttons; the UUID is the token."""
 
     template_name = "auctions/club_member_by_uuid.html"
     allow_non_admins = True
@@ -402,8 +387,9 @@ class ClubMemberByUUIDView(ClubViewMixin, TemplateView):
 
 
 class ClubMemberByNumberView(ClubViewMixin, TemplateView):
-    """Public, number-keyed page showing membership number, expiration status, and a
-    payment button when applicable. Linked from Discord."""
+    """Public, number-keyed page showing the membership number, expiration and a payment button where it
+    applies. Linked from Discord.
+    """
 
     template_name = "auctions/club_member_by_number.html"
     allow_non_admins = True
@@ -455,10 +441,8 @@ class ClubAdminView(LoginRequiredMixin, ClubViewMixin, HTMxTableView):
         return super().dispatch(request, *args, **kwargs)
 
     def get_queryset(self):
-        # is_deleted filtering is handled by ClubMemberFilter.filter_queryset (default: hide deactivated)
-        # Every row reads its club's membership fee to decide whether to show a Renew button.
-        # prefetch, not join: all the rows have the same club, so this way they share one instance
-        # of it -- and one copy of everything cached on it.
+        # ClubMemberFilter.filter_queryset hides deactivated members by default. Every row reads its
+        # club's membership fee, and prefetch rather than join so the rows share one instance of it.
         return (
             ClubMember.objects.filter(club=self.club).select_related("user").prefetch_related("club").order_by("name")
         )
@@ -478,8 +462,9 @@ class ClubAdminView(LoginRequiredMixin, ClubViewMixin, HTMxTableView):
         return context
 
     def _build_no_results_html(self, query, can_add_edit):
-        """Empty-state with a link to expand the search to deactivated members and (optionally) an
-        Add member button pre-populated from the search query."""
+        """Empty state with a link to include deactivated members and, optionally, an Add member button
+        prefilled from the search.
+        """
         from urllib.parse import urlencode
 
         from django.utils.html import format_html
@@ -544,7 +529,7 @@ class ClubAdminView(LoginRequiredMixin, ClubViewMixin, HTMxTableView):
                 or self.user_has_club_permission("permission_edit_club")
             )
         )
-        # Column visibility uses direct field checks — permission_admin alone doesn't reveal all columns
+        # Column visibility uses direct field checks: permission_admin alone doesn't reveal all.
         if self.request.user.is_superuser:
             kwargs["can_manage_bap"] = True
             kwargs["can_manage_membership"] = True
@@ -558,11 +543,11 @@ class ClubAdminView(LoginRequiredMixin, ClubViewMixin, HTMxTableView):
         return kwargs
 
     def get_possible_filters(self):
-        """Clickable chips that inject ClubMemberFilter search tokens, modeled on the auction
-        users page. Each chip's key is normalized (underscores -> spaces) into a search token."""
+        """Clickable chips that inject ClubMemberFilter search tokens, modelled on the auction users page. Each
+        key is normalized (underscores to spaces) into a token.
+        """
         filters = []
-        # Membership status only exists when the club charges dues (a 0 fee means no membership
-        # system, so hide the paid/unpaid chips).
+        # Membership status only exists when the club charges dues.
         if self.club.membership_annual_fee:
             filters.extend(
                 [

@@ -1,7 +1,5 @@
-"""Pages that belong to the site rather than to any auction or club.
-
-The FAQ, support, the promo site, the privacy policy, the blog, unsubscribe, and the landing
-redirect that decides where a signed-in user with no context should be sent.
+"""Pages that belong to the site rather than to an auction or club: the FAQ, support, the promo site,
+the privacy policy, the blog, unsubscribe, and the landing redirect.
 """
 
 import logging
@@ -77,10 +75,8 @@ class FAQ(ListView):
     def get_queryset(self):
         """Everything but the agent-only answers.
 
-        ``agent_only`` is not privacy -- anybody can reach one by asking the assistant, and
-        ``search_help`` serves them to every caller. It is about what deserves a heading on a page
-        somebody reads top to bottom: an edge case that is worth writing down and worth keeping out
-        of the twenty questions everybody else came here for.
+        ``agent_only`` isn't privacy -- ``search_help`` serves them to everyone -- it keeps edge cases off a
+        page people read top to bottom.
         """
         return super().get_queryset().filter(agent_only=False)
 
@@ -92,31 +88,14 @@ class FAQ(ListView):
 
 
 class SupportView(FormView):
-    """Every way to get help, on one page, ending in a way to reach a human with no account.
+    """Every way to get help on one page, ending in a way to reach a human with no account.
 
-    The page leads with connecting an AI agent (``/ai/``), because that answers a question about
-    somebody's own auction in seconds where an email answers it in days. Then the FAQ, then the two
-    tutorial videos -- collapsed, because they are half an hour of video and the people who want
-    them know they want them -- and last the message form.
+    Leads with connecting an AI agent (``/ai/``), then the FAQ, the two tutorial videos, and the message
+    form. The App Store's Support URL is opened with no session, so nothing here requires one; the site
+    owner's address is never rendered (scrapers), and the message is emailed to ``settings.ADMINS[0][1]``
+    with the sender as ``Reply-To``. reCAPTCHA stands in for the login.
 
-    The form is the part with a rule attached. The App Store's Support URL is opened by App Review
-    in a plain browser with no session, and the only page that could serve as one was /faq/, which
-    ended with the site owner's address for signed-in users and the words "(Sign in to see email)"
-    for everybody else. That is a Guideline 1.5 metadata rejection waiting to happen, and a metadata
-    rejection costs a review round trip.
-
-    Hiding the address from anonymous visitors is a real measure against scrapers and stays exactly
-    as it was: this page never renders it. The message is emailed to ``settings.ADMINS[0][1]`` with
-    the sender's address as ``Reply-To``, so answering is one click and nothing is published.
-
-    Deliberately open to everybody, signed in or not -- a support page that needs an account is not
-    a support page. reCAPTCHA (the same invisible v2 as signup) is what stands in for the login.
-    Everything above the form is on the same page rather than behind a link, so the no-session
-    reader gets the whole of it; the one link that needs an account is the agent one, and an agent
-    connected to nothing is no use to somebody who has not signed up yet anyway.
-
-    Lives at /support/; /contact/ is a permanent redirect, since that is the address the App Store
-    metadata and older links carry.
+    Lives at /support/; /contact/ is a permanent redirect.
     """
 
     template_name = "support.html"
@@ -124,18 +103,15 @@ class SupportView(FormView):
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
-        # The same two videos the promo page shows, and the same chapter lists -- one auction runs
-        # online and one in person, and which one somebody needs is the first thing they know.
+        # The same two videos and chapter lists as the promo page: one online, one in person.
         context["online_tutorial"] = settings.ONLINE_TUTORIAL_YOUTUBE_ID
         context["online_tutorial_chapters"] = settings.ONLINE_TUTORIAL_CHAPTERS
         context["in_person_tutorial"] = settings.IN_PERSON_TUTORIAL_YOUTUBE_ID
         context["in_person_tutorial_chapters"] = settings.IN_PERSON_TUTORIAL_CHAPTERS
         return context
 
-    #: Messages one address can send in an hour. reCAPTCHA is the front door and this is the floor
-    #: under it: a site with no keys configured has no captcha at all, and a solved captcha is not
-    #: a promise that the next thousand messages are worth reading. Deliberately generous -- a
-    #: person with a real problem writes two or three, not six.
+    #: Messages one address may send in an hour: the floor under reCAPTCHA, which a site with no
+    #: keys doesn't have at all.
     MESSAGES_PER_HOUR = 5
 
     def _over_the_limit(self, request) -> bool:
@@ -163,8 +139,7 @@ class SupportView(FormView):
         from post_office import mail
 
         if self._over_the_limit(self.request):
-            # Say so rather than pretending it was sent: somebody who has genuinely written five
-            # messages in an hour needs to know the sixth is not on its way.
+            # Say so rather than pretending it was sent.
             messages.error(
                 self.request,
                 "That's a lot of messages in a short time - please give us a little while to reply "
@@ -172,8 +147,7 @@ class SupportView(FormView):
             )
             return super().form_valid(form)
 
-        # Off the account when they are signed in, off the form when they are not -- the form
-        # doesn't even render the two fields to somebody it already knows. See ContactForm.
+        # Off the account when signed in, off the form otherwise. See ContactForm.
         name = form.sender_name
         email = form.sender_email
         signed_in = self.request.user.username if self.request.user.is_authenticated else "not signed in"
@@ -184,9 +158,8 @@ class SupportView(FormView):
                 f"{name} <{email}> wrote from {Site.objects.get_current().domain}"
                 f" ({signed_in}):\n\n{form.cleaned_data['message']}"
             ),
-            # Reply-To rather than From: the From address is the site's own routed sender (and on
-            # SES it is rewritten anyway), so putting a visitor's address there would fail SPF and
-            # land the one email that matters in spam.
+            # Reply-To, not From: the From address is the site's routed sender, and a visitor's
+            # address there would fail SPF.
             headers={"Reply-To": email},
         )
         messages.success(
@@ -214,9 +187,7 @@ class PromoSite(TemplateView):
 
 
 class ToDefaultLandingPage(View):
-    """
-    Allow the user to pick up where they left off
-    """
+    """Send the user back to where they left off."""
 
     def tos_check(self, request, auction, routeByLastAuction):
         if not auction:
@@ -253,12 +224,11 @@ class ToDefaultLandingPage(View):
             auction = Auction.objects.exclude(is_deleted=True).filter(slug=list(data.keys())[0])[0]
             # return tos_check(request, auction, routeByLastAuction)
         except Exception:
-            # if not, check and see if the user has been participating in an auction
+            # Otherwise, has the user been taking part in an auction?
             try:
                 auction = UserData.objects.get(user=request.user).last_auction_used
-                # Admins of an in-person auction land on the users list, not the lot list — but only
-                # while the auction is still current. Once it's pretty_much_over (wound down 24h+),
-                # that redirect is stale, so fall through to the invoice/browse path instead.
+                # Admins of a current in-person auction land on the users list; once it's
+                # pretty_much_over that redirect is stale.
                 if (
                     auction
                     and not auction.is_online
@@ -286,8 +256,7 @@ class ToDefaultLandingPage(View):
                 else:
                     # in progress online auctions get routed
                     if AuctionTOS.objects.filter(user=request.user, auction=auction, auction__is_online=True).exists():
-                        # only show the banner if the TOS is signed
-                        # messages.add_message(request, messages.INFO, f'{auction} is the last auction you joined.  <a href="/lots/">View all lots instead</a>')
+                        # Only show the banner if the TOS is signed.
                         routeByLastAuction = True
             except (TypeError, AttributeError, Auction.DoesNotExist):
                 # probably no userdata or userdata.auction is None
@@ -303,10 +272,8 @@ class MyAccount(LoginRequiredMixin, RedirectView):
 class AccountSetupRedirect(LoginRequiredMixin, RedirectView):
     """/account/setup/ -- the one "Account" row in the navbar menu.
 
-    The Account setup menu has no page of its own: it is a sidebar beside whichever of its pages you
-    are on. So this lands on the page you were last on, and on Contact info the first time -- the
-    one people arrive for, and the one an auction needs filled in. `account_nav.landing_url` checks
-    the remembered name against the menu before reversing it.
+    The menu has no page of its own, so this lands on the page you were last on, and on Contact info the
+    first time. `account_nav.landing_url` checks the remembered name against the menu.
     """
 
     def get_redirect_url(self, *args, **kwargs):
@@ -316,11 +283,10 @@ class AccountSetupRedirect(LoginRequiredMixin, RedirectView):
 
 
 class MyLastAuctionLots(LoginRequiredMixin, RedirectView):
-    """GET /lots/my-last-auction/ — the app's "Lots in my last auction" home-screen shortcut.
+    """GET /lots/my-last-auction/ — the app's home-screen shortcut.
 
-    Redirects to the lot list filtered to the user's last-used auction when there is one (and it
-    hasn't been deleted), otherwise to the plain lot list. Kept server-side so the app can deep-link
-    a stable URL without knowing the user's current auction.
+    Redirects to the lot list filtered to the user's last-used auction, else the plain lot list. Kept
+    server-side so the app can deep-link a stable URL.
     """
 
     def get_redirect_url(self, *args, **kwargs):
@@ -372,7 +338,7 @@ class AllAuctions(LocationMixin, HTMxTableView):
             qs = qs.exclude(is_deleted=True)
             return qs.filter(standard_filter).annotate(joined=Value(0, output_field=FloatField())).distinct()
         if self.request.user.is_superuser:
-            # joined is disabled for admins because we need to return before filtering non-promoted auctions
+            # joined is disabled for admins: we return before filtering unpromoted auctions.
             return qs.annotate(joined=Value(0, output_field=FloatField())).order_by("-date_posted").distinct()
         qs = qs.exclude(is_deleted=True)
         joined_subquery = Exists(
@@ -391,7 +357,7 @@ class AllAuctions(LocationMixin, HTMxTableView):
             .annotate(joined=joined_subquery)
             .distinct()
         )
-        # Apply nearby filter if user has a location set, the preference is enabled, and nearby=false is not in GET params
+        # Apply the nearby filter with a location, the preference on, and no nearby=false.
         self.nearby_filter_active = False
         userdata = self.request.user.userdata
         self._base_qs = qs  # save pre-filter qs for auto-remove fallback
@@ -411,7 +377,7 @@ class AllAuctions(LocationMixin, HTMxTableView):
         return qs
 
     def get_context_data(self, **kwargs):
-        # Auto-remove nearby filter when no results exist but the search term has results without distance constraint
+        # Drop the nearby filter when it's the only reason there are no results.
         nearby_filter_auto_removed = None
         if getattr(self, "nearby_filter_active", False) and not self.object_list.exists():
             query = self.request.GET.get("query", "")
@@ -470,7 +436,6 @@ class Leaderboard(ListView):
         context["unique_species"] = UserData.objects.filter(number_unique_species__isnull=False).order_by(
             "rank_unique_species"
         )
-        # context['total_spent'] = UserData.objects.filter(rank_total_spent__isnull=False).order_by('rank_total_spent')
         context["total_bids"] = UserData.objects.filter(rank_total_bids__isnull=False).order_by("rank_total_bids")
         return context
 
@@ -486,7 +451,7 @@ class AllLots(LotListView, AuctionViewMixin):
     allow_non_admins = True
 
     def render_to_response(self, context, **response_kwargs):
-        """override the default just to add a cookie -- this will allow us to save ordering for subsequent views"""
+        """Add a cookie so the ordering is remembered for later views."""
         response = super().render_to_response(context, **response_kwargs)
         if hasattr(self, "ordering"):
             response.set_cookie("lot_order", self.ordering)
@@ -509,7 +474,7 @@ class AllLots(LotListView, AuctionViewMixin):
         if self.ordering == "unloved":
             can_show_unloved_tip = False
             if randint(1, 10) > 9:
-                # we need a gentle nudge to remind people not to ALWAYS sort by least popular
+                # A nudge not to always sort by least popular.
                 context["search_button_tooltip"] = "Sorting by least popular"
         if not context["auction"]:
             context["auction"] = self.auction
@@ -536,10 +501,9 @@ class AllLots(LotListView, AuctionViewMixin):
             ignore=True,
             regardingAuction=self.auction,
         )
-        # LotFilter hides lots posted in the last 20 minutes from non-owners. When those are the
-        # only lots in the auction the list looks empty, so flag it and let the template explain the
-        # short wait instead of showing a bare "No lots found". Superusers and in-person auctions
-        # don't hide new lots (see LotFilter.qs), so there's nothing to explain there.
+        # LotFilter hides lots posted in the last 20 minutes from non-owners, which can look like an
+        # empty auction; flag it so the template explains the wait. Superusers and in-person
+        # auctions don't hide them (see LotFilter.qs).
         context["recently_added_lots_hidden"] = False
         if self.auction and self.auction.is_online and not self.request.user.is_superuser:
             recent_lots = Lot.objects.filter(
@@ -569,13 +533,11 @@ class BlogPostView(DetailView):
 
 
 class PrivacyPolicyView(BlogPostView):
-    """The privacy policy at a stable, obvious path.
+    """The privacy policy at a stable path.
 
-    Same content as /blog/privacy/ (one BlogPost, seeded by migration), rendered here rather than
-    redirected: the app opens this URL inside the signed-out signup WebView against an allow-list of
-    exactly the paths /api/mobile/config/ hands it, so a redirect elsewhere would bounce the user out
-    to the system browser mid-signup. Apple requires a privacy policy linked from inside the app, and
-    Google Play's data-deletion policy wants a URL — both point here.
+    The same BlogPost as /blog/privacy/, rendered rather than redirected: the app opens this URL in the
+    signed-out signup WebView against an allow-list, so a redirect would bounce the user to the system
+    browser. Apple requires it, and Google Play's data-deletion policy wants a URL.
     """
 
     def get_object(self, queryset=None):
@@ -583,9 +545,7 @@ class PrivacyPolicyView(BlogPostView):
 
 
 class UnsubscribeView(TemplateView):
-    """
-    Match a UUID in the URL to a UserData, and unsubscribe that user
-    """
+    """Match a UUID to a UserData and unsubscribe that user."""
 
     template_name = "unsubscribe.html"
 

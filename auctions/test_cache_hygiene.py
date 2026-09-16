@@ -1,15 +1,14 @@
 """Guards against tests that clear a cache shared with every other parallel worker.
 
 ``manage.py test --parallel`` (what CI runs) gives each worker its own database but not its own
-cache — they all point at the one Redis in ``settings.CACHES``, where ``cache.clear()`` is a
-``FLUSHDB``. A test class clearing the cache in ``setUp`` therefore empties it out from under
-whatever every *other* worker is asserting at that moment. That is how
+cache -- they all point at the one Redis in ``settings.CACHES``, where ``cache.clear()`` is a
+``FLUSHDB``. A class clearing the cache in ``setUp`` therefore empties it out from under whatever
+every *other* worker is asserting at that moment. That is how
 ``test_the_jwks_is_not_refetched_for_every_notification`` came to fail CI with ``2 != 1`` after
-passing on its own for months: the JWKS it had just cached was flushed by another worker between
-the two notifications, so the second one went back to Apple.
+passing on its own for months.
 
-``auctions.test_support.isolated_cache`` is the fix. This makes leaving it off fail the build,
-rather than one unlucky run in a hundred somewhere else in the suite.
+``auctions.test_support.isolated_cache`` is the fix. This makes leaving it off fail the build rather
+than one unlucky run in a hundred somewhere else in the suite.
 """
 
 import ast

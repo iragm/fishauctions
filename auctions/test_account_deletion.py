@@ -1,9 +1,8 @@
-"""Tests for account deletion (Part D).
+"""Tests for account deletion.
 
-Deleting your account has to be possible from inside the app for both stores, and it has to do what
-the page says it does. The interesting parts are the boundaries: what belongs to the person and goes,
-what belongs to a club or an auction and stays, and the grace period that makes an accidental
-deletion recoverable.
+Deleting an account has to be possible from inside the app for both stores and do what the page
+says. The interesting parts are the boundaries: what belongs to the person and goes, what belongs to
+a club or auction and stays, and the grace period that makes an accidental deletion recoverable.
 """
 
 import datetime
@@ -70,7 +69,7 @@ class AccountDeletionRequestTests(TestCase):
         response = self.client.post(reverse("account_delete"), {"confirm_username": "leaver"})
         userdata = UserData.objects.get(user=self.user)
         self.assertIsNotNone(userdata.account_deletion_requested)
-        # Ending at /logout/ is what turns the web sign-out into a full native sign-out in the app.
+        # Ending at /logout/ turns the web sign-out into a native one in the app.
         self.assertIn(reverse("account_logout"), response.url)
         self.assertNotIn("_auth_user_id", self.client.session)
 
@@ -126,7 +125,7 @@ class AccountDeletionRequestTests(TestCase):
 
 
 class AccountDeletionScheduleTests(TestCase):
-    """The grace period is the only undo there is; the job that ends it has to be exact."""
+    """The grace period is the only undo there is, so the job that ends it has to be exact."""
 
     def setUp(self):
         self.user = User.objects.create_user(username="waiting", password="x", email="waiting@example.com")
@@ -151,8 +150,9 @@ class AccountDeletionScheduleTests(TestCase):
         self.assertFalse(self.user.is_active)
 
     def test_a_deactivated_account_is_still_deleted(self):
-        """account_deletion_requested is the "not done yet" marker; is_active is not, and an admin
-        deactivating someone in between must not strand their request forever."""
+        """account_deletion_requested is the "not done yet" marker; is_active is not, so an admin deactivating
+        somebody in between must not strand their request.
+        """
         request_deletion(self.user)
         UserData.objects.filter(user=self.user).update(
             account_deletion_requested=timezone.now() - datetime.timedelta(days=GRACE_PERIOD_DAYS + 1)
@@ -261,10 +261,10 @@ class PersonalDataIsDeletedTests(TestCase):
 
 
 class ClubRecordsSurviveTests(TestCase):
-    """A club's own records are the club's, and can't be wiped by a member leaving the site.
+    """A club's own records are the club's, and can't be wiped by a member leaving.
 
-    ``ClubMember.admin_edited`` is the line: a record an admin created or edited stays whole and
-    only loses the account link; one the member made about themselves goes with the account.
+    ``ClubMember.admin_edited`` is the line: an admin-created or edited record stays whole and loses the
+    account link; one the member made about themselves goes with the account.
     """
 
     def setUp(self):
@@ -305,7 +305,7 @@ class ClubRecordsSurviveTests(TestCase):
         self.assertTrue(self.own_record.is_deleted)
 
     def test_admin_edited_defaults_to_kept(self):
-        """Existing rows and anything an admin touches are the club's — the safe default."""
+        """Existing rows and anything an admin touches are the club's: the safe default."""
         member = ClubMember.objects.create(club=self.club, name="Someone")
         self.assertTrue(member.admin_edited)
 
@@ -328,8 +328,7 @@ class ClubRecordsSurviveTests(TestCase):
         self.assertTrue(self.own_record.admin_edited)
 
     def test_a_kept_record_keeps_its_contact_status(self):
-        """do_not_contact would archive the club's Mailchimp contact and delete its Brevo one on the
-        next sync -- the club-owned data this branch exists to leave alone."""
+        """do_not_contact would archive the club's Mailchimp contact and delete its Brevo one on the next sync."""
         delete_account(self.user)
         self.admin_record.refresh_from_db()
         self.assertEqual(self.admin_record.contact_status, "contact")
@@ -377,7 +376,7 @@ class ClubRecordsSurviveTests(TestCase):
 
 
 class AuctionRecordsSurviveTests(StandardTestCase):
-    """Bids, invoices and sold lots are other people's records too — they keep adding up."""
+    """Bids, invoices and sold lots are other people's records: they keep adding up."""
 
     def setUp(self):
         super().setUp()
@@ -434,7 +433,7 @@ class AuctionRecordsSurviveTests(StandardTestCase):
         actions = " ".join(
             AuctionHistory.objects.filter(auction=self.in_person_auction).values_list("action", flat=True)
         )
-        # Matched without regard to case: an admin types an address however the person wrote it.
+        # Matched case-insensitively: an admin types an address however it was written.
         self.assertNotIn("Real@Example.com", actions)
         self.assertIn("[deleted]", actions)
         self.assertIn("new@example.com", actions)
@@ -501,12 +500,8 @@ class SingleClubModeTests(TestCase):
     """The membership every account gets in single-club mode is the member's own record.
 
     SINGLE_CLUB_MODE is on by default and entrypoint.sh creates the club, so this is the ordinary
-    deployment, not an edge case: a row created for the person out of their signup form must not
-    keep their name and address in the club's roster after they've deleted their account.
-
-    The mode is pinned here rather than inherited from the environment: it is a .env setting, and
-    CI runs with it off (.github/scripts/prepare-ci.sh), which left the club uncreated and every
-    assertion below looking for a membership that was never made.
+    deployment. It is pinned here because CI runs with it off, which left the club uncreated and every
+    assertion looking for a membership that was never made.
     """
 
     def setUp(self):
@@ -528,8 +523,9 @@ class SingleClubModeTests(TestCase):
         self.assertIsNone(member.email)
 
     def test_deletion_does_not_hand_the_account_a_fresh_membership(self):
-        """The last thing delete_account does is save the User, which lands in the signal that
-        creates this membership -- and would link a brand new one straight back to the account."""
+        """The last thing delete_account does is save the User, which lands in the signal that creates this
+        membership and would link a fresh one straight back.
+        """
         delete_account(self.user)
         self.assertFalse(ClubMember.objects.filter(user=self.user).exists())
         self.assertEqual(ClubMember.objects.filter(club=self.club).count(), 1)
@@ -648,8 +644,9 @@ class MarketingContactTaskTests(TestCase):
         self.assertIsNone(error)
 
     def test_brevo_still_runs_when_mailchimp_fails(self):
-        """Neither provider's API error descends from requests.RequestException, so a shared
-        try/except (or an autoretry_for list) drops the second call and never retries."""
+        """Neither provider's API error descends from requests.RequestException, so a shared try/except would
+        drop the second call and never retry.
+        """
         mc, brevo, error = self._run(mailchimp_side_effect=RuntimeError("mailchimp is down"))
         brevo.assert_called_once_with(self.club, "gone@example.com")
         self.assertIsNotNone(error)
@@ -680,10 +677,10 @@ class PickupLocationSanityTests(TestCase):
 
 
 class MobileSignInCancelsDeletionTests(TestCase):
-    """Someone who deleted from inside the app comes back through the app, not the web login.
+    """Somebody who deleted from inside the app comes back through the app.
 
-    The web cancels on the ``user_logged_in`` signal, which a JWT login never fires — without this
-    the page's promise ("sign in again and it's cancelled") would be false for app users.
+    The web cancels on ``user_logged_in``, which a JWT login never fires -- so without this the page's
+    promise would be false for app users.
     """
 
     def setUp(self):

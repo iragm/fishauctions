@@ -5,9 +5,8 @@ from django import template
 from django.conf import settings
 from django.utils.safestring import mark_safe
 
-# python-barcode is an optional runtime dep. Import lazily-but-eagerly here and
-# tolerate ImportError so a missing wheel doesn't bring down everything that
-# loads this template-tag library (e.g. the Celery worker's Django checks).
+# python-barcode is an optional runtime dep, so a missing wheel must not take down everything that
+# loads this tag library (the Celery worker's Django checks, for one).
 try:
     import barcode
     from barcode.writer import SVGWriter
@@ -46,20 +45,15 @@ def membership_barcode(value, barcode_type="code128"):
 
 @register.simple_tag
 def google_wallet_save_url(member):
-    """Return a 'Save to Google Wallet' URL for this member, or empty string.
+    """A 'Save to Google Wallet' URL for this member, or "" when the button should be hidden.
 
-    Requires the following Django settings to be set:
-      GOOGLE_WALLET_ISSUER_ID            — numeric issuer ID from Google Wallet Console
-      GOOGLE_WALLET_SERVICE_ACCOUNT_EMAIL — the issuer service account email
-      GOOGLE_WALLET_SERVICE_ACCOUNT_KEY   — the PEM-encoded RSA private key
-
-    If any setting is missing the tag returns "" so the template can hide the button.
+    Needs GOOGLE_WALLET_ISSUER_ID, GOOGLE_WALLET_SERVICE_ACCOUNT_EMAIL and
+    GOOGLE_WALLET_SERVICE_ACCOUNT_KEY; any one missing returns "".
     """
     if not member:
         return ""
-    # Respect the club's per-mode visibility — when membership numbers are off
-    # entirely, or restricted to paid members and this member isn't paid, no
-    # Google Wallet URL should be exposed.
+    # Honour the club's per-mode visibility: no URL when membership numbers are off, or restricted
+    # to paid members and this member isn't one.
     if not member.club.show_member_barcode:
         return ""
     from auctions.google_wallet import (
@@ -77,8 +71,8 @@ def google_wallet_save_url(member):
 
     try:
         club = member.club
-        # Wallet class IDs are immutable, so we use club.pk (stable) instead of
-        # club.slug (mutable via AutoSlugField with always_update=True).
+        # Wallet class ids are immutable, so club.pk rather than club.slug, which AutoSlugField
+        # rewrites on every rename.
         class_id = f"{issuer_id}.membership_{club.pk}"
         object_id = f"{issuer_id}.member_{member.pk}"
         member_name = member.name or (member.user.get_full_name() or member.user.username if member.user else "Member")

@@ -1,9 +1,9 @@
 """The gate before creating an auction, and the repair queue for the auctions created before it.
 
-Both halves of one problem. ``Auction.club`` is set at creation from ``UserData.club``, nothing on
-the way to creating an auction ever asked for that, and so about four auctions in five belong to no
-club and are invisible to every number in ``club_health``. The gate stops the backlog growing; the
-queue on ``/admin-unlinked-auctions/`` works off what is already there.
+``Auction.club`` is set at creation from ``UserData.club``, nothing on the way to creating an auction
+asked for that, and so about four auctions in five belong to no club and are invisible to
+``club_health``. The gate stops the backlog growing; the queue on ``/admin-unlinked-auctions/``
+works off what is there.
 
 See ``services.missing_contact_info``, ``auctions/club_matching.py`` and
 ``views.usability.UnlinkedAuctions``.
@@ -136,7 +136,7 @@ class AuctionCreationGateTests(StandardTestCase):
         self.assertEqual(missing_contact_info(User.objects.get(pk=self.user.pk), require_phone=True), [])
 
     def test_there_is_no_loop_between_the_gate_and_the_page(self):
-        """Save the contact page as the gate asks and the next hop is the auction form itself."""
+        """Save the contact page as the gate asks and the next hop is the auction form."""
         self.client.get(reverse("create_auction"))
         self.client.post(
             reverse("contact_info") + f"?next={reverse('create_auction')}",
@@ -155,12 +155,11 @@ class ClubNameMatchingTests(TestCase):
     """Clubs write themselves down three ways and all three name the same club."""
 
     def test_clubs_that_share_initials_are_not_the_same_club(self):
-        """``Club.save`` derives an abbreviation from the name, so almost every club has one.
+        """Clubs that share initials are not the same club.
 
-        Treating a derived abbreviation as evidence made every club sharing initials one club --
-        and aquarium societies collide constantly: Milwaukee, Minnesota and Missouri are all MAS.
-        A 300-row import would have quietly merged them, which is the worst outcome this matcher
-        has, because a merge attaches one society's history to another.
+        ``Club.save`` derives an abbreviation from the name, so treating one as evidence made every club
+        sharing initials one club -- Milwaukee, Minnesota and Missouri are all MAS -- and a merge attaches
+        one society's history to another.
         """
         clubs = [
             Club.objects.create(name="Milwaukee Aquarium Society"),
@@ -174,12 +173,10 @@ class ClubNameMatchingTests(TestCase):
         self.assertIsNone(best_match("Motor City Aquarium Society", clubs)[0])
 
     def test_a_derived_abbreviation_is_not_evidence_when_the_name_has_punctuation(self):
-        """The same trap one layer down: two ways to derive an abbreviation, and only one is used.
-
-        ``Club.save`` splits on whitespace, so "Mid-Atlantic Aquarium Society" derives ``MAS``.
-        :func:`initials` splits on punctuation too and reads the same name as ``maas``, so
-        comparing against that alone called ``MAS`` hand-written -- and every club with a hyphen or
-        an ampersand in its name went back to swallowing its neighbours.
+        """The same trap one layer down: ``Club.save`` splits on whitespace, so "Mid-Atlantic Aquarium Society"
+        derives ``MAS``, while :func:`initials` splits on punctuation and reads ``maas``. Comparing against
+        that alone called ``MAS`` hand-written, and every club with a hyphen went back to swallowing its
+        neighbours.
         """
         mid_atlantic = Club.objects.create(name="Mid-Atlantic Aquarium Society")
         michigan = Club.objects.create(name="Michigan Aquarium Society")
@@ -378,10 +375,9 @@ class UnlinkedAuctionsPageTests(StandardTestCase):
 class MakeClubAdminButtonTests(StandardTestCase):
     """The "Make X admin of Y" button beside "Trust this user" on the auction page.
 
-    It is offered in two situations (``can_make_club_admin`` is an OR): the creator is not an admin
-    of their club, *or* the auction has no club.  The second one is the trap -- filing the clubless
-    auctions is normally a side effect of saving the ``ClubMember``, and there is no save to make
-    when the person is already an admin.
+    Offered in two situations (``can_make_club_admin`` is an OR): the creator is not an admin of their
+    club, or the auction has no club. The second is the trap -- filing clubless auctions is normally a
+    side effect of saving the ``ClubMember``, and there is no save to make when they are already an admin.
     """
 
     def setUp(self):

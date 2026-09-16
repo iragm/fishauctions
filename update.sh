@@ -13,9 +13,8 @@ set_env_value() {
     local value="$2"
     if grep -q "^${key}=" "$ENV_FILE"; then
         local escaped_value
-        # Escape sed replacement metacharacters: backslash FIRST, then the @
-        # delimiter and & (whole-match backreference). Missing the backslash meant
-        # a value containing '\' (or '@') silently corrupted the written line.
+        # Escape sed replacement metacharacters: backslash first, then the @ delimiter and &.
+        # Without the backslash, a value containing '\' or '@' corrupted the written line.
         escaped_value="$(printf '%s' "$value" | sed 's/[\\@&]/\\&/g')"
         sed -i "s@^${key}=.*@${key}=${escaped_value}@" "$ENV_FILE"
     else
@@ -169,9 +168,9 @@ ensure_permissions() {
         echo "  sudo chown -R $puid:$pgid ${writable_paths[*]}"
     fi
 
-    # Wallet credential files are copied into the repo root by hand (often via
-    # sudo/root scp), which leaves them unreadable by the container's app user and
-    # breaks pass signing until someone remembers the chown. Fix them here.
+    # Wallet credential files are copied into the repo root by hand, often as root, which leaves
+    # them unreadable by the container's app user and breaks pass signing until somebody chowns
+    # them. Fix them here.
     local wallet_file
     for wallet_file in "$(get_env_value "APPLE_WALLET_CERT_FILE")" \
                        "$(get_env_value "APPLE_WALLET_WWDR_FILE")" \
@@ -186,21 +185,17 @@ ensure_permissions() {
 }
 
 render_nginx_domain() {
-    # Render nginx.prod.conf from the tracked nginx.prod.conf.template, substituting
-    # __SITE_DOMAIN__ with SITE_DOMAIN. The OUTPUT is gitignored, which is the whole
-    # point: `git restore .` / `git pull` above never revert it to a broken
-    # placeholder (a code-only deploy can no longer take the site down), and
-    # rendering never dirties the tree, so the live domain can't be committed by
-    # accident. The template is always clean, so this is fully idempotent -- no
-    # reliance on the current rendered value.
+    # Render nginx.prod.conf from the tracked template, substituting __SITE_DOMAIN__. The output is
+    # gitignored, which is the point: `git restore .` above can't revert it to a placeholder and
+    # take the site down, and rendering can't commit the live domain by accident. Idempotent, since
+    # it reads the template rather than the current rendered value.
     local template="./nginx.prod.conf.template"
     local output="./nginx.prod.conf"
     local site_domain escaped_site_domain
-    # If any docker compose command runs while the rendered config is missing
-    # (fresh clone, or the one-time upgrade across the commit that un-tracked
-    # nginx.prod.conf), Docker auto-creates the bind-mount source as a DIRECTORY
-    # and swag silently serves its default config. Self-heal: drop the directory
-    # (it holds at most swag-created droppings, never operator data) and render.
+    # A docker compose command run while the rendered config is missing (a fresh clone) makes
+    # Docker create the bind-mount source as a DIRECTORY, and swag then silently serves its own
+    # default config. Drop it -- it holds swag's droppings at most, never operator data -- and
+    # render.
     if [ -d "$output" ]; then
         echo "WARNING: $output is a directory -- docker compose ran before the nginx config was"
         echo "         rendered, so Docker created the missing bind-mount source as a directory."
@@ -217,10 +212,9 @@ render_nginx_domain() {
         echo "         Is the file checked out cleanly?"
         return
     fi
-    # An empty SITE_DOMAIN would render `server_name ;`, which nginx rejects and
-    # which would take the site down. Refuse to overwrite a possibly-good existing
-    # config and abort the deploy loudly -- git has already advanced, so the old
-    # containers keep serving until SITE_DOMAIN is fixed and ./update.sh re-run.
+    # An empty SITE_DOMAIN renders `server_name ;`, which nginx rejects: abort rather than
+    # overwrite a possibly-good config. Git has already advanced, so the old containers keep
+    # serving until SITE_DOMAIN is fixed and ./update.sh re-run.
     if [ -z "$site_domain" ]; then
         echo "Update failed: SITE_DOMAIN is empty; refusing to render $output (would break nginx)."
         echo "Set SITE_DOMAIN in .env and re-run ./update.sh. Containers were NOT restarted."
@@ -232,12 +226,10 @@ render_nginx_domain() {
 }
 
 backup_certs() {
-    # Snapshot the cert store before any deploy touches containers. swag responds
-    # to certain conditions (cert param changes, its start-time chain checks) by
-    # REVOKING and deleting the live cert, and the CA rate-limits reissues -- in
-    # the 2026-07-20 outage that meant no new cert for a week. Archives are a few
-    # KB; keep them all. Failure is a warning, not fatal: the param guard below is
-    # the real protection, this is the recovery path if something slips past it.
+    # Snapshot the cert store before any deploy touches containers: swag revokes and deletes the
+    # live cert on a cert-param change or a failed start-time chain check, and the CA rate-limits
+    # reissues -- a week with no cert in the 2026-07-20 outage. Archives are a few KB, so keep them
+    # all. Failure is a warning: the param guard below is the protection, this is the recovery.
     local backup_dir="$HOME/cert-backups"
     local members=()
     [ -d ./swag/etc/letsencrypt ] && members+=(swag/etc/letsencrypt)
@@ -252,10 +244,9 @@ backup_certs() {
     fi
 }
 
-# Preflight: a custom NGINX_IMAGE (prod uses lscr.io/linuxserver/swag) without
-# NGINX_TAG resolves to swag:<default tag>, which only exists for the stock dev
-# nginx image -- the deploy would then die at `docker compose pull`, AFTER git has
-# already advanced. Fail here instead, before anything changes.
+# Preflight: a custom NGINX_IMAGE (prod uses swag) with no NGINX_TAG resolves to a tag that only
+# exists for the stock dev nginx image, so the deploy dies at `docker compose pull` -- after git
+# has already advanced. Fail here, before anything changes.
 if [ -f "$ENV_FILE" ]; then
     nginx_image="$(get_env_value "NGINX_IMAGE")"
     nginx_tag="$(get_env_value "NGINX_TAG")"
@@ -268,14 +259,11 @@ if [ -f "$ENV_FILE" ]; then
     fi
 fi
 
-# Preflight: swag REVOKES and deletes the live certificate whenever any cert
-# parameter it receives differs from the previous run (recorded in
-# swag/.donoteditthisfile.conf), then requests a fresh one -- and the CA
-# rate-limits reissues, so an accidental change can take HTTPS down for days
-# (the 2026-07-20 outage). Compare what this deploy will send against what swag
-# recorded, and refuse to continue on any drift. The file only exists where swag
-# has run (prod), so dev installs skip this. Sourcing is safe: it contains one
-# line of ORIG*="..." assignments, written by swag itself.
+# Preflight: swag revokes and deletes the live certificate whenever a cert parameter differs from
+# the previous run (recorded in swag/.donoteditthisfile.conf), and CA rate limits can then leave
+# the site without HTTPS for days (the 2026-07-20 outage). Compare what this deploy would send
+# against what swag recorded, and refuse on any drift. The file only exists where swag has run, so
+# dev skips this; sourcing it is safe, being one line of ORIG*="..." written by swag itself.
 if [ -f "$ENV_FILE" ] && [ -f ./swag/.donoteditthisfile.conf ]; then
     # shellcheck source=/dev/null
     . ./swag/.donoteditthisfile.conf
@@ -286,10 +274,9 @@ if [ -f "$ENV_FILE" ] && [ -f ./swag/.donoteditthisfile.conf ]; then
             cert_param_drift="${cert_param_drift}  ${label}: swag recorded '${recorded}', this deploy would send '${sending}'"$'\n'
         fi
     }
-    # Expected values mirror the nginx service env in docker-compose.yaml: URL and
-    # EMAIL interpolate from .env, VALIDATION is hardcoded http, CERTPROVIDER
-    # passes through, and the rest are never set (swag records SUBDOMAINS and
-    # EXTRA_DOMAINS as empty when unset). Update this list if compose changes.
+    # These mirror the nginx service env in docker-compose.yaml: URL and EMAIL from .env,
+    # VALIDATION hardcoded, CERTPROVIDER passed through, and the rest never set. Update the list
+    # if compose changes.
     check_cert_param "URL (SITE_DOMAIN in .env)" "$(get_env_value "SITE_DOMAIN")" "${ORIGURL-}"
     check_cert_param "EMAIL (ADMIN_EMAIL in .env)" "$(get_env_value "ADMIN_EMAIL")" "${ORIGEMAIL-}"
     check_cert_param "CERTPROVIDER (in .env)" "$(get_env_value "CERTPROVIDER")" "${ORIGCERTPROVIDER-}"
@@ -326,10 +313,8 @@ if [[ "$response" != "y" ]]; then
 fi
 
 git restore .
-# A plain `git pull` silently deploys whatever branch is checked out. Pin the ref
-# (override with DEPLOY_BRANCH) so the deployed branch is explicit, and use
-# --ff-only so a branch that has diverged from its remote fails loudly instead of
-# creating a merge commit / conflict on the server.
+# A plain `git pull` silently deploys whatever branch is checked out. Pin the ref (override with
+# DEPLOY_BRANCH), and use --ff-only so a diverged branch fails instead of merging on the server.
 if [ "$deploy_branch" != "$current_branch" ]; then
     if ! git checkout "$deploy_branch"; then
         echo "Update failed: could not checkout '$deploy_branch'. Docker services were not restarted."
@@ -351,24 +336,19 @@ set_env_value "SETUP_COMPLETE" "\"1\""
 render_nginx_domain
 backup_certs
 
-# Refresh base images so security patches actually arrive. `up --build` alone
-# never re-pulls tags that already exist locally, so pinned images (mariadb,
-# redis, nginx/swag) and the python base in our Dockerfile's FROM would be frozen
-# at whatever was first pulled. `pull` refreshes the pre-built service images;
-# `build --pull` re-pulls the base image referenced by FROM before building ours.
+# Refresh base images so security patches actually arrive: `up --build` never re-pulls tags that
+# already exist locally, so mariadb, redis, nginx/swag and the python base in our FROM would be
+# frozen at whatever was first pulled. `pull` refreshes the pre-built service images; `build
+# --pull` re-pulls the FROM base before building ours.
 #
 # --ignore-buildable is REQUIRED. web/celery_worker/celery_beat carry an explicit
-# `image: ${APP_IMAGE-fishauctions-app}` so CI can build that one tag once and have
-# all three find it. That tag is built HERE and pushed to no registry, so a plain
-# `docker compose pull` tries to fetch it from Docker Hub and the whole deploy dies
-# on "pull access denied for fishauctions-app" -- after git has already advanced.
-# The flag skips every service with a build section, leaving this step doing the job
-# it exists for (mariadb, redis, nginx/swag) and still failing loudly on a real
-# registry error, which --ignore-pull-failures would have swallowed.
+# `image: ${APP_IMAGE-fishauctions-app}` so CI can build that tag once and all three find it. It
+# is pushed to no registry, so a plain pull tries Docker Hub and the deploy dies on "pull access
+# denied" -- after git has advanced. The flag skips every service with a build section and still
+# fails loudly on a real registry error, which --ignore-pull-failures would have swallowed.
 #
-# From here on git has already advanced, so on any failure say so explicitly:
-# the old containers are still running the previous build, and re-running
-# ./update.sh after fixing the error is the recovery path.
+# From here on git has advanced, so every failure below says so: the old containers are still
+# serving the previous build, and re-running ./update.sh after fixing the error is the recovery.
 if ! docker compose pull --ignore-buildable; then
     echo "Update failed during 'docker compose pull' (registry error or bad image tag in .env)."
     echo "Code was already updated by git, but containers were NOT restarted -- the site is"
@@ -381,24 +361,18 @@ if ! docker compose build --pull; then
     echo "Fix the error above and re-run ./update.sh."
     exit 1
 fi
-# --force-recreate is REQUIRED, not optional. App code is bind-mounted (not baked
-# into the image), so a routine code-only deploy rebuilds a byte-identical image and
-# a plain `up -d` recreates NOTHING -- gunicorn/celery keep serving the pre-pull code
-# until manually restarted. Worse, nginx proxies to a STATIC `proxy_pass http://web:8000`
-# (nginx_fishauctions.conf), resolving web's container IP once at startup; if web is
-# ever replaced without nginx also restarting, nginx proxies to a dead IP. Recreating
-# the whole graph fixes both: every app container restarts with fresh code, and nginx
-# (which depends_on web) comes up AFTER web and re-resolves its current IP. This is why
-# past deploys needed a manual `docker compose restart` -- that bounced nginx too.
-# --wait makes compose block until every service is running (healthy, where a
-# healthcheck exists) and FAIL otherwise, instead of returning success while part
-# of the graph never started. That partial-graph case is real: after a
-# force-recreate, mariadb can spend minutes on crash recovery/upgrade checks; the
-# dependency wait on its healthcheck times out, compose abandons web/nginx, and
-# the deploy "succeeds" with the site down -- historically fixed by hand with a
-# follow-up `docker compose up -d`. That exact follow-up is automated below as a
-# single retry: by then the slow dependency is usually healthy, so the retry just
-# starts the abandoned services.
+# --force-recreate is REQUIRED. App code is bind-mounted rather than baked into the image, so a
+# code-only deploy rebuilds a byte-identical image and a plain `up -d` recreates NOTHING --
+# gunicorn and celery keep serving the pre-pull code. Worse, nginx proxies to a static
+# `proxy_pass http://web:8000` (nginx_fishauctions.conf) and resolves web's IP once at startup, so
+# replacing web without restarting nginx leaves nginx pointed at a dead IP. Recreating the whole
+# graph fixes both: nginx depends_on web, so it comes up after it and re-resolves.
+#
+# --wait blocks until every service is running -- healthy, where there is a healthcheck -- and
+# fails otherwise, rather than returning success with half the graph down. That case is real:
+# after a force-recreate mariadb can spend minutes on crash recovery, the dependency wait times
+# out, and compose abandons web and nginx. The manual `docker compose up -d` that used to fix it
+# is the single retry below, by which point the slow dependency is usually healthy.
 if ! docker compose up -d --force-recreate --wait --wait-timeout 600; then
     echo "'docker compose up' did not reach a healthy state. Current status:"
     docker compose ps --all
@@ -412,10 +386,9 @@ if ! docker compose up -d --force-recreate --wait --wait-timeout 600; then
     fi
 fi
 
-# Final proof, not vibes: hit the site through nginx from the host. Any response
-# below 500 counts (the https redirect and login pages are fine) -- the goal is
-# catching "deploy finished but the site is down" while the operator is still at
-# the keyboard, not hours later.
+# Proof: hit the site through nginx from the host. Anything below 500 counts, the https redirect
+# and the login page included; the point is catching "deploy finished but the site is down" while
+# the operator is still at the keyboard.
 if command -v curl >/dev/null; then
     site_port="$(get_env_value "HTTP_PORT")"
     site_port="${site_port:-80}"

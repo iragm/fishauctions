@@ -33,13 +33,11 @@ class Command(BaseCommand):
             self.stdout.write(self.style.WARNING("Running in FAKE mode - no emails will be sent, no counters updated"))
 
         now = timezone.now()
-        # get any users who have opted into the weekly email
-        # Both windows are deliberate, and the six days is the one that looks like a bug.
-        # Somebody who has been on the site this week already knows what auctions are running; this
-        # email exists for the people who have not been, which makes its audience the semi-lapsed by
-        # construction and makes it the site's one re-engagement channel. Confirmed 2026-09-09;
-        # USABILITY.md phase 2 builds on it. The 400 days at the other end is the point where
-        # somebody is gone rather than quiet.
+        # Users who opted into the weekly email. Both windows are deliberate, and the six days is
+        # the one that looks like a bug: somebody who has been on the site this week already knows
+        # what is running, so this email's audience is the semi-lapsed by construction, which makes
+        # it the site's one re-engagement channel (confirmed 2026-09-09; USABILITY.md phase 2 builds
+        # on it). The 400 days at the other end is where somebody is gone rather than quiet.
         exclude_newer_than = now - datetime.timedelta(days=6)
         exclude_older_than = now - datetime.timedelta(days=400)
         in_person_auctions_cutoff = now + datetime.timedelta(days=7)
@@ -66,13 +64,13 @@ class Command(BaseCommand):
 
         for user in users:
             try:
-                # App users who opted into push get promoted auctions as notifications via
-                # promo_push_notifications instead of this weekly email — skip them here.
+                # App users who opted into push get promoted auctions through
+                # promo_push_notifications instead.
                 if user.userdata.user_prefers_push():
                     emails_skipped += 1
                     continue
 
-                # If schedule not yet initialized, set it up and skip sending this run
+                # No schedule yet: set one up and skip this run.
                 if user.userdata.next_promo_email_at is None:
                     if not fake_mode:
                         user.userdata.set_next_promo()

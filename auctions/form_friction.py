@@ -1,28 +1,21 @@
 """The view mixin that writes :class:`auctions.friction_models.FormFailure` rows.
 
-Add ``FormFrictionMixin`` **first** in a form view's bases and it records every rejected
-submission, and marks the run resolved when the person finally gets through:
+Add ``FormFrictionMixin`` **first** in a form view's bases and it records every rejected submission
+and marks the run resolved when the person gets through::
 
     class AuctionUpdate(FormFrictionMixin, LoginRequiredMixin, AuctionViewMixin, UpdateView):
 
-First, because it works by overriding ``form_valid``/``form_invalid`` and calling ``super()`` --
-behind Django's own ``FormMixin`` in the MRO it would never be reached.
-``test_form_friction.FormFrictionWiringTests`` checks the ordering on every view that uses it, so
-a view that adds it in the wrong place fails the build rather than silently measuring nothing.
+First, because it overrides ``form_valid``/``form_invalid`` and calls ``super()``: behind Django's
+own ``FormMixin`` it would never be reached. ``test_form_friction.FormFrictionWiringTests`` checks
+the ordering on every view that uses it.
 
-Three things this deliberately does not do:
+Three things it deliberately doesn't do: **swallow anything** (every write is inside ``try``, since
+an instrument that can 500 a form is worse than none, and this runs on the error path); **store what
+anybody typed** (field names and error codes only); and **count a fresh GET as an attempt** (the
+counter is in the session and only ``form_invalid`` moves it).
 
-* **It does not swallow anything.** Every write is inside ``try``: an instrument that can 500 a
-  form is worse than no instrument, and this one runs on the error path, which is where the
-  unusual state already is.
-* **It does not store what anybody typed.** Field names and Django error codes only. See the
-  module docstring on ``friction_models``.
-* **It does not count a fresh GET as an attempt.** The counter lives in the session, keyed by form,
-  and only ``form_invalid`` moves it.
-
-The session counter is what makes ``attempt`` mean "in a row" rather than "ever", and it is also
-what closes a run out: ``form_valid`` marks this person's open failures on this form resolved and
-clears the key, so a run is bounded by either a success or the end of the session.
+That counter is what makes ``attempt`` mean "in a row": ``form_valid`` marks this person's open
+failures on this form resolved and clears the key, so a run ends with a success or the session.
 """
 
 from __future__ import annotations
@@ -35,28 +28,26 @@ from django.utils import timezone
 logger = logging.getLogger(__name__)
 
 SESSION_KEY = "form_friction_attempts"
-# Namespace for the token the page posts back when somebody leaves a form unsaved. It is signed so
-# the endpoint's vocabulary is exactly "forms this server actually rendered for this person": the
-# beacon is unauthenticated by necessity (it fires as the page goes away), and without this it
-# would accept any form name anybody cared to invent.
+# Namespace for the token the page posts back when somebody leaves a form unsaved. Signed, so the
+# endpoint's vocabulary is exactly the forms this server rendered for this person: the beacon is
+# unauthenticated by necessity and would otherwise accept any form name.
 ABANDON_SALT = "auctions.form_friction.abandon"
 ABANDON_TOKEN_MAX_AGE = 60 * 60 * 12
-# Field names posted with an abandonment. A form has 43 fields; anything past this is not a person.
+# Field names posted with an abandonment. A form has 43 fields; past this it is not a person.
 MAX_ABANDONED_FIELDS = 60
-# One abandonment row per form per session. Somebody who opens the settings page five times and
-# closes it five times is one story, not five, and this endpoint takes no authentication.
+# One abandonment row per form per session: somebody who opens a page five times and closes it five
+# times is one story, and this endpoint takes no authentication.
 ABANDON_SESSION_KEY = "form_friction_abandoned"
-# Past this, the run is not telling us anything new -- somebody is holding the enter key, or a
-# script is. Rows stop being written; the counter stops climbing.
+# Past this the run says nothing new -- somebody is holding the enter key, or a script is.
 MAX_ATTEMPTS_RECORDED = 10
 
 
 def error_codes(form) -> dict[str, list[str]]:
     """``{field name: [error code, ...]}`` for a rejected form.
 
-    Codes rather than messages: a code is what groups. ``as_data()`` is the only place Django keeps
-    them -- ``form.errors`` has already rendered the messages, and a message carries whatever the
-    validator interpolated into it, which can be the value somebody typed.
+    Codes rather than messages, because a code is what groups, and ``as_data()`` is the only place
+    Django keeps them: a rendered message carries whatever the validator interpolated, which can be the
+    value somebody typed.
     """
     codes: dict[str, list[str]] = {}
     try:
@@ -68,14 +59,12 @@ def error_codes(form) -> dict[str, list[str]]:
 
 
 def _who(request, create_session=False):
-    """``(user, session_id)``: whichever of the two identifies this person.
+    """``(user, session_id)``: whichever identifies this person.
 
-    A signed-out visitor is joined up by session key, the same way ``PageView`` does it -- and a
-    visitor on their first request has no key yet, so recording a failure has to force one. Without
-    that, every anonymous first bounce is stored under ``session_id=""``: it can never be resolved,
-    it is counted as "never finished" for ever, and worse, one anonymous person's success would
-    resolve every *other* anonymous person's empty-session failures at once. Somebody submitting a
-    form is a person, not a crawler, which is the case the session write was being saved for.
+    A signed-out visitor is joined up by session key, as ``PageView`` does it, and a visitor on their
+    first request has no key yet -- so recording a failure forces one. Without that, every anonymous
+    first bounce is stored under ``session_id=""``, can never be resolved, and one anonymous person's
+    success would resolve every other anonymous person's failures at once.
     """
     user = getattr(request, "user", None)
     user = user if (user is not None and user.is_authenticated) else None
@@ -105,8 +94,8 @@ class FormFrictionMixin:
     def get_context_data(self, **kwargs):
         """Hand the page a signed form name, which is what lets it report being abandoned.
 
-        base.html renders this into a marker element whenever it is present, so adding the mixin to
-        a view is the whole of instrumenting it -- there is no template to remember to edit.
+        base.html renders it into a marker element whenever it is present, so adding the mixin is the whole
+        of instrumenting a view.
         """
         context = super().get_context_data(**kwargs)
         try:
@@ -166,14 +155,14 @@ class FormFrictionMixin:
         session = getattr(request, "session", None)
         attempts = (session.get(SESSION_KEY) or {}) if session is not None else {}
         if not attempts.get(form_name):
-            # Got it right first time, which is the case this table has nothing to say about.
+            # Got it right first time, which this table has nothing to say about.
             return 0
         del attempts[form_name]
         session[SESSION_KEY] = attempts
         user, session_id = _who(request)
         if user is None and not session_id:
-            # Nothing identifies this person, so there is no run of theirs to close. Resolving on
-            # an empty session id would mark every anonymous failure on the site resolved.
+            # Nothing identifies this person, so there is no run to close. Resolving on an empty
+            # session id would mark every anonymous failure on the site resolved.
             return 0
         rows = FormFailure.objects.filter(form_name=form_name, resolved=False)
         rows = rows.filter(user=user) if user is not None else rows.filter(session_id=session_id, user__isnull=True)

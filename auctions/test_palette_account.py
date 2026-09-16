@@ -1,13 +1,11 @@
 """The rest of the account, and the auction and club setup pages behind it.
 
-``update_preferences`` covered the Preferences tab and nothing else, so the four other pages the
-preferences ribbon links to -- contact info, username, label printing, ignore categories -- were
-reachable only by being sent to them. The same was true of an auction's pickup locations, its custom
-fields, its label layout and its volunteer requests, and of three of a club's four settings pages.
+``update_preferences`` covered the Preferences tab only, so the four other pages the ribbon linked to
+were reachable only by being sent to them -- as were an auction's pickup locations, custom fields,
+label layout and volunteer requests, and three of a club's four settings pages.
 
-Each test here is one of those, plus the two things about them that are easy to get wrong: contact
-details are copied into every auction and club that holds them, and a map marker must never be
-guessed from an address.
+Each test here is one of those, plus the two things easy to get wrong: contact details are copied
+into every auction and club that holds them, and a map marker must never be guessed from an address.
 """
 
 import json
@@ -32,10 +30,10 @@ class AccountTestCase(PaletteAssistTestCase):
         return palette_actions.run_action(request, action, params or {})
 
     def _fill_in_contact_info(self):
-        """What somebody who has used the contact info page once already looks like.
+        """What somebody who has used the contact info page once looks like.
 
-        The form requires a name and an address whatever else is being changed, so without this
-        every test below would be testing that rule rather than the thing it is about.
+        The form requires a name and address whatever else is changing, so without this every test below
+        would be testing that rule.
         """
         self.user.first_name = "Ada"
         self.user.last_name = "Bidder"
@@ -124,7 +122,7 @@ class ContactInfoTests(AccountTestCase):
         self.assertAlmostEqual(self.user.userdata.longitude, -71.06, places=2)
 
     def test_an_address_is_never_turned_into_a_marker(self):
-        """The edge case: nothing on this site geocodes, so a marker must not follow an address."""
+        """Nothing on this site geocodes, so a marker must not follow an address."""
         result = self._run("update_contact_info", {"location_coordinates": "12 Mill Lane, Boston"})
         self.assertIn("more_info_needed", result)
         self.assertIn("latitude", result["more_info_needed"])
@@ -172,7 +170,7 @@ class UsernameTests(AccountTestCase):
         self.assertEqual(self.user.username, "riverbend")
 
     def test_the_at_symbol_rule_is_the_forms_own(self):
-        """``validate_username_no_at_symbol`` -- the same rule every allauth signup applies."""
+        """``validate_username_no_at_symbol``: the rule every allauth signup applies."""
         result = self._run("update_username", {"username": "ada@example.com"})
         self.assertNotIn("ok", result)
         self.user.refresh_from_db()
@@ -211,7 +209,7 @@ class PrintingPreferenceTests(AccountTestCase):
 
 
 class LotFieldTests(AccountTestCase):
-    """The two per-lot fields the catalogue could not reach, and the auction's own names for them."""
+    """The two per-lot fields the catalogue couldn't reach, and the auction's own names for them."""
 
     def setUp(self):
         super().setUp()
@@ -222,7 +220,7 @@ class LotFieldTests(AccountTestCase):
         self.auction.save()
 
     def _lot(self):
-        """The fixture's first lot. Its seller is ``online_tos``, which is the admin's row."""
+        """The fixture's first lot; its seller is ``online_tos``, the admin's row."""
         return self.lot
 
     def test_the_auctions_own_name_for_the_checkbox_is_reported(self):
@@ -231,10 +229,9 @@ class LotFieldTests(AccountTestCase):
         self.assertEqual(fields.get("custom_checkbox", {}).get("label"), "CARES species")
 
     def test_the_reference_link_says_a_video_is_embedded(self):
-        """Said in describe_auction briefly and in the parameter documentation at length.
-
-        The long version cost 168 characters of a 5000-character budget that describe_auction sends
-        on every lookup, and truncated the auction's rules off the end of it.
+        """The reference link says a video is embedded, briefly in describe_auction and at length in the
+        parameter documentation -- the long version cost 168 characters of a 5000-character budget and
+        truncated the auction's rules.
         """
         result = self._run("describe_auction", {"auction": self.auction.slug})
         fields = result["auction"]["lot_fields_this_auction_uses"]
@@ -267,7 +264,7 @@ class LotFieldTests(AccountTestCase):
         self.assertIn("error", result)
 
     def test_a_field_the_auction_switched_off_is_refused_rather_than_saved(self):
-        """The form hides a disabled field instead of deleting it, so it would otherwise be saved."""
+        """The form hides a disabled field rather than deleting it, so it would otherwise be saved."""
         self.auction.use_custom_checkbox_field = False
         self.auction.save()
         lot = self._lot()
@@ -320,8 +317,9 @@ class AuctionSetupTests(AccountTestCase):
         self.assertEqual(self.location.address, "9 New Road")
 
     def test_a_location_with_no_map_marker_says_that_rather_than_talking_about_a_map(self):
-        """``PickupLocationForm`` refuses every field until there is a marker; it says so in a
-        sentence about a map that is not here."""
+        """``PickupLocationForm`` refuses every field until there is a marker, in a sentence about a map that
+        isn't here.
+        """
         result = self._run(
             "update_pickup_location",
             {"auction": self.auction.slug, "location": self.location.name, "setting": "address", "value": "9 New Road"},
@@ -551,12 +549,11 @@ class ClubSetupTests(AccountTestCase):
 
 
 class EverySettingIsReachableTests(AccountTestCase):
-    """The guards that keep this from rotting the day somebody adds a club feature.
+    """The guards that keep this from rotting when somebody adds a club feature.
 
-    ``test_palette_skills`` already fails the build when a view accepting a POST is neither a skill
-    nor written down in ``NOT_A_SKILL``. These are the same idea one level down: a settings *form*
-    that no tool can reach, and a feature in ``club_setup`` that points at nothing, are both things
-    that pass that audit and are still broken — the page is a skill, the setting on it isn't.
+    ``test_palette_skills`` fails the build when a POST view is neither a skill nor in ``NOT_A_SKILL``;
+    these are the same idea one level down -- a settings form no tool can reach, and a ``club_setup``
+    feature pointing at nothing, both pass that audit and are still broken.
     """
 
     def test_every_club_settings_form_is_reachable_or_has_a_written_reason(self):
@@ -591,7 +588,7 @@ class EverySettingIsReachableTests(AccountTestCase):
                 self.assertIn(name, index, f"{name} is on the {label} form but cannot be named")
 
     def test_every_club_feature_points_at_something_real(self):
-        """A survey row whose 'how to turn it on' names a tool that doesn't exist is worse than none."""
+        """A survey row whose "how to turn it on" names a tool that doesn't exist is worse than none."""
         for feature in palette_actions._CLUB_FEATURES:
             for setting in feature.get("settings", ()):
                 self.assertIsNotNone(
@@ -607,7 +604,7 @@ class EverySettingIsReachableTests(AccountTestCase):
             self.assertTrue(palette_actions._how_to_turn_it_on(feature), f"{feature['key']} says nothing")
 
     def test_the_only_features_with_no_tool_are_the_ones_needing_a_browser(self):
-        """Every 'go to the page' row is an OAuth sign-in with somebody else, and says so."""
+        """Every "go to the page" row is an OAuth sign-in with somebody else, and says so."""
         for feature in palette_actions._CLUB_FEATURES:
             if feature.get("settings") or feature.get("tool"):
                 continue
@@ -652,7 +649,7 @@ class ClubIntegrationTests(AccountTestCase):
         self.assertFalse(self.club.add_auctions_to_calendar)
 
     def test_donation_tracking_is_a_setting_too(self):
-        """And turning it on asks for the address a receipt needs, which is the form's own rule."""
+        """Turning donation tracking on asks for the address a receipt needs, which is the form's own rule."""
         first = self._run(
             "update_club_setting", {"club": self.club.name, "setting": "enable_donation_tracking", "value": True}
         )
@@ -697,10 +694,9 @@ class ClubIntegrationTests(AccountTestCase):
 class ClubAPIToolTests(AccountTestCase):
     """``club_api``: what a club's own API can do, read by whoever is about to write against it.
 
-    The tool exists so an agent asked for "an integration that puts our lots on our website" can
-    find out what is already there instead of guessing at endpoints. So the tests are mostly about
-    the two halves of that: what it says about the keys, and that the documentation it hands over
-    is the page's own and still fits in one answer.
+    It exists so an agent asked for "an integration that puts our lots on our website" can find out what
+    is there instead of guessing at endpoints, so the tests are about what it says about the keys and
+    that the documentation fits in one answer.
     """
 
     def setUp(self):
@@ -754,7 +750,7 @@ class ClubAPIToolTests(AccountTestCase):
         self.assertNotIn("species-lookup", documentation)
 
     def test_every_topic_still_fits_in_one_mcp_result(self):
-        """The reason the documentation is cut into topics at all. Whole, it does not fit."""
+        """Why the documentation is cut into topics at all: whole, it does not fit."""
         for topic in palette_actions._API_TOPICS:
             result = self._run("club_api", {"club": self.club.name, "topic": topic})
             self.assertTrue(result["documentation"], f"{topic} documented nothing")
@@ -776,7 +772,7 @@ class ClubAPIToolTests(AccountTestCase):
         self.assertIn("Can use species", result["error"])
 
     def test_a_whole_key_pasted_in_matches_on_its_prefix_and_the_secret_goes_nowhere(self):
-        """The commonest way an agent will name a key is by copying one out of a config file."""
+        """The commonest way an agent names a key is by copying one out of a config file."""
         result = self._run("club_api", {"club": self.club.name, "key": self.raw_key})
         self.assertTrue(result.get("found"), result)
         self.assertNotIn(self.raw_key.split(".", 1)[-1], json.dumps(result))
@@ -787,7 +783,9 @@ class ClubAPIToolTests(AccountTestCase):
         self.assertIn("WordPress", result["error"])
 
     def test_a_club_with_no_keys_is_pointed_at_the_page_that_makes_one(self):
-        """It cannot make one, on purpose: the tick boxes are fixed for the life of the key."""
+        """A club with no keys is pointed at the page that makes one; it cannot make one, since the tick boxes
+        are fixed for the life of the key.
+        """
         self.key.delete()
         result = self._run("club_api", {"club": self.club.name})
         self.assertEqual(result["keys"], [])
@@ -795,7 +793,7 @@ class ClubAPIToolTests(AccountTestCase):
         self.assertEqual(ClubAPIKey.objects.filter(club=self.club).count(), 0)
 
     def test_somebody_who_cannot_edit_the_club_cannot_read_its_keys(self):
-        """The page needs permission_edit_club, and so does this. An ordinary member is not enough."""
+        """The page needs permission_edit_club, and so does this: an ordinary member is not enough."""
         ClubMember.objects.create(club=self.club, user=self.userB, name="Bob Member", email=self.userB.email)
         result = self._run("club_api", {"club": self.club.name}, user=self.userB)
         self.assertNotIn("found", result)
@@ -822,7 +820,7 @@ class ClubAPIToolTests(AccountTestCase):
             self.assertIn(label, page, f"“{label}” is not what the create page calls it any more")
 
     def test_the_tool_is_read_only(self):
-        """It reads credentials' permissions. Nothing here may be offered to a write-shaped caller."""
+        """It reads credentials' permissions, so nothing here may be offered to a write-shaped caller."""
         action = palette_actions.ACTIONS["club_api"]
         self.assertEqual(action.danger, palette_actions.DANGER_SAFE)
         self.assertTrue(mcp_tools.read_only(action))

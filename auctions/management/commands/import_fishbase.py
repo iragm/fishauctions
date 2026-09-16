@@ -1,24 +1,22 @@
 """Load the species picklist from a pinned FishBase snapshot, plus the curated aquarium list.
 
-    manage.py import_fishbase                 # the whole picklist: FishBase + the curated list
+    manage.py import_fishbase                 # FishBase plus the curated list
     manage.py import_fishbase --check-version # is there a newer snapshot?
     manage.py import_fishbase --dry-run       # parse and report, write nothing
-    manage.py import_fishbase --databases slb # opt in to SeaLifeBase as well
+    manage.py import_fishbase --databases slb # opt in to SeaLifeBase
     manage.py import_fishbase --purge slb     # delete rows from a source nothing points at
 
 Reads ``species.parquet``, ``comnames.parquet`` and ``families.parquet`` (joined on SpecCode and
-FamCode; see :mod:`auctions.fishbase` for why the version is pinned). Known misspellings are
-dropped. Rows are matched on (source, SpecCode) so re-running updates in place.
+FamCode; :mod:`auctions.fishbase` says why the version is pinned). Known misspellings are dropped,
+and rows are matched on (source, SpecCode) so a re-run updates in place.
 
-Two idempotent passes run after the download, and can be run alone when only the mapping/list has
-changed (``--only-categories``, ``--only-curated``): the **curated aquarium list**
-(:mod:`auctions.aquarium_species` -- plants, inverts, live foods, cultivars FishBase lacks) and
-**categories** (:mod:`auctions.species_categories` -- family/order mapped onto site Category rows).
+Two idempotent passes follow, and can be run alone (``--only-categories``, ``--only-curated``): the
+curated aquarium list (:mod:`auctions.aquarium_species`) and categories
+(:mod:`auctions.species_categories`).
 
-One more only matters the first time: **legacy rows**, hand-typed leftovers from the old
-``Product`` table. Matched by scientific name; lots pointing at a match move onto the real row and
-the leftover is deleted, otherwise it's left with genus/epithet filled in so it searches properly.
-``--keep-legacy`` skips it.
+One more only matters the first time: legacy hand-typed ``Product`` rows, matched by scientific
+name. Lots pointing at a match move onto the real row and the leftover is deleted; otherwise it
+keeps genus and epithet so it still searches. ``--keep-legacy`` skips it.
 """
 
 import io
@@ -37,7 +35,7 @@ from auctions.species_categories import assign_categories
 
 logger = logging.getLogger(__name__)
 
-#: Only these become searchable common names; FishBase's 300+ languages would bloat English search.
+#: Only these become searchable names; FishBase's 300+ languages would bloat English search.
 DEFAULT_LANGUAGES = ("English",)
 
 #: Rows per bulk_create batch: fast, without blowing max_allowed_packet.
@@ -45,7 +43,7 @@ BATCH_SIZE = 2000
 
 
 def _strip_nulls(value):
-    """Return *value* as a clean string, stripped of the embedded null bytes MySQL rejects on insert."""
+    """*value* as a clean string, without the null bytes MySQL rejects on insert."""
     if value is None:
         return ""
     return str(value).replace("\x00", "").strip()
@@ -226,7 +224,7 @@ class Command(BaseCommand):
             return
         changed, resolver = assign_categories()
         self.stdout.write(f"  {changed} species categorised")
-        # The whole mapping, not just the failures -- an unexpected match is the interesting bug.
+        # The whole mapping, not just failures: an unexpected match is the interesting bug.
         for hint, category in resolver.report():
             self.stdout.write(f"    {hint:<26} -> {category.name if category else '—'}")
         counts = {
@@ -246,8 +244,8 @@ class Command(BaseCommand):
     def _merge_legacy(self, *, dry_run=False):
         """Fold old hand-typed ``Product`` rows (``source="manual"``, no SpecCode) into the imported list.
 
-        Matched on scientific name only; anything that doesn't match is left alone with genus and
-        epithet split out so it at least turns up in a search.
+        Matched on scientific name only; anything else is left alone with genus and epithet split out so it
+        turns up in a search.
         """
         legacy = list(Species.objects.filter(source="manual", speccode__isnull=True))
         if not legacy:
@@ -286,7 +284,7 @@ class Command(BaseCommand):
             self.stdout.write(self.style.WARNING("Dry run — nothing written."))
 
     def _purge(self, source, *, dry_run):
-        """Delete every unused species from one source.  Lots keep whatever they point at."""
+        """Delete every unused species from one source; lots keep whatever they point at."""
         source = DATABASES.get(source, source)
         queryset = Species.objects.filter(source=source)
         total = queryset.count()
@@ -294,7 +292,7 @@ class Command(BaseCommand):
             self.stdout.write(f"No species with source={source}.")
             return
         in_use = set(Lot.objects.filter(species__source=source).values_list("species_id", flat=True).distinct())
-        # A parent with children counts as in use too, since a variety cascades with it.
+        # A parent with children counts as in use, since a variety cascades with it.
         in_use |= set(Species.objects.filter(parent__source=source).values_list("parent_id", flat=True).distinct())
         removable_pks = list(queryset.exclude(pk__in=in_use).values_list("pk", flat=True))
         self.stdout.write(
@@ -303,7 +301,7 @@ class Command(BaseCommand):
         if dry_run:
             self.stdout.write(self.style.WARNING("Dry run — nothing written."))
             return
-        # In batches: a single delete() over 100k species pulls every related row into memory.
+        # In batches: one delete() over 100k species pulls every related row into memory.
         for index in range(0, len(removable_pks), BATCH_SIZE):
             batch = removable_pks[index : index + BATCH_SIZE]
             SpeciesCommonName.objects.filter(species_id__in=batch).delete()
@@ -343,7 +341,7 @@ class Command(BaseCommand):
         return table.column(name).to_pylist()
 
     def _families(self, parquet, version, database):
-        """``{famcode: (family, order)}``, joined on FamCode; a snapshot without it leaves family/order blank."""
+        """``{famcode: (family, order)}``; a snapshot without it leaves family and order blank."""
         try:
             table = self._read(parquet, "families", version, database)
         except httpx.HTTPError:
@@ -389,8 +387,8 @@ class Command(BaseCommand):
                 "saltwater": bool(salt[index]),
                 "family": family,
                 "order": order,
-                # Free text ("commercial", "never/rarely"...), interpreted by
-                # Species.AQUARIUM_TRADE_VALUES rather than made a boolean here.
+                # Free text, interpreted by Species.AQUARIUM_TRADE_VALUES rather than made a
+                # boolean here.
                 "aquarium_use": _strip_nulls(aquarium[index])[:30],
                 "source": source,
             }
@@ -435,13 +433,11 @@ class Command(BaseCommand):
     def _save(self, species_rows, common_rows, source):
         """Upsert species by (source, SpecCode), then replace their common names wholesale.
 
-        Keyed on the source as well as the code because FishBase and SeaLifeBase both number their
-        species from 1 -- matching on SpecCode alone makes the second import silently overwrite
-        tens of thousands of rows from the first.
+        Keyed on the source as well as the code because FishBase and SeaLifeBase both number from 1, so
+        matching on SpecCode alone would make the second import overwrite tens of thousands of rows.
 
-        Replacing rather than merging the common names keeps a re-import from accumulating names
-        the source has since removed, and it is cheap: the whole set for one species is a handful
-        of rows.
+        Replacing the names keeps a re-import from accumulating names the source has removed, and the whole
+        set for one species is a handful of rows.
         """
         existing = {
             species.speccode: species for species in Species.objects.filter(source=source, speccode__isnull=False)
@@ -460,7 +456,7 @@ class Command(BaseCommand):
                     setattr(species, field, value)
                     changed = True
             if changed:
-                # Not bulk_update: save() is what rebuilds scientific_name from genus + species.
+                # Not bulk_update: save() rebuilds scientific_name from genus and species.
                 species.save()
                 updated += 1
         for index in range(0, len(to_create), BATCH_SIZE):
@@ -474,12 +470,10 @@ class Command(BaseCommand):
         by_code = {
             species.speccode: species for species in Species.objects.filter(source=source, speccode__in=species_rows)
         }
-        # Replace this snapshot's names, and *only* this snapshot's names.  The extra
-        # ``source=source`` is the whole reason SpeciesCommonName has a source column: without it
-        # this line was the reason no hobby name could ever be added to a FishBase species and
-        # survive.  FishBase has no idea that Labidochromis caeruleus is a "yellow lab" -- it files
-        # it under "Blue streak hap" -- so those names have to be ours, and before this they lasted
-        # exactly until somebody bumped FISHBASE_VERSION and re-ran the import.
+        # Replace this snapshot's names and only this snapshot's names. The ``source=source`` is why
+        # SpeciesCommonName has a source column: without it, no hobby name could be added to a
+        # FishBase species and survive a re-import -- FishBase files Labidochromis caeruleus under
+        # "Blue streak hap", so "yellow lab" has to be ours.
         SpeciesCommonName.objects.filter(
             source=source, species__source=source, species__speccode__in=list(common_rows)
         ).delete()
@@ -493,7 +487,7 @@ class Command(BaseCommand):
                     SpeciesCommonName(
                         species=species,
                         name=name,
-                        # bulk_create skips save(); this column is what every lookup matches on.
+                        # bulk_create skips save(), and this column is what every lookup matches on.
                         name_normalized=normalize_species_name(name),
                         language=language,
                         is_preferred=is_preferred,

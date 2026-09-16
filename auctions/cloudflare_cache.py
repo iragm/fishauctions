@@ -1,19 +1,18 @@
 """Purging a file out of Cloudflare's edge cache.
 
 Separate from :mod:`auctions.cloudflare_images`, which talks to a different API with a different
-token: Images is account-scoped and holds its own copies of uploads, while this is the CDN cache
-sitting in front of the site's own ``/media/`` and needs ``Zone.Cache Purge`` on the zone.
+token: Images is account-scoped and holds its own copies of uploads, while this is the CDN cache in
+front of the site's own ``/media/`` and needs ``Zone.Cache Purge`` on the zone.
 
-It exists for one reason. ``nginx_fishauctions.conf`` serves ``/media/`` with
-``Cache-Control: public, max-age=2592000``, which is right for a file written once under a unique
-name and never edited -- and wrong the moment a file has to *stop* existing. Deleting the row and
-the file leaves the edge handing out the image for another thirty days, and "I deleted it, the CDN
-did not" is not the expeditious removal 17 U.S.C. 512(c)(1)(C) asks for. So a takedown purges.
+It exists for one reason. ``nginx_fishauctions.conf`` serves ``/media/`` with ``Cache-Control:
+public, max-age=2592000``, which is right for a file written once under a unique name and never
+edited -- and wrong the moment a file has to *stop* existing. Deleting the row and the file leaves
+the edge handing out the image for another thirty days, and "I deleted it, the CDN did not" is not
+the expeditious removal 17 U.S.C. 512(c)(1)(C) asks for. So a takedown purges.
 
-Unconfigured is a supported state, not an error: a deployment with no Cloudflare in front of it has
-nothing to purge, and one that has Cloudflare but no purge token still gets the file removed from
-the origin. Both log, and neither raises -- a failed purge must not roll back a deletion that has
-already happened.
+Unconfigured is a supported state: a deployment with no Cloudflare has nothing to purge, and one
+with Cloudflare but no purge token still gets the file off the origin. Both log, neither raises -- a
+failed purge must not roll back a deletion that has already happened.
 """
 
 import logging

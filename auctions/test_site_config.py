@@ -338,11 +338,11 @@ class AuctionEmailFieldsTest(StandardTestCase):
         self.assertIsNotNone(auction.welcome_email_due)
         self.assertFalse(auction.welcome_email_sent)
 
-        # Invoice email should be due 1 hour after auction end (for online auctions)
+        # Online auctions: the invoice email is due an hour after the end.
         self.assertIsNotNone(auction.invoice_email_due)
         self.assertFalse(auction.invoice_email_sent)
 
-        # Follow-up email should be due 24 hours after auction end (for online auctions)
+        # And the follow-up 24 hours after the end.
         self.assertIsNotNone(auction.followup_email_due)
         self.assertFalse(auction.followup_email_sent)
 
@@ -363,7 +363,7 @@ class AuctionEmailFieldsTest(StandardTestCase):
         # Invoice email should be marked as sent for in-person auctions
         self.assertTrue(auction.invoice_email_sent)
 
-        # Follow-up email should be due 24 hours after auction start (for in-person auctions)
+        # In-person auctions: the follow-up is 24 hours after the start.
         self.assertIsNotNone(auction.followup_email_due)
         self.assertFalse(auction.followup_email_sent)
 
@@ -427,7 +427,7 @@ class UserLocationUpdateTests(StandardTestCase):
         self.in_person_tos.save()
 
     def test_recent_auctiontos_updated_on_contact_change(self):
-        """When a user updates their contact info, recent AuctionTOS records should be updated."""
+        """Updating contact info updates recent AuctionTOS records."""
         self.client.login(username="my_lot", password="testpassword")
 
         # Post updated contact info
@@ -578,7 +578,7 @@ class UserLocationUpdateTests(StandardTestCase):
         response = self.client.get("/contact_info/")
         self.assertEqual(response.status_code, 200)
         self.assertIn("auctiontos_update_message", response.context)
-        # When there's only one auction, it shows the auction name, not "1 auction"
+        # With one auction it shows the auction name, not "1 auction".
         self.assertIn(str(self.in_person_auction), response.context["auctiontos_update_message"])
 
     def test_update_message_shown_for_multiple_auctions(self):
@@ -637,7 +637,7 @@ class LoadDemoDataTests(TestCase):
 
     @override_settings(DEBUG=True, SINGLE_CLUB_MODE=False)
     def test_load_demo_data_with_debug_true(self):
-        """Test that demo data loads successfully when DEBUG=True and no auctions exist"""
+        """Demo data loads when DEBUG=True and no auctions exist."""
         from io import StringIO
 
         from django.core.management import call_command
@@ -773,7 +773,7 @@ class AdminReadonlyFieldsTests(StandardTestCase):
         self.assertIn("created_by", admin_instance.readonly_fields)
 
     def test_auctiontos_admin_readonly_fields(self):
-        """Test that AuctionTOSAdmin has user, auction, and pickup_location as readonly"""
+        """AuctionTOSAdmin makes user, auction and pickup_location read-only."""
         from auctions.admin import AuctionTOSAdmin
 
         admin_instance = AuctionTOSAdmin(AuctionTOS, None)

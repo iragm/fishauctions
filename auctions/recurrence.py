@@ -1,18 +1,18 @@
 """Repeating club events.
 
 A repeating event from Google Calendar is stored the way Google stores it: **one row for the
-series**, holding the rule (the RRULE/EXDATE/RDATE lines, verbatim) and the moment the series is
-anchored to. The row's ``date_start``/``date_end`` are kept pointing at the occurrence happening
-now, or the next one — so everything that knows nothing about recurrence keeps working unchanged:
-the club page sorts by ``date_start``, "upcoming" filters on ``date_end``, membership emails pick
-the soonest event, and Discord gets one scheduled event at a time rather than fifty-two.
+series**, holding the rule (RRULE/EXDATE/RDATE, verbatim) and the moment it is anchored to. The
+row's ``date_start``/``date_end`` point at the occurrence happening now, or the next one, so
+everything that knows nothing about recurrence keeps working -- the club page sorts by
+``date_start``, "upcoming" filters on ``date_end``, membership emails pick the soonest, and Discord
+gets one scheduled event rather than fifty-two.
 
-The alternative — asking Google to expand the series (``singleEvents=true``) and storing an event
-per occurrence — is what this replaced. A single never-ending weekly meeting became a row, a club
-page entry, a Discord event and an iCal VEVENT per week, for ever.
+Asking Google to expand the series (``singleEvents=true``) is what this replaced: a never-ending
+weekly meeting became a row, a club page entry, a Discord event and an iCal VEVENT per week, for
+ever.
 
-Only the feed and the push to Google deal in the whole series: both take ``recurrence_start`` as
-DTSTART and hand over the rule itself, so a subscriber's calendar expands it the way Google does.
+Only the feed and the push to Google deal in the whole series: both send ``recurrence_start`` as
+DTSTART and the rule itself, so a subscriber's calendar expands it the way Google does.
 """
 
 from __future__ import annotations

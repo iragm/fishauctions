@@ -32,16 +32,13 @@ class DeviceService:
         app_version: str = "",
         fcm_token: str | None = None,
     ) -> tuple[MobileDevice, bool]:
-        """Create or update a device record for the given user.
+        """Create or update a device record for the given user; returns ``(device, created)``.
 
-        Returns (device, created) — mirrors QuerySet.update_or_create semantics.
-        If device_uuid is already registered to a different user, the record is
-        re-assigned to the current user (handles device re-use after factory reset).
-
-        ``fcm_token`` is upserted when provided (None leaves any existing token untouched, e.g. a
-        registration call that doesn't carry a token). A non-empty token seen on this device is
-        cleared from any *other* device row that still holds it — FCM tokens follow the app install,
-        not the user, so this prevents a stale row pushing to the wrong account on a shared device.
+        A device_uuid registered to a different user is re-assigned to this one, which is what happens after
+        a factory reset. ``fcm_token`` is upserted when given (``None`` leaves an existing token alone), and
+        a non-empty token seen here is cleared from any *other* device row still holding it: FCM tokens
+        follow the app install rather than the user, so on a shared device a stale row would otherwise push
+        to the wrong account.
         """
         device_uuid = DeviceService._coerce_uuid(device_uuid)
 
@@ -72,11 +69,10 @@ class DeviceService:
 
     @staticmethod
     def unregister(user, device_uuid: str | uuid_module.UUID) -> bool:
-        """Clear the FCM token for the user's device (keeps the row for stats).
+        """Clear the FCM token for the user's device, keeping the row for stats; True if one was found.
 
-        Called at sign-out so a signed-out phone stops receiving the previous user's pushes. Returns
-        True if a matching device row was found. Scoped to the calling user so one account can't
-        clear another's token.
+        Called at sign-out, so a signed-out phone stops receiving the previous user's pushes. Scoped to the
+        calling user, so one account can't clear another's token.
         """
         device_uuid = DeviceService._coerce_uuid(device_uuid)
         device = MobileDevice.objects.filter(device_uuid=device_uuid, user=user).first()

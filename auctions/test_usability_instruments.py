@@ -1,9 +1,8 @@
 """Tests for the measurement half of the usability campaign: what an edit changed, and who has ever
 changed it.
 
-Covers ``auctions.history`` (``changed_fields`` on both changelogs), ``auctions.field_adoption``
-(the retroactive "has anybody ever moved this off its default" table) and the essentials/advanced
-split in ``auctions.auction_form_layout``.
+Covers ``auctions.history`` (``changed_fields``), ``auctions.field_adoption`` and the
+essentials/advanced split in ``auctions.auction_form_layout``.
 """
 
 import datetime
@@ -24,11 +23,10 @@ from auctions.tests import StandardTestCase
 
 
 def _as_posted(bound_field):
-    """One bound field's value as a browser would submit it, or None for "not submitted at all".
+    """One bound field's value as a browser would submit it, or None for "not submitted".
 
-    An unchecked checkbox is *absent* from a POST rather than present and empty, and a select
-    posts one scalar rather than the list ``ChoiceWidget.format_value`` returns. Getting either
-    wrong makes a form that changed nothing look like a form that changed ten things.
+    An unchecked checkbox is absent from a POST rather than empty, and a select posts one scalar rather
+    than the list ``ChoiceWidget.format_value`` returns.
     """
     widget = bound_field.field.widget
     value = bound_field.value()
@@ -60,8 +58,8 @@ class JsonableTests(TestCase):
         self.assertEqual(history.jsonable(datetime.date(2026, 9, 8)), "2026-09-08")
 
     def test_non_finite_floats_do_not_reach_the_column(self):
-        # json.dumps encodes these as bare Infinity/NaN, which is not JSON and which MariaDB
-        # rejects when the column's CHECK constraint validates it -- inside the edit's transaction.
+        # json.dumps encodes these as bare Infinity/NaN, which MariaDB rejects when the column's
+        # CHECK constraint validates it -- inside the edit's transaction.
         self.assertEqual(history.jsonable(float("inf")), "inf")
         self.assertEqual(history.jsonable(float("nan")), "nan")
 
@@ -141,14 +139,9 @@ class AuctionHistoryChangedFieldsTests(StandardTestCase):
     def _bound_form(self, **overrides):
         """The edit form, resubmitted exactly as rendered, with `overrides` applied.
 
-        Values come through each widget's ``format_value``, which is what the browser posts back.
-        Building the dict from ``form.initial`` instead looks equivalent and is not: for a datetime
-        whose widget declares no microsecond support, ``get_initial_for_field`` strips microseconds
-        from the *initial* side of the comparison and nothing strips them from the data side, so
-        all four date fields come back as changed on a submission that changed nothing. That is a
-        bug in the test, not in the form -- see test_resubmitting_the_form_unchanged_changes_nothing
-        -- and it is worth the four lines here, because a helper that quietly marks four fields
-        dirty would make every assertion below weaker than it looks.
+        Values come through each widget's ``format_value``, which is what the browser posts back. Building
+        from ``form.initial`` looks equivalent and isn't: ``get_initial_for_field`` strips microseconds from
+        the initial side and nothing strips them from the data side, so all four date fields read as changed.
         """
         kwargs = {
             "instance": self.online_auction,
@@ -170,11 +163,9 @@ class AuctionHistoryChangedFieldsTests(StandardTestCase):
     def test_resubmitting_the_form_unchanged_changes_nothing(self):
         """Saving a form you did not touch must record nothing.
 
-        This is the guard on everything else here. A field that reads as changed on every save
-        writes a history row every time, and its adoption numbers -- both halves -- become noise
-        that looks like signal. The datetime pickers are the ones to watch: their rendered format
-        has to round-trip through DateTimeField.has_changed(), and nothing else on the site would
-        notice if it stopped.
+        This guards everything else: a field that reads as changed on every save writes a history row every
+        time, and its adoption numbers become noise that looks like signal. The datetime pickers are the
+        ones to watch.
         """
         self.assertEqual(self._bound_form().changed_data, [])
 
@@ -210,11 +201,10 @@ class AuctionHistoryChangedFieldsTests(StandardTestCase):
         self.assertEqual(row.changed_fields, {})
 
     def test_a_field_below_the_800_character_truncation_is_still_in_the_summary(self):
-        """The bug the summary exists to fix: prose truncates in form-field order.
+        """A field below the 800-character truncation is still in the summary.
 
-        A wide edit loses the tail of `action`, and which fields are in the tail is decided by
-        where they sit in the layout -- so the prose column systematically forgets the bottom of
-        the form. The summary is a JSON column with no such limit.
+        Prose truncates in form-field order, so it systematically forgets the bottom of the form; the
+        summary is a JSON column with no such limit.
         """
         names = [f"field_number_{index}_with_a_long_name" for index in range(60)]
 

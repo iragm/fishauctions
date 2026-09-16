@@ -69,10 +69,10 @@ class LapsingTests(ClubHistoryFixture):
         self.assertEqual(lapsed, set())
 
     def test_the_last_auction_cannot_report_lapsing(self):
-        """Right-censoring, which is the mistake that makes every retention number look good.
+        """Right-censoring, the mistake that makes every retention number look good.
 
-        Nobody at the most recent auction has been *asked* to come back yet, so they are neither
-        lapsed nor retained.  The honest answer is that the question does not have one.
+        Nobody at the most recent auction has been asked to come back yet, so they are neither lapsed nor
+        retained.
         """
         person = User.objects.create_user(username="censored", password="x")
         self.join(self.auctions[-1], user=person, number="12")
@@ -81,7 +81,7 @@ class LapsingTests(ClubHistoryFixture):
         self.assertEqual(lapsed, set())
 
     def test_the_second_to_last_auction_is_censored_too(self):
-        """Two auctions have to have passed, not one -- ``LAPSED_AFTER_AUCTIONS`` is 2."""
+        """Two auctions have to have passed, not one: ``LAPSED_AFTER_AUCTIONS`` is 2."""
         _, measurable = lifecycle.lapsed_participants(self.club, self.auctions[-2])
         self.assertFalse(measurable)
 
@@ -136,12 +136,11 @@ class SignInStitchTests(TestCase):
         self.person = User.objects.create_user(
             username="stitcher", password=self.password, email="stitcher@example.com"
         )
-        # allauth refuses the sign-in and redirects to /confirm-email/ without this, so
-        # ``user_logged_in`` never fires and the test would pass or fail for the wrong reason.
+        # allauth refuses the sign-in and redirects without this, so ``user_logged_in`` never fires.
         EmailAddress.objects.create(user=self.person, email=self.person.email, verified=True, primary=True)
 
     def test_the_stitch_records_the_key_the_browser_sent(self):
-        # An anonymous visit first, so the client is holding a session key when it signs in.
+        # An anonymous visit first, so the client holds a session key when it signs in.
         self.client.get(reverse("allLots"))
         before = self.client.session.session_key
         self.assertTrue(before)
@@ -168,8 +167,8 @@ class SignInStitchTests(TestCase):
 def _session_key(name):
     """A session key the shape of a real one: 32 characters, of which only the first 12 are used.
 
-    ``lifecycle.SESSION_KEY_PREFIX`` means a key shorter than 12 characters resolves to nothing, so
-    a made-up "tl-session" here would pass or fail for a reason production never sees.
+    ``lifecycle.SESSION_KEY_PREFIX`` means a shorter key resolves to nothing, so a made-up one would
+    pass or fail for a reason production never sees.
     """
     return name.ljust(32, "0")[:32]
 
@@ -220,15 +219,15 @@ class SessionTimelineTests(TestCase):
         self.assertEqual(lifecycle.session_timeline(), [])
 
     def test_a_key_shorter_than_the_prefix_resolves_to_nothing(self):
-        """Not "match everything that starts with t": a prefix that short is not one person."""
+        """Not "match everything starting with t": a prefix that short is not one person."""
         self._view(0, session_id=_session_key("tl-anon"))
         self.assertEqual(lifecycle.session_timeline(session_id="tl"), [])
 
     def test_the_index_is_bounded_to_recent_history_and_hands_back_a_prefix_only(self):
-        """``PageView`` is never purged and goes back to 2020; this is the page's default render.
+        """The index is bounded to recent history and hands back a prefix only.
 
-        Unbounded, opening ``/admin-session-replay/`` is a ``GROUP BY`` over every row on the site
-        -- the shape ``milestone_reach``'s docstring names as a past production incident.
+        ``PageView`` is never purged and goes back to 2020, so unbounded this is a ``GROUP BY`` over every
+        row on the site.
         """
         recent = _session_key("recent-one")
         ancient = _session_key("ancient-one")
@@ -246,10 +245,10 @@ class SessionTimelineTests(TestCase):
 
 class MedianMemberTests(ClubHistoryFixture):
     def test_the_median_is_a_real_person_and_not_the_power_user(self):
-        """The mean of this distribution is meaningless: one power user moves it past everybody.
+        """The median is a real person, not the power user.
 
-        Five members: three did one lot each, one did nothing, one did twenty.  The mean is five,
-        which is more than four of the five people managed.  The median is one, which is a person.
+        Five members: three did one lot each, one did nothing, one did twenty. The mean is five, which is
+        more than four of them managed.
         """
         auction = self.auctions[1]
         people = []
@@ -308,16 +307,16 @@ class MilestoneReachTests(StandardTestCase):
         route_name.cache_clear()
 
     def test_a_seller_who_never_opens_a_lot_page_still_reaches_added_lots(self):
-        """The seller's whole path, and the reason this is not a funnel.
+        """A seller who never opens a lot page still reaches added lots.
 
-        In a strict funnel "added lots" sits under "viewed a first lot" and this person reads as
-        somebody who dropped out at the lot page.  They did not: they never needed one.
+        In a strict funnel "added lots" sits under "viewed a first lot", and this person reads as a drop-out
+        when they simply never needed one.
         """
         reach = lifecycle.milestone_reach([self.online_auction])[self.online_auction.pk]
         self.assertGreaterEqual(reach["added_lots"], 1)
 
     def test_the_rules_page_is_the_auctions_own_page_and_not_its_lots(self):
-        """Since 7a.2 a lot view carries the auction FK too, so the FK alone cannot answer this."""
+        """A lot view carries the auction FK too, so the FK alone can't identify a rules-page view."""
         lot = self.online_auction.lots_qs.first()
         PageView.objects.create(
             url=f"/lots/{lot.pk}/whatever/",
@@ -353,10 +352,10 @@ class MilestoneReachTests(StandardTestCase):
 
 
 class LifecyclePageTests(StandardTestCase):
-    """Both pages are admin-only and both render on a site with data in it.
+    """Both pages are admin-only and render on a site with data in it.
 
-    ``StandardTestCase.admin_user`` is an *auction* admin, which is a different thing entirely:
-    ``AdminOnlyViewMixin`` gates on ``is_superuser`` and says so in its own docstring.
+    ``StandardTestCase.admin_user`` is an *auction* admin, which is different: ``AdminOnlyViewMixin``
+    gates on ``is_superuser``.
     """
 
     def _as_site_admin(self):
@@ -367,9 +366,8 @@ class LifecyclePageTests(StandardTestCase):
     def _with_a_club(self):
         """Attach the fixture's auctions to a club, because every panel groups by one.
 
-        Without this the page renders its "no club has an auction yet" branch, which is a real
-        state of the site and the reason ``club_coverage`` is on the page -- but it is not the
-        state that proves the panels work.
+        Without this the page renders its "no club has an auction yet" branch, which is a real state of the
+        site but not the one that proves the panels work.
         """
         club = Club.objects.create(name="Lifecycle page club")
         Auction.objects.filter(pk__in=[self.online_auction.pk, self.in_person_auction.pk]).update(club=club)
@@ -412,11 +410,10 @@ class LifecyclePageTests(StandardTestCase):
         self.assertEqual(len(response.context["timeline"]), 1)
 
     def test_the_index_never_prints_a_whole_session_key(self):
-        """``PageView.session_id`` is the live session cookie of an anonymous visitor.
+        """The index never prints a whole session key.
 
-        Rendering one and posting it back in ``?session=`` puts a usable credential into the access
-        log, the admin's browser history and the ``Referer`` of every link on the page. A prefix
-        finds the session just as well and is not a cookie anybody can paste back.
+        ``PageView.session_id`` is an anonymous visitor's live session cookie, and rendering it would put a
+        usable credential in the access log, the browser history and every link's ``Referer``.
         """
         key = _session_key("wholekeyleak")
         PageView.objects.create(url="/lots/", title="t", session_id=key)
@@ -426,7 +423,7 @@ class LifecyclePageTests(StandardTestCase):
         self.assertContains(response, key[: lifecycle.SESSION_KEY_PREFIX])
 
     def test_a_user_that_is_not_a_number_is_not_a_500(self):
-        """``filter(pk="abc")`` raises ValueError; this page exists to be poked at by hand."""
+        """``filter(pk="abc")`` raises ValueError, and this page exists to be poked at by hand."""
         self._as_site_admin()
         response = self.client.get(reverse("admin_session_replay"), {"user": "abc"})
         self.assertEqual(response.status_code, 200)

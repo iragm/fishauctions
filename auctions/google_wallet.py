@@ -1,14 +1,9 @@
-"""Helpers for talking to the Google Wallet REST API.
+"""Helpers for the Google Wallet REST API.
 
-This module handles the OAuth2 access-token dance against
-``https://oauth2.googleapis.com/token`` using the JWT-bearer assertion flow,
-so we don't need ``google-auth`` as a dependency. PyJWT (already a project
-dep) plus ``requests`` is enough.
+Does the OAuth2 JWT-bearer token dance against ``https://oauth2.googleapis.com/token`` with PyJWT
+and ``requests``, so ``google-auth`` isn't a dependency.
 
-Public entry points:
-    is_configured()                       -> bool
-    get_access_token()                    -> str | None  (cached in-memory)
-    create_generic_class(club)            -> bool         (True on 200/409)
+Entry points: ``is_configured()``, ``get_access_token()`` (cached), ``create_generic_class(club)``.
 """
 
 from __future__ import annotations
@@ -27,11 +22,9 @@ TOKEN_URL = "https://oauth2.googleapis.com/token"  # noqa: S105 - not a secret
 WALLET_API_BASE = "https://walletobjects.googleapis.com/walletobjects/v1"
 ISSUER_SCOPE = "https://www.googleapis.com/auth/wallet_object.issuer"
 
-# Default class background — neutral dark, looks readable with white text.
+# Neutral dark, readable with white text.
 DEFAULT_HEX_BG = "#1f2937"
-# Background used when a membership is lapsed/expired — a dark red, still readable
-# with white text. Wallet passes can't color an individual field red, so we tint the
-# whole card to signal the "Unpaid/expired" state.
+# A lapsed membership tints the whole card: Wallet can't colour one field red.
 EXPIRED_HEX_BG = "#991b1b"
 
 _token_lock = threading.Lock()
@@ -59,10 +52,9 @@ def _build_assertion() -> str:
 
 
 def get_access_token() -> str | None:
-    """Return a cached OAuth2 access token, refreshing on demand.
+    """A cached OAuth2 access token, refreshed on demand, or None when Wallet isn't configured.
 
-    Tokens are valid for one hour; we cache slightly less and refresh with a
-    60s safety margin. Returns None when Wallet is not configured.
+    Tokens last an hour; this caches slightly less, with a 60s margin.
     """
     if not is_configured():
         return None
@@ -91,12 +83,11 @@ def _class_id_for_club(club) -> str:
 
 
 def _absolute_icon_url(club) -> str:
-    """Return a publicly-reachable https URL for the club's icon, or "" if none/unusable.
+    """A publicly reachable https URL for the club's icon, or "" if there is none.
 
-    Google Wallet only accepts publicly resolvable https URLs for `logo.sourceUri.uri`,
-    so we build one from the current Site domain and the thumbnailer's URL. If the
-    deployment is on http only, we still return https — Google will reject it but
-    that's a config issue, not a runtime one. Returns "" when there is no icon.
+    Google only accepts public https URLs for `logo.sourceUri.uri`, so this builds one from the current
+    Site domain. An http-only deployment still gets https, which Google rejects -- a config problem, not
+    a runtime one.
     """
     if not getattr(club, "icon", None):
         return ""
@@ -121,16 +112,12 @@ def _absolute_icon_url(club) -> str:
 
 
 def _class_body(club) -> dict:
-    # Note: per Google Wallet REST docs, `logo` and `hexBackgroundColor` are NOT
-    # fields on GenericClass — they live on GenericObject. Setting them here is
-    # silently ignored. See _object_visuals() and update_generic_object_for_member().
+    # Per Google's docs, `logo` and `hexBackgroundColor` are not GenericClass fields -- they live on
+    # GenericObject, and setting them here is silently ignored. See _object_visuals().
     #
-    # cardTemplateOverride REPLACES the default card layout: only rows listed here
-    # show on the card front (everything in textModulesData still shows on the
-    # details screen). The membership_status row is what makes "Valid through ..."
-    # visible on the card; Google omits the row on objects without that module
-    # (clubs that don't run memberships). Class changes only reach Google when
-    # re-pushed — run `manage.py sync_google_wallet_classes` after editing.
+    # cardTemplateOverride replaces the default layout: only rows listed here show on the card front,
+    # and the membership_status row is what makes "Valid through ..." visible. Class changes reach
+    # Google only when re-pushed -- run `manage.py sync_google_wallet_classes`.
     return {
         "id": _class_id_for_club(club),
         "classTemplateInfo": {
@@ -155,12 +142,10 @@ def _class_body(club) -> dict:
 
 
 def _object_visuals(club, expired: bool = False) -> dict:
-    """Logo + background color fields for a GenericObject, derived from the club.
+    """Logo and background fields for a GenericObject, derived from the club.
 
-    These belong on the per-member GenericObject (not the GenericClass), so they
-    must be merged into both the initial save-to-wallet JWT payload and any
-    subsequent PATCH that refreshes member metadata. When ``expired`` is True the
-    card is tinted red to signal a lapsed membership.
+    These belong on the per-member object, so they go into both the save-to-wallet JWT and any later
+    PATCH. ``expired`` tints the card red.
     """
     visuals: dict = {"hexBackgroundColor": EXPIRED_HEX_BG if expired else DEFAULT_HEX_BG}
     icon_url = _absolute_icon_url(club)
@@ -173,9 +158,8 @@ def _object_visuals(club, expired: bool = False) -> dict:
 
 
 def _status_text_module(member) -> dict | None:
-    """A 'Membership' text module carrying the member's wallet status line, or None.
-
-    None when the club doesn't run memberships, so those passes are unchanged.
+    """A 'Membership' text module with the member's wallet status line, or None when the club doesn't run
+    memberships.
     """
     status = member.wallet_status_text
     if not status:
@@ -184,7 +168,7 @@ def _status_text_module(member) -> dict | None:
 
 
 def member_text_modules(member) -> list:
-    """textModulesData for a member's GenericObject: member ID plus (if applicable) status."""
+    """textModulesData for a member's GenericObject: member ID, plus status where it applies."""
     modules = [{"id": "member_id", "header": "Member ID", "body": str(member.membership_number)}]
     status_module = _status_text_module(member)
     if status_module:
@@ -217,8 +201,7 @@ def update_generic_object_for_member(member) -> bool:
         "cardTitle": {
             "defaultValue": {"language": "en-US", "value": member.club.name},
         },
-        # Keep the pass-type line live: "Active Paid Membership" / "Unpaid
-        # Membership" for dues-charging clubs, static "Membership" otherwise.
+        # Keep the pass-type line live: paid or unpaid for dues-charging clubs.
         "header": {
             "defaultValue": {"language": "en-US", "value": member.wallet_header_text},
         },
@@ -233,10 +216,8 @@ def update_generic_object_for_member(member) -> bool:
         },
         **_object_visuals(member.club, expired=member.wallet_status_is_expired),
     }
-    # Deliberately no validTimeInterval: a past end date makes Google Wallet
-    # auto-archive the pass off the user's device. A lapsed membership instead
-    # keeps an active pass tinted red with an "Expired <date>" status line
-    # (see wallet_status_text) — we never programmatically expire the card.
+    # No validTimeInterval: a past end date makes Wallet archive the pass off the device. A lapsed
+    # membership keeps an active pass tinted red with an "Expired <date>" line.
     resp = requests.patch(
         f"{WALLET_API_BASE}/genericObject/{object_id}",
         json=body,
@@ -255,11 +236,10 @@ def update_generic_object_for_member(member) -> bool:
 
 
 def expire_generic_object_for_member(member) -> bool:
-    """PATCH the member's Wallet object to state=EXPIRED so devices show it as expired.
+    """PATCH the member's object to state=EXPIRED so devices show it as expired.
 
-    Returns True if Google confirms the object is now expired (200), or False if
-    we couldn't tell (404 = object never existed = nothing to revoke, treated
-    as success). Raises on transport / 5xx for Celery retry.
+    True when Google confirms it; False when it never existed (404, nothing to revoke). Raises on
+    transport or 5xx errors for Celery to retry.
     """
     if not is_configured():
         return False
@@ -277,7 +257,7 @@ def expire_generic_object_for_member(member) -> bool:
         logger.info("Expired Google Wallet object %s", object_id)
         return True
     if resp.status_code == 404:
-        # No object means the user never added the pass to Wallet — nothing to revoke.
+        # No object means the pass was never added to Wallet.
         logger.info("Google Wallet object %s does not exist; nothing to expire", object_id)
         return False
     logger.error("Google Wallet expire failed for member %s: %s %s", member.pk, resp.status_code, resp.text)
@@ -286,11 +266,10 @@ def expire_generic_object_for_member(member) -> bool:
 
 
 def create_generic_class(club) -> bool:
-    """Create-or-update the GenericClass for this club on Google Wallet.
+    """Create or update this club's GenericClass.
 
-    Tries POST first; on 409 (already exists) PATCHes the same body. The class
-    only carries the template / structural fields — per-pass visuals (logo,
-    background) live on each member's GenericObject. Raises on 5xx for retry.
+    POST first, PATCHing the same body on 409. The class carries only template fields; per-pass visuals
+    live on each member's GenericObject. Raises on 5xx for retry.
     """
     if not is_configured():
         return False

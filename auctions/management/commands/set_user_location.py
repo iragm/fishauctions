@@ -15,27 +15,23 @@ class Command(BaseCommand):
     help = "Set user lat/long based on their IP address"
 
     def handle(self, *args, **options):
-        # get users that have been on the site for at least 1 days, but have not set their location
+        # Users who have been on the site at least a day and still have no location.
         recently = timezone.now() - datetime.timedelta(days=1)
         users = UserData.objects.filter(
             Q(latitude=0, longitude=0) | Q(location__isnull=True),
             last_ip_address__isnull=False,
             user__date_joined__lte=recently,
         ).order_by("-last_activity")[:100]
-        # build a list of IPs - bit awkward as we can't use single quotes here, and it has to be a string, not a list
+        # A string, not a list, and single quotes are not allowed in it.
         ip_list = "["
         if users:
             for user in users:
                 ip_list += f'"{user.last_ip_address}",'
             ip_list = ip_list[:-1] + "]"  # trailing , breaks things
-            # See here for more documentation: https://ip-api.com/docs/api:batch#test
-            # lat and lng only
-            # r = requests.post("http://ip-api.com/batch?fields=25024", data=ip_list)
-            # lat lng and country
+            # fields=1106113 is lat, lng and country; see https://ip-api.com/docs/api:batch#test
             r = requests.post("http://ip-api.com/batch?fields=1106113", data=ip_list)
             if r.status_code == 200:
                 ip_addresses = r.json()
-                # now, we cycle through users again and assign their location based on IP
                 for user in users:
                     for value in ip_addresses:
                         try:
@@ -119,15 +115,12 @@ class Command(BaseCommand):
                 logger.warning("Query failed for this IP list:")
                 logger.warning(ip_list)
                 logger.warning(r["text"])
-            # some limitations to note:
-            # we are capped at 100 lookups per query
-            # Looks like the cap on this service is 15 per minute, so it's easily able to meet our needs if the cron job is run more often.
-            # right now, this is run once per day via cron.  Not a big deal for current user loads, and this can be run twice a day if needed
-            # older users don't have a location assigned (around 440 users, I do not have a way to assign a location to these automatically)
-            # if there is a problematic IP, it may be hard to spot, the error checking is minimal here
+            # Limits: 100 lookups a query, 15 a minute -- the daily cron is well inside both. Around
+            # 440 older users have no location and no automatic way to get one, and a problematic IP
+            # is hard to spot, since the error checking here is minimal.
 
-        # now, we handle pageviews separately.  There is some duplicate code here that could get merged with the user lookup above
-        # first check is to see if we've already got this IP address in the system somewhere
+        # Page views are handled separately, with some duplicate code that could be merged with the
+        # user lookup above. First check whether this IP is already known somewhere.
         pageviews = (
             PageView.objects.exclude(ip_address="172.21.0.1")
             .exclude(ip_address="172.22.0.1")
@@ -141,7 +134,7 @@ class Command(BaseCommand):
                 if view.ip_address not in ip_list:
                     ip_list += f'"{view.ip_address}",'
             ip_list = ip_list[:-1] + "]"  # trailing , breaks things
-            # See here for more documentation: https://ip-api.com/docs/api:batch#test
+            # See https://ip-api.com/docs/api:batch#test
             r = requests.post("http://ip-api.com/batch?fields=25024", data=ip_list)
             if r.status_code == 200:
                 ip_addresses = r.json()

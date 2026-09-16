@@ -72,7 +72,7 @@ class LotImageManagementTests(StandardTestCase):
         self.assertEqual(self.image_lot.use_images_from, source_lot)
 
     def test_image_permission_check_blocks_when_dependent_online_lot_sold(self):
-        """image_permission_check should return False if a dependent online auction lot is sold"""
+        """image_permission_check is False when a dependent online auction lot is sold."""
         source_lot = Lot.objects.create(
             lot_name="Source lot",
             auction=self.online_auction,
@@ -90,7 +90,7 @@ class LotImageManagementTests(StandardTestCase):
         )
         # can_add_images is False for sold lots (winning_price is set)
         self.assertFalse(dependent_lot.can_add_images)
-        # source_lot should now fail image_permission_check because dependent is sold online auction lot
+        # source_lot now fails because a dependent online lot is sold.
         self.assertFalse(source_lot.image_permission_check(self.user))
 
     def test_image_permission_check_allows_when_no_dependent_lots(self):
@@ -105,7 +105,7 @@ class LotImageManagementTests(StandardTestCase):
         self.assertTrue(source_lot.image_permission_check(self.user))
 
     def test_lot_image_url_field_cleared_after_processing(self):
-        """image_url field on a Lot should be cleared after an image is created from it"""
+        """A lot's image_url is cleared once an image is created from it."""
         # Directly test the model field behavior
         test_lot = Lot.objects.create(
             lot_name="URL image lot",
@@ -114,7 +114,7 @@ class LotImageManagementTests(StandardTestCase):
             quantity=1,
             image_url="https://example.com/new_fish.jpg",
         )
-        # Simulate the processing: create a LotImage from image_url and clear the field
+        # Simulate the processing: create the LotImage and clear the field.
         if test_lot.image_url:
             LotImage.objects.create(
                 lot_number=test_lot,
@@ -153,7 +153,7 @@ class LotImageManagementTests(StandardTestCase):
         self.assertIn("url", form.errors)
 
     def test_lot_image_url_field_invalid_extension_shows_error(self):
-        """Submitting a lot form with an image_url that lacks an image extension should show an error and not create a LotImage"""
+        """An image_url with no image extension shows an error and creates no LotImage."""
         self.client.login(username="my_lot", password="testpassword")
         self.user.first_name = "Test"
         self.user.last_name = "User"
@@ -188,7 +188,7 @@ class LotImageManagementTests(StandardTestCase):
         self.assertTrue(any("not valid" in m for m in messages_list))
 
     def test_lot_image_url_field_invalid_scheme_shows_error(self):
-        """Submitting a lot form with an image_url that uses a non-http/https scheme should show an error and not create a LotImage"""
+        """An image_url with a non-http scheme shows an error and creates no LotImage."""
         self.client.login(username="my_lot", password="testpassword")
         self.user.first_name = "Test"
         self.user.last_name = "User"
@@ -221,7 +221,7 @@ class LotImageManagementTests(StandardTestCase):
         self.assertTrue(any("not valid" in m for m in messages_list))
 
     def test_lot_image_url_field_accepts_valid_url(self):
-        """The lot image_url hidden field should accept valid http image URLs without showing errors"""
+        """The hidden image_url field accepts a valid http image URL without errors."""
 
         # Ensure user can submit standalone lots
         self.user.userdata.can_submit_standalone_lots = True
@@ -245,7 +245,7 @@ class LotImageManagementTests(StandardTestCase):
         self.assertNotIn("image_url", form.errors)
 
     def test_images_managed_from_only_shown_to_lot_creator(self):
-        """images_managed_from_lot context should only be set for the lot creator, not auction admins"""
+        """images_managed_from_lot is set for the lot creator, not for auction admins."""
         source_lot = Lot.objects.create(
             lot_name="Source lot for creator check",
             auction=self.online_auction,
@@ -262,12 +262,11 @@ class LotImageManagementTests(StandardTestCase):
         self.client.login(username="admin_user", password="testpassword")
         response = self.client.get(source_lot.lot_link)
         self.assertNotIn("images_managed_from_lot", response.context)
-        # when use_images_from is set, nobody (not even admin) should be able to add images to this lot
-        # — images are managed from the source lot instead
+        # With use_images_from set, not even an admin can add images here.
         self.assertFalse(source_lot.image_permission_check(self.admin_user))
 
     def test_images_and_thumbnail_delegate_via_use_images_from(self):
-        """images and thumbnail should return images from the source lot when use_images_from is set"""
+        """images and thumbnail come from the source lot when use_images_from is set."""
         delegating_lot = Lot.objects.create(
             lot_name="Delegating lot",
             auction=self.online_auction,
@@ -275,12 +274,12 @@ class LotImageManagementTests(StandardTestCase):
             quantity=1,
             use_images_from=self.image_lot,
         )
-        # delegating_lot has no direct images, but should show image_lot's images
+        # delegating_lot has no images of its own.
         self.assertEqual(list(delegating_lot.images), [self.url_image])
         self.assertEqual(delegating_lot.thumbnail, self.url_image)
 
     def test_lot_detail_renders_auto_image_from_url(self):
-        """Lot detail should render URL-only auto images without trying to access an uploaded file"""
+        """The lot page renders a URL-only auto image without touching an uploaded file."""
         self.user.userdata.auto_add_images = True
         self.user.userdata.save(update_fields=["auto_add_images"])
         self.online_auction.auto_add_images = True
@@ -311,7 +310,7 @@ class LotImageManagementTests(StandardTestCase):
         self.assertContains(response, "https://example.com/auto-image.jpg")
 
     def test_htmx_lot_renders_auto_image_from_url(self):
-        """HTMX lot view should render URL-only auto images without trying to access an uploaded file"""
+        """So does the HTMX lot view."""
         self.client.force_login(self.admin_user)
         self.user.userdata.auto_add_images = True
         self.user.userdata.save(update_fields=["auto_add_images"])
@@ -378,7 +377,7 @@ class LotImageManagementTests(StandardTestCase):
             "payment_cash": "on",
         }
         self.client.post(f"/lots/edit/{test_lot.pk}/", data=form_data)
-        # After form submission the image should be created and image_url cleared
+        # The image is created and image_url cleared.
         test_lot.refresh_from_db()
         new_images = LotImage.objects.filter(lot_number=test_lot)
         self.assertEqual(new_images.count(), initial_image_count + 1)
@@ -386,7 +385,7 @@ class LotImageManagementTests(StandardTestCase):
         self.assertIsNone(test_lot.image_url)
 
     def test_lot_clone_copies_images(self):
-        """Cloning a lot should deep-copy URL images to the new lot; original keeps its own images"""
+        """Cloning a lot deep-copies URL images; the original keeps its own."""
         original_lot = Lot.objects.create(
             lot_name="Original lot to clone",
             user=self.user,
@@ -425,7 +424,7 @@ class LotImageManagementTests(StandardTestCase):
         self.assertEqual(LotImage.objects.filter(lot_number=original_lot).count(), 1)
 
     def test_image_permission_check_blocks_when_dependent_any_auction_lot_sold(self):
-        """image_permission_check should block for any auction lot sold, not just online auctions"""
+        """image_permission_check blocks for any sold auction lot, not just online ones."""
         source_lot = Lot.objects.create(
             lot_name="Source for in-person check",
             auction=self.in_person_auction,
@@ -447,11 +446,10 @@ class LotImageManagementTests(StandardTestCase):
 
 
 class ImageSourceOnThePageTests(StandardTestCase):
-    """Which image_source labels a lot page prints.
+    """Which image_source labels the lot page prints.
 
-    The catch-all is a question we ask the person adding the picture -- "Not my photo - I have
-    permission to use it" -- and it is what a blank field is set to, so it lands on most rows
-    whether it was chosen or not.  It is not something to print under a photograph.
+    The catch-all ("Not my photo - I have permission to use it") is what a blank field becomes, so it
+    lands on most rows whether or not it was chosen: not something to print under a photograph.
     """
 
     RANDOM_LABEL = dict(LotImage.PIC_CATEGORIES)["RANDOM"]
@@ -499,14 +497,14 @@ class ImageSourceOnThePageTests(StandardTestCase):
         self.assertNotContains(response, self.RANDOM_LABEL)
 
     def test_a_sellers_own_photo_still_says_so(self):
-        """The other two labels are what a bidder is deciding on, so they stay on the page."""
+        """The other two labels are what a bidder is deciding on, so they stay."""
         self.image.image_source = "ACTUAL"
         self.image.save()
         response = self.client.get(self.labelled_lot.lot_link)
         self.assertContains(response, self.ACTUAL_LABEL)
 
     def test_a_caption_survives_a_hidden_label(self):
-        """The label and the caption shared one line, so dropping the label must not drop it."""
+        """The label and caption shared one line, so dropping the label must not drop the caption."""
         self.image.caption = "Second generation"
         self.image.save()
         response = self.client.get(self.labelled_lot.lot_link)
@@ -539,7 +537,7 @@ class ChangeUsernameFormTest(TestCase):
 
 
 class CustomSignupFormTest(TestCase):
-    """Tests that the allauth adapter rejects usernames with @ via ACCOUNT_USERNAME_VALIDATORS"""
+    """The allauth adapter rejects usernames with @ via ACCOUNT_USERNAME_VALIDATORS."""
 
     def test_username_with_at_symbol_rejected_by_adapter(self):
         from allauth.account.adapter import get_adapter
@@ -645,7 +643,7 @@ class AdminUserSignupsJSONTests(TestCase):
         self.fresh_user = User.objects.create_user(
             username="fresh_user", password="testpassword", email="u5@example.com"
         )
-        # User with multiple AuctionTOS entries and multiple sold lots (to test distinct counting)
+        # Several AuctionTOS entries and sold lots, to test distinct counting.
         self.multi_user = User.objects.create_user(
             username="multi_user", password="testpassword", email="u6@example.com"
         )
@@ -669,8 +667,6 @@ class AdminUserSignupsJSONTests(TestCase):
             quantity=1,
             winning_price=9,
         )
-        # Total users in test DB: superuser + user_with_tos + user_winner + user_seller
-        #                         + stale_user + fresh_user + multi_user = 7
 
     def _get_json(self, days=None):
         self.client.force_login(self.superuser)
@@ -702,27 +698,25 @@ class AdminUserSignupsJSONTests(TestCase):
         self.assertEqual(total_ds["data"][-1], expected)
 
     def test_joined_auction_exact_count(self):
-        """Joined an auction series must count distinct users with an AuctionTOS, not join rows"""
+        """ "Joined an auction" counts distinct users with an AuctionTOS, not join rows."""
         data = self._get_json(days=90)
         tos_ds = next(ds for ds in data["datasets"] if ds["label"] == "Joined an auction")
-        # user_with_tos, user_winner, multi_user (2 TOS) = 3 distinct users
-        # multi_user has 2 AuctionTOS rows but must be counted once
+        # user_with_tos, user_winner and multi_user (2 rows, counted once) = 3.
         expected = User.objects.filter(auctiontos__isnull=False).distinct().count()
         self.assertEqual(tos_ds["data"][-1], expected)
 
     def test_won_or_sold_exact_count(self):
-        """Won or sold series must count distinct users with a won lot or a sold lot (winning_price set)"""
+        """ "Won or sold" counts distinct users with a won lot or a lot with a winning_price."""
         data = self._get_json(days=90)
         won_sold_ds = next(ds for ds in data["datasets"] if ds["label"] == "Won or sold a lot")
-        # user_winner (winner field set), user_seller (lot with winning_price), multi_user (lots with winning_price) = 3
-        # multi_user has 2 sold lots but must be counted once
+        # user_winner, user_seller and multi_user (2 sold lots, counted once) = 3.
         winners = set(User.objects.filter(winner__isnull=False).values_list("pk", flat=True))
         sellers = set(User.objects.filter(lot__winning_price__isnull=False).values_list("pk", flat=True))
         expected = len(winners | sellers)
         self.assertEqual(won_sold_ds["data"][-1], expected)
 
     def test_unsold_lot_not_counted_as_sold(self):
-        """A user who submitted a lot without a winning_price must not appear in the 'won or sold' series"""
+        """A lot with no winning_price doesn't make its owner a seller."""
         unsold_user = User.objects.create_user(
             username="unsold_user", password="testpassword", email="unsold@example.com"
         )
@@ -742,7 +736,7 @@ class AdminUserSignupsJSONTests(TestCase):
         self.assertNotIn(unsold_user.pk, winners | sellers)
 
     def test_stale_users_exact_count(self):
-        """Stale users series must equal the exact count of users inactive for 400+ days"""
+        """ "Stale" counts users inactive for 400+ days exactly."""
         data = self._get_json(days=90)
         stale_ds = next(ds for ds in data["datasets"] if ds["label"] == "Stale (400+ days inactive)")
         cutoff = timezone.now() - datetime.timedelta(days=400)

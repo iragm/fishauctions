@@ -9,11 +9,9 @@ class Command(BaseCommand):
     help = "Backfill bap_auto_reason for sold lots in BAP-enabled club auctions, and auto-award points where eligible."
 
     def handle(self, *args, **options):
-        # ── Step 1: Live food cultures in culture-program clubs ─────────────────
-        # When a club has separate_cap enabled, "Live food cultures" lots are
-        # eligible for CAP (culture) points.  Lots submitted before the club
-        # turned on separate_cap may have i_bred_this_fish=False.  Set it to
-        # True so downstream reason/award logic can treat them correctly.
+        # Step 1: live food cultures in culture-program clubs. With separate_cap on, those lots are
+        # eligible for CAP points, but ones submitted before the club turned it on may have
+        # i_bred_this_fish=False.
         culture_lots = Lot.objects.filter(
             is_deleted=False,
             auction__club__enable_breeder_award_program=True,
@@ -25,9 +23,8 @@ class Command(BaseCommand):
         culture_updated = culture_lots.update(i_bred_this_fish=True)
         self.stdout.write(f"Step 1: set i_bred_this_fish=True on {culture_updated} live-food-culture lot(s).")
 
-        # ── Step 2: Fill lot.date_end for sold breeder-points lots missing it ───
-        # Lots submitted outside an auction (date_end=None) need a date_end so
-        # BapAward.date can be derived from it.  Use date_posted as a proxy.
+        # Step 2: sold breeder-points lots with no date_end (submitted outside an auction) need one
+        # for BapAward.date to be derived from. date_posted is the proxy.
         lots_missing_end = Lot.objects.filter(
             is_deleted=False,
             i_bred_this_fish=True,
@@ -38,11 +35,9 @@ class Command(BaseCommand):
         end_filled = lots_missing_end.update(date_end=F("date_posted"))
         self.stdout.write(f"Step 2: filled date_end from date_posted on {end_filled} sold lot(s).")
 
-        # ── Step 3: Fix BapAward.date when lot had no date_end ──────────────────
-        # Awards created before Step 2 may have an incorrect date (e.g. today's
-        # date from timezone.now()).  Re-derive the date from lot.date_posted for
-        # any award whose lot still has no date_end (or whose award date doesn't
-        # match the lot's creation date when date_end was absent at award time).
+        # Step 3: awards created before step 2 may carry today's date instead. Re-derive it from
+        # lot.date_posted for any award whose lot still has no date_end, or whose date doesn't match
+        # the lot's creation date.
         awards_to_fix = (
             BapAward.objects.filter(
                 lot__isnull=False,
@@ -67,7 +62,7 @@ class Command(BaseCommand):
             award_updated += len(award_updates)
         self.stdout.write(f"Step 3: corrected date on {award_updated} BapAward(s).")
 
-        # ── Step 4: Backfill bap_auto_reason and auto-award ─────────────────────
+        # Step 4: backfill bap_auto_reason and auto-award.
         lots_to_check = (
             Lot.objects.filter(
                 is_deleted=False,
@@ -110,7 +105,7 @@ class Command(BaseCommand):
                 if len(reason_updates) >= 500:
                     flush_updates()
 
-            # For eligible lots in auto-add clubs, create the award with correct category points
+            # Eligible lots in auto-add clubs get the award, with the category's points.
             if not reason and lot.auction.club.auto_add_points:
                 flush_updates()  # flush first so bap_auto_reason is saved before auto_award reads it
                 lot.auto_award_bap_points()

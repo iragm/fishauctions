@@ -1,27 +1,24 @@
 """Two accessibility rules a template cannot break twice, checked against template source.
 
 The site had ten ``<img>`` with no ``alt`` and a handful of icon-only buttons with no accessible
-name.  Both were fixed once; without something failing the build they come back, because neither
-one is visible when you look at the page -- that is what makes them accessibility bugs rather than
-rendering bugs.  This is the same shape as :mod:`auctions.template_lint`: pure stdlib, no Django
-import, so one implementation serves the unit test, the lint script and the pre-commit hook.
+name. Both were fixed once; without something failing the build they come back, because neither is
+visible when you look at the page -- which is what makes them accessibility bugs. Same shape as
+:mod:`auctions.template_lint`: pure stdlib, no Django import, so one implementation serves the unit
+test, the lint script and the pre-commit hook.
 
-**Every ``<img>`` needs an ``alt``.**  Including a decorative one, which needs ``alt=""`` -- the
-empty string is a decision ("skip this"), a missing attribute makes a screen reader read the file
-name instead.  There is no way to tell the two apart from the outside, which is why the rule is
-"present" rather than "non-empty".
+**Every ``<img>`` needs an ``alt``**, including a decorative one, which needs ``alt=""``: the empty
+string is a decision, a missing attribute makes a screen reader read the file name. Nothing outside
+can tell those apart, so the rule is "present" rather than "non-empty".
 
-**A control whose only content is an icon needs a name.**  ``<button><i class="bi bi-trash"></i>
-</button>`` is announced as "button" and nothing else: the icon is a font glyph with no text.
-``aria-label`` or ``title`` supplies one.  A control with a text label as well is fine and is not
-reported, which is why this only fires on controls that contain *nothing but* an icon.
+**A control whose only content is an icon needs a name.** ``<button><i class="bi bi-trash"></i>
+</button>`` is announced as "button" and nothing else, because the icon is a font glyph with no
+text; ``aria-label`` or ``title`` supplies one. A control with a text label too is fine and is not
+reported.
 
-What this deliberately does **not** do is parse HTML.  Templates are not HTML -- half these tags
-have a ``{% if %}`` inside the attribute list -- so an HTML parser either rejects them or silently
-reinterprets them.  These are two narrow regexes over the source, and the cost of that is that
-they are conservative: they find the shapes that are actually written here, and a sufficiently
-strange one gets past.  A rule that catches the ten real cases and fails the build on the eleventh
-is worth more than a correct parser nobody can run.
+This deliberately does **not** parse HTML. Templates are not HTML -- half these tags have a
+``{% if %}`` inside the attribute list -- so a parser either rejects them or silently reinterprets
+them. These are two narrow regexes over the source, and the cost is that they are conservative:
+they catch the shapes actually written here, and a sufficiently strange one gets past.
 """
 
 from __future__ import annotations

@@ -67,7 +67,7 @@ class ModelMethodsTestCase(StandardTestCase):
 
     def test_auction_find_user_by_email(self):
         """Test Auction.find_user can find users by email"""
-        # Set email on AuctionTOS (find_user searches AuctionTOS.email, not User.email)
+        # find_user searches AuctionTOS.email, not User.email.
         self.admin_online_tos.email = "test@example.com"
         self.admin_online_tos.save()
 
@@ -103,14 +103,11 @@ class ModelMethodsTestCase(StandardTestCase):
 
         result = self.online_auction.find_user(email="test@example.com", exclude_pk=self.admin_online_tos.pk)
 
-        # Should not find the excluded user (but there might be other users with same email)
         if result:
             self.assertNotEqual(result.pk, self.admin_online_tos.pk)
 
     def test_auction_soft_delete(self):
         """Test Auction.delete performs soft delete"""
-        # NOTE: This tests the current behavior, but soft delete may have issues
-        # If a lot is not properly archived, it could still appear in queries
         auction_pk = self.online_auction.pk
         self.online_auction.delete()
 
@@ -167,7 +164,6 @@ class ModelMethodsTestCase(StandardTestCase):
         self.assertEqual(new_view.longitude, -0.1278)
 
     def test_pageview_create_updates_last_activity_for_authenticated_user(self):
-        """PageViewCreate should update last_activity on UserData for authenticated users"""
         past_time = timezone.now() - timezone.timedelta(days=1)
         UserData.objects.filter(user=self.user).update(last_activity=past_time)
         self.client.force_login(self.user)
@@ -252,7 +248,6 @@ class SignalLogicTestCase(StandardTestCase):
         self.assertEqual(auction.lot_submission_end_date, auction.date_end)
 
     def test_auction_signal_fixes_bad_lot_submission_end_date(self):
-        """Test that auction signal fixes lot submission end date if it's after auction end"""
         start_date = timezone.now() + datetime.timedelta(days=1)
         end_date = start_date + datetime.timedelta(days=7)
         bad_submission_end = end_date + datetime.timedelta(days=1)
@@ -307,19 +302,18 @@ class DuplicateAuctionTOSTests(StandardTestCase):
     """Test that duplicate AuctionTOS records are auto-merged on save"""
 
     def test_duplicate_user_auction_is_auto_merged_on_save(self):
-        """Creating a second AuctionTOS for the same user+auction via save() auto-merges it into the older one"""
+        """A second AuctionTOS for the same user and auction auto-merges into the older one on save."""
         initial_count = AuctionTOS.objects.filter(user=self.admin_user, auction=self.online_auction).count()
         self.assertEqual(initial_count, 1)
         # Simulate a duplicate being saved (e.g. race condition)
         AuctionTOS.objects.create(
             user=self.admin_user, auction=self.online_auction, pickup_location=self.location, is_admin=False
         )
-        # The save() method should have merged it; only 1 record should remain
         final_count = AuctionTOS.objects.filter(user=self.admin_user, auction=self.online_auction).count()
         self.assertEqual(final_count, 1)
 
     def test_duplicate_email_is_auto_merged_on_save(self):
-        """Creating a second TOS with the same email in the same auction auto-merges on save"""
+        """A second TOS with the same email in the same auction auto-merges on save."""
         # Set a known email on the existing TOS
         AuctionTOS.objects.filter(pk=self.online_tos.pk).update(email="dup@example.com")
         initial_count = AuctionTOS.objects.filter(auction=self.online_auction, email="dup@example.com").count()
@@ -337,7 +331,6 @@ class DuplicateAuctionTOSTests(StandardTestCase):
         self.assertEqual(final_count, 1)
 
     def test_multiple_null_users_allowed_same_auction(self):
-        """Multiple manually-added (user=None) TOS records are allowed in the same auction"""
         tos1 = AuctionTOS.objects.create(
             auction=self.online_auction, pickup_location=self.location, manually_added=True, name="Person A"
         )
@@ -348,7 +341,7 @@ class DuplicateAuctionTOSTests(StandardTestCase):
         self.assertIsNotNone(tos2.pk)
 
     def test_merge_preserves_fields_from_duplicate(self):
-        """merge_duplicate() copies non-empty fields from duplicate onto canonical if canonical is missing them"""
+        """merge_duplicate() fills the canonical record's empty fields from the duplicate."""
         canonical = AuctionTOS.objects.create(
             auction=self.online_auction,
             pickup_location=self.location,
@@ -374,14 +367,13 @@ class DuplicateAuctionTOSTests(StandardTestCase):
         self.assertEqual(canonical.phone_number, "555-1234")
         self.assertEqual(canonical.address, "123 Fish St")
         self.assertEqual(canonical.memo, "important note")
-        # canonical already had a name and bidder_number — should not be overwritten
         self.assertEqual(canonical.name, "Old Record")
         self.assertEqual(canonical.bidder_number, "OLD1")
         # duplicate should be deleted
         self.assertFalse(AuctionTOS.objects.filter(pk=duplicate.pk).exists())
 
     def test_merge_copies_user_from_duplicate_to_canonical(self):
-        """If the canonical record has no user but the duplicate does, user is copied to canonical"""
+        """merge_duplicate() copies the user onto a canonical record that has none."""
         canonical = AuctionTOS.objects.create(
             auction=self.online_auction,
             pickup_location=self.location,
@@ -389,9 +381,7 @@ class DuplicateAuctionTOSTests(StandardTestCase):
             name="Manual Entry",
             email="linkme@example.com",
         )
-        # Creating this duplicate with the same email triggers the auto-merge inside save():
-        # save() detects the email duplicate (canonical), calls canonical.merge_duplicate(duplicate).
-        # merge_duplicate() copies user from duplicate onto canonical, then deletes duplicate.
+        # The email match makes save() merge this into canonical and delete it.
         duplicate = AuctionTOS.objects.create(
             user=self.user_who_does_not_join,
             auction=self.online_auction,
@@ -400,18 +390,15 @@ class DuplicateAuctionTOSTests(StandardTestCase):
             name="User Entry",
         )
         canonical.refresh_from_db()
-        # The email-duplicate save path should have merged them; canonical should have the user
         self.assertFalse(AuctionTOS.objects.filter(pk=duplicate.pk).exists())
         self.assertEqual(canonical.user, self.user_who_does_not_join)
 
 
 class AuctionNoShowURLEncodingTest(StandardTestCase):
-    """Test that bidder_number with special characters (like slashes) work with path converter"""
+    """Bidder numbers with special characters work with the path converter."""
 
     def test_bidder_number_with_special_characters(self):
-        """Test that bidder_number with special characters (except slashes) work correctly"""
-        # Note: Slashes are now automatically removed on save (see test_bidder_number_slash_removal_on_save)
-        # Test with special characters that are allowed
+        # Slashes are removed on save; see test_bidder_number_slash_removal_on_save.
         special_bidder_number = "test@123"
         special_tos = AuctionTOS.objects.create(
             user=self.user_who_does_not_join,
@@ -440,10 +427,8 @@ class AuctionNoShowURLEncodingTest(StandardTestCase):
         self.assertIn("Test Special User", response.content.decode())
 
     def test_bidder_number_with_url_like_content(self):
-        """Test with bidder_number that looks like a URL (the actual error case from the issue)"""
-        # The actual error case: bidder_number = 'https://atlfishclub./' (22 chars)
-        # Note: Slashes are now automatically removed on save
-        # We use a shorter version since bidder_number has max_length=20, and without slashes
+        """A URL-like bidder number, the originally reported case."""
+        # The reported value was 'https://atlfishclub./'; slashes are removed and max_length is 20.
         url_like_bidder = "https:site."
         url_tos = AuctionTOS.objects.create(
             user=self.user_who_does_not_join,
@@ -496,8 +481,6 @@ class AuctionNoShowURLEncodingTest(StandardTestCase):
         self.assertEqual(response.status_code, 200)
 
     def test_other_bidder_number_urls(self):
-        """Test that other URL patterns work with special characters in bidder_number where applicable"""
-        # Note: Slashes are now automatically removed on save, so we test with other special chars
         special_bidder_number = "user@123"
         special_tos = AuctionTOS.objects.create(
             user=self.user,
@@ -518,7 +501,6 @@ class AuctionNoShowURLEncodingTest(StandardTestCase):
         self.assertIsNotNone(bulk_image_url)
         self.assertIn("user@123", bulk_image_url)
 
-        # Test print_labels_by_bidder_number URL - this uses <path:bidder_number>
         print_labels_url = reverse(
             "print_labels_by_bidder_number",
             kwargs={
@@ -529,10 +511,7 @@ class AuctionNoShowURLEncodingTest(StandardTestCase):
         self.assertIsNotNone(print_labels_url)
         self.assertIn("user@123", print_labels_url)
 
-        # Note: bulk_add_lots and bulk_add_lots_auto use <str:bidder_number> because they have
-        # additional path segments after the bidder_number parameter, so they cannot support
-        # slashes in bidder_number (Django's path converter would match too greedily).
-        # These patterns work fine with bidder_numbers that don't contain slashes.
+        # bulk_add_lots URLs use <str:bidder_number> since more path follows it, so no slashes.
         normal_bidder = "user123"
         normal_tos = AuctionTOS.objects.create(
             user=self.user_with_no_lots,
@@ -553,7 +532,7 @@ class AuctionNoShowURLEncodingTest(StandardTestCase):
         self.assertIn("user123", bulk_add_url)
 
     def test_bidder_number_slash_removal_on_save(self):
-        """Test that forward slashes are removed from bidder_number on save and history is created"""
+        """Slashes are removed from bidder_number on save, with a history entry."""
 
         # Create an AuctionTOS with a bidder_number containing slashes
         bidder_with_slash = "test/123/abc"
@@ -588,7 +567,7 @@ class AuctionNoShowURLEncodingTest(StandardTestCase):
             name="Existing User",
         )
 
-        # Try to create another TOS with bidder_number "user/123" which would become "user123" after cleaning
+        # "user/123" would clean to "user123", which is taken.
         fresh_user = User.objects.create_user(username="fresh_noshow_user", password="testpassword")
         new_tos = AuctionTOS.objects.create(
             user=fresh_user,
@@ -606,7 +585,7 @@ class AuctionNoShowURLEncodingTest(StandardTestCase):
         self.assertIn("1", new_tos.bidder_number)  # Should be "user1231" or similar
 
     def test_bidder_number_reuse_by_email(self):
-        """Test that bidder numbers are reused across auctions for the same auction creator when user has the same email"""
+        """Bidder numbers are reused across the same creator's auctions by email."""
         # Create a new auction by the same creator
         new_auction = Auction.objects.create(
             created_by=self.user,  # same creator as self.online_auction
@@ -619,7 +598,6 @@ class AuctionNoShowURLEncodingTest(StandardTestCase):
             name="new location", auction=new_auction, pickup_time=timezone.now() + datetime.timedelta(days=8)
         )
 
-        # Create an AuctionTOS in the first auction with a specific bidder number
         AuctionTOS.objects.create(
             auction=self.online_auction,
             pickup_location=self.location,
@@ -628,7 +606,6 @@ class AuctionNoShowURLEncodingTest(StandardTestCase):
             name="Test User",
         )
 
-        # Create an AuctionTOS in the second auction with the same email, no bidder number
         second_tos = AuctionTOS.objects.create(
             auction=new_auction,
             pickup_location=new_location,
@@ -636,11 +613,10 @@ class AuctionNoShowURLEncodingTest(StandardTestCase):
             name="Test User",
         )
 
-        # The second TOS should reuse the bidder number from the first auction
         self.assertEqual(second_tos.bidder_number, "777")
 
     def test_bidder_number_reuse_by_user(self):
-        """Test that bidder numbers are reused across auctions for the same auction creator when user account is the same"""
+        """Bidder numbers are reused across the same creator's auctions by user."""
         # Create a new auction by the same creator
         new_auction = Auction.objects.create(
             created_by=self.user,  # same creator as self.online_auction
@@ -658,7 +634,6 @@ class AuctionNoShowURLEncodingTest(StandardTestCase):
             username="reuse_user", password="testpassword", email="different@example.com"
         )
 
-        # Create an AuctionTOS in the first auction with a specific bidder number
         AuctionTOS.objects.create(
             user=test_user,
             auction=self.online_auction,
@@ -667,7 +642,6 @@ class AuctionNoShowURLEncodingTest(StandardTestCase):
             name="Test User",
         )
 
-        # Create an AuctionTOS in the second auction with the same user but different email
         second_tos = AuctionTOS.objects.create(
             user=test_user,
             auction=new_auction,
@@ -676,11 +650,10 @@ class AuctionNoShowURLEncodingTest(StandardTestCase):
             name="Test User",
         )
 
-        # The second TOS should reuse the bidder number from the first auction
         self.assertEqual(second_tos.bidder_number, "888")
 
     def test_bidder_number_not_reused_if_in_use(self):
-        """Test that bidder numbers are NOT reused if already taken in the current auction"""
+        """Bidder numbers aren't reused if taken in the current auction."""
         # Create a new auction by the same creator
         new_auction = Auction.objects.create(
             created_by=self.user,
@@ -711,7 +684,6 @@ class AuctionNoShowURLEncodingTest(StandardTestCase):
             name="Blocker User",
         )
 
-        # Try to create an AuctionTOS in the second auction with the same email
         second_tos = AuctionTOS.objects.create(
             auction=new_auction,
             pickup_location=new_location,
@@ -723,7 +695,7 @@ class AuctionNoShowURLEncodingTest(StandardTestCase):
         self.assertNotEqual(second_tos.bidder_number, "999")
 
     def test_bidder_number_reuse_most_recent_auction(self):
-        """Test that bidder numbers are reused from the most recently created AuctionTOS"""
+        """Bidder numbers are reused from the most recently created AuctionTOS."""
         # Create two new auctions by the same creator, in order
         old_auction = Auction.objects.create(
             created_by=self.user,
@@ -756,7 +728,6 @@ class AuctionNoShowURLEncodingTest(StandardTestCase):
             name="Test User",
         )
 
-        # Create an AuctionTOS in the newer auction with a different bidder number
         AuctionTOS.objects.create(
             auction=new_auction,
             pickup_location=new_location,
@@ -785,7 +756,6 @@ class AuctionNoShowURLEncodingTest(StandardTestCase):
             name="Test User",
         )
 
-        # Should reuse 222 from the most recently created AuctionTOS, not 111 from the older one
         self.assertEqual(third_tos.bidder_number, "222")
 
 
@@ -863,7 +833,6 @@ class WeeklyPromoManagementCommandTests(StandardTestCase):
             self.assertFalse(mock_send.called, "mail.send should not be called for recently active users")
 
     def test_weekly_promo_excludes_very_old_users(self):
-        """Test that weekly_promo excludes users who haven't been active in a long time."""
         # Update user to be inactive for too long (more than 400 days)
         self.promo_user.userdata.last_activity = timezone.now() - datetime.timedelta(days=500)
         self.promo_user.userdata.save()
@@ -919,8 +888,7 @@ class WeeklyPromoManagementCommandTests(StandardTestCase):
             longitude=-74.0060,
         )
 
-        # Update user to opt into in-person auctions
-        # Disable online auction notifications to isolate in-person behavior
+        # Opt into in-person auctions only.
         self.promo_user.userdata.email_me_about_new_auctions = False
         self.promo_user.userdata.email_me_about_new_in_person_auctions = True
         self.promo_user.userdata.email_me_about_new_in_person_auctions_distance = 100
@@ -973,7 +941,7 @@ class WeeklyPromoManagementCommandTests(StandardTestCase):
         self.assertIn("FAKE", output, "Output should include FAKE indicator")
 
     def test_weekly_promo_initializes_null_schedule(self):
-        """Test that a user with null next_promo_email_at gets it initialized but no email sent."""
+        """A null next_promo_email_at is initialized and no email sent."""
         self.promo_user.userdata.next_promo_email_at = None
         self.promo_user.userdata.save()
 
@@ -1017,7 +985,7 @@ class WeeklyPromoManagementCommandTests(StandardTestCase):
         )
 
     def test_set_next_promo_initializes_to_next_wednesday(self):
-        """Test that set_next_promo sets next_promo_email_at to the next Wednesday at 10 AM."""
+        """set_next_promo picks the next Wednesday at 10 AM."""
         self.promo_user.userdata.next_promo_email_at = None
         self.promo_user.userdata.save()
 
@@ -1041,7 +1009,6 @@ class WeeklyPromoManagementCommandTests(StandardTestCase):
 
         new_time = self.promo_user.userdata.next_promo_email_at
         self.assertGreater(new_time, timezone.now(), "Advanced time should be in the future")
-        # Should be exactly 7 days from base_time (which was just 1 hour in the past)
         expected = base_time + datetime.timedelta(days=7)
         diff = abs((new_time - expected).total_seconds())
         self.assertLess(diff, 60, "Advanced time should be ~7 days from the original value")
@@ -1098,7 +1065,7 @@ class AuctionTOSNotificationsCommandTests(StandardTestCase):
     """Test the auctiontos_notifications management command"""
 
     def test_excludes_mail_only_locations_from_base_queryset(self):
-        """Test that mail-only TOS are excluded from the base queryset used for notifications"""
+        """Mail-only TOS are excluded from the notification queryset."""
 
         # Create auction with only mail pickup location
         mail_auction = Auction.objects.create(
@@ -1126,7 +1093,6 @@ class AuctionTOSNotificationsCommandTests(StandardTestCase):
             createdon=timezone.now() - datetime.timedelta(hours=25),
         )
 
-        # Verify that the base queryset used by the command excludes mail-only TOS
         base_qs = AuctionTOS.objects.filter(manually_added=False, user__isnull=False).exclude(
             pickup_location__pickup_by_mail=True
         )
@@ -1169,7 +1135,6 @@ class AuctionTOSNotificationsCommandTests(StandardTestCase):
         assert base_qs.filter(pk=physical_tos.pk).exists(), "Physical location TOS should be included in base queryset"
 
     def test_command_uses_shared_distance_helper(self):
-        """Test that the command runs successfully and uses the shared distance calculation helper"""
         from unittest.mock import patch
 
         from django.core.management import call_command
@@ -1197,8 +1162,6 @@ class AuctionTOSNotificationsCommandTests(StandardTestCase):
 
         # Patch mail.send to prevent actual email sending
         with patch("auctions.management.commands.auctiontos_notifications.mail.send"):
-            # Verify the command runs without error
-            # The command uses Auction.get_closest_location_distance_subquery which excludes (0,0) and mail locations
             try:
                 call_command("auctiontos_notifications")
                 # Success - command ran without errors

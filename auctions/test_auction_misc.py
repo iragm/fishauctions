@@ -1,4 +1,4 @@
-"""The smaller auction surfaces -- pickup locations, stats, bulk pages, watching, images."""
+"""Tests for the smaller auction surfaces: pickup locations, stats, bulk pages, watching, images."""
 
 import datetime
 import io
@@ -448,9 +448,7 @@ class ImageViewTests(WritableMediaRoot, StandardTestCase):
         return buffer.getvalue()
 
     def _animated_gif_bytes(self, size=(10, 10)):
-        """Raw bytes of a two-frame GIF -- the upload behind the `cannot write mode P as
-        JPEG` 500: easy_thumbnails hands an animated source back as a palette image, which
-        Pillow then refuses to write as the JPEG thumbnail it wants to make."""
+        """Two-frame GIF bytes: easy_thumbnails hands back a palette image Pillow can't write as JPEG."""
         from PIL import Image as PILImage
 
         frames = [PILImage.new("RGB", size, color).convert("P") for color in ("red", "green")]
@@ -499,7 +497,6 @@ class ImageViewTests(WritableMediaRoot, StandardTestCase):
         self.assertIn("image", form.errors)
 
     def test_validate_uploaded_image_rejects_garbage(self):
-        """validate_uploaded_image raises a friendly ValidationError on unreadable data"""
         from auctions.forms import validate_uploaded_image
 
         upload = SimpleUploadedFile("bad.png", b"not an image at all", content_type="image/png")
@@ -525,8 +522,7 @@ class ImageViewTests(WritableMediaRoot, StandardTestCase):
         self.assertTrue(form.cleaned_data["image"].name.endswith(".jpg"))
 
     def test_editing_an_image_with_an_animated_gif(self):
-        """The prod regression: POSTing an animated GIF to /images/<pk>/edit raised
-        `OSError: cannot write mode P as JPEG` out of easy_thumbnails and 500ed."""
+        """Editing an image with an animated GIF used to 500 with `cannot write mode P as JPEG`."""
         lot = self._addable_lot()
         image = LotImage.objects.create(lot_number=lot, image_source="ACTUAL")
         self.client.login(username=self.user.username, password="testpassword")
@@ -538,9 +534,7 @@ class ImageViewTests(WritableMediaRoot, StandardTestCase):
         self.assertTrue(image.image.name.endswith(".jpg"), image.image.name)
 
     def test_site_error_on_save_is_not_masked_as_corrupt(self):
-        """A permission/disk error while saving must surface as a 500 (which emails the
-        admins), not be reported to the user as a corrupt image. This is the prod
-        regression: [Errno 13] Permission denied writing to mediafiles/images/."""
+        """A permission or disk error while saving surfaces as a 500, not as "corrupt image"."""
         lot = self._addable_lot()
         self.client.login(username=self.user.username, password="testpassword")
         url = reverse("add_image", kwargs={"lot": lot.pk})
@@ -551,8 +545,7 @@ class ImageViewTests(WritableMediaRoot, StandardTestCase):
                 self.client.post(url, {"image": upload, "image_source": "ACTUAL"})
 
     def test_image_processing_error_on_save_shown_to_user(self):
-        """If the image itself is unusable at save time, the user gets a friendly error
-        (not a 500) and stays on the form."""
+        """An unusable image gives a friendly error, not a 500."""
         from PIL import UnidentifiedImageError
 
         lot = self._addable_lot()

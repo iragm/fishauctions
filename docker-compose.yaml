@@ -7,11 +7,10 @@ x-logging: &default-logging
     max-size: "10m"
     max-file: "3"
 
-# Shared build config for the app image (web + celery). PUID/PGID must reach the
-# Dockerfile's ARGs so the in-container app user matches the host owner of the
-# bind-mounted mediafiles/logs dirs -- update.sh's ensure_permissions chowns those
-# to the same .env values, so declaring the ARG without wiring it here would let
-# the two silently diverge whenever PUID/PGID != 1000.
+# Shared build config for the app image (web + celery). PUID/PGID must reach the Dockerfile's ARGs
+# so the in-container app user matches the host owner of the bind-mounted mediafiles/logs dirs:
+# update.sh chowns those to the same .env values, so an unwired ARG would let the two diverge
+# whenever PUID/PGID is not 1000.
 x-app-build: &app-build
   context: .
   args:
@@ -23,11 +22,10 @@ x-app-build: &app-build
 # a layer cache and then never builds again (.github/workflows/test.yml); APP_IMAGE is how it says
 # which tag it built.
 
-# NOTE on container_name: the fixed names (django, db, redis, ...) are intentional.
-# The entire ops workflow -- CLAUDE.md, update-packages.sh, cron/docs -- runs
-# `docker exec django ...` / `docker exec redis ...` against them. Fixed names do
-# prevent `docker compose up --scale` and would collide if two checkouts ran on one
-# host, but this is a single-instance deploy where stable, greppable names win.
+# The fixed container names (django, db, redis, ...) are deliberate: the whole ops workflow --
+# CLAUDE.md, update-packages.sh, cron, docs -- runs `docker exec django ...` against them. They do
+# rule out `up --scale` and would collide between two checkouts on one host, but this is a
+# single-instance deploy where greppable names win.
 services:
   web:
     build: *app-build
@@ -36,13 +34,11 @@ services:
     logging: *default-logging
     volumes:
       - .:/home/app/web
-      # collectstatic output lives in a dedicated volume, NOT bind-mounted onto
-      # the source tree. Previously this was `./auctions/static:.../staticfiles`,
-      # which pointed STATIC_ROOT at the app's own source-static dir -- so
-      # collectstatic dumped third-party statics (admin/, summernote/, ...) into
-      # git and update.sh needed a destructive `git restore .`. The source dir
-      # (auctions/static) is still visible via the repo mount above for Django's
-      # AppDirectoriesFinder to collect FROM.
+      # collectstatic output, in its own volume rather than bind-mounted onto the source tree. It
+      # used to be ./auctions/static, which pointed STATIC_ROOT at the app's own static dir, so
+      # collectstatic dumped third-party statics into git and update.sh needed a destructive
+      # `git restore .`. The source dir is still visible through the repo mount above, which is
+      # what AppDirectoriesFinder collects from.
       - staticfiles:/home/app/web/staticfiles
       - ./mediafiles:/home/app/web/mediafiles
       # Django's rotating log files (settings.py LOG_DIR) -- on the host so they
@@ -57,13 +53,10 @@ services:
       redis:
         condition: service_started
     restart: always
-    # HTTP check: proves a worker actually served a request. A bare TCP connect is
-    # not enough -- the gunicorn master binds the socket before forking, so TCP
-    # succeeds even while every worker crash-loops on an import error. Any HTTP
-    # response (even a 4xx/5xx) counts as alive: 127.0.0.1 is in ALLOWED_HOSTS, and
-    # http.client never follows redirects so the check can't wander off-box.
-    # start_period is generous: entrypoint.sh runs migrate + collectstatic before
-    # gunicorn binds.
+    # An HTTP check, because a TCP connect is not enough: the gunicorn master binds the socket
+    # before forking, so TCP succeeds while every worker crash-loops on an import error. Any HTTP
+    # response counts as alive (127.0.0.1 is in ALLOWED_HOSTS, and http.client never follows
+    # redirects). start_period is generous: entrypoint.sh migrates and collects statics first.
     healthcheck:
       test:
         - CMD-SHELL
@@ -132,34 +125,26 @@ services:
   db:
     container_name: db
     logging: *default-logging
-    # Track a single release series (security patches flow automatically) instead of
-    # :latest, which jumps release series on routine pulls and leaves system tables
-    # behind unless mariadb-upgrade runs. 11.4 is an LTS series (maintained to 2029).
-    # If an environment's data volume was created under a newer series, set
-    # MARIADB_VERSION in .env to that series -- MariaDB can't downgrade a data dir.
+    # A single release series rather than :latest, which jumps series on a routine pull and leaves
+    # system tables behind unless mariadb-upgrade runs. 11.4 is LTS, maintained to 2029. Set
+    # MARIADB_VERSION in .env if a data volume was created under a newer series -- MariaDB cannot
+    # downgrade a data dir.
     image: mariadb:${MARIADB_VERSION-11.4}
     restart: always
-    # Connection limits and timeouts. Peak concurrency is NOT just the process count:
-    # each of the 8 async gunicorn workers runs sync ORM code in a per-worker threadpool,
-    # and with CONN_MAX_AGE=0 every in-flight request holds its own connection -- so an
-    # auction-end spike can legitimately hold a few hundred connections at once (plus
-    # celery, beat, and ops sessions). 512 covers that peak while staying BOUNDED, which
-    # is what makes it a leak detector: a real leak shows up as Max_used_connections
-    # climbing toward the cap long before it hurts. (The old max_connections=10000 just
-    # hid leaks and reserved huge per-thread memory.)
+    # Peak concurrency is not the process count: each of the 8 async gunicorn workers runs sync ORM
+    # code in a threadpool, and with CONN_MAX_AGE=0 every in-flight request holds its own
+    # connection, so an auction-end spike can hold a few hundred at once. 512 covers that and stays
+    # bounded, which is what makes it a leak detector -- a leak shows as Max_used_connections
+    # climbing toward the cap. (The old 10000 hid leaks and reserved huge per-thread memory.)
     command:
       - "--max_connections=512"       # bounded: covers peak fan-out AND surfaces leaks (watch Max_used_connections)
       - "--max_allowed_packet=16M"
-      # wait_timeout: how long an IDLE connection is kept before the server reaps it.
-      # The app never leaves a connection idle by accident -- HTTP is fresh-per-request,
-      # Channels runs close_old_connections around every consumer dispatch, and celery's
-      # Django fixup does the same at task boundaries -- so nothing legitimately idles for
-      # long and there is no unbounded-leak path (max_connections above is the backstop).
-      # A short timeout (we tried 3600s) reaps live-but-idle connections in edge/long-task
-      # cases and surfaces as user-visible "server has gone away" 500s across many paths.
-      # 30 days = never reap a live connection, while still finite so a true zombie
-      # eventually clears (unlike the old ~10-year / 315M value, which was effectively
-      # infinite and hid stuck connections forever).
+      # wait_timeout is how long an IDLE connection is kept. Nothing here idles by accident -- HTTP
+      # is fresh-per-request, Channels closes old connections around every dispatch, and celery's
+      # Django fixup does the same at task boundaries -- so there is no unbounded-leak path, and
+      # max_connections above is the backstop. A short timeout (3600s was tried) reaps
+      # live-but-idle connections in long-task cases and surfaces as "server has gone away" 500s.
+      # 30 days never reaps a live connection while staying finite, so a true zombie still clears.
       - "--wait_timeout=2592000"      # 30 days
       - "--interactive_timeout=3600"  # keep interactive/CLI sessions alive an hour for ops
       - "--open_files_limit=100000"   # legitimate: many tables x connections
@@ -195,11 +180,9 @@ services:
     expose:
       - 6379
     volumes:
-      # The official redis image persists to /data. The old mount at
-      # /bitnami/redis/data was a leftover from a bitnami example, so the volume
-      # was never written and the broker queue/results were wiped on every
-      # container recreate. Enable AOF (appendfsync everysec) so the broker queue
-      # survives restarts with at most ~1s of loss.
+      # The official redis image persists to /data; the old /bitnami/redis/data mount was a
+      # leftover, so the volume was never written and the broker queue was wiped on every recreate.
+      # AOF (appendfsync everysec) keeps the queue across restarts, losing at most a second.
       - redis_data:/data
     restart: always
     command: >
@@ -211,24 +194,19 @@ services:
   nginx:
     container_name: nginx
     logging: *default-logging
-    # Pin the tag instead of :latest so a routine rebuild/pull can't drag in a
-    # swag/nginx release that reorganizes its config includes and breaks the site.
-    # NGINX_IMAGE selects dev (nginx) vs prod (lscr.io/linuxserver/swag); NGINX_TAG
-    # pins the version. Both tags still receive rebuilds on `docker compose pull`
-    # (nginx 1.27 patch rebuilds; swag republishes version tags with newer -ls
-    # builds), so security patches flow without surprise major jumps. The 1.27
-    # default only exists for the dev nginx image -- when NGINX_IMAGE is set to
-    # swag, NGINX_TAG MUST be set in .env to the swag release the host runs
-    # (update.sh refuses to deploy otherwise). Bump deliberately.
+    # A pinned tag rather than :latest, so a routine pull can't drag in a swag/nginx release that
+    # reorganizes its config includes and breaks the site. NGINX_IMAGE selects dev (nginx) or prod
+    # (swag) and NGINX_TAG pins the version; both tags still get rebuilds on `docker compose pull`,
+    # so patches flow without major jumps. The 1.27 default only exists for the dev image -- with
+    # swag, NGINX_TAG MUST be set in .env, and update.sh refuses to deploy otherwise.
     image: ${NGINX_IMAGE-nginx}:${NGINX_TAG-1.27}
     volumes:
       # the root conf file is set for dev, but for production use:
       # NGINX_CONF='./nginx.prod.conf'
       # NGINX_CONF_LOCATION='/config/nginx/site-confs/default.conf'
-      # nginx.prod.conf is gitignored and rendered by update.sh. If compose runs
-      # before it exists, Docker creates the mount source as a DIRECTORY and swag
-      # silently serves its default config -- always deploy via ./update.sh
-      # (render_nginx_domain both renders and self-heals the directory case).
+      # nginx.prod.conf is gitignored and rendered by update.sh. If compose runs before it exists,
+      # Docker creates the mount source as a DIRECTORY and swag silently serves its own default
+      # config -- always deploy via ./update.sh, which renders it and self-heals that case.
       - ${NGINX_CONF-./nginx.dev.conf}:${NGINX_CONF_LOCATION-/etc/nginx/nginx.conf}
       - ./swag:/config
       - ./nginx_fishauctions.conf:/etc/nginx/nginx_fishauctions.conf:ro
@@ -240,24 +218,19 @@ services:
       - ${HTTP_PORT-80}:80
       - ${SSL_PORT-443}:443 # this is only used in production
     restart: always
-    # Deliberately NOT condition: service_healthy. Gating nginx on web's health
-    # removes the graceful-degradation path: if web can't become healthy (e.g. a
-    # failed migration crash-looping the container), a service_healthy dependency
-    # means nginx can never start or be recreated -- the public endpoint becomes
-    # connection-refused and swag's cert renewal stops, instead of nginx serving
-    # 502s until web recovers. nginx tolerates an absent upstream fine, so it only
-    # needs start ordering here; web's healthcheck still reports in `ps`/`--wait`.
+    # Deliberately NOT service_healthy: gating nginx on web's health removes the graceful path. If
+    # web can't become healthy -- a failed migration crash-looping it -- nginx could never start or
+    # be recreated, so the public endpoint would be connection-refused and cert renewal would stop,
+    # instead of nginx serving 502s until web recovers. It tolerates an absent upstream fine, so it
+    # only needs start ordering; web's healthcheck still reports in `ps` and `--wait`.
     depends_on:
       web:
         condition: service_started
-    # NET_ADMIN is required by the prod swag image only: its bundled fail2ban edits
-    # iptables to ban abusive IPs. The dev plain-nginx image never uses the
-    # capability (it's inert there, a minor over-grant on a local container).
-    # Compose can't conditionally drop a single cap_add entry via env, and removing
-    # it would break swag's fail2ban in prod, so it stays for both. NOTE: the prod
-    # config path (NGINX_CONF=./nginx.prod.conf + swag ssl.conf includes) is only
-    # exercised in production -- there's no dev harness for it, so change
-    # nginx.prod.conf / nginx_fishauctions.conf carefully.
+    # NET_ADMIN is for the prod swag image only: its bundled fail2ban edits iptables to ban abusive
+    # IPs. The dev nginx image never uses it -- inert there, a minor over-grant on a local
+    # container -- and compose can't drop a single cap_add entry by env, so it stays for both. The
+    # prod config path (nginx.prod.conf plus swag's ssl.conf includes) has no dev harness at all,
+    # so change nginx.prod.conf and nginx_fishauctions.conf carefully.
     cap_add:
       - NET_ADMIN
     environment: # none of these get used in development
@@ -267,11 +240,10 @@ services:
       - URL=${SITE_DOMAIN}
       - VALIDATION=http
       - EMAIL=${ADMIN_EMAIL}
-      # ACME CA swag requests certs from. Empty = swag's default (Let's Encrypt).
-      # Prod runs zerossl since the 2026-07-20 incident: swag's init revoked every
-      # LE cert for the domain and new LE issuance was rate-limited for a week
-      # ("new certificates per exact set of identifiers"). Value lives in .env
-      # (untracked) so update.sh's `git restore .` can't strip it on deploy.
+      # The ACME CA swag requests certs from; empty is swag's default, Let's Encrypt. Prod runs
+      # zerossl since the 2026-07-20 incident, when swag's init revoked every LE cert for the
+      # domain and reissue was rate-limited for a week. Lives in .env, so update.sh's
+      # `git restore .` can't strip it on deploy.
       - CERTPROVIDER=${CERTPROVIDER-}
 
   selenium:
@@ -295,7 +267,6 @@ services:
 volumes:
   redis_data:
   mariadb_data:
-  # collectstatic output (STATIC_ROOT). A named volume rather than a bind mount
-  # onto ./auctions/static, so collected third-party statics never land in the
-  # source tree / git. Repopulated by collectstatic on container start.
+  # collectstatic output (STATIC_ROOT). A named volume rather than a bind mount onto
+  # ./auctions/static, so collected third-party statics never land in git. Repopulated on start.
   staticfiles:

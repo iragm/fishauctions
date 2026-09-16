@@ -24,11 +24,8 @@ from auctions.tests import StandardTestCase
 
 
 class NonOAuthPayPalTests(TestCase):
-    """Club-supplied (non-OAuth) PayPal credentials.
-
-    When an admin sets ``Club.allow_non_oauth_paypal``, the club enters its own PayPal REST
-    API client ID/secret and they're used exactly like the site's PAYPAL_CLIENT_ID/SECRET:
-    payments go straight to that PayPal account with no payee override or platform fee.
+    """Club-supplied (non-OAuth) PayPal credentials, used exactly like the site's, with no payee override
+    or platform fee.
     """
 
     def setUp(self):
@@ -109,8 +106,7 @@ class NonOAuthPayPalTests(TestCase):
         )
         invoice = Invoice(auction=auction)
         self.assertEqual(invoice.paypal_credentials, ("club-client-id", "club-secret"))
-        # No linked seller and not the site account => no payee merchant id, so the money
-        # goes straight to the club's own PayPal account (same as the site keys do).
+        # No payee merchant id, so money goes straight to the club's PayPal account.
         self.assertIsNone(auction.paypal_information)
 
     # -- mixin auth resolution -------------------------------------------------
@@ -177,8 +173,7 @@ class NonOAuthPayPalTests(TestCase):
 
     @override_settings(PAYPAL_CLIENT_ID="site-id", PAYPAL_SECRET="site-secret")
     def test_settings_page_shows_oauth_when_flag_off(self):
-        # The OAuth "Connect" button is gated behind the user's paypal_enabled flag, which
-        # defaults to PAYPAL_ENABLED_FOR_USERS (False). Enable it so the button can render.
+        # The OAuth Connect button needs the user's paypal_enabled flag, off by default.
         self.money_user.userdata.paypal_enabled = True
         self.money_user.userdata.save(update_fields=["paypal_enabled"])
         self.client.login(username="nonoauth_money", password="pw")
@@ -195,8 +190,7 @@ class NonOAuthPayPalTests(TestCase):
         self._enable_credentials()
         invoice = self._make_club_invoice()
         mixin = PayPalAPIMixin()
-        # Returns a manual-refund message and never touches the PayPal API (no webhook
-        # means an automated refund would go unrecorded).
+        # A manual-refund message, never the PayPal API: without a webhook it would go unrecorded.
         result = mixin.refund_invoice(invoice, Decimal("5.00"))
         self.assertIn("manually", result.lower())
 
@@ -235,8 +229,7 @@ class NonOAuthPayPalTests(TestCase):
             active=False,
         )
         invoice, _ = Invoice.objects.get_or_create(auctiontos_user=buyer_tos)
-        # The button itself is available and the club's own credentials resolve -- so the QR is
-        # suppressed by the non-OAuth gate, not because PayPal is unavailable.
+        # The QR is suppressed by the non-OAuth gate, not by PayPal being unavailable.
         self.assertTrue(invoice.show_paypal_button)
         self.assertIsNotNone(invoice.paypal_credentials)
 
@@ -257,9 +250,8 @@ class NonOAuthPayPalTests(TestCase):
             date_end=timezone.now() - datetime.timedelta(days=1),
             enable_online_payments=False,  # club config supersedes this for club auctions
         )
-        # Off by default => the per-auction flag (False) decides, so the CSV export stays available.
         self.assertFalse(auction.paypal_payments_enabled)
-        # Turning on non-OAuth PayPal means buyers can pay directly => hide the manual CSV export.
+        # With non-OAuth PayPal on, buyers pay directly, so the manual CSV export is hidden.
         self._enable_credentials()
         auction.refresh_from_db()
         self.assertTrue(auction.paypal_payments_enabled)
@@ -276,8 +268,7 @@ class ClubMoneyInvoiceHistoryTests(StandardTestCase):
         ClubMoney.objects.all().delete()
 
     def test_marking_seller_invoice_paid_books_payout_not_receivables(self):
-        # self.invoice's user sold lots, so paying it books a seller payout. The old
-        # receivable/profit categories are gone (commission is computed, not stored).
+        # Paying a seller's invoice books a payout; commission is computed, not stored.
         self.invoice.status = "PAID"
         self.invoice.save(update_fields=["status"])
         categories = set(ClubMoney.objects.filter(invoice=self.invoice).values_list("category", flat=True))
@@ -319,13 +310,8 @@ class ClubMoneyInvoiceHistoryTests(StandardTestCase):
 
 
 class ClubProfitTests(TestCase):
-    """Auction.club_profit -- what the club nets from auction activity.
-
-    Regression coverage for the four defects fixed in Item 14:
-      * a genuine loss stays negative (no abs()),
-      * invoices whose calculated_total was never stamped (NULL) are not dropped,
-      * cents survive end to end (no int() truncation),
-      * sales tax and membership dues are excluded (they are not auction-activity profit).
+    """Auction.club_profit: losses stay negative, unstamped invoices count, cents survive, and tax and
+    dues are excluded.
     """
 
     def setUp(self):
@@ -383,7 +369,7 @@ class ClubProfitTests(TestCase):
         return invoice
 
     def test_normal_profit_is_positive_commission(self):
-        # club_pct=20 on a $100 lot: buyer pays 100, seller gets 80, club keeps 20.
+        # 20% of a $100 lot: buyer pays 100, seller gets 80, club keeps 20.
         auction = self._auction(club_pct=20)
         seller, buyer = self._tos(auction), self._tos(auction)
         self._sold_lot(auction, seller, buyer, 100)
@@ -393,8 +379,7 @@ class ClubProfitTests(TestCase):
         self.assertIsInstance(auction.club_profit, Decimal)
 
     def test_loss_shows_as_negative(self):
-        # club takes no cut but promises every buyer a $5 first-bid payout: it collects 5 from the
-        # buyer yet owes the seller 10, a real $5 loss. The old abs() reported this as +5 profit.
+        # No cut but a $5 first-bid payout: collects 5, owes 10, a real $5 loss.
         auction = self._auction(club_pct=0, first_bid_payout=5)
         seller, buyer = self._tos(auction), self._tos(auction)
         self._sold_lot(auction, seller, buyer, 10)
@@ -404,22 +389,18 @@ class ClubProfitTests(TestCase):
         self.assertLess(auction.club_profit, 0)
 
     def test_null_calculated_total_is_not_dropped(self):
-        # Fresh draft invoices never had calculated_total stamped; they must still contribute their
-        # live rounded_net instead of silently vanishing from the total.
+        # Draft invoices have no stamped calculated_total and must still count.
         auction = self._auction(club_pct=20)
         seller, buyer = self._tos(auction), self._tos(auction)
         self._sold_lot(auction, seller, buyer, 100)
         seller_invoice = self._invoice(seller)
         buyer_invoice = self._invoice(buyer)
-        # Precondition: both invoices genuinely have an unstamped (NULL) calculated_total.
         self.assertIsNone(seller_invoice.calculated_total)
         self.assertIsNone(buyer_invoice.calculated_total)
-        # Profit is still the full 20 (100 collected - 80 paid), not 0 as it was when NULLs dropped.
         self.assertEqual(auction.club_profit, Decimal("20.00"))
 
     def test_cents_are_preserved(self):
-        # club_pct=33 on a $10 lot: seller cut 6.70, club cut 3.30. int() truncation would drop the
-        # 30 cents (yielding 3). No invoice_rounding, so the exact cents must flow through.
+        # 33% of $10: seller 6.70, club 3.30, with no int() truncation.
         auction = self._auction(club_pct=33)
         seller, buyer = self._tos(auction), self._tos(auction)
         self._sold_lot(auction, seller, buyer, 10)
@@ -429,8 +410,7 @@ class ClubProfitTests(TestCase):
         self.assertNotEqual(auction.club_profit, Decimal(3))
 
     def test_tax_is_excluded(self):
-        # 10% tax on a $100 lot: buyer owes 110, but the extra 10 is remitted to the taxing
-        # authority. club_profit is the 20 commission, NOT 30 (which would count the tax as profit).
+        # 10% tax on $100: the tax is remitted, so profit is the 20 commission, not 30.
         auction = self._auction(club_pct=20, tax=10)
         seller, buyer = self._tos(auction), self._tos(auction)
         self._sold_lot(auction, seller, buyer, 100)
@@ -440,8 +420,7 @@ class ClubProfitTests(TestCase):
         self.assertEqual(auction.club_profit, Decimal("20.00"))
 
     def test_membership_dues_are_excluded(self):
-        # A renewing buyer pays their $100 in bids plus the $25 annual fee. Dues are separate club
-        # revenue, so club_profit stays the 20 commission, not 45.
+        # Dues are separate revenue, so profit stays 20, not 45.
         auction = self._auction(club_pct=20)
         seller, buyer = self._tos(auction), self._tos(auction)
         self._sold_lot(auction, seller, buyer, 100)
@@ -456,8 +435,7 @@ class ClubProfitTests(TestCase):
         self._sold_lot(auction, seller, buyer, 100)
         self._invoice(seller, paid=True)
         self._invoice(buyer, paid=True, renewal_needed=True)
-        # buyer invoice net = -(100 bids + 10 tax + 25 dues) = -135; seller net = +80.
-        # -sum(calculated_total) = 55, minus 10 tax minus 25 dues = 20 commission.
+        # buyer net -135, seller +80: 55 - 10 tax - 25 dues = 20 commission.
         self.assertEqual(auction.club_profit, Decimal("20.00"))
 
     def test_untaxed_non_membership_auction_backs_out_nothing(self):
@@ -469,10 +447,7 @@ class ClubProfitTests(TestCase):
         self.assertEqual(auction._auction_membership_dues, Decimal("0.00"))
 
     def test_derived_properties_track_the_fix(self):
-        # percent_to_club derives from club_profit, so the sign fix flows through: on a loss the
-        # club's percentage of gross is correctly negative -- which the old abs() masked.
-        # total_to_sellers is computed directly (Item 15), so the buyer's $5 first-bid payout is NOT
-        # miscounted as money paid to the seller: the seller is credited exactly their $10 cut.
+        # percent_to_club follows the sign; total_to_sellers credits the seller exactly their cut.
         auction = self._auction(club_pct=0, first_bid_payout=5)
         seller, buyer = self._tos(auction), self._tos(auction)
         self._sold_lot(auction, seller, buyer, 10)
@@ -485,14 +460,8 @@ class ClubProfitTests(TestCase):
 
 
 class TotalToSellersPercentToClubTests(TestCase):
-    """Auction.total_to_sellers and Auction.percent_to_club (Item 15).
-
-    total_to_sellers is now computed directly from the per-lot seller cut (``your_cut``) rather
-    than as ``gross - club_profit``. That subtraction distorted the figure once club_profit
-    stopped mirroring gross: club_profit excludes tax and dues (never part of gross) and reflects
-    buyer-side promotions, so subtraction would fold tax, dues and buyer payouts into a number
-    that is supposed to be only what sellers are owed. percent_to_club is club_profit as a
-    Decimal fraction of gross, negative on a loss and 0 (not a ZeroDivisionError) when gross is 0.
+    """Auction.total_to_sellers is the sum of per-lot seller cuts, not ``gross - club_profit``, which
+    would fold in tax, dues and buyer payouts. percent_to_club is club_profit over gross, 0 when gross is 0.
     """
 
     def setUp(self):
@@ -564,7 +533,7 @@ class TotalToSellersPercentToClubTests(TestCase):
     # ---- total_to_sellers ----------------------------------------------------------------
 
     def test_total_to_sellers_matches_seller_credits(self):
-        # club_pct=25: on $100 the seller keeps 75, on $40 they keep 30. Total credited = 105.
+        # 25%: the seller keeps 75 of $100 and 30 of $40.
         auction = self._auction(club_pct=25)
         seller, buyer = self._tos(auction), self._tos(auction)
         self._sold_lot(auction, seller, buyer, 100)
@@ -573,8 +542,7 @@ class TotalToSellersPercentToClubTests(TestCase):
         self.assertIsInstance(auction.total_to_sellers, Decimal)
 
     def test_total_to_sellers_not_distorted_by_tax(self):
-        # 10% tax makes the buyer owe 110, but tax never touches the seller cut: still 80.
-        # gross - club_profit would also give 80 here only by coincidence; the direct value is 80.
+        # Tax never touches the seller cut.
         auction = self._auction(club_pct=20, tax=10)
         seller, buyer = self._tos(auction), self._tos(auction)
         self._sold_lot(auction, seller, buyer, 100)
@@ -583,7 +551,7 @@ class TotalToSellersPercentToClubTests(TestCase):
         self.assertEqual(auction.total_to_sellers, Decimal("80.00"))
 
     def test_total_to_sellers_not_distorted_by_membership_dues(self):
-        # A renewing buyer pays $25 dues on top of their bids; the seller is still owed only 80.
+        # Dues don't either.
         auction = self._auction(club_pct=20)
         seller, buyer = self._tos(auction), self._tos(auction)
         self._sold_lot(auction, seller, buyer, 100)
@@ -593,8 +561,7 @@ class TotalToSellersPercentToClubTests(TestCase):
         self.assertEqual(auction.total_to_sellers, Decimal("80.00"))
 
     def test_total_to_sellers_excludes_buyer_first_bid_payout(self):
-        # club_pct=0 + $5 first-bid payout to the buyer: the seller is credited their full $10.
-        # gross - club_profit = 10 - (-5) = 15 would wrongly count the buyer payout as a payout.
+        # A buyer-side first-bid payout isn't a payout to the seller.
         auction = self._auction(club_pct=0, first_bid_payout=5)
         seller, buyer = self._tos(auction), self._tos(auction)
         self._sold_lot(auction, seller, buyer, 10)
@@ -603,8 +570,7 @@ class TotalToSellersPercentToClubTests(TestCase):
         self.assertEqual(auction.total_to_sellers, Decimal("10.00"))
 
     def test_total_to_sellers_ignores_banned_and_donated_lots(self):
-        # Banned lots are never charged (seller gets 0) and donations go entirely to the club
-        # (seller cut 0). Only the normal $100 lot's $75 cut counts.
+        # Banned lots aren't charged and donations go to the club, so only the $100 lot counts.
         auction = self._auction(club_pct=25)
         seller, buyer = self._tos(auction), self._tos(auction)
         self._sold_lot(auction, seller, buyer, 100)
@@ -613,8 +579,7 @@ class TotalToSellersPercentToClubTests(TestCase):
         self.assertEqual(auction.total_to_sellers, Decimal("75.00"))
 
     def test_total_to_sellers_ignores_unsold_lot_fees(self):
-        # An unsold lot carries a seller-charged unsold_lot_fee. total_to_sellers reports payouts
-        # for lots that sold; the fee must not silently reduce it below the sold lot's cut.
+        # An unsold lot's fee must not reduce the sold lot's payout.
         auction = self._auction(club_pct=25, unsold_lot_fee=2)
         seller, buyer = self._tos(auction), self._tos(auction)
         self._sold_lot(auction, seller, buyer, 100)
@@ -641,14 +606,14 @@ class TotalToSellersPercentToClubTests(TestCase):
         self.assertIsInstance(auction.percent_to_club, Decimal)
 
     def test_percent_to_club_zero_gross_returns_zero(self):
-        # No sold lots -> gross is 0. Must return a sane 0, not raise ZeroDivisionError.
+        # No sold lots: 0, not ZeroDivisionError.
         auction = self._auction(club_pct=20)
         self.assertEqual(auction.gross, 0)
         self.assertEqual(auction.percent_to_club, Decimal(0))
         self.assertIsInstance(auction.percent_to_club, Decimal)
 
     def test_percent_to_club_negative_on_loss(self):
-        # club_pct=0 + $5 buyer payout: the club loses $5 on $10 gross = -50%.
+        # A $5 loss on $10 gross is -50%.
         auction = self._auction(club_pct=0, first_bid_payout=5)
         seller, buyer = self._tos(auction), self._tos(auction)
         self._sold_lot(auction, seller, buyer, 10)
@@ -660,20 +625,8 @@ class TotalToSellersPercentToClubTests(TestCase):
 
 
 class AuctionGrossTests(TestCase):
-    """Auction.gross -- refund-adjusted gross sales (Item 17).
-
-    gross was ``Sum("winning_price")`` over every lot in the auction. That had three defects, all
-    fixed here so gross reconciles with the money stats shown beside it on the stats page:
-
-      * it counted BANNED (removed) lots, which are never charged and are excluded from
-        ``total_to_sellers``, ``median_lot_price`` and ``total_sold_lots``;
-      * it ignored PARTIAL REFUNDS, reporting the full hammer price even though a refund
-        proportionally reduces both the buyer's bill and the seller's payout;
-      * its filter did not match ``total_sold_lots``, so "N lots sold, $X gross" could count
-        different lots.
-
-    The chosen basis is refund-adjusted final price (``winning_price * (100 - refund%) / 100``) over
-    sold, non-banned lots, which makes ``gross == total_to_sellers + club_profit_raw`` exactly.
+    """Auction.gross is refund-adjusted sales over sold, non-banned lots, so it equals total_to_sellers
+    plus the club's raw cut and matches total_sold_lots.
     """
 
     def setUp(self):
@@ -729,7 +682,6 @@ class AuctionGrossTests(TestCase):
         )
 
     def test_gross_simple_known_prices(self):
-        # Two sold lots, $100 and $40, no refunds: gross is the plain hammer total, 140.
         auction = self._auction()
         seller, buyer = self._tos(auction), self._tos(auction)
         self._sold_lot(auction, seller, buyer, 100)
@@ -738,8 +690,7 @@ class AuctionGrossTests(TestCase):
         self.assertIsInstance(auction.gross, Decimal)
 
     def test_gross_includes_donations(self):
-        # A donation is still billed to the buyer at the hammer price (it all goes to the club),
-        # so it is genuine gross even though the seller's cut is 0.
+        # A donation is billed to the buyer at the hammer price, so it's genuine gross.
         auction = self._auction()
         seller, buyer = self._tos(auction), self._tos(auction)
         self._sold_lot(auction, seller, buyer, 100)
@@ -747,8 +698,7 @@ class AuctionGrossTests(TestCase):
         self.assertEqual(auction.gross, Decimal("150.00"))
 
     def test_gross_excludes_banned_lots(self):
-        # The $200 banned lot is pulled from the sale and never charged, so it must not inflate
-        # gross above the $100 that actually sold.
+        # A banned lot is never charged.
         auction = self._auction()
         seller, buyer = self._tos(auction), self._tos(auction)
         self._sold_lot(auction, seller, buyer, 100)
@@ -756,7 +706,6 @@ class AuctionGrossTests(TestCase):
         self.assertEqual(auction.gross, Decimal("100.00"))
 
     def test_gross_excludes_unsold_lots(self):
-        # An unsold lot has no winning_price and contributes nothing to gross.
         auction = self._auction(unsold_lot_fee=2)
         seller, buyer = self._tos(auction), self._tos(auction)
         self._sold_lot(auction, seller, buyer, 100)
@@ -764,9 +713,7 @@ class AuctionGrossTests(TestCase):
         self.assertEqual(auction.gross, Decimal("100.00"))
 
     def test_gross_nets_out_partial_refund(self):
-        # A 25% partial refund on a $100 lot reduces both the buyer's bill and the seller's payout,
-        # so refund-adjusted gross is 75, not the full 100 hammer price. A second un-refunded $40
-        # lot adds its full price: 75 + 40 = 115.
+        # A 25% refund on $100 gives 75, plus an un-refunded $40 lot.
         auction = self._auction()
         seller, buyer = self._tos(auction), self._tos(auction)
         self._sold_lot(auction, seller, buyer, 100, refund=25)
@@ -774,8 +721,7 @@ class AuctionGrossTests(TestCase):
         self.assertEqual(auction.gross, Decimal("115.00"))
 
     def test_gross_ties_out_to_seller_and_club_cuts(self):
-        # The whole point of the refund-adjusted basis: gross must equal what sellers are credited
-        # plus the club's raw cut of the same lots, refunds and all.
+        # gross equals seller credits plus the club's raw cut of the same lots.
         auction = self._auction(club_pct=25, lot_entry_fee=0)
         seller, buyer = self._tos(auction), self._tos(auction)
         self._sold_lot(auction, seller, buyer, 100, refund=20)  # final 80: seller 60, club 20
@@ -785,8 +731,7 @@ class AuctionGrossTests(TestCase):
         self.assertEqual(auction.gross, Decimal("120.00"))
 
     def test_gross_and_total_sold_lots_count_the_same_lots(self):
-        # "N lots sold, $X gross" must be coherent: the lots counted by total_sold_lots are exactly
-        # the ones summed by gross. The banned and unsold lots are excluded from both.
+        # The lots counted by total_sold_lots are exactly the ones summed by gross.
         auction = self._auction()
         seller, buyer = self._tos(auction), self._tos(auction)
         self._sold_lot(auction, seller, buyer, 100)

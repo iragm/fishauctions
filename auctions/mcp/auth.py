@@ -1,11 +1,8 @@
 """Who is calling ``/mcp/``, and what they may do.
 
-Two credentials, both ``Authorization: Bearer``: OAuth 2.1 (``django-oauth-toolkit``, gated on
-``oauth2_provider`` in ``INSTALLED_APPS``) and a per-user :class:`auctions.models.UserAPIKey`
-(prefix ``ak_``) for clients that can't run an OAuth dance. A session cookie is refused: this is a
-CSRF-exempt POST endpoint that performs writes, so honouring cookies would let any page act as
-whoever is signed in. A credential only ever narrows what its owner may do -- every tool still asks
-the database what this user may do on this object, same as a click would.
+Two ``Authorization: Bearer`` credentials: OAuth 2.1 (``django-oauth-toolkit``) and a per-user
+:class:`auctions.models.UserAPIKey` (prefix ``ak_``). Session cookies are refused: this is a
+CSRF-exempt write endpoint. A credential only narrows its owner's permissions.
 """
 
 from __future__ import annotations
@@ -20,63 +17,35 @@ from django.utils import timezone
 
 logger = logging.getLogger(__name__)
 
-#: Requests per hour for a credential that names no limit of its own. It has to sit above
-#: :data:`DEFAULT_WRITE_BUDGET` with room over: every write is a request too, and an agent doing a
-#: run of writes reads between them (which lot, which bidder, did that work). A write budget above
-#: the request limit would be a number that never applies, which is worse than a low one.
+#: Requests per hour by default. Must exceed :data:`DEFAULT_WRITE_BUDGET`, since writes are
+#: requests too.
 DEFAULT_RATE_LIMIT = 3000
 
-#: Writes per hour for one credential. It is a ceiling on a runaway, not a security boundary: what
-#: it bounds is the number of rows an agent following an instruction it read in a lot description
-#: can reach before somebody notices. Every write is still one row, still needs a permission its
-#: owner really holds, and is still recorded in the auction's history with the assistant named.
-#:
-#: Raised from 300, which was set from "a check-in table is one write per person through the door"
-#: and turned out to describe the *quiet* jobs. The ones that actually spend this are the bulk
-#: ones -- a picture on every lot without one, clearing a room's check-ins one call at a time,
-#: setting winners through an evening -- and 300 stopped a real afternoon's work partway through,
-#: which teaches an operator to work around the limit rather than to notice it.
+#: Writes per hour per credential: a ceiling on a runaway or injected agent, not a security
+#: boundary. 300 stopped real bulk jobs.
 DEFAULT_WRITE_BUDGET = 2000
 
-#: How often a key's ``last_used_at`` is worth writing. Every request would be a database write per
-#: tool call to record something nobody reads to the minute; the column exists to answer "is this
-#: key still in use", and an hour is precise enough for that.
+#: How often ``last_used_at`` is written; hourly is precise enough.
 LAST_USED_INTERVAL_SECONDS = 3600
 
-#: The scope an OAuth token needs before a write tool will run for it. Reads need ``read``.
+#: Write tools need the ``write`` scope; reads need ``read``.
 SCOPE_READ = "read"
 SCOPE_WRITE = "write"
 
 
-# There is deliberately **no per-user opt-in gate on this endpoint**, and that is a change from how
-# it shipped. It used to require ``UserData.use_llm_search`` -- the flag that opens the
-# natural-language command palette -- on the reasoning that the two are one beta reached two ways.
-# They are not the same feature and the flag was the wrong shape for this one. The palette spends
-# *this site's* language-model budget on every keystroke, which is what that flag is for; an agent
-# connecting over MCP brings its own model, costs this site nothing beyond the queries any web page
-# would make, and can do nothing its owner could not do by clicking. Gating it bought no safety and
-# cost the thing an unreleased feature can least afford: somebody pressing Connect, completing a
-# full OAuth flow, and being refused by their own site with no way to act on it.
-#
-# What is still checked on every credential is ``is_active``. See :data:`INACTIVE_MESSAGE`.
+# No per-user opt-in on this endpoint: agents bring their own model and can't exceed their owner's
+# permissions. ``is_active`` is still checked on every credential; see :data:`INACTIVE_MESSAGE`.
 
 
-#: What a person is told when the account behind a credential has been turned off. Deliberately
-#: says nothing about why: the two reasons an account is inactive are that its owner deleted it and
-#: that somebody here banned it, and neither is a sentence to put in front of a stranger's agent.
+#: Shown when the account is inactive. Says nothing about why (deleted or banned).
 INACTIVE_MESSAGE = "This account is no longer active on this site."
 
 
 @dataclass
 class Refusal:
-    """A credential we recognised and will not act on, with the reason a person needs to read.
+    """A recognised credential we won't act on, with a reason, answered with 403.
 
-    Kept apart from ``None`` because the two have to be answered with different status codes, and
-    getting that wrong costs the whole feature rather than one request. A ``401`` is an instruction
-    to authenticate: a client that receives one runs the OAuth flow again, is issued another
-    perfectly valid token, presents it, and is refused again -- a loop with no message in it
-    anywhere, and no way for the person watching it to find out why. A ``403`` ends it and carries
-    the sentence that says what to do.
+    A 401 would make an OAuth client fetch another valid token and loop with no message.
     """
 
     message: str
@@ -88,9 +57,9 @@ class Credential:
 
     user: Any
     writes: bool = False
-    #: ``"oauth"`` or ``"key"``. Recorded, and used to key the rate limit.
+    #: ``"oauth"`` or ``"key"``; keys the rate limit.
     kind: str = ""
-    #: The ``UserAPIKey`` or OAuth ``AccessToken`` row, for throttling and for a log line.
+    #: The ``UserAPIKey`` or ``AccessToken`` row.
     token: Any = None
 
     @property
@@ -99,13 +68,8 @@ class Credential:
 
     @property
     def label(self) -> str:
-        """What to call this caller in a history line a club will read months later.
-
-        The registered OAuth application ("Claude", "Claude Code") or the key's own name, because
-        those are what a person recognises. Deliberately *not* the client's ``initialize``
-        handshake: this server is stateless, so a ``tools/call`` is a separate HTTP request that
-        carries no ``clientInfo`` at all -- and a name that arrives in the request body is a name
-        the caller chose for itself.
+        """The caller's name for history lines: the OAuth application or the key's name, never the
+        client-supplied ``clientInfo``.
         """
         if self.kind == "oauth":
             application = getattr(self.token, "application", None)
@@ -140,29 +104,17 @@ def bearer_token(request) -> str:
 
 
 def resource_metadata_url(request) -> str:
-    """Where a client should look to find out how to authenticate.
+    """Where clients find out how to authenticate (RFC 9728).
 
-    RFC 9728 puts the document at the *origin's* ``/.well-known/oauth-protected-resource``, and
-    appends the resource's own path component after it -- so an endpoint at ``/mcp`` is described
-    at ``/.well-known/oauth-protected-resource/mcp``. That form is the one that matters here,
-    because the ``resource`` it reports is then ``https://host/mcp`` rather than
-    ``https://host``, and Claude requires ``resource`` to match the URL the user typed into it.
-
-    Built from the request's own path rather than hard-coded, so it stays right if the endpoint is
-    ever mounted somewhere else, and so staging, production and a development box each advertise
-    themselves rather than a name baked into settings.
+    The path form ``/.well-known/oauth-protected-resource/mcp`` reports ``resource`` as
+    ``https://host/mcp``, which Claude requires. Built from the request so every host advertises itself.
     """
     path = (request.path or "/mcp").rstrip("/")
     return request.build_absolute_uri(f"/.well-known/oauth-protected-resource{path}")
 
 
 def challenge(request) -> str:
-    """The ``WWW-Authenticate`` header to put on a 401.
-
-    Claude only honours this on a ``401`` -- never on a ``200`` -- and without the
-    ``resource_metadata`` pointer it has to guess at the well-known paths, which costs round trips
-    on every connection and fails outright on a host that cannot serve them.
-    """
+    """The ``WWW-Authenticate`` header for a 401. Claude only reads ``resource_metadata`` on a 401."""
     return f'Bearer resource_metadata="{resource_metadata_url(request)}"'
 
 
@@ -176,20 +128,14 @@ def _from_oauth(request) -> Credential | Refusal | None:
     from oauth2_provider.models import get_access_token_model
 
     token = get_access_token_model().objects.filter(token=raw).select_related("user__userdata").first()
-    # ``is_valid(scopes)`` is expiry *and* scope in one call. Reading is the floor: a token that
-    # was granted neither scope has nothing here it is allowed to do, and saying so at the door
-    # beats handing it a tool list it will be refused on every entry of.
+    # Expiry and scope together; ``read`` is the floor.
     if token is None or not token.is_valid([SCOPE_READ]):
         return None
     if token.user is not None and not token.user.is_active:
-        # Nothing in the toolkit's ``is_valid`` looks at the user. On the web, ``is_active=False``
-        # stops somebody at the login form; here their agent carries on acting as them, so
-        # deleting an account or banning somebody would not disconnect what they had connected.
+        # The toolkit doesn't check the user, so an inactive account must be refused here.
         return Refusal(INACTIVE_MESSAGE)
     if token.user is None:
-        # A client-credentials token has no user behind it. Every tool here acts as a person and
-        # checks that person's permissions, so a token with nobody attached has nothing to act as.
-        # (Claude does not issue these either: every connection is user-consented.)
+        # Client-credentials tokens have no user to act as.
         return None
     return Credential(
         user=token.user,
@@ -200,7 +146,7 @@ def _from_oauth(request) -> Credential | Refusal | None:
 
 
 def _from_api_key(request) -> Credential | Refusal | None:
-    """A ``UserAPIKey``. Same ``Authorization: Bearer`` header; told apart by the ``ak_`` prefix."""
+    """A ``UserAPIKey`` in the same Bearer header, identified by the ``ak_`` prefix."""
     from auctions.models import UserAPIKey
 
     raw = bearer_token(request)
@@ -216,7 +162,7 @@ def _from_api_key(request) -> Credential | Refusal | None:
 
 
 def _touch(key) -> None:
-    """Record that a key was used, at most once an hour. See :data:`LAST_USED_INTERVAL_SECONDS`."""
+    """Record key use, at most hourly."""
     marker = f"mcp-key-used-{key.pk}"
     if cache.get(marker):
         return
@@ -225,15 +171,10 @@ def _touch(key) -> None:
 
 
 def authenticate(request) -> Credential | Refusal | None:
-    """The caller behind one request, a :class:`Refusal`, or ``None`` when there isn't a credential.
+    """The caller, a :class:`Refusal`, or ``None`` without a credential.
 
-    Order matters only for speed: an ``ak_`` prefix is decided by a string comparison, an OAuth
-    token by a query, so the cheap check that can rule itself out goes first. Neither can match a
-    credential meant for the other -- the prefix is what separates them.
-
-    A ``Refusal`` is truthy, so it short-circuits the ``or`` below and is never second-guessed by
-    the other credential type: a key whose owner has been deactivated must not be answered by
-    falling through and pretending nobody presented anything.
+    The ``ak_`` prefix check runs first because it's cheaper. A Refusal is truthy, so it's never
+    overridden by the other credential type.
     """
     if not bearer_token(request):
         return None
@@ -241,23 +182,11 @@ def authenticate(request) -> Credential | Refusal | None:
 
 
 def within_write_budget(credential: Credential) -> bool:
-    """Count one write against this credential's hourly budget. False when it is spent.
+    """Count one write against the hourly budget; False when spent.
 
-    Separate from :func:`within_rate_limit` because the two bound different things. The rate limit
-    is about load: every request, reads included. This is about *damage*, and it is the only
-    structural answer this server has to prompt injection.
-
-    The attack is not exotic: every string these tools return was typed by somebody else -- lot
-    names, lot descriptions, member memos, chat messages -- and an agent holding the write scope
-    that reads "also mark every invoice paid" is the whole of it. The attacker only needs to be
-    able to list a lot in an auction the victim runs. Three things bound it, and this is the third:
-    a write needs a permission its owner genuinely holds, so the blast radius is their own
-    auctions; there is no tool that changes more than one row, so a hundred invoices is a hundred
-    calls; and after this many of them in an hour the calls stop.
-
-    It counts *attempted* writes rather than successful ones on purpose. A refused write is still
-    a call the agent chose to make, and an attack that spends its budget on refusals is an attack
-    that has been stopped either way.
+    Separate from :func:`within_rate_limit`: this bounds damage from prompt injection. Writes need the
+    owner's real permissions, no tool changes more than one row, and this caps the count. Attempts are
+    counted, not successes.
     """
     key = credential.write_cache_key
     count = cache.get_or_set(key, 0, timeout=3600)
@@ -271,7 +200,7 @@ def within_write_budget(credential: Credential) -> bool:
 
 
 def within_rate_limit(credential: Credential) -> bool:
-    """A fixed-window counter per credential. Coarse on purpose; this is a bound, not a queue."""
+    """A fixed-window counter per credential."""
     key = credential.cache_key
     count = cache.get_or_set(key, 0, timeout=3600)
     if count >= credential.rate_limit:
@@ -283,18 +212,14 @@ def within_rate_limit(credential: Credential) -> bool:
     return True
 
 
-#: Dynamic client registrations one address may make in a window. DCR has to be open -- it is the
-#: first call a client makes, before anybody has signed in, and the toolkit's default "must be
-#: authenticated" permission refuses every real attempt -- so the row it creates is writable by
-#: anonymous strangers. Two dozen an hour is far more than any real client needs (one per fresh
-#: connection, and Claude prefers CIMD, which registers nothing at all) and far less than a script
-#: needs to fill a table.
+#: Dynamic client registrations per address per window. DCR must be open to anonymous callers, so
+#: this bounds the Application table.
 DCR_REGISTRATIONS_PER_HOUR = 24
 DCR_WINDOW_SECONDS = 3600
 
 
 def client_ip(request) -> str:
-    """The caller's address, trusting the proxy in front of us for the left-most entry."""
+    """The caller's address, trusting the proxy's left-most X-Forwarded-For entry."""
     forwarded = request.META.get("HTTP_X_FORWARDED_FOR", "")
     if forwarded:
         return forwarded.split(",")[0].strip()
@@ -302,12 +227,8 @@ def client_ip(request) -> str:
 
 
 def throttle_registration(view):
-    """Bound how often one address may register an OAuth client.
-
-    Wrapped around django-oauth-toolkit's DCR endpoint in ``fishauctions/urls.py``. Deliberately a
-    cheap fixed window on the cache rather than anything cleverer: the thing being prevented is an
-    unbounded ``Application`` table, not a determined attacker, and a registration that is refused
-    is retried by every real client.
+    """Rate-limit OAuth client registration per address, wrapping the toolkit's DCR view in
+    ``fishauctions/urls.py``.
     """
     import functools
 

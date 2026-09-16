@@ -1,10 +1,5 @@
-"""
-Security tests to ensure AuctionTOS and user data is properly protected.
-
-These tests verify that:
-1. Unauthenticated users cannot access user/AuctionTOS data
-2. Non-admin authenticated users cannot access user/AuctionTOS data
-3. Auction admins CAN access user/AuctionTOS data for their auctions only
+"""Tests that AuctionTOS and user data are protected: unauthenticated and non-admin users can't reach
+them, and auction admins can reach only their own auctions'.
 """
 
 from django.contrib.auth import get_user_model

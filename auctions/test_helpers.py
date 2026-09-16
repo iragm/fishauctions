@@ -1,4 +1,4 @@
-"""The utility layer -- helper functions, model utilities, template tags, context processors."""
+"""Tests for helper functions, model utilities, template tags and context processors."""
 
 import datetime
 import json
@@ -89,7 +89,6 @@ class HelperFunctionsTestCase(StandardTestCase):
         from auctions.helper_functions import bin_data
 
         qs = Lot.objects.filter(auction=self.online_auction)
-        # Should raise ValueError when field doesn't exist and can't be ordered
         with self.assertRaises(ValueError) as context:
             bin_data(qs, "nonexistent_field", 5)
         self.assertIn("start_bin and end_bin are required", str(context.exception))
@@ -131,8 +130,7 @@ class HelperFunctionsTestCase(StandardTestCase):
         qs = Lot.objects.filter(lot_name__startswith="Single bin test")
         result = bin_data(qs, "winning_price", 1)
         self.assertEqual(len(result), 1)
-        # Note: Due to the >= comparison in bin_data, the max value (40) is excluded
-        # and goes to high_overflow. So only 4 items (0,10,20,30) are in the bin.
+        # bin_data's >= comparison puts the max value (40) in high_overflow.
         self.assertEqual(result[0], 4)
 
     def test_bin_data_zero_range(self):
@@ -151,7 +149,6 @@ class HelperFunctionsTestCase(StandardTestCase):
             )
 
         qs = Lot.objects.filter(lot_name__startswith="Zero range test")
-        # When start equals end, bin_size will be 0, which should now raise ValueError
         with self.assertRaises(ValueError) as context:
             bin_data(qs, "winning_price", 5, start_bin=50, end_bin=50)
         self.assertIn("zero bin size", str(context.exception))
@@ -197,7 +194,6 @@ class ModelUtilityFunctionsTestCase(StandardTestCase):
 
         qs = Lot.objects.filter(lot_name__startswith="Median test even")
         result = median_value(qs, "winning_price")
-        # With values 0, 10, 20, 30, 40, 50, the median is the mean of the two middle values (20, 30)
         self.assertEqual(result, 25)
 
     def test_add_price_info_requires_lot_queryset(self):
@@ -340,7 +336,6 @@ class ModelUtilityFunctionsTestCase(StandardTestCase):
         self.assertIsNotNone(distance_km)
 
     def test_distance_to_allows_qualified_sql_field_names(self):
-        """Backtick-qualified table.column identifiers are valid for raw SQL annotation."""
         from auctions.models import distance_to
 
         distance = distance_to(
@@ -355,8 +350,7 @@ class ModelUtilityFunctionsTestCase(StandardTestCase):
         """Test find_image prioritizes images from specific user"""
         from auctions.models import find_image
 
-        # find_image requires images to be uploaded, which is restricted in tests
-        # This test validates the function exists and handles basic inputs
+        # Image uploads are restricted in tests, so this only covers basic inputs.
         result = find_image("Test Lot", self.user, self.online_auction)
         # Should return None when no images exist
         self.assertIsNone(result)
@@ -468,13 +462,10 @@ class ModelUtilityFunctionsTestCase(StandardTestCase):
         self.location.longitude = -74.0060
         self.location.save()
 
-        # User already has TOS (joined)
-        # Test with include_already_joined=False (default)
         auctions, distances = nearby_auctions(
             40.7128, -74.0060, distance=100, user=self.user, include_already_joined=False
         )
 
-        # User has already joined online_auction, so it should be filtered out
         auction_slugs = [a.slug for a in auctions]
         self.assertNotIn(self.online_auction.slug, auction_slugs)
 
@@ -596,18 +587,15 @@ class FormsUtilityTestCase(TestCase):
         )
 
     def test_clean_summernote_removes_foreign_content_tags(self):
-        """Allowlist sanitizer must strip <svg>/<math> and their subtrees (mutation-XSS vectors)
-        that the old blocklist did not enumerate, while unwrapping unknown-but-benign tags."""
+        """The allowlist sanitizer strips <svg>/<math> subtrees and unwraps unknown benign tags."""
         from auctions.forms import clean_summernote
 
         self.assertEqual(clean_summernote("<svg><script>alert(1)</script></svg>"), "")
         self.assertEqual(clean_summernote("<math><mtext><script>alert(1)</script></mtext></math>"), "")
         self.assertEqual(clean_summernote("<svg><desc><img src=x onerror=alert(1)></desc></svg>"), "")
-        # Unknown, non-executable tags are unwrapped so their text content survives.
         self.assertEqual(clean_summernote("<p>Keep <acme>this</acme></p>"), "<p>Keep this</p>")
 
     def test_summernote_widget_includes_upload_url_in_rendered_html(self):
-        """Summernote widget should include upload URL and drag-drop disabling in rendered HTML."""
         from django.urls import reverse
         from django_summernote.widgets import SummernoteWidget
 
@@ -851,7 +839,7 @@ class ContextProcessorsTestCase(TestCase):
 
     @override_settings(GOOGLE_OAUTH_LINK="real-client-id.apps.googleusercontent.com")
     def test_one_tap_withheld_on_a_visitors_first_page(self):
-        """The prompt is a one-shot, so it is not spent on somebody who has not browsed yet."""
+        """One Tap isn't shown on a visitor's first page."""
         from auctions.context_processors import ONE_TAP_PAGE_VIEW_SESSION_KEY, google_one_tap
 
         request = self._one_tap_request()
@@ -867,7 +855,7 @@ class ContextProcessorsTestCase(TestCase):
 
     @override_settings(GOOGLE_OAUTH_LINK="real-client-id.apps.googleusercontent.com")
     def test_one_tap_stops_counting_at_the_threshold(self):
-        """Past the threshold the answer cannot change, so a returning visitor costs no session write."""
+        """Past the threshold, no more session writes."""
         from auctions.context_processors import ONE_TAP_PAGE_VIEW_SESSION_KEY, google_one_tap
 
         session = {ONE_TAP_PAGE_VIEW_SESSION_KEY: 1}
@@ -876,7 +864,7 @@ class ContextProcessorsTestCase(TestCase):
 
     @override_settings(GOOGLE_OAUTH_LINK="real-client-id.apps.googleusercontent.com")
     def test_one_tap_always_shown_on_sign_in_and_sign_up(self):
-        """It cannot be wasted on the two pages somebody reaches meaning to get an account."""
+        """Always shown on sign-in and sign-up."""
         from auctions.context_processors import google_one_tap
 
         for url_name in ("account_login", "account_signup"):
@@ -886,7 +874,7 @@ class ContextProcessorsTestCase(TestCase):
 
     @override_settings(GOOGLE_OAUTH_LINK="real-client-id.apps.googleusercontent.com")
     def test_one_tap_does_not_count_htmx_fragments(self):
-        """An HTMx-heavy page swaps several times; that is one page, not a browsing session."""
+        """HTMx fragments don't count as pages."""
         from auctions.context_processors import ONE_TAP_PAGE_VIEW_SESSION_KEY, google_one_tap
 
         session = {}
@@ -907,7 +895,7 @@ class ContextProcessorsTestCase(TestCase):
 
     @override_settings(GOOGLE_OAUTH_LINK="real-client-id.apps.googleusercontent.com")
     def test_one_tap_counts_a_page_once_however_many_templates_it_renders(self):
-        """once_per_request: a page that also renders a partial is still one page load."""
+        """A page rendering several templates counts once."""
         from auctions.context_processors import ONE_TAP_PAGE_VIEW_SESSION_KEY, google_one_tap
 
         request = self._one_tap_request()
@@ -954,7 +942,7 @@ class ContextProcessorsTestCase(TestCase):
 
     @override_settings(GOOGLE_OAUTH_LINK="real-client-id.apps.googleusercontent.com")
     def test_one_tap_suppressed_pages_still_count_as_browsing(self):
-        """Hiding the prompt on the lot list is not the same as pretending the visit did not happen."""
+        """Pages that suppress the prompt still count as browsing."""
         from auctions import views
         from auctions.context_processors import ONE_TAP_PAGE_VIEW_SESSION_KEY, google_one_tap
 
@@ -1073,7 +1061,6 @@ class ContextProcessorsTestCase(TestCase):
         self.assertEqual(context["user_timezone"], "Europe/London")
 
     def test_add_tz_rejects_invalid_cookie(self):
-        """Invalid tz cookie value falls back to the default and is not flagged as set."""
         from django.contrib.auth.models import AnonymousUser
         from django.test import RequestFactory
 
@@ -1106,13 +1093,9 @@ class ContextProcessorsTestCase(TestCase):
         self.assertEqual(context["user_timezone"], "America/New_York")
 
     def test_base_template_renders_without_context_processors(self):
-        """Django's default 500/404 views call template.render() with no RequestContext,
-        so context processors don't run and user_timezone is undefined. The base template
-        must still render -- otherwise the error page itself errors out with
-        `ValueError: ZoneInfo keys must be normalized relative paths, got: `."""
+        """The base template renders without context processors, as Django's default 500/404 views do."""
         from django.template.loader import get_template
 
-        # Render with no context at all -- mirrors django.views.defaults.server_error.
         get_template("500.html").render()
 
     def test_add_location_with_cookies(self):
@@ -1278,9 +1261,7 @@ class ContextProcessorsTestCase(TestCase):
 
 
 class FooterIconTests(TestCase):
-    #: Asked for through the storage, not spelled out: wherever collectstatic has run the name is
-    #: content-hashed (`icon-footer.11b8414ff733.png`), so a literal passes in CI -- whose
-    #: STATIC_ROOT is empty -- and fails in the django container. See fishauctions/static_storage.py.
+    #: Through the storage: collected static names are hashed. See fishauctions/static_storage.py.
     def footer_icon_url(self):
         return staticfiles_storage.url("icon-footer.png")
 
@@ -1305,8 +1286,7 @@ class SiteWebmanifestTests(TestCase):
         data = json.loads(response.content)
         self.assertEqual(data["name"], "Test Auctions")
         sources = {icon["src"] for icon in data["icons"]}
-        # Through the storage rather than spelled out: these names are hashed wherever
-        # collectstatic has run -- see fishauctions/static_storage.py.
+        # Hashed names; see fishauctions/static_storage.py.
         self.assertIn(staticfiles_storage.url("android-chrome-512x512.png"), sources)
         # Maskable variants keep their art inside the launcher-crop safe zone
         self.assertIn(staticfiles_storage.url("android-chrome-maskable-512x512.png"), sources)
@@ -1336,7 +1316,7 @@ class AdminSetupChecklistViewTests(TestCase):
     def setUp(self):
         self.superuser = User.objects.create_superuser("setupadmin", "setup@example.com", "testpass")
         self.client.force_login(self.superuser)
-        # The checklist looks up the server's public IP over the network; pin it in tests.
+        # The checklist looks up the public IP over the network.
         ip_patcher = patch("auctions.views.admin_checklist.get_server_public_ip", return_value="203.0.113.7")
         ip_patcher.start()
         self.addCleanup(ip_patcher.stop)
@@ -1379,8 +1359,7 @@ class AdminSetupChecklistViewTests(TestCase):
         self.assertFalse(email_item["configured"])
 
     def test_wallet_items_say_uuid_links_can_add_and_not_owner_only(self):
-        # The wallet cards are reachable by UUID link, not just the signed-in owner. The help text
-        # must reflect that and must not repeat the old owner-only claim.
+        # Wallet cards are reachable by UUID link, not only by the owner.
         response = self.client.get(reverse("admin_setup_checklist"))
         setup_items = response.context["setup_items"]
         for name in ("Google Wallet membership cards", "Apple Wallet membership cards"):

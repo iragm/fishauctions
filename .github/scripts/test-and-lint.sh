@@ -54,26 +54,22 @@ process_args() {
 process_args "$@"
 
 # Django template tags have to open and close on the same line or they render onto the page as
-# text — see auctions/template_lint.py. Ruff can't see inside templates, so this runs alongside
-# it. Same code the auctions.test_template_hygiene tests use.
+# text (auctions/template_lint.py). Ruff can't see inside templates, so this runs alongside it.
 check_templates() {
   python3 /home/app/web/auctions/template_lint.py /home/app/web
 }
 
-# An <img> with no alt and an icon-only button with no name are both invisible when you look at
-# the page, which is exactly what makes them accessibility bugs rather than rendering bugs — so
-# they come back unless something fails the build. Same code auctions.test_template_a11y uses.
+# An <img> with no alt and an icon-only button with no name are invisible when you look at the
+# page, which is what makes them accessibility bugs, so they come back unless the build fails.
 check_accessibility() {
-  # -m rather than by path: this one shares iter_template_files() with template_lint, so the
-  # package has to be importable. PYTHONPATH because the lint container's working directory is
-  # not the repo root.
+  # -m rather than by path: this shares iter_template_files() with template_lint, so the package
+  # has to be importable, and the lint container's working directory is not the repo root.
   PYTHONPATH=/home/app/web python3 -m auctions.template_a11y /home/app/web
 }
 
-# docs/module_map.md is generated from the modules' own docstrings, so it can go stale the moment
-# somebody adds a file. This regenerates it in memory and fails if the checked-in copy differs, and
-# enforces the docstring and file-size rules in auctions/module_map.py. Same code the
-# auctions.test_module_map tests use.
+# docs/module_map.md is generated from the modules' own docstrings, so it goes stale the moment
+# somebody adds a file. This regenerates it in memory, fails if the checked-in copy differs, and
+# enforces the docstring rule in auctions/module_map.py.
 check_module_map() {
   python3 /home/app/web/auctions/module_map.py
 }

@@ -1,8 +1,5 @@
-"""
-Management command to set up Celery Beat periodic tasks in the database.
-
-This command creates PeriodicTask entries in the django-celery-beat database
-from the beat_schedule defined in fishauctions/celery.py.
+"""Create the PeriodicTask rows django-celery-beat reads, from the beat_schedule in
+fishauctions/celery.py.
 """
 
 from django.core.management.base import BaseCommand
@@ -25,10 +22,10 @@ class Command(BaseCommand):
         # Get names of tasks that should exist
         expected_task_names = set(beat_schedule.keys())
 
-        # Delete tasks that are no longer in the beat_schedule.
-        # This hand-maintained list is not the thing that keeps the beat database honest --
-        # FixedDatabaseScheduler._prune_orphaned_entries does that on every beat start, for every
-        # row, without being told the names. Do not add a removed task here to get it deleted.
+        # Delete tasks no longer in the beat_schedule. This hand-maintained list is not what keeps
+        # the beat database honest -- FixedDatabaseScheduler._prune_orphaned_entries does that on
+        # every beat start, for every row, without being told the names. Do not add a removed task
+        # here to get it deleted.
         existing_tasks = PeriodicTask.objects.filter(
             name__in=[
                 "endauctions",

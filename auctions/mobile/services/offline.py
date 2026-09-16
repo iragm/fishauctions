@@ -1,21 +1,16 @@
-"""Offline-mode service for the mobile app's in-person sale screens.
+"""Offline mode for the app's in-person sale screens.
 
-Backs GET /api/mobile/offline/snapshot/ and POST /api/mobile/offline/sync/. The Flutter app keeps
-running an in-person sale while disconnected — listing users with their total bought, adding users,
-adding lots, and setting lot winners — as native screens that mirror the web pages
-(``/auctions/<slug>/users/``, the add-user modal, bulk add lots, ``/lots/set-winners/``). Offline
-changes queue locally and push here when the connection returns.
+Backs GET /api/mobile/offline/snapshot/ and POST /api/mobile/offline/sync/. The app queues changes
+(listing and adding users, adding lots, setting winners) while disconnected and pushes them here.
 
-Design: the app is a dumb queue + display. All id assignment, validation and conflict rules live
-here; the server copy always wins. A conflicted op is never applied — the admin resolves it on the
-website. Applied ops are recorded in :class:`~auctions.models.MobileOfflineOp` so a resent queue
-(dropped response) returns ``already_applied`` instead of duplicating rows, and so a later op can
-reference an offline-created row by ``op:<op_id>``.
+The app is a queue and a display: id assignment, validation and conflict rules live here and the
+server copy always wins. A conflicted op is never applied. Applied ops are recorded in
+:class:`~auctions.models.MobileOfflineOp` so a resent queue returns ``already_applied`` and a later
+op can reference an offline-created row by ``op:<op_id>``.
 
-This module intentionally re-implements the same effects as the web views it mirrors
-(:class:`auctions.views.AuctionTOSAdmin`, :class:`auctions.views.BulkAddLots`,
-:class:`auctions.views.DynamicSetLotWinner`) rather than calling them, because those are
-request/response views tied to sessions, forms and the in-person lot queue. Keep the two in sync.
+This re-implements the effects of :class:`auctions.views.AuctionTOSAdmin`,
+:class:`auctions.views.BulkAddLots` and :class:`auctions.views.DynamicSetLotWinner` rather than
+calling those request/response views. Keep them in sync.
 """
 
 import logging
@@ -38,7 +33,7 @@ from auctions.services import apply_club_member_to_tos, ensure_club_member, exis
 
 logger = logging.getLogger(__name__)
 
-# The app chunks; a single sync call applies at most this many ops (a larger batch is a 400).
+# The app chunks; a larger batch is a 400.
 MAX_OPS_PER_SYNC = 500
 
 
@@ -50,18 +45,13 @@ MAX_OPS_PER_SYNC = 500
 def _admin_auction_candidates(user):
     """Non-deleted auctions ``user`` might administer, newest first.
 
-    A superset of what :meth:`Auction.permission_check` allows (every True branch of it is covered:
-    creator, is_admin AuctionTOS, or club admin/manage-auctions), so callers can filter the result
-    through ``permission_check`` to get the exact set. Superusers pass every auction, so we hand back
-    all non-deleted auctions for them.
+    A superset of what :meth:`Auction.permission_check` allows, so callers filter through it.
     """
     qs = Auction.objects.filter(is_deleted=False).order_by("-date_start")
     if user.is_superuser:
         return qs
     admin_tos_auction_ids = AuctionTOS.objects.filter(is_admin=True, user=user).values_list("auction_id", flat=True)
-    # Club paths only grant permission when the auction is club-managed; permission_check enforces
-    # that, so including these clubs' auctions here (some of which may not be club-managed) is fine —
-    # the caller re-checks each candidate with permission_check.
+    # Club paths only count for club-managed auctions, which permission_check enforces.
     from auctions.models import ClubMember
 
     club_ids = (
@@ -73,10 +63,10 @@ def _admin_auction_candidates(user):
 
 
 def get_last_admin_auction(user):
-    """The caller's "last admin auction", or ``None`` when they administer nothing.
+    """The caller's last admin auction, or ``None``.
 
-    ``userdata.last_auction_used`` when the caller passes ``permission_check`` for it; otherwise the
-    most recent (by ``date_start``) non-deleted auction the caller can administer.
+    ``userdata.last_auction_used`` when they pass ``permission_check``, else the most recent auction
+    they can administer.
     """
     userdata = getattr(user, "userdata", None)
     last = getattr(userdata, "last_auction_used", None) if userdata else None
@@ -89,26 +79,20 @@ def get_last_admin_auction(user):
 
 
 def _invoice_status_by_tos(auction):
-    """Map ``auctiontos_user_id`` → latest invoice status for the auction, in one query.
-
-    Mirrors ``AuctionTOS.invoice`` (latest by ``-date``) without an N+1 across the users list.
-    """
+    """``auctiontos_user_id`` -> latest invoice status, in one query. Mirrors ``AuctionTOS.invoice``."""
     status_by_tos = {}
     for tos_id, tos_status in (
         Invoice.objects.filter(auctiontos_user__auction=auction)
         .order_by("auctiontos_user_id", "-date")
         .values_list("auctiontos_user_id", "status")
     ):
-        # First row seen per user is the latest (‑date), so setdefault keeps it.
+        # The first row per user is the latest.
         status_by_tos.setdefault(tos_id, tos_status)
     return status_by_tos
 
 
 def _lot_number_display(auction, lot):
-    """The lot's display number as a string, without touching ``lot.auction`` (avoids an N+1).
-
-    Same rule as ``Lot.lot_number_display`` but with the already-loaded ``auction``.
-    """
+    """The lot's display number, using the already-loaded ``auction`` to avoid an N+1."""
     if auction.use_seller_dash_lot_numbering and lot.custom_lot_number:
         return str(lot.custom_lot_number)
     if lot.lot_number_int:
@@ -117,10 +101,9 @@ def _lot_number_display(auction, lot):
 
 
 def build_snapshot(auction):
-    """The compact per-auction payload the offline screens need, or ``{"auction": None}``.
+    """The per-auction payload the offline screens need, or ``{"auction": None}``.
 
-    ``users`` are every AuctionTOS ordered by name (matches the web users page); ``lots`` are every
-    non-deleted, non-banned lot. No images, no pagination — a bounded per-auction payload.
+    ``users`` is every AuctionTOS by name; ``lots`` every non-deleted, non-banned lot. No pagination.
     """
     if auction is None:
         return {"auction": None}
@@ -176,15 +159,12 @@ def build_snapshot(auction):
 
 
 class _OpApplier:
-    """Applies one batch of offline ops against ``auction`` for the syncing ``user``, in order.
+    """Applies one batch of offline ops against ``auction``, in order. Single-use per sync call.
 
-    Instances are single-use per sync call. ``created_rows`` maps an ``op_id`` created earlier in
-    this batch to the resulting object, so ``op:<op_id>`` references resolve before the ledger row
-    is even needed.
+    ``created_rows`` maps an ``op_id`` from this batch to its object so ``op:<op_id>`` resolves.
 
-    Each ``_apply_*`` handler returns ``(status, payload)``: on a conflict the payload carries
-    ``conflict`` + ``message`` and nothing is mutated (the server copy always wins); on
-    applied/already_applied the payload carries the echoed numbers and the ledger row is recorded.
+    Each ``_apply_*`` returns ``(status, payload)``: a conflict carries ``conflict`` and ``message``
+    and mutates nothing; applied and already_applied carry the echoed numbers and record a ledger row.
     """
 
     def __init__(self, auction, user):
@@ -194,16 +174,16 @@ class _OpApplier:
 
     @staticmethod
     def _conflict(conflict, message):
-        """A per-op conflict result: not applied, surfaced to the app for the admin to resolve."""
+        """A per-op conflict: not applied, surfaced for the admin to resolve."""
         return "conflict", {"conflict": conflict, "message": message}
 
     # -- reference resolution -------------------------------------------------
 
     def _resolve_op_ref(self, ref, op_type, model):
-        """Resolve an ``op:<op_id>`` reference to the row created by an earlier op, or None.
+        """Resolve an ``op:<op_id>`` reference to an earlier op's row, or None.
 
-        Looks in this batch first, then the persisted ledger. A reference to an op that conflicted
-        (never recorded) resolves to None → the referencing op reports ``not_found``.
+        This batch first, then the ledger. A reference to a conflicted op resolves to None, so the
+        referencing op reports ``not_found``.
         """
         op_id = ref[len("op:") :]
         row = self.created_rows.get(op_id)
@@ -246,7 +226,7 @@ class _OpApplier:
         return bool(invoice and invoice.status != "DRAFT")
 
     def _record(self, op_id, op_type, result_pk, echo):
-        """Persist the applied-op ledger row so replays dedupe and later ops can reference it."""
+        """Persist the applied-op ledger row, so replays dedupe and later ops can reference it."""
         MobileOfflineOp.objects.create(
             op_id=op_id,
             auction=self.auction,
@@ -267,8 +247,7 @@ class _OpApplier:
                 AuctionTOS.objects.filter(auction=self.auction, bidder_number=requested).order_by("-createdon").first()
             )
         if existing:
-            # Same number + same name = the same person double-entered (idempotent); different name =
-            # someone claimed that number on the server meanwhile (a real conflict).
+            # Same number and name is a double entry; a different name is a real conflict.
             if (existing.name or "").strip().casefold() == name.casefold():
                 echo = {"bidder_number": existing.bidder_number}
                 self._record(op["op_id"], "add_user", existing.pk, echo)
@@ -285,10 +264,8 @@ class _OpApplier:
 
         email = (op.get("email") or "").strip()
         phone_number = (op.get("phone_number") or "").strip()
-        # A club-managed auction keeps bidder numbers on the ClubMember, so somebody added at the door
-        # needs a member record too — with the number the admin just wrote on their card when it's free
-        # in the club. Creating the member also creates the participant row (signals), so adopt it
-        # rather than adding a second row for the same person.
+        # Club-managed auctions keep bidder numbers on the ClubMember, so create one (its signals
+        # create the participant row, which is adopted rather than duplicated).
         member, _created = ensure_club_member(
             self.auction,
             name=name,
@@ -314,12 +291,8 @@ class _OpApplier:
         apply_club_member_to_tos(self.auction, tos, member)
         tos.save()  # AuctionTOS.save() auto-assigns a free bidder_number when the requested one is blank
         if requested and tos.bidder_number != requested:
-            # The card the admin just handed out wins, and in club-managed mode it wins for the
-            # *person*: force_set_bidder_number routes through services.set_member_bidder_number, so
-            # the club, this auction and every other auction they are in all say the same number.
-            # Letting this auction alone use the card is what produced the original bug -- the club
-            # page showing one number and the floor another, and a lot knocked down to whoever still
-            # held it.
+            # In club-managed mode the card wins for the person: force_set_bidder_number routes
+            # through services.set_member_bidder_number, so every auction agrees.
             tos.force_set_bidder_number(requested, acting_user=self.user)
         self.auction.create_history(applies_to="USERS", action=f"Added {name}", user=self.user)
         echo = {"bidder_number": tos.bidder_number}
@@ -351,8 +324,8 @@ class _OpApplier:
             added_by=self.user,
             user=seller.user,
         )
-        # Honor the requested display number when it is still free; otherwise leave it unset so
-        # Lot.save() assigns the next free one (the remap the echo reports back to the app).
+        # Honour the requested number when free; otherwise Lot.save() assigns one and the echo
+        # reports the remap.
         if requested:
             if self.auction.use_seller_dash_lot_numbering:
                 if not self.auction.lots_qs.filter(custom_lot_number=requested).exists():
@@ -401,8 +374,7 @@ class _OpApplier:
             return self._conflict("invalid_price", "A valid winning price is required")
 
         if server_sold:
-            # The server copy wins: same winner + price is an idempotent no-op, anything else is a
-            # conflict the admin resolves on the website. Either way we do NOT mutate the row.
+            # The server copy wins: the same winner and price is a no-op, anything else a conflict.
             if lot.auctiontos_winner_id == winner.pk and lot.winning_price == price:
                 self._record(op["op_id"], "set_winner", None, {})
                 return "already_applied", {}
@@ -491,9 +463,8 @@ class _OpApplier:
             lot.add_winner_message(self.user, winning_tos, winning_price)
         except Exception:
             logger.exception("add_winner_message failed for lot %s", lot.pk)
-        # Same running-total push the web set-winners screen sends. A queue that syncs late collapses
-        # into one notification carrying the correct final total, because the collapse key is the
-        # auction rather than the lot -- so a reconnect after five sales buzzes the buyer once.
+        # The same running-total push the web screen sends; collapsed on the auction, so a late
+        # sync buzzes the buyer once with the final total.
         try:
             from auctions.notifications import notify_running_total
 
@@ -520,12 +491,11 @@ class _OpApplier:
     }
 
     def apply_one(self, op):
-        """Apply a single op and return its result dict (never raises for a per-op problem)."""
+        """Apply one op and return its result dict; never raises for a per-op problem."""
         op_id = op.get("op_id")
         result = {"op_id": op_id}
 
-        # Idempotent replay: a recorded op_id returns its original numbers with an already_applied
-        # status instead of re-running (the phone resent the queue after a dropped response).
+        # A recorded op_id returns its original numbers instead of re-running.
         led = MobileOfflineOp.objects.filter(op_id=op_id).first()
         if led:
             result.update(led.result_data or {})
@@ -538,8 +508,7 @@ class _OpApplier:
             return result
 
         try:
-            # One savepoint per op: a conflict returns before mutating (nothing to roll back), and an
-            # unexpected mid-apply failure rolls back just this op without aborting the whole batch.
+            # One savepoint per op, so an unexpected failure rolls back only this op.
             with transaction.atomic():
                 status, payload = getattr(self, handler_name)(op)
         except Exception:
@@ -553,11 +522,10 @@ class _OpApplier:
 
 
 def apply_ops(auction, user, ops):
-    """Apply a batch of queued offline ops in order; return per-op results (never all-or-nothing).
+    """Apply a batch of ops in order and return per-op results; never all-or-nothing.
 
-    Each op is independent: a conflict on one leaves the rest to apply (except ops that reference a
-    conflicted op's row, which resolve to ``not_found``). Duplicate op_ids in the same batch, and
-    ops already in the ledger, return ``already_applied``.
+    A conflict leaves the rest to apply (ops referencing it resolve to ``not_found``). Duplicate and
+    already-recorded op_ids return ``already_applied``.
     """
     applier = _OpApplier(auction, user)
     results = []

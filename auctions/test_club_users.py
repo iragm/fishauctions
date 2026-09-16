@@ -27,8 +27,7 @@ from auctions.models import (
 
 
 class ManageUsersThroughClubTests(TestCase):
-    """Tests for the per-auction 'manage_users_through_club' setting that pivots auction
-    user management onto ClubMember records."""
+    """The per-auction 'manage_users_through_club' setting, which moves user management to ClubMember."""
 
     def setUp(self):
         now = timezone.now()
@@ -153,7 +152,6 @@ class ManageUsersThroughClubTests(TestCase):
             cloned_from=None,
             user_timezone="UTC",
         )
-        # Without activity the field is NOT disabled — the admin may toggle it.
         self.assertFalse(form.fields["manage_users_through_club"].disabled)
 
     def test_cannot_disable_once_lots_exist(self):
@@ -168,7 +166,7 @@ class ManageUsersThroughClubTests(TestCase):
         )
         # UI-level: field is disabled so users cannot post an empty value.
         self.assertTrue(form.fields["manage_users_through_club"].disabled)
-        # Defense-in-depth: the validator also rejects an attempt to turn it off.
+        # The validator also rejects turning it off.
         form2 = AuctionEditForm(
             data={"manage_users_through_club": "", "club": str(self.club.pk)},
             instance=self.auction,
@@ -184,10 +182,7 @@ class ManageUsersThroughClubTests(TestCase):
         self.joiner.userdata.preferred_bidder_number = "246"
         self.joiner.userdata.save(update_fields=["preferred_bidder_number"])
         member = ClubMember.objects.create(club=self.club, user=self.joiner, name="Joiner", email=self.joiner.email)
-        # Pre-assign distinct bidder numbers to the other setUp club members so that
-        # _rebuild_auctiontos_from_club cannot randomly consume "246" when generating
-        # numbers for them (they have no preferred_bidder_number, so randint(1,999) is
-        # used, which has a ~0.3% chance of picking 246 and making this test flaky).
+        # Give the other members fixed numbers so random assignment can't take 246.
         for idx, m in enumerate(ClubMember.objects.filter(club=self.club).exclude(pk=member.pk), start=1):
             ClubMember.objects.filter(pk=m.pk).update(bidder_number=str(idx))
         form = AuctionEditForm(
@@ -236,7 +231,6 @@ class ManageUsersThroughClubTests(TestCase):
         return online
 
     def test_checkin_choice_hidden_for_online_auction(self):
-        """Check-in mode is in-person only, so the option is dropped for online auctions."""
         form = AuctionEditForm(
             instance=self._online_club_auction(), user=self.creator, cloned_from=None, user_timezone="UTC"
         )
@@ -245,7 +239,7 @@ class ManageUsersThroughClubTests(TestCase):
         self.assertIn("all", choice_values)
 
     def test_checkin_mode_rejected_for_online_auction(self):
-        """Even if check-in is forced past the UI, the validator rejects it for online auctions."""
+        """The validator rejects check-in mode for online auctions even past the UI."""
         online = self._online_club_auction()
         form = AuctionEditForm(
             data={"manage_users_through_club": "checkin", "club": str(self.club.pk)},
@@ -254,7 +248,7 @@ class ManageUsersThroughClubTests(TestCase):
             cloned_from=None,
             user_timezone="UTC",
         )
-        # Restore the full choice set so the field accepts "checkin" and our custom validator runs.
+        # Restore the choices so the custom validator runs.
         form.fields["manage_users_through_club"].choices = Auction.MANAGE_USERS_CHOICES
         form.is_valid()
         self.assertIn("manage_users_through_club", form.errors)
@@ -264,8 +258,7 @@ class ManageUsersThroughClubTests(TestCase):
         self._enable_club_managed()
         self.assertTrue(self.auction.permission_check(self.club_admin_user))
         self.assertTrue(self.auction.permission_check(self.club_manage_auctions_user))
-        # add_edit alone does NOT grant general auction permission_check; it is gated
-        # specifically by can_add_edit_people on the view layer.
+        # add_edit alone doesn't grant permission_check; the view gates it via can_add_edit_people.
         self.assertFalse(self.auction.permission_check(self.club_add_edit_user))
         self.assertFalse(self.auction.permission_check(self.outsider))
 
@@ -275,7 +268,6 @@ class ManageUsersThroughClubTests(TestCase):
         from auctions.forms import AuctionJoin
         from auctions.views import AuctionInfo
 
-        # Drive AuctionInfo.post directly to avoid URL/host coupling and to assert form validity.
         form = AuctionJoin(
             data={
                 "i_agree": True,
@@ -301,17 +293,13 @@ class ManageUsersThroughClubTests(TestCase):
         self.assertEqual(cm.source, "Empty Auction")
         self.assertTrue(cm.bidder_number)
         self.assertNotEqual(cm.bidder_number, "")
-        # The join links the AuctionTOS to the joining user directly. (The email-change guard used
-        # to clear it because the email went None->value on the second save; it no longer does now
-        # that the email is seeded on creation and the guard ignores blank->value transitions.)
+        # The join links the AuctionTOS to the joining user.
         tos = AuctionTOS.objects.get(auction=self.auction, clubmember=cm)
         self.assertEqual(tos.user, self.joiner)
         self.assertEqual(tos.bidder_number, cm.bidder_number)
 
     def test_checkin_mode_self_join_does_not_grant_bidding(self):
-        """Clicking 'join' on a check-in auction must not enable bidding -- the member still has
-        to check in at the event.  Regression: the join path copied the club member's default
-        bidding_allowed=True, which let a self-joined user bid without ever checking in."""
+        """Self-joining a check-in auction doesn't grant bidding; the member must check in."""
         self._enable_checkin_mode()
 
         from auctions.forms import AuctionJoin
@@ -345,13 +333,11 @@ class ManageUsersThroughClubTests(TestCase):
         self.assertFalse(tos.can_bid_in_auction)
 
     def test_check_bidding_permissions_blocks_unchecked_in_member(self):
-        """Defense in depth: even if a check-in-mode TOS somehow has bidding_allowed=True, the bid
-        gate must refuse a member who has not checked in yet."""
+        """check_bidding_permissions refuses a member who hasn't checked in, even with bidding_allowed."""
         from auctions.bidding import check_bidding_permissions
 
         self._enable_checkin_mode()
         cm = ClubMember.objects.create(club=self.club, user=self.joiner, name="Joiner", bidder_number="123")
-        # checkin mode auto-creates a shadow AuctionTOS via the ClubMember post_save signal
         tos = AuctionTOS.objects.get(auction=self.auction, clubmember=cm)
         tos.bidding_allowed = True  # simulate a stray grant that skipped check-in
         tos.checked_in = None
@@ -370,8 +356,7 @@ class ManageUsersThroughClubTests(TestCase):
         )
 
     def test_edit_form_warns_when_checkin_mode_and_pre_event_online_bidding(self):
-        """Check-in mode blocks bidding until users are checked in at the event, so online
-        bidding that opens before the start date can't actually be used; warn the admin"""
+        """Warn when check-in mode is combined with online bidding before the start date."""
         self.client.force_login(self.creator)
         data = {
             **self._auction_form_data(),
@@ -418,7 +403,6 @@ class ManageUsersThroughClubTests(TestCase):
             name="Joiner",
             bidder_number="42",
         )
-        # club-managed mode auto-creates a shadow AuctionTOS via the ClubMember post_save signal
         tos = AuctionTOS.objects.get(auction=self.auction, clubmember=cm)
         cm.bidding_allowed = False
         cm.selling_allowed = False
@@ -432,9 +416,7 @@ class ManageUsersThroughClubTests(TestCase):
         self.assertEqual(tos.bidder_number, "77")
 
     def test_a_new_member_keeps_their_number_and_the_auction_moves_whoever_had_it(self):
-        """Two people on one number is what breaks every later lookup by number, and in this mode
-        the club member is the one who keeps it: their number is the same in the club, here, and in
-        every other auction, so the row with no club record behind it is the one that can move."""
+        """A new member keeps their number; the row with no club record behind it moves."""
         self._enable_club_managed()
         stranger = AuctionTOS.objects.create(
             auction=self.auction,
@@ -452,11 +434,7 @@ class ManageUsersThroughClubTests(TestCase):
         self.assertEqual(AuctionTOS.objects.filter(auction=self.auction, bidder_number="314").count(), 1)
 
     def test_an_invoiced_auction_is_kept_in_step_too(self):
-        """One person has one number, and "except the ones that already went out" is not a rule
-        anybody at an event can hold in their head. The cost is accepted deliberately: an invoice
-        that has already been issued prints the bidder number, and with use_seller_dash_lot_numbering
-        so does every lot number on it, so renumbering somebody makes those disagree with the paper.
-        """
+        """Invoiced auctions are renumbered too, even though issued invoices print the old number."""
         self._enable_club_managed()
         cm = ClubMember.objects.create(
             club=self.club,
@@ -464,7 +442,6 @@ class ManageUsersThroughClubTests(TestCase):
             name="Joiner",
             bidder_number="55",
         )
-        # club-managed mode auto-creates a shadow AuctionTOS via the ClubMember post_save signal
         tos = AuctionTOS.objects.get(auction=self.auction, clubmember=cm)
         self.auction.invoiced = True
         self.auction.save()
@@ -474,18 +451,10 @@ class ManageUsersThroughClubTests(TestCase):
         self.assertEqual(tos.bidder_number, "999")
 
     def test_renumbering_a_member_moves_a_row_that_had_drifted_onto_the_number(self):
-        """Check-in mode's nastiest bug: the number changed everywhere except where it counts.
-
-        Rows used to be allowed to disagree with their club number, and giving somebody a number one
-        of them had drifted onto was skipped in silence -- the member's dialog showed the new number,
-        the auction's ID column kept the old one, and setting a lot winner by number sold the lot to
-        whoever still held it. A drifted row is put back on its own club number rather than handed a
-        third one nobody has seen.
-        """
+        """Renumbering a member moves a row that had drifted onto the number back to its own club number."""
         self._enable_checkin_mode()
         borrower = ClubMember.objects.create(club=self.club, name="Borrower", bidder_number="10")
         borrowing_row = AuctionTOS.objects.get(auction=self.auction, clubmember=borrower)
-        # Their auction row drifts onto 20 while the club still knows them as 10.
         AuctionTOS.objects.filter(pk=borrowing_row.pk).update(bidder_number="20")
         member = ClubMember.objects.create(club=self.club, user=self.joiner, name="Joiner", bidder_number="30")
         shadow = AuctionTOS.objects.get(auction=self.auction, clubmember=member)
@@ -496,16 +465,11 @@ class ManageUsersThroughClubTests(TestCase):
         shadow.refresh_from_db()
         borrowing_row.refresh_from_db()
         self.assertEqual(shadow.bidder_number, "20", "the number the admin typed has to reach the auction")
-        # The row that was only holding 20 gets its own club number back, healing the drift.
         self.assertEqual(borrowing_row.bidder_number, "10")
         self.assertEqual(AuctionTOS.objects.filter(auction=self.auction, bidder_number="20").count(), 1)
 
     def _second_club_managed_auction(self):
-        """A second auction of the same club, in the same mode, with a pickup location.
-
-        The propagation is only observable across two of them: one auction cannot show the
-        difference between "wrote the row in front of it" and "wrote the person".
-        """
+        """A second club-managed auction of the same club, to observe propagation across auctions."""
         now = timezone.now()
         other = Auction.objects.create(
             created_by=self.creator,
@@ -521,14 +485,7 @@ class ManageUsersThroughClubTests(TestCase):
         return other
 
     def test_editing_a_member_from_inside_an_auction_is_not_undone_by_the_row_save(self):
-        """The member form's own save used to revert the edit it had just made.
-
-        It loads the participant row, saves the member (which propagates the new details down with
-        ``update()``, invisible to the row object already in memory), then saves that row for
-        ``is_club_member`` and the pickup location. The upward sync ignored ``update_fields`` and so
-        carried the stale name and email back up to the member -- and from there to every other
-        auction the member is in.
-        """
+        """The member form's row save doesn't revert the member edit it just made (update_fields respected)."""
         self._enable_club_managed()
         member = ClubMember.objects.create(club=self.club, user=self.joiner, name="Old Name", email="old@example.com")
         shadow = AuctionTOS.objects.get(auction=self.auction, clubmember=member)
@@ -561,13 +518,7 @@ class ManageUsersThroughClubTests(TestCase):
         self.assertEqual(member.phone_number, "555-0123")
 
     def test_check_in_with_a_number_renumbers_the_member_everywhere(self):
-        """Check-in writes a bidder number, and in this mode that number belongs to the person.
-
-        ``force_set_bidder_number`` used to write the one row in front of it with ``update()``,
-        which is invisible to the propagation signal: the club page, the member's card and every
-        other auction they were in stayed on the old number, which is the exact divergence this
-        mode exists to prevent. The barcode scanner and the app's offline queue arrive the same way.
-        """
+        """Check-in with a number renumbers the member everywhere, not just one row."""
         from auctions.services import check_in_auctiontos
 
         self._enable_checkin_mode()
@@ -608,12 +559,7 @@ class ManageUsersThroughClubTests(TestCase):
         self.assertEqual(AuctionTOS.objects.filter(auction=self.auction, bidder_number="64").count(), 1)
 
     def test_a_name_too_long_for_the_participant_row_is_cut_rather_than_raising(self):
-        """ClubMember.name holds 200 characters and AuctionTOS.name holds 181.
-
-        Every write down to the participant rows is an ``update()``, which is not validated, so a
-        name imported at full length made every later save of that member raise ``DataError 1406``
-        -- from a save that had nothing to do with the name.
-        """
+        """A name longer than AuctionTOS.name (181) is truncated rather than raising DataError 1406."""
         self._enable_club_managed()
         long_name = "Bartholomew " * 20
         member = ClubMember.objects.create(club=self.club, user=self.joiner, name=long_name[:200])
@@ -629,11 +575,7 @@ class ManageUsersThroughClubTests(TestCase):
         self.assertEqual(shadow.name, long_name[:limit])
 
     def test_renumbering_a_member_takes_the_number_off_whoever_had_it(self):
-        """The number goes where the admin sent it, and the person who had it is given another.
-
-        The same thing the check-in dialog does and says on its face. Refusing instead is what
-        produced the original bug: the member's page showing one number and the auction another.
-        """
+        """Renumbering a member takes the number off whoever had it."""
         self._enable_checkin_mode()
         stranger = AuctionTOS.objects.create(
             auction=self.auction,
@@ -659,7 +601,7 @@ class ManageUsersThroughClubTests(TestCase):
         )
 
     def test_the_member_form_allows_a_number_somebody_else_is_using(self):
-        """It is applied, not refused -- the live validation names who gets renumbered instead."""
+        """The member form applies a number someone else uses; live validation names who moves."""
         from auctions.forms import ClubMemberAdminForm
 
         self._enable_checkin_mode()
@@ -712,12 +654,7 @@ class ManageUsersThroughClubTests(TestCase):
         self.assertEqual(response.json()["bidder_number_tooltip"], "", "not an error -- it will be applied")
 
     def test_the_live_validation_warns_when_creating_a_member_too(self):
-        """Creating displaces exactly as editing does, so the warning cannot be for edits only.
-
-        The note was gated on ``pk``, so typing a number that a walk-in already held into the
-        *create* form said nothing at all -- and the save then took it off them silently, which is
-        the case where the admin is least likely to know who they just renumbered.
-        """
+        """Live validation warns when creating a member too."""
         self._enable_checkin_mode()
         AuctionTOS.objects.create(
             auction=self.auction,
@@ -746,8 +683,7 @@ class ManageUsersThroughClubTests(TestCase):
         shadow = AuctionTOS.objects.get(auction=self.auction, clubmember=member)
         member.bidder_number = "20"
         member.save()
-        # Check-in mode refuses a winner who is not through the door yet, which is a different
-        # answer from the one this test is about.
+        # Check-in mode refuses winners who haven't checked in.
         AuctionTOS.objects.filter(pk=shadow.pk).update(checked_in=timezone.now(), bidding_allowed=True)
 
         from auctions.views import DynamicSetLotWinner
@@ -760,13 +696,7 @@ class ManageUsersThroughClubTests(TestCase):
         self.assertEqual(tos.pk, shadow.pk)
 
     def test_a_corrected_name_and_email_reach_the_auction(self):
-        """The auction keeps its own copy of the contact details, and it is the copy that shows.
-
-        The users table renders ``AuctionTOS.name``, the invoice is addressed to it and the invoice
-        email goes to ``AuctionTOS.email``. Correcting either on the member's page used to stop at
-        the club record, so the auction went on using the old one with nothing to say so -- the same
-        "saved successfully, column unchanged" shape as the bidder number.
-        """
+        """A corrected name and email on the member reach the auction's rows."""
         self._enable_checkin_mode()
         member = ClubMember.objects.create(
             club=self.club,
@@ -793,12 +723,7 @@ class ManageUsersThroughClubTests(TestCase):
         self.assertEqual(shadow.address, "2 New Street")
 
     def test_a_detail_fixed_in_the_auction_reaches_the_club_and_every_other_auction(self):
-        """Managing members through the club means there is no per-auction copy of anybody.
-
-        It must not matter which page the admin was standing on when they fixed an address: the
-        participant form, the CSV import, ``update_person`` and the app all write an AuctionTOS, and
-        that is the same person as the ClubMember and as their row in every other auction.
-        """
+        """A detail fixed in an auction reaches the club and every other auction."""
         self._enable_checkin_mode()
         other_auction = Auction.objects.create(
             created_by=self.creator,
@@ -827,8 +752,7 @@ class ManageUsersThroughClubTests(TestCase):
         self.assertEqual(there.address, "2 New Street", "and so is last year's auction")
 
     def test_a_corrected_email_reaches_the_auction_even_when_it_looks_like_a_duplicate(self):
-        """One person, one email. A second row in the auction carrying it is a duplicate to flag,
-        not a reason to leave the auction addressing invoices to an address that bounces."""
+        """A corrected email reaches the auction even when another row has it (flagged as duplicate)."""
         self._enable_checkin_mode()
         AuctionTOS.objects.create(
             auction=self.auction,
@@ -847,8 +771,7 @@ class ManageUsersThroughClubTests(TestCase):
         self.assertEqual(shadow.email_address_status, "UNKNOWN")
 
     def test_check_in_mode_does_not_hand_out_bidding_from_the_club_page(self):
-        """Bidding is granted at the door in this mode. Re-enabling a member at club level used to
-        grant it to somebody who had not arrived yet -- which is the whole thing the mode prevents."""
+        """Enabling a member at club level doesn't grant bidding in check-in mode."""
         self._enable_checkin_mode()
         member = ClubMember.objects.create(club=self.club, name="Not here yet", bidding_allowed=False)
         shadow = AuctionTOS.objects.get(auction=self.auction, clubmember=member)
@@ -874,9 +797,7 @@ class ManageUsersThroughClubTests(TestCase):
         self.assertFalse(shadow.bidding_allowed)
 
     def test_checking_somebody_in_gives_them_their_club_number_and_moves_whoever_had_it(self):
-        """``_upsert_clubmember_shadow_tos`` is how the barcode scan, the palette and setting a
-        winner all create a participant row. The member arrives holding a card with their club
-        number on it, so that is the number they get, and it cannot be on two rows at once."""
+        """``_upsert_clubmember_shadow_tos`` gives the member their club number and moves whoever had it."""
         from auctions.views.base import _upsert_clubmember_shadow_tos
 
         self._enable_checkin_mode()
@@ -972,7 +893,6 @@ class ManageUsersThroughClubTests(TestCase):
     def test_check_in_endpoint_marks_user_checked_in(self):
         self._enable_checkin_mode()
         cm = ClubMember.objects.create(club=self.club, user=self.joiner, name="Joiner", bidder_number="123")
-        # checkin mode auto-creates a shadow AuctionTOS via the ClubMember post_save signal
         tos = AuctionTOS.objects.get(auction=self.auction, clubmember=cm)
         self.client.force_login(self.creator)
         response = self.client.post(reverse("auction_check_in", kwargs={"pk": tos.pk}))
@@ -1006,7 +926,6 @@ class ManageUsersThroughClubTests(TestCase):
         unchecked_member = ClubMember.objects.create(
             club=self.club, user=self.outsider, name="Unchecked User", bidder_number="456"
         )
-        # checkin mode auto-creates shadow AuctionTOS records via the ClubMember post_save signal
         checked_in_tos = AuctionTOS.objects.get(auction=self.auction, clubmember=checked_in_member)
         checked_in_tos.checked_in = timezone.now()
         checked_in_tos.save()
@@ -1043,17 +962,14 @@ class ManageUsersThroughClubTests(TestCase):
         self.assertTrue(tos.bidding_allowed)
 
     def test_barcode_scan_check_in_only_ignores_side_effects(self):
-        """The self check-in kiosk posts check_in_only; bidder number assignment and
-        invoice adjustments must be ignored no matter what the client sends."""
+        """The self check-in kiosk's check_in_only ignores bidder number and adjustments."""
         self._enable_checkin_mode()
         member = ClubMember.objects.create(
             club=self.club,
             user=self.joiner,
             name="Joiner",
             bidder_number="",
-            # A phone number, so check-in seeds the bidder number it does assign from its last
-            # three digits instead of randint(1, 999) -- which lands on the 456 this test says
-            # must not be used about one run in a thousand.
+            # The phone seeds the bidder number, so it can't randomly land on 456.
             phone_number="555-555-0123",
         )
         self.client.force_login(self.creator)
@@ -1100,8 +1016,7 @@ class ManageUsersThroughClubTests(TestCase):
         self.assertEqual(response.status_code, 403)
 
     def test_barcode_scan_adjustment_on_checked_in_card_keeps_checkin_time(self):
-        """Scanning an adjustment then an already-checked-in member card applies the adjustment
-        without clobbering the original check-in timestamp or re-checking them in."""
+        """An adjustment scan then an already-checked-in card keeps the check-in time."""
         self._enable_checkin_mode()
         member = ClubMember.objects.create(club=self.club, user=self.joiner, name="Joiner")
         self.client.force_login(self.creator)
@@ -1129,8 +1044,7 @@ class ManageUsersThroughClubTests(TestCase):
         self.assertTrue(InvoiceAdjustment.objects.filter(invoice__auctiontos_user=tos, amount=7).exists())
 
     def test_barcode_scan_adjustment_applied_to_bidder_number(self):
-        """Scanning an adjustment then a paddle (bidder number) applies the adjustment to the
-        AuctionTOS holding that bidder number, without a membership card."""
+        """An adjustment scan then a paddle applies to that bidder number."""
         self._enable_checkin_mode()
         tos = AuctionTOS.objects.create(
             user=self.joiner,
@@ -1159,7 +1073,7 @@ class ManageUsersThroughClubTests(TestCase):
         self.assertEqual(adj.adjustment_type, "DISCOUNT")
 
     def test_barcode_scan_adjustment_to_bidder_requires_checked_in(self):
-        """In check-in mode, applying an adjustment to a bidder number that isn't checked in errors."""
+        """In check-in mode, the bidder must be checked in."""
         self._enable_checkin_mode()
         AuctionTOS.objects.create(
             user=self.joiner,
@@ -1183,8 +1097,7 @@ class ManageUsersThroughClubTests(TestCase):
         self.assertFalse(InvoiceAdjustment.objects.exists())
 
     def test_barcode_scan_adjustment_to_bidder_no_checkin_mode(self):
-        """Outside check-in mode, applying an adjustment to a bidder number works without a
-        check-in requirement (scanning is available in all club auctions)."""
+        """Outside check-in mode, no check-in is needed."""
         self._enable_club_managed()  # "all" mode, not check-in
         tos = AuctionTOS.objects.create(
             user=self.joiner,
@@ -1222,8 +1135,7 @@ class ManageUsersThroughClubTests(TestCase):
         self.assertIn("999", response.json()["message"])
 
     def test_barcode_scan_adjustment_to_bidder_with_closed_invoice_errors(self):
-        """Scanning an adjustment onto a paddle/bidder number whose invoice is already closed
-        (not DRAFT) must error out instead of adjusting the closed invoice."""
+        """A closed invoice on the bidder number errors."""
         self._enable_checkin_mode()
         tos = AuctionTOS.objects.create(
             user=self.joiner,
@@ -1249,8 +1161,7 @@ class ManageUsersThroughClubTests(TestCase):
         self.assertFalse(InvoiceAdjustment.objects.filter(invoice__auctiontos_user=tos).exists())
 
     def test_barcode_scan_adjustment_on_member_card_with_closed_invoice_errors(self):
-        """Scanning an adjustment then a membership card whose invoice is already closed must
-        error out instead of adjusting the closed invoice (and must not create a new one)."""
+        """A closed invoice on the member card errors without creating another."""
         self._enable_checkin_mode()
         member = ClubMember.objects.create(club=self.club, user=self.joiner, name="Joiner")
         tos = AuctionTOS.objects.get(auction=self.auction, clubmember=member)
@@ -1308,11 +1219,7 @@ class ManageUsersThroughClubTests(TestCase):
 
 
 class PlaceBidApiTests(TestCase):
-    """The /api/lots/<pk>/bid/ endpoint persists bids over HTTP so a dropped or
-    stalled websocket can't silently lose them (the in-person bidding regression).
-    These cover persistence, permissions, the websocket broadcast, and -- most
-    importantly -- that a broadcast failure still saves the bid.
-    """
+    """/api/lots/<pk>/bid/ saves bids over HTTP, even when the websocket broadcast fails."""
 
     def setUp(self):
         the_future = timezone.now() + datetime.timedelta(days=3)
@@ -1341,8 +1248,7 @@ class PlaceBidApiTests(TestCase):
             reserve_price=10,
             date_end=the_future,
         )
-        # date_posted is auto_now_add, which makes the lot "too new to bid" for 20 min;
-        # backdate it (bypassing auto_now_add) so bidding is actually allowed.
+        # Backdate past the 20-minute new-lot bidding hold.
         Lot.objects.filter(pk=self.lot.pk).update(date_posted=timezone.now() - datetime.timedelta(hours=2))
         self.lot.refresh_from_db()
         self.url = reverse("lot_bid", kwargs={"pk": self.lot.pk})
@@ -1389,8 +1295,7 @@ class PlaceBidApiTests(TestCase):
 
     @patch("auctions.bidding.broadcast_bid_result")
     def test_api_bid_on_lot_without_category(self, mock_broadcast):
-        """A lot with no species_category must not crash bidding (the category-interest
-        update is skipped, since UserInterestCategory.category can't be null)."""
+        """A lot with no species_category doesn't break bidding."""
         Lot.objects.filter(pk=self.lot.pk).update(species_category=None)
         self.lot.refresh_from_db()
         self.client.force_login(self.bidder)
@@ -1400,8 +1305,7 @@ class PlaceBidApiTests(TestCase):
         self.assertTrue(self._bids(self.bidder).exists())
 
     def test_bid_saved_even_when_broadcast_fails(self):
-        """The whole point of moving bids to HTTP: a websocket/channel-layer failure
-        must NOT lose the bid. The broadcast raises, yet the bid is still persisted."""
+        """A broadcast failure still saves the bid."""
         from auctions.bidding import place_bid_and_broadcast
 
         with patch("auctions.bidding.broadcast_bid_result", side_effect=Exception("redis down")):
@@ -1427,8 +1331,7 @@ class PlaceBidApiTests(TestCase):
         self.assertEqual(sent["message"]["info"], "NEW_HIGH_BIDDER")
 
     def _in_person_lot(self, **auction_kwargs):
-        """An in-person auction + a lot in it, with the bidder joined. Permission-case
-        helper ported from the old websocket bid tests."""
+        """An in-person auction and lot, with the bidder joined."""
         the_future = timezone.now() + datetime.timedelta(days=3)
         auction = Auction.objects.create(
             created_by=self.seller,
@@ -1455,7 +1358,6 @@ class PlaceBidApiTests(TestCase):
 
     @patch("auctions.bidding.broadcast_bid_result")
     def test_api_bid_before_online_bidding_starts(self, mock_broadcast):
-        """In-person auction: bids are rejected before the online bidding window opens."""
         lot = self._in_person_lot(
             date_online_bidding_starts=timezone.now() + datetime.timedelta(hours=2),
             date_online_bidding_ends=timezone.now() + datetime.timedelta(days=2),
@@ -1469,7 +1371,6 @@ class PlaceBidApiTests(TestCase):
 
     @patch("auctions.bidding.broadcast_bid_result")
     def test_api_bid_after_online_bidding_ends(self, mock_broadcast):
-        """In-person auction: bids are rejected after the online bidding window closes."""
         lot = self._in_person_lot(
             date_online_bidding_starts=timezone.now() - datetime.timedelta(days=2),
             date_online_bidding_ends=timezone.now() - datetime.timedelta(hours=1),
@@ -1483,8 +1384,7 @@ class PlaceBidApiTests(TestCase):
 
     @patch("auctions.bidding.broadcast_bid_result")
     def test_api_bid_on_sold_lot(self, mock_broadcast):
-        """A lot with a winner already assigned can't be bid on.
-        (No winning_price set, so it isn't `ended`; this exercises the winner check.)"""
+        """A lot with a winner can't be bid on (no winning_price, so this tests the winner check)."""
         self.lot.winner = self.seller
         self.lot.auctiontos_winner = self.bidder_tos
         self.lot.save()

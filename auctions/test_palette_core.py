@@ -29,7 +29,7 @@ from auctions.tests import StandardTestCase
 
 
 class CommandPaletteTests(StandardTestCase):
-    """Tests for the command palette: search scoping, default items, search logging, and routing."""
+    """The command palette: search scoping, default items, logging and routing."""
 
     def _login(self, user):
         self.client.force_login(user)
@@ -75,7 +75,7 @@ class CommandPaletteTests(StandardTestCase):
         self.assertFalse(any("View users" in t for t in titles))  # not an admin
 
     def _make_last_auction_pretty_much_over(self):
-        """Push the online auction's pickup + end dates into the past so it's pretty_much_over."""
+        """Push the online auction's pickup and end dates into the past so it's pretty_much_over."""
         self.location.pickup_time = timezone.now() - datetime.timedelta(hours=48)
         self.location.save()
         self.online_auction.date_end = timezone.now() - datetime.timedelta(hours=48)
@@ -83,8 +83,7 @@ class CommandPaletteTests(StandardTestCase):
         self.assertTrue(self.online_auction.pretty_much_over)
 
     def test_default_items_pretty_much_over_shows_only_invoice(self):
-        # Once the last auction is pretty_much_over, the palette should surface only its invoice,
-        # not View lots / admin actions.
+        # Once pretty_much_over, only the invoice is surfaced.
         self.invoice.status = "UNPAID"
         self.invoice.save()
         self.user.userdata.last_auction_used = self.online_auction
@@ -99,7 +98,6 @@ class CommandPaletteTests(StandardTestCase):
         self.assertFalse(any("Quick checkout" in t for t in titles))
 
     def test_view_lots_shortcut_hidden_when_pretty_much_over(self):
-        # The dynamic "view lots" shortcut must not resolve for a pretty_much_over auction.
         self.user.userdata.last_auction_used = self.online_auction
         self.user.userdata.save()
         self._make_last_auction_pretty_much_over()
@@ -133,8 +131,7 @@ class CommandPaletteTests(StandardTestCase):
         self.assertTrue(any("Set auction location" in t for t in titles))
 
     def test_print_search_surfaces_more_label_pages(self):
-        # Task 4: "print" and "labels" should surface the auction /print/ hub's label pages, not
-        # just the user's own label print.
+        # "print" and "labels" surface the auction's label pages, not just the user's own.
         self.user.userdata.last_auction_used = self.online_auction
         self.user.userdata.save()
         self._login(self.user)
@@ -253,12 +250,12 @@ class CommandPaletteTests(StandardTestCase):
         page = CommandPalettePage.objects.first()
         resp = self.client.post(reverse("command_palette_log"), {"search": "pref", "result": "pending"})
         search_id = resp.json()["id"]
-        # Refining the query updates the same row rather than creating a new one.
+        # Refining a query updates the same row.
         resp = self.client.post(
             reverse("command_palette_log"), {"id": search_id, "search": "preferences", "result": "pending"}
         )
         self.assertEqual(resp.json()["id"], search_id)
-        # Clicking a page result finalizes the row and bumps that page's hit counter.
+        # Clicking a page result finalizes the row and bumps that page's hits.
         self.client.post(
             reverse("command_palette_log"),
             {
@@ -283,7 +280,7 @@ class CommandPaletteTests(StandardTestCase):
         self.assertTrue(any("angelfish" in t for t in self._all_item_titles(resp)))
 
     def test_landing_page_in_person_admin_redirects_to_users(self):
-        # A current in-person auction (not pretty_much_over) redirects its admin to the users list.
+        # A current in-person auction redirects its admin to the users list.
         self.in_person_auction.date_start = timezone.now() - datetime.timedelta(hours=1)
         self.in_person_auction.date_end = timezone.now() + datetime.timedelta(days=1)
         self.in_person_auction.save()
@@ -295,7 +292,7 @@ class CommandPaletteTests(StandardTestCase):
         self.assertEqual(resp.url, self.in_person_auction.user_admin_link)
 
     def test_landing_page_pretty_much_over_in_person_admin_does_not_redirect_to_users(self):
-        # Once the in-person auction is pretty_much_over, the stale users-list redirect is skipped.
+        # Once pretty_much_over, that redirect is skipped.
         self.in_person_auction.date_start = timezone.now() - datetime.timedelta(days=3)
         self.in_person_auction.save()
         self.assertTrue(self.in_person_auction.pretty_much_over)
@@ -303,7 +300,6 @@ class CommandPaletteTests(StandardTestCase):
         self.user.userdata.save()
         self._login(self.user)
         resp = self.client.get(reverse("home"))
-        # Not redirected to the users list; either falls through to browse or renders home.
         if resp.status_code == 302:
             self.assertNotEqual(resp.url, self.in_person_auction.user_admin_link)
 
@@ -319,7 +315,7 @@ class CommandPaletteTests(StandardTestCase):
         resp = self.client.get(reverse("command_palette"), {"q": "findme@example.com"})
         labels = self._group_labels(resp)
         self.assertIn("Auction users", labels)
-        # the link pre-populates ?query= so the record surfaces on the destination page
+        # The link pre-populates ?query= so the record surfaces on the destination page.
         urls = [i["url"] for g in resp.json()["groups"] if g["label"] == "Auction users" for i in g["items"]]
         self.assertTrue(any("query=" in u for u in urls))
         # exact match only: a partial email should not match
@@ -365,8 +361,7 @@ class CommandPaletteTests(StandardTestCase):
         self.assertIn(reverse("edit_auction", kwargs={"slug": self.online_auction.slug}), urls)
 
     def test_auction_field_search_only_includes_editable_form_fields(self):
-        # paypal_email_address is a model field that lives on no form, so "paypal" must not be
-        # advertised as a configurable auction setting ("configure paypal email address").
+        # paypal_email_address is on no form, so it isn't a configurable setting.
         self.user.userdata.last_auction_used = self.online_auction
         self.user.userdata.save()
         self._login(self.user)
@@ -375,7 +370,6 @@ class CommandPaletteTests(StandardTestCase):
         settings_items = [
             i for g in resp.json()["groups"] if g["label"] == "Go to" for i in g["items"] if i["url"] == edit_url
         ]
-        # The editable "PayPal payments" toggle (enable_online_payments) still surfaces...
         self.assertTrue(settings_items)
         for item in settings_items:
             self.assertIn("PayPal payments", item["subtitle"])
@@ -383,7 +377,7 @@ class CommandPaletteTests(StandardTestCase):
             self.assertNotIn("email address", item["subtitle"].lower())
 
     def test_set_winners_excluded_for_online_auction(self):
-        # Online auctions pick winners from bids; the set-lot-winners shortcut must not appear.
+        # Online auctions pick winners from bids, so no set-lot-winners shortcut.
         self.user.userdata.last_auction_used = self.online_auction
         self.user.userdata.save()
         self._login(self.user)
@@ -403,9 +397,7 @@ class CommandPaletteTests(StandardTestCase):
         self.assertIn(self.in_person_auction.set_lot_winners_link, urls)
 
     def test_add_lot_shortcuts_follow_auction_lot_entry_mode(self):
-        # Keep the auction current (started recently) so it isn't pretty_much_over, which would
-        # otherwise hide the add-lot shortcut. date_end must stay after date_start or the pre_save
-        # signal swaps them.
+        # Keep the auction current, and date_end after date_start or the signal swaps them.
         self.in_person_auction.date_start = timezone.now() - datetime.timedelta(hours=1)
         self.in_person_auction.date_end = timezone.now() + datetime.timedelta(days=1)
         self.in_person_auction.allow_bulk_adding_lots = True
@@ -443,7 +435,7 @@ class CommandPaletteTests(StandardTestCase):
             ]
             self.assertIn(print_labels_url, urls, f"print labels shortcut missing for '{q}'")
             self.assertIn(reverse("printing"), urls, f"printing preferences shortcut missing for '{q}'")
-        # The per-auction label setup is admin-only and keyed off "label", not "print".
+        # The per-auction label setup is admin-only and keyed off "label".
         label_urls = [
             i["url"]
             for g in self.client.get(reverse("command_palette"), {"q": "label"}).json()["groups"]
@@ -458,9 +450,7 @@ class CommandPaletteTests(StandardTestCase):
         self.assertEqual(row.result, "bounce")
 
     def test_finalize_without_id_records_the_search(self):
-        # The client finalizes a search (e.g. a sendBeacon on navigation away) even when the
-        # in-progress row's id hasn't come back yet. A finalize with no id must still record the
-        # search rather than drop it, which is how searches abandoned by navigating used to vanish.
+        # A finalize with no id (a sendBeacon on navigation) must still record the search.
         self._login(self.user)
         resp = self.client.post(reverse("command_palette_log"), {"search": "guppy", "result": "abandoned"})
         row = CommandPaletteSearch.objects.get(pk=resp.json()["id"])
@@ -484,8 +474,7 @@ class CommandPaletteTests(StandardTestCase):
         return [i["url"] for g in resp.json()["groups"] if g["label"] == "Go to" for i in g["items"]]
 
     def _make_palette_club(self, user, **permissions):
-        """Create a club, make ``user`` a member with the given permissions, and record it as the
-        user's last club used so the palette's club shortcuts target it."""
+        """Create a club with ``user`` as a member and record it as their last club used."""
         club = Club.objects.create(name="Palette Club")
         ClubMember.objects.create(club=club, user=user, name="Member", **permissions)
         user.userdata.last_club_used = club
@@ -552,7 +541,7 @@ class CommandPaletteTests(StandardTestCase):
         Lot.objects.create(lot_name="Promoted Palette Lot", auction=promoted, auctiontos_seller=seller, quantity=1)
         self._login(self.user)  # self.user has not joined the promoted auction
         resp = self.client.get(reverse("command_palette"), {"q": "Promoted Palette"})
-        # The auction itself is visible (promoted), but its lots are not searchable by a non-participant.
+        # The auction is promoted, but its lots aren't searchable by a non-participant.
         self.assertIn("Auctions", self._group_labels(resp))
         self.assertNotIn("Lots", self._group_labels(resp))
 
@@ -626,9 +615,7 @@ class CommandPaletteTests(StandardTestCase):
 
 
 class MobileCommandPaletteTests(StandardTestCase):
-    """The /api/mobile/ command-palette endpoints reuse the shared command_palette module, so this
-    only covers what differs from the web: JWT (not session) auth, the JSON contract the app reads,
-    and that search-logging is wired through the same log_search upsert."""
+    """The mobile palette endpoints, which differ only by JWT auth and the JSON contract."""
 
     def setUp(self):
         super().setUp()
@@ -644,10 +631,9 @@ class MobileCommandPaletteTests(StandardTestCase):
         return [g["label"] for g in resp.json()["groups"]]
 
     def test_requires_jwt_not_session(self):
-        # No token at all is rejected (DRF answers 401/403 depending on the auth header).
+        # No token is rejected (401 or 403 depending on the header).
         self.assertIn(self.client.get(self.search_url).status_code, (401, 403))
-        # A web session must NOT grant access to the mobile endpoints (IsMobileAuthenticated only
-        # accepts JWT), so a session-authenticated request is still denied.
+        # A web session doesn't grant access: IsMobileAuthenticated only accepts JWT.
         self.client.force_login(self.user)
         self.assertIn(self.client.get(self.search_url).status_code, (401, 403))
 
@@ -664,8 +650,7 @@ class MobileCommandPaletteTests(StandardTestCase):
         self.assertEqual(resp["Cache-Control"], "private, no-store")
         items = [i for g in resp.json()["groups"] for i in g["items"]]
         self.assertTrue(items)
-        # Admin of the most recent auction sees the "View lots" default; every item carries the
-        # full contract the mobile client renders.
+        # Every item carries the full contract the mobile client renders.
         self.assertTrue(any("View lots" in i["title"] for i in items))
         for key in ("type", "title", "subtitle", "url", "icon", "id"):
             self.assertIn(key, items[0])
@@ -698,12 +683,7 @@ class MobileCommandPaletteTests(StandardTestCase):
 
 
 class MobileMyClubsTests(StandardTestCase):
-    """/api/mobile/clubs/mine/ — the clubs the JWT user belongs to, with the is_admin flag.
-
-    Mirrors the web ``user_clubs`` membership scoping (non-deleted ClubMember), so this covers
-    what differs on mobile: JWT (not session) auth, name ordering, the is_admin flag, and the
-    {name, slug, url, icon_url, is_admin} contract the app reads.
-    """
+    """/api/mobile/clubs/mine/: the JWT user's clubs, name-ordered, with is_admin."""
 
     def setUp(self):
         super().setUp()
@@ -711,7 +691,7 @@ class MobileMyClubsTests(StandardTestCase):
 
         self.bearer = {"HTTP_AUTHORIZATION": f"Bearer {RefreshToken.for_user(self.user).access_token}"}
         self.url = reverse("mobile-clubs-mine")
-        # "Beta" sorts before "Alpha club" only by name, so ordering is observable regardless of pk.
+        # "Beta" sorts after "Alpha club", so ordering is observable regardless of pk.
         self.admin_club = Club.objects.create(name="Alpha club")
         self.member_club = Club.objects.create(name="Beta club")
         # A club the user does NOT belong to must never appear.
@@ -721,7 +701,7 @@ class MobileMyClubsTests(StandardTestCase):
 
     def test_requires_jwt_not_session(self):
         self.assertIn(self.client.get(self.url).status_code, (401, 403))
-        # A web session must NOT grant access — IsMobileAuthenticated only accepts JWT.
+        # A web session doesn't grant access.
         self.client.force_login(self.user)
         self.assertIn(self.client.get(self.url).status_code, (401, 403))
 
@@ -759,7 +739,7 @@ class MobileMyClubsTests(StandardTestCase):
 
 
 class MobileLabelTests(StandardTestCase):
-    """/api/mobile/labels/<pk>/ — authorization (seller or auction admin) and PNG rendering."""
+    """/api/mobile/labels/<pk>/: authorization (seller or auction admin) and PNG rendering."""
 
     def setUp(self):
         super().setUp()
@@ -810,7 +790,7 @@ class MobileLabelTests(StandardTestCase):
         self.assertEqual(resp.status_code, 200)
         img = Image.open(BytesIO(resp.content))
         self.assertEqual(img.size, (96, 64))
-        # PIL round-trips DPI through the PNG pixels-per-meter chunk, so it comes back ~203.0.
+        # PIL round-trips DPI through the PNG pixels-per-meter chunk.
         dpi_x, dpi_y = img.info.get("dpi")
         self.assertEqual((round(dpi_x), round(dpi_y)), (203, 203))
 
@@ -827,12 +807,11 @@ class MobileLabelTests(StandardTestCase):
 
 
 class MobileConfigTests(TestCase):
-    """/api/mobile/config/ — public, unauthenticated deployment config the app reads before sign-in."""
+    """/api/mobile/config/: the public config the app reads before sign-in."""
 
     def setUp(self):
         self.url = reverse("mobile-config")
-        # privacy_policy_url is only offered when the page exists. The post is seeded by migration,
-        # but a TransactionTestCase earlier in the run can truncate it away, so make it explicit.
+        # Seeded by migration, but a TransactionTestCase can truncate it.
         BlogPost.objects.get_or_create(slug=PRIVACY_POLICY_SLUG, defaults={"title": "Privacy"})
 
     @override_settings(
@@ -840,13 +819,10 @@ class MobileConfigTests(TestCase):
         SQUARE_ENVIRONMENT="sandbox",
         GOOGLE_OAUTH_CLIENT_ID="123.apps.googleusercontent.com",
         NAVBAR_BRAND="Test Auctions",
-        # Pinned empty so the exact-response assertion doesn't depend on whether the .env of the
-        # machine running the tests happens to have the Firebase config files; the firebase block
-        # has its own tests below.
+        # Pinned so the exact-response assertion doesn't depend on the machine's .env; the firebase
+        # block has its own tests.
         FIREBASE_CLIENT_CONFIG={},
-        # Same reason: pin the social providers so this doesn't depend on the running machine's
-        # .env. Both keys are always present, whatever their value -- the app hides a provider's
-        # button when its key is empty, so the key going missing would be a silent breakage.
+        # Pinned too: both keys are always present, and an empty one hides the button.
         APPLE_ALLOWED_AUDIENCES=["com.fishauctions.app"],
         FACEBOOK_APP_ID="1234567890",
     )
@@ -854,16 +830,12 @@ class MobileConfigTests(TestCase):
         resp = self.client.get(self.url)
         self.assertEqual(resp.status_code, 200)
         payload = resp.json()
-        # The drawer is the one per-user block and has its own tests (auctions/test_mobile_menu.py);
-        # here it is only checked for being present and signed-out, then dropped so the rest of the
-        # response can still be asserted exactly.
+        # The menu has its own tests (auctions/test_mobile_menu.py); popped so the rest can be
+        # compared exactly.
         menu = payload.pop("menu")
         self.assertEqual([section["id"] for section in menu["sections"]], ["main", "about"])
-        # The voice grammar is served to every caller now -- word lists and score cutoffs rather
-        # than secrets, and the set-winners page has always matched against these same defaults, so
-        # the app has to score by them too or the two sides disagree about one utterance. Its
-        # contents are asserted in auctions/test_voice.py; popped here for the same reason as the
-        # menu, so the rest of the response can still be compared exactly.
+        # The voice grammar is served to everyone so app and page score alike; its contents are
+        # asserted in auctions/test_voice.py.
         voice_block = payload.pop("voice")
         self.assertIn("lot", voice_block["anchors"])
         self.assertEqual(
@@ -872,15 +844,12 @@ class MobileConfigTests(TestCase):
                 "square_application_id": "sq0idp-test",
                 "square_environment": "sandbox",
                 "google_server_client_id": "123.apps.googleusercontent.com",
-                # Which social sign-in buttons to draw. Apple is a boolean because the native flow's
-                # audience is the app's own bundle id and needs nothing at runtime; Facebook's app id
-                # is public by construction (it's compiled into the app and registered as an
-                # fb<app-id> URL scheme). Neither secret is ever sent -- see test_exposes_no_secrets.
+                # Apple is a boolean (the native audience is the bundle id); Facebook's app id is
+                # public. Neither secret is sent -- see test_exposes_no_secrets.
                 "apple_sign_in_enabled": True,
                 "facebook_app_id": "1234567890",
                 "brand_name": "Test Auctions",
-                # Through the storage: whether this name is hashed depends on whether collectstatic has
-                # run, which differs between CI and a dev container -- see fishauctions/static_storage.py.
+                # Hashed where collectstatic has run; see fishauctions/static_storage.py.
                 "icon_url": "http://testserver" + staticfiles_storage.url("android-chrome-512x512.png"),
                 # Apple requires both to be linkable from inside the app at sign-up.
                 "terms_url": "/tos/",
@@ -889,14 +858,12 @@ class MobileConfigTests(TestCase):
         )
 
     def test_exposes_no_secrets(self):
-        # Guard against a secret ever being added to this public endpoint: the response keys are a
-        # fixed allowlist of public values, and none of the bytes leak a server-side secret.
+        # The response keys are a fixed allowlist of public values.
         with override_settings(
             SQUARE_CLIENT_SECRET="sq0csp-supersecret",
             SECRET_KEY="django-secret-key-value",
             FIREBASE_CLIENT_CONFIG={},  # same reason as above: keep the key allowlist exact
-            # Each social provider has a public half that belongs here and a secret half that never
-            # does. Set both so the assertions below prove the line is drawn in the right place.
+            # Each provider has a public half that belongs here and a secret half that never does.
             FACEBOOK_APP_ID="1234567890",
             FACEBOOK_APP_SECRET="fb-app-secret-value",
             APPLE_ALLOWED_AUDIENCES=["com.fishauctions.app"],
@@ -916,16 +883,15 @@ class MobileConfigTests(TestCase):
                 "icon_url",
                 "terms_url",
                 "privacy_policy_url",
-                # Anchor words and score cutoffs for voice set-winners -- see auctions/voice.py.
+                # Voice anchor words and cutoffs -- see auctions/voice.py.
                 "voice",
-                # Titles and paths of navbar links, nothing else -- see auctions/mobile/menu.py.
+                # Navbar link titles and paths -- see auctions/mobile/menu.py.
                 "menu",
             },
         )
         self.assertNotIn(b"sq0csp-supersecret", resp.content)
         self.assertNotIn(b"django-secret-key-value", resp.content)
-        # The Facebook app *id* is public (compiled into the app, registered as a URL scheme); the
-        # app secret and Apple's .p8 signing key are not, and must never travel to a device.
+        # The Facebook app id is public; the app secret and Apple's signing key never are.
         self.assertIn(b"1234567890", resp.content)
         self.assertNotIn(b"fb-app-secret-value", resp.content)
         self.assertNotIn(b"apple-p8-value", resp.content)
@@ -1058,8 +1024,7 @@ class FirebaseClientConfigParsingTests(TestCase):
 
 
 class SingleLotLabelPngTests(StandardTestCase):
-    """The web single-lot label endpoint can also emit a PNG (?format=png) via the shared renderer,
-    with the same ?resolution / ?dpi controls as the mobile endpoint; default stays the PDF sheet."""
+    """The web single-lot label endpoint's ?format=png, with the same ?resolution and ?dpi as mobile."""
 
     def setUp(self):
         super().setUp()
@@ -1091,15 +1056,14 @@ class SingleLotLabelPngTests(StandardTestCase):
 
 
 class MobileEmailLoginTests(TestCase):
-    """MobileAuthService email fallback must work even when multiple users share an email, and it
-    must honour allauth's mandatory email-verification policy (no weaker side door than the web)."""
+    """MobileAuthService's email fallback with shared emails, honouring mandatory email verification."""
 
     def setUp(self):
         from allauth.account.models import EmailAddress
 
         self.alice = User.objects.create_user("alice", "dup@example.com", "pw-alice")
         self.bob = User.objects.create_user("bob", "dup@example.com", "pw-bob")
-        # ACCOUNT_EMAIL_VERIFICATION is mandatory, so these must have a verified email to log in.
+        # Mandatory verification, so these need a verified email.
         for user in (self.alice, self.bob):
             EmailAddress.objects.create(user=user, email=user.email, verified=True, primary=True)
 
@@ -1120,7 +1084,7 @@ class MobileEmailLoginTests(TestCase):
         self.assertIsNone(MobileAuthService.authenticate("dup@example.com", "nope"))
 
     def test_unverified_email_blocked_when_verification_mandatory(self):
-        """A correct password is not enough when the email is unverified — matches web login."""
+        """An unverified email blocks login even with the right password, as on the web."""
         from auctions.mobile.services.auth import MobileAuthService
 
         # No verified EmailAddress for carol.
@@ -1140,10 +1104,9 @@ class MobileEmailLoginTests(TestCase):
 
 @isolated_cache("mobile-web-session")
 class MobileWebSessionTests(TestCase):
-    """The WebView pre-auth handoff: a Bearer-authenticated POST mints a one-time token, and the
-    WebView-loaded consume GET turns it into a real, server-set Django session cookie. The cookie
-    must never be established by the mint call and must carry HttpOnly/Secure flags from the consume
-    redirect; the token must be single-use and fail closed (redirect to login, no session)."""
+    """The WebView handoff: a Bearer POST mints a one-time token, and the consume GET sets the session
+    cookie. The mint call must set no cookie, and the token must be single-use and fail closed.
+    """
 
     SESSION_COOKIE = "sessionid"
 
@@ -1151,7 +1114,7 @@ class MobileWebSessionTests(TestCase):
         from django.conf import settings
         from rest_framework_simplejwt.tokens import RefreshToken
 
-        # Random-token TTL keys can't collide between tests, but clear to keep the cache deterministic.
+        # Clear the cache to keep tests deterministic.
         cache.clear()
         self.user = User.objects.create_user("websession", "ws@example.com", "pw")
         self.access = str(RefreshToken.for_user(self.user).access_token)
@@ -1182,7 +1145,7 @@ class MobileWebSessionTests(TestCase):
         handoff_url = resp.json()["handoff_url"]
         self.assertIn(self.consume_url, handoff_url)
         self.assertIn("t=", handoff_url)
-        # The mint call must NOT log anyone in: no session cookie, the token is the only credential.
+        # The mint call must not log anyone in.
         self.assertNotIn(self.SESSION_COOKIE, resp.cookies)
         self.assertIsNone(self._logged_in_user_id())
 
@@ -1191,7 +1154,7 @@ class MobileWebSessionTests(TestCase):
         self.assertEqual(resp.status_code, 302)
         self.assertEqual(resp.url, self.home_url)
         self.assertIn(self.SESSION_COOKIE, resp.cookies)
-        # The follow-up request carries the cookie, so the WebView is now authenticated as the user.
+        # The follow-up request carries the cookie.
         self.assertEqual(self._logged_in_user_id(), str(self.user.pk))
 
     @override_settings(SESSION_COOKIE_SECURE=True)
@@ -1243,5 +1206,5 @@ class MobileWebSessionTests(TestCase):
     def test_consume_rejects_offsite_next(self):
         resp = self.client.get(self.consume_url, {"t": self._mint_token(), "next": "https://evil.example.com/"})
         self.assertEqual(resp.status_code, 302)
-        # Open-redirect attempt falls back to the safe default rather than the attacker's host.
+        # An open-redirect attempt falls back to the safe default.
         self.assertEqual(resp.url, self.home_url)

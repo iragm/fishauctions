@@ -21,18 +21,15 @@ from auctions.tests import StandardTestCase
 
 
 class MobilePaymentConfirmTests(StandardTestCase):
-    """confirm_mobile_payment verifies an on-device Tap to Pay charge + idempotent recording.
+    """confirm_mobile_payment verifies an on-device charge and records it idempotently.
 
-    The Mobile Payments SDK charges the card on-device and returns a completed payment_id; the
-    server re-fetches it via GetPayment (client.payments.get) and verifies it before recording.
-
-    Tap to Pay is operated by the merchant (auction admin), so the service is driven here as
-    ``self.admin_user`` (an is_admin TOS on the auction); the buyer is never authorized.
+    The SDK charges on-device and returns a payment_id, which the server re-fetches via GetPayment and
+    verifies. Tap to Pay is operated by the merchant, so this runs as ``self.admin_user``.
     """
 
     def setUp(self):
         super().setUp()
-        # A fresh buyer with no lots + one ADD adjustment owes a deterministic $20.
+        # A fresh buyer with no lots and one ADD adjustment owes exactly $20.
         self.buyer = User.objects.create_user("mobilebuyer", "mb@example.com", "pw")
         tos = AuctionTOS.objects.create(user=self.buyer, auction=self.online_auction, pickup_location=self.location)
         self.pay_invoice, _ = Invoice.objects.get_or_create(auctiontos_user=tos)
@@ -63,8 +60,7 @@ class MobilePaymentConfirmTests(StandardTestCase):
     ):
         from types import SimpleNamespace
 
-        # Mirror the squareup 44.x typed GetPaymentResponse: .errors, .payment, and a nested Money
-        # object (attributes, not a dict) on .amount_money.
+        # The squareup 44.x typed GetPaymentResponse: .errors, .payment and a Money object.
         currency = currency if currency is not None else self.pay_invoice.currency
         reference_id = reference_id if reference_id is not None else str(self.pay_invoice.pk)
         payment = SimpleNamespace(
@@ -98,11 +94,8 @@ class MobilePaymentConfirmTests(StandardTestCase):
         self.assertEqual(InvoicePayment.objects.filter(invoice=self.pay_invoice, external_id="PAY1").count(), 1)
 
     def test_create_and_confirm_use_rounded_amount(self):
-        """With invoice rounding on, Tap to Pay charges/verifies the rounded balance, not the cents.
-
-        A fractional residual ($19.60 owed) is charged at the rounded $19.00 (customer's favour);
-        confirm must accept the $19.00 (1900c) Square charge and mark the invoice PAID even though a
-        fractional residual remains on net_after_payments.
+        """With rounding on, the charge and verification use the rounded balance ($19.00 on $19.60 owed) and
+        the invoice is marked PAID despite the fractional residual.
         """
 
         from auctions.mobile.services.payments import PaymentService
@@ -114,13 +107,13 @@ class MobilePaymentConfirmTests(StandardTestCase):
             pickup_location=self.location,
         )
         invoice, _ = Invoice.objects.get_or_create(auctiontos_user=tos)
-        # $20 owed, less a $0.40 partial payment, leaves a fractional $19.60 balance.
+        # $20 owed less a $0.40 payment leaves $19.60.
         InvoiceAdjustment.objects.create(adjustment_type="ADD", amount=20, notes="t", invoice=invoice)
         InvoicePayment.objects.create(
             invoice=invoice, payment_method="Cash", amount=Decimal("0.40"), currency=invoice.currency
         )
         invoice.refresh_from_db()
-        # Rounding must actually change the amount for this test to be meaningful.
+        # Rounding must change the amount, or the test means nothing.
         unrounded = Decimal("0.00") - Decimal(invoice.net_after_payments)
         rounded = Decimal("0.00") - Decimal(invoice.rounded_net_after_payments)
         self.assertNotEqual(rounded, unrounded)
@@ -180,7 +173,7 @@ class MobilePaymentConfirmTests(StandardTestCase):
         self._assert_rejected_and_unrecorded(self._payment_response(location_id="LOC_OTHER"))
 
     def test_confirm_rejects_wrong_reference_id(self):
-        # A payment bound to a different invoice's reference (its pk) must not pay this one.
+        # A payment referencing a different invoice must not pay this one.
         self._assert_rejected_and_unrecorded(self._payment_response(reference_id=str(self.pay_invoice.pk + 99999)))
 
     def test_confirm_rejects_already_paid(self):
@@ -199,11 +192,10 @@ class MobilePaymentConfirmTests(StandardTestCase):
     def test_confirm_is_idempotent_on_external_id(self):
         from auctions.mobile.services.payments import PaymentService
 
-        # Owe more than the pre-existing payment so a balance remains (a payment that covers the
-        # whole invoice would trip the "no amount due" guard before the dedup path is reached).
+        # Owe more than the existing payment, or the "no amount due" guard fires first.
         InvoiceAdjustment.objects.create(adjustment_type="ADD", amount=40, notes="t", invoice=self.pay_invoice)
         self.pay_invoice.refresh_from_db()
-        # Simulate the Square webhook (or a prior retry) already recording this payment.
+        # The Square webhook, or a retry, already recorded this payment.
         InvoicePayment.objects.create(
             invoice=self.pay_invoice,
             external_id="PAY1",
@@ -212,8 +204,7 @@ class MobilePaymentConfirmTests(StandardTestCase):
             amount_available_to_refund=20,
             currency=self.pay_invoice.currency,
         )
-        # $60 owed, $20 already recorded → $40 (4000 cents) due at confirm time; the verification
-        # recomputes amount_due net of the existing payment, so the fetched payment must match it.
+        # $60 owed less $20 recorded is $40 due, which the fetched payment must match.
         seller, _ = self._mock_seller(get_return=self._payment_response(pid="PAY1", amount=4000))
         with (
             patch.object(PaymentService, "_get_seller_for_invoice", return_value=seller),
@@ -230,14 +221,12 @@ class MobilePaymentConfirmTests(StandardTestCase):
         self.assertEqual(self.pay_invoice.status, "PAID")
 
     def test_confirm_surfaces_actionable_message_on_idempotency_key_reuse(self):
-        # The footgun: the create idempotency key is stable per invoice, so after an earlier Tap to Pay
-        # charge a re-tap reuses it and Square returns that ORIGINAL (already-recorded) charge instead
-        # of charging the new balance. Confirm must raise the specific PaymentAlreadyChargedError —
-        # naming the prior charge and what is still due — not the generic mismatch error, and record
-        # nothing new.
+        # The create idempotency key is stable per invoice, so a re-tap after an earlier charge
+        # returns that original charge instead of the new balance. Confirm must raise
+        # PaymentAlreadyChargedError, naming the prior charge and what is due, and record nothing.
         from auctions.mobile.services.payments import PaymentAlreadyChargedError, PaymentService
 
-        # A prior $20 Square charge (external_id PAY1) is already on the invoice...
+        # A prior $20 charge (PAY1) is on the invoice...
         InvoicePayment.objects.create(
             invoice=self.pay_invoice,
             external_id="PAY1",
@@ -246,7 +235,7 @@ class MobilePaymentConfirmTests(StandardTestCase):
             amount_available_to_refund=20,
             currency=self.pay_invoice.currency,
         )
-        # ...then $30 more is added, so $30 is now due. Re-tapping deduped to the original $20 payment.
+        # ...then $30 more is added, and the re-tap deduped to the original $20.
         InvoiceAdjustment.objects.create(adjustment_type="ADD", amount=30, notes="t", invoice=self.pay_invoice)
         self.pay_invoice.refresh_from_db()
 
@@ -260,12 +249,12 @@ class MobilePaymentConfirmTests(StandardTestCase):
                 PaymentService.confirm_mobile_payment(
                     invoice_pk=self.pay_invoice.pk, payment_id="PAY1", idempotency_key="i", user=self.admin_user
                 )
-        # PaymentAlreadyChargedError is still a ValueError subclass (so generic handlers catch it too).
+        # Still a ValueError subclass, so generic handlers catch it.
         self.assertIsInstance(cm.exception, ValueError)
         msg = str(cm.exception)
         self.assertIn("20.00", msg)  # the amount already charged
         self.assertIn("30.00", msg)  # the amount still due
-        # Nothing new recorded, no renewal side effects, invoice not flipped to PAID off the stale charge.
+        # Nothing recorded, no renewal side effects, not marked PAID.
         self.assertEqual(InvoicePayment.objects.filter(invoice=self.pay_invoice).count(), 1)
         ensure.assert_not_called()
         renew.assert_not_called()
@@ -290,7 +279,7 @@ class MobilePaymentConfirmTests(StandardTestCase):
         self.assertNotIn("square_application_id", result)
         self.assertEqual(result["location_id"], "LOC1")
         self.assertEqual(result["amount"], "20.00")
-        # The client must charge with this reference_id; it matches the web convention (str(pk)).
+        # The client charges with this reference_id, matching the web convention.
         self.assertEqual(result["reference_id"], str(self.pay_invoice.pk))
         # Every documented create field is present (and nothing extra leaks).
         self.assertEqual(
@@ -309,13 +298,10 @@ class MobilePaymentConfirmTests(StandardTestCase):
         )
 
     def test_create_issues_a_fresh_attempt_id_every_time(self):
-        """The value the app hands the SDK as ``paymentAttemptId`` names ONE attempt.
+        """``paymentAttemptId`` names one attempt, so create issues a fresh one every time.
 
-        It used to be a stable per-invoice string, with a comment describing the Payments API's
-        server-side ``idempotency_key`` — a different concept with the opposite behaviour. Nothing
-        ever deduplicated; what actually happened, on hardware, is that the retry after a declined
-        card was refused by Square with ``payment_attempt_id_reused``, which is Tap to Pay failing
-        exactly when it is needed. Double-charge safety is the attempt record now, not this string.
+        It used to be a stable per-invoice string described as an idempotency key, and Square refused the
+        retry after a decline with ``payment_attempt_id_reused``. Double-charge safety is the attempt record.
         """
         from auctions.mobile.services.payments import PaymentService
 
@@ -330,22 +316,22 @@ class MobilePaymentConfirmTests(StandardTestCase):
 
         with patch.object(PaymentService, "_get_seller_for_invoice", return_value=self._mock_seller()[0]):
             first = PaymentService.create_mobile_payment(invoice_pk=self.pay_invoice.pk, user=self.admin_user)
-            # The attempt has to be closed the way a decline closes it, or create refuses the retry.
+            # Close the attempt as a decline would, or create refuses the retry.
             PaymentService.close_attempt(attempt_id=first["attempt_id"], outcome="failed", user=self.admin_user)
             again = PaymentService.create_mobile_payment(invoice_pk=self.pay_invoice.pk, user=self.admin_user)
             other = PaymentService.create_mobile_payment(invoice_pk=other_invoice.pk, user=self.admin_user)
 
         self.assertNotEqual(first["attempt_id"], again["attempt_id"])
         self.assertNotEqual(first["attempt_id"], other["attempt_id"])
-        # Still invoice-derived, so a charge is traceable from the Square dashboard to an invoice.
+        # Still invoice-derived, so a charge is traceable from the Square dashboard.
         self.assertIn(str(self.pay_invoice.pk), first["attempt_id"])
         self.assertLessEqual(len(first["attempt_id"]), 45)  # Square caps both fields at 45 chars
-        # The old field name carries the same value, for app builds that predate attempt_id.
+        # The old field name carries the same value, for older app builds.
         self.assertEqual(first["idempotency_key"], first["attempt_id"])
 
     def test_create_blocks_seller_without_tap_to_pay_scope(self):
-        # A legacy Square account (token lacks PAYMENTS_WRITE_IN_PERSON) is blocked before the device
-        # is handed a token, with a distinguishable error so the app can prompt a reconnect.
+        # A legacy account (no PAYMENTS_WRITE_IN_PERSON) is blocked before the device gets a token,
+        # with a distinguishable error so the app can prompt a reconnect.
         from auctions.mobile.services.payments import PaymentService, SquareReconnectRequired
 
         seller, _ = self._mock_seller()
@@ -355,7 +341,7 @@ class MobilePaymentConfirmTests(StandardTestCase):
                 PaymentService.create_mobile_payment(invoice_pk=self.pay_invoice.pk, user=self.admin_user)
 
     def test_create_denies_buyer(self):
-        # The buyer must NOT be able to create a payment — that would leak the seller's Square token.
+        # The buyer must not create a payment: it would leak the seller's Square token.
         from auctions.mobile.services.payments import PaymentService
 
         seller, _ = self._mock_seller()
@@ -370,8 +356,7 @@ class MobilePaymentConfirmTests(StandardTestCase):
             PaymentService.create_mobile_payment(invoice_pk=self.pay_invoice.pk, user=self.userB)
 
     def test_create_allows_is_admin_tos_on_square_auction_without_club(self):
-        # A Square auction with no club: anyone with an is_admin AuctionTOS (not just the creator)
-        # can take payment. online_auction has no club, and this fresh admin isn't its creator.
+        # A Square auction with no club: any is_admin AuctionTOS can take payment.
         from auctions.mobile.services.payments import PaymentService
 
         self.assertIsNone(self.online_auction.club_id)  # no club on this auction
@@ -385,9 +370,8 @@ class MobilePaymentConfirmTests(StandardTestCase):
         self.assertEqual(result["access_token"], "tok")
 
     def test_create_allows_club_manage_auctions_permission(self):
-        # A club member with "manage auctions" can take payment for that club's auction invoice —
-        # even when the auction is not manage_users_through_club (so Auction.permission_check alone,
-        # which gates the club branch on is_club_managed, would not grant it).
+        # A club member with "manage auctions" can take payment even when the auction isn't
+        # manage_users_through_club, which Auction.permission_check alone wouldn't grant.
         from auctions.mobile.services.payments import PaymentService
 
         club = Club.objects.create(name="Mgr Club")
@@ -403,7 +387,7 @@ class MobilePaymentConfirmTests(StandardTestCase):
         self.assertEqual(result["access_token"], "tok")
 
     def test_create_denies_club_member_without_payment_permission(self):
-        # A plain club member (no money / manage-auctions / admin permission) is still denied.
+        # A plain club member is denied.
         from auctions.mobile.services.payments import PaymentService
 
         club = Club.objects.create(name="Plain Club")
@@ -430,8 +414,7 @@ class MobilePaymentConfirmTests(StandardTestCase):
 
 
 class MobilePaymentEndpointTests(StandardTestCase):
-    """The /api/mobile/payments/ HTTP layer: JWT auth, the PermissionError->403 mapping, and that
-    only the merchant (auction admin) — not the buyer — can reach create/confirm."""
+    """The /api/mobile/payments/ HTTP layer: JWT auth, PermissionError to 403, and merchant-only access."""
 
     def setUp(self):
         super().setUp()
@@ -471,7 +454,7 @@ class MobilePaymentEndpointTests(StandardTestCase):
         self.assertEqual(body["reference_id"], str(self.pay_invoice.pk))
 
     def test_buyer_create_is_403(self):
-        # Even with Square configured, the buyer must get 403 and never see the access token.
+        # Even with Square configured, the buyer gets 403 and never sees the token.
         from auctions.mobile.services.payments import PaymentService
 
         with patch.object(PaymentService, "_get_seller_for_invoice", return_value=self._mock_seller()):
@@ -488,14 +471,12 @@ class MobilePaymentEndpointTests(StandardTestCase):
         self.assertEqual(resp.status_code, 403)
 
     def test_confirm_already_charged_returns_409_with_actionable_code(self):
-        # The idempotency-key-reuse footgun must reach the app as an actionable 409 (code
-        # "already_charged" + a cashier-facing detail), not the generic "couldn't verify" message.
+        # The idempotency-key reuse must reach the app as a 409 with code "already_charged".
         from types import SimpleNamespace
 
         from auctions.mobile.services.payments import PaymentService
 
-        # A prior $20 Square charge is on the invoice; then $30 more is added, so $30 is now due. The
-        # re-tap deduped to the original $20 charge (same payment_id), which no longer covers the due.
+        # A prior $20 charge, then $30 more added: the re-tap deduped to a charge that no longer covers it.
         InvoicePayment.objects.create(
             invoice=self.pay_invoice,
             external_id="PAY1",
@@ -536,19 +517,17 @@ class MobilePaymentEndpointTests(StandardTestCase):
 
 
 class SquareSellerRoutingTests(StandardTestCase):
-    """Which Square account an auction's payments route to -- and which token Tap to Pay hands out.
+    """Which Square account an auction's payments route to, and which token Tap to Pay hands out.
 
-    Auction invoices always carry ``club=None`` (that FK is for membership invoices), so anything
-    resolving the seller from ``invoice.club`` alone silently falls through to the auction
-    creator's *personal* Square account on a club auction. That both misroutes the club's money and
-    ships a personal merchant token to whoever holds an is_admin AuctionTOS.
+    Auction invoices always have ``club=None`` (that FK is for membership invoices), so resolving the
+    seller from ``invoice.club`` falls through to the creator's personal account on a club auction --
+    misrouting the money and shipping a personal token to any is_admin AuctionTOS.
     """
 
     def setUp(self):
         super().setUp()
         self.club = Club.objects.create(name="Routing Club")
-        # self.user creates online_auction; give them a personal Square account to compete with the
-        # club's, so a test failing over means money landed in the wrong account.
+        # Give the creator a personal Square account to compete with the club's.
         self.creator_seller = SquareSeller.objects.create(
             user=self.user, square_merchant_id="CREATOR_MID", access_token="creator-tok", payer_email="c@example.com"
         )
@@ -576,7 +555,7 @@ class SquareSellerRoutingTests(StandardTestCase):
         self.assertEqual(self.online_auction.square_information, "CLUB_MID")
 
     def test_club_auction_falls_back_to_creator_when_club_has_no_square(self):
-        # The club never connected Square, so the creator's account is the only way to take money.
+        # The club never connected Square, so the creator's account is the only one.
         self.online_auction.club = self.club
         self.online_auction.save()
         self.assertEqual(self.online_auction.effective_square_seller, self.creator_seller)
@@ -586,8 +565,7 @@ class SquareSellerRoutingTests(StandardTestCase):
         self.assertEqual(self.online_auction.effective_square_seller, self.creator_seller)
 
     def test_auction_invoice_on_club_auction_resolves_club_seller(self):
-        # The regression: invoice.club is None on an auction invoice, so resolving from the invoice
-        # alone would hand back self.creator_seller here.
+        # The regression: invoice.club is None, so resolving from the invoice gives the creator's.
         from auctions.mobile.services.payments import PaymentService
 
         club_seller = self._connect_club_square()
@@ -608,11 +586,11 @@ class SquareSellerRoutingTests(StandardTestCase):
         self.online_auction.save()
         with patch.object(SquareSeller, "get_location_id", return_value="LOC1"):
             result = PaymentService.create_mobile_payment(invoice_pk=self.pay_invoice.pk, user=self.admin_user)
-        # "creator-tok" here would mean an auction admin was handed a personal merchant credential.
+        # "creator-tok" here would mean an admin got a personal merchant credential.
         self.assertEqual(result["access_token"], "club-tok")
 
     def test_web_payment_link_routes_to_club_seller(self):
-        # SquareAPIMixin.create_payment_link had the identical mismatch as the mobile path.
+        # SquareAPIMixin.create_payment_link had the same mismatch.
         from auctions.views import SquareAPIMixin
 
         club_seller = self._connect_club_square()
@@ -621,7 +599,7 @@ class SquareSellerRoutingTests(StandardTestCase):
         self.pay_invoice.refresh_from_db()
         mixin = SquareAPIMixin()
         mixin.request = MagicMock()
-        # autospec so the bound instance shows up as call_args[0][0] -- that is the assertion.
+        # autospec, so the bound instance is call_args[0][0].
         with patch.object(
             SquareSeller, "create_payment_link", autospec=True, return_value=("https://sq/pay", None)
         ) as create_link:
@@ -631,7 +609,7 @@ class SquareSellerRoutingTests(StandardTestCase):
         self.assertEqual(create_link.call_args[0][0], club_seller)
 
     def test_membership_invoice_uses_club_seller_only(self):
-        # A membership invoice has no auction, so there is no creator to fall back to.
+        # A membership invoice has no auction, so there's no creator to fall back to.
         from auctions.mobile.services.payments import PaymentService
 
         club_seller = self._connect_club_square()
@@ -640,10 +618,8 @@ class SquareSellerRoutingTests(StandardTestCase):
 
 
 class SquareTokenHandoutAuditTests(StandardTestCase):
-    """Every create_mobile_payment that returns a token must leave a history entry.
-
-    The response carries a merchant-wide OAuth token, so the audit entry is the only record that a
-    given admin pulled the credential -- and a create with no matching payment is the signal.
+    """Every create_mobile_payment that returns a token leaves a history entry: the response carries a
+    merchant-wide token, and a create with no matching payment is the signal.
     """
 
     def setUp(self):
@@ -684,7 +660,7 @@ class SquareTokenHandoutAuditTests(StandardTestCase):
         self.assertFalse(AuctionHistory.objects.filter(action__contains="Square Tap to Pay access token").exists())
 
     def test_history_failure_does_not_block_payment(self):
-        # A cashier must never be blocked from taking money by an audit write.
+        # An audit write must never block a cashier.
         from auctions.mobile.services.payments import PaymentService
 
         with patch.object(PaymentService, "_get_seller_for_invoice", return_value=self._mock_seller()):

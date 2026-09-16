@@ -1,19 +1,17 @@
 """What the DMCA safe harbour needs to be true, checked.
 
-Section 512 is a list of conditions rather than a standard, which makes it unusually testable, and
-every test here is one of the conditions:
+Section 512 is a list of conditions rather than a standard, and every test here is one of them:
 
-* the designated agent is published, and only when one is actually configured (512(c)(2));
-* a notice can be sent and reaches the agent, and the address that address resolves to is not a
-  hole in the ground (512(c)(2) again -- AOL lost the safe harbour in *Ellison v. Robertson* for
-  letting notices bounce);
-* a notice has all six of its parts or it is not a notice (512(c)(3)(A));
-* **removing something removes it** -- the file, the thumbnails, and the copy at the edge
-  (512(c)(1)(C)), which is the one this whole area of the code was missing;
+* the designated agent is published, and only when one is configured (512(c)(2));
+* a notice reaches the agent, and that address is not a hole in the ground -- AOL lost the safe
+  harbour in *Ellison v. Robertson* for letting notices bounce;
+* a notice has all six parts or it is not a notice (512(c)(3)(A));
+* **removing something removes it**: the file, the thumbnails and the copy at the edge
+  (512(c)(1)(C)), which is what this area of the code was missing;
 * strikes are recorded, counted, and stop counting when withdrawn (512(i)(1)(A)).
 
-``AgentConfigurationTests`` is the one to read first: everything else assumes an agent, and the
-question of what a deployment with no agent does is the one a fork gets wrong.
+``AgentConfigurationTests`` is the one to read first: everything else assumes an agent, and what a
+deployment with no agent does is what a fork gets wrong.
 """
 
 from unittest.mock import patch
@@ -99,7 +97,7 @@ class AgentConfigurationTests(SimpleTestCase):
         MAILING_ADDRESS="No address configured",
     )
     def test_the_unset_mailing_address_placeholder_is_not_an_address(self):
-        """Publishing the words "No address configured" is worse than publishing no page."""
+        """Publishing "No address configured" is worse than publishing no page."""
         self.assertIsNone(dmca.agent())
 
     @override_settings(
@@ -111,7 +109,7 @@ class AgentConfigurationTests(SimpleTestCase):
         ADMINS=[("Admin", "admin@example.com")],
     )
     def test_notices_still_reach_somebody_with_no_agent_registered(self):
-        """Not being in the directory is a reason to lose the safe harbour, not to drop the mail."""
+        """Not being in the directory loses the safe harbour; it is not a reason to drop the mail."""
         self.assertEqual(dmca.agent_email(), "admin@example.com")
 
 
@@ -128,13 +126,13 @@ class DmcaPageTests(StandardTestCase):
 
     @override_settings(**AGENT)
     def test_the_published_strike_count_matches_the_one_that_runs(self):
-        """A published policy that does not match the implemented one is what loses the safe harbour."""
+        """A published policy that doesn't match the implemented one is what loses the safe harbour."""
         response = self.client.get(reverse("dmca"))
         self.assertContains(response, f"closed at {dmca.STRIKES_BEFORE_TERMINATION} strikes")
 
     @override_settings(**AGENT)
     def test_the_page_says_how_to_send_a_counter_notice(self):
-        """The terms send uploaders here for this, so the four parts of 512(g)(3) have to be here."""
+        """The terms send uploaders here for a counter-notice, so the four parts of 512(g)(3) are here."""
         response = self.client.get(reverse("dmca"))
         for part in ("signature", "where it appeared", "mistake or misidentification", "service of process"):
             self.assertContains(response, part)
@@ -185,8 +183,9 @@ class NoticeIntakeTests(StandardTestCase):
 
     @override_settings(**AGENT)
     def test_a_notice_without_the_perjury_statement_is_refused(self):
-        """512(c)(3)(A)(vi) is not optional, and a form that took it as optional would be
-        collecting something that is not a notice while looking like it collects notices."""
+        """512(c)(3)(A)(vi) is not optional: a form that took it as optional would collect something that is
+        not a notice while looking like it collects notices.
+        """
         payload = {**COMPLETE_NOTICE, "accurate": False}
         self.client.post(reverse("dmca_notice"), payload)
         self.assertEqual(CopyrightNotice.objects.count(), 0)
@@ -242,10 +241,11 @@ class NoticeRoutingTests(SimpleTestCase):
         ADMINS=[("Admin", "admin@example.com")],
     )
     def test_publishing_the_alias_itself_does_not_route_it_to_itself(self):
-        """The setup checklist suggests dmca@yourdomain.com, and that address is the alias.
+        """Publishing the alias doesn't route it to itself.
 
-        Forwarding the alias to itself sends the copy back in through SES from the relay address,
-        where the Lambda's loop guard drops it: every notice lost, with nothing bouncing.
+        The setup checklist suggests dmca@yourdomain.com, which is the alias: forwarding it to itself sends
+        the copy back in through SES, where the Lambda's loop guard drops it -- every notice lost, with
+        nothing bouncing.
         """
         self.assertEqual(dmca.agent()["email"], "DMCA@Auction.Example")
         self.assertEqual(resolve_routed_recipient("dmca"), "admin@example.com")
@@ -271,13 +271,11 @@ class ReportContentTests(StandardTestCase):
         self.client.logout()
         response = self.client.get(reverse("report_lot", kwargs={"pk": self.lot.pk}))
         self.assertEqual(response.status_code, 200)
-        # Copyright complaints are pointed somewhere else on purpose: this form collects none of
-        # the six things a notice needs.
+        # Copyright complaints are pointed elsewhere: this form collects none of the six things.
         self.assertContains(response, reverse("dmca"))
 
     def test_the_lot_page_offers_the_report_link_to_a_signed_out_reader(self):
-        """App Review browses with no session, and so does a photographer who just found their
-        picture on a listing here."""
+        """App Review browses with no session, and so does a photographer who just found their picture."""
         self.client.logout()
         response = self.client.get(self.lot.lot_link)
         self.assertContains(response, reverse("report_lot", kwargs={"pk": self.lot.pk}))
@@ -291,7 +289,7 @@ class ReportContentTests(StandardTestCase):
         self.assertEqual(ContentReport.objects.get().reported_by, self.user)
 
     def test_the_report_survives_the_lot_it_was_about(self):
-        """A queue that deletes its own record the moment the thing is dealt with is no record."""
+        """A queue that deletes its own record when the thing is dealt with is no record."""
         self.client.post(
             reverse("report_lot", kwargs={"pk": self.lot.pk}),
             {"reason": "PROHIBITED", "details": "not legal to ship"},
@@ -327,8 +325,9 @@ class StrikeTests(StandardTestCase):
 
     @override_settings(ADMINS=[("Admin", "admin@example.com")])
     def test_the_third_strike_asks_a_person_rather_than_closing_the_account(self):
-        """512(f) exists because false notices are sent; an automatic ban wired to a number a
-        stranger controls is a way to lose somebody their account over a form."""
+        """512(f) exists because false notices are sent, so an automatic ban wired to a number a stranger
+        controls loses somebody their account over a form.
+        """
         from post_office.models import Email
 
         for _ in range(dmca.STRIKES_BEFORE_TERMINATION):
@@ -346,11 +345,10 @@ class StrikeTests(StandardTestCase):
 
 
 class TakedownRemovesTheMaterialTests(WritableMediaRoot, StandardTestCase):
-    """The one that matters: deleting the row has to delete the picture.
+    """Deleting the row has to delete the picture.
 
-    Before this, ``LotImage.delete()`` left the JPEG under ``mediafiles/`` and nginx went on
-    serving it, unauthenticated, at the same URL the notice quoted -- for another thirty days at
-    the edge on top of that. "We deleted the database row" is not removal.
+    ``LotImage.delete()`` left the JPEG under ``mediafiles/`` and nginx went on serving it,
+    unauthenticated, at the URL the notice quoted -- for another thirty days at the edge.
     """
 
     def _image(self, lot, name="takedown.png"):
@@ -367,8 +365,9 @@ class TakedownRemovesTheMaterialTests(WritableMediaRoot, StandardTestCase):
         self.assertFalse(storage.exists(path))
 
     def test_a_file_two_rows_share_is_left_alone(self):
-        """Relisting a lot gives the copy the original's file rather than duplicating it, so
-        deleting one row must not take the other row's picture with it."""
+        """Relisting gives the copy the original's file rather than duplicating it, so deleting one row must
+        not take the other's picture.
+        """
         first = self._image(self.lot)
         second = LotImage.objects.create(lot_number=self.lotB, image=first.image.name)
         storage, path = first.image.storage, first.image.name
@@ -402,8 +401,7 @@ class TakedownRemovesTheMaterialTests(WritableMediaRoot, StandardTestCase):
         self.assertEqual(dmca.strike_count(self.user), 1)
 
     def test_take_down_leaves_the_listing_itself_alone(self):
-        """A notice is about a photograph. Deleting the listing would take bids and an auction
-        entry that had nothing to do with the complaint."""
+        """A notice is about a photograph: deleting the listing would take bids and an auction entry with it."""
         self.lot.user = self.user
         self.lot.save()
         self._image(self.lot)
@@ -441,7 +439,7 @@ class ImageSourceLabelTests(SimpleTestCase):
             self.assertNotIn("from the internet", label.lower(), value)
 
     def test_the_catch_all_still_exists(self):
-        """It is what a blank field is set to, so removing it would only move the problem."""
+        """The catch-all is what a blank field is set to, so removing it would move the problem."""
         self.assertIn("RANDOM", dict(LotImage.PIC_CATEGORIES))
 
 
@@ -460,8 +458,9 @@ class AccountDeletionTests(StandardTestCase):
         self.assertEqual(report.reporter_email, "")
 
     def test_strikes_against_them_survive(self):
-        """They hang off the User row that survives deletion, and 512(i) is a condition we would
-        otherwise be dismantling one deleted account at a time."""
+        """Strikes hang off the User row that survives deletion; 512(i) would otherwise be dismantled one
+        deleted account at a time.
+        """
         from auctions.account_deletion import delete_account
 
         dmca.record_strike(self.user, reason="a photo")

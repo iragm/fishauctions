@@ -26,11 +26,9 @@ from auctions.tests import StandardTestCase, WritableMediaRoot
 
 
 class AuctionJoinLinksUserTests(StandardTestCase):
-    """Regression + guard tests for the AuctionTOS.user=None bug.
-
-    Joining an auction through the UI must link the AuctionTOS to the joining user so downstream
-    user-FK lookups keep working: the join-state check on the auction page, /bids/ and /lots/won/
-    (both restrict lots to auctions the user has a TOS in, via LotFilter.possibleAuctions).
+    """Joining through the UI must link the AuctionTOS to the joining user, or downstream user-FK lookups
+    break: the join-state check on the auction page, /bids/ and /lots/won/ (both via
+    LotFilter.possibleAuctions).
     """
 
     def setUp(self):
@@ -93,7 +91,7 @@ class AuctionJoinLinksUserTests(StandardTestCase):
             auctiontos_winner=tos,
             active=False,
         )
-        # date_posted is auto_now_add; push it out of the 20-minute new-lot hiding window.
+        # date_posted is auto_now_add; push it out of the 20-minute new-lot window.
         Lot.objects.filter(pk=won.pk).update(date_posted=timezone.now() - datetime.timedelta(days=1))
         self.client.force_login(self.fresh_user)
         response = self.client.get(reverse("won_lots"))
@@ -118,8 +116,9 @@ class AuctionJoinLinksUserTests(StandardTestCase):
         self.assertContains(response, "Fresh user bid on this")
 
     def test_next_param_is_carried_into_join_form_action(self):
-        """Visiting the auction with ?next= renders a join form that POSTs back with ?next=,
-        so get_success_url can return the user to where they came from."""
+        """Visiting with ?next= renders a join form that POSTs back with it, so get_success_url can return the
+        user where they came from.
+        """
         self.client.force_login(self.fresh_user)
         response = self.client.get(reverse("auction_main", kwargs={"slug": self.open_auction.slug}) + "?next=/lots/")
         self.assertEqual(response.context["form"].helper.form_action.split("?next=")[-1], "%2Flots%2F")
@@ -167,8 +166,9 @@ class AuctionJoinLinksUserTests(StandardTestCase):
 
 
 class AuctionTOSEmailChangeGuardTests(StandardTestCase):
-    """The email-change guard in AuctionTOS.save() should only unlink the account on a *real*
-    email change to an address that isn't the linked user's own."""
+    """The email-change guard in AuctionTOS.save() only unlinks the account on a real change to an address
+    that isn't the linked user's own.
+    """
 
     def test_real_email_change_unlinks_user_and_resets_status(self):
         guard_user = User.objects.create_user(username="guard1", password="x", email="guard-a@example.com")
@@ -188,7 +188,7 @@ class AuctionTOSEmailChangeGuardTests(StandardTestCase):
 
     def test_filling_blank_email_keeps_user(self):
         guard_user = User.objects.create_user(username="guard2", password="x", email="guard2@example.com")
-        # No matching user exists for this address at creation, so user stays as we set it.
+        # No matching user exists for this address at creation, so user stays as set.
         tos = AuctionTOS.objects.create(
             user=guard_user,
             auction=self.online_auction,
@@ -220,7 +220,7 @@ class RelinkAuctiontosUsersCommandTests(StandardTestCase):
     """Tests for the relink_auctiontos_users repair command."""
 
     def _make_orphan(self, email):
-        """Create an AuctionTOS with no user (no matching user exists yet, so save() can't auto-link)."""
+        """An AuctionTOS with no user: no matching user exists yet, so save() can't auto-link."""
         tos = AuctionTOS.objects.create(
             auction=self.online_auction,
             pickup_location=self.location,
@@ -250,15 +250,16 @@ class RelinkAuctiontosUsersCommandTests(StandardTestCase):
         # A newer TOS already linked to the user in the same auction.
         own = AuctionTOS.objects.create(auction=self.online_auction, pickup_location=self.location, user=dup_user)
         call_command("relink_auctiontos_users")
-        # Oldest record (the orphan) is kept as canonical and gets the user; the newer one is merged away.
+        # The oldest record (the orphan) is kept as canonical and gets the user.
         orphan.refresh_from_db()
         self.assertEqual(orphan.user, dup_user)
         self.assertFalse(AuctionTOS.objects.filter(pk=own.pk).exists())
 
 
 class LotListUXTests(StandardTestCase):
-    """Part 3 UX: the persistent 'Outbid' chip on /bids/, the 20-minute new-lot message on the
-    auction lot list, and gating the 'Add Lots' button by the submission window."""
+    """The persistent 'Outbid' chip on /bids/, the 20-minute new-lot message on the auction lot list, and
+    gating the 'Add Lots' button by the submission window.
+    """
 
     def setUp(self):
         super().setUp()
@@ -314,7 +315,7 @@ class LotListUXTests(StandardTestCase):
         self.assertNotContains(response, "Outbid")
 
     def test_recently_added_lots_message(self):
-        # The only lot was posted moments ago, so it's hidden from non-owners by the 20-minute window.
+        # The only lot was posted moments ago, so it is hidden by the 20-minute window.
         self._make_lot("Brand new lot", recent=True)
         self.client.force_login(self.bidder)
         response = self.client.get(self.ux_auction.view_lot_link)
@@ -327,9 +328,9 @@ class LotListUXTests(StandardTestCase):
         self.assertContains(response, "bi-calendar-plus")
 
     def test_add_lots_button_shown_after_submission_closes_and_redirects(self):
-        """The Add Lot(s) button stays visible even after lot submission closes. Clicking it
-        returns the user to the auction rules page with a 'Lot submission has ended' error,
-        rather than the button being hidden."""
+        """The Add Lot(s) button stays visible after submission closes; clicking it returns to the auction
+        rules page with an error rather than the button being hidden.
+        """
         self.ux_auction.lot_submission_end_date = timezone.now() - datetime.timedelta(hours=1)
         self.ux_auction.save()
         self.assertFalse(self.ux_auction.can_submit_lots)
@@ -337,7 +338,7 @@ class LotListUXTests(StandardTestCase):
         response = self.client.get(reverse("auction_main", kwargs={"slug": self.ux_auction.slug}))
         # The button is still rendered
         self.assertContains(response, "bi-calendar-plus")
-        # Clicking it redirects back to the auction with an error instead of adding a lot
+        # Clicking it redirects back to the auction with an error instead of adding a lot.
         response = self.client.get(self.ux_auction.add_lot_link, follow=True)
         self.assertRedirects(response, self.ux_auction.get_absolute_url())
         self.assertContains(response, "Lot submission has ended")
@@ -351,7 +352,7 @@ class LotListUXTests(StandardTestCase):
     CLOUDFLARE_IMAGES_DOMAIN="",
 )
 class CloudflareImagesTests(WritableMediaRoot, StandardTestCase):
-    """Cloudflare Images serving, fallback, and the migrate_to_cloudflare_images command"""
+    """Cloudflare Images serving, fallback, and the migrate_to_cloudflare_images command."""
 
     def _image_file(self, name="test.jpg"):
         from PIL import Image as PILImage
@@ -403,7 +404,7 @@ class CloudflareImagesTests(WritableMediaRoot, StandardTestCase):
         self.assertEqual(club.icon_display_url, "https://imagedelivery.net/test-hash/icon1/public")
         self.assertEqual(club.icon_thumbnail_url, "https://imagedelivery.net/test-hash/icon1/club_icon")
         with override_settings(CLOUDFLARE_IMAGES_ENABLED=False):
-            # falls back to the locally generated easy-thumbnails alias (named by size, not alias)
+            # Falls back to the locally generated easy-thumbnails alias, named by size.
             self.assertEqual(club.icon_display_url, club.icon.url)
             self.assertIn("128x128", club.icon_thumbnail_url)
 
@@ -413,7 +414,7 @@ class CloudflareImagesTests(WritableMediaRoot, StandardTestCase):
         second = LotImage.objects.create(lot_number=lot, image=self._image_file("second.jpg"))
         with patch("auctions.cloudflare_images.requests.post", return_value=self._mock_upload_response()) as mock_post:
             call_command("migrate_to_cloudflare_images")
-        # a single run migrates every pending original (only the originals, never the thumbnails)
+        # One run migrates every pending original, never the thumbnails.
         self.assertEqual(mock_post.call_count, 2)
         first.refresh_from_db()
         second.refresh_from_db()
@@ -501,7 +502,7 @@ class CloudflareImagesTests(WritableMediaRoot, StandardTestCase):
             call_command("migrate_to_cloudflare_images")
         bad.refresh_from_db()
         good.refresh_from_db()
-        # the rejected file is marked so it isn't retried every run, and keeps serving locally
+        # A rejected file is marked so it isn't retried every run, and keeps serving locally.
         self.assertEqual(bad.cloudflare_image_id, UPLOAD_FAILED)
         self.assertNotIn("imagedelivery", bad.display_url)
         self.assertEqual(good.cloudflare_image_id, "cf-image-id")
@@ -513,7 +514,7 @@ class CloudflareImagesTests(WritableMediaRoot, StandardTestCase):
         self.assertEqual(image.cloudflare_image_id, "")
 
     def test_setting_new_id_with_new_image_is_kept(self):
-        # the lot copy flows set a new file and its matching id in the same save
+        # The lot copy flows set a new file and its matching id in the same save.
         image = LotImage.objects.create(lot_number=self._lot())
         image.image = self._image_file()
         image.cloudflare_image_id = "copied-id"
@@ -541,12 +542,10 @@ class CloudflareImagesTests(WritableMediaRoot, StandardTestCase):
     ROLLBACK = "rolled back on purpose"
 
     def test_deleting_row_queues_cloudflare_delete(self):
-        """Queued on commit, not from inside the delete.
+        """Deleting a row queues the Cloudflare delete on commit.
 
-        post_delete fires inside the transaction Django wraps every delete in, so enqueuing there
-        directly meant a rollback could leave the row alive pointing at an image that had already
-        been deleted from Cloudflare. captureOnCommitCallbacks is what runs the callback in a
-        TestCase, where nothing ever really commits.
+        post_delete fires inside the transaction Django wraps every delete in, so enqueuing there meant a
+        rollback could leave the row alive pointing at an image already deleted from Cloudflare.
         """
         image = LotImage.objects.create(lot_number=self._lot(), cloudflare_image_id="gone1")
         with patch("auctions.tasks.delete_cloudflare_image.delay") as mock_delay:

@@ -86,8 +86,7 @@ class AuctionEditViewTests(StandardTestCase):
         """Non-admin users should not be able to edit"""
         self.client.login(username=self.user_with_no_lots.username, password="testpassword")
         response = self.client.get(self.online_auction.get_edit_url())
-        # Should be denied - can be either 302 (redirect to error/login page) or 403 (forbidden)
-        # depending on permission middleware configuration
+        # Denied as either a redirect or a 403, depending on the middleware.
         assert response.status_code in [302, 403]
 
     def test_auction_edit_admin_user(self):
@@ -126,7 +125,7 @@ class AuctionEditViewTests(StandardTestCase):
             "invoice_rounding": str(self.online_auction.invoice_rounding),
             "only_whole_dollar_bids": "",
             "minimum_bid": str(self.online_auction.minimum_bid),
-            # use_categories intentionally omitted — it should not be touched by AuctionEditForm
+            # use_categories is omitted: AuctionEditForm must not touch it.
         }
         response = self.client.post(self.online_auction.get_edit_url(), data=form_data, follow=False)
         self.assertEqual(
@@ -164,7 +163,7 @@ class AuctionEditViewTests(StandardTestCase):
             "invoice_rounding": str(self.online_auction.invoice_rounding),
             "only_whole_dollar_bids": "",
             "minimum_bid": str(self.online_auction.minimum_bid),
-            # sealed_bid intentionally omitted — it should not be touched by AuctionEditForm
+            # sealed_bid is omitted: AuctionEditForm must not touch it.
         }
         response = self.client.post(self.online_auction.get_edit_url(), data=form_data, follow=False)
         self.assertEqual(
@@ -198,13 +197,12 @@ class AuctionEditViewTests(StandardTestCase):
             "tax": str(self.in_person_auction.tax or "0"),
             "online_bidding": self.in_person_auction.online_bidding,
             "date_start": self.in_person_auction.date_start.strftime("%Y-%m-%d %H:%M:%S"),
-            # date_end is omitted intentionally: for offline auctions the form sets date_end to HiddenInput
-            # and the field is nullable, so it is not required in POST data.
+            # date_end is omitted: for offline auctions the form hides it and the field is nullable.
             "invoice_rounding": str(self.in_person_auction.invoice_rounding),
             "only_whole_dollar_bids": "",
             "minimum_bid": str(self.in_person_auction.minimum_bid),
             "use_seller_dash_lot_numbering": self.in_person_auction.use_seller_dash_lot_numbering,
-            # advanced_lot_adding intentionally omitted — it should not be touched by AuctionEditForm
+            # advanced_lot_adding is omitted: AuctionEditForm must not touch it.
         }
         response = self.client.post(self.in_person_auction.get_edit_url(), data=form_data, follow=False)
         self.assertEqual(
@@ -307,7 +305,7 @@ class AuctionCustomFieldsViewTests(StandardTestCase):
         self.assertContains(response, "Custom dropdown")
 
     def test_custom_dropdown_options_api_admin_can_create(self):
-        """Regression: the API view must set self.auction so is_auction_admin works (used to 500)."""
+        """The custom-dropdown API view sets self.auction so is_auction_admin works; it used to 500."""
         self.client.login(username="my_lot", password="testpassword")
         response = self.client.post(
             reverse("auction_custom_dropdown_options", kwargs={"slug": self.online_auction.slug}),
@@ -328,18 +326,16 @@ class AuctionCustomFieldsViewTests(StandardTestCase):
 
 
 class AuctionCloneCustomFieldsTests(StandardTestCase):
-    """Copying an auction has to bring the custom fields with it.
+    """Copying an auction brings the custom fields with it.
 
-    A setting that is missing from ``AuctionCreateView.fields_to_clone`` is not copied, and because
-    the copy starts from a fresh ``Auction`` it silently takes the model default instead.  That is
-    invisible on the create form -- the club sees a new auction that looks right -- and only turns
-    up when the first seller adds a lot and the field they were told to fill in is not there.
+    A setting missing from ``AuctionCreateView.fields_to_clone`` silently takes the model default, which
+    only shows up when the first seller finds a field they were told to fill in missing.
     """
 
     def setUp(self):
         super().setUp()
         userdata = self.user.userdata
-        # ALLOW_USERS_TO_CREATE_AUCTIONS is read from the environment, and CI's differs from dev's.
+        # ALLOW_USERS_TO_CREATE_AUCTIONS comes from the environment, and CI differs from dev.
         userdata.can_create_club_auctions = True
         userdata.save()
         give_contact_info(self.user)  # AuctionCreateView refuses somebody with no contact info
@@ -369,8 +365,7 @@ class AuctionCloneCustomFieldsTests(StandardTestCase):
         self.assertEqual(clone.custom_checkbox_name, "CARES species")
 
     def test_the_copy_shows_the_custom_checkbox_when_a_lot_is_added(self):
-        # The name alone is not enough: both halves are read together everywhere the field is
-        # shown, so a copy that kept the name and lost the switch shows the seller nothing.
+        # The name alone isn't enough: both halves are read together wherever the field is shown.
         self.online_auction.use_custom_checkbox_field = True
         self.online_auction.custom_checkbox_name = "CARES species"
         self.online_auction.save()
@@ -380,8 +375,7 @@ class AuctionCloneCustomFieldsTests(StandardTestCase):
         self.assertEqual(form.fields["custom_checkbox"].label, "CARES species")
 
     def test_copying_an_auction_keeps_switched_off_fields_switched_off(self):
-        # These two default to True, so leaving them out of the copy turns them back on -- the
-        # opposite failure, and just as unwanted by a club that stripped its lot form down.
+        # These default to True, so leaving them out of the copy turns them back on.
         self.online_auction.use_description = False
         self.online_auction.use_reference_link = False
         self.online_auction.save()
@@ -432,7 +426,7 @@ class PayPalFormFieldVisibilityTests(StandardTestCase):
 
     @override_settings(PAYPAL_CLIENT_ID="test_client_id", PAYPAL_SECRET="test_secret")
     def test_enable_online_payments_field_visible_for_superuser_without_paypal(self):
-        """Field should be visible for superuser even without PayPal connected (site-wide fallback)"""
+        """The field is visible to a superuser even without PayPal connected (the site-wide fallback)."""
         # Create superuser
         superuser = User.objects.create_superuser(
             username="superuser", password="testpassword", email="super@example.com"
@@ -452,7 +446,7 @@ class PayPalFormFieldVisibilityTests(StandardTestCase):
         form = AuctionEditForm(
             instance=superuser_auction, user=superuser_auction.created_by, cloned_from=None, user_timezone="UTC"
         )
-        # Field should NOT be hidden for superuser (site-wide PayPal fallback)
+        # Not hidden for a superuser, thanks to the site-wide PayPal fallback.
         assert not isinstance(form.fields["enable_online_payments"].widget, forms.HiddenInput)
 
     def test_manage_users_through_club_field_shown_without_club(self):
@@ -461,12 +455,12 @@ class PayPalFormFieldVisibilityTests(StandardTestCase):
         form = AuctionEditForm(
             instance=self.online_auction, user=self.online_auction.created_by, cloned_from=None, user_timezone="UTC"
         )
-        # manage_users_through_club is always rendered so JS can toggle it based on club selection
+        # Always rendered, so JS can toggle it based on the club selection.
         self.assertNotIsInstance(form.fields["manage_users_through_club"].widget, forms.HiddenInput)
 
     def test_allow_self_checkin_field_rendered_for_js_toggling(self):
-        # Like manage_users_through_club, the real widget is always rendered so the form JS can show
-        # it only in check-in mode (see update_self_checkin_field in auction_edit_form.html).
+        # Also always rendered, so the form JS can show it only in check-in mode (see
+        # update_self_checkin_field in auction_edit_form.html).
         form = AuctionEditForm(
             instance=self.in_person_auction,
             user=self.in_person_auction.created_by,
@@ -499,8 +493,7 @@ class PayPalFormFieldVisibilityTests(StandardTestCase):
 
     @override_settings(SINGLE_CLUB_MODE=True, NAVBAR_BRAND="Single Club")
     def test_single_club_mode_hides_club_picker_and_blocks_turning_off_management(self):
-        # Use an in-person auction: check-in mode is an in-person concept and is rejected for online
-        # auctions by clean_manage_users_through_club, so it only belongs in the choices here.
+        # An in-person auction: check-in mode is in-person only and is rejected for online ones.
         Club.objects.create(name="Single Club")
         self.in_person_auction.club = None
         self.in_person_auction.manage_users_through_club = ""
@@ -516,12 +509,12 @@ class PayPalFormFieldVisibilityTests(StandardTestCase):
         # The club picker is hidden and pinned to the single club...
         self.assertIsInstance(form.fields["club"].widget, forms.HiddenInput)
         self.assertEqual(form.fields["club"].initial.name, "Single Club")
-        # ...but participant management stays visible with the "Off" option removed.
+        # Participant management stays visible, with the "Off" option removed.
         self.assertNotIsInstance(form.fields["manage_users_through_club"].widget, forms.HiddenInput)
         choice_values = [value for value, _label in form.fields["manage_users_through_club"].choices]
         self.assertNotIn("", choice_values)
         self.assertEqual(set(choice_values), {"all", "checkin"})
-        # New single-club auctions default to auto-adding all members; check-in stays available as an opt-in.
+        # New single-club auctions default to auto-adding members; check-in is an opt-in.
         self.assertEqual(form.fields["manage_users_through_club"].initial, "all")
 
 
@@ -699,7 +692,7 @@ class AuctionUsersViewTests(StandardTestCase):
         assert response.status_code == 200
 
     def test_auction_users_context_configures_shared_htmx_filter_ui(self):
-        """Auction users view defines placeholder text and filter choices for the shared HTMX template."""
+        """The auction users view defines the placeholder and filter choices for the shared HTMX template."""
         self.client.force_login(self.admin_user)
         url = reverse("auction_tos_list", kwargs={"slug": self.online_auction.slug})
         response = self.client.get(url)

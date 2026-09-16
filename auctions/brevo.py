@@ -1,24 +1,13 @@
-"""One-way Django -> Brevo sync for clubs.
+"""One-way Django -> Brevo sync for clubs, built like auctions/mailchimp.py.
 
-Built the same way as auctions/mailchimp.py: a club connects its own Brevo account by pasting in
-a Brevo API key (see the Brevo*View classes in views.py). From then on this module keeps the
-club's chosen contact list in sync: members are pushed as Brevo contacts with rich attributes
-plus lifecycle/value/category info (in the MEMBER_TAGS / CATEGORIES attributes), so club admins
-can build automations and segmented campaigns.
+A club connects with a Brevo API key (views/club_integrations.py). Members sync to the chosen list
+with attributes. Only unsubscribe/bounce/spam status flows back, via the webhook.
 
-The sync is intentionally one-way. The only thing that flows back is unsubscribe/bounce/spam
-status (via the webhook) so we stop emailing those people in Brevo without ever touching their
-site-level email preferences.
+Unlike Mailchimp: auth is a per-club encrypted API key (Brevo's OAuth isn't public), and Brevo has
+no tags, so tags and top categories go in the MEMBER_TAGS and CATEGORIES attributes.
 
-Two things differ from Mailchimp, both driven by Brevo's platform:
-  * Brevo's public OAuth program is private/org-scoped, so clubs authenticate with a per-club API
-    key (stored encrypted) sent in the "api-key" header instead of an OAuth token.
-  * Brevo has no native "tags", so the lifecycle tags and top categories are written into the
-    MEMBER_TAGS and CATEGORIES contact attributes (admins segment with "MEMBER_TAGS contains ...").
-
-The category ranking, "in scope" rule, and self-service link helpers are shared with the
-Mailchimp module rather than duplicated. All Brevo API access goes through get_client(); tests
-mock that single entry point.
+Shares category ranking, scope and self-service helpers with mailchimp. All API access goes
+through get_client(), which tests mock.
 """
 
 import logging
@@ -30,16 +19,13 @@ from django.urls import reverse
 from django.utils import timezone
 
 from auctions.helper_functions import scrub_emails
-
-# Reuse the platform-agnostic helpers from the Mailchimp module (same source of truth).
 from auctions.mailchimp import _self_service_url, _site_domain, _top_category_names, in_scope_members
 
 logger = logging.getLogger(__name__)
 
 API_BASE = "https://api.brevo.com/v3"
 
-# Custom contact attributes provisioned on connect. FIRSTNAME / LASTNAME already exist on every
-# Brevo account. Each tuple is (name, brevo_type). Brevo attribute names are uppercase.
+# Attributes provisioned on connect, as (name, brevo_type); FIRSTNAME/LASTNAME already exist.
 CONTACT_ATTRIBUTES = (
     ("MEMBERNO", "float"),
     ("EXPIRES", "date"),
@@ -54,17 +40,16 @@ CONTACT_ATTRIBUTES = (
     ("NOCOMM", "text"),
 )
 
-# Marketing webhook events we honor (Brevo's create-webhook spelling). The inbound payload uses a
-# slightly different spelling (unsubscribe / hard_bounce / contact_deleted), handled in the view.
+# Webhook events in Brevo's registration spelling; the view handles the inbound spelling.
 WEBHOOK_EVENTS = ["unsubscribed", "hardBounce", "spam", "contactDeleted"]
 
 
 class BrevoError(Exception):
-    """Raised for unrecoverable Brevo problems the caller should surface/log (e.g. auth)."""
+    """Unrecoverable Brevo problems, such as auth."""
 
 
 class BrevoApiError(Exception):
-    """A non-2xx data-plane response. Carries status_code so callers can treat 400/404 specially."""
+    """A non-2xx response, with status_code."""
 
     def __init__(self, status_code, detail):
         self.status_code = status_code
@@ -73,7 +58,7 @@ class BrevoApiError(Exception):
 
 
 def _readable_api_error(resp):
-    """Pull a short human-readable message out of a Brevo error body ({code, message})."""
+    """A short message from a Brevo error body."""
     try:
         data = resp.json()
         return data.get("message") or data.get("error") or resp.text
@@ -85,13 +70,8 @@ _IPV4_RE = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
 
 
 def blocked_ip_from_error(exc):
-    """Classify a key-validation failure: bad key vs. Brevo's "unauthorized IP" block.
-
-    Brevo returns 401 for both, but when it's blocking the caller's IP the message includes the
-    offending IP (which is exactly what the admin must whitelist). Returns:
-      * the blocked IP string when Brevo named one,
-      * "" when it's clearly an IP-authorization block but no IP was parseable,
-      * None for anything else (e.g. a genuinely invalid key) so callers show the bad-key message.
+    """Classify a 401: the blocked IP string, "" for an IP block with no parseable IP, or None for
+    anything else (a bad key).
     """
     if not isinstance(exc, BrevoApiError) or exc.status_code != 401:
         return None
@@ -106,11 +86,7 @@ def blocked_ip_from_error(exc):
 
 
 def outbound_ip():
-    """Best-effort public IP this server uses for outbound calls, for Brevo IP whitelisting.
-
-    Cached for a day (the egress IP is stable); returns "" if it can't be determined, so the UI
-    can fall back to generic wording. Never raises.
-    """
+    """This server's outbound IP for Brevo allowlisting, cached a day; "" if unknown. Never raises."""
     from django.core.cache import cache
 
     cached = cache.get("brevo_outbound_ip")
@@ -132,11 +108,9 @@ def outbound_ip():
 
 
 class BrevoClient:
-    """Thin authenticated wrapper around the Brevo REST API.
+    """Thin wrapper around the Brevo REST API using the club's api-key header.
 
-    Authenticates with the club's API key (the "api-key" header), so callers never deal with
-    auth. Raises BrevoApiError on 4xx/5xx; lets requests.RequestException propagate so the Celery
-    task can retry network blips.
+    Raises BrevoApiError on 4xx/5xx; network errors propagate so Celery can retry.
     """
 
     def __init__(self, club):
@@ -167,11 +141,7 @@ def get_client(club):
 
 
 def list_contact_lists(client):
-    """Return [{'id','name'}] for the connected account.
-
-    We intentionally don't surface Brevo's per-list subscriber totals: they don't line up with
-    what an admin expects when choosing a list, so we only show names.
-    """
+    """[{'id', 'name'}] for the account's lists, without subscriber totals."""
     out = []
     offset = 0
     while True:
@@ -187,7 +157,7 @@ def list_contact_lists(client):
 
 
 def ensure_folder(client, club):
-    """Return the id of the club's Brevo folder, creating it if needed (lists must live in one)."""
+    """The club's Brevo folder id, created if needed."""
     if club.brevo_folder_id:
         return club.brevo_folder_id
     resp = client.request("POST", "/contacts/folders", json_body={"name": f"{club.name} (auction site)"})
@@ -222,7 +192,7 @@ def ensure_attributes(club):
                 json_body={"type": attr_type},
             )
         except BrevoApiError as exc:
-            # 400 here almost always means "attribute already exists" — safe to ignore.
+            # 400 usually means it already exists.
             if exc.status_code != 400:
                 logger.error(
                     "Failed to create Brevo attribute %s for club %s: %s", name, club.pk, scrub_emails(exc.detail)
@@ -269,12 +239,12 @@ def _store_webhook_id(club, webhook_id):
 
 
 def _desired_status(member):
-    """Map our contact model to a Brevo intent.
+    """Map contact status to a Brevo intent.
 
     contact        -> subscribed   (emailBlacklisted False)
-    non_essential  -> unsubscribed (emailBlacklisted True, kept so they can resubscribe)
-    do_not_contact -> archived     (contact deleted from Brevo)
-    A bad/blank email or a deactivated member is also archived.
+    non_essential  -> unsubscribed (emailBlacklisted True, can resubscribe)
+    do_not_contact -> archived     (contact deleted)
+    A bad or blank email or a deactivated member is also archived.
     """
     if member.is_deleted or not member.email or member.email_address_status == "BAD":
         return "archived"
@@ -286,11 +256,7 @@ def _desired_status(member):
 
 
 def member_attributes(member):
-    """Build the Brevo attributes payload for a member.
-
-    Reuses the model's tag vocabulary (compute_mailchimp_tags) and the shared category ranking;
-    Brevo has no native tags, so the active tag/category names go into text attributes.
-    """
+    """The Brevo attributes for a member, with tags and categories as text attributes."""
     active_tags = [name for name, active in member.compute_mailchimp_tags().items() if active]
     categories = sorted(_top_category_names(member))
     return {
@@ -311,11 +277,9 @@ def member_attributes(member):
 
 
 def sync_member(member, force_status=False):
-    """Upsert one member into the club's Brevo list (or delete them) and record the result.
+    """Upsert one member into the list, or delete them, and record the result. False when nothing to do.
 
-    Returns True on a successful sync/delete, False when there's nothing to do. Respects
-    Brevo-side unsubscribes (won't resubscribe) unless force_status=True (the explicit
-    resubscribe self-service action).
+    Won't resubscribe a Brevo-side unsubscribe unless force_status=True.
     """
     club = member.club
     if not club.brevo_connected:
@@ -324,7 +288,6 @@ def sync_member(member, force_status=False):
     if not client:
         return False
 
-    # Keep the power-seller/buyer tags accurate before we compute the attribute set.
     member.refresh_cached_totals(save=True)
     desired = _desired_status(member)
 
@@ -335,7 +298,6 @@ def sync_member(member, force_status=False):
             _clear_error(club)
             return True
 
-        # Never resurrect someone Brevo told us unsubscribed/bounced, unless explicitly forced.
         respect_remote_optout = (
             desired == "subscribed" and not force_status and member.brevo_status in ("unsubscribed", "cleaned")
         )
@@ -350,9 +312,7 @@ def sync_member(member, force_status=False):
         return True
     except BrevoApiError as e:
         if e.status_code in (400, 422):
-            # Brevo rejected this specific address (invalid email, etc.). Record on the member row
-            # but don't propagate — other members in the batch should still sync.
-            # The member pk is enough to identify them; addresses never go to the logs.
+            # Rejected address: record on the member and continue. Log the pk, never the address.
             logger.warning("Brevo rejected member %s: %s", member.pk, scrub_emails(e.detail))
             _record_sync(member, status="cleaned", contact_id=member.brevo_contact_id or "")
         else:
@@ -378,7 +338,7 @@ def _upsert_contact(client, member, blacklisted):
         new_id = (resp.json() or {}).get("id")
         if new_id:
             return new_id
-    # 200/204 == updated an existing contact (no body). Reuse the stored id, or look it up once.
+    # 200/204 updated an existing contact with no body.
     return member.brevo_contact_id or _fetch_contact_id(client, member.email)
 
 
@@ -406,12 +366,7 @@ def _delete_contact_by_email(client, email):
 
 
 def delete_contact_by_email(club, email):
-    """Delete a contact from *club*'s Brevo list by address, with no member row needed.
-
-    Used by account deletion, which has to remove the contact after the member record it came from
-    has already been emptied (or is being kept by the club without the person's account). Returns
-    True when a call was made.
-    """
+    """Delete a contact by address, for account deletion. Returns True when a call was made."""
     if not email or not club.brevo_connected:
         return False
     client = get_client(club)
@@ -422,11 +377,7 @@ def delete_contact_by_email(club, email):
 
 
 def change_member_email(member, old_email):
-    """Move a contact to the member's current email: delete the old contact, then re-sync.
-
-    Brevo's update endpoint can't rename a contact's email, so we drop the stale contact and let
-    sync_member recreate it under the new address (carrying all attributes and list membership).
-    """
+    """Brevo can't rename a contact's email, so delete the old contact and re-sync."""
     club = member.club
     if not club.brevo_connected or not old_email or old_email == member.email:
         return
@@ -437,7 +388,7 @@ def change_member_email(member, old_email):
         client.request("DELETE", f"/contacts/{quote(old_email)}")
     except BrevoApiError as e:
         if e.status_code != 404:
-            # Not logger.exception: the traceback includes the request URL, which is the old address.
+            # No traceback: the URL contains the old address.
             logger.error("Failed to delete old Brevo contact for member %s: %s", member.pk, scrub_emails(e.detail))
 
 
@@ -445,11 +396,7 @@ def change_member_email(member, old_email):
 
 
 def backfill(club):
-    """Queue a sync for every in-scope member after an initial connection (and nightly).
-
-    Reuses the shared in_scope rule and the per-member task path so each contact's id/status is
-    captured locally.
-    """
+    """Queue a per-member sync for every in-scope member, after connecting and nightly."""
     from auctions.tasks import sync_club_member_to_brevo
 
     count = 0
@@ -503,12 +450,7 @@ def member_in_brevo_url(member):
 
 
 def account_info(client):
-    """Brevo's own record of who this account is: {'company', 'address'}.
-
-    Brevo asks for a company name and postal address when an account is created and prints them in
-    the footer of every campaign, which makes them the same details a club's letters need. Read
-    rather than asked for, on the same principle as the sender below: the club already told Brevo.
-    """
+    """The account's {'company', 'address'}, which Brevo prints in campaign footers."""
     try:
         data = client.request("GET", "/account").json()
     except Exception:
@@ -518,7 +460,7 @@ def account_info(client):
 
 
 def format_mailing_address(address):
-    """Turn Brevo's account `address` block into the multi-line address a letter is signed with."""
+    """Brevo's account `address` as a multi-line letter address."""
     if not address:
         return ""
     lines = [address.get("street")]
@@ -544,8 +486,7 @@ def senders(client):
                 "id": sender.get("id"),
                 "name": sender.get("name") or "",
                 "email": sender.get("email") or "",
-                # Brevo omits `active` on accounts with a single verified sender; absent means
-                # usable, so don't treat a missing key as "not verified".
+                # Absent means usable.
                 "active": sender.get("active", True),
             }
         )
@@ -553,13 +494,7 @@ def senders(client):
 
 
 def default_sender(club):
-    """The sender a campaign goes out as: the club's stored choice, else the first active one.
-
-    Brevo has no campaign_defaults the way Mailchimp does, but it does have a list of verified
-    senders, and the overwhelmingly common case is exactly one. Asking a club to type an address
-    Brevo would then refuse is the worst of both, so the address is read and only the *choice*
-    between several is ever put to the admin (Club.brevo_sender_id).
-    """
+    """The campaign sender: the club's stored choice (Club.brevo_sender_id), else the first active one."""
     client = get_client(club)
     if not client:
         return None
@@ -574,16 +509,10 @@ def default_sender(club):
 
 
 def send_announcement_campaign(club, *, subject, html, plain_text=None):
-    """Create and send one Brevo campaign to the club's list. Returns the campaign id.
+    """Create and send one campaign to the club's list, returning its id.
 
-    ``plain_text`` is accepted and not sent: Brevo's campaign endpoint has no text field (that is
-    transactional email) and generates its own text part from the HTML. It stays in the signature
-    so the two providers are called the same way by announcements.send_emails.
-
-    Campaigns, never transactional send: a campaign is addressed to the list, so Brevo applies the
-    club's own blocklist and unsubscribes and appends its own unsubscribe footer. A transactional
-    send would go to whoever we named, blocklist and all, which is exactly the failure this
-    integration exists to prevent.
+    ``plain_text`` is ignored (Brevo generates it) and only kept to match mailchimp's signature.
+    Campaigns, never transactional sends, so Brevo applies the list's unsubscribes and footer.
     """
     client = get_client(club)
     if not client or not club.brevo_list_id:

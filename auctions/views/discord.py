@@ -1,8 +1,8 @@
-"""Discord: verifying its signatures, answering its interactions, and syncing roles.
+"""Discord: verifying signatures, answering interactions, and syncing roles.
 
-``DiscordInteractionsView`` is the slash-command endpoint and must answer within three seconds, so
-anything slow behind it is queued. The club-side configuration pages are at the bottom.
-``InboundEmailRoutingView`` sits here as the other endpoint somebody else's system posts to.
+``DiscordInteractionsView`` must answer within three seconds, so slow work is queued. The club
+configuration pages are at the bottom. ``InboundEmailRoutingView`` is here as the other endpoint
+somebody else's system posts to.
 """
 
 import json
@@ -59,19 +59,14 @@ logger = logging.getLogger(__name__)
 
 
 class InboundEmailRoutingView(APIView):
-    """Resolve an inbound email address to its forwarding recipient.
+    """Resolve an inbound email address to its forwarding recipient, for the SES inbound Lambda.
 
-    Called by the SES inbound Lambda to determine where to forward a message.
-    Requires a shared secret supplied via the ``X-Routing-Secret`` header (must
-    match the ``INBOUND_ROUTING_SECRET`` Django setting).
+    Requires ``X-Routing-Secret`` matching ``INBOUND_ROUTING_SECRET``.
 
     GET /api/v1/email-routing/resolve/?address=<local_part_or_full_email>
 
-    Returns:
-        200 {"recipient": "user@example.com", "display_name": "Spring Auction 2024"}
-        400 {"error": "address parameter is required"}
-        401 {"error": "invalid or missing routing secret"}
-        503 {"error": "email routing is not enabled"}
+    200 {"recipient": ..., "display_name": ...}; 400 without an address; 401 on a bad secret;
+    503 when routing is disabled.
     """
 
     authentication_classes = []
@@ -92,18 +87,15 @@ class InboundEmailRoutingView(APIView):
         if not address:
             return Response({"error": "address parameter is required"}, status=400)
 
-        # Accept either a bare local-part or a full email; extract local-part only.
+        # Accept a bare local-part or a full email.
         local_part = address.split("@")[0]
         info = resolve_routing_info(local_part)
         if info is None:
             return Response({"error": "no recipient found for this address"}, status=404)
         payload = {"recipient": info["recipient"], "display_name": info["display_name"]}
-        # A donation alias has to say so.  The Lambda reads "kind" for two decisions -- post the
-        # body back to /api/v1/email-routing/donation/ so it lands on the vendor's row, and treat
-        # an empty recipient as "forward to nobody" rather than as a missing answer.  Whitelisting
-        # only the two keys above silently turned both off: no vendor reply was ever recorded, and
-        # a club with no donation contact had its vendors' replies forwarded to the site fallback
-        # inbox, which is the one outcome SES.md says must not happen.
+        # "kind" and "vendor_key" too: the Lambda posts donation replies back to
+        # /api/v1/email-routing/donation/ and reads an empty recipient as "forward to nobody".
+        # Whitelisting only recipient and display_name silently disabled both.
         for key in ("kind", "vendor_key"):
             if info.get(key):
                 payload[key] = info[key]
@@ -130,15 +122,12 @@ _DISCORD_COMPONENT_BUTTON = 2
 # Discord button styles
 _DISCORD_BUTTON_STYLE_PRIMARY = 1
 
-# Discord message flag: ephemeral (only visible to the user who triggered it)
+# Ephemeral: visible only to the user who triggered the interaction.
 _DISCORD_FLAG_EPHEMERAL = 64
 
 
 def verify_discord_signature(public_key_hex, signature_hex, timestamp, body):
-    """Verify a Discord interaction request signature using Ed25519.
-
-    Returns True if the signature is valid, False otherwise.
-    """
+    """Verify a Discord interaction signature (Ed25519)."""
     from cryptography.exceptions import InvalidSignature
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
@@ -152,11 +141,7 @@ def verify_discord_signature(public_key_hex, signature_hex, timestamp, body):
 
 
 def assign_discord_role(guild_id, user_id, role_id):
-    """Assign a Discord role to a guild member via the Discord REST API.
-
-    PUT /guilds/{guild_id}/members/{user_id}/roles/{role_id}
-    Returns True on success (204 No Content), False otherwise.
-    """
+    """Assign a Discord role via PUT /guilds/{guild_id}/members/{user_id}/roles/{role_id}."""
     bot_token = getattr(settings, "DISCORD_BOT_TOKEN", "")
     if not bot_token:
         logger.warning("DISCORD_BOT_TOKEN not configured – cannot assign Discord role")
@@ -199,12 +184,9 @@ def _has_discord_manage_guild(data):
 
 
 def _sync_discord_roles(club, bot_token):
-    """Fetch roles from Discord and upsert ClubDiscordRole objects.
+    """Fetch roles from Discord and upsert ClubDiscordRole rows, returning the count or None on failure.
 
-    Also fetches the bot's own member record to determine its highest role position.
-    Roles at or above that position have bot_can_manage=False.
-
-    Returns the number of roles synced, or None if the API call failed.
+    Roles at or above the bot's highest role position get bot_can_manage=False.
     """
     headers = {"Authorization": f"Bot {bot_token}"}
     guild_id = club.discord_server_id
@@ -224,9 +206,7 @@ def _sync_discord_roles(club, bot_token):
     # Build a position lookup by role ID
     position_by_id = {r["id"]: r.get("position", 0) for r in all_roles}
 
-    # Fetch the bot's own guild member to find its highest role position.
-    # /members/@me only works with OAuth2 bearer tokens, not bot tokens.
-    # Instead: resolve the bot's user ID first, then fetch its guild member by ID.
+    # /members/@me needs an OAuth2 token, so resolve the bot's user id and fetch its member by id.
     bot_max_position = 0
     try:
         user_resp = requests.get("https://discord.com/api/v10/users/@me", headers=headers, timeout=10)
@@ -276,21 +256,15 @@ def _sync_discord_roles(club, bot_token):
         else:
             ClubDiscordRole.objects.create(club=club, role_id=role_id, role_name=role_name, bot_can_manage=can_manage)
         updated += 1
-    # Remove roles that no longer exist in Discord (only those with a non-empty role_id;
-    # preserve placeholder rows without a Discord ID)
+    # Drop roles that no longer exist in Discord, keeping placeholder rows with no role_id.
     ClubDiscordRole.objects.filter(club=club).exclude(role_id__in=fetched_role_ids).exclude(role_id="").delete()
     return updated
 
 
 class DiscordInteractionsView(View):
-    """Handle Discord interaction requests at /discord/interactions/.
+    """Handle Discord interactions at /discord/interactions/.
 
-    Supports:
-      - Type 1 (PING)
-      - Type 3 (component / button click) with custom_id=join_button
-        (behaves like the /membership command: join modal if not joined,
-        membership info + link if joined)
-      - Type 5 (modal submit) with custom_id=join_modal
+    Type 1 (PING), type 3 (the join button, which behaves like /membership) and type 5 (join modal).
     """
 
     @method_decorator(csrf_exempt)
@@ -333,9 +307,7 @@ class DiscordInteractionsView(View):
         if interaction_type == _DISCORD_TYPE_COMPONENT:
             custom_id = data.get("data", {}).get("custom_id", "")
             if custom_id == "join_button":
-                # The join button mirrors the /membership command: if the user
-                # hasn't joined, show the join modal; if they have, show their
-                # membership info and link.
+                # The join button mirrors /membership.
                 return self._handle_membership_command(data)
             return _discord_ephemeral("Unsupported interaction")
 
@@ -414,7 +386,7 @@ class DiscordInteractionsView(View):
         return self._join_modal_response()
 
     def _already_joined(self, data):
-        """Return True if the Discord user is already a member of the club for this server."""
+        """Whether the Discord user is already a member of this server's club."""
         guild_id = data.get("guild_id", "")
         if not guild_id:
             return False
@@ -441,7 +413,7 @@ class DiscordInteractionsView(View):
             for comp in row.get("components", []):
                 fields[comp.get("custom_id", "")] = comp.get("value", "")
 
-        # Accept either a single ``name`` field or ``first_name`` / ``last_name``.
+        # Accept either ``name`` or ``first_name``/``last_name``.
         name = fields.get("name", "").strip()
         if not name:
             first_name = fields.get("first_name", "").strip()
@@ -463,12 +435,8 @@ class DiscordInteractionsView(View):
 
         # Email match – link Discord ID and assign role
         if email:
-            # note that we do not verify email anywhere
-            # this means that anyone can claim any email address by entering it in the modal
-            # under no circumstances should the club member expose any information,
-            # not even name, to anyone who hasn't been specifically granted a role in the club
-            # and anything on discord needs to reflect this, too
-            # the user model has an email that can be assumed valid
+            # Emails are never verified here, so anyone can claim any address: nothing on Discord
+            # may expose member information, not even a name, without a granted role.
             if len(email) < 5 or "@" not in email:
                 return _discord_ephemeral("❌ Please enter a valid email address.")
             existing_by_email = ClubMember.objects.filter(club=club, email=email, is_deleted=False).first()
@@ -597,13 +565,10 @@ class DiscordInteractionsView(View):
         return _discord_ephemeral("✅ Auction announcements will be posted in this channel.")
 
     def _handle_announcements_here_command(self, data):
-        """/announcements_here — point this club's announcements at the channel it was run in.
+        """/announcements_here — point the club's announcements at this channel.
 
-        Deliberately a second channel rather than reusing ``auction_channel_id``: an auction
-        announcement is news for everybody, and a club announcement is often for members only, so
-        the two land in different rooms on most servers. Same shape and same permission bar as
-        /auctions_here, and it writes to ClubHistory for the same reason — a channel that stops
-        working six months later needs a record of who set it.
+        A second channel rather than reusing ``auction_channel_id``: club announcements are often
+        members-only. Writes to ClubHistory so there's a record of who set it.
         """
         guild_id = data.get("guild_id", "")
         channel_id = data.get("channel_id", "")
@@ -730,9 +695,7 @@ class LotBapPointsView(LoginRequiredMixin, View):
         return render(
             request,
             "auctions/bap_lot_buttons.html",
-            # ``Lot.default_bap_points``, not a third opinion about it: this used to read the
-            # category override and not the genus one, so approving a lot whose genus the club
-            # values differently re-rendered the row with a number the table had never shown.
+            # ``Lot.default_bap_points``, so approving a lot shows the number the table showed.
             {"lot": lot, "club": club, "default_points": lot.default_bap_points(club)},
         )
 
@@ -742,8 +705,7 @@ class LotBapPointsView(LoginRequiredMixin, View):
         if not club or not check_club_permission(request.user, club, "permission_manage_bap"):
             return HttpResponse(status=403)
 
-        # "reject" is what this page's buttons have always posted; the service calls it "deny",
-        # which is the word somebody says out loud. Same decision either way.
+        # The buttons post "reject"; the service calls it "deny".
         action = request.POST.get("action", "approve")
         decision = "deny" if action == "reject" else action
         if decision not in BAP_DECISIONS:
@@ -877,7 +839,7 @@ class ClubDiscordEditRoleView(LoginRequiredMixin, ClubViewMixin, View):
             hap = 0
 
         with transaction.atomic():
-            # Enforce exclusivity: each club can have at most one paid and one unpaid role
+            # At most one paid and one unpaid role per club.
             if is_paid:
                 ClubDiscordRole.objects.filter(club=self.club, is_paid_role=True).exclude(pk=pk).update(
                     is_paid_role=False

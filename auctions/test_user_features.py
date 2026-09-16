@@ -1,4 +1,4 @@
-"""Preferences that change what a user sees: distance units, exports, and the trust system."""
+"""Tests for preferences that change what a user sees: distance units, exports, and trust."""
 
 import datetime
 
@@ -35,12 +35,7 @@ class DistanceUnitTests(StandardTestCase):
         self.assertEqual(userdata.distance_unit, "km")
 
     def test_preference_form_converts_km_to_miles_on_save(self):
-        """The notifications form displays km and stores miles, with no unit field on the page.
-
-        `distance_unit` stayed on /preferences/ when the notification settings moved to their own
-        page, which is what let the page's distance-converting JavaScript go: the unit is read off
-        the instance and cannot change while this form is open.
-        """
+        """The notifications form displays km and stores miles, with no unit field on the page."""
         from auctions.forms import ChangeUserNotificationsForm
 
         userdata = self.user.userdata
@@ -76,12 +71,7 @@ class DistanceUnitTests(StandardTestCase):
         self.assertEqual(saved_instance.email_me_about_new_auctions_distance, 99)  # 160 km / 1.60934 ≈ 99 miles
 
     def test_a_km_radius_survives_a_round_trip_untouched(self):
-        """Render, save nothing, save: the number the user never touched must come back the same.
-
-        The old single-page form could not promise this on its own -- the unit select and the radii
-        were on one screen, so the value in the box was only right if the page's JavaScript had
-        converted it. Saving the rendered value is now exactly a no-op.
-        """
+        """A km radius survives a render-and-save round trip untouched."""
         from auctions.forms import ChangeUserNotificationsForm
 
         userdata = self.user.userdata
@@ -282,7 +272,7 @@ class UserExportTests(StandardTestCase):
         url = reverse("compose_email_to_users", kwargs={"slug": self.online_auction.slug})
         response = self.client.get(url)
         self.assertEqual(response.status_code, 200)
-        # The view renders a button snippet with a mailto href, not a redirect
+        # The view renders a mailto button, not a redirect.
         self.assertContains(response, 'id="email_all_users"')
 
     def test_compose_email_with_filter(self):
@@ -316,14 +306,11 @@ class UserExportTests(StandardTestCase):
         header = lines[0]
         self.assertIn("Lots sold", header)
 
-        # Verify header column order: "Lots submitted" should come before "Lots sold" which comes before "Lots won"
+        # Column order: submitted, then sold, then won.
         self.assertLess(header.index("Lots submitted"), header.index("Lots sold"))
         self.assertLess(header.index("Lots sold"), header.index("Lots won"))
 
-        # Find the row for "my_lot" user who has:
-        # - 4 lots submitted (lot, lotB, lotC, unsoldLot)
-        # - 3 lots sold (lot, lotB, lotC have winning_price)
-        # - 0 lots won (this user is a seller)
+        # "my_lot" has 4 lots submitted, 3 sold and 0 won.
         header_parts = header.split(",")
         lots_submitted_idx = header_parts.index("Lots submitted")
         lots_sold_idx = header_parts.index("Lots sold")
@@ -424,7 +411,7 @@ class UserTrustSystemTests(StandardTestCase):
         self.assertFalse(invoice.show_payment_button)
 
     def test_trusted_user_invoice_shows_payment_button(self):
-        """Test that invoices for trusted users show payment button when conditions are met"""
+        """A trusted user's invoice shows the payment button when the other conditions are met."""
         # Make sure user is trusted
         self.user.userdata.is_trusted = True
         self.user.userdata.paypal_enabled = True
@@ -432,12 +419,11 @@ class UserTrustSystemTests(StandardTestCase):
         # Enable online payments
         self.online_auction.enable_online_payments = True
         self.online_auction.save()
-        # Get invoice - show_payment_button may still be False due to other checks
-        # (e.g., balance, PayPal config), we're mainly testing that the is_trusted check doesn't block it
+        # show_payment_button may still be False for other reasons; this checks is_trusted doesn't block it.
         Invoice.objects.get(auctiontos_user=self.online_tos)
 
     def test_invoice_template_shows_email_message_for_trusted(self):
-        """Test that invoice template shows email notification message for trusted users"""
+        """The invoice template shows the email notification message for trusted users."""
         self.client.login(username="my_lot", password="testpassword")
         # Make sure the creator is trusted
         self.user.userdata.is_trusted = True
@@ -461,7 +447,7 @@ class UserTrustSystemTests(StandardTestCase):
         AuctionTOS.objects.create(user=self.superuser, auction=self.untrusted_auction, pickup_location=location)
         response = self.client.get(url)
         self.assertEqual(response.status_code, 200)
-        # Check that response contains trust link (only if auction is not promoted)
+        # The trust link only appears for an unpromoted auction.
         if not self.untrusted_auction.promote_this_auction:
             self.assertContains(response, "trust_user=true")
 
@@ -521,13 +507,11 @@ class WatchOrUnwatchViewTests(StandardTestCase):
 
 
 class AdFetchTests(TestCase):
-    """``/ads/fetch/`` -- the async request every page makes for its ad slot.
+    """``/ads/fetch/``: the async request every page makes for its ad slot.
 
-    This 500ed for every signed-in visitor who had any category interest recorded: it passed a
-    QuerySet to ``random.sample``, which wants a sequence, and the ``except`` beside it named
-    IndexError and ValueError but not TypeError. It never showed up in CI because CI runs the
-    site with DEBUG on, where nothing crawls the page set, and the endpoint fails silently into a
-    slot the page leaves empty.
+    It 500'd for every signed-in visitor with a category interest -- a QuerySet passed to
+    ``random.sample`` raises TypeError, which the ``except`` beside it didn't name -- and failed
+    silently into an empty slot.
     """
 
     def setUp(self):

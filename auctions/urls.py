@@ -1,14 +1,12 @@
 """Every URL on the site, and the one place a new one has to be declared.
 
-Ordinary Django routing, with one local rule worth knowing before you add anything: **a new named
-URL or POST view costs you two entries.** It must either be catalogued as an ``Action`` in
-:mod:`auctions.palette_actions` -- which is what puts it in the command palette *and* on the MCP
-endpoint, since both read one registry -- or be excused in ``palette_actions.NOT_A_SKILL`` with a
-reason about the capability rather than about the palette. ``test_palette_skills`` fails the build
-otherwise.
+Ordinary Django routing with one local rule: **a new named URL or POST view costs two entries.** It
+must be catalogued as an ``Action`` in :mod:`auctions.palette_actions` -- which puts it in the
+palette and on the MCP endpoint, since both read one registry -- or excused in
+``palette_actions.NOT_A_SKILL`` with a reason about the capability. ``test_palette_skills`` fails
+the build otherwise.
 
-``/mcp`` is matched with and without its trailing slash on purpose: ``APPEND_SLASH`` drops a POST
-body, and that endpoint is a POST.
+``/mcp`` is matched with and without its trailing slash: ``APPEND_SLASH`` drops a POST body.
 """
 
 from allauth.socialaccount import views as socialaccount_views
@@ -21,10 +19,9 @@ from . import app_links, apple_notifications, donation_views, passkit_views, vie
 from .mcp.transport import MCPEndpointView
 
 urlpatterns = [
-    # App-association files. The paths and filenames are fixed by Google and Apple (Apple's really
-    # does have no .json extension), and neither platform follows a redirect to reach them, so they
-    # are matched exactly here rather than anywhere APPEND_SLASH could get involved. Public: the
-    # fetch comes from Google's and Apple's infrastructure, not from a signed-in user.
+    # App-association files. The paths are fixed by Google and Apple (Apple's really has no .json
+    # extension) and neither follows a redirect, so they're matched exactly rather than anywhere
+    # APPEND_SLASH could fire. Public: the fetch comes from Google and Apple, not a signed-in user.
     path(".well-known/assetlinks.json", app_links.assetlinks, name="android_assetlinks"),
     path(
         ".well-known/apple-app-site-association",
@@ -32,24 +29,20 @@ urlpatterns = [
         name="apple_app_site_association",
     ),
     # allauth mounts these under /3rdparty/, but the app's WebView allowlist is built around
-    # /social/... (AllauthWebScreen), so the mobile social-login continuation is sent here instead.
-    # Same views, second path — the /3rdparty/ URLs keep working for the web, and the names stay
-    # allauth's so reverse() anywhere else is unaffected.
+    # /social/... (AllauthWebScreen). Same views, second path; the names stay allauth's so reverse()
+    # is unaffected.
     path("social/signup/", socialaccount_views.signup, name="mobile_socialaccount_signup"),
     path("social/connections/", socialaccount_views.connections, name="mobile_socialaccount_connections"),
-    # Sign in with Apple server-to-server notifications (see auctions/apple_notifications.py).
-    # allauth has no view for these. The path is whatever was registered in Apple's developer
-    # portal and matches with or without the trailing slash, because APPEND_SLASH can't rescue a
-    # POST — the redirect drops the body, and Apple would only see it as a failed delivery.
+    # Sign in with Apple server-to-server notifications (auctions/apple_notifications.py); allauth
+    # has no view for these. The path was registered in Apple's portal and matches with or without a
+    # trailing slash, since APPEND_SLASH's redirect would drop the POST body.
     re_path(
         r"^apple/notifications/?$",
         apple_notifications.AppleServerNotificationView.as_view(),
         name="apple_server_notifications",
     ),
-    # Apple PassKit web service (see auctions/passkit_views.py). The paths are fixed
-    # by Apple's spec — devices build them from the webServiceURL in pass.json — and
-    # deliberately have no trailing slash (iOS sends none; POSTs can't follow the
-    # APPEND_SLASH redirect).
+    # Apple PassKit web service (auctions/passkit_views.py). The paths are fixed by Apple's spec and
+    # have no trailing slash: iOS sends none, and POSTs can't follow the APPEND_SLASH redirect.
     path(
         "passkit/v1/devices/<str:device_library_id>/registrations/<str:pass_type_id>/<str:serial_number>",
         passkit_views.PassKitRegistrationView.as_view(),
@@ -317,15 +310,10 @@ urlpatterns = [
         login_required(views.CommandPaletteReportView.as_view()),
         name="command_palette_report",
     ),
-    # The Model Context Protocol endpoint. Not login_required and deliberately not CSRF-protected:
-    # it authenticates with a bearer token and refuses session cookies outright, which is what makes
-    # a CSRF-exempt POST safe here. See auctions/mcp/auth.py.
-    #
-    # Matched with and without the trailing slash, for the same reason the Apple notification
-    # endpoint above is: APPEND_SLASH cannot rescue a POST, because the 301 drops the body. People
-    # will type both forms into Claude and paste both into scripts, and the RFC 9728 metadata
-    # document names the resource without one — so both have to reach the view directly rather
-    # than one of them redirecting into nothing.
+    # The Model Context Protocol endpoint. Not login_required and deliberately CSRF-exempt: it
+    # authenticates with a bearer token and refuses session cookies, which is what makes that safe.
+    # See auctions/mcp/auth.py. Matched with and without the trailing slash, since APPEND_SLASH
+    # drops a POST body and the RFC 9728 metadata names the resource without one.
     re_path(r"^mcp/?$", MCPEndpointView.as_view(), name="mcp"),
     path("", views.ToDefaultLandingPage.as_view(), name="home"),
     path("about/", views.PromoSite.as_view(), name="promo"),
@@ -499,21 +487,6 @@ urlpatterns = [
         views.ImportLotsFromCSV.as_view(),
         name="import_lots_from_csv",
     ),
-    # path(
-    #     "auctions/<slug:slug>/lots/set-winners/old",
-    #     login_required(views.SetLotWinner.as_view()),
-    #     name="auction_lot_winners",
-    # ),
-    # path(
-    #     "auctions/<slug:slug>/lots/set-winners/presentation",
-    #     login_required(views.SetLotWinnerImage.as_view()),
-    #     name="auction_lot_winners_images",
-    # ),
-    # path(
-    #     "auctions/<slug:slug>/lots/set-winners/autocomplete",
-    #     views.QuickSetLotWinner.as_view(),
-    #     name="auction_lot_winners_autocomplete",
-    # ),
     path(
         "auctions/<slug:slug>/lots/set-winners/",
         views.DynamicSetLotWinner.as_view(),
@@ -636,13 +609,11 @@ urlpatterns = [
     path("user/<str:slug>/", views.UserByName.as_view()),
     path("u/<str:slug>/", views.UserByName.as_view()),
     path("store/<str:slug>/", views.UserByName.as_view()),
-    # path('users/<int:pk>/location/', views.UserLocationUpdate.as_view()),
     path(
         "username/",
         login_required(views.UsernameUpdate.as_view()),
         name="change_username",
     ),
-    # path('users/<int:pk>/preferences/', views.UserPreferencesUpdate.as_view()),
     path(
         "ignore/",
         login_required(views.IgnoreCategoriesView.as_view()),
@@ -672,12 +643,11 @@ urlpatterns = [
     path("account/deleted/", views.AccountDeletedView.as_view(), name="account_deleted"),
     path("messages/", login_required(views.ChatSubscriptions.as_view()), name="messages"),
     path("printing/", login_required(views.UserLabelPrefsView.as_view()), name="printing"),
-    # Keys for the MCP endpoint. Session-authenticated like every other preferences page — this is
-    # where a person issues one; /mcp/ itself never accepts a session.
+    # Keys for the MCP endpoint: session-authenticated like any preferences page, since this is
+    # where a person issues one. /mcp/ itself never accepts a session.
     path("ai/", views.UserAPIKeyView.as_view(), name="user_api_keys"),
     # Printing from a computer to the phone's Bluetooth printer: the waiting page polls the first of
-    # these once a second, and the three buttons on a failure use the other two. Session auth -- this
-    # is the computer's half of the conversation; the phone's half is under /api/mobile/printjobs/.
+    # these once a second. Session auth -- the phone's half is under /api/mobile/printjobs/.
     path(
         "printing/job/<uuid:job_uuid>/",
         views.RemotePrintJobStatusView.as_view(),
@@ -695,9 +665,8 @@ urlpatterns = [
     ),
     path("faq/", views.FAQ.as_view(), name="faq"),
     path("support/", views.SupportView.as_view(), name="support"),
-    # /contact/ was this page's address, and it is what the App Store Support URL and every older
-    # link still point at. Unnamed on purpose: it is not a destination, and a name would put it in
-    # front of the palette route audit as a page to describe.
+    # /contact/ is the App Store Support URL and what older links point at. Unnamed on purpose: a
+    # name would put it in front of the palette route audit as a page to describe.
     path("contact/", RedirectView.as_view(pattern_name="support", permanent=True)),
     path(
         "auctions/<slug:slug>/locations/",
@@ -709,8 +678,6 @@ urlpatterns = [
         views.PickupLocationsCreate.as_view(),
         name="create_auction_pickup_location",
     ),
-    # path('locations/', views.PickupLocations.as_view(), name='PickupLocation'),
-    # path('locations/new/', views.PickupLocationsCreate.as_view()),
     path(
         "locations/edit/<int:pk>/",
         views.PickupLocationsUpdate.as_view(),
@@ -733,9 +700,8 @@ urlpatterns = [
     ),
     path("blog/<slug:slug>/", views.BlogPostView.as_view(), name="blog_post"),
     path("privacy/", views.PrivacyPolicyView.as_view(), name="privacy_policy"),
-    # 512(c)(2) requires the designated agent's details to be published on the site as well as
-    # filed with the Copyright Office.  /dmca/ 404s on a deployment that hasn't configured one --
-    # see auctions/dmca.py.
+    # 512(c)(2) requires the designated agent's details on the site as well as filed with the
+    # Copyright Office. /dmca/ 404s on a deployment with no agent -- see auctions/dmca.py.
     path("dmca/", views.DmcaPolicyView.as_view(), name="dmca"),
     path("dmca/notice/", views.CopyrightNoticeCreate.as_view(), name="dmca_notice"),
     path("feedback/", views.LeaveFeedbackView.as_view(), name="feedback"),
@@ -866,8 +832,6 @@ urlpatterns = [
         views.SpeciesSuggestions.as_view(),
         name="species_suggestions",
     ),
-    # path('api/auctionstats/distance-traveled', views.AdminStatsDistanceTraveled.as_view(), name='distance_traveled'),
-    # path('api/auctionstats/prices-with-images', views.AdminStatsImages.as_view(), name='prices_with_images'),
     path(
         "api/lots/<int:pk>/show-high-bidder",
         views.AuctionShowHighBidder.as_view(),
@@ -893,9 +857,8 @@ urlpatterns = [
         name="club_paypal_subscription_webhook",
     ),
     re_path(r"^square/webhook/$", views.SquareWebhookView.as_view(), name="square_webhook"),
-    # Speaker directory.  These sit above the clubs/<slug>/ patterns because the list is not
-    # scoped to one club -- a club is passed as ?club=<slug> so the same page can be shared
-    # between officers, and falls back to the viewer's own location when it isn't.
+    # Speaker directory. Above the clubs/<slug>/ patterns because the list isn't scoped to one club:
+    # a club is passed as ?club=<slug> so officers can share the page.
     path("speakers/", views.SpeakerListView.as_view(), name="speaker_list"),
     path("speakers/add/", views.SpeakerCreateView.as_view(), name="speaker_add"),
     path("speakers/<slug:slug>/", views.SpeakerDetailView.as_view(), name="speaker_detail"),
@@ -1221,8 +1184,8 @@ urlpatterns = [
         views.ClubAuctionListAPIView.as_view(),
         name="api_club_auctions",
     ),
-    # <identifier> is an auction slug, or the word "current" or "latest" -- so a club's website can
-    # be pointed at one URL that never has to be edited when next year's auction is created.
+    # <identifier> is an auction slug, or "current" or "latest", so a club's website can point at
+    # one URL that never needs editing.
     path(
         "api/v1/clubs/<slug:slug>/auctions/<str:identifier>/",
         views.ClubAuctionDetailAPIView.as_view(),
@@ -1243,8 +1206,8 @@ urlpatterns = [
         views.ClubSpeciesLookupAPIView.as_view(),
         name="api_club_species_lookup",
     ),
-    # <identifier> is a species id *or* a scientific name -- a caller that just matched free text
-    # has the name and not the id, and looking it up first would be two calls to do one thing.
+    # <identifier> is a species id or a scientific name: a caller that matched free text has the
+    # name, not the id.
     path(
         "api/v1/clubs/<slug:slug>/species-lookup/<str:identifier>/common-names/",
         views.ClubSpeciesCommonNameAPIView.as_view(),
@@ -1256,8 +1219,8 @@ urlpatterns = [
         donation_views.InboundDonationEmailView.as_view(),
         name="inbound_donation_email",
     ),
-    # Donation tracking. The unsubscribe link goes out in email to people with no account here,
-    # so it sits outside the clubs/<slug>/ admin block and is keyed on an unguessable uuid.
+    # Donation tracking. The unsubscribe link goes to people with no account here, so it sits
+    # outside the clubs/<slug>/ admin block, keyed on an unguessable uuid.
     path(
         "donations/unsubscribe/<uuid:uuid>/",
         donation_views.DonationUnsubscribeView.as_view(),

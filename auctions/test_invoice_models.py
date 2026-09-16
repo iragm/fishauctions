@@ -95,7 +95,9 @@ class InvoiceCreateViewTests(StandardTestCase):
         assert new_tos.invoice.auction == self.online_auction
 
     def test_invoice_create_duplicate_handling(self):
-        """Test that creating a second invoice for the same AuctionTOS deduplicates on save: keeps oldest, merges data"""
+        """Creating a second invoice for the same AuctionTOS deduplicates on save: the oldest is kept and the
+        data merged.
+        """
 
         new_tos = AuctionTOS.objects.create(
             user=self.user_who_does_not_join,
@@ -109,7 +111,7 @@ class InvoiceCreateViewTests(StandardTestCase):
         InvoicePayment.objects.create(invoice=first_invoice, amount=10, payment_method="Cash")
         InvoiceAdjustment.objects.create(invoice=first_invoice, amount=5, notes="test adj")
 
-        # Create a second invoice (simulates a race-condition duplicate); save() should auto-deduplicate
+        # A second invoice simulates a race-condition duplicate; save() deduplicates.
         Invoice.objects.create(auctiontos_user=new_tos, auction=self.online_auction)
 
         # Exactly one invoice remains, and it's the oldest

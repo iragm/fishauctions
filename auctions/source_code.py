@@ -1,29 +1,16 @@
 """This site's own source code, read out of the public repository it is published from.
 
-The tool on the other end of this (``read_source``, in :mod:`auctions.palette_actions`) exists for
-one question: **how does this actually work?** Every other tool on ``/mcp/`` answers out of the
-database -- what a lot sold for, who has paid, when the meeting is -- and none of them can say why a
-lot got no breeder points, what "pretty much over" means, or how lots get recommended to somebody.
-The answers to those are written down in exactly one place, and it is a public repository, so an
-agent asked the question can read the same lines a maintainer would.
+``read_source`` (in :mod:`auctions.palette_actions`) answers "how does this actually work?", which
+no database tool can: why a lot got no breeder points, what "pretty much over" means.
 
-**The whole repository is fetched as one archive, and everything is answered out of that.** That is
-the design decision worth knowing, because the obvious alternative -- GitHub's contents API for
-listings and the raw CDN for files -- cannot search the *code*, only filenames, and "how does the
-lot recommendation system work" is not a filename. GitHub's code search API is the other obvious
-answer and it refuses anonymous callers outright, so it would have made this feature depend on a
-credential. ``codeload.github.com`` needs none, the archive is 4.5 MB for this repository and
-arrives in about a second, and one fetch an hour then answers listings, filename searches, file
-reads and a genuine content grep with no further network at all.
+The whole repository is fetched as one archive and everything is answered from it. GitHub's
+contents API can only search filenames, and its code search API refuses anonymous callers;
+``codeload.github.com`` needs no credential, and one 4.5 MB fetch an hour answers listings,
+filename searches, file reads and a content grep with no further network.
 
-**What it can serve is bounded by what is already published, and that is the whole security
-argument.** Nothing here touches a filesystem path -- not one. The archive is read in memory, a
-manifest of what is in it is built, and every path is resolved against that manifest, so the tool
-can only ever hand back a file that is already on a public web page. That matters more than it
-looks: on this deployment the source is bind-mounted into the container next to ``.env``, a Google
-Wallet keyfile and the logs, and a "read a file off disk" tool with an allowlist of directories
-would be one forgotten entry away from serving a database password. ``.env`` is gitignored, so it is
-not in the archive, so as far as this module is concerned it does not exist.
+Nothing here touches a filesystem path. The archive is read in memory and every path resolves
+against its manifest, so only files already published can be served -- which matters when the source
+is bind-mounted next to ``.env`` and a Wallet keyfile. ``.env`` is gitignored, so it isn't there.
 """
 
 from __future__ import annotations
@@ -45,27 +32,22 @@ logger = logging.getLogger(__name__)
 
 TIMEOUT = 30
 
-#: How long the downloaded archive is worth keeping. An hour is chosen from how often the answer
-#: changes rather than from how often it is asked: a file that appeared five minutes ago is not what
-#: somebody asking how a feature works is asking about.
+#: How long the downloaded archive is kept: an hour, from how often the answer changes.
 ARCHIVE_CACHE_SECONDS = 3600
 
-#: How long one process keeps the *extracted* archive before throwing it away. A conversation asks
-#: several questions in a row and re-extracting for each one is wasted work; holding ten megabytes
-#: per worker for an hour to save a fifth of a second is not. Five minutes is the middle.
+#: How long one process keeps the extracted archive. A conversation asks several questions, but
+#: holding ten megabytes per worker for an hour isn't worth a fifth of a second.
 MEMO_SECONDS = 300
 
-#: Refuse an archive bigger than this rather than pulling it into memory. This repository's is about
-#: 4.5 MB compressed; the ceiling is for a fork whose repository is full of video.
+#: Refuse a bigger archive rather than pulling it into memory. This repository's is about 4.5 MB.
 MAX_ARCHIVE_BYTES = 80_000_000
 
 #: A file bigger than this is listed but never has its text kept.
 MAX_TEXT_FILE_BYTES = 2_000_000
 
-#: How much of a file one call hands back. Two bounds rather than one, because lines and characters
-#: are both real: :data:`auctions.mcp.tools.MAX_RESULT_CHARS` is 20,000 and a result that busts it
-#: is refused wholesale, so the character bound is the one that keeps this from ever being the
-#: reason a call comes back empty. Both are said in the answer, with how to ask for the next page.
+#: How much of a file one call returns. Lines and characters both, since
+#: :data:`auctions.mcp.tools.MAX_RESULT_CHARS` refuses an oversized result wholesale. Both are
+#: reported in the answer with how to ask for the next page.
 DEFAULT_LINES = 120
 MAX_LINES = 400
 MAX_CHARS = 12000
@@ -73,16 +55,14 @@ MAX_CHARS = 12000
 #: How many paths a filename search names at once.
 MAX_MATCHES = 40
 
-#: How many lines a content search returns, and how many of them may come from one file. The
-#: per-file cap is what stops a word that appears ninety times in ``models.py`` filling the answer
-#: with one file when the interesting thing is *which files* it is in.
+#: How many lines a content search returns, and how many from one file: the per-file cap stops a
+#: word that appears ninety times in ``models.py`` filling the answer.
 MAX_GREP_MATCHES = 30
 MAX_GREP_PER_FILE = 4
 GREP_LINE_CHARS = 220
 
-#: What counts as text. An extension list rather than sniffing, because the answer has to be the
-#: same every time for the same repository, and because a file this misses is still listed and
-#: still readable through its own path -- it just does not take part in a content search.
+#: What counts as text. An extension list rather than sniffing, so the answer is stable; a file this
+#: misses is still listed and readable by path, just not searched.
 TEXT_SUFFIXES = (
     ".py",
     ".html",
@@ -119,30 +99,25 @@ TEXT_SUFFIXES = (
 
 
 class SourceUnavailable(Exception):
-    """The repository could not be reached, or is not configured. Carries the sentence to say."""
+    """The repository could not be reached, or isn't configured. Carries the sentence to say."""
 
 
-#: What a network problem and a bad response say. Two sentences rather than one, because "couldn't
-#: reach it" and "reached it and it wouldn't answer" are different things for whoever reads the log.
+#: What a network problem and a bad response say: "couldn't reach it" and "reached it and it
+#: wouldn't answer" are different things in a log.
 UNREACHABLE = "I couldn't reach the source code repository just now."
 UNREADABLE = "I couldn't read the source code repository just now."
 
-#: The extracted archive, held per process. ``{"stamp": …, "sizes": …, "text": …, "at": …}``.
+#: The extracted archive, per process. ``{"stamp": …, "sizes": …, "text": …, "at": …}``.
 _MEMO: dict[str, Any] = {}
 
 
 def configured() -> bool:
-    """Whether this deployment publishes its source. Blank ``SOURCE_CODE_URL`` turns the tool off."""
+    """Whether this deployment publishes its source; a blank ``SOURCE_CODE_URL`` turns the tool off."""
     return bool(repository())
 
 
 def repository() -> tuple[str, str] | None:
-    """``("iragm", "fishauctions")`` from the configured URL, or ``None``.
-
-    Only GitHub is understood. That is not a limitation worth engineering around: the setting names
-    one repository, and a fork that lives somewhere else can point the tool at nothing and lose a
-    feature it never had.
-    """
+    """``("iragm", "fishauctions")`` from the configured URL, or ``None``. Only GitHub is understood."""
     raw = (getattr(settings, "SOURCE_CODE_URL", "") or "").strip()
     if not raw:
         return None
@@ -160,7 +135,7 @@ def branch() -> str:
 
 
 def home_url() -> str:
-    """The repository's own page -- what an answer links to when it can't link to a file."""
+    """The repository's own page, for answers that can't link to a file."""
     owner_repo = repository()
     if not owner_repo:
         return ""
@@ -187,7 +162,7 @@ def _cache_key(kind: str, value: str = "") -> str:
 
 
 def _archive() -> bytes:
-    """The repository as one gzipped tar, from ``codeload``. Cached; one download an hour."""
+    """The repository as one gzipped tar from ``codeload``; cached, so one download an hour."""
     owner_repo = repository()
     if not owner_repo:
         message = "This site doesn't publish its source code."
@@ -221,10 +196,9 @@ def _is_text(path: str) -> bool:
 
 
 def _extract(blob: bytes) -> tuple[dict[str, int], dict[str, str]]:
-    """``(sizes, text)`` out of the archive. Read in memory; nothing is written anywhere.
+    """``(sizes, text)`` from the archive, read in memory.
 
-    GitHub wraps the tree in a single top-level directory named for the commit, which is stripped
-    so paths read the way the repository spells them.
+    GitHub's single top-level commit directory is stripped so paths read as the repository spells them.
     """
     sizes: dict[str, int] = {}
     text: dict[str, str] = {}
@@ -245,8 +219,7 @@ def _extract(blob: bytes) -> tuple[dict[str, int], dict[str, str]]:
                 try:
                     text[path] = handle.read().decode("utf-8")
                 except (UnicodeDecodeError, OSError):
-                    # Listed, still readable by path, just not searchable. An SVG with a stray byte
-                    # in it is not worth failing the whole extraction over.
+                    # Still listed and readable by path, just not searchable.
                     continue
     except (tarfile.TarError, EOFError) as exc:
         logger.warning("Could not read the source archive: %s", exc)
@@ -271,22 +244,21 @@ def _loaded() -> tuple[dict[str, int], dict[str, str]]:
 
 
 def forget() -> None:
-    """Drop the process-local copy. For tests, and for anything that wants the memory back."""
+    """Drop the process-local copy, for tests and to reclaim the memory."""
     _MEMO.clear()
 
 
 def tree() -> dict[str, int]:
-    """Every file in the repository, path -> size in bytes.
+    """Every file in the repository, path -> size.
 
-    This is the allowlist. Nothing else in this module answers about a path that is not a key here,
-    which is what makes ``..``, an absolute path and a secret sitting beside the source all the same
-    kind of nothing: they are not in the repository, so they do not resolve.
+    This is the allowlist: nothing else answers about a path that isn't a key here, which is what makes
+    ``..``, an absolute path and a secret beside the source all resolve to nothing.
     """
     return _loaded()[0]
 
 
 def normalize(path: str) -> str:
-    """A path as the repository spells it. Leading slashes and ``./`` go; nothing is resolved."""
+    """A path as the repository spells it: leading slashes and ``./`` go, nothing is resolved."""
     cleaned = (path or "").strip().strip("/")
     while cleaned.startswith("./"):
         cleaned = cleaned[2:]
@@ -332,19 +304,17 @@ def find(query: str, limit: int = MAX_MATCHES) -> list[str]:
         if wanted not in lowered:
             continue
         name = lowered.rsplit("/", 1)[-1]
-        # A hit on the filename beats a hit further up the path, and an exact filename beats both.
+        # A hit on the filename beats one further up the path, and an exact filename beats both.
         rank = 0 if name == wanted or name.startswith(wanted + ".") else (1 if wanted in name else 2)
         scored.append((rank, candidate))
     scored.sort(key=lambda row: (row[0], len(row[1]), row[1]))
     return [path for _rank, path in scored[:limit]]
 
 
-#: Where a match ranks, in order. The ranking is the difference between this being useful and being
-#: a keyword grep: "recommend" appears in ``Dockerfile``'s ``--no-install-recommends`` and in four
-#: markdown headings, and a flat search spends its whole budget on those before reaching the code
-#: that does the recommending. So a line that *defines* something by that name comes first, then a
-#: file whose path says it is about it, then the application's own Python, then the design notes,
-#: then everything else, and last the files that match nearly every word in the codebase.
+#: Ranking, in order, which is what makes this more than a keyword grep: "recommend" appears in
+#: ``--no-install-recommends`` and in markdown headings. A line that defines something by that name
+#: comes first, then a path that says it is about it, then the application's Python, then the design
+#: notes, then everything else.
 _DEFINES = "def |class |DEFINE"
 _APP_PYTHON = re.compile(r"^(auctions|fishauctions)/.*\.py$")
 _NOTES = re.compile(r"\.(md|rst|txt)$")
@@ -375,14 +345,10 @@ def _rank(path: str, line: str, wanted: str) -> int:
 
 
 def grep(query: str, limit: int = MAX_GREP_MATCHES) -> list[dict[str, Any]]:
-    """Lines of the repository's own code containing *query*, case-insensitively, best first.
+    """Lines of code containing *query*, case-insensitively, best first.
 
-    The reason this module downloads an archive instead of asking GitHub for one file at a time.
-    "How does the lot recommendation system work" is not a filename, and until an agent could grep
-    the code the only way to answer it was to read ``views.py`` a hundred and twenty lines at a
-    time. Substring rather than regex, deliberately: the caller is a language model writing a
-    search box query, not a maintainer, and an unanchored regex over ten megabytes is a way to
-    spend a request.
+    The reason this downloads an archive: "how does the lot recommendation system work" is not a
+    filename. Substring rather than regex, since the caller is a language model, not a maintainer.
     """
     wanted = (query or "").strip().lower()
     if not wanted:
@@ -417,11 +383,9 @@ def grep(query: str, limit: int = MAX_GREP_MATCHES) -> list[dict[str, Any]]:
 
 
 def read(path: str, start: int = 1, count: int = DEFAULT_LINES) -> dict[str, Any]:
-    """A page of one file, numbered from 1, bounded by both lines and characters.
+    """A page of one file, numbered from 1, bounded by lines and characters.
 
-    Returns the text with its line numbers on it. Numbered because that is what makes the answer
-    checkable -- "``auctions/models.py`` line 4120" is something a person can go and look at, and a
-    quoted paragraph with no line on it is something they have to search for.
+    Numbered so the answer is checkable: "``auctions/models.py`` line 4120" can be looked at.
     """
     wanted = normalize(path)
     sizes, text = _loaded()
@@ -448,8 +412,8 @@ def read(path: str, start: int = 1, count: int = DEFAULT_LINES) -> dict[str, Any
             break
         kept.append(rendered)
         used += len(rendered) + 1
-    # Nothing kept means ``start`` is past the end of the file. It has to report "no more", or an
-    # agent paging through hands back the same ``next_line`` it was just given, forever.
+    # Nothing kept means ``start`` is past the end, which must report "no more" or a paging agent
+    # loops on the same ``next_line``.
     end = start + len(kept) - 1 if kept else start - 1
     more = bool(kept) and end < total
     return {
@@ -463,8 +427,7 @@ def read(path: str, start: int = 1, count: int = DEFAULT_LINES) -> dict[str, Any
     }
 
 
-#: Files worth naming to somebody who has just arrived and does not know the shape of this
-#: repository. Read off nothing -- it is a hand-written signpost, and it is short on purpose.
+#: Files worth naming to somebody who has just arrived. A hand-written signpost, short on purpose.
 LANDMARKS = (
     ("docs/module_map.md", "One line per module: what it is and what it defines. Start here."),
     ("CLAUDE.md", "How the site is built and the rules that apply everywhere."),

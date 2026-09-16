@@ -48,8 +48,7 @@ from auctions.printing import label_prefs_warnings, warning_matrix
 from auctions.test_support import isolated_cache
 from auctions.tests import StandardTestCase, patch_views
 
-# A plausible-looking inline service-account JSON; push_configured() only checks it's non-empty and
-# no real FCM call is made (send_push_to_user.delay / send_fcm_message are mocked where needed).
+# push_configured() only checks it's non-empty; FCM calls are mocked.
 FAKE_FIREBASE = '{"type": "service_account", "project_id": "x"}'
 
 
@@ -293,7 +292,7 @@ class MobilePrinterObservedApiTests(StandardTestCase):
         self.assertEqual(observed.firmware, "1.0.4")  # refreshed to current truth
 
     def test_manual_row_without_profile_is_kept(self):
-        # The work queue: a printer nobody had a profile for, and the user cancelled the dialog.
+        # A printer with no profile, and the user cancelled the dialog.
         resp = self._post(profile_slug=None, matched_by="manual", model="", manufacturer="")
         self.assertEqual(resp.status_code, 201)
         observed = ObservedPrinter.objects.get(user=self.user)
@@ -378,15 +377,9 @@ class MobileLabelPrefsApiTests(StandardTestCase):
 
 
 class PrintMethodDropdownOnTheWebTests(StandardTestCase):
-    """Saving /printing/ from a computer, with an app-only print method already selected.
+    """Saving /printing/ from a computer with an app-only print method selected.
 
-    The bug: the first save failed validation ("this field is required" on a dropdown plainly
-    showing a value) and the second one worked. Both halves were the same cause. On the web the
-    print-method dropdown renders System printer and Bluetooth as ``<option disabled>``, and HTML's
-    form-submission algorithm appends a ``<select>``'s selected option to the form data *only if
-    that option is not disabled* -- so an account set to Bluetooth submitted no print_method at all.
-    The re-rendered page then had nothing selected, the browser showed the first option instead, and
-    the "successful" second save quietly rewrote the setting to PDF.
+    Disabled ``<option>``s aren't submitted, so the first save failed and the second reset to PDF.
     """
 
     WEB_UA = "Mozilla/5.0"
@@ -396,7 +389,6 @@ class PrintMethodDropdownOnTheWebTests(StandardTestCase):
         self.prefs, _ = UserLabelPrefs.objects.get_or_create(user=self.user)
         self.prefs.print_method = "bluetooth"
         self.prefs.save()
-        # The dropdown is only shown to an account that has an app to print from.
         MobileDevice.objects.create(user=self.user, device_uuid=uuid.uuid4())
         self.client.force_login(self.user)
 
@@ -409,12 +401,7 @@ class PrintMethodDropdownOnTheWebTests(StandardTestCase):
         return [one for one in self._options(html) if f'value="{value}"' in one][0]
 
     def _form_data(self, **overrides):
-        """Every field the page renders, the way a browser would send them back.
-
-        The custom-geometry fields are all required (JS only *hides* them behind the preset), so a
-        POST of two fields is a form error for reasons that have nothing to do with what is being
-        tested here.
-        """
+        """Every field the page renders, as a browser would post it (the custom-geometry ones are required)."""
         data = {}
         for field in UserLabelPrefs._meta.get_fields():
             if not hasattr(field, "attname") or field.name in ("id", "user"):
@@ -445,12 +432,7 @@ class PrintMethodDropdownOnTheWebTests(StandardTestCase):
 
     @override_settings(FIREBASE_CREDENTIALS_JSON=FAKE_FIREBASE)
     def test_enabling_print_from_computer_saves_first_time(self):
-        """The checkbox is only offered where push is configured (``_show_print_from_computer``).
-
-        Without the override this passes or fails on whether the *developer's* ``.env`` exports
-        FIREBASE_CREDENTIALS_JSON: unset, the field is dropped from the form, the POST leaves the
-        stored False alone, and the failure looks like the save bug this class is about.
-        """
+        """Pins push config, which ``_show_print_from_computer`` needs to offer the checkbox."""
         MobileDevice.objects.filter(user=self.user).update(ever_print_ready=True)
         response = self._save(print_from_computer="on")
         self.assertEqual(
@@ -492,9 +474,7 @@ class MobileLabelPdfTests(StandardTestCase):
 
 
 class _FakeLot:
-    """Just a pk. The batch loop's own behaviour -- the count cap and the time budget -- is about
-    the list, not about what a label looks like, and rendering real ones to prove it would make
-    this test a hundred WeasyPrint runs."""
+    """Just a pk: the batch loop's cap and time budget don't need real renders."""
 
     def __init__(self, pk):
         self.pk = pk
@@ -502,12 +482,7 @@ class _FakeLot:
 
 @isolated_cache("label-batch")
 class MobileLabelBatchTests(StandardTestCase):
-    """POST labels/batch/ — a whole print run in one request instead of one request per label.
-
-    A label costs about 110 ms to render and the app was paying a round trip for each of them, on
-    hall wifi, while somebody stood at a table. Batching is about the round trips: the renders are
-    still one at a time, which is what makes each one cacheable.
-    """
+    """POST labels/batch/ — a whole print run in one request."""
 
     def setUp(self):
         super().setUp()
@@ -550,8 +525,7 @@ class MobileLabelBatchTests(StandardTestCase):
         self.assertEqual([entry["lot"] for entry in body["skipped"]], [9000001])
 
     def test_a_run_longer_than_a_chunk_hands_the_rest_back(self):
-        """The app's loop is "post what is left, print what comes back", so the server picks the
-        chunk size -- and a slow server picks a smaller one without the phone having to know."""
+        """A run longer than a chunk hands the rest back; the server picks the chunk size."""
         from auctions.mobile.services import label_raster
 
         lots = [_FakeLot(pk) for pk in range(1, label_raster.MAX_LABELS_PER_BATCH + 3)]
@@ -604,12 +578,7 @@ class MobileLabelBatchTests(StandardTestCase):
 
 
 class MobileLabelAcceptHeaderTests(StandardTestCase):
-    """Part 9 — an honest Accept header must not be a 406.
-
-    DRF negotiates content before authentication, against the view's renderers; with the default
-    JSON-only set, ``Accept: application/pdf`` / ``image/png`` 406'd before the view ran and *all*
-    label fetching broke in production.
-    """
+    """An image or PDF Accept header must not 406."""
 
     def setUp(self):
         super().setUp()
@@ -631,7 +600,6 @@ class MobileLabelAcceptHeaderTests(StandardTestCase):
         self.assertEqual(resp.status_code, 200)
 
     def test_error_body_is_json_even_for_a_binary_accept(self):
-        # The app reads `detail` off DRF errors; a binary-only Accept must not corrupt it.
         resp = self.client.get(self.url, {"fmt": "pdf"}, HTTP_ACCEPT="application/pdf", **_bearer(self.userB))
         self.assertEqual(resp.status_code, 403)
         self.assertEqual(resp["Content-Type"], "application/json")
@@ -642,8 +610,7 @@ class MobileLabelAcceptHeaderTests(StandardTestCase):
 
 
 class PushConfiguredTests(TestCase):
-    # Pinned empty rather than relying on the ambient env: a dev box / staging with real
-    # FIREBASE_CREDENTIALS_JSON exported would otherwise make "unconfigured" tests fail.
+    # Pinned: a box with real FIREBASE_CREDENTIALS_JSON would fail this.
     @override_settings(FIREBASE_CREDENTIALS_JSON="")
     def test_default_is_disabled(self):
         self.assertFalse(notifications.push_configured())
@@ -903,7 +870,7 @@ class PromoPushCommandTests(TestCase):
             date_start=now + datetime.timedelta(days=1),
             date_end=now + datetime.timedelta(days=3),
         )
-        # date_posted is auto_now_add; backdate it so the auction is past its 24h "settle" window.
+        # Backdate past the auction's 24h settle window.
         Auction.objects.filter(pk=self.auction.pk).update(date_posted=now - datetime.timedelta(days=2))
         PickupLocation.objects.create(
             name="loc",
@@ -982,14 +949,11 @@ class WeeklyPromoSkipsPushUsersTests(TestCase):
         ud.email_me_about_new_auctions = True
         ud.latitude = 40.0
         ud.longitude = -80.0
-        # Make the user genuinely eligible for the weekly promo (active 30 days ago, not in the last
-        # 6 days) so the push-skip is actually exercised rather than filtered out beforehand.
+        # Eligible for the weekly promo, so the push-skip is really exercised.
         ud.last_activity = timezone.now() - datetime.timedelta(days=30)
         ud.save()
         MobileDevice.objects.create(user=user, device_uuid=uuid.uuid4(), fcm_token="tok", push_enabled=True)
 
-        # This user genuinely prefers push (opted in + live device + FCM configured), so weekly_promo
-        # must skip them rather than email.
         self.assertTrue(user.userdata.user_prefers_push())
         with patch("auctions.management.commands.weekly_promo.mail.send") as send:
             call_command("weekly_promo")
@@ -1001,8 +965,6 @@ class WeeklyPromoSkipsPushUsersTests(TestCase):
 
 
 class ProgramSchemaV2Tests(TestCase):
-    """The additive v2 constructs, and the guard that makes the arithmetic one safe to author."""
-
     def test_total_bytes_in_tx_text(self):
         validate_profile_programs(
             print_program=[{"tx_text": "^GFA,{total_bytes},{total_bytes},{width_bytes},"}, {"tx_raster": True}]
@@ -1020,12 +982,7 @@ class ProgramSchemaV2Tests(TestCase):
             validate_profile_programs(print_program=[{"tx": "1d {u16le:total_bytes}"}])
 
     def test_bare_size_placeholder_in_tx_rejected_unconditionally(self):
-        """A bare {name} in a hex tx renders as ONE byte.
-
-        Rejected whatever the value would be at render time: a profile authored against a small
-        test label would otherwise validate and then silently truncate a length field on the first
-        4x6, printing half a label for a reason nobody can see.
-        """
+        """A bare size placeholder in a hex tx renders as one byte, so it's always rejected."""
         for name in ("total_bytes", "width_bytes", "height_px", "width_px"):
             with self.assertRaises(ProgramValidationError, msg=name):
                 validate_profile_programs(print_program=[{"tx": f"1d 76 {{{name}}}"}])
@@ -1035,7 +992,6 @@ class ProgramSchemaV2Tests(TestCase):
         validate_profile_programs(print_program=[{"tx": "10 ff 10 00 {density}"}, {"tx": "10 ff 84 {paper_type}"}])
 
     def test_size_placeholders_are_fine_in_tx_text(self):
-        # tx_text renders ASCII decimal, so there is no one-byte limit to overflow.
         validate_profile_programs(print_program=[{"tx_text": "BITMAP 0,0,{width_bytes},{height_px},0,"}])
 
     def test_tx_raster_encodings(self):
@@ -1103,29 +1059,24 @@ class TsplPrinterProfileTests(StandardTestCase):
         self.profile.full_clean(exclude=["slug"])
 
     def test_verified_gatt_ids_are_pinned(self):
-        """Never blank these: the service's first *writable* characteristic is the radio module's
-        control channel, so discovery-by-guessing writes label rasters into the radio's config."""
+        """The GATT ids are pinned: the first writable characteristic is the radio's control channel."""
         self.assertEqual(self.profile.service_uuid, "49535343-fe7d-4ae5-8fa9-9fafd205e455")
         self.assertEqual(self.profile.write_characteristic_uuid, "49535343-8841-43f4-a8d4-ecbe34729bb3")
         self.assertEqual(self.profile.notify_characteristic_uuid, "49535343-1e4d-4bd9-ba61-23c647249616")
 
     def test_manufacturer_patterns_stay_empty(self):
-        """The DIS reports "Feasycom" / "FSC-BT986" — the radio module, which ships in dozens of
-        unrelated products. Matching on it would claim other vendors' hardware."""
+        """No manufacturer patterns: "Feasycom" is the radio module, used in unrelated products."""
         self.assertEqual(self.profile.manufacturer_patterns, [])
 
     def test_raster_is_inverted(self):
         self.assertTrue(self.profile.invert_raster)
 
     def test_program_has_no_await_step(self):
-        """TSPL has no print-completion ack. An await here resurrects exactly the "couldn't confirm
-        the print finished" warning this profile exists to fix."""
+        """TSPL has no print-completion ack, so the program must not await one."""
         self.assertNotIn("await", [key for step in self.profile.print_program for key in step])
 
     def test_status_values_disambiguate_the_lid_open_reading(self):
-        """A Y486BT with nothing but its lid open answers 0x07. Read as a bitmask that is
-        out-of-paper AND jammed AND open — which told the user to load labels already in the
-        printer."""
+        """0x07 means lid open, not out of paper and jammed."""
         self.assertEqual(self.profile.status_flags["values"]["07"], ["no_ribbon", "cover_open"])
         self.assertEqual(self.profile.status_flags["values"]["00"], [])
         self.assertNotIn("out_of_paper", self.profile.status_flags["values"]["07"])
@@ -1151,9 +1102,7 @@ class TsplPrinterProfileTests(StandardTestCase):
         self.assertEqual(languages["d11s-aiyin"], "d11s")
 
     def test_exactly_one_enabled_profile_speaks_tspl(self):
-        """Uniqueness is what lets the app auto-select without asking. Knowing a printer speaks
-        TSPL doesn't tell you its printhead width or GATT ids, so two candidates is a real
-        question; one candidate is nothing to get wrong."""
+        """Exactly one enabled TSPL profile, so the app can auto-select it."""
         tspl = ThermalPrinterProfile.objects.filter(enabled=True, command_language="tspl")
         self.assertEqual(tspl.count(), 1)
 
@@ -1172,8 +1121,7 @@ class ObservedPrinterProbeCaptureTests(StandardTestCase):
         return self.client.post(self.url, payload, content_type="application/json", **_bearer(self.user))
 
     def test_probe_match_is_no_longer_reported_as_device_info(self):
-        """A strict ChoiceField 400s an unknown value, so without this the app had to lie and call
-        a probe-derived match "deviceInfo" — making the two indistinguishable in the admin."""
+        """matched_by="probe" is accepted and stored as such."""
         self.assertEqual(self._post(matched_by="probe").status_code, 201)
         self.assertEqual(ObservedPrinter.objects.get(user=self.user).matched_by, "probe")
 
@@ -1201,8 +1149,7 @@ class ObservedPrinterProbeCaptureTests(StandardTestCase):
         self.assertEqual(len(observed.status_ambiguities), 1)
 
     def test_a_plain_repairing_does_not_wipe_captured_evidence(self):
-        """Most pairings carry no probe data. Overwriting with the empty default would throw away
-        the one report that was worth having."""
+        """A plain re-pairing doesn't wipe stored probe evidence."""
         self._post(
             probed_language="tspl",
             probe_replies={"tspl_status": {"hex": "00"}},
@@ -1232,7 +1179,6 @@ class ObservedPrinterProbeCaptureTests(StandardTestCase):
         )
         observed = ObservedPrinter.objects.get(user=self.user)
         self.assertEqual(observed.derived_status_values, {"20": ["printing"]})
-        # An empty ambiguity list is a real result ("tells every state apart"), not a missing one.
         self.assertEqual(observed.status_ambiguities, [])
 
     def test_absent_fields_are_still_a_valid_report(self):
@@ -1243,8 +1189,7 @@ class ObservedPrinterProbeCaptureTests(StandardTestCase):
         self.assertFalse(observed.characterized)
 
     def test_oversized_json_is_dropped_not_rejected(self):
-        """Same leniency as the rest of the endpoint: the app ignores the response, so a row we
-        refuse is a row we simply never see."""
+        """Oversized JSON is dropped, not rejected."""
         resp = self._post(probe_replies={"k": "v" * 50000})
         self.assertEqual(resp.status_code, 201)
         self.assertEqual(ObservedPrinter.objects.get(user=self.user).probe_replies, {})
@@ -1266,7 +1211,7 @@ class ObservedPrinterProbeCaptureTests(StandardTestCase):
 
 
 class DraftProfileFromObservationTests(StandardTestCase):
-    # The real Y486BT shape: the module's CONTROL channel (…6daa…) is writable and comes first.
+    # The real Y486BT: the writable control channel comes first.
     GATT = [
         {"uuid": "1800", "characteristics": [{"uuid": "2a00", "properties": ["read", "write"]}]},
         {"uuid": "0000180a-0000-1000-8000-00805f9b34fb", "characteristics": [{"uuid": "2a24", "properties": ["read"]}]},
@@ -1299,8 +1244,7 @@ class DraftProfileFromObservationTests(StandardTestCase):
         return ObservedPrinter.objects.create(**fields)
 
     def test_drafts_a_disabled_profile(self):
-        """Disabled because a drafted profile is a hypothesis: the person who submitted it is the
-        one holding the printer, and "Print test label" is what confirms it."""
+        """Drafted profiles start disabled until someone prints a test label."""
         profile, created = draft_profile_from_observation(self._observation())
         self.assertTrue(created)
         self.assertFalse(profile.enabled)
@@ -1312,8 +1256,7 @@ class DraftProfileFromObservationTests(StandardTestCase):
         profile.full_clean(exclude=["slug"])
 
     def test_skips_the_radio_control_channel(self):
-        """Picking the write characteristic wrong is silent: labels go into the radio module's
-        configuration, nothing prints, and nothing errors."""
+        """The draft skips the radio control channel."""
         profile, _ = draft_profile_from_observation(self._observation())
         self.assertEqual(profile.service_uuid, "49535343-fe7d-4ae5-8fa9-9fafd205e455")
         self.assertEqual(profile.write_characteristic_uuid, "49535343-8841-43f4-a8d4-ecbe34729bb3")
@@ -1334,8 +1277,7 @@ class DraftProfileFromObservationTests(StandardTestCase):
         self.assertIn("print_width_px", profile.notes)  # the bit that still needs a human
 
     def test_notes_flag_a_manufacturer_that_may_be_the_radio_module(self):
-        """Feasycom is the Y486BT's Bluetooth module, not its maker — a pattern on it would claim
-        unrelated hardware. Drafted (it is what the printer said) but flagged for the reviewer."""
+        """A manufacturer that may be the radio module is flagged in the notes."""
         profile, _ = draft_profile_from_observation(self._observation())
         self.assertIn("CHECK manufacturer_patterns", profile.notes)
         self.assertIn("Feasycom", profile.notes)
@@ -1356,14 +1298,14 @@ class DraftProfileFromObservationTests(StandardTestCase):
         self.assertEqual(second.status_flags["values"]["02"], ["paper_jam"])
 
     def test_never_overwrites_an_enabled_profile(self):
-        # A model name that happens to slugify onto a seeded profile must not clobber it.
+        # A model name slugifying onto a seeded profile must not clobber it.
         with self.assertRaises(DraftError):
             draft_profile_from_observation(self._observation(model="TSPL raster"))
         self.assertEqual(
             ThermalPrinterProfile.objects.get(slug="tspl-raster").name,
             "TSPL label printer (VEVOR Y486BT, TSC-compatible)",
         )
-        # Nor may a redraft clobber a draft somebody has since confirmed and enabled.
+        # Nor may a redraft clobber a confirmed draft.
         observation = self._observation()
         first, _ = draft_profile_from_observation(observation)
         ThermalPrinterProfile.objects.filter(pk=first.pk).update(enabled=True)
@@ -1413,18 +1355,15 @@ class MobileLabelsPrintedApiTests(StandardTestCase):
         self.assertEqual(self._post([self.lot.pk]).json(), {"marked": 1, "failed": 0})
 
     def test_shrinks_the_unprinted_queryset(self):
-        """The whole point: without this, "print unprinted labels" never shrinks for a Bluetooth
-        user, because only the PDF views set label_printed."""
+        """Reported labels leave the unprinted queryset."""
         before = self.online_tos.unprinted_label_count
         self._post([self.lot.pk])
-        # Re-read: unprinted_label_count is cached on the instance, and this test is holding one
-        # from before the request, which no request could have invalidated.
+        # unprinted_label_count is cached on the instance.
         after = AuctionTOS.objects.get(pk=self.online_tos.pk).unprinted_label_count
         self.assertEqual(after, before - 1)
 
     def test_lots_the_caller_cannot_touch_are_skipped_not_refused(self):
-        """A batch of forty is one print run and most of it printed fine — failing the whole
-        report over one lot would lose the record of the thirty-nine that worked."""
+        """Lots the caller can't touch are skipped, not the whole report refused."""
         stranger = User.objects.create_user(username="stranger", password="x")
         resp = self._post([self.lot.pk], user=stranger)
         self.assertEqual(resp.status_code, 200)
@@ -1460,17 +1399,8 @@ class MobileLabelsPrintedApiTests(StandardTestCase):
         self.assertIn(self.client.post(self.url, {"lots": []}, content_type="application/json").status_code, (401, 403))
 
 
-# Part W1 — bulk label printing hands a Bluetooth app user the lot set
-
-
 class LabelPrintFailureReportTests(StandardTestCase):
-    """A paper jam reported as "printed OK".
-
-    The server cannot see the printer -- every byte goes phone, Bluetooth, printhead, and none of
-    that passes through here -- so the fix is not a server-side check but a channel for the app to
-    say which labels did not come out. The vocabulary is already the server's: each printer profile
-    carries a status_flags table that decodes a status byte into these condition names.
-    """
+    """The app reports which labels didn't come out, using the profiles' status_flags vocabulary."""
 
     def setUp(self):
         super().setUp()
@@ -1527,14 +1457,9 @@ class LabelPrintFailureReportTests(StandardTestCase):
 
 
 class BulkBluetoothPrintLinkTests(StandardTestCase):
-    """A Bluetooth user tapping a *bulk* label button used to get a PDF sheet they can't feed to a
-    thermal printer.
+    """A Bluetooth user's bulk label button hands the lots to the app instead of a PDF sheet.
 
-    Gated in LotLabelView rather than in the templates that build the links: every bulk entry point
-    -- the users-table anchors, ?printredirect=, the command palette, print-after-bulk-add, a
-    bookmarked URL -- funnels through that one view, and gating templates one at a time leaves
-    entry points behind (it would also put label printing back inside the mobile-app UA
-    conditionals that MobileAppLabelPrintingVisibilityTests exists to keep out).
+    Gated in LotLabelView, which every bulk entry point goes through.
     """
 
     APP_UA = "FishAuctionsApp/1.0 (iOS)"
@@ -1615,8 +1540,7 @@ class BulkBluetoothPrintLinkTests(StandardTestCase):
         self.assertEqual(self.in_person_tos.unprinted_label_count, 0)
 
     def test_long_lot_sets_are_capped_and_say_so(self):
-        """Platform URL handling varies, so keep the link near 2000 characters. The app itself has
-        no cap -- it prints serially and cancellably."""
+        """Long lot sets are capped near 2000 characters and say so."""
         Lot.objects.bulk_create(
             [
                 Lot(
@@ -1640,11 +1564,7 @@ class BulkBluetoothPrintLinkTests(StandardTestCase):
 
 
 class LabelPngMatchesPdfTests(StandardTestCase):
-    """The PNG sent to a Bluetooth printer used to be drawn independently in Pillow -- a Code128
-    barcode where the PDF puts a QR code, different fields, different typography, and no knowledge
-    of Auction.label_print_fields or the user's UserLabelPrefs. There is one layout now: WeasyPrint
-    renders the same label_template.html and pdfium rasterizes page one.
-    """
+    """The Bluetooth PNG is page one of the WeasyPrint label PDF, rasterized."""
 
     def setUp(self):
         super().setUp()
@@ -1666,8 +1586,7 @@ class LabelPngMatchesPdfTests(StandardTestCase):
         return Image.open(io.BytesIO(content))
 
     def test_png_is_the_rasterized_pdf(self):
-        """Not "looks similar": the same bytes go through the same template, so rasterizing the
-        PDF ourselves must reproduce the endpoint's PNG exactly."""
+        """The PNG matches our own rasterization of the PDF exactly."""
         from auctions.mobile.services.label_pdf import render_single_lot_pdf
         from auctions.mobile.services.label_raster import rasterize_pdf
 
@@ -1684,24 +1603,20 @@ class LabelPngMatchesPdfTests(StandardTestCase):
                 self.assertEqual(self._image(self._png(resolution=resolution)).size, size)
 
     def test_label_is_not_distorted(self):
-        """A label whose aspect ratio doesn't match the user's page setup gets even white margins,
-        not stretched text."""
+        """A mismatched aspect ratio gets white margins, not stretched text."""
         wide = self._image(self._png(resolution="800x200")).convert("L")
-        # Scaled to fit a 3x2 page into 800x200 => 300x200 of content, centred: the far edges are
-        # white padding.
+        # 3x2 into 800x200 is 300x200 of content, centred.
         self.assertEqual(wide.getpixel((2, 100)), 255)
         self.assertEqual(wide.getpixel((797, 100)), 255)
 
     def test_rendering_a_png_does_not_mark_the_label_printed(self):
-        """Rendering a PDF sheet marks it printed; drawing a raster must not. Nothing has printed
-        until the app says so via labels/printed/."""
+        """Rendering a PNG doesn't mark the label printed."""
         self._png()
         self.lot.refresh_from_db()
         self.assertFalse(self.lot.label_printed)
 
     def test_a_sheet_preset_renders_one_label_not_a_sheet(self):
-        """An Avery page is 8.5x11 with the label in a corner. Rasterizing that would be a label in
-        the corner of a mostly blank image -- and on a roll, a lot of wasted label."""
+        """A sheet preset renders one label, not a sheet."""
         self.prefs.preset = "lg"
         self.prefs.save()
         image = self._image(self._png(resolution="780x243")).convert("L")
@@ -1709,8 +1624,7 @@ class LabelPngMatchesPdfTests(StandardTestCase):
         self.assertGreater(dark, 500, "the label did not fill the frame")
 
     def test_the_label_respects_auction_print_fields(self):
-        """Proof it is the real pipeline: turning a field off in the auction changes the raster.
-        The standalone renderer never knew label_print_fields existed."""
+        """Auction label_print_fields change the raster."""
         self.online_auction.label_print_fields = "lot_name,seller_name"
         self.online_auction.save()
         without_qr = self._png(resolution="600x400")
@@ -1719,8 +1633,7 @@ class LabelPngMatchesPdfTests(StandardTestCase):
         self.assertNotEqual(without_qr, self._png(resolution="600x400"))
 
     def test_falls_back_when_there_is_no_pdf_to_rasterize(self):
-        """A lot with no auction has no label configuration to render against, and an approximate
-        label still beats no label at a check-in table."""
+        """A lot with no auction falls back to the approximate renderer."""
         orphan = Lot.objects.create(lot_name="no auction here", user=self.user, quantity=1)
         url = reverse("mobile-label-lot", kwargs={"pk": orphan.pk})
         resp = self.client.get(url, {"resolution": "600x400"}, **_bearer(self.user))
@@ -1732,8 +1645,7 @@ class LabelPngMatchesPdfTests(StandardTestCase):
         self.assertEqual(self.client.get(self.url, {"resolution": "wide"}, **_bearer(self.user)).status_code, 400)
 
     def test_the_web_png_endpoint_matches_the_mobile_one(self):
-        """SingleLotLabelView?fmt=png exists so the web endpoint matches the app; it has to keep
-        matching."""
+        """The web PNG endpoint matches the mobile one."""
         self.client.force_login(self.user)
         web = self.client.get(
             reverse("single_lot_label", kwargs={"pk": self.lot.pk}), {"fmt": "png", "resolution": "600x400"}
@@ -1747,11 +1659,7 @@ class LabelPngMatchesPdfTests(StandardTestCase):
 
 
 class PrinterSupportedNotificationTests(StandardTestCase):
-    """Enabling a profile that claims a hand-identified printer must not be silent.
-
-    Their next connect just starts matching properly, which from where the user is standing looks
-    exactly like nothing happened.
-    """
+    """Enabling a profile that matches a hand-identified printer notifies its owner."""
 
     def setUp(self):
         super().setUp()
@@ -1782,8 +1690,7 @@ class PrinterSupportedNotificationTests(StandardTestCase):
     @override_settings(FIREBASE_CREDENTIALS_JSON=FAKE_FIREBASE)
     @patch("auctions.tasks.send_push_to_user.delay")
     def test_enabling_a_matching_profile_notifies_the_owner(self, delay):
-        # The enqueue is on_commit, so a rolled-back save can't push about a profile that was
-        # never enabled -- which means the test has to let the commit hooks run.
+        # The enqueue is on_commit.
         with self.captureOnCommitCallbacks(execute=True):
             self._enable_matching_profile()
         delay.assert_called_once()
@@ -1846,14 +1753,8 @@ class PrinterSupportedNotificationTests(StandardTestCase):
         self.assertFalse(profile_matches_observation(profile, blank))
 
 
-# Part 2 — watched-lot "bidding is starting" alerts pick one channel per person
-
-
 class WatchedLotPushRoutingTests(StandardTestCase):
-    """A watcher who can be reached in the app is reached *only* there.
-
-    A browser subscription and the app on the same phone are indistinguishable from the server, so
-    sending both would buzz one person twice for one lot."""
+    """A watcher reachable in the app is notified only there, not by browser push too."""
 
     def setUp(self):
         super().setUp()
@@ -1898,7 +1799,7 @@ class WatchedLotPushRoutingTests(StandardTestCase):
         app_push.assert_called_once()
         self.assertEqual(app_push.call_args.args[0], self.watcher.pk)
         self.assertEqual(app_push.call_args.kwargs["category"], notifications.CATEGORY_LOT_SELLING)
-        # Same tag the browser payload uses, so "about to be sold" replaces "coming up soon".
+        # Same tag as the browser payload, so the newer alert replaces the older.
         self.assertEqual(app_push.call_args.kwargs["collapse_key"], f"lot_sell_notification_{self.in_person_lot.pk}")
 
     @override_settings(FIREBASE_CREDENTIALS_JSON=FAKE_FIREBASE)
@@ -1978,8 +1879,6 @@ class WatchedLotPushRoutingTests(StandardTestCase):
 
 
 class PreferencesWebpushVisibilityTests(TestCase):
-    """The browser "subscribe to push messaging" offer is dropped wherever it would be wrong."""
-
     def setUp(self):
         self.user = User.objects.create_user(username="prefs_push", password="x")
 
@@ -1999,14 +1898,12 @@ class PreferencesWebpushVisibilityTests(TestCase):
         self.assertIn("app on your phone", form.fields["push_notifications_when_lots_sell"].help_text)
 
     def test_hidden_inside_the_app_webview(self):
-        # No Push API in a WebView, so there is nothing to subscribe to even without a live token.
+        # No Push API in a WebView.
         self.assertFalse(self._form(is_mobile_app=True).can_subscribe_to_webpush)
 
 
 @override_settings(FIREBASE_CREDENTIALS_JSON=FAKE_FIREBASE)
 class RunningTotalNotificationTests(StandardTestCase):
-    """The in-person running total: one notification per auction, rewritten as each lot sells."""
-
     def setUp(self):
         super().setUp()
         self.buyer = self.user_with_no_lots  # the account behind self.in_person_buyer
@@ -2014,7 +1911,6 @@ class RunningTotalNotificationTests(StandardTestCase):
         self._sell(self.in_person_lot, 12)
 
     def _sell(self, lot, price):
-        """Record a sale the way set_winner does, without notifying -- the test does that itself."""
         from auctions.models import Invoice
 
         lot.auctiontos_winner = self.in_person_buyer
@@ -2026,8 +1922,7 @@ class RunningTotalNotificationTests(StandardTestCase):
         return lot
 
     def _notify(self, lot=None):
-        """Run the helper and hand back the mocked task. Patch stays outside captureOnCommitCallbacks
-        so it is still in place when the on_commit callback actually fires."""
+        """Run the helper and return the mocked task; the patch outlives captureOnCommitCallbacks."""
         with patch("auctions.tasks.send_push_to_user.delay") as push:
             with self.captureOnCommitCallbacks(execute=True):
                 sent = notifications.notify_running_total(lot or self.in_person_lot)
@@ -2036,7 +1931,7 @@ class RunningTotalNotificationTests(StandardTestCase):
     def test_the_winner_is_told_what_they_have_spent(self):
         sent, push = self._notify()
         self.assertTrue(sent)
-        # The first sale also carries the one-time tip, so the running total is the first of two.
+        # The first sale also sends a one-time tip.
         total_call = push.call_args_list[0]
         self.assertEqual(total_call.args[0], self.buyer.pk)
         self.assertEqual(total_call.kwargs["category"], notifications.CATEGORY_RUNNING_TOTAL)
@@ -2050,7 +1945,6 @@ class RunningTotalNotificationTests(StandardTestCase):
         )
 
     def test_one_notification_per_auction_rather_than_one_per_lot(self):
-        """The collapse key is the auction, so the second lot rewrites the first lot's alert."""
         _, first = self._notify()
         second_lot = Lot.objects.create(
             lot_name="a second test lot",
@@ -2064,7 +1958,6 @@ class RunningTotalNotificationTests(StandardTestCase):
         key = f"running_total_{self.in_person_auction.pk}"
         self.assertEqual(first.call_args_list[0].kwargs["collapse_key"], key)
         self.assertEqual(second.call_args_list[0].kwargs["collapse_key"], key)
-        # ...and the total accumulates rather than restarting at the newest lot.
         self.assertIn("20.00", second.call_args_list[0].kwargs["body"])
 
     def test_the_tip_is_sent_once_and_only_once(self):
@@ -2100,7 +1993,6 @@ class RunningTotalNotificationTests(StandardTestCase):
         push.assert_not_called()
 
     def test_online_auctions_are_left_alone(self):
-        """In-person only: an online auction's winners find out by email when the auction ends."""
         sent, push = self._notify(self.lot)  # self.lot belongs to the online auction
         self.assertFalse(sent)
         push.assert_not_called()
@@ -2113,7 +2005,6 @@ class RunningTotalNotificationTests(StandardTestCase):
         push.assert_not_called()
 
     def test_setting_a_winner_sends_it(self):
-        """The wiring, not the helper: selling a lot on the set-winners screen notifies the buyer."""
         from auctions.views import DynamicSetLotWinner
 
         view = DynamicSetLotWinner()
@@ -2138,10 +2029,7 @@ class RunningTotalNotificationTests(StandardTestCase):
 
 
 class QueueRespectsTheAuctionNotificationSettingTests(StandardTestCase):
-    """The lot queue must honour message_users_when_lots_sell like the set-winners screen does.
-
-    Turning that setting off also hides the opt-in on the lot page, so an auction that opted out
-    would otherwise be notifying watchers who were never offered a way to say no."""
+    """The lot queue honours message_users_when_lots_sell, like the set-winners screen."""
 
     def setUp(self):
         super().setUp()
@@ -2268,7 +2156,6 @@ class JoinReminderPushTests(TestCase):
         delay.assert_called_once()
         self.assertEqual(delay.call_args.kwargs["title"], "Don't miss this auction")
         self.assertIn(self.auction.title, delay.call_args.kwargs["body"])
-        # The campaign's tracked link, so a tap still marks the campaign VIEWED.
         self.assertIn(str(self.campaign.uuid), delay.call_args.kwargs["url"])
         emailed = [call.args[0] for call in send.call_args_list if call.args]
         self.assertNotIn(self.user.email, emailed)
@@ -2285,12 +2172,7 @@ class JoinReminderPushTests(TestCase):
         self.assertIn(self.user.email, emailed)
 
 
-# Part 2 — losing the app: nothing is dropped, and the UI says what's going on
-
-
 class UninstallFallbackTests(TestCase):
-    """Uninstalling / revoking notifications has to degrade to email without losing a message."""
-
     def setUp(self):
         self.user = User.objects.create_user(username="gone", password="x", email="gone@example.com")
         userdata = self.user.userdata
@@ -2324,7 +2206,7 @@ class UninstallFallbackTests(TestCase):
         ):
             tasks.send_push_to_user(self.user.pk, title="t", body="b", url="u", category="invoice")
         send.assert_called_once()
-        # A transient error is not proof the token is dead, so it survives for the next try.
+        # A transient error doesn't kill the token.
         self.device.refresh_from_db()
         self.assertEqual(self.device.fcm_token, "tok")
 
@@ -2389,8 +2271,7 @@ class UninstallFallbackTests(TestCase):
         MobileDevice.objects.filter(pk=self.device.pk).update(fcm_token="")
         form = ChangeUserNotificationsForm(self.user, data={}, instance=self.user.userdata)
         form.is_valid()
-        # A disabled field ignores POST and keeps the stored value, so an uninstall can't quietly
-        # erase what the user asked for.
+        # A disabled field keeps the stored value.
         self.assertTrue(form.cleaned_data["push_notifications_instead_of_email"])
 
 
@@ -2398,12 +2279,7 @@ class UninstallFallbackTests(TestCase):
 
 
 class MobileNotificationPrefsApiTests(TestCase):
-    """/api/mobile/notifications/prefs/ — the third step of the app's "Enable notifications".
-
-    The app raises the OS permission, registers the device, then writes these toggles. Without
-    this endpoint the app could only get the permission and send the user to /notifications/, where
-    the checkbox is greyed out until the page is reloaded with a live device.
-    """
+    """/api/mobile/notifications/prefs/, written after the app gets OS permission and registers."""
 
     def setUp(self):
         self.user = User.objects.create_user(username="prefs_api", password="x")
@@ -2412,8 +2288,7 @@ class MobileNotificationPrefsApiTests(TestCase):
     def test_get_returns_every_toggle(self):
         response = self.client.get(self.url, **_bearer(self.user))
         self.assertEqual(response.status_code, 200)
-        # running_total is the one that ships on rather than off: a buyer who installed the app is
-        # already saying they want the auction on their phone.
+        # running_total defaults on.
         self.assertEqual(
             response.json(),
             {"push_instead_of_email": False, "push_when_lots_sell": False, "running_total": True},
@@ -2427,7 +2302,6 @@ class MobileNotificationPrefsApiTests(TestCase):
             **_bearer(self.user),
         )
         self.assertEqual(response.status_code, 200)
-        # A partial write leaves the toggle it didn't name alone, rather than defaulting it off.
         self.assertEqual(
             response.json(),
             {"push_instead_of_email": True, "push_when_lots_sell": True, "running_total": True},
@@ -2496,17 +2370,13 @@ class MobileNotificationPrefsApiTests(TestCase):
 
 
 class LotPagePushPromptOfferTests(StandardTestCase):
-    """The lot page tells the app when offering notifications would mean something.
-
-    The app can't tell an in-person lot page from any other one and won't spend a round trip per lot
-    page guessing, so the decision is made here and handed over the JS bridge.
-    """
+    """The lot page tells the app when to offer notifications."""
 
     APP_UA = "FishAuctionsApp/1.0 (Flutter; iOS)"
 
     def setUp(self):
         super().setUp()
-        # StandardTestCase's in-person auction is long over; put it back on the calendar.
+        # Put the fixture's in-person auction back on the calendar.
         self.in_person_auction.date_start = timezone.now() - datetime.timedelta(hours=1)
         self.in_person_auction.date_end = timezone.now() + datetime.timedelta(days=1)
         self.in_person_auction.message_users_when_lots_sell = True
@@ -2551,11 +2421,7 @@ class LotPagePushPromptOfferTests(StandardTestCase):
 
 
 class PreferencesPushBridgeTests(TestCase):
-    """/notifications/ asks the app about this phone instead of showing an unexplained grey checkbox.
-
-    This lived on /preferences/ until the notification settings were split onto a page of their own;
-    the bridge follows the checkbox it explains.
-    """
+    """/notifications/ asks the app about this phone rather than showing a grey checkbox."""
 
     APP_UA = "FishAuctionsApp/1.0 (Flutter; Android)"
 
@@ -2580,12 +2446,7 @@ class PreferencesPushBridgeTests(TestCase):
 
 
 def _ensure_privacy_post():
-    """Guarantee the privacy page exists for these tests.
-
-    Migrations seed the real post (and normally that's what these tests render), but a
-    TransactionTestCase earlier in the run truncates migration-seeded rows, so fall back to a stub
-    carrying the same account-deletion section rather than depending on test order.
-    """
+    """Ensure the privacy post exists; an earlier TransactionTestCase may have truncated the seed row."""
     from auctions.models import PRIVACY_POLICY_SLUG, BlogPost
 
     BlogPost.objects.get_or_create(
@@ -2595,14 +2456,9 @@ def _ensure_privacy_post():
 
 
 class MobileConfigLegalUrlsTests(TestCase):
-    """Apple requires terms and a privacy policy from inside the app at the point of sign-up.
-
-    The app draws the links natively and gets their paths from the public config endpoint; it
-    rejects an off-host URL, since these pages open inside the signed-out login trap.
-    """
+    """The public config carries terms and privacy policy paths for the app's sign-up (Apple requires them)."""
 
     def setUp(self):
-        # Seeded by migration, but a TransactionTestCase earlier in the run truncates seed rows.
         _ensure_privacy_post()
 
     def test_config_carries_both(self):
@@ -2626,8 +2482,6 @@ class MobileConfigLegalUrlsTests(TestCase):
 
 
 class PrivacyPolicyPageTests(TestCase):
-    """The privacy policy needs a stable path of its own; /blog/privacy/ keeps working."""
-
     def setUp(self):
         _ensure_privacy_post()
 
@@ -2637,7 +2491,7 @@ class PrivacyPolicyPageTests(TestCase):
         self.assertContains(response, "Deleting your account")
 
     def test_no_redirect_out_of_the_signup_webview(self):
-        # A redirect would leave the app's allow-list and kick a half-filled sign-up to the browser.
+        # A redirect would leave the app's allow-list.
         self.assertEqual(self.client.get("/privacy/").status_code, 200)
 
     def test_the_blog_url_still_works(self):
@@ -2660,13 +2514,7 @@ class SignupLegalLinksTests(TestCase):
 
 
 class CookieBannerInTheAppTests(StandardTestCase):
-    """The "By using this site..." bar is web chrome and must not render inside the app.
-
-    It is fixed to the bottom of every page, so in the app it sits on top of the native controls
-    for a decision the user already made in the app's own sign-up (and again at review time).
-    Dropped on the app's User-Agent, the same way the navbar and the install prompts are; the web
-    banner and its "Don't show again" cookie are untouched.
-    """
+    """The cookie banner doesn't render in the app."""
 
     APP_UA = "FishAuctionsApp/1.0 (Flutter; iOS)"
     BANNER = "By using this site"
@@ -2685,7 +2533,7 @@ class CookieBannerInTheAppTests(StandardTestCase):
         self.assertNotContains(response, "agreeTos")  # and the dismiss button's script with it
 
     def test_hidden_in_the_app_for_a_signed_out_visitor(self):
-        # The app's login screen is a WebView too, and that is where the bar was most in the way.
+        # Including the app's WebView login screen.
         self.assertNotContains(self._home(self.APP_UA, login=False), self.BANNER)
 
     def test_the_web_dismiss_cookie_still_works(self):
@@ -2697,8 +2545,6 @@ class CookieBannerInTheAppTests(StandardTestCase):
 
 
 class MobileAppPlatformMiddlewareTests(TestCase):
-    """``request.mobile_app_platform`` — set from the app's own User-Agent, empty on the web."""
-
     def _platform(self, user_agent):
         from auctions.middleware import MobileAppMiddleware
 
@@ -2714,17 +2560,11 @@ class MobileAppPlatformMiddlewareTests(TestCase):
         self.assertEqual(self._platform("FishAuctionsApp/1.0 (Flutter; Android)"), "android")
 
     def test_blank_for_a_browser(self):
-        # A desktop browser mentioning "Android" in some other context still isn't the app.
         self.assertEqual(self._platform("Mozilla/5.0 (Linux; Android 13) Chrome/120"), "")
 
 
 class MembershipCardWalletButtonsTests(TestCase):
-    """Offer the wallet the phone actually has.
-
-    In the app the Google Wallet save URL opens in the system browser, so on an iPhone it's a button
-    that leaves the app to do nothing useful; an Apple Wallet download on Android is the same in
-    reverse. On the web both are offered — the browser could be on either platform.
-    """
+    """Offer only the wallet the phone has; the web offers both."""
 
     @classmethod
     def setUpTestData(cls):
@@ -2781,12 +2621,7 @@ class MembershipCardWalletButtonsTests(TestCase):
 
 
 class AppCommandPaletteRenderingTests(StandardTestCase):
-    """The palette modal is rendered in the app, not just on the web.
-
-    The app's app-bar title opens ``#command-palette-modal`` and falls back to its own native
-    palette when the element isn't there, so this template line is what decides whether an app user
-    gets the natural-language assistant or plain search.
-    """
+    """The palette modal renders in the app, which opens it instead of its native palette."""
 
     APP_UA = "FishAuctionsApp/1.0 (Flutter; iOS)"
 
@@ -2805,11 +2640,7 @@ class AppCommandPaletteRenderingTests(StandardTestCase):
 
 
 class AppPaletteDeepLinkTests(StandardTestCase):
-    """The two destinations that aren't pages: native lot scanning and native Tap to Pay.
-
-    Both are emitted as ordinary palette items whose URL uses the app's own scheme, gated on the
-    app's User-Agent — the links are dead in a browser.
-    """
+    """Native lot scanning and Tap to Pay as palette items with the app's URL scheme, app UA only."""
 
     IOS_UA = "FishAuctionsApp/1.0 (Flutter; iOS)"
     ANDROID_UA = "FishAuctionsApp/1.0 (Flutter; Android)"
@@ -2817,8 +2648,7 @@ class AppPaletteDeepLinkTests(StandardTestCase):
 
     def setUp(self):
         super().setUp()
-        # An in-person auction that is actually happening: StandardTestCase's are days in the past,
-        # and lot scanning stops once an auction is pretty_much_over.
+        # Make the auction current, so lot scanning is offered.
         self.in_person_auction.date_start = timezone.now() - datetime.timedelta(hours=1)
         self.in_person_auction.date_end = timezone.now() + datetime.timedelta(hours=4)
         self.in_person_auction.save()
@@ -2877,26 +2707,20 @@ class AppPaletteDeepLinkTests(StandardTestCase):
         self.assertNotIn(self.tap_to_pay_link, self._urls(self._palette(user_agent=self.WEB_UA)))
 
     def test_the_label_is_the_one_apples_review_guide_allows(self):
-        """5.4: "Tap to Pay on iPhone" is the permitted wording, and it takes no " — {auction}"
-        suffix, so the auction goes in the subtitle."""
+        """ "Tap to Pay on iPhone" with no auction suffix (Apple 5.4)."""
         titles = self._titles(self._palette())
         self.assertIn("Tap to Pay on iPhone", titles)
         self.assertFalse([title for title in titles if title.startswith("Tap to Pay on iPhone —")], titles)
 
     def test_tap_to_pay_is_not_offered_on_android(self):
-        """The screen behind the link is Apple's flow end to end, which is why the app gates its own
-        two entry points on the platform. This row was the one that didn't: on Android it opened the
-        iPhone setup screen, which asked an uninitialized Square SDK for its state and killed the
-        process."""
+        """Tap to Pay is not offered on Android."""
         for query in ("", "tap", "card", "payment"):
             urls = self._urls(self._palette(query, self.ANDROID_UA))
             self.assertNotIn(self.tap_to_pay_link, urls, query)
-        # The other native row is unaffected -- lot scanning is the same screen on both phones.
         self.assertIn(self.ar_link, self._urls(self._palette(user_agent=self.ANDROID_UA)))
 
     def test_the_row_carries_no_payment_iconography(self):
-        """5.5: an icon on the control must be SF Symbols' wave.3.right.circle, which we don't have
-        and may not imitate — so the row gets the palette's neutral "go here" arrow."""
+        """No payment icon on the row (Apple 5.5)."""
         items = [
             item
             for group in self._palette().json()["groups"]
@@ -2910,8 +2734,7 @@ class AppPaletteDeepLinkTests(StandardTestCase):
             self.assertIn(self.tap_to_pay_link, self._urls(self._palette(query)), query)
 
     def test_the_native_palette_is_not_sent_rows_it_injects_itself(self):
-        """``/api/mobile/command-palette/`` backs the app's own fallback palette, which adds both
-        rows natively; sending them from here as well would show the user each one twice."""
+        """The native palette isn't sent rows it adds itself."""
         response = self.client.get(reverse("mobile-command-palette"), HTTP_USER_AGENT=self.IOS_UA, **_bearer(self.user))
         self.assertEqual(response.status_code, 200)
         items = [item for group in response.json()["groups"] for item in group["items"]]
@@ -2921,8 +2744,6 @@ class AppPaletteDeepLinkTests(StandardTestCase):
 
 
 class AppPaletteNavigationTests(StandardTestCase):
-    """ "Take me to tap to pay" — the assistant's navigation skill knows the native screens too."""
-
     IOS_UA = "FishAuctionsApp/1.0 (Flutter; iOS)"
     ANDROID_UA = "FishAuctionsApp/1.0 (Flutter; Android)"
 
@@ -2964,8 +2785,7 @@ class AppPaletteNavigationTests(StandardTestCase):
         return request
 
     def test_the_assistant_is_told_about_the_native_screens(self):
-        """The prompt is a catalog of URLs, and these two aren't URLs — so without this the model
-        can only answer "take me to tap to pay" with the nearest real page."""
+        """The assistant is told about the native screens."""
         from auctions import command_palette, palette_assist
 
         destinations = command_palette.app_destinations_for_prompt(self._request(self.IOS_UA))
@@ -2975,15 +2795,14 @@ class AppPaletteNavigationTests(StandardTestCase):
         self.assertIn("tap to pay", prompt)
 
     def test_android_hears_about_lot_scanning_but_never_about_tap_to_pay(self):
-        """Otherwise the assistant answers "take me to tap to pay" on an Android phone with a link
-        that opens Apple's setup screen, which is not a screen that exists there."""
+        """Android hears about lot scanning but never Tap to Pay."""
         from auctions import command_palette
 
         request = self._request(self.ANDROID_UA)
         destinations = command_palette.app_destinations_for_prompt(request)
         self.assertEqual([name for name, _ in destinations], ["lot scanning"])
         self.assertIsNone(command_palette.app_deep_link_by_name(request, "tap to pay"))
-        # And the question still gets a useful answer: the nearest real page on the web.
+        # Still answered with the nearest real page.
         self.assertTrue(self._go("tap to pay", self.ANDROID_UA)["url"].startswith("/"))
 
     def test_the_web_prompt_says_nothing_about_screens_the_browser_cannot_open(self):

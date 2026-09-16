@@ -10,10 +10,9 @@ register = template.Library()
 def club_sidebar(context):
     """Render the club navigation sidebar.
 
-    Driven entirely off the current view: `view.club_sidebar_can_view` decides
-    whether to render at all, `view.club_sidebar_club` is the club, and
-    `view.auction` (when present) provides the in-context auction. Club-level
-    sub-links are gated with the same permissions the old club_ribbon used.
+    Driven entirely off the current view: ``view.club_sidebar_can_view`` decides whether to render at
+    all, ``view.club_sidebar_club`` is the club, and ``view.auction`` (when present) is the in-context
+    auction. Club-level sub-links are gated with the same permissions the old club_ribbon used.
     """
     # Lazy import: avoids a circular import at module load (views imports heavily).
     from auctions.views import check_club_permission

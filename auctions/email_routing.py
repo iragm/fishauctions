@@ -31,13 +31,11 @@ def build_routed_sender_address(local_part):
 def sender_with_display_name(display_name, address):
     """``Some Club <club-slug-contact@example.com>`` -- the From line as a person reads it.
 
-    Gmail shows the display name and hides the address, so without one the From reads as a slug:
-    "spring-fling-2026", or "info". ``formataddr`` rather than an f-string because a club called
-    ``Bob's "Fish" Club`` written straight into a header is a malformed From, and a mail client
-    shown one of those loses the address behind it.
+    Gmail shows the display name and hides the address, so without one the From reads as a slug.
+    ``formataddr`` rather than an f-string, because a club called ``Bob's "Fish" Club`` written into a
+    header is a malformed From and the client loses the address behind it.
 
-    Returns None when there is no routed address, which is what ``build_routed_sender_address``
-    gives on a site with routing off -- post_office reads that as "use DEFAULT_FROM_EMAIL".
+    Returns None when there is no routed address, which post_office reads as "use DEFAULT_FROM_EMAIL".
     """
     if not address:
         return None
@@ -60,17 +58,16 @@ def _is_on_routing_domain(address):
     return bool(domain) and address.rsplit("@", 1)[-1].strip().lower() == domain
 
 
-#: ``<club-slug>-donations-<10 digits>``. The club slug is carried for readability only -- the
-#: digits are what identify the vendor, so a club rename doesn't strand replies in flight.
+#: ``<club-slug>-donations-<10 digits>``. The slug is for readability; the digits identify the
+#: vendor, so a club rename doesn't strand replies in flight.
 DONATION_ALIAS_RE = re.compile(r"^(?P<club_slug>.+)-donations-(?P<key>\d{10})$")
 
 
 def resolve_donation_alias(local_part):
-    """Return ``{"vendor": <DonationVendor>}`` for a donation reply address, else None.
+    """``{"vendor": <DonationVendor>}`` for a donation reply address, else None.
 
-    Returns None for a well-formed address whose vendor has been deleted, whose club has since
-    turned donation tracking off, or whose club isn't sending donation mail from this site -- all
-    of which mean the same thing to the caller: drop it silently.
+    None for a well-formed address whose vendor is gone, whose club turned donation tracking off, or
+    whose club isn't sending donation mail from here -- all of which mean "drop it silently".
     """
     match = DONATION_ALIAS_RE.match(local_part or "")
     if not match:
@@ -85,26 +82,21 @@ def resolve_donation_alias(local_part):
 
 
 def resolve_routing_info(local_part):
-    """Return forwarding info for the given alias local-part as a dict, or None.
+    """Forwarding info for an alias local-part, or None ("drop this message").
 
     Recognised aliases:
-    - ``info``, ``support`` → site admin email
-    - ``dmca`` → the designated copyright agent (see :mod:`auctions.dmca`), or the site admin when
-      the agent address is itself on this domain
-    - ``<club-slug>-auctions`` → oldest non-admin auction manager → oldest admin → site admin
-    - ``<club-slug>-contact`` → oldest non-admin membership manager → oldest admin → **drop**
-    - ``<club-slug>-donations-<10 digits>`` → the club's donation contact, **or nobody**
-    - ``<auction-slug>`` → if club: oldest non-admin auction manager → oldest admin → auction creator;
-                           if no club: auction creator directly
 
-    Returns a dict ``{"recipient": <email>, "display_name": <name>}`` when
-    the alias is recognised, or ``None`` if the alias does not match any known
-    pattern (or the club contact has no configured recipient).
-    Callers should treat ``None`` as "drop this message".
+    - ``info``, ``support`` -> site admin
+    - ``dmca`` -> the designated copyright agent (:mod:`auctions.dmca`), or the site admin when the
+      agent address is itself on this domain
+    - ``<club-slug>-auctions`` -> oldest non-admin auction manager, then admin, then site admin
+    - ``<club-slug>-contact`` -> oldest non-admin membership manager, then admin, else drop
+    - ``<club-slug>-donations-<10 digits>`` -> the club's donation contact, or nobody
+    - ``<auction-slug>`` -> the club's auction manager, else the auction creator
 
-    Donation aliases add ``"kind": "donation"`` and ``"vendor_key"``, and are the one case where
-    ``recipient`` may be an empty string: the message still needs to be posted back to
-    ``/api/v1/email-routing/donation/`` to be recorded, even when no human is forwarded a copy.
+    Returns ``{"recipient": ..., "display_name": ...}``. Donation aliases add ``"kind"`` and
+    ``"vendor_key"``, and are the one case where ``recipient`` may be empty: the message still has to be
+    posted to ``/api/v1/email-routing/donation/`` to be recorded.
     """
     local_part = (local_part or "").strip().lower()
     if not local_part:
@@ -112,16 +104,14 @@ def resolve_routing_info(local_part):
     if local_part in ("info", "support"):
         return {"recipient": admin_routing_email(), "display_name": local_part.capitalize()}
     if local_part == "dmca":
-        # The address published in the Copyright Office's directory, which is a public federal
-        # database and gets scraped -- so it is an alias rather than somebody's real mailbox, and
-        # re-pointing it is an .env edit rather than a $6 amendment filing and a window of being
-        # out of date.  It must resolve to *something*: an agent address that silently drops mail
-        # is how AOL lost the safe harbour in Ellison v. Robertson.
+        # The address published in the Copyright Office's public directory gets scraped, so it is an
+        # alias rather than a mailbox, and re-pointing it is an .env edit rather than a $6 filing.
+        # It must resolve to something: an agent address that drops mail is how AOL lost the safe
+        # harbour in Ellison v. Robertson.
         #
-        # So DMCA_AGENT_EMAIL is normally this very alias, and forwarding to it would forward the
-        # alias to itself: the copy comes back in through SES from the relay address, and the
-        # Lambda's loop guard drops it -- every notice, silently.  Anything on this domain comes
-        # back through the Lambda, so a published address here means "the site admin".
+        # DMCA_AGENT_EMAIL is normally this alias, and forwarding it to itself sends the copy back
+        # through SES, where the Lambda's loop guard drops it. So a published address on this domain
+        # means "the site admin".
         from auctions.dmca import agent_email
 
         recipient = agent_email()
@@ -152,10 +142,9 @@ def resolve_routing_info(local_part):
     donation = resolve_donation_alias(local_part)
     if donation:
         vendor = donation["vendor"]
-        # Unlike every other alias, a donation address is worth answering even with nowhere to
-        # forward to: the reply's value is the record kept against the vendor, which the inbound
-        # webhook writes. "recipient" may therefore be empty -- the Lambda drops the forward and
-        # still posts the body. Clubs are steered towards exactly this setup on the settings page.
+        # Unlike every other alias, a donation address is worth answering with nowhere to forward
+        # to: the reply's value is the record kept against the vendor. Clubs are steered towards
+        # exactly this setup on the settings page.
         return {
             "recipient": vendor.club.donation_routing_email or "",
             "display_name": vendor.club.name,
@@ -165,8 +154,7 @@ def resolve_routing_info(local_part):
 
     auction = Auction.objects.filter(slug=local_part, is_deleted=False).select_related("created_by", "club").first()
     if auction:
-        # If the auction belongs to a club, route through the club's auction recipient
-        # (non-admin auction manager first, then admin, then auction creator).
+        # A club auction routes through the club's recipient.
         if auction.club:
             recipient = auction.club.auction_email_recipient
             if recipient and recipient.routing_email:
@@ -179,10 +167,8 @@ def resolve_routing_info(local_part):
 
 
 def resolve_routed_recipient(local_part):
-    """Return the forwarding email address for the given alias local-part, or None.
-
-    Thin wrapper around :func:`resolve_routing_info` for callers that only
-    need the recipient address.
+    """The forwarding address for an alias local-part, or None: a thin wrapper around
+    :func:`resolve_routing_info`.
     """
     info = resolve_routing_info(local_part)
     return info["recipient"] if info else None

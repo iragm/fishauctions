@@ -1,15 +1,12 @@
-"""Part R — printing from a computer to the phone's Bluetooth label printer.
+"""Printing from a computer to the phone's Bluetooth label printer.
 
-The whole feature is built around one constraint, and most of what is worth testing follows from it:
-**the phone cannot be summoned.** Android forbids starting an Activity from the background and this
-app's BLE connection lives in a UI-scoped provider on the shell; iOS silent pushes are best-effort
-and dropped once the app is force-quit. So the server measures whether the app is already open
-(a heartbeat), only offers the feature when it is, and tells the user the truth when it isn't —
-rather than pushing hopefully and timing out.
+The feature is built around one constraint: **the phone cannot be summoned.** Android forbids
+starting an Activity from the background and the BLE connection lives in a UI-scoped provider; iOS
+silent pushes are best-effort and dropped once the app is force-quit. So the server measures whether
+the app is open, offers the feature when it is, and says so when it isn't.
 
-That makes the interesting cases the negative ones: the phone that stopped heartbeating, the device
-with no push token, the job that was pushed and never answered, and the escape hatch that has to work
-from inside any of them.
+That makes the negative cases the interesting ones: the phone that stopped heartbeating, the device
+with no push token, the job pushed and never answered, and the escape hatch out of any of them.
 """
 
 import datetime
@@ -95,7 +92,7 @@ class HeartbeatTests(RemotePrintBase):
         self.assertIsNotNone(self.device.last_heartbeat)
 
     def test_unregistered_device_404s(self):
-        """The app self-disables the whole feature on a 404, so an old deployment costs it nothing."""
+        """The app self-disables the feature on a 404, so an old deployment costs it nothing."""
         response = self.client.post(
             reverse("mobile-device-heartbeat"),
             {"device_uuid": str(uuid.uuid4())},
@@ -109,9 +106,8 @@ class HeartbeatTests(RemotePrintBase):
         self.assertEqual(response.status_code, 404)
 
     def test_ever_print_ready_is_sticky(self):
-        # It answers "does this account have a phone that could do this at all", which is what decides
-        # whether /printing/ offers the checkbox -- not a question that changes when the printer is
-        # switched off for the morning.
+        # It answers "does this account have a phone that could do this at all", which decides
+        # whether /printing/ offers the checkbox.
         self._beat(print_ready=True, printer_name="Y486BT")
         self._beat(print_ready=False, printer_name="")
         self.device.refresh_from_db()
@@ -133,8 +129,7 @@ class ReachabilityTests(RemotePrintBase):
         self.assertIn(self.device, MobileDevice.reachable_printers_for(self.user))
 
     def test_one_missed_beat_is_still_reachable(self):
-        # The app beats every 5 minutes; the window is 6, so a single dropped beat is slack rather
-        # than a failure.
+        # The app beats every 5 minutes and the window is 6, so one dropped beat is slack.
         self.device.last_heartbeat = timezone.now() - datetime.timedelta(minutes=5, seconds=30)
         self.device.save()
         self.assertTrue(self.device.is_reachable_for_printing)
@@ -145,8 +140,7 @@ class ReachabilityTests(RemotePrintBase):
         self.assertFalse(self.device.is_reachable_for_printing)
 
     def test_print_ready_false_is_not_reachable(self):
-        # A phone can be wide awake with nothing paired to it. print_ready is the app's own answer to
-        # "is a printer paired and does its profile resolve", not something derived from print_method.
+        # A phone can be awake with nothing paired: print_ready is the app's own answer.
         self.device.print_ready = False
         self.device.save()
         self.assertFalse(self.device.is_reachable_for_printing)
@@ -157,7 +151,7 @@ class ReachabilityTests(RemotePrintBase):
         self.assertFalse(self.device.is_reachable_for_printing)
 
     def test_presence_falls_back_to_the_last_phone_heard_from(self):
-        """When nothing is reachable, "how long ago" is the useful answer, not "no device"."""
+        """With nothing reachable, "how long ago" is the useful answer, not "no device"."""
         self.device.last_heartbeat = timezone.now() - datetime.timedelta(hours=3)
         self.device.save()
         device, last_seen = MobileDevice.print_presence_for(self.user)
@@ -185,8 +179,8 @@ class PrintFromComputerCheckboxTests(RemotePrintBase):
         self.assertNotContains(response, "print_from_computer")
 
     def test_hidden_checkbox_does_not_clear_the_stored_value(self):
-        # The field is dropped from the form when hidden, so a save from a browser that never saw it
-        # leaves what the phone set alone.
+        # The field is dropped from the form when hidden, so a save from a browser that never saw
+        # it leaves what the phone set alone.
         MobileDevice.objects.filter(user=self.user).update(ever_print_ready=False)
         self.client.force_login(self.user)
         self.client.post(reverse("printing") + "?next=/", {"preset": "lg", "unit": "in"})
@@ -207,10 +201,8 @@ class PrintFromComputerCheckboxTests(RemotePrintBase):
 
     @override_settings(FIREBASE_CREDENTIALS_JSON="")
     def test_checkbox_is_hidden_when_the_deployment_has_no_push(self):
-        """The job reaches the phone as an FCM data message and by no other route.
-
-        Without credentials every job would go straight to "couldn't reach your phone", which blames
-        the user's phone for the server's missing config.
+        """The checkbox is hidden without push credentials: the job reaches the phone as an FCM data message
+        and by no other route, so every job would otherwise blame the user's phone for missing config.
         """
         self.client.force_login(self.user)
         response = self.client.get(reverse("printing"), HTTP_USER_AGENT=WEB_UA)
@@ -245,11 +237,9 @@ class LabelViewBranchTests(RemotePrintBase):
         self.assertFalse(RemotePrintJob.objects.exists())
 
     def test_no_reachable_phone_lands_on_the_same_page_and_says_so(self):
-        """The one that used to silently hand back a PDF.
+        """No reachable phone lands on the same page and says so.
 
-        Somebody who asked for labels on the printer beside their phone and got a file in their
-        downloads folder has been answered with a different thing and told nothing; the only way to
-        find out why is to guess. Same page, and it says what to do about it.
+        Silently handing back a PDF answered somebody with a different thing and told them nothing.
         """
         self.device.last_heartbeat = timezone.now() - datetime.timedelta(hours=1)
         self.device.save()
@@ -258,7 +248,7 @@ class LabelViewBranchTests(RemotePrintBase):
         job = RemotePrintJob.objects.get(user=self.user)
         self.assertEqual(job.status, RemotePrintJob.STATUS_UNREACHABLE)
         html = response.content.decode()
-        # Painted from the server, so the error is on the first frame rather than one poll later.
+        # Painted from the server, so the error is on the first frame rather than a poll later.
         self.assertIn("remote-print-initial-state", html)
         self.assertIn(RemotePrintJob.STATUS_UNREACHABLE, html)
 
@@ -269,7 +259,7 @@ class LabelViewBranchTests(RemotePrintBase):
         self.assertIn("Open the app on your phone, then press Try again.", html)
         self.assertIn('id="remote-print-retry"', html)
         self.assertIn('id="remote-print-cancel"', html)
-        # Still one button away, for whoever wants it -- it is a choice now, not a substitution.
+        # Still one button away: it is a choice now, not a substitution.
         self.assertIn("Print a PDF here", html)
         self.assertIn(reverse("printing"), html)
 
@@ -289,7 +279,7 @@ class LabelViewBranchTests(RemotePrintBase):
         self.assertEqual(retried.lots, first.lots)
 
     def test_the_app_arm_wins_over_the_job_arm(self):
-        """Printing *from* the phone prints directly, rather than routing a job back to itself."""
+        """Printing from the phone prints directly, rather than routing a job back to itself."""
         self.prefs.print_method = "bluetooth"
         self.prefs.save()
         html = self._get(APP_UA).content.decode()
@@ -297,8 +287,8 @@ class LabelViewBranchTests(RemotePrintBase):
         self.assertFalse(RemotePrintJob.objects.exists())
 
     def test_pdf_param_skips_both_branches(self):
-        # The escape hatch on the waiting page. The app arm has to respect it too, or "Print a PDF
-        # here" would bounce a phone straight back into the deep link it was trying to get out of.
+        # The waiting page's escape hatch: the app arm has to respect it, or "Print a PDF here"
+        # would bounce a phone back into the deep link it was escaping.
         self.assertEqual(self._get(url=self.url + "?pdf=1")["Content-Type"], "application/pdf")
         self.prefs.print_method = "bluetooth"
         self.prefs.save()
@@ -361,8 +351,7 @@ class JobStatusViewTests(RemotePrintBase):
         self.assertEqual(self.client.get(self.status_url).status_code, 302)
 
     def test_twenty_seconds_of_silence_after_sent_is_unreachable(self):
-        # Applied on the server rather than in the page's JS so two tabs watching one job agree, and
-        # so "unreachable" is a fact on the row rather than something one browser decided.
+        # Applied on the server so two tabs agree, and so "unreachable" is a fact on the row.
         RemotePrintJob.objects.filter(pk=self.job.pk).update(
             status=RemotePrintJob.STATUS_SENT,
             updated_at=timezone.now() - datetime.timedelta(seconds=25),
@@ -371,7 +360,7 @@ class JobStatusViewTests(RemotePrintBase):
         self.assertEqual(self.client.get(self.status_url).json()["status"], "unreachable")
 
     def test_a_queued_job_is_never_called_unreachable(self):
-        """It hasn't been pushed yet; there is nothing for the phone to have failed to answer."""
+        """A queued job is never called unreachable: it hasn't been pushed yet."""
         RemotePrintJob.objects.filter(pk=self.job.pk).update(updated_at=timezone.now() - datetime.timedelta(minutes=5))
         self.client.force_login(self.user)
         self.assertEqual(self.client.get(self.status_url).json()["status"], "queued")
@@ -402,8 +391,7 @@ class JobRetryAndCancelTests(RemotePrintBase):
         self.assertEqual(new_job.status, RemotePrintJob.STATUS_SENT)
 
     def test_retry_keeps_the_lots_even_if_one_has_since_gone(self):
-        # Re-deriving the queryset would silently shorten the batch, and the person is standing at
-        # the printer expecting the labels they asked for.
+        # Re-deriving the queryset would silently shorten the batch.
         Lot.objects.filter(pk=self.lots[0].pk).update(is_deleted=True)
         self.client.force_login(self.user)
         with patch("auctions.mobile.services.remote_print.send_fcm_data_message", return_value=SEND_OK):
@@ -468,7 +456,7 @@ class JobReportingTests(RemotePrintBase):
         self.assertEqual(self.job.printed_count, 2)
 
     def test_progress_never_counts_backwards(self):
-        """These arrive out of order: the app drops and retries them. 7 of 12 must not become 5."""
+        """Progress never counts backwards: these arrive out of order, so 7 of 12 must not become 5."""
         self._progress(status="printing", printed=2, total=3)
         self._progress(status="printing", printed=1, total=3)
         self.job.refresh_from_db()
@@ -500,7 +488,7 @@ class JobReportingTests(RemotePrintBase):
         self.assertEqual(self._result(user=self.user_with_no_lots, status="printed", printed=3).status_code, 404)
 
     def test_a_late_result_beats_the_pages_unreachable_guess(self):
-        """The phone demonstrably was reachable; the truth is worth more than the earlier guess."""
+        """A late result beats the page's unreachable guess: the phone demonstrably was reachable."""
         self.job.status = RemotePrintJob.STATUS_UNREACHABLE
         self.job.save()
         self._result(status="printed", printed=3, total=3)
@@ -524,7 +512,7 @@ class JobReportingTests(RemotePrintBase):
 
 
 class JobIsolationTests(RemotePrintBase):
-    """A job uuid is unguessable; a 403 would only confirm that somebody else's exists."""
+    """A job uuid is unguessable, so a 403 would only confirm that somebody else's exists."""
 
     def test_status_result_and_progress_all_hide_other_peoples_jobs(self):
         other = RemotePrintJob.objects.create(user=self.user_with_no_lots, lots=[], total_count=0)

@@ -4,7 +4,7 @@
  * had to be added by hand and was on 7 of the 99 templates that render a form. The other 92 lost
  * whatever you had typed if you clicked a link, with no warning at all.
  *
- * What a form has to be for this to attach to it:
+ * What a form has to be for this to attach:
  *
  *   - method="post" -- a GET form is a search or a filter, and nothing is lost by leaving one;
  *   - at least MIN_FIELDS editable fields, which excludes every confirm-delete page, every
@@ -13,33 +13,23 @@
  *
  * Dirty means a value differs from the one the field was rendered with -- not, as the old version
  * had it, that a field was ever blurred. Tabbing through a form you have not touched used to arm
- * the browser's "leave site?" dialog, which teaches people to click through those dialogs, which
- * is the opposite of what they are for.
+ * the browser's "leave site?" dialog, which teaches people to click through those dialogs.
  *
  * The bar is the part that matters. A browser's unload prompt appears once somebody has already
  * decided to leave, cannot say what would be lost, and cannot save. A bar pinned to the bottom of
  * the viewport says there are unsaved changes while there is still something to do about it, and
- * brings the Save button up from wherever the bottom of a four-dozen-field form is.
+ * brings the Save button up from the bottom of a four-dozen-field form.
  *
  * The third job is reporting the abandonment: see auctions/friction_models.py. Field names and a
  * duration, never a value -- the whole point of the case is that the values were not saved.
  *
- * HTMx is most of the forms on this site, and it breaks every assumption a page-lifecycle version
- * of this would make. Four separate cases, each handled below:
- *
- *   1. A form that did not exist at load. Modals, inline panels and table headers arrive in a
- *      swap, so attaching once on DOMContentLoaded reaches none of them -- attach() runs again on
- *      every htmx:afterSwap, over the swapped subtree.
- *   2. A form that saves without unloading the page. There is no page-level submit and no unload,
- *      so a form saved by hx-post would stay "dirty" for ever and warn on the way out of a page
- *      whose changes were saved twenty minutes ago. A successful request over a form re-snapshots
- *      it.
- *   3. A form swapped *away* while dirty. This is an abandonment -- the values are gone and
- *      nothing was saved -- and it is one beforeunload will never see, because the page never
- *      unloads. It is reported at the moment of the swap, and confirmed first.
- *   4. Navigation that is not navigation. An hx-get link replacing the region a dirty form is in
- *      loses the work with no browser dialog anywhere, because as far as the browser is concerned
- *      nothing happened. htmx:beforeRequest is cancelable, so that is where the question is asked.
+ * HTMx is most of the forms here, and it breaks every assumption a page-lifecycle version of this
+ * would make, so there are four cases, each marked below: a form that did not exist at load (1); a
+ * form that saves without unloading the page, which would otherwise stay dirty for ever and warn
+ * on the way out of a page saved twenty minutes ago (2); a dirty form swapped away, which is an
+ * abandonment beforeunload will never see because the page never unloads (3); and an hx-get link
+ * replacing the region a dirty form sits in, which loses the work with no browser dialog anywhere,
+ * because as far as the browser is concerned nothing happened (4).
  *
  * Trackers are pruned whenever they are used: a swap detaches form elements without telling
  * anybody, and a detached form's fields still answer questions about their values.

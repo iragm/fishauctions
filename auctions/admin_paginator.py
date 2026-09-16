@@ -1,24 +1,23 @@
 """Paginate the admin's biggest changelists without counting the whole table.
 
-Django's changelist asks the paginator for ``count`` on every load, and asks the model admin for a
-second, unfiltered ``root_queryset.count()`` on top of it unless ``show_full_result_count`` is off
-(``django.contrib.admin.views.main.ChangeList.get_results``).  On ``PageView`` -- the largest table
-on this site -- that is two full index scans to render twenty rows, and it gets slower every month
-whether or not anybody is adding page views faster than before.
+Django's changelist asks the paginator for ``count`` on every load, and the model admin for a second,
+unfiltered ``root_queryset.count()`` on top unless ``show_full_result_count`` is off
+(``django.contrib.admin.views.main.ChangeList.get_results``). On ``PageView`` -- the largest table
+here -- that is two full index scans to render twenty rows, and it gets slower every month whether
+or not anybody is adding page views faster than before.
 
 Two things fix it, and both belong on the ``ModelAdmin``::
 
     show_full_result_count = False
     paginator = EstimatedCountPaginator
 
-The estimate is only ever used for a queryset with **no** ``WHERE`` clause, which is the only case
-that is expensive: a filtered or searched changelist is bounded by its own filter and still gets a
-real ``COUNT``.  Unfiltered, "how many page views are there" has no exact answer worth two seconds,
-and InnoDB already keeps a row estimate in ``information_schema``.  It can be off by a good margin
-in either direction -- that is what an estimate is -- so the only thing riding on it is how many
-page links are drawn.  If the engine has no estimate to give (a fresh table, a backend that is not
-MySQL/MariaDB, a permission problem reading ``information_schema``), this falls back to the real
-count rather than reporting zero rows.
+The estimate is used only for a queryset with **no** ``WHERE`` clause, which is the only expensive
+case: a filtered or searched changelist is bounded by its own filter and still gets a real
+``COUNT``. Unfiltered, "how many page views are there" has no exact answer worth two seconds, and
+InnoDB already keeps a row estimate in ``information_schema``. It can be well out in either
+direction -- that is what an estimate is -- and all that rides on it is how many page links are
+drawn. With no estimate to give (a fresh table, a non-MySQL backend, an unreadable
+``information_schema``) this falls back to the real count rather than reporting zero rows.
 """
 
 from django.core.paginator import Paginator

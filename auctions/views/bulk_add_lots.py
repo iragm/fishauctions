@@ -1,8 +1,7 @@
 """Getting lots in at once: the bulk table, the quick-add page, and the CSV importer.
 
-Four ways into the same rows. ``SaveLotAjax`` is the per-row save behind the bulk table and is the
-one place that writes to the species name cache on a row's first save, bounded to the five
-suggestions the page offered.
+``SaveLotAjax`` is the per-row save and the one place that writes the species name cache on a row's
+first save.
 """
 
 import json
@@ -102,16 +101,14 @@ class BulkAddLots(LoginRequiredMixin, AuctionViewMixin, TemplateView):
         if lot_formset.is_valid():
             lots = lot_formset.save(commit=False)
             new_lot_count = 0
-            # Which of these rows the seller actually moved the species on.  A rejection is
-            # evidence about a lot, not about a save, so re-posting a row whose species was
-            # cleared last week must not count a second time -- see record_choice.
+            # Which rows the seller moved the species on: a rejection is evidence about a lot, so
+            # re-posting a row cleared last week must not count again. See record_choice.
             species_moved = {id(form.instance) for form in lot_formset.forms if "species" in form.changed_data}
             for lot in lots:
                 lot_is_new = not lot.pk
                 if lot_is_new:
                     new_lot_count += 1
-                    # save_new_lot is shared with the command palette's add_lot action so a lot
-                    # added by voice lands exactly the same way as one added on this page.
+                    # save_new_lot is shared with the palette's add_lot action.
                     save_new_lot(lot, auction=self.auction, tos=self.tos, added_by=self.request.user)
                 else:
                     lot.auctiontos_seller = self.tos
@@ -120,9 +117,7 @@ class BulkAddLots(LoginRequiredMixin, AuctionViewMixin, TemplateView):
                     if owner:
                         lot.user = owner
                     lot.save()
-                # What the seller did with the species this lot name was remembered as.  The same
-                # report the ajax bulk page makes -- this is the other bulk page, and a remembered
-                # answer cleared here is exactly the same evidence.  See record_choice.
+                # What the seller did with the remembered species. See record_choice.
                 if self.auction.use_scientific_name and lot.lot_name:
                     record_species_choice(
                         lot.lot_name,
@@ -140,8 +135,7 @@ class BulkAddLots(LoginRequiredMixin, AuctionViewMixin, TemplateView):
                 )
                 messages.success(self.request, f"Updated lots for {self.tos.name}")
                 recalculate_seller_invoice(self.auction, self.tos)
-            # when saving labels, it doesn't take you off from the page you're on
-            # So we need to go somewhere, and then say "download labels"
+            # Saving labels doesn't navigate, so go somewhere and then download.
             if "print" in str(self.request.GET.get("type", "")):
                 print_url = f"printredirect={reverse('print_labels_by_bidder_number', kwargs={'slug': self.auction.slug, 'bidder_number': self.tos.bidder_number})}"
             else:
@@ -180,7 +174,7 @@ class BulkAddLots(LoginRequiredMixin, AuctionViewMixin, TemplateView):
         if self.is_auction_admin:
             self.is_admin = True
         if not self.tos:
-            # if you don't got permission to edit this auction, you can only add lots for yourself
+            # Without permission to edit the auction, you can only add lots for yourself.
             self.tos = (
                 AuctionTOS.objects.filter(auction=self.auction)
                 .filter(Q(email=request.user.email) | Q(user=request.user))
@@ -204,7 +198,6 @@ class BulkAddLots(LoginRequiredMixin, AuctionViewMixin, TemplateView):
                 extra = self.queryset.count()
             else:
                 extra = self.auction.max_lots_per_user - self.queryset.count()
-            # but of course sometimes admisn will break the rules for their users:
             extra = max(extra, 0)
         else:
             extra = 5  # default rows to show if max_lots_per_user is not set for this auction
@@ -300,7 +293,7 @@ class BulkAddLotsAuto(LoginRequiredMixin, AuctionViewMixin, TemplateView):
         self.is_admin = self.is_auction_admin
 
         if not self.tos:
-            # if you don't got permission to edit this auction, you can only add lots for yourself
+            # Without permission to edit the auction, you can only add lots for yourself.
             self.tos = (
                 AuctionTOS.objects.filter(auction=self.auction)
                 .filter(Q(email=request.user.email) | Q(user=request.user))
@@ -340,8 +333,7 @@ class SaveLotAjax(APIView, AuctionViewMixin):
             self.is_admin = self.is_auction_admin
 
             if bidder_number:
-                # Someone is trying to add lots for a specific user
-                # Only admins can do this
+                # Only admins can add lots for another user.
                 if not self.is_admin:
                     return JsonResponse({"success": False, "error": "Only auction admins can add lots for other users"})
                 self.tos = AuctionTOS.objects.filter(bidder_number=bidder_number, auction=self.auction).first()
@@ -383,9 +375,8 @@ class SaveLotAjax(APIView, AuctionViewMixin):
                     added_by=request.user,
                 )
                 is_new = True
-            # What the species was before this save touched it, so record_choice can tell a seller
-            # taking the answer off a lot from a seller editing the price of a lot they already
-            # took it off.  Only the first of those is evidence about the name.
+            # The species before this save, so record_choice can tell clearing it from editing a
+            # lot it was already cleared on.
             species_before = lot.species_id
 
             admin_bypassed_lot_limit = False  # Track if admin bypassed lot limit
@@ -398,7 +389,7 @@ class SaveLotAjax(APIView, AuctionViewMixin):
             # Check lot limits
             if is_new and self.auction.max_lots_per_user:
                 current_count = self.tos.unbanned_lot_qs.count()
-                # Admins can bypass limits for both their own lots and other users' lots
+                # Admins bypass the per-user lot limit.
                 bypass_limit = self.is_admin
                 limit_exceeded = current_count >= self.auction.max_lots_per_user
 
@@ -433,27 +424,22 @@ class SaveLotAjax(APIView, AuctionViewMixin):
             if not lot.species_category_id:
                 lot.species_category = Category.objects.filter(name="Uncategorized").first()
 
-            # Scientific name.  Only ever a pk from the suggestions endpoint; anything else is
-            # rejected rather than coerced, so the column can't fill up with free text.
+            # Only a pk from the suggestions endpoint; anything else is rejected, not coerced.
             if self.auction.use_scientific_name:
                 species_id = data.get("species")
                 if species_id in (None, "", "0"):
                     lot.species = None
                 else:
                     species = visible_species(request.user, self.auction.club).filter(pk=species_id).first()
-                    # Whatever is already on the lot stays allowed even when it isn't this
-                    # person's to pick: an unapproved species another admin added is still the
-                    # right answer for that lot, and every save posts the field back, so
-                    # rejecting it here would make the row unsaveable rather than just unpickable.
+                    # Whatever is already on the lot stays allowed, or the row would be unsaveable.
                     if not species and str(lot.species_id) == str(species_id):
                         species = lot.species
                     if not species:
                         errors["species"] = "Pick a scientific name from the list"
                     else:
                         lot.species = species
-            # No else: with the field switched off there is nothing on the page to post, so an
-            # ajax save of any other field would otherwise wipe a species that is already stored.
-            # Turning the setting off hides the field; it does not throw the column away.
+            # No else: with the field off nothing is posted, so another field's save would wipe a
+            # stored species.
 
             # Custom checkbox
             if self.auction.use_custom_checkbox_field and self.auction.custom_checkbox_name:
@@ -565,18 +551,14 @@ class SaveLotAjax(APIView, AuctionViewMixin):
             if errors:
                 return JsonResponse({"success": False, "errors": errors})
 
-            # Save the lot - locking is handled in Lot.save() for both standard and seller_dash modes
+            # Lot.save() handles locking for both numbering modes.
             lot.save()
 
-            # The species half of the save, and only once the row has really been saved: a row that
-            # bounced on its price is not somebody's answer about what the fish is.
+            # Only once the row has really been saved: a row that bounced isn't an answer.
             if self.auction.use_scientific_name and lot.lot_name:
-                # What the seller did with the answer this name was remembered as: left it alone,
-                # cleared it with the X, or picked something else.  This is the half that was
-                # missing -- the page wrote to a site-wide cache on a first save and never reported
-                # back, so one misclick was the site's answer for good.  Before remember() below,
-                # deliberately: the person teaching the site a pairing must not also be counted as a
-                # second person agreeing with it.  See species_matching.record_choice.
+                # What the seller did with the remembered answer, before remember() below so the
+                # person teaching a pairing isn't also counted as agreeing with it. See
+                # species_matching.record_choice.
                 record_species_choice(
                     lot.lot_name,
                     lot.species,
@@ -584,11 +566,9 @@ class SaveLotAjax(APIView, AuctionViewMixin):
                     changed=lot.species_id != species_before,
                     user=request.user,
                 )
-                # Remember it only on the row's first save, where the name and the species were
-                # entered together and the pairing is really what the person meant.  On a later edit
-                # they may well have rewritten the lot name and left the old species sitting there,
-                # and the cache is global -- one stale row would teach every club that "sponge
-                # filter" is a guppy.
+                # Only on a first save, where the name and species were entered together: on a later
+                # edit the name may have been rewritten with the old species left behind, and the
+                # cache is global.
                 if is_new and lot.species:
                     remember_species(lot.lot_name, lot.species, source="user", user=request.user)
 
@@ -638,13 +618,12 @@ class SaveLotAjax(APIView, AuctionViewMixin):
             return JsonResponse({"success": False, "error": "Unable to save lot."})
 
     def dispatch(self, request, *args, **kwargs):
-        # Let DRF's IsAuthenticated permission return a clean 401/403 instead of crashing
-        # on request.user.email below when an unauthenticated (e.g. expired session) request comes in
+        # Let IsAuthenticated return 401/403 instead of crashing on request.user.email.
         if not request.user.is_authenticated:
             return super().dispatch(request, *args, **kwargs)
         self.get_auction(kwargs.pop("slug", ""))
 
-        # Get bidder_number from POST data if present (for admin adding lots for specific user)
+        # An admin adding lots for a specific user posts a bidder_number.
         bidder_number = None
         if request.method == "POST":
             try:
@@ -685,10 +664,9 @@ class SaveLotAjax(APIView, AuctionViewMixin):
 class ImportLotsFromCSV(LoginRequiredMixin, CSVContactImportMixin, AuctionViewMixin, View):
     """Import or update lots from a CSV file.
 
-    Each row either updates an existing lot (matched by lot number) or creates a lot under a seller (an
-    AuctionTOS, matched/created by normalized email then name). The shared preview surfaces lots to
-    create/update, seller possible-duplicates (merge into existing vs create new), and skipped rows with
-    reasons before anything is written."""
+    Each row updates a lot matched by lot number, or creates one under a seller matched by email then
+    name. The shared preview shows creates, updates, seller duplicates and skipped rows first.
+    """
 
     import_record_kind = "lot"
     import_supports_duplicates = True
@@ -737,7 +715,7 @@ class ImportLotsFromCSV(LoginRequiredMixin, CSVContactImportMixin, AuctionViewMi
         return self.handle_csv_upload(csv_file)
 
     def _custom_field_specs(self):
-        """Resolve the auction's configurable custom-field column names + valid dropdown values."""
+        """The auction's configurable custom-field column names and valid dropdown values."""
         checkbox_fields = ["custom checkbox", "custom_checkbox"]
         if self.auction.use_custom_checkbox_field and self.auction.custom_checkbox_name:
             checkbox_fields.append(self.auction.custom_checkbox_name.lower())
@@ -778,8 +756,7 @@ class ImportLotsFromCSV(LoginRequiredMixin, CSVContactImportMixin, AuctionViewMi
             "reserve_price": self._to_int(self.extract_csv_field(row, self.RESERVE_PRICE_FIELDS)),
             "buy_now_price": self._to_int(self.extract_csv_field(row, self.BUY_NOW_PRICE_FIELDS)),
             "category_id": category.pk if category else None,
-            # Tri-state: None when the row didn't say, so an update can't silently clear a flag that
-            # changes the invoice (breeder points, donations) just because the column was left blank.
+            # Tri-state: None when the row didn't say, so an update can't clear invoice flags.
             "i_bred_this_fish": self.parse_csv_boolean(self.extract_csv_field(row, self.BRED_FIELDS)),
             "donation": self.parse_csv_boolean(self.extract_csv_field(row, self.DONATION_FIELDS)),
             "custom_checkbox": self.parse_csv_boolean(self.extract_csv_field(row, checkbox_fields)),
@@ -814,7 +791,7 @@ class ImportLotsFromCSV(LoginRequiredMixin, CSVContactImportMixin, AuctionViewMi
     def plan_row(self, row):
         fields = self._parse_lot_row(row)
         base = {"fields": fields, "target_pk": None, "target_display": "", "match_type": None, "seller_pk": None}
-        # Step 1: update an existing lot matched by lot number (no seller involved)
+        # Step 1: update an existing lot matched by lot number.
         lot = self._find_lot(fields["lot_number"])
         if lot:
             return {**base, "action": "update", "target_pk": lot.pk, "reason": "Update existing lot"}
@@ -823,7 +800,7 @@ class ImportLotsFromCSV(LoginRequiredMixin, CSVContactImportMixin, AuctionViewMi
             return {**base, "action": "skip", "reason": "Missing lot number and complete bidder information"}
         if not fields["lot_name"]:
             return {**base, "action": "skip", "reason": "Missing required lot information (lot name)"}
-        # Step 3: resolve the seller — exact email match attaches silently; a name-only match is a duplicate
+        # Step 3: an exact email match attaches silently; a name-only match is a duplicate.
         seller_by_email = self.auction.find_user(email=fields["email"])
         if seller_by_email:
             if not self._seller_invoice_open(seller_by_email):
@@ -850,7 +827,7 @@ class ImportLotsFromCSV(LoginRequiredMixin, CSVContactImportMixin, AuctionViewMi
         return {**base, "action": "create", "reason": "New lot and new seller"}
 
     def _update_lot(self, lot, fields):
-        # Don't touch winner, winning_price, partial_refund, banned — only the importable fields.
+        # Only importable fields: never winner, winning_price, partial_refund or banned.
         if fields.get("lot_name"):
             lot.lot_name = fields["lot_name"]
         if fields.get("description"):
@@ -863,8 +840,7 @@ class ImportLotsFromCSV(LoginRequiredMixin, CSVContactImportMixin, AuctionViewMi
             lot.buy_now_price = fields["buy_now_price"]
         if fields.get("category_id"):
             lot.species_category_id = fields["category_id"]
-        # Only when the row actually said yes or no; a blank cell (or a file with no such column at all)
-        # leaves the lot's current flag alone instead of clearing it.
+        # Only when the row said yes or no; a blank cell leaves the flag alone.
         for field_name in ("i_bred_this_fish", "donation", "custom_checkbox"):
             value = fields.get(field_name)
             if value is not None:
@@ -876,8 +852,7 @@ class ImportLotsFromCSV(LoginRequiredMixin, CSVContactImportMixin, AuctionViewMi
         lot.save()
 
     def _resolve_seller(self, fields, action, decision):
-        """Return (seller, created_bool). Reuses the matched seller unless the admin chose to create a new
-        record for a name-match duplicate."""
+        """Return (seller, created), reusing the matched seller unless the admin chose to create a new one."""
         seller_pk = action.get("seller_pk")
         make_new = action["action"] == "duplicate" and decision == "create"
         if seller_pk and not make_new:
@@ -886,9 +861,7 @@ class ImportLotsFromCSV(LoginRequiredMixin, CSVContactImportMixin, AuctionViewMi
                 return seller, False
         name = fields.get("name", "")
         email = fields.get("email", "")
-        # In a club-managed auction the club owns the bidder number, so an imported seller needs a
-        # member record like any other participant. Creating it also creates the participant row
-        # (signals), so adopt that instead of adding a second one for the same person.
+        # Club-managed auctions need a ClubMember, whose signals create the participant row.
         member, _created = ensure_club_member(self.auction, name=name, email=email)
         adopted = existing_tos_for_club_member(self.auction, member)
         if adopted is not None:
@@ -940,7 +913,7 @@ class ImportLotsFromCSV(LoginRequiredMixin, CSVContactImportMixin, AuctionViewMi
                 return "skipped"
             self._update_lot(lot, fields)
             return "updated"
-        # create or duplicate → resolve the seller, re-check the invoice, create the lot
+        # create or duplicate: resolve the seller, re-check the invoice, create the lot.
         seller, created_seller = self._resolve_seller(fields, action, decision)
         if not self._seller_invoice_open(seller):
             return "skipped"
@@ -975,6 +948,6 @@ class ImportLotsFromCSV(LoginRequiredMixin, CSVContactImportMixin, AuctionViewMi
         self.auction.create_history(applies_to="LOTS", action=history_msg, user=self.request.user)
 
     def process_csv_data(self, csv_reader, filename=None):
-        """Parse the upload into planned actions and show the review page; nothing is written yet."""
+        """Plan the upload and show the review page; nothing is written yet."""
         token = self.build_preview(csv_reader, filename=filename)
         return self.redirect_to_preview(token)

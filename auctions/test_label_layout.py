@@ -1,9 +1,8 @@
 """Every lot label preset, rendered with worst-case lots and held to the layout rules.
 
-The rules are in :mod:`auctions.printing`'s docstring. These tests render the real
-``label_template.html`` through WeasyPrint and read the laid-out boxes back, so "nothing runs into
-anything else" and "the winner is always on the label" are checked against where the text actually
-landed, clip rectangles included -- not against what the template or ``plan_label`` meant to do.
+The rules are in :mod:`auctions.printing`'s docstring. These render the real ``label_template.html``
+through WeasyPrint and read the laid-out boxes back, so "nothing runs into anything else" is checked
+against where the text landed, clip rectangles included.
 """
 
 import re
@@ -92,9 +91,9 @@ def squeezed(text):
 
 
 class LabelLayoutTests(StandardTestCase):
-    """The layout rules, for every preset: an unsold and a sold worst case, and an online one.
+    """The layout rules for every preset: an unsold and a sold worst case, and an online one.
 
-    Each label is rendered once, in setUpTestData, and every test reads the same layouts.
+    Each label is rendered once in setUpTestData and every test reads the same layouts.
     """
 
     @classmethod
@@ -116,7 +115,7 @@ class LabelLayoutTests(StandardTestCase):
         cls.in_person_tos.save()
         cls.in_person_buyer.name = "Bartholomew Featherstonehaugh"
         cls.in_person_buyer.save()
-        # An online auction only prints lots that sold, and with a second pickup point it prints where
+        # An online auction only prints sold lots, and with a second pickup point it prints where
         # the winner collects -- one more line under the winner's name.
         hall = PickupLocation.objects.create(
             name="Northeast Council of Aquarium Societies, Hall B",
@@ -171,7 +170,7 @@ class LabelLayoutTests(StandardTestCase):
                 self.assertEqual([p.text for p in placed if p.partly_visible and not p.horizontally_whole], [])
 
     def test_nothing_is_cut_in_half(self):
-        """Rule 3: the middle band stops at a whole line -- no half a line of description."""
+        """Rule 3: the middle band stops at a whole line, with no half a line of description."""
         for name, (_context, _label, placed) in self.rendered.items():
             with self.subTest(name):
                 self.assertEqual([p.text for p in placed if p.partly_visible and not p.visible], [])
@@ -187,14 +186,11 @@ class LabelLayoutTests(StandardTestCase):
                 self.assertEqual(clashes, [])
 
     def test_every_tag_is_on_the_label(self):
-        """Rule 2: a tag that doesn't fit on the left moves right; none is lost off the bottom.
+        """Rule 2: a tag that doesn't fit on the left moves right, and none is lost off the bottom.
 
-        Unless the label can't hold them at all. The Dymo label, sold, with the winner's pickup
-        location and every field turned on, needs about 79pt of its 73: then the lot name is down to
-        one line, and only then are the tags clamped -- at a whole line, which the other tests hold.
-
-        A *sold* label makes no such promise: there the tags are the first thing to give way, because
-        the winner, the lot name and the pickup location are what that label is read for.
+        Unless the label can't hold them: the Dymo label, sold, with every field on, needs about 79pt of its
+        73, and only then are the tags clamped -- at a whole line. A sold label makes no such promise, since
+        the winner, lot name and pickup location are what it is read for.
         """
         for name, (context, label, placed) in self.rendered.items():
             with self.subTest(name):
@@ -203,7 +199,7 @@ class LabelLayoutTests(StandardTestCase):
                 self.assertIn("BAP/HAP/CARES", tags)
                 missing = [tag for tag in tags if squeezed(tag) not in visible]
                 if missing:
-                    # Whatever is missing moved to the right column first; the left column never loses one.
+                    # Whatever is missing moved right; the left column never loses one.
                     self.assertTrue(set(missing) <= set(label.tags_right))
                     needed = wrapped_lines(
                         " · ".join(label.tags_right),
@@ -242,10 +238,8 @@ class LabelLayoutTests(StandardTestCase):
         self.assertEqual(context["qr_size"], context["first_column_width"])
 
     def test_online_label_keeps_the_winner_the_lot_name_and_the_pickup_location(self):
-        """What a sold label is for, on every preset -- an online auction prints nothing else.
-
-        The three are what gets the lot to the person who won it. Anything else on a sold label gives
-        way to them; a long pickup location is allowed to cost the tags line.
+        """A sold label keeps the winner, the lot name and the pickup location on every preset: those three are
+        what gets the lot to the person who won it, and a long pickup location may cost the tags line.
         """
         for preset, _ in UserLabelPrefs.PRESETS:
             with self.subTest(preset):
@@ -259,10 +253,8 @@ class LabelLayoutTests(StandardTestCase):
                 self.assertIn(squeezed("Northeast Council"), visible)
 
     def test_centimetres_lay_out_the_same_as_inches(self):
-        """A custom size saved in cm is the same label as that size saved in inches.
-
-        It used to be multiplied by 2.54 instead of divided, so a label saved in cm printed 6.45 times
-        too big.
+        """A custom size saved in cm is the same label as that size in inches: it used to be multiplied by 2.54
+        instead of divided, so a cm label printed 6.45 times too big.
         """
         request = RequestFactory().get("/")
         request.user = self.admin_user
@@ -286,7 +278,7 @@ class LabelLayoutTests(StandardTestCase):
             laid_out[unit] = {key: context[key] for key in (*sizes, "labels_per_page")}
         for key, inches in laid_out["in"].items():
             self.assertAlmostEqual(laid_out["cm"][key], inches, places=6, msg=key)
-        # 2 across (8in of room, 2.7in a label) and 9 down (10in of room, 1.1in a label).
+        # 2 across (8in of room, 2.7in a label) and 9 down (10in, 1.1in a label).
         self.assertEqual(laid_out["cm"]["labels_per_page"], 18)
 
 
@@ -331,9 +323,9 @@ class LabelMeasurementTests(SimpleTestCase):
         self.assertEqual(wrapped_lines("BAP/HAP/CARES BAP/HAP/CARES", width_pt=90, font_size_pt=10), 2)
         # After a slash, as WeasyPrint does: "BAP/HAP/" (51pt) and "CARES" (37pt) in 55pt lines.
         self.assertEqual(wrapped_lines("BAP/HAP/CARES", width_pt=55, font_size_pt=10), 2)
-        # 9.89em, with nowhere to break: split across two 50pt lines, as overflow-wrap: anywhere does.
+        # 9.89em with nowhere to break: split across two 50pt lines, as overflow-wrap: anywhere does.
         self.assertEqual(wrapped_lines("Featherstonehaugh", width_pt=50, font_size_pt=10), 2)
         self.assertEqual(wrapped_lines("one\ntwo", width_pt=100, font_size_pt=10), 2)
-        # A word that ends in a delimiter, or is nothing but delimiters, is still one word.
+        # A word ending in a delimiter, or made of them, is still one word.
         self.assertEqual(wrapped_lines("BAP/HAP/", width_pt=90, font_size_pt=10), 1)
         self.assertEqual(wrapped_lines("-- //", width_pt=90, font_size_pt=10), 1)

@@ -26,9 +26,9 @@ from auctions.tests import WritableMediaRoot
 
 
 class DiscordJoinModalNameTests(TestCase):
-    """Tests for the Discord join modal — the modal now collects a single ``name``
-    field, but the handler must still accept ``first_name`` / ``last_name`` for
-    backward compatibility with any cached/older Discord modal definitions."""
+    """The Discord join modal collects one ``name`` field, but the handler still accepts
+    ``first_name``/``last_name`` from older cached modal definitions.
+    """
 
     def setUp(self):
         from auctions.views import DiscordInteractionsView
@@ -66,8 +66,9 @@ class DiscordJoinModalNameTests(TestCase):
 
 
 class DiscordJoinButtonTests(TestCase):
-    """The join button and the /membership command must behave identically:
-    not joined -> show the join modal; joined -> show membership info + link."""
+    """The join button and /membership behave identically: not joined shows the modal, joined shows
+    membership info and a link.
+    """
 
     def setUp(self):
         from auctions.views import DiscordInteractionsView
@@ -204,7 +205,7 @@ class ClubMemberIngestNameTests(TestCase):
     GOOGLE_WALLET_SERVICE_ACCOUNT_KEY="fake-key",
 )
 class GoogleWalletClassCreateTests(TestCase):
-    """Verify the Wallet class create task: idempotent, configured-gated, correct body."""
+    """The Wallet class create task: idempotent, gated on being configured, correct body."""
 
     def setUp(self):
         from auctions.models import Club
@@ -280,23 +281,19 @@ class GoogleWalletClassCreateTests(TestCase):
     def test_signal_dispatches_when_class_not_yet_created(self):
         from auctions.models import Club
 
-        # transaction.on_commit callbacks do not fire inside TestCase's atomic block
-        # unless we capture them — use captureOnCommitCallbacks(execute=True) so the
-        # signal's lambda actually runs and we can observe the .delay() call.
+        # on_commit callbacks don't fire inside TestCase's atomic block, so capture them.
         with patch("auctions.tasks.create_google_wallet_class_for_club.delay") as delay:
             with self.captureOnCommitCallbacks(execute=True):
                 club = Club.objects.create(name="Another")
             delay.assert_called_once_with(club.pk)
             delay.reset_mock()
-            # Subsequent edits while the flag is still False — dispatch again so legacy
-            # clubs that pre-date the integration get their class on next save.
+            # Dispatch again while the flag is False, so legacy clubs get their class on next save.
             with self.captureOnCommitCallbacks(execute=True):
                 club.name = "Another Renamed"
                 club.save()
             delay.assert_called_once_with(club.pk)
             delay.reset_mock()
-            # Once Google confirms the class exists, the flag is flipped and further
-            # saves must NOT re-dispatch (don't spam Google's API on every edit).
+            # Once Google confirms, the flag flips and further saves must not re-dispatch.
             club.google_wallet_class_created = True
             club.save()
             with self.captureOnCommitCallbacks(execute=True):
@@ -325,7 +322,7 @@ class MembershipNumberUniquenessTests(TestCase):
         self.club = Club.objects.create(name="Unique Test Club")
 
     def test_save_repicks_on_collision(self):
-        """If a new member is constructed with a number that already exists, save() picks a new one."""
+        """A new member constructed with a number that already exists gets a new one on save."""
         from auctions.models import ClubMember
 
         first = ClubMember.objects.create(club=self.club, name="A")
@@ -340,7 +337,7 @@ class MembershipNumberUniquenessTests(TestCase):
         existing = ClubMember.objects.create(club=self.club, name="A")
         new_number = _pick_unique_membership_number()
         self.assertNotEqual(new_number, existing.membership_number)
-        # Sanity: the picker keeps producing a number even when an unrelated row exists.
+        # The picker keeps producing a number even when an unrelated row exists.
         self.assertTrue(1_000_000_000 <= new_number <= 9_999_999_999)
 
 
@@ -357,12 +354,10 @@ class AppleWalletPassTests(TestCase):
 
     @staticmethod
     def _make_cert_files(tmp_path, chained=True, wwdr_encoding="PEM"):
-        """Generate a WWDR-stand-in CA plus a signer cert and return their paths.
+        """Generate a WWDR stand-in CA plus a signer cert and return their paths.
 
-        By default the signer is issued by the WWDR stand-in (a real chain, which
-        _load_signing_certs now verifies). chained=False produces an unrelated
-        self-signed signer to exercise the chain-mismatch error. wwdr_encoding
-        may be "DER" to mimic Apple's .cer download format.
+        The signer is issued by the stand-in by default (a real chain, which _load_signing_certs verifies);
+        chained=False gives an unrelated self-signed signer, and wwdr_encoding="DER" mimics Apple's .cer.
         """
         import datetime as _dt
 
@@ -394,7 +389,7 @@ class AppleWalletPassTests(TestCase):
         else:
             signer_cert = _build_cert("Pass Type Cert", signer_key)
 
-        # .p12 with no password — encryption=NoEncryption matches APPLE_WALLET_CERT_PASSWORD="".
+        # No password, matching APPLE_WALLET_CERT_PASSWORD="".
         p12_bytes = pkcs12.serialize_key_and_certificates(
             name=b"pass-cert",
             key=signer_key,
@@ -445,7 +440,7 @@ class AppleWalletPassTests(TestCase):
             self.assertEqual(pass_data["teamIdentifier"], "ABCDE12345")
             self.assertEqual(pass_data["serialNumber"], f"member-{self.member.pk}")
             self.assertEqual(pass_data["barcode"]["message"], str(self.member.membership_number))
-            # Manifest must list a sha1 for every payload file (not itself, not signature).
+            # The manifest lists a sha1 for every payload file, but not itself or the signature.
             manifest = _json.loads(zf.read("manifest.json"))
             self.assertEqual(set(manifest.keys()), {"pass.json", "icon.png", "icon@2x.png", "logo.png"})
 
@@ -461,7 +456,7 @@ class AppleWalletPassTests(TestCase):
             self.assertFalse(apple_wallet.is_configured())
 
     def test_pkpass_download_requires_owner(self):
-        """Only the owning user may download; UUID-link visitors / other users get 403."""
+        """Only the owning user may download a pkpass; UUID-link visitors and other users get 403."""
         url = reverse("club_member_apple_wallet", kwargs={"pk": self.member.pk})
         with self.settings(
             APPLE_WALLET_CERT_FILE="cert.p12",
@@ -641,7 +636,7 @@ class PassKitWebServiceTests(TestCase):
             # Nothing changed since the tag we just got → 204.
             response = self.client.get(list_url, {"passesUpdatedSince": last_updated})
             self.assertEqual(response.status_code, 204)
-            # Bump the pass version (what the notify task does) → serial reappears.
+            # Bump the pass version, as the notify task does, and the serial reappears.
             type(self.member).objects.filter(pk=self.member.pk).update(
                 apple_pass_updated=timezone.now() + datetime.timedelta(seconds=5)
             )
@@ -690,7 +685,7 @@ class PassKitWebServiceTests(TestCase):
                 self.assertEqual(pass_data["authenticationToken"], self.token)
                 self.assertTrue(pass_data["webServiceURL"].endswith("/passkit"))
                 self.assertNotIn("voided", pass_data)
-                # Device re-checks with If-Modified-Since → 304 until the pass is bumped.
+                # If-Modified-Since gives 304 until the pass is bumped.
                 response = self.client.get(pass_url, HTTP_IF_MODIFIED_SINCE=last_modified, **self._auth())
                 self.assertEqual(response.status_code, 304)
                 type(self.member).objects.filter(pk=self.member.pk).update(
@@ -776,7 +771,7 @@ class PassKitWebServiceTests(TestCase):
             self.club.show_member_barcode = False
             self.club.save()
         apple_delay.assert_called_once_with(self.club.pk)
-        # Re-enabling also pushes (passes un-void), unlike Google's expire-only path.
+        # Re-enabling pushes too (passes un-void), unlike Google's expire-only path.
         with (
             patch("auctions.tasks.notify_apple_wallet_devices_for_club.delay") as apple_delay,
             self.captureOnCommitCallbacks(execute=True),
@@ -966,7 +961,7 @@ class ClubIconWalletTests(WritableMediaRoot, TestCase):
         self.member = ClubMember.objects.create(club=self.club, user=self.user, name="M")
 
     def test_object_visuals_includes_logo_when_icon_set(self):
-        """Logo lives on GenericObject (not GenericClass) per Google Wallet REST schema."""
+        """The logo lives on GenericObject, not GenericClass."""
         from auctions.google_wallet import _object_visuals
 
         with self.settings(GOOGLE_WALLET_ISSUER_ID="3388000000022XXXXXX"):
@@ -990,7 +985,7 @@ class ClubIconWalletTests(WritableMediaRoot, TestCase):
         self.assertIn("hexBackgroundColor", visuals)
 
     def test_class_body_never_contains_logo_or_hex_bg(self):
-        """Google silently ignores logo/hexBackgroundColor on GenericClass — keep them out."""
+        """Google silently ignores logo and hexBackgroundColor on GenericClass, so they stay out."""
         from auctions.google_wallet import _class_body
 
         with self.settings(GOOGLE_WALLET_ISSUER_ID="3388000000022XXXXXX"):
@@ -1021,7 +1016,7 @@ class ClubIconWalletTests(WritableMediaRoot, TestCase):
             delay.assert_not_called()
 
     def test_adding_icon_to_initialized_club_dispatches_object_refresh(self):
-        """Adding an icon for the first time must refresh every member's wallet object."""
+        """Adding an icon for the first time refreshes every member's wallet object."""
 
         from auctions.models import Club
 
@@ -1059,7 +1054,7 @@ class ClubIconWalletTests(WritableMediaRoot, TestCase):
                     self.assertTrue(update_generic_object_for_member(self.member))
         payload = patch_mock.call_args.kwargs["json"]
         self.assertEqual(payload["cardTitle"]["defaultValue"]["value"], self.club.name)
-        # Logo + background must be on the GenericObject PATCH — not the class.
+        # Logo and background belong on the object PATCH, not the class.
         self.assertIn("logo", payload)
         self.assertIn("hexBackgroundColor", payload)
 
@@ -1067,8 +1062,7 @@ class ClubIconWalletTests(WritableMediaRoot, TestCase):
         from auctions.apple_wallet import _icon_png
 
         png = _icon_png(self.club, (29, 29))
-        # Decode the PNG and confirm it's the requested size — proves it ran
-        # through the icon-rendering branch (not the placeholder text fallback).
+        # Decode the PNG to confirm the size, which proves it took the icon branch.
         import io as _io
 
         from PIL import Image as _Image
@@ -1113,7 +1107,7 @@ class ClubIconWalletTests(WritableMediaRoot, TestCase):
                         self.assertTrue(create_generic_class(self.club))
         self.assertEqual(post_mock.call_count, 1)
         self.assertEqual(patch_mock.call_count, 1)
-        # logo/hexBackgroundColor are NOT valid GenericClass fields — keep them out.
+        # logo and hexBackgroundColor are not valid GenericClass fields.
         patch_body = patch_mock.call_args.kwargs["json"]
         self.assertNotIn("logo", patch_body)
         self.assertNotIn("hexBackgroundColor", patch_body)

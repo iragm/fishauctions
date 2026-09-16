@@ -1,9 +1,8 @@
 #!/bin/sh
 
-# Disable core dumps. The worker's CWD is the bind-mounted repo root, so a native
-# crash (see the uvloop heap-corruption SIGABRTs) drops a ~200MB core file into the
-# source tree and, at that size per crash, will fill the host disk. We keep the
-# crash visible via logs/monitoring rather than 200MB forensic dumps in ./.
+# Disable core dumps: the worker's CWD is the bind-mounted repo root, so a native crash (the
+# uvloop heap-corruption SIGABRTs) drops a ~200MB core file into the source tree, and at that size
+# per crash it fills the host disk. The crash stays visible in the logs.
 ulimit -c 0
 
 check_writable_dir() {
@@ -78,12 +77,10 @@ if ! python manage.py migrate --no-input; then
     echo "restarting and re-printing the traceback above until migrations apply." >&2
     exit 1
 fi
-# Do NOT silence this: STATIC_ROOT is an empty named volume on first boot and the
-# third-party statics (admin/, summernote/, ...) are no longer in git, so a failed
-# collectstatic means an unstyled site with no other trace. --verbosity 0 keeps the
-# per-file spam out of the logs while leaving errors on stderr. Failure is loud but
-# non-fatal: on redeploys the volume still holds the previous run's statics, and a
-# stale-CSS site beats a down site.
+# Do NOT silence this. STATIC_ROOT is an empty named volume on first boot and the third-party
+# statics are no longer in git, so a failed collectstatic means an unstyled site with no other
+# trace. --verbosity 0 keeps the per-file spam out of the logs and leaves errors on stderr.
+# Non-fatal: on a redeploy the volume still holds the last run's statics, and stale CSS beats down.
 echo "Collecting static files..."
 if ! python manage.py collectstatic --no-input --verbosity 0; then
     echo "ERROR: collectstatic failed (see traceback above). Static assets in the" >&2
@@ -105,9 +102,9 @@ END
 
 if [ "$debug_mode" = "true" ]; then
     echo Starting fishauctions in development mode
-    # --loop asyncio: match production. Without it uvicorn's loop="auto" picks
-    # uvloop (still installed via uvicorn[standard]) -- the exact library whose
-    # heap-corruption SIGABRTs gunicorn.conf.py exists to avoid.
+    # --loop asyncio to match production: uvicorn's loop="auto" picks uvloop, still installed via
+    # uvicorn[standard], which is the library whose heap-corruption SIGABRTs gunicorn.conf.py
+    # exists to avoid.
     exec uvicorn fishauctions.asgi:application --host 0.0.0.0 --port 8000 --loop asyncio --reload --reload-include '*.py' --reload-include '*.html' --reload-include '*.js'
 else
     echo Starting fishauctions in production mode

@@ -1,27 +1,22 @@
 """The vocabulary the app matches spoken words against, for one auction.
 
-Backs ``GET /api/mobile/auctions/<slug>/voice/vocabulary/``. The accuracy strategy inverts the
-usual one: instead of transcribing freely and then repairing the text, the app expands the values
-that actually exist in *this* auction into their spoken forms and matches the utterance against
-those. "Fifteen" and "fifty" are a coin flip acoustically — but if only one of them is a real
-bidder here the ambiguity disappears, and if both are, the app knows to ask instead of guessing.
+Backs ``GET /api/mobile/auctions/<slug>/voice/vocabulary/``. The accuracy strategy inverts the usual
+one: instead of transcribing freely and repairing the text, the app expands the values that exist in
+*this* auction into their spoken forms and matches against those. "Fifteen" and "fifty" are a coin
+flip acoustically, but if only one is a real bidder here the ambiguity disappears.
 
-Two rules follow from that, and both matter more than they look:
+**These are strings and nothing normalizes them.** ``AuctionTOS.bidder_number`` is routinely text,
+and in seller-dash auctions it spills into lot numbers, so ``BOB-1`` and ``3-1`` are both ordinary
+lot numbers. Values go out exactly as stored; the app owns the expansion into spoken forms.
 
-**These are strings and nothing normalizes them.** ``AuctionTOS.bidder_number`` is a CharField
-that is routinely text, and in seller-dash auctions that text spills into lot numbers
-(``Lot.save()`` builds ``f"{bidder_number}-{n}"``), so ``BOB-1`` and ``3-1`` are both ordinary lot
-numbers. Values go out exactly as stored, case and dashes included; the app owns the expansion into
-spoken forms.
-
-**Auction-scoped, never club-wide.** A bidder number that isn't legal in this auction is a wrong
-answer the matcher would happily produce with full confidence.
+**Auction-scoped, never club-wide.** A bidder number that isn't legal here is a wrong answer the
+matcher would produce with full confidence.
 """
 
 from auctions.models import AuctionTOS, ClubMember
 
-# AuctionTOS.save() falls back to this literal when it cannot generate a unique bidder number. It
-# is a broken row, not a bidder, and "error" is a word an auctioneer might well say out loud.
+# AuctionTOS.save() falls back to this literal when it cannot generate a unique bidder number: a
+# broken row, not a bidder, and a word an auctioneer might say out loud.
 INVALID_BIDDER_NUMBER = "ERROR"
 
 
@@ -36,13 +31,11 @@ def _unique(values):
 
 
 def lot_numbers(auction):
-    """Lot numbers that are still a legal answer to "which lot are we selling?".
+    """Lot numbers still a legal answer to "which lot are we selling?".
 
-    Unsold only: a lot that already has a winner *and* a price is refused by
-    ``DynamicSetLotWinner.validate_lot`` ("This lot has already been sold"), so offering it would
-    only invite a command the page rejects — and leaving it out sharpens every other match. That's
-    the exact complement of the view's own check, deliberately: a lot ended unsold, or one with a
-    price but no winning bidder, can still be sold here and so is still a legal answer.
+    Unsold only: a lot with a winner and a price is refused by ``DynamicSetLotWinner.validate_lot``, so
+    offering it would only invite a rejected command. A lot ended unsold, or with a price but no
+    bidder, can still be sold here.
     """
     lots = (
         auction.lots_qs.exclude(banned=True)
@@ -51,8 +44,8 @@ def lot_numbers(auction):
         .values_list("custom_lot_number", "lot_number_int", "lot_number")
     )
     use_custom = auction.use_seller_dash_lot_numbering
-    # Mirrors Lot.lot_number_display without loading whole Lot objects — this list is every unsold
-    # lot in the auction and it is re-fetched on a timer while selling runs.
+    # Mirrors Lot.lot_number_display without loading whole Lot objects: this is every unsold lot,
+    # re-fetched on a timer while selling runs.
     numbers = []
     for custom_lot_number, lot_number_int, lot_number in lots:
         if use_custom and custom_lot_number:
@@ -67,10 +60,9 @@ def lot_numbers(auction):
 def bidder_numbers(auction):
     """Bidder numbers the set-winners page would accept as a winner.
 
-    Includes the club's members when the auction is club-managed, because
-    ``DynamicSetLotWinner.validate_winner`` falls back to ``ClubMember`` there (creating a shadow
-    AuctionTOS on the spot) — so a member who hasn't checked in yet is still a legal answer, and
-    voice has to be able to fill one.
+    Includes the club's members in a club-managed auction, because ``validate_winner`` falls back to
+    ``ClubMember`` there (creating a shadow AuctionTOS), so a member who hasn't checked in is still a
+    legal answer.
     """
     numbers = list(
         AuctionTOS.objects.filter(auction=auction)
@@ -93,9 +85,8 @@ def bidder_numbers(auction):
 def build_vocabulary(auction):
     """Everything the app needs to match an utterance against this auction.
 
-    The three settings that ride along are what stop the app from proposing a value the page will
-    then refuse: half-dollar amounts in a whole-dollar auction, and digit-only lot numbers in a
-    seller-dash auction where ``BOB-1`` is the real format.
+    The three settings that ride along stop the app proposing a value the page will refuse: half-dollar
+    amounts in a whole-dollar auction, and digit-only lot numbers in a seller-dash auction.
     """
     return {
         "lot_numbers": lot_numbers(auction),

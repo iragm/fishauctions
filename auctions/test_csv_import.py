@@ -120,7 +120,6 @@ class AuctionHistoryTests(StandardTestCase):
         test_location = PickupLocation.objects.create(name="test location", auction=test_auction, pickup_time=theFuture)
         test_tos = AuctionTOS.objects.create(user=self.user, auction=test_auction, pickup_location=test_location)
 
-        # Create a lot that can be deleted (no winner, no bids, created recently)
         deletable_lot = Lot.objects.create(
             lot_name="Deletable test lot",
             auction=test_auction,
@@ -148,7 +147,6 @@ class AuctionHistoryTests(StandardTestCase):
         """Test that joining an auction creates history only on first join"""
         # Create a new user who hasn't joined yet
         User.objects.create_user(username="new_user", password="testpassword", email="new@example.com")
-        # UserData is automatically created by signal, so we don't need to create it manually
         self.client.login(username="new_user", password="testpassword")
 
         # Get initial history count
@@ -223,7 +221,6 @@ class CSVImportTests(StandardTestCase):
         self.assertEqual(tos2.memo, "Another memo")
 
     def test_csv_import_with_admin_field(self):
-        """Test that admin/staff field is correctly imported from CSV with various boolean values"""
         import csv
         from io import StringIO
 
@@ -312,8 +309,7 @@ class CSVImportTests(StandardTestCase):
             csv_file,
         )
 
-        # Check that bidder number was assigned
-        # Using "9999" (outside the 1-999 auto-generation range) to avoid conflicts with randomly assigned bidder numbers
+        # 9999 is outside the 1-999 auto-generation range.
         bidder1 = AuctionTOS.objects.filter(auction=self.online_auction, email="bidder1@example.com").first()
         self.assertIsNotNone(bidder1)
         self.assertEqual(bidder1.bidder_number, "9999")
@@ -349,13 +345,11 @@ class CSVImportTests(StandardTestCase):
             csv_file,
         )
 
-        # Check that new user was created but without the conflicting bidder number
         new_user = AuctionTOS.objects.filter(auction=self.online_auction, email="newuser@example.com").first()
         self.assertIsNotNone(new_user)
         self.assertNotEqual(new_user.bidder_number, "777")
 
     def test_csv_import_bidder_number_update_existing_user(self):
-        """Test that existing user's bidder number is updated if new number is not in use"""
         import csv
         from io import StringIO
 
@@ -369,7 +363,7 @@ class CSVImportTests(StandardTestCase):
         )
         # save() auto-assigns a random bidder_number; clear it for the test
         AuctionTOS.objects.filter(pk=existing_tos.pk).update(bidder_number="")
-        # Ensure no other tos in the auction has the target number (auto-gen may collide)
+        # Auto-generated numbers may collide with the target.
         for other in AuctionTOS.objects.filter(auction=self.online_auction, bidder_number="888").exclude(
             pk=existing_tos.pk
         ):
@@ -509,11 +503,9 @@ class CSVImportTests(StandardTestCase):
         existing_tos.refresh_from_db()
         self.assertEqual(existing_tos.memo, "New memo from CSV")
 
-        # Check that history was created for the update (should be 1 summary entry)
         new_count = AuctionHistory.objects.filter(auction=self.online_auction, applies_to="USERS").count()
         self.assertEqual(new_count, initial_count + 1)
 
-        # Verify the summary history entry contains the update count and filename
         update_history = AuctionHistory.objects.filter(auction=self.online_auction, applies_to="USERS").latest(
             "timestamp"
         )
@@ -554,7 +546,6 @@ class CSVImportTests(StandardTestCase):
             csv_file,
         )
 
-        # Check that no history was created (no users added, no users actually updated)
         new_count = AuctionHistory.objects.filter(auction=self.online_auction, applies_to="USERS").count()
         self.assertEqual(new_count, initial_count)
 
@@ -595,11 +586,8 @@ class CSVImportTests(StandardTestCase):
 
 
 class CSVImportBiddingPermissionTests(StandardTestCase):
-    """The "allow bidding" column, which decides whether people can bid at all.
-
-    A blank cell in that column used to mean "no", and the user CSV export leaves it blank for everyone
-    who *can* bid -- so exporting the user list and importing it back silently revoked bidding from every
-    user in the auction, and the only symptom was "Bid failed! This auction requires admin approval".
+    """The "bidding allowed" column: a blank cell must not revoke bidding, since the user CSV export
+    leaves it blank for everyone who can bid.
     """
 
     def _import(self, rows, header=("email", "name", "bidding allowed")):
@@ -623,7 +611,6 @@ class CSVImportBiddingPermissionTests(StandardTestCase):
         self.assertTrue(self._tos("new@example.com").bidding_allowed)
 
     def test_blank_bidding_cell_leaves_an_existing_user_alone(self):
-        """Re-importing an exported user list must not revoke bidding from everyone in the auction."""
         self.online_tos.email = "existing@example.com"
         self.online_tos.bidding_allowed = True
         self.online_tos.save()
@@ -673,7 +660,7 @@ class CSVImportBiddingPermissionTests(StandardTestCase):
         self.assertTrue(self._tos("nocolumn@example.com").bidding_allowed)
 
     def test_explicit_no_wins_over_the_manually_added_default(self):
-        """AuctionTOS.save() force-allows bidding for manually added users in an approval auction."""
+        """AuctionTOS.save() force-allows bidding for manually added users; an explicit "no" still wins."""
         self.online_auction.only_approved_bidders = True
         self.online_auction.save()
         self._import(
@@ -686,14 +673,13 @@ class CSVImportBiddingPermissionTests(StandardTestCase):
         self.assertTrue(self._tos("allowed@example.com").bidding_allowed)
 
     def test_blank_admin_cell_does_not_strip_an_existing_admin(self):
-        """Same rule on the admin column: a roster with one 'yes' can't demote everyone else."""
+        """A blank admin cell doesn't strip an existing admin."""
         self.admin_online_tos.email = "theadmin@example.com"
         self.admin_online_tos.save()
         self._import(
             [["theadmin@example.com", self.admin_online_tos.name, ""]],
             header=("email", "name", "admin"),
         )
-        # The row matched the existing record by email rather than creating a second one...
         self.assertEqual(
             AuctionTOS.objects.filter(auction=self.online_auction, email="theadmin@example.com").count(), 1
         )
@@ -702,7 +688,7 @@ class CSVImportBiddingPermissionTests(StandardTestCase):
         self.assertTrue(self.admin_online_tos.is_admin)
 
     def test_user_csv_export_spells_out_bidding_allowed(self):
-        """The export is a round-trip source for the importer, so it can't leave the column blank."""
+        """The user CSV export spells out bidding allowed, so it round-trips."""
         self.online_tos.bidding_allowed = True
         self.online_tos.save()
         self.tosB.bidding_allowed = False
@@ -719,7 +705,7 @@ class CSVImportBiddingPermissionTests(StandardTestCase):
 
 
 class EnableBiddingForAllUsersTests(StandardTestCase):
-    """The bulk repair on the users page for an auction that lost bidding for everyone at once."""
+    """The bulk "enable bidding for all users" repair on the users page."""
 
     def _url(self):
         return reverse("auction_enable_bidding_for_all", kwargs={"slug": self.online_auction.slug})
@@ -742,7 +728,7 @@ class EnableBiddingForAllUsersTests(StandardTestCase):
         self.assertContains(response, "Enable bidding for all users")
 
     def test_check_in_auctions_never_offer_it(self):
-        """Bidding off until you check in at the door is the point of that mode, not a fault to repair."""
+        """Never offered in check-in mode, where bidding off until check-in is intended."""
         club = Club.objects.create(name="Bidding Repair Club")
         self.online_auction.club = club
         self.online_auction.manage_users_through_club = "checkin"
@@ -775,7 +761,7 @@ class EnableBiddingForAllUsersTests(StandardTestCase):
         self.assertIn(f"Enabled bidding for {count} users", history.action)
 
     def test_the_user_who_could_not_bid_can_bid_afterwards(self):
-        """End to end: the fix has to clear the actual 'requires admin approval' bid error."""
+        """End to end: the repaired user passes check_bidding_permissions."""
         from auctions.bidding import check_bidding_permissions
 
         self.online_auction.date_end = timezone.now() + datetime.timedelta(days=2)
@@ -806,7 +792,7 @@ class EnableBiddingForAllUsersTests(StandardTestCase):
         self.assertTrue(AuctionTOS.objects.filter(auction=self.online_auction, bidding_allowed=False).exists())
 
     def test_club_managed_auction_also_fixes_the_member_records(self):
-        """Otherwise the club page still says 'no' and a later member edit pushes it back down."""
+        """Club-managed auctions fix the member records too."""
         club = Club.objects.create(name="Managed Bidding Club")
         self.online_auction.club = club
         self.online_auction.manage_users_through_club = "all"
@@ -825,13 +811,12 @@ class EnableBiddingForAllUsersTests(StandardTestCase):
 
 
 class CSVImportPreviewTests(StandardTestCase):
-    """The preview/confirm flow and standardized duplicate handling for the AuctionTOS importer."""
+    """The preview/confirm flow and duplicate handling for the AuctionTOS importer."""
 
     def _bulk_add_url(self):
         return reverse("bulk_add_users", kwargs={"slug": self.online_auction.slug})
 
     def test_upload_without_confirm_creates_nothing(self):
-        """Uploading a CSV only builds a preview; nothing is written until the confirm step."""
         self.client.login(username=self.admin_user.username, password="testpassword")
         csv_file = SimpleUploadedFile(
             "u.csv", b"name,email\nPreview Only,previewonly@example.com\n", content_type="text/csv"
@@ -846,7 +831,7 @@ class CSVImportPreviewTests(StandardTestCase):
         )
 
     def test_preview_page_renders_with_duplicate_radios(self):
-        """GET ?preview renders the review page, showing the merge/create choice for a possible duplicate."""
+        """GET ?preview renders the merge/create choice for a possible duplicate."""
         self.online_tos.name = "Bob Smith"
         self.online_tos.email = "bob@example.com"
         self.online_tos.save()
@@ -864,9 +849,9 @@ class CSVImportPreviewTests(StandardTestCase):
         self.assertContains(preview, "Bob Smith")
 
     def test_no_email_walkin_merges_into_existing_online_record(self):
-        """The reported bug: a no-email check-in row for someone who already joined online (with an email)
-        is surfaced as a possible duplicate and, on the default 'merge' choice, updates the existing record
-        (the check-in bidder number wins) instead of creating a second account."""
+        """A no-email check-in row for someone who joined online is a possible duplicate, and the default
+        merge updates the existing record with the check-in bidder number.
+        """
         self.online_tos.name = "Bob Smith"
         self.online_tos.email = "bob@example.com"
         self.online_tos.save()
@@ -881,8 +866,7 @@ class CSVImportPreviewTests(StandardTestCase):
         self.assertEqual(self.online_tos.email, "bob@example.com")
 
     def test_no_email_walkin_create_choice_makes_flagged_duplicate(self):
-        """Choosing 'create' for the same no-email row makes a second record, flagged as a possible
-        duplicate of the original for later admin review."""
+        """Choosing 'create' makes a second record flagged as a possible duplicate."""
         self.online_tos.name = "Bob Smith"
         self.online_tos.email = "bob@example.com"
         self.online_tos.save()
@@ -896,7 +880,6 @@ class CSVImportPreviewTests(StandardTestCase):
         self.assertEqual(new.possible_duplicate, self.online_tos)
 
     def test_email_match_is_case_and_whitespace_insensitive(self):
-        """A CSV email that differs only by case/whitespace matches the existing record (no duplicate)."""
         self.online_tos.name = "Carol"
         self.online_tos.email = "carol@example.com"
         self.online_tos.save()
@@ -911,8 +894,7 @@ class CSVImportPreviewTests(StandardTestCase):
         self.assertEqual(self.online_tos.memo, "vip")
 
     def test_email_is_normalized_on_save(self):
-        """AuctionTOS.save lowercases/strips a real email but leaves an empty one untouched (None stays None
-        so the email__isnull 'no email' filter keeps working)."""
+        """AuctionTOS.save normalizes a real email and leaves None as None."""
         tos = AuctionTOS.objects.create(
             auction=self.online_auction, pickup_location=self.location, email="  Mixed@Case.COM "
         )
@@ -921,10 +903,9 @@ class CSVImportPreviewTests(StandardTestCase):
         self.assertFalse(no_email.email)
 
     def test_ragged_row_does_not_500(self):
-        """A row with more columns than the header (e.g. an unescaped comma) is imported instead of
-        crashing the whole upload with an AttributeError on the None DictReader key."""
+        """A row with more columns than the header imports rather than 500ing."""
         self.client.login(username=self.admin_user.username, password="testpassword")
-        # Header has 2 columns; the data row has 4 -> DictReader stashes the surplus under a None key.
+        # DictReader puts the surplus under a None key.
         csv_file = SimpleUploadedFile(
             "ragged.csv", b"name,email\nBob,bob@example.com,extra,more\n", content_type="text/csv"
         )
@@ -933,11 +914,9 @@ class CSVImportPreviewTests(StandardTestCase):
         self.assertTrue(AuctionTOS.objects.filter(auction=self.online_auction, email="bob@example.com").exists())
 
     def test_duplicate_email_rows_in_file_collapse_to_one_record(self):
-        """Two rows sharing a normalized email are combined into a single record (the later row is flagged
-        as a skipped in-file duplicate), and complementary blank fields are filled rather than lost."""
+        """Rows sharing a normalized email collapse into one record, filling each other's blank fields."""
         self.client.login(username=self.admin_user.username, password="testpassword")
         before = AuctionTOS.objects.filter(auction=self.online_auction).count()
-        # Row 1 has the name but no phone; row 2 (same email, different case/space) has the phone.
         csv_file = SimpleUploadedFile(
             "dupes.csv",
             b"name,email,phone\nDana,Dupe@Example.com,\nDana, dupe@example.com ,555-1212\n",
@@ -947,11 +926,9 @@ class CSVImportPreviewTests(StandardTestCase):
         matches = AuctionTOS.objects.filter(auction=self.online_auction, email="dupe@example.com")
         self.assertEqual(matches.count(), 1)
         self.assertEqual(AuctionTOS.objects.filter(auction=self.online_auction).count(), before + 1)
-        # The phone from the second row was folded into the single surviving record (not dropped).
         self.assertEqual(matches.first().phone_number, "555-1212")
 
     def test_duplicate_email_rows_surfaced_in_preview_as_skipped(self):
-        """The in-file duplicate is shown on the review page as a skipped/combined row, not silently."""
         self.client.login(username=self.admin_user.username, password="testpassword")
         csv_file = SimpleUploadedFile(
             "dupes.csv",
@@ -963,20 +940,19 @@ class CSVImportPreviewTests(StandardTestCase):
         self.assertContains(preview, "Duplicate email in file")
 
     def test_double_confirm_same_token_does_not_double_import(self):
-        """Re-POSTing the same confirm token (double-click / replay) imports the batch only once."""
+        """Re-POSTing the same confirm token imports once."""
         self.client.login(username=self.admin_user.username, password="testpassword")
         before = AuctionTOS.objects.filter(auction=self.online_auction).count()
         csv_file = SimpleUploadedFile("once.csv", b"name,email\nOnce Only,once@example.com\n", content_type="text/csv")
         upload = self.client.post(self._bulk_add_url(), {"csv_file": csv_file})
         token = upload["Location"].split("preview=")[1].split("&")[0]
         self.client.post(self._bulk_add_url(), {"_confirm": token}, follow=True)
-        # Second confirm with the now-consumed token must not create a second record.
         self.client.post(self._bulk_add_url(), {"_confirm": token}, follow=True)
         self.assertEqual(AuctionTOS.objects.filter(auction=self.online_auction).count(), before + 1)
         self.assertEqual(AuctionTOS.objects.filter(auction=self.online_auction, email="once@example.com").count(), 1)
 
     def test_cancel_frees_token_and_writes_nothing(self):
-        """The Cancel POST clears the Redis token (so a later confirm can't apply it) and writes nothing."""
+        """Cancel clears the token and writes nothing."""
 
         self.client.login(username=self.admin_user.username, password="testpassword")
         before = AuctionTOS.objects.filter(auction=self.online_auction).count()
@@ -992,18 +968,6 @@ class CSVImportPreviewTests(StandardTestCase):
 
 class GoogleDriveImportTests(StandardTestCase):
     """Test Google Drive import functionality"""
-
-    # def test_auction_has_google_drive_fields(self):
-    #     """Test that the new fields exist"""
-    #     auction = Auction.objects.create(
-    #         created_by=self.user,
-    #         title="Test auction for Google Drive",
-    #         is_online=True,
-    #         date_end=timezone.now() + datetime.timedelta(days=2),
-    #         date_start=timezone.now() - datetime.timedelta(days=1),
-    #     )
-    #     self.assertIsNone(auction.google_drive_link)
-    #     self.assertIsNone(auction.last_sync_time)
 
     def test_save_google_drive_link(self):
         """Test that we can save a Google Drive link"""

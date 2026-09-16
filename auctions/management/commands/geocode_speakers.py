@@ -4,16 +4,15 @@
     manage.py geocode_speakers --limit 25         # do 25 for real
     manage.py geocode_speakers                    # the rest
 
-Two steps per speaker: ask the language model where the person is based *according to their
-own bio*, then geocode that place name with the Google Geocoding API.  Both are needed --
-the bios name plenty of places, but almost all of them are talk subjects ("Collecting in
-Mexico", "Long Island, NY: An Unlikely Hotspot") rather than where the speaker lives, and a
-regex has no way to tell those apart.  The prompt is built around exactly that distinction
-and the model is told to return nothing when it isn't sure, which is why `--dry-run` and a
-review pass are worth doing before letting it write.
+Two steps per speaker: ask the language model where the person is based *according to their own
+bio*, then geocode that place name with the Google Geocoding API. Both are needed -- the bios name
+plenty of places, but nearly all are talk subjects ("Collecting in Mexico", "Long Island, NY: An
+Unlikely Hotspot") rather than where the speaker lives, and a regex cannot tell those apart. The
+prompt is built around that distinction and the model is told to return nothing when unsure, which
+is why `--dry-run` and a review pass are worth doing first.
 
-Speakers who already have coordinates are skipped, so this is safe to re-run and will never
-move a pin somebody placed by hand.
+Speakers who already have coordinates are skipped, so this is safe to re-run and never moves a pin
+somebody placed by hand.
 """
 
 import json
@@ -46,8 +45,8 @@ Rules:
 
 Reply with the JSON object and nothing else."""
 
-# Bios run to ~4600 characters; the home-base signal is almost always in the first part or the
-# last line, but truncation risks cutting the signal, so send the whole thing and cap tokens.
+# Bios run to ~4600 characters and the home-base signal is usually in the first part or the last
+# line, but truncating risks cutting it: send the whole thing and cap tokens instead.
 MAX_BIO_CHARACTERS = 6000
 
 GEOCODE_URL = "https://maps.googleapis.com/maps/api/geocode/json"

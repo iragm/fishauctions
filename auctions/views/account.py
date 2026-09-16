@@ -1,9 +1,8 @@
 """The reader's own account: profile, username, preferences, notifications, deletion.
 
-``OwnUserDataUpdate`` lists ``SuccessMessageMixin`` first on purpose -- written the other way round
-``UpdateView.form_valid`` wins the MRO and the success message never renders. Preferences and
-notifications are two separate forms that partition the ``UserData`` fields between them, which is
-why neither page needs any JavaScript.
+``OwnUserDataUpdate`` lists ``SuccessMessageMixin`` first on purpose, or ``UpdateView.form_valid``
+wins the MRO and the success message never renders. Preferences and notifications are two forms
+partitioning the ``UserData`` fields, which is why neither page needs JavaScript.
 """
 
 import logging
@@ -94,10 +93,6 @@ class UserByName(UserView):
             return User.objects.get(username=unquote(self.username))
         except User.DoesNotExist:
             pass
-        # try:
-        #     return User.objects.get(pk=self.username)
-        # except:
-        #     pass
         raise Http404
 
 
@@ -151,21 +146,15 @@ class UserLabelPrefsView(UpdateView, SuccessMessageMixin):
         return label_prefs
 
     def _show_print_method(self):
-        """The print-method dropdown only makes sense to someone who can use the app to print. Show
-        it in the app, or on web if the user has ever registered a device (so they can pre-configure)."""
+        """The print-method dropdown is shown in the app, or on the web to anyone who has registered a device."""
         return bool(self.request.is_mobile_app) or MobileDevice.objects.filter(user=self.request.user).exists()
 
     def _show_print_from_computer(self):
         """Offer computer-to-phone printing only to an account with a phone that could do it.
 
-        ``ever_print_ready``, not ``print_ready``: the current flag goes False the moment the printer
-        is switched off, and "does this account have a phone with a label printer" is not a question
-        whose answer changes over breakfast. Whether it will work *right now* is the separate, honest
-        question, and the last-seen line beside the checkbox is where that gets answered.
-
-        ``push_configured`` because the job reaches the phone as an FCM data message and nothing else:
-        on a deployment with no Firebase credentials every job would go straight to "couldn't reach
-        your phone", which is true but blames the user's phone for the server's missing config.
+        ``ever_print_ready``, not ``print_ready``: the current flag goes False the moment the printer is off,
+        and whether it works right now is answered by the last-seen line beside the checkbox.
+        ``push_configured`` because the job reaches the phone as an FCM message.
         """
         if not push_configured():
             return False
@@ -187,19 +176,16 @@ class UserLabelPrefsView(UpdateView, SuccessMessageMixin):
         context["label_prefs"] = prefs
         context["show_print_method"] = self._show_print_method()
         context["show_print_from_computer"] = self._show_print_from_computer()
-        # The single fact that decides whether printing to the phone will work, and the only one the
-        # user can do anything about. Rendered next to the checkbox rather than left for them to
-        # discover by pressing print and waiting.
+        # The one fact that decides whether printing to the phone works, rendered next to the
+        # checkbox rather than discovered by pressing print.
         device, last_seen = MobileDevice.print_presence_for(self.request.user)
         context["print_phone_device"] = device
         context["print_phone_last_seen"] = last_seen
         context["print_phone_reachable"] = bool(device and device.is_reachable_for_printing)
-        # Print-method mismatch warnings talk about switching to Bluetooth / thermal printers, which
-        # only work in the app. On the web only PDF is available, so the warnings aren't actionable —
-        # suppress them there and keep them in the app.
+        # The warnings talk about Bluetooth and thermal printers, which only work in the app.
         show_warnings = bool(self.request.is_mobile_app)
         context["warnings"] = label_prefs_warnings(prefs) if show_warnings else []
-        # A plain dict; the template embeds it safely with |json_script for the live-warning JS.
+        # A plain dict, embedded with |json_script for the live-warning JS.
         context["warning_map"] = warning_matrix() if show_warnings else {}
         userData = self.request.user.userdata
         context["last_auction_used"] = userData.last_auction_used
@@ -215,18 +201,14 @@ class UserLabelPrefsView(UpdateView, SuccessMessageMixin):
 
 
 class AccountDeleteView(TemplateView):
-    """Delete your account, from inside the app or the website.
+    """Delete your account, from the app or the website.
 
-    Required by both app stores for an app that offers sign-up (App Store Review 5.1.1(v)), and it
-    has to be doable without emailing support. It's a web page rather than anything native because
-    account lifecycle is server business logic — the app already renders /preferences/, which links
-    here, so no app release is involved.
+    Required by both app stores (App Store Review 5.1.1(v)) and doable without emailing support. A web
+    page because account lifecycle is server logic, and the app already renders /preferences/.
 
-    Confirmation is typing the username: it works for accounts that signed up with Google and have
-    no password, and it can't be done by accident. The request is then reversible for
-    ``GRACE_PERIOD_DAYS`` by signing in again, and the session ends at /logout/, which the app
-    intercepts to clear its own JWT, cached profile, cookies and push token — without that the app
-    would sit on a signed-in shell for an account on its way out.
+    Confirmation is typing the username, which works for accounts with no password and can't be done by
+    accident. The request is reversible for ``GRACE_PERIOD_DAYS`` by signing in, and the session ends at
+    /logout/, which the app intercepts to clear its JWT, profile, cookies and push token.
     """
 
     template_name = "account_delete.html"
@@ -260,8 +242,7 @@ class AccountDeleteView(TemplateView):
         email = request.user.email
         due = request_deletion(request.user)
         if email:
-            # Always email, never push: this is account correspondence, and the phone it would go to
-            # is about to stop being signed in.
+            # Always email: account correspondence, and the phone is about to be signed out.
             mail.send(
                 email,
                 subject="Your account is scheduled to be deleted",
@@ -273,17 +254,15 @@ class AccountDeleteView(TemplateView):
                 ),
             )
         logout(request)
-        # The confirmation page is public and the session is gone by the time it loads, so whether we
-        # managed to email anyone has to travel in the URL — an account with no address on it must
-        # not be told to go and check their inbox.
+        # The confirmation page is public and the session is gone, so whether anyone was emailed
+        # travels in the URL.
         target = f"{reverse('account_deleted')}?emailed=1" if email else reverse("account_deleted")
-        # End at /logout/ so the app turns this into a full native sign-out; it redirects an already
-        # signed-out visitor straight on to the confirmation page.
+        # End at /logout/ so the app does a native sign-out; it passes a signed-out visitor through.
         return redirect(f"{reverse('account_logout')}?next={quote(target)}")
 
 
 class AccountDeletedView(TemplateView):
-    """Shown after requesting deletion — public, because the session is gone by the time it loads."""
+    """Shown after requesting deletion; public, because the session is gone by the time it loads."""
 
     template_name = "account_deleted.html"
 
@@ -299,25 +278,19 @@ class AccountDeletedView(TemplateView):
 class OwnUserDataUpdate(FormFrictionMixin, SuccessMessageMixin, LoginRequiredMixin, UpdateView):
     """Base for the two pages that edit your own ``UserData``: /preferences/ and /notifications/.
 
-    ``SuccessMessageMixin`` is listed **first** on purpose. Written the other way round -- which is
-    what these views used to be -- ``UpdateView.form_valid`` wins the MRO and the mixin's never
-    runs, so the success message was configured on both pages and shown on neither.
+    ``SuccessMessageMixin`` is listed first on purpose: the other way round ``UpdateView.form_valid``
+    wins the MRO and the success message never runs.
     """
 
     model = UserData
 
     def get_object(self, *args, **kwargs):
-        # UserData is auto-created with the user, so this is always the caller's own row and there
-        # is nothing to authorize: the URL carries no key to a different one.
+        # UserData is auto-created with the user, so this is always the caller's own row.
         return UserData.objects.get(user=self.request.user)
 
     def get_success_url(self):
-        # Back to the page that was just saved, so the success message is read where the change was
-        # made. ``?next=`` is honoured for the pages that link here asking for one setting to be
-        # changed (the auction list's "change in preferences", the label pages' "printing
-        # preferences"). Read with ``.get()``: the old code indexed ``next`` after testing only
-        # whether the query string was *empty*, so any other parameter on the URL -- a utm tag was
-        # enough -- turned saving the form into a 500.
+        # Back to the page just saved, honouring ``?next=`` for pages that link here for one
+        # setting. ``.get()``: indexing it turned any other query parameter into a 500.
         return self.request.GET.get("next") or self.request.path
 
     def get_form_kwargs(self):
@@ -333,11 +306,10 @@ class UserPreferencesUpdate(OwnUserDataUpdate):
 
 
 class UserNotificationsUpdate(OwnUserDataUpdate):
-    """/notifications/ -- the emails and push notifications half of the old preferences page.
+    """/notifications/ -- the emails and push half of the old preferences page.
 
-    Split out because it is the half people go looking for, and because it is what let the page's
-    JavaScript go: ``distance_unit`` stayed on /preferences/, so the three radii here are rendered
-    and read in one unit that cannot change while the page is open.
+    Split out because it is the half people look for, and because ``distance_unit`` stayed on
+    /preferences/, so the radii here are rendered and read in one unit.
     """
 
     template_name = "user_notifications.html"
@@ -355,9 +327,8 @@ class UserLocationUpdate(UpdateView, SuccessMessageMixin):
     model = UserData
     success_message = "Contact info updated"
     form_class = UserLocation
-    # such a hack...UserData and User do not have the same pks.
-    # This means that if we go to /users/1/edit, we'll get the wrong UserData
-    # The fix is to have a self.user_pk, which is set in dispatch and called in get_object
+    # UserData and User don't share pks, so /users/1/edit would load the wrong UserData; dispatch
+    # sets self.user_pk for get_object.
     user_pk = None
 
     def dispatch(self, request, *args, **kwargs):
@@ -385,8 +356,7 @@ class UserLocationUpdate(UpdateView, SuccessMessageMixin):
 
     def get_form_kwargs(self):
         kwargs = super().get_form_kwargs()
-        # Only the auction gate sets this, and only until they save once.  See
-        # ``services.CONTACT_GATE_NEEDS_PHONE`` for why it travels in the session.
+        # Only the auction gate sets this, until they save once. See services.CONTACT_GATE_NEEDS_PHONE.
         kwargs["require_phone"] = bool(self.request.session.get(CONTACT_GATE_NEEDS_PHONE))
         return kwargs
 
@@ -410,12 +380,11 @@ class UserLocationUpdate(UpdateView, SuccessMessageMixin):
         user.save()
         userData.last_activity = timezone.now()
         userData.save()
-        # The auctions and clubs holding their own copy of this person's details. Shared with the
-        # assistant's update_contact_info so both routes touch the same rows and write the same
-        # history lines.
+        # The auctions and clubs holding their own copy of these details, shared with the
+        # assistant's update_contact_info.
         propagate_contact_info(user, userData)
-        # They have answered the question the gate asked.  Leaving the flag set would keep the
-        # phone number required for ever afterwards, on a page most people reach for other reasons.
+        # They've answered the gate's question; leaving the flag set would require a phone number
+        # for ever.
         self.request.session.pop(CONTACT_GATE_NEEDS_PHONE, None)
         return super().form_valid(form)
 
@@ -463,10 +432,8 @@ class UserChartView(APIView):
         pageViews = PageView.objects.select_related("lot_number__species_category").filter(
             user=user, lot_number__species_category__isnull=False
         )
-        # This is extremely inefficient
-        # Almost all of it could be done in SQL with a more complex join and a count
-        # However, I keep changing attributes (views, view duration, bids) and sorting here
-        # This code is also only run for admins (and async of page load), so the server load is pretty low
+        # Inefficient, but only run for admins and async of page load. Most of it could be a join
+        # and a count, but the attributes and sorting keep changing.
 
         categories = {}
         for item in allBids:
@@ -477,8 +444,7 @@ class UserChartView(APIView):
             categories.setdefault(category, {"bids": 0, "views": 0})["views"] += 1
         # sort the result
         sortedCategories = sorted(categories, key=lambda t: -categories[t]["views"])
-        # sortedCategories = sorted(categories, key=lambda t: -categories[t]['bids'] )
-        # format for chart.js
+        # Format for chart.js.
         labels = []
         bids = []
         views = []

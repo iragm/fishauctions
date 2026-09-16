@@ -1,30 +1,22 @@
 """What an edit changed, in a form a query can answer.
 
-``AuctionHistory.action`` and ``ClubHistory.action`` are prose: ``"Edited Buy now, Tax, Reserve
-price"``, built by joining **verbose names** with commas into an 800-character ``CharField``.  That
-string is the right thing to show an organizer and the wrong thing to ask a question of:
+``AuctionHistory.action`` and ``ClubHistory.action`` are prose -- verbose names joined with commas
+into an 800-character field -- which is right to show an organizer and wrong to query: it is keyed
+on the label, so rewording one breaks every historical row; it truncates in form-field order, so the
+loss is biased toward the bottom of the layout; and it records *that* a field changed, never what it
+became.
 
-* it is keyed on the label, so rewording one silently breaks every historical row, and two fields
-  sharing a verbose name are indistinguishable;
-* it truncates, and truncation follows form-field order -- so on a ~90-field form the loss is
-  systematically biased toward whatever sits at the bottom of the layout;
-* it records *that* a field changed, never what it became.
+``changed_fields`` is the queryable half, written alongside ``action`` by the same call, keyed on the
+model field name and carrying the before and after. The prose column is untouched.
 
-``changed_fields`` is the queryable half, written alongside ``action`` by the same call.  It is
-keyed on the **model field name**, which is what migrations rename and what code already refers to,
-and it carries the before and after.  The prose column is untouched: it is still what the history
-page renders, and rewriting three years of it was never worth it.
+The question it exists for is "has anybody ever changed this setting" -- behind every argument about
+whether a field belongs on the first screen, behind *Advanced*, or gone.
+:func:`auctions.field_adoption` answers it for the past; this answers it exactly for the future,
+including a field changed and changed back.
 
-The question this exists to answer is "has anybody, ever, changed this setting" -- the one behind
-every argument about whether a field should be on the first screen of a form, behind an *Advanced*
-toggle, or gone.  :func:`auctions.field_adoption` answers it for the past by comparing live rows
-against their defaults; this answers it for the future, exactly, including a field somebody changed
-and changed back.
-
-Values are stored as JSON scalars a human can read back, not as a serialization anybody could
-restore from: long text is truncated, model instances become their ``str()``, and anything that
-looks like a credential is replaced with ``"[redacted]"`` -- ``ClubPayPalForm`` posts a secret
-through this same path, and a changelog is not a place to keep one.
+Values are stored as readable JSON scalars, not a restorable serialization: long text is truncated,
+model instances become their ``str()``, and anything that looks like a credential becomes
+``"[redacted]"`` -- ``ClubPayPalForm`` posts a secret through this path.
 """
 
 from __future__ import annotations
@@ -34,13 +26,13 @@ import decimal
 import uuid
 from typing import Any
 
-# One stored value. Long enough for a pickup-location description or a rules paragraph's opening,
-# short enough that a 90-field edit is still a sensible row.
+# One stored value: long enough for a pickup-location description, short enough that a 90-field edit
+# is still a sensible row.
 MAX_VALUE_LENGTH = 300
 # A form with more changed fields than this is not an edit anybody made by hand.
 MAX_FIELDS = 250
-# Substrings of a field name that mean the value is a credential. Matched on the field name rather
-# than the value because the value is exactly what must not be looked at.
+# Substrings of a field name meaning the value is a credential. Matched on the name, because the
+# value is exactly what must not be looked at.
 SECRET_FIELD_MARKERS = ("password", "secret", "api_key", "apikey", "token", "private_key", "client_id")
 REDACTED = "[redacted]"
 
@@ -54,15 +46,14 @@ def is_secret_field(field_name: str) -> bool:
 def jsonable(value: Any, _depth: int = 0) -> Any:
     """A JSON-storable, human-readable stand-in for a form value.
 
-    ``JSONField`` will happily accept anything ``json.dumps`` can encode and raise on everything
-    else, at ``save()`` time, inside whatever transaction the edit is in -- so a changelog write
-    could roll back the edit it was describing.  Nothing reaches the field without passing through
-    here, and there is no branch that raises.
+    ``JSONField`` raises at ``save()`` time on anything ``json.dumps`` can't encode, inside the edit's
+    own transaction -- so a changelog write could roll back the edit it describes. Nothing reaches the
+    field without passing through here, and no branch raises.
     """
     if value is None or isinstance(value, bool):
         return value
     if isinstance(value, int | float):
-        # A float that JSON cannot encode (inf, nan) would raise at save time.
+        # A float JSON cannot encode (inf, nan) would raise at save time.
         if isinstance(value, float) and (value != value or value in (float("inf"), float("-inf"))):
             return str(value)
         return value
@@ -99,22 +90,20 @@ def truncate(value: str) -> str:
 def changed_field_summary(form) -> dict[str, dict[str, Any]]:
     """``{field_name: {"from": old, "to": new}}`` for everything ``form`` changed.
 
-    Keyed on the form field name, which for a ``ModelForm`` is the model field name.  ``from``
-    comes from ``form.initial`` -- captured when the form was built, so this is correct whether the
-    caller records history before or after ``save()``, and both orders exist in this codebase
-    (``AuctionUpdate.form_valid`` is before, ``palette_actions`` is after).
+    Keyed on the form field name, which for a ``ModelForm`` is the model field name. ``from`` comes from
+    ``form.initial``, captured when the form was built, so this is correct whether the caller records
+    history before or after ``save()`` -- both orders exist here.
 
-    An empty dict for a form that changed nothing, or for anything that is not a form; the field's
-    default is the same empty dict, so "no summary" and "nothing changed" read alike.  They are not
-    distinguishable and do not need to be: no row is written at all unless something changed.
+    An empty dict for a form that changed nothing or isn't a form; no row is written unless something
+    changed, so the two need not be distinguishable.
     """
     if form is None:
         return {}
     try:
         changed = list(form.changed_data)
     except Exception:
-        # changed_data validates, and a form that cannot say what changed still has an edit behind
-        # it that is being recorded. Prose without a summary beats an exception here.
+        # changed_data validates, and a form that can't say what changed still has an edit behind
+        # it. Prose without a summary beats an exception.
         return {}
     initial = getattr(form, "initial", None) or {}
     cleaned = getattr(form, "cleaned_data", None) or {}
@@ -133,11 +122,9 @@ def changed_field_summary(form) -> dict[str, dict[str, Any]]:
 def record_club_history(club, applies_to, action="Edited", user=None, form=None):
     """``Club``'s half of :meth:`Auction.create_history`, including ``changed_fields``.
 
-    ``ClubHistory`` rows are written from thirty-odd places directly, and all but the form-backed
-    ones name their own change ("Added member X") with nothing a field summary could add.  This is
-    for the ones that hand over a form -- the settings pages, where the question "did anybody ever
-    turn this on" is the same question as on the auction side and had no answer at all: those views
-    wrote the constant string "Updated club settings".
+    ``ClubHistory`` rows are written from thirty-odd places that name their own change ("Added member
+    X"); this is for the form-backed ones -- the settings pages, where "did anybody ever turn this on"
+    had no answer at all, since those views wrote the constant "Updated club settings".
     """
     from auctions.models import ClubHistory
 

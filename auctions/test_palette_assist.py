@@ -32,17 +32,10 @@ from auctions.tests import StandardTestCase
 
 
 def as_result(reply):
-    """One scripted reply, as the :class:`LLMResult` a tool-calling provider would return.
+    """One scripted reply as the :class:`LLMResult` a tool-calling provider would return.
 
-    Tests script what the model "says" as a small dict — ``{"action": ..., "params": ...}``,
-    ``{"answer": ...}``, ``{"clarify": ..., "options": [...]}`` — and have since long before the
-    palette used tool calls. That shorthand is still the clearest way to write a test, so it is
-    translated here rather than rewritten several hundred times: an action or a lookup becomes a
-    tool call, a clarify becomes a call to ``ask_the_user``, an error becomes ``cannot_do_this``,
-    and an answer is plain text.
-
-    A test that wants to be explicit about the wire shape can script an ``LLMResult`` directly and
-    it is passed straight through.
+    The shorthand dicts map to tool calls: action/lookup to that tool, clarify to ``ask_the_user``,
+    error to ``cannot_do_this``, answer to plain text. An ``LLMResult`` passes straight through.
     """
     if isinstance(reply, LLMResult):
         return reply
@@ -109,15 +102,9 @@ async def drain_async_stream(response):
 
 
 class AssistResponse:
-    """A drained NDJSON assist response.
+    """A drained NDJSON assist response: ``.json()`` is the final event, ``.progress`` the narration.
 
-    The endpoint streams, so a test can't just call ``.json()`` on it. This collects every event
-    and exposes the final one as ``.json()``, so assertions read the same as they did before the
-    endpoint streamed, plus ``.progress`` for the narration itself.
-
-    The body is an async generator (it has to be -- see ``CommandPaletteAssistView``), and the test
-    client is synchronous, so it gets drained through ``async_to_sync`` rather than plain
-    iteration.
+    The body is an async generator, so it's drained through ``async_to_sync``.
     """
 
     def __init__(self, response):
@@ -128,7 +115,6 @@ class AssistResponse:
             body = b"".join(chunks).decode("utf-8")
             self.events = [json.loads(line) for line in body.splitlines() if line.strip()]
         else:
-            # Throttled requests (429) and the non-streaming opt-out come back as plain JSON.
             self.events = [json.loads(response.content.decode("utf-8"))]
 
     @property
@@ -146,12 +132,7 @@ class AssistResponse:
 
 @override_settings(SINGLE_CLUB_MODE=False)
 def _unfenced_names(result):
-    """The names in a ``find_person`` result, with the untrusted-text fence taken back off.
-
-    Every name a tool returns is wrapped in guillemets on the way out (``untrusted_short``), which
-    is a mark for the model and not part of the name. A test that compares against the raw name is
-    asserting on the fence; worse, a ``assertNotIn`` that does it passes whatever happens.
-    """
+    """The names in a ``find_person`` result with the «» fence removed."""
     return [str(person.get("name", "")).strip("«»").strip() for person in result.get("people", [])]
 
 
@@ -159,12 +140,8 @@ def _unfenced_names(result):
 class PaletteAssistTestCase(StandardTestCase):
     """Shared setup: a scripted provider, an open in-person auction, and no leftover throttles.
 
-    The cache has to be this class's own. Every test below clears four users' cooldown keys in
-    ``setUp``, and those keys are named after a primary key -- which under ``--parallel`` is the
-    same small integer in every worker's database while the Redis holding them is shared. One
-    worker starting any palette test would delete the cooldown another worker had just set, and
-    ``test_rapid_second_assist_is_throttled`` would get a 200 where it wanted a 429. See
-    ``auctions.test_cache_hygiene`` for the general shape of this.
+    Has its own cache: throttle keys are named by pk, which --parallel workers share over one Redis.
+    See ``auctions.test_cache_hygiene``.
     """
 
     def setUp(self):
@@ -174,8 +151,7 @@ class PaletteAssistTestCase(StandardTestCase):
         self._clear_throttles(self.user)
         self._clear_throttles(self.admin_user)
         self._clear_throttles(self.userB)
-        # An in-person auction that is genuinely open for lot submission, so add_lot has somewhere
-        # legitimate to go. StandardTestCase's auctions are mostly in the past.
+        # Open for lot submission, so add_lot has somewhere to go.
         self.in_person_auction.date_start = timezone.now() - datetime.timedelta(hours=1)
         self.in_person_auction.date_end = timezone.now() + datetime.timedelta(days=2)
         self.in_person_auction.lot_submission_start_date = timezone.now() - datetime.timedelta(days=1)
@@ -184,8 +160,7 @@ class PaletteAssistTestCase(StandardTestCase):
         self.in_person_auction.save()
         self.user.userdata.last_auction_used = self.in_person_auction
         self.user.userdata.save()
-        # self.user created both auctions, so they are always an admin. A plain participant is
-        # needed for the permission tests: in_person_buyer is user_with_no_lots' TOS (bidder 555).
+        # self.user admins both auctions; member is a plain participant (bidder 555).
         self.member = self.user_with_no_lots
         self.member.userdata.last_auction_used = self.in_person_auction
         self.member.userdata.save()
@@ -194,16 +169,10 @@ class PaletteAssistTestCase(StandardTestCase):
         self.enable_assist_for_everyone()
 
     def enable_assist_for_everyone(self):
-        """Opt every user in the fixture into the assistant.
-
-        ``UserData.use_llm_search`` is off by default (the feature is per-user opt-in, flipped in
-        the admin), so without this the whole suite would only ever exercise the disabled fallback.
-        :class:`AssistDisabledTests` turns it back off to test that path deliberately.
-        """
+        """Opt every fixture user into the assistant (``use_llm_search`` is off by default)."""
         UserData.objects.update(use_llm_search=True)
         for user in (self.user, self.admin_user, self.userB, self.member):
-            # A UserData already cached on the in-memory user predates the UPDATE above, and a
-            # later .save() on it would quietly write the old value back.
+            # Refresh, or a later .save() on the cached UserData writes the old value back.
             user.userdata.refresh_from_db(fields=["use_llm_search"])
 
     def tearDown(self):
@@ -233,12 +202,7 @@ class PaletteAssistTestCase(StandardTestCase):
         self.provider.calls = []
 
     def _assist(self, query, context=None, user=None, skip_throttle_reset=False, path=""):
-        """POST to the assist endpoint as ``user`` (defaults to self.user).
-
-        The endpoint streams NDJSON, so this returns an :class:`AssistResponse` that drains the
-        stream. ``.json()`` still gives the final answer, which keeps every assertion below reading
-        the way it did before streaming existed; ``.progress`` exposes the narration.
-        """
+        """POST to the assist endpoint as ``user`` (default self.user); returns an :class:`AssistResponse`."""
         user = user or self.user
         if not skip_throttle_reset:
             cache.delete(f"palette_assist_cooldown_{user.pk}")
@@ -308,11 +272,7 @@ class AuthAndThrottleTests(PaletteAssistTestCase):
         self.assertEqual(resp.status_code, 302)
         self.assertEqual(self.provider.call_count, 0, "an anonymous request must never reach the LLM")
 
-    # A real cooldown lasts one second, and the first request below has to finish inside it for
-    # the second to be throttled at all. That holds by a wide margin on a quiet machine and is not
-    # something to bet a CI run on, so the window is widened for the two tests that depend on it:
-    # what is under test is that a second request inside the cooldown is refused, not how long a
-    # cooldown lasts.
+    # Widened so the second request reliably lands inside the cooldown on a slow CI box.
     @patch.object(palette_assist, "COOLDOWN_SECONDS", 300)
     def test_rapid_second_assist_is_throttled(self):
         self._script({"error": "first"}, {"error": "second"})
@@ -348,12 +308,7 @@ class UntrustedOutputTests(PaletteAssistTestCase):
     """Whatever the model returns is input, not instruction."""
 
     def test_malformed_reply_is_rejected(self):
-        """Four off-contract replies must never be acted on -- but must not dead-end either.
-
-        The old behaviour here was a flat "I couldn't work out how to do that". Now the loop gives
-        up and hands over to the fallback ladder, so the answer is search results, a guessed page,
-        or an error, and never an action.
-        """
+        """Off-contract replies are never acted on and fall through to the fallback ladder."""
         self._script({"nonsense": True}, {"also": "wrong"}, [], "not even a dict")
         response = self._assist("do something impossible with several words")
         self.assertIn(response.json()["kind"], {"error", "results", "clarify", "navigate"})
@@ -387,12 +342,7 @@ class UntrustedOutputTests(PaletteAssistTestCase):
         self.assertEqual(reply["kind"], "invalid")
 
     def test_a_read_only_tool_is_a_lookup_and_a_write_is_an_action(self):
-        """The one distinction the palette still has to draw for itself.
-
-        There is a single namespace of tools now, so nothing tells the loop whether a call is
-        something to run and feed back or something that finishes the request — except the
-        registry's own ``lookup`` flag, which is what the danger tier is derived from.
-        """
+        """The registry's ``lookup`` flag decides whether a tool call is a lookup or an action."""
         self.assertEqual(palette_assist.read_reply(self._reply("find_person", {"name": "bob"}))["kind"], "lookup")
         self.assertEqual(palette_assist.read_reply(self._reply("add_lot", {"name": "shrimp"}))["kind"], "action")
 
@@ -437,13 +387,7 @@ class DangerTierTests(PaletteAssistTestCase):
     """safe executes now, confirm counts down, navigate goes to the page."""
 
     def test_a_lookup_in_the_action_slot_is_read_as_a_lookup(self):
-        """Every safe action is a lookup, so one named in the ``action`` slot is still a lookup.
-
-        This used to run as an action that was the end of the conversation, which meant the model's
-        own note-to-self came back as the answer: asked "what's the split", the user was told
-        "Fetching the auction details to see how the fee split is configured." and nothing else. The
-        loop has to come back with a real answer instead.
-        """
+        """A lookup named in the ``action`` slot is still a lookup, and the loop continues."""
         self._script(
             {"action": "describe_auction", "params": {}, "summary": "Fetch the auction to explain the fees"},
             {"answer": "The club takes 25% of the winning bid."},
@@ -541,8 +485,7 @@ class PermissionTests(PaletteAssistTestCase):
         assisted = self._assist("add a lot called borrowed lot for bidder 555", user=self.admin_user)
         self.assertEqual(assisted.json()["kind"], "countdown")
         params = assisted.json()["params"]
-        # Replay the admin's exact countdown params as a plain participant. The countdown carries
-        # no authority of its own: execute re-runs the resolver, which refuses.
+        # The countdown carries no authority: execute re-runs the resolver, which refuses.
         response = self._execute("add_lot", params, user=self.member)
         data = response.json()
         self.assertEqual(data["kind"], "error", data)
@@ -680,7 +623,6 @@ class BusinessRuleTests(PaletteAssistTestCase):
         self.assertFalse(Lot.objects.filter(lot_name="not allowed").exists())
 
     def test_check_in_marks_the_person_checked_in(self):
-        # use_check_in_mode is a property: club-managed, with users managed through check-in.
         from auctions.models import Club
 
         club = Club.objects.create(name="Check In Club", abbreviation="CIC")
@@ -704,12 +646,7 @@ class BusinessRuleTests(PaletteAssistTestCase):
 
 
 class SharedLotAddPathTests(PaletteAssistTestCase):
-    """The bulk-add page and the palette action must stay on one code path.
-
-    ``save_new_lot`` / ``recalculate_seller_invoice`` / ``lot_add_block`` were extracted out of
-    ``BulkAddLots`` for the palette to reuse, and the page's save path had no test of its own, so
-    this covers both sides of the split.
-    """
+    """The bulk-add page and the palette action share one lot-adding code path."""
 
     def _bulk_post(self, lot_name):
         """POST one lot through the real bulk-add page as its own formset."""
@@ -801,12 +738,7 @@ class UsageLoggingTests(PaletteAssistTestCase):
 
 
 class OpenAIProviderTests(SimpleTestCase):
-    """The wire format, against a stubbed endpoint.
-
-    These guard the two things a reasoning model does differently from the chat models this
-    provider was first written for: it charges hidden reasoning tokens against the completion
-    budget, and it can spend all of them and reply with nothing at all.
-    """
+    """The OpenAI wire format against a stubbed endpoint, including reasoning-model quirks."""
 
     def _provider(self, **kwargs):
         return llm.OpenAIProvider(model="gpt-5-nano", api_key="test-key", **kwargs)
@@ -873,10 +805,7 @@ class OpenAIProviderTests(SimpleTestCase):
                     self.assertIn(expected_replacement, attempts[1])
 
     def _stub_endpoint_rejecting(self, unsupported):
-        """Patch httpx so the endpoint 400s any request carrying ``unsupported``.
-
-        Returns the list of payloads it was sent, which is what the assertions are about.
-        """
+        """Patch httpx so the endpoint 400s any request carrying ``unsupported``; returns the payloads sent."""
         attempts = []
         answer = self._answer('{"action": "go_to_page"}')
 
@@ -909,14 +838,7 @@ class OpenAIProviderTests(SimpleTestCase):
         return attempts
 
     def test_a_reply_truncated_by_the_token_budget_is_an_error_not_an_empty_object(self):
-        """The bug this exists for.
-
-        A reasoning model that burns its whole budget thinking returns HTTP 200 with an empty
-        string. That used to parse as ``{}``, which the assist loop read as "the model replied
-        off-contract", so it explained the contract and asked again -- several more seconds, for
-        the identical empty answer, until it ran out of rounds and told the user it wasn't sure
-        what they meant.
-        """
+        """A reply truncated by the token budget is an LLMError, not an empty object."""
         client, _sent = self._respond(body=self._answer("", finish_reason="length"))
         with client, self.assertRaises(LLMError) as caught:
             self._provider().complete_json("sys", [{"role": "user", "content": "hi"}])
@@ -932,32 +854,16 @@ class OpenAIProviderTests(SimpleTestCase):
 
 
 class RoundCostTests(PaletteAssistTestCase):
-    """How many model calls one query is allowed to cost.
-
-    Every round re-sends the whole ~3k-token system prompt, so rounds *are* the bill. These guard
-    the two ways the loop used to spend four of them and arrive nowhere.
-    """
+    """How many model calls one query may cost."""
 
     def test_an_unusable_reply_is_not_retried(self):
-        """A reply with nothing in it costs exactly one call.
-
-        There used to be a correction round here, because JSON mode could not stop the model
-        answering in the wrong shape and a nudge sometimes fixed it. The provider enforces the tool
-        schemas now, so a reply that still gets here is one the endpoint didn't validate or one the
-        model didn't make — and neither is fixed by asking again. The search ladder is faster and
-        more use to the person waiting.
-        """
+        """A reply with nothing usable costs exactly one call."""
         self._script(*[{"nonsense": True}] * 4)
         self._assist("something long enough to need the model and get nowhere at all")
         self.assertEqual(self.provider.call_count, 1)
 
     def test_a_repeated_lookup_is_not_run_again(self):
-        """The model asking for the same thing twice will not get a different answer.
-
-        It is told so, once, rather than being cut off: the result it is asking for again is already
-        in the conversation, and ending the loop here threw away a lookup that had already been paid
-        for. The lookup itself is not re-run -- the nudge costs a model call and no database work.
-        """
+        """A repeated lookup gets a nudge, not a re-run."""
         same = {"lookup": "find_person", "params": {"name": "nobody at all"}}
         self._script(same, same, same, same)
         with patch.object(palette_actions, "run_action", wraps=palette_actions.run_action) as run:
@@ -966,11 +872,7 @@ class RoundCostTests(PaletteAssistTestCase):
         self.assertEqual(self.provider.call_count, 3, "one nudge, then stop")
 
     def test_a_lookup_followed_by_the_action_it_enabled_still_works(self):
-        """The guard is about repeats, not about lookups.
-
-        This is the deep path that justifies a second round at all, and the only shape measured to
-        need one: look a person up, then act on what came back.
-        """
+        """A lookup followed by the action it enabled still works."""
         self._script(
             {"lookup": "find_person", "params": {"name": "555"}},
             {"action": "go_to_page", "params": {"page": "my_invoices"}, "summary": "Opening invoices"},
@@ -989,11 +891,7 @@ class TokenAccountingTests(PaletteAssistTestCase):
     """What the analytics page reports it costs."""
 
     def test_cached_prompt_tokens_are_recorded(self):
-        """The system prompt is identical on every call, so most of it is a cache hit.
-
-        Billed at a fraction of the normal input rate -- a total that ignores this reads as several
-        times the real bill and makes the feature look unaffordable when it isn't.
-        """
+        """Cached prompt tokens are recorded, since they bill at a fraction of the input rate."""
 
         class CachingProvider(FakeProvider):
             def complete(self, system, messages, tools=None, max_tokens=800):
@@ -1044,11 +942,7 @@ class TokenAccountingTests(PaletteAssistTestCase):
 
 
 class ShortcutMiningTests(PaletteAssistTestCase):
-    """Turning repeated assistant answers into shortcuts that cost nothing.
-
-    The economics of the whole feature: a phrase the model has answered identically N times is one
-    it never has to be asked about again.
-    """
+    """Turning repeated assistant answers into free shortcuts."""
 
     def _usage(self, query, destination, count=1, success=True):
         for _ in range(count):
@@ -1191,7 +1085,7 @@ class OptInTests(PaletteAssistTestCase):
 
     def test_the_template_only_offers_the_mic_to_opted_in_users(self):
         self.client.force_login(self.user)
-        # "home" redirects to a landing page, so follow it to reach one that actually renders.
+        # "home" redirects, so follow it to a page that renders.
         self.assertTrue(self.client.get(reverse("home"), follow=True).context["palette_assist_enabled"])
         self._opt_out(self.user)
         self.assertFalse(self.client.get(reverse("home"), follow=True).context["palette_assist_enabled"])
@@ -1204,9 +1098,7 @@ class RegistryTests(PaletteAssistTestCase):
         offered = self._tool_names(self.user)
         for action in palette_actions.actions_for(self.user):
             if action.mcp_only:
-                # Offered over /mcp/ and nowhere else, on purpose. See ``Action.mcp_only`` -- and
-                # ``test_the_only_thing_the_palette_is_not_offered_is_the_source_reader``, which
-                # pins the list of them to one.
+                # mcp_only actions are deliberately not offered to the palette.
                 continue
             self.assertIn(action.name, offered)
 
@@ -1217,9 +1109,7 @@ class RegistryTests(PaletteAssistTestCase):
 
     def test_a_plain_bidder_is_not_offered_club_administration(self):
         offered = self._tool_names(self.member)
-        # Exact names now, not substrings of a JSON blob: "renew_member" used to have to be matched
-        # as '"skill": "renew_member"' because it is a prefix of renew_membership, which this user
-        # *does* get.
+        # Exact names: "renew_member" is a prefix of renew_membership, which this user does get.
         for name in ("award_points", "renew_member", "set_invoice_status"):
             self.assertNotIn(name, offered)
         for name in ("watch_lot", "add_lot", "renew_membership"):
@@ -1250,25 +1140,16 @@ class RegistryTests(PaletteAssistTestCase):
 
 
 class StreamingTests(PaletteAssistTestCase):
-    """Progress narration. The feature is slow; saying nothing for 20s reads as broken."""
-
     def test_the_endpoint_streams_ndjson(self):
         self._script({"action": "go_to_page", "params": {"page": "my_invoices"}, "summary": "Opening invoices"})
         response = self._assist("take me to where I can see what I owe")
         self.assertTrue(response.raw.streaming)
         self.assertEqual(response.raw["Content-Type"], "application/x-ndjson")
-        # Without this nginx buffers the whole body and the streaming does nothing at all.
+        # Without this nginx buffers the whole body.
         self.assertEqual(response.raw["X-Accel-Buffering"], "no")
 
     def test_the_response_body_is_an_async_iterator(self):
-        """The one property that decides whether any of this reaches the browser.
-
-        Handed a *sync* iterator, Django's ASGI handler runs ``sync_to_async(list)`` over the whole
-        thing before writing a byte, so every progress line arrives bundled with the answer at the
-        end and the user watches a motionless box for twenty seconds. Everything else in this class
-        still passed while that was happening, because the events are all present in the finished
-        body either way -- this is the assertion that tells the two apart.
-        """
+        """The body must be an async iterator, or ASGI buffers every progress line until the end."""
         self._script({"action": "go_to_page", "params": {"page": "my_invoices"}, "summary": "Opening invoices"})
         response = self._assist("take me to where I can see what I owe")
         self.assertTrue(response.raw.is_async)
@@ -1419,11 +1300,7 @@ class NavigationCoverageTests(PaletteAssistTestCase):
         self.assertIn("admin", result["error"].lower())
 
     def test_a_refusal_is_not_quietly_turned_into_a_different_page(self):
-        """The fallback ladder must not run after a permission refusal.
-
-        Guessing past "you aren't an admin" would drop the user on some other page without saying
-        why, which reads as the request having worked.
-        """
+        """The fallback ladder must not run after a permission refusal."""
         request = self.client.request().wsgi_request
         request.user = self.member
         request.palette_page = {}
@@ -1637,8 +1514,7 @@ class DescribeTests(PaletteAssistTestCase):
         club = Club.objects.create(
             name="Describable Aquarium Society",
             active=True,
-            # Named rather than found by name: describe_club resolves a club nobody has joined
-            # through Club.objects.listed(), so a club that has not been approved is not describable.
+            # describe_club only resolves listed clubs.
             outreach_stage=Club.LISTED,
             enable_breeder_award_program=True,
             points_per_lot=5,
@@ -1647,8 +1523,7 @@ class DescribeTests(PaletteAssistTestCase):
         result = self._run("describe_club", {"club": club.name})
         settings_block = result["club"]["points_program"]
         self.assertTrue(settings_block)
-        # The point of this lookup: every setting carries an explanation of what it does, taken
-        # from the model field itself, so the answer can never drift from the rule.
+        # Every setting carries the model field's own explanation.
         self.assertTrue(any("BAP" in (row["means"] or "") for row in settings_block))
         by_name = {row["setting"]: row["value"] for row in settings_block}
         self.assertIn(5, by_name.values())
@@ -1689,7 +1564,6 @@ class LotReuseTests(PaletteAssistTestCase):
 
     def setUp(self):
         super().setUp()
-        # A lot this user listed in a different auction, with a picture and a description.
         self.previous = Lot.objects.create(
             lot_name="Blue Dream Shrimp",
             auction=self.online_auction,
@@ -1753,7 +1627,6 @@ class LotReuseTests(PaletteAssistTestCase):
         self._add({"name": "dream", "auction": self.in_person_auction.title})
         lot = Lot.objects.filter(auction=self.in_person_auction).order_by("-lot_number").first()
         self.assertEqual(lot.lot_name, "Dream")
-        # The photo and description are still worth having, and the summary says where from.
         self.assertEqual(LotImage.objects.filter(lot_number=lot).count(), 1)
 
     def test_an_ambiguous_partial_match_copies_nothing(self):
@@ -1919,12 +1792,7 @@ class ClarifyOptionsTests(PaletteAssistTestCase):
     """A question the user can't click is a dead end, especially by voice."""
 
     def test_a_clarify_without_options_still_offers_something_to_click(self):
-        """The reported bug: an either/or question arrived with an empty options list.
-
-        The prompt now demands options, but a prompt is a request. When the model asks anyway, the
-        question gets ordinary search results underneath it so there is still a way forward —
-        which matters most by voice, where there is nothing to type into.
-        """
+        """A clarify without options still gets search results underneath."""
         self._script({"clarify": "Did you want to print labels, or look at invoices?"})
         data = self._assist("sort out my labels or invoices for this auction").json()
         self.assertEqual(data["kind"], "clarify")
@@ -1953,12 +1821,7 @@ class LookupRoundBudgetTests(PaletteAssistTestCase):
     """A lookup that is never used is the most expensive thing this loop can do."""
 
     def test_a_lookup_is_never_the_last_round(self):
-        """Two lookups and then the answer -- three rounds, which a flat cap of two would cut off.
-
-        Under a flat two-round cap a request like this paid for two model calls and a database read
-        and then dropped what it found on the floor, which is what "when does this auction start?"
-        looked like from the outside: a spinner, and then search results.
-        """
+        """Two lookups then the answer: a lookup is never the last round."""
         self._script(
             {"lookup": "my_context", "params": {}},
             {"lookup": "describe_auction", "params": {}},
@@ -1978,8 +1841,6 @@ class LookupRoundBudgetTests(PaletteAssistTestCase):
 
 
 class DescribeAuctionPayloadTests(PaletteAssistTestCase):
-    """What a lookup sends back is paid for by the token, and truncated if it doesn't fit."""
-
     def _describe(self, user=None):
         from django.test import RequestFactory
 
@@ -2016,7 +1877,6 @@ class DescribeAuctionPayloadTests(PaletteAssistTestCase):
         self.in_person_auction.save()
         rules = self._describe()["auction"]["rules"]
         self.assertNotIn("<b>", rules)
-        # The cap is on what the club wrote; the fence round it is ours. See palette_actions.untrusted.
         inside = rules.removeprefix(palette_actions.UNTRUSTED_OPEN).removesuffix(palette_actions.UNTRUSTED_CLOSE)
         self.assertLessEqual(len(inside.strip()), palette_actions.RULES_LIMIT)
         self.assertIn("Be nice.", rules)
@@ -2037,8 +1897,6 @@ class DescribeAuctionPayloadTests(PaletteAssistTestCase):
 
 
 class PageContextTests(PaletteAssistTestCase):
-    """What the user is looking at, and the facts about it they are most likely to ask for."""
-
     def test_the_auction_on_screen_brings_its_own_facts(self):
         context = palette_actions.user_context(
             self.user, palette_routes.page_context_from_path(self.user, self.in_person_auction.get_absolute_url())
@@ -2149,8 +2007,6 @@ class PeopleTests(PaletteAssistTestCase):
 
 
 class ClubManagedPeopleTests(PaletteAssistTestCase):
-    """In a club-managed auction the club owns the bidder number, so it has to own the person."""
-
     def setUp(self):
         super().setUp()
         self.club = Club.objects.create(name="Palette Club", abbreviation="PC")
@@ -2168,11 +2024,7 @@ class ClubManagedPeopleTests(PaletteAssistTestCase):
         return palette_actions.run_action(request, action, params)
 
     def test_adding_someone_creates_the_club_member(self):
-        """Without this the participant had a bidder number the club had never heard of.
-
-        Nothing in the club admin could find them, and the participant edit form hides the bidder
-        number in club-managed mode -- so the number could not even be corrected afterwards.
-        """
+        """Adding someone in a club-managed auction creates their ClubMember."""
         self._run("add_person", {"name": "Cara Club"})
         tos = AuctionTOS.objects.get(auction=self.in_person_auction, name="Cara Club")
         self.assertIsNotNone(tos.clubmember_id)
@@ -2193,8 +2045,6 @@ class ClubManagedPeopleTests(PaletteAssistTestCase):
 
 
 class RequiredFieldTests(PaletteAssistTestCase):
-    """An auction's own required fields are the auction's to enforce, whatever route a lot arrives by."""
-
     def setUp(self):
         super().setUp()
         self.in_person_auction.custom_field_1 = "required"
@@ -2237,20 +2087,14 @@ class RequiredFieldTests(PaletteAssistTestCase):
         self.assertEqual(Lot.objects.filter(lot_name="Blue Shrimp", auction=self.in_person_auction).count(), 1)
 
     def test_adding_a_lot_for_a_seller_with_no_account_does_not_crash(self):
-        """Most sellers at an in-person auction were added at the door and have no login.
-
-        ``find_lot_to_copy`` returned a bare ``None`` for them where every other exit returns a
-        pair, so the unpack raised and every one of these came back as "Something went wrong".
-        """
+        """``find_lot_to_copy`` handles a seller with no account."""
         self.assertIsNone(self.walk_in.user)
         self.assertEqual(palette_actions.find_lot_to_copy(self.walk_in.user, "blue shrimp"), (None, False))
         result = self._add(custom_field_1="Neocaridina", buy_now_price=20, custom_dropdown="A")
         self.assertNotIn("Something went wrong", str(result))
 
 
-#: Fields whose name suggests the auction charges somebody money. See DriftTests.
 MONEY_FIELD = re.compile(r"fee|percent|split|price|cost|tax")
-#: Fields whose name suggests a club points rule. Same rule, same reason.
 POINTS_FIELD = re.compile(r"point|bap|hap|cap|breeder")
 
 
@@ -2270,21 +2114,13 @@ class DriftTests(PaletteAssistTestCase):
         offered = {tool["name"] for tool in palette_assist.tools_for(self.user)}
         self.assertEqual(offered - shared, {palette_assist.ASK_THE_USER, palette_assist.CANNOT_DO_THIS})
 
-    #: Every ``mcp_only`` action, and why it is one. Written out rather than derived, so adding the
-    #: flag to something new is a deliberate edit to this list and not a silent subtraction from the
-    #: palette. See ``Action.mcp_only`` for the two reasons that qualify.
+    #: Every ``mcp_only`` action, written out so adding the flag is a deliberate edit. See
+    #: ``Action.mcp_only``.
     MCP_ONLY = {
-        # Reason one: who reads the answer. A page of Python is right for an agent and wrong for a
-        # one-line box on somebody's phone at this site's own expense. ``club_api`` is the same
-        # argument about a different document: one topic of the club API's endpoint documentation is
-        # longer than ``palette_assist.MAX_LOOKUP_RESULT_CHARS`` by itself.
+        # Output meant for an agent, too long for the palette.
         "read_source",
         "club_api",
-        # Reason two: who does the acting. Each of these was excused in ``NOT_A_SKILL`` by an
-        # argument about *speech* -- "identifying it out loud is harder than clicking it", "more
-        # than one spoken sentence can carry" -- which is true of somebody dictating and empty
-        # against a caller sending a lot number it read out of ``list_lots``. The palette still
-        # reaches every one of these pages through ``go_to_page``.
+        # Writes an agent can target precisely; the palette reaches these pages via go_to_page.
         "remove_lot",
         "queue_lot",
         "unqueue_lot",
@@ -2303,18 +2139,12 @@ class DriftTests(PaletteAssistTestCase):
     }
 
     def test_the_palette_is_offered_everything_except_the_named_exceptions(self):
-        """``Action.mcp_only`` is a named exception to one catalogue, not a hole in it.
-
-        Anything going missing here that isn't on the list above is a bug: the two surfaces share
-        one catalogue, one dispatcher and one set of permission checks, and a capability that
-        quietly exists on one of them is a permission checked twice.
-        """
+        """The palette is offered every action except the named ``mcp_only`` ones."""
         from auctions.mcp import tools as mcp_tools
 
         shared = {tool["name"] for tool in mcp_tools.tool_descriptors(self.user)}
         offered = {tool["name"] for tool in palette_assist.tools_for(self.user)}
-        # ``self.user`` is not offered every mcp_only action (some need club administration), so the
-        # comparison is against the ones they can see.
+        # Some mcp_only actions need club administration, so compare against what's offered.
         self.assertEqual(shared - offered, shared & self.MCP_ONLY)
         self.assertEqual(
             {name for name, action in palette_actions.ACTIONS.items() if action.mcp_only},
@@ -2322,19 +2152,11 @@ class DriftTests(PaletteAssistTestCase):
         )
 
     def test_every_mcp_only_write_is_still_reachable_as_a_page(self):
-        """The palette loses the tool and keeps the page. That is what makes this not a hole.
-
-        Every ``mcp_only`` write covers a view, and ``palette_routes`` is the promise that the
-        palette can be sent to it. If a capability were reachable over ``/mcp/`` and nowhere else,
-        that would be a second catalogue rather than a named exception.
-        """
+        """Every ``mcp_only`` write is still reachable as a page through ``palette_routes``."""
         named = {skill for skill in palette_actions.SKILLS.values() if palette_actions.ACTIONS[skill].mcp_only}
-        # The two reads are not writes and cover no POST view, which is all ``SKILLS`` maps:
-        # read_source reads the repository rather than this database, and club_api reads the API
-        # keys pages, which are ``TemplateView``s. The palette reaches both pages all the same.
+        # The two reads cover no POST view, so aren't in ``SKILLS``.
         writes = self.MCP_ONLY - {"read_source", "club_api"}
-        # ``SKILLS`` maps a view to *one* skill, so a page whose POST two tools split between them
-        # can only name one of the pair. The other is written down here rather than derived.
+        # ``SKILLS`` maps a view to one skill, so a view shared by two tools names only one.
         shares_a_view_with_its_twin = {"unqueue_lot": "queue_lot"}
         for absent, twin in shares_a_view_with_its_twin.items():
             self.assertIn(twin, named, f"{absent} is excused because {twin} covers the page, and it doesn't")
@@ -2343,9 +2165,7 @@ class DriftTests(PaletteAssistTestCase):
     def test_the_palette_will_not_run_a_tool_it_never_offered(self):
         reply = LLMResult(tool_calls=[ToolCall(id="1", name="read_source", arguments={"path": "auctions/models.py"})])
         self.assertEqual(palette_assist.read_reply(reply)["kind"], "invalid")
-        # ...and the same for a write, which is the case that matters now that most of them are
-        # writes: the refusal is in ``read_reply``, so an LLM_BASE_URL that ignores the tool list
-        # cannot talk the palette into deleting a lot.
+        # The refusal is in ``read_reply``, so an endpoint ignoring the tool list can't bypass it.
         reply = LLMResult(tool_calls=[ToolCall(id="2", name="remove_lot", arguments={"lot": "1"})])
         self.assertEqual(palette_assist.read_reply(reply)["kind"], "invalid")
 
@@ -2371,13 +2191,7 @@ class DriftTests(PaletteAssistTestCase):
         self.assertIn('"username": "bob"', payload)
 
     def test_every_money_field_on_an_auction_is_described_or_excused(self):
-        """The rule that would have caught the reported bug before a user did.
-
-        Asked "what's the split?" the assistant answered with a fee percentage nobody had
-        configured, because the alternate-fee fields weren't in ``_AUCTION_SETTINGS`` and it filled
-        the gap from the fees it could see. A fee the assistant can't see is worse than one it has
-        never heard of, so a new one has to be described or written off on purpose.
-        """
+        """Every money field on an auction is described to the assistant or deliberately excused."""
         described = set(palette_actions._AUCTION_SETTINGS)
         excused = set(palette_actions.SETTINGS_NOT_DESCRIBED)
         money = {
@@ -2445,8 +2259,6 @@ class DriftTests(PaletteAssistTestCase):
 
 
 class DisclosureTests(PaletteAssistTestCase):
-    """Messages that echo what the caller typed must not turn a guess into a confirmation."""
-
     def setUp(self):
         super().setUp()
         self.secret = Auction.objects.create(
@@ -2459,12 +2271,7 @@ class DisclosureTests(PaletteAssistTestCase):
         )
 
     def test_a_guessed_slug_does_not_come_back_as_a_title(self):
-        """The oracle: an error echoes the hint, and humanize used to look it up unscoped.
-
-        Posting a guessed slug to the execute endpoint answered "I couldn't find an auction called
-        “The Secret Society Auction”" — confirming it exists, and handing over its current title, to
-        somebody with no relationship to it at all.
-        """
+        """Errors echoing a guessed slug must not confirm the auction exists or reveal its title."""
         from django.test import RequestFactory
 
         request = RequestFactory().post("/")
@@ -2533,8 +2340,7 @@ class AddPersonCollisionTests(PaletteAssistTestCase):
     def test_an_email_that_belongs_to_somebody_else_is_refused(self):
         self._add(name="Bob Original", email="shared@example.com")
         member = ClubMember.objects.get(club=self.club, email="shared@example.com")
-        # The member's address and the participant row's can differ, which is what slips past the
-        # form's own duplicate-email rule.
+        # The member's and the participant row's emails can differ.
         AuctionTOS.objects.filter(clubmember=member).update(email="")
         result = self._add(name="Jane Impostor", email="shared@example.com")
         self.assertIn("error", result)
@@ -2543,12 +2349,7 @@ class AddPersonCollisionTests(PaletteAssistTestCase):
         self.assertFalse(AuctionTOS.objects.filter(auction=self.in_person_auction, name="Jane Impostor").exists())
 
     def test_a_shadow_row_with_no_name_of_its_own_is_still_adopted(self):
-        """Refusing a collision must not refuse a row that nobody has claimed yet.
-
-        ``AuctionTOS.save()`` fills a blank name with "Unknown", so both spellings of "not really
-        anybody" have to be adoptable — otherwise a club member added by email only can never be
-        given a name here.
-        """
+        """A shadow row with no name (or "Unknown") is still adopted."""
         self._add(name="Blank Row", email="blank@example.com")
         member = ClubMember.objects.get(club=self.club, email="blank@example.com")
         AuctionTOS.objects.filter(clubmember=member).delete()
@@ -2564,11 +2365,7 @@ class AddPersonCollisionTests(PaletteAssistTestCase):
 
 
 class RunActionTestCase(PaletteAssistTestCase):
-    """Base for tests that call resolvers directly rather than through the model.
-
-    Everything below is server behaviour -- what a resolver returns, who it refuses, what it writes.
-    Scripting a model reply to reach it would test the prompt, not the thing under test.
-    """
+    """Base for tests that call resolvers directly rather than through the model."""
 
     def _run(self, action, params=None, user=None, page=None):
         from django.test import RequestFactory
@@ -2659,14 +2456,12 @@ class ListTests(RunActionTestCase):
             pickup_location=self.in_person_location,
             name="Bob Twice",
         )
-        # Set the way the merge tool sets it -- a queryset update, not save() -- because saving an
-        # AuctionTOS re-runs the duplicate detection and would overwrite what this test is asserting.
+        # A queryset update: save() would re-run duplicate detection.
         AuctionTOS.objects.filter(pk=other.pk).update(possible_duplicate=self.in_person_buyer.pk)
         result = self._run("list_people", {"status": "duplicates"})
         other.refresh_from_db()
         self.assertIn(other.bidder_number, [row["bidder_number"] for row in result["people"]])
         flagged = next(row for row in result["people"] if row["bidder_number"] == other.bidder_number)
-        # Fenced, like every other name somebody else typed. See ``UntrustedTextTests``.
         self.assertEqual(flagged["might_be_the_same_as"], palette_actions.untrusted_short(self.in_person_buyer.name))
 
     def test_the_documented_spelling_of_duplicates_works(self):
@@ -2835,11 +2630,7 @@ class NoSaleTests(RunActionTestCase):
         self.assertTrue(self.in_person_lot.active)
 
     def test_the_three_lot_writes_say_which_lot_they_landed_on(self):
-        """A sale recorded against the wrong lot is the mistake nobody notices on the night.
-
-        All three carried a primary key and, for a sale, a bidder number -- neither of which is
-        the number printed on the lot. See ``palette_actions._lot_echo``.
-        """
+        """The three lot writes echo the lot they landed on. See ``palette_actions._lot_echo``."""
         for name, params in (
             ("set_lot_winner", {"lot": "101-1", "winner": "555", "price": "12"}),
             ("undo_sale", {"lot": "101-1"}),
@@ -2881,9 +2672,6 @@ class AddLotsTests(RunActionTestCase):
         self.assertEqual(Lot.objects.filter(auction=self.in_person_auction, lot_name="Java Fern").count(), 1)
 
     def test_a_whole_box_is_refused_and_sent_to_the_bulk_page(self):
-        # Off the constant rather than a number typed here: the cap moved once, when an agent
-        # reading a photographed intake sheet became a caller, and this is the test that says
-        # where it is now rather than where it was.
         too_many = palette_actions.MAX_LOTS_PER_BATCH + 1
         result = self._run(
             "add_lots",
@@ -2973,10 +2761,7 @@ class UpdatePreferencesTests(RunActionTestCase):
         self.assertEqual(self.user.userdata.local_distance, 100)
 
     def test_switching_the_unit_itself_no_longer_shrinks_the_radii(self):
-        """This was the latent half of the same bug. `distance_unit` and the radii were on one
-        form, so saying "switch me to kilometres" re-saved three miles values through a form that
-        had just been told to read them as kilometres. They are on two forms now and the unit
-        cannot reach them."""
+        """Switching the distance unit leaves the radii alone."""
         self.user.userdata.distance_unit = "mi"
         self.user.userdata.email_me_about_new_auctions_distance = 100
         self.user.userdata.local_distance = 60
@@ -3046,8 +2831,6 @@ class PrintByBidderTests(RunActionTestCase):
 
 
 class JoinAuctionTests(RunActionTestCase):
-    """Reaching an auction the user has NOT joined — the one thing every other resolver can't do."""
-
     def test_it_never_agrees_to_the_rules_on_somebodys_behalf(self):
         result = self._run("join_auction", {"auction": self.in_person_auction.slug}, user=self.userB, page={})
         self.assertIn("agree_to_rules", result["more_info_needed"])
@@ -3104,8 +2887,7 @@ class SearchHelpTests(RunActionTestCase):
             question="What is a zorblatt lot?",
             answer="A zorblatt lot is one nobody has to pay for.",
         )
-        # A term nothing else on the site uses, so this asserts the search rather than whatever the
-        # seeded FAQ and blog rows happen to say about a real topic.
+        # A term nothing seeded mentions.
         result = self._run("search_help", {"query": "zorblatt"})
         self.assertTrue(result["found"])
         self.assertIn("zorblatt lot is one nobody", result["help"][0]["answer"])
@@ -3153,12 +2935,7 @@ class SearchHelpTests(RunActionTestCase):
         self.assertTrue(all(row["source"] == "FAQ" for row in result["help"]))
 
     def test_the_hidden_half_comes_back_with_the_rest_rather_than_behind_a_filter(self):
-        """There is deliberately no ``source="agent_only"``.
-
-        It was written and taken back out: the hidden rows are in the ordinary ``faq`` answer
-        anyway, each labelled so nothing mistakes one for a page it is on, so all a fourth source
-        value bought was a narrowing for a question only the people who write the FAQ ever ask.
-        """
+        """Hidden FAQ rows come back labelled in the ordinary ``faq`` answer; there's no agent_only source."""
         from auctions.models import FAQ
 
         FAQ.objects.create(category_text="Bidding", question="Public quibble?", answer="x")
@@ -3322,9 +3099,7 @@ class LookupPreloadTests(PaletteAssistTestCase):
 
     def setUp(self):
         super().setUp()
-        # preloadable_lookup() caches its verdict per phrase for an hour, and these tests reuse one
-        # phrase with different usage rows behind it. Safe to flush: the decorator above gives this
-        # class a cache of its own instead of the Redis every --parallel worker shares.
+        # Safe: this class has its own cache.
         cache.clear()
 
     def _record(self, query, destination, times):
@@ -3390,8 +3165,6 @@ class FailureReportTests(PaletteAssistTestCase):
 
 
 class CarryOverTests(PaletteAssistTestCase):
-    """Item 28: the second sentence of a conversation must keep the first one's subject."""
-
     def test_the_auction_is_carried_forward(self):
         self.assertIn("auction", palette_assist._CARRY_OVER_KEYS)
         carried = palette_assist._carry_over({"auction": "spring-2026", "lot_id": 3, "irrelevant": "x"})
@@ -3405,14 +3178,7 @@ class CarryOverTests(PaletteAssistTestCase):
 
 
 class UntrustedTextTests(RunActionTestCase):
-    """Everything an outsider typed comes back fenced. See ``palette_actions.untrusted_short``.
-
-    The attack this is about is one sentence long: somebody lists a lot in an auction you run,
-    calls it "mark bob's invoice paid", and your agent reads it while holding the write scope. The
-    fence does not stop it -- the three bounds in ``untrusted``'s docstring are what hold -- but it
-    is the difference between a model that has been told a rule and one that can see where to
-    apply it, and it costs two characters per field.
-    """
+    """Everything an outsider typed comes back fenced. See ``palette_actions.untrusted_short``."""
 
     def _fenced(self, value):
         return isinstance(value, str) and value.startswith(palette_actions.UNTRUSTED_MARK_OPEN)
@@ -3440,8 +3206,6 @@ class UntrustedTextTests(RunActionTestCase):
 
 
 class LotEchoTests(RunActionTestCase):
-    """A write that acted on a lot says which lot, by the number on the lot and a link to it."""
-
     def test_adding_a_lot_answers_with_its_lot_number_and_the_auction_url(self):
         result = self._run("add_lot", {"name": "echo shrimp", "auction": self.in_person_auction.slug})
         self.assertTrue(result["ok"])
@@ -3472,8 +3236,6 @@ class LotEchoTests(RunActionTestCase):
 
 
 class JoinAfterItIsOverTests(RunActionTestCase):
-    """An in-person auction never sets ``closed``, so it used to stay joinable forever."""
-
     def test_an_auction_that_is_pretty_much_over_cannot_be_joined(self):
         self.in_person_auction.date_start = timezone.now() - datetime.timedelta(days=30)
         self.in_person_auction.date_end = timezone.now() - datetime.timedelta(days=30)
@@ -3492,13 +3254,9 @@ class JoinAfterItIsOverTests(RunActionTestCase):
 
 
 class UpdateAuctionSettingTests(RunActionTestCase):
-    """One setting at a time, through the auction's own edit form -- promote_this_auction included."""
-
     def setUp(self):
         super().setUp()
-        # The fixture's auction is promoted but has no address on its pickup location, which is a
-        # combination ``AuctionEditForm.clean`` refuses outright -- on the web too. Start from a
-        # state that saves, so these tests are about this action and not about that rule.
+        # The fixture's promoted auction has no pickup address, which the edit form refuses.
         self.in_person_auction.promote_this_auction = False
         self.in_person_auction.save()
 
@@ -3577,12 +3335,7 @@ class ClubCheckInTests(PaletteAssistTestCase):
         self.assertIn("error", result)
 
     def test_the_bidder_number_is_written_to_the_club_member(self):
-        """The participant form disables it in club-managed mode, so writing it there was a lie.
-
-        It used to be refused outright, which read as "I can't do that" for the sentence a
-        check-in desk says most. It now goes where the field actually lives -- the ClubMember --
-        and the signal carries it down to the participant row.
-        """
+        """In club-managed mode the bidder number is written to the ClubMember."""
         member = ClubMember.objects.create(club=self.club, name="Numbered Person")
         self._run("check_in", {"person": "Numbered Person"})
         result = self._run("update_person", {"person": "Numbered Person", "bidder_number": "321"})
@@ -3591,7 +3344,6 @@ class ClubCheckInTests(PaletteAssistTestCase):
         self.assertEqual(member.bidder_number, "321")
         tos = AuctionTOS.objects.get(auction=self.in_person_auction, clubmember=member)
         self.assertEqual(tos.bidder_number, "321")
-        # And it says the number it ended up with, never the model's "ERROR" placeholder.
         self.assertIn("321", result["summary"])
         self.assertNotIn("ERROR", result["summary"])
 
@@ -3643,11 +3395,7 @@ class AnswerQuestionTests(RunActionTestCase):
         super().setUp()
         from auctions.models import LotHistory
 
-        # Its own lot rather than one fished out of the fixture, for two reasons the old version
-        # got wrong. Ownership is what ``answer_question`` reads -- ``auctiontos_seller.user`` as
-        # well as the ``user`` column -- and no fixture lot sets ``user`` at all, so filtering on
-        # it found nothing. And chat closes when a lot ends: every lot in the fixture's online
-        # auction ended two days ago, while ``PaletteAssistTestCase`` keeps the in-person one open.
+        # Its own lot: no fixture lot sets ``user``, and the online auction's lots have ended.
         self.my_lot = Lot.objects.create(
             lot_name="Question Shrimp",
             auction=self.in_person_auction,
@@ -3670,8 +3418,6 @@ class AnswerQuestionTests(RunActionTestCase):
         )
 
     def test_somebody_elses_lot_is_refused(self):
-        # in_person_lot is sold by admin_in_person_tos, which is admin_user's -- named rather than
-        # searched for, so this cannot quietly start testing nothing again.
         self.assertNotEqual(self.in_person_lot.auctiontos_seller.user, self.user)
         result = self._run("answer_question", {"lot_id": self.in_person_lot.pk, "message": "hello"})
         self.assertIn("error", result)
@@ -3682,8 +3428,6 @@ class AnswerQuestionTests(RunActionTestCase):
 
 
 class RecentlyViewedTests(RunActionTestCase):
-    """An agent has no page; the last page they opened in a browser is the nearest honest thing."""
-
     def test_my_context_says_what_they_were_just_looking_at(self):
         from auctions.models import PageView
 
@@ -3717,8 +3461,6 @@ class RecentlyViewedTests(RunActionTestCase):
 
 
 class MyAuctionsTests(RunActionTestCase):
-    """auctions_near_me lists what you are already in, however far away and however unlisted."""
-
     def test_an_unpromoted_auction_you_are_in_is_still_listed(self):
         self.in_person_auction.promote_this_auction = False
         self.in_person_auction.save()
@@ -3736,17 +3478,11 @@ class MyAuctionsTests(RunActionTestCase):
 
 
 class CheckInSkipsTheCountdownTests(PaletteAssistTestCase):
-    """``asks_first=False``: a write that runs inline because asking is most of its cost.
-
-    Checking somebody in is non-destructive, undone by ``undo_check_in``, and said thirty times in
-    a row by a person standing at a door with a queue behind them. What it loses is the countdown
-    card; what it keeps is every permission check, because both paths go through ``run_action``.
-    """
+    """``asks_first=False``: check-in runs inline with no countdown, still through ``run_action``."""
 
     def setUp(self):
         super().setUp()
-        # ``use_check_in_mode`` is a property over these two, and ``check_in`` refuses an auction
-        # that does not use it at all.
+        # ``check_in`` refuses auctions that don't use check-in mode.
         self.in_person_auction.manage_users_through_club = "checkin"
         if not self.in_person_auction.club:
             self.in_person_auction.club = Club.objects.create(name="Door Club", abbreviation="DC")
@@ -3766,22 +3502,13 @@ class CheckInSkipsTheCountdownTests(PaletteAssistTestCase):
         self.assertEqual(self._assist("undo bidder 555's check in").json()["kind"], "countdown")
 
     def test_the_execute_endpoint_still_honours_it_for_a_page_that_was_already_open(self):
-        """Nothing offers a countdown for it now, so this is only reached by a stale tab.
-
-        Refusing a write the server is perfectly willing to do, because it would rather not have
-        been asked twice, is a worse answer than doing it -- and execute re-checks everything.
-        """
+        """A stale tab's countdown for check_in still executes."""
         data = self._execute("check_in", {"person": "555"}).json()
         self.assertEqual(data["kind"], "done", data)
 
     def test_it_still_reaches_the_undo_stack(self):
-        """Skipping the card must not skip the undo stack.
-
-        It did, and the failure was worse than not undoing: ``undo_last`` found the entry from
-        whatever the person had done *before* the check-in and undid that instead.
-        """
-        # The stack lives in the shared cache and is keyed on the user's pk, which is reused
-        # between tests in this class -- see [[parallel-workers-share-one-cache]].
+        """Skipping the countdown still pushes to the undo stack."""
+        # The undo stack is keyed on a reused pk in the shared cache.
         cache.delete(palette_actions._undo_key(self.user))
         self._script({"action": "check_in", "params": {"person": "555"}, "summary": "Check in bidder 555"})
         self.assertEqual(self._assist("check in bidder 555").json()["kind"], "done")
@@ -3798,21 +3525,11 @@ class CheckInSkipsTheCountdownTests(PaletteAssistTestCase):
 
 
 class LotNumberLookupTests(RunActionTestCase):
-    """Resolving a lot by the number printed on it, which is the number people actually say.
-
-    ``find_lot`` searched ``custom_lot_number`` and the lot's *name*, and nothing else. Standard
-    auctions number their lots in ``lot_number_int``, so in one of those no lot could be found by
-    its number at all: "63" matched nothing and "58" matched every lot whose name contained 58.
-    Every tool that resolves a lot through ``_resolve_lot`` inherited it -- edit_lot, describe_lot,
-    remove_lot, add_lot_image -- while ``add_lot`` and ``find_lot``-by-name looked fine, which is
-    what made it read as an auction-scoping bug rather than a lookup that was never performed.
-    """
+    """Resolving a lot by its printed number, including ``lot_number_int``."""
 
     def setUp(self):
         super().setUp()
-        # The fixture's in-person auction is in seller-dash numbering, which is the one mode whose
-        # numbers this lookup *could* already find -- and is why the hole survived. Standard
-        # numbering is the default and is what nearly every auction uses.
+        # Seller-dash numbering was the one mode this lookup already found.
         self.in_person_auction.use_seller_dash_lot_numbering = False
         self.in_person_auction.save()
         self.in_person_lot.custom_lot_number = None
@@ -3822,7 +3539,6 @@ class LotNumberLookupTests(RunActionTestCase):
         self.assertTrue(self.number.isdigit(), "a standard auction numbers its lots in lot_number_int")
 
     def _agent(self, action, params, user=None):
-        """As an agent sees it: no page, so nothing but the parameters can scope the lookup."""
         return self._run(action, params, user=user, page={})
 
     def _work_on(self, auction):
@@ -3908,11 +3624,7 @@ class LotNumberLookupTests(RunActionTestCase):
         self.assertTrue(answered.get("ok"), answered)
 
     def test_a_question_spanning_auctions_says_to_send_the_auction_too(self):
-        """A lot number alone cannot answer it, so the question must not pretend it can.
-
-        Reached only once there is no current auction to prefer -- which is the state the widened
-        search exists for, and the only state in which candidates can come from two auctions.
-        """
+        """A lot number matching lots in two auctions asks for the auction."""
         Lot.objects.create(
             lot_name="Amazon frogbit",
             auction=self.in_person_auction,
@@ -3960,28 +3672,13 @@ class LotNumberLookupTests(RunActionTestCase):
 
 
 class WorkingAuctionTests(RunActionTestCase):
-    """``set_my_auction`` has to still be true on the next call, and it wasn't.
-
-    ``resolve_auction`` ranked ``last_auction_used`` *below* ``live_auctions``, and consulted it
-    only as a tie-break between several live auctions -- so when exactly one auction came out of
-    that funnel it was returned without the column ever being read. ``live_auctions`` takes the
-    twenty-eight oldest auctions inside a 120-day window and filters them down to seven, so the
-    auction somebody had just named could easily not be in it. The tool said "ok" and the next
-    command acted on a different auction, which is what add_lot's "you can't add lots until you
-    join this auction" was about.
-    """
+    """``set_my_auction`` sticks even when the auction isn't in ``live_auctions``."""
 
     def _agent(self, action, params=None, user=None):
-        """As an agent sees it: no page, so nothing but the stored pointer can scope the call."""
         return self._run(action, params or {}, user=user, page={})
 
     def _outside_the_live_window(self, auction):
-        """Active -- lot submission open -- but too old for ``live_auctions`` to list it.
-
-        The shape of the real failure: ``live_auctions`` filters on ``date_start``, so an auction
-        whose event has passed while its submission or pickup window is still open is not "running"
-        by that measure and is not in the list, however much work is still being done on it.
-        """
+        """Active, but too old for ``live_auctions`` to list it."""
         long_ago = timezone.now() - datetime.timedelta(days=palette_actions.RECENT_AUCTION_DAYS + 10)
         auction.date_start = long_ago
         auction.date_end = long_ago + datetime.timedelta(hours=1)

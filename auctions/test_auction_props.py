@@ -1,4 +1,4 @@
-"""``Auction`` computed properties -- the many questions the rest of the site asks an auction."""
+"""Tests for ``Auction`` computed properties."""
 
 import datetime
 from decimal import Decimal
@@ -63,7 +63,6 @@ class AuctionPropertyTests(StandardTestCase):
             date_start=timezone.now() - datetime.timedelta(days=10),
             date_end=timezone.now() - datetime.timedelta(days=8),
         )
-        # Pickup still in the recent past (12h ago) -> not yet pretty_much_over.
         loc = PickupLocation.objects.create(
             name="loc", auction=auction, pickup_time=timezone.now() - datetime.timedelta(hours=12)
         )
@@ -74,7 +73,7 @@ class AuctionPropertyTests(StandardTestCase):
         self.assertTrue(auction.pretty_much_over)
 
     def test_pretty_much_over_online_uses_latest_of_multiple_pickups(self):
-        """The latest pickup (incl. second_pickup_time) across locations drives wind-down."""
+        """The latest pickup across locations, including second_pickup_time, drives wind-down."""
         auction = Auction.objects.create(
             created_by=self.user,
             title="pmo multi",
@@ -85,7 +84,6 @@ class AuctionPropertyTests(StandardTestCase):
         PickupLocation.objects.create(
             name="early", auction=auction, pickup_time=timezone.now() - datetime.timedelta(hours=48)
         )
-        # A second pickup only 2h ago keeps the auction from being pretty_much_over.
         PickupLocation.objects.create(
             name="late",
             auction=auction,
@@ -109,8 +107,7 @@ class AuctionPropertyTests(StandardTestCase):
         self.assertFalse(auction.pretty_much_over)
 
     def test_pretty_much_over_in_person_uses_date_start(self):
-        """In-person auctions are pretty_much_over 24h after date_start, once the online bidding
-        and lot submission windows (which default to date_start) are moved along with it."""
+        """In-person auctions are pretty_much_over 24h after date_start once the other windows have passed."""
         auction = Auction.objects.create(
             created_by=self.user,
             title="pmo in person",
@@ -125,8 +122,7 @@ class AuctionPropertyTests(StandardTestCase):
         self.assertTrue(auction.pretty_much_over)
 
     def test_pretty_much_over_in_person_waits_for_online_bidding_end(self):
-        """An in-person auction with online bidding enabled isn't pretty_much_over until the online
-        bidding window closes, even if the in-person event (date_start) was 24h+ ago."""
+        """An in-person auction waits for online bidding to end."""
         auction = Auction.objects.create(
             created_by=self.user,
             title="pmo in person online bidding",
@@ -138,8 +134,7 @@ class AuctionPropertyTests(StandardTestCase):
         self.assertFalse(auction.pretty_much_over)
 
     def test_pretty_much_over_in_person_waits_for_lot_submission_end(self):
-        """An in-person auction isn't pretty_much_over until lot submission closes, even if the
-        event (date_start) was 24h+ ago."""
+        """An in-person auction waits for lot submission to end."""
         auction = Auction.objects.create(
             created_by=self.user,
             title="pmo in person lot submission",
@@ -188,7 +183,6 @@ class AuctionPropertyTests(StandardTestCase):
 
     def test_allow_mailing_lots(self):
         """Test the allow_mailing_lots property"""
-        # Create a separate auction for this test to avoid test isolation issues
         mail_auction = Auction.objects.create(
             created_by=self.user,
             title="Mail test auction",
@@ -251,7 +245,6 @@ class AuctionPropertyTests(StandardTestCase):
             date_start=timezone.now() - datetime.timedelta(days=1),
             date_end=timezone.now() + datetime.timedelta(days=1),
         )
-        # Add a location with 0,0 coordinates (should be excluded from distance)
         PickupLocation.objects.create(
             name="Zero location",
             auction=zero_coord_auction,
@@ -274,7 +267,7 @@ class AuctionPropertyTests(StandardTestCase):
         assert zero_coord_auction.location_with_location_qs.count() == 1
 
     def test_all_auctions_distance_excludes_zero_and_mail_locations(self):
-        """Test that AllAuctions view distance calculation excludes 0,0 and mail locations"""
+        """AllAuctions distance excludes 0,0 and mail locations."""
         from django.test import RequestFactory
 
         from auctions.views import AllAuctions
@@ -597,7 +590,6 @@ class AuctionPropertyTests(StandardTestCase):
         assert qs.filter(pk=far_created_auction.pk).exists()
 
     def test_nearby_filter_disabled_by_preference(self):
-        """When show_nearby_auctions preference is False, the nearby filter should not apply"""
         from django.test import RequestFactory
 
         from auctions.views import AllAuctions
@@ -639,7 +631,7 @@ class AuctionPropertyTests(StandardTestCase):
         assert qs.filter(pk=far_auction.pk).exists()
 
     def test_nearby_filter_in_person_distance(self):
-        """In-person auctions should use email_me_about_new_in_person_auctions_distance, not the online distance"""
+        """In-person auctions use the in-person distance preference."""
         from django.test import RequestFactory
 
         from auctions.views import AllAuctions
@@ -681,9 +673,7 @@ class AuctionPropertyTests(StandardTestCase):
         test_user = self.user_who_does_not_join
         test_user.userdata.latitude = 43.0
         test_user.userdata.longitude = -71.5
-        # Online distance is very small so online auctions wouldn't qualify via distance
         test_user.userdata.email_me_about_new_auctions_distance = 10
-        # In-person distance is large enough to include the nearby in-person auction
         test_user.userdata.email_me_about_new_in_person_auctions_distance = 100
         test_user.userdata.save()
 
@@ -712,12 +702,10 @@ class AuctionPropertyTests(StandardTestCase):
         # Regular user without admin TOS does not have permission
         assert self.online_auction.permission_check(self.user_with_no_lots) is False
 
-        # Non-authenticated user does not have permission (though this requires a User object)
         assert self.online_auction.permission_check(self.userB) is False
 
     def test_dynamic_end(self):
         """Test the dynamic_end property for online auctions"""
-        # For non-sealed-bid auctions, dynamic end should be 60 minutes after date_end
         expected_dynamic_end = self.online_auction.date_end + datetime.timedelta(minutes=60)
         assert self.online_auction.dynamic_end == expected_dynamic_end
 
@@ -817,11 +805,7 @@ class AuctionPropertyTests(StandardTestCase):
         assert illogical_seconds.has_non_logical_times is not False
 
     def test_buyer_seller_participant_stats(self):
-        """Test that number_of_buyers, number_of_sellers, number_of_sellers_who_didnt_buy, and number_of_participants are accurate"""
-        # In StandardTestCase setup for online_auction:
-        # - online_tos (user) sold lots but never won any -> seller only
-        # - tosB (userB) won lots but never sold any -> buyer only
-        # - admin_online_tos and tosC neither bought nor sold
+        # online_tos only sold, tosB only won, admin_online_tos and tosC did neither.
         assert self.online_auction.number_of_buyers == 1
         assert self.online_auction.number_of_sellers == 1
         assert self.online_auction.number_of_sellers_who_didnt_buy == 1
@@ -848,11 +832,9 @@ class AuctionPropertyTests(StandardTestCase):
             auctiontos_winner=tos_both,
             active=False,
         )
-        # tos_both both sold and won a lot, so sellers_who_didnt_buy should stay at 1
         assert self.online_auction.number_of_buyers == 2
         assert self.online_auction.number_of_sellers == 2
         assert self.online_auction.number_of_sellers_who_didnt_buy == 1
-        # participants = buyers (tosB, tos_both) + sellers who didn't buy (online_tos) = 3
         assert self.online_auction.number_of_participants == 3
 
 
@@ -899,22 +881,10 @@ class LotPropertyTests(StandardTestCase):
 
 
 class LotInvoicePropertyTests(StandardTestCase):
-    """Regression tests for Lot.winner_invoice / Lot.sellers_invoice.
-
-    These properties previously queried Invoice with a non-existent `user` field
-    (`Q(user=..., auction=...)`). The resulting FieldError was swallowed by a blanket
-    `except Exception: return None`, so any lot with `winner` or `user` (seller) set --
-    which is the normal case for online sales and every user-submitted lot -- silently
-    resolved to None. That broke the Square auto-refund path and the invoice links in the
-    lot table/detail templates. The correct traversal is `auctiontos_user__user=...`.
-    """
+    """Lot.winner_invoice and Lot.sellers_invoice traverse ``auctiontos_user__user``."""
 
     def test_winner_invoice_resolves_when_winner_user_and_auctiontos_both_set(self):
-        """Realistic online-sale case: both winner (User) and auctiontos_winner are set.
-
-        The old code raised a swallowed FieldError as soon as `winner` was truthy (even though
-        the auctiontos branch was valid), so this returned None. It must now return the invoice.
-        """
+        """Both winner and auctiontos_winner set: returns the invoice."""
         self.lot.winner = self.userB
         self.lot.save()
         assert self.lot.winner is not None
@@ -922,7 +892,7 @@ class LotInvoicePropertyTests(StandardTestCase):
         assert self.lot.winner_invoice == self.invoiceB
 
     def test_winner_invoice_resolves_from_winner_user_without_auctiontos(self):
-        """Only the legacy winner (User FK) is set: resolve via auctiontos_user__user for this auction."""
+        """Only the legacy winner FK set."""
         invoice = Invoice.objects.create(auctiontos_user=self.tosB, auction=self.online_auction)
         lot = Lot.objects.create(
             lot_name="winner-user only lot",
@@ -945,7 +915,7 @@ class LotInvoicePropertyTests(StandardTestCase):
         assert self.lot.sellers_invoice == self.invoice
 
     def test_sellers_invoice_resolves_from_seller_user_without_auctiontos(self):
-        """Only the legacy user (seller User FK) is set: resolve via auctiontos_user__user for this auction."""
+        """Only the legacy seller FK set."""
         invoice = Invoice.objects.create(auctiontos_user=self.online_tos, auction=self.online_auction)
         lot = Lot.objects.create(
             lot_name="seller-user only lot",
@@ -958,7 +928,7 @@ class LotInvoicePropertyTests(StandardTestCase):
         assert lot.sellers_invoice == invoice
 
     def test_winner_invoice_none_when_winner_has_no_invoice(self):
-        """A winner who never joined the auction has no invoice: return None, not an error."""
+        """A winner with no invoice gets None."""
         lot = Lot.objects.create(
             lot_name="no-invoice winner lot",
             auction=self.online_auction,
@@ -982,7 +952,6 @@ class LotInvoicePropertyTests(StandardTestCase):
         assert bare_lot.sellers_invoice is None
 
     def test_square_refund_possible_true_for_winner_user_lot_with_square_payment(self):
-        """With the invoice now resolvable, a Square payment large enough makes a refund possible."""
         invoice = Invoice.objects.create(auctiontos_user=self.tosB, auction=self.online_auction)
         InvoicePayment.objects.create(
             invoice=invoice,
@@ -1019,26 +988,10 @@ class LotInvoicePropertyTests(StandardTestCase):
 
 
 class SellerInvoiceRemovedLotTests(StandardTestCase):
-    """Regression tests for Item 12: a removed (banned) lot must still appear on its seller's
-    invoice, but it must not be charged.
-
-    ``Lot.banned`` is labeled "Removed" and its help text documents "Removed lots are not
-    charged in invoices." The original ``payout`` property honored that with an
-    ``if self.banned: return payout`` short-circuit (a $0 payout). When the cut math was
-    refactored into the ``add_price_info`` queryset annotation, that guard was dropped, so a
-    removed lot was silently charged its normal seller cut / unsold-lot fee -- money the
-    invoice's own line items displayed but that the club never intended to collect, and (on
-    the buyer side) money billed for a lot that was pulled. These tests lock in:
-
-      * removed lots stay visible in ``sold_lots_queryset`` (they are not filtered out),
-      * their ``your_cut`` / ``club_cut`` are $0, so the displayed seller line items reconcile
-        with ``total_sold`` / ``net`` / ``calculated_total``,
-      * a buyer is never billed for a removed lot they "won".
-    """
+    """A removed (banned) lot stays on its seller's invoice but isn't charged, and buyers aren't billed."""
 
     def _isolated_auction(self):
-        """Build a clean online auction with a seller, a buyer, and both invoices, so the
-        assertions aren't muddied by the lots StandardTestCase attaches to ``self.invoice``."""
+        """A clean online auction with a seller, a buyer and both invoices."""
         now = timezone.now()
         auction = Auction.objects.create(
             created_by=self.user,
@@ -1081,7 +1034,6 @@ class SellerInvoiceRemovedLotTests(StandardTestCase):
         )
 
     def test_removed_lot_still_listed_on_seller_invoice(self):
-        """A removed lot (sold or unsold) is not filtered out of the seller's lot listing."""
         auction, seller_tos, buyer_tos, seller_invoice, _ = self._isolated_auction()
         kept = self._sold_lot(auction, seller_tos, buyer_tos, "kept sold lot", price=100)
         removed_sold = self._sold_lot(auction, seller_tos, buyer_tos, "sold then removed", price=100)
@@ -1105,14 +1057,13 @@ class SellerInvoiceRemovedLotTests(StandardTestCase):
         by_pk = {lot.pk: lot for lot in seller_invoice.sold_lots_queryset}
         assert by_pk[removed_sold.pk].your_cut == Decimal(0)
         assert by_pk[removed_sold.pk].club_cut == Decimal(0)
-        # Without the fix this would be -unsold_lot_fee (-10), charging the seller for a pulled lot.
+        # Otherwise the seller is charged the unsold-lot fee for a pulled lot.
         assert by_pk[removed_unsold.pk].your_cut == Decimal(0)
         assert by_pk[removed_unsold.pk].club_cut == Decimal(0)
 
     def test_seller_invoice_lines_reconcile_with_total(self):
-        """The sum of the displayed per-lot cuts equals total_sold / net / calculated_total."""
+        """The displayed per-lot cuts sum to total_sold, net and calculated_total."""
         auction, seller_tos, buyer_tos, seller_invoice, _ = self._isolated_auction()
-        # one lot that is genuinely sold (charged) plus two removed lots (not charged)
         self._sold_lot(auction, seller_tos, buyer_tos, "kept sold lot", price=100)
         removed_sold = self._sold_lot(auction, seller_tos, buyer_tos, "sold then removed", price=100)
         removed_sold.remove(True, self.user)
@@ -1142,7 +1093,6 @@ class SellerInvoiceRemovedLotTests(StandardTestCase):
         assert kept.pk in bought_pks
         assert removed.pk not in bought_pks, "buyer must not be billed for a removed lot"
 
-        # buyer display (bought_lots_queryset) reconciles with total_bought, and neither counts the removed lot
         displayed_buyer_total = sum((lot.final_price for lot in buyer_invoice.bought_lots_queryset), Decimal(0))
         assert displayed_buyer_total == Decimal(100)
         assert buyer_invoice.total_bought == Decimal(100)
@@ -1156,30 +1106,15 @@ class SellerInvoiceRemovedLotTests(StandardTestCase):
         by_pk = {lot.pk: lot for lot in seller_invoice.sold_lots_queryset}
         assert by_pk[sold.pk].your_cut == Decimal(73)
         assert by_pk[sold.pk].club_cut == Decimal(27)
-        # a plain unsold lot is still charged the unsold-lot fee -- only *removed* lots are waived
+        # Only removed lots are waived the unsold-lot fee.
         assert by_pk[unsold.pk].your_cut == Decimal(-10)
 
 
 class BuyNowSellerCreditTests(StandardTestCase):
-    """Regression tests for Item 13: a lot bought via "buy now" must credit the seller (and
-    charge the buyer) immediately -- before the endauctions cron runs.
+    """A buy-now sale credits the seller and charges the buyer immediately, before endauctions.
 
-    A completed buy-now sale sets ``winning_price`` + ``buy_now_used`` but deliberately leaves
-    ``active=True`` (the sold lot stays visible in the browse view until the cron flips it
-    inactive; see the comment in ``bidding.bid_on_lot``). Two bugs kept the money wrong until
-    the cron caught up:
-
-      * ``add_price_info``'s ``your_cut`` annotation only produced the real seller cut for lots
-        with ``active=False``. A live buy-now lot fell through to ``$0``, so ``club_cut``
-        (``winning_price - your_cut``) booked the *entire* sale price to the club and credited
-        the seller nothing until ``endauctions`` set ``active=False``.
-      * ``bidding.bid_on_lot`` called ``create_update_invoices`` *before* saving the sale
-        fields, so both invoices recalculated from stale (unsold) DB state -- even the buyer's
-        invoice showed ``$0`` until the next recalculation.
-
-    These tests lock in that the seller cut, club cut, and both invoices are correct the moment
-    buy now completes, that a later ``endauctions`` run does not double-apply anything, and that
-    normal (non-buy-now) sales are unchanged.
+    Buy now leaves the lot ``active=True``, so ``your_cut`` must not depend on ``active=False``, and
+    invoices must be recalculated after the sale fields are saved.
     """
 
     def _buy_now_auction(self, **kwargs):
@@ -1218,7 +1153,7 @@ class BuyNowSellerCreditTests(StandardTestCase):
             date_end=now + datetime.timedelta(days=2),
             **kwargs,
         )
-        # bidding (and therefore buy now) is blocked on very new lots; backdate date_posted so it is allowed
+        # Bidding is blocked on very new lots.
         lot.date_posted = now - datetime.timedelta(hours=1)
         lot.save()
         return lot
@@ -1230,7 +1165,6 @@ class BuyNowSellerCreditTests(StandardTestCase):
         return Invoice.objects.filter(auctiontos_user=buyer_tos, auction=auction).first()
 
     def test_seller_credited_immediately_after_buy_now(self):
-        """The seller cut / club cut are correct the moment buy now completes, before any cron run."""
         from auctions.bidding import bid_on_lot
 
         auction, _location, seller_tos, buyer_tos = self._buy_now_auction()
@@ -1240,13 +1174,12 @@ class BuyNowSellerCreditTests(StandardTestCase):
         assert result["type"] == "LOT_END_WINNER", result
 
         lot.refresh_from_db()
-        # buy now completed the sale, but deliberately left the lot active until the cron
+        # Buy now leaves the lot active until the cron.
         assert lot.winning_price == Decimal(100)
         assert lot.buy_now_used is True
         assert lot.auctiontos_winner == buyer_tos
         assert lot.active is True, "buy now must not deactivate the lot (it stays visible until endauctions)"
 
-        # the seller-cut annotation credits the live buy-now lot NOW, not $0-until-the-cron
         priced = add_price_info(Lot.objects.filter(pk=lot.pk)).first()
         assert priced.your_cut == Decimal(73)  # 100 * (100 - 25)/100 - 2 (lot entry fee)
         assert priced.club_cut == Decimal(27)  # 100 - 73
@@ -1275,11 +1208,7 @@ class BuyNowSellerCreditTests(StandardTestCase):
         assert buyer_invoice.calculated_total == Decimal(-100)
 
     def test_endauctions_does_not_double_apply_after_buy_now(self):
-        """Running the endauctions logic after buy now must not change either invoice total.
-
-        The buy-now lot is still ``active=True`` so ``declare_winners_on_lots`` picks it up,
-        sets ``active=False`` and recalculates. Because ``recalculate()`` re-derives the total
-        (it is not additive), the numbers are identical before and after -- no double credit."""
+        """endauctions after buy now leaves both invoice totals unchanged (recalculate isn't additive)."""
         from auctions.bidding import bid_on_lot
         from auctions.management.commands.endauctions import declare_winners_on_lots
 
@@ -1293,7 +1222,6 @@ class BuyNowSellerCreditTests(StandardTestCase):
         assert seller_invoice.calculated_total == Decimal(73)
         assert buyer_invoice.calculated_total == Decimal(-100)
 
-        # run the cron logic; the buy-now lot is ended (sold) and still active, so it is processed
         lot.refresh_from_db()
         declare_winners_on_lots([lot])
 
@@ -1301,17 +1229,14 @@ class BuyNowSellerCreditTests(StandardTestCase):
         assert lot.active is False, "endauctions should finalize (deactivate) the buy-now lot"
         seller_invoice.refresh_from_db()
         buyer_invoice.refresh_from_db()
-        # totals unchanged: the credit was already applied at buy-now time and recalculate is idempotent
         assert seller_invoice.calculated_total == Decimal(73)
         assert buyer_invoice.calculated_total == Decimal(-100)
-        # and the seller cut is still correct once the lot is inactive (active=False branch agrees)
         priced = add_price_info(Lot.objects.filter(pk=lot.pk)).first()
         assert priced.your_cut == Decimal(73)
         assert priced.club_cut == Decimal(27)
 
     def test_normal_auction_ending_lot_still_credits_correctly(self):
-        """Guard: a normally-ended (non-buy-now) sold lot -- active=False, buy_now_used=False --
-        still credits the seller exactly as before the fix."""
+        """A normally ended sold lot still credits the seller."""
         auction, _location, seller_tos, buyer_tos = self._buy_now_auction()
         lot = Lot.objects.create(
             lot_name="normal sold lot",
@@ -1328,8 +1253,7 @@ class BuyNowSellerCreditTests(StandardTestCase):
         assert priced.club_cut == Decimal(27)
 
     def test_active_lot_without_buy_now_is_not_credited(self):
-        """Guard: the fix must be precise -- a still-active lot that hasn't sold (no winning_price,
-        not buy_now_used) is credited $0. Only *completed* buy-now sales bypass the active=False gate."""
+        """An active unsold lot without buy now is credited $0."""
         auction, _location, seller_tos, _buyer_tos = self._buy_now_auction()
         lot = self._biddable_lot(auction, seller_tos, buy_now_price=100)  # no bid placed: active, unsold
 

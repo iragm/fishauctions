@@ -1,16 +1,13 @@
-"""Tests for the MCP-app widgets — the ``ui://`` resources a host renders instead of the JSON.
+"""Tests for the MCP-app widgets: the ``ui://`` resources a host renders instead of the JSON.
 
-Two things here are worth more than the rest.
+Two matter more than the rest.
+:meth:`BundleTests.test_the_vendored_runtime_still_ends_in_an_export` has to hold: the widget layer
+depends on rewriting the vendored ext-apps module's trailing ``export{…}`` into a global assignment,
+and the failure mode is a blank rectangle in somebody's chat with the error in an iframe console.
 
-:meth:`BundleTests.test_the_vendored_runtime_still_ends_in_an_export` is the one that has to hold:
-the whole widget layer depends on rewriting the vendored ext-apps module's trailing ``export{…}``
-into a global assignment, and the failure mode when that stops matching is a blank rectangle in
-somebody's chat with the error in an iframe console nobody will ever open. It fails the build
-instead.
-
-:meth:`CatalogueTests.test_every_widget_is_attached_to_a_registered_tool` is the same audit
-``test_palette_skills`` runs on the skill tables: a widget pointed at a tool that has been renamed
-would be published, listed, and never rendered, because nothing would ever ask for it.
+:meth:`CatalogueTests.test_every_widget_is_attached_to_a_registered_tool` is the audit
+``test_palette_skills`` runs on the skill tables: a widget pointed at a renamed tool would be
+published, listed and never rendered.
 """
 
 import json
@@ -57,11 +54,11 @@ class CatalogueTests(SimpleTestCase):
             self.assertTrue(descriptor["title"].strip())
             self.assertTrue(descriptor["description"].strip())
             ui = descriptor["_meta"]["ui"]
-            # Explicit, because the schema's own note says host defaults vary and a card drawn
-            # inside a card is the commonest way one of these looks wrong.
+            # Explicit, because host defaults vary and a card drawn inside a card is the commonest
+            # way one of these looks wrong.
             self.assertIn("prefersBorder", ui)
-            # No outbound connections at all: a widget asks the host, which asks us with the
-            # caller's own credential. There is no second authenticated path into this API.
+            # No outbound connections: a widget asks the host, which asks us with the caller's own
+            # credential. There is no second authenticated path into this API.
             self.assertEqual(ui["csp"]["connectDomains"], [])
             self.assertTrue(ui["csp"]["resourceDomains"], "lot photos would be blocked")
 
@@ -77,28 +74,23 @@ class CatalogueTests(SimpleTestCase):
                 # Both spellings, flat and nested, because hosts read one or the other.
                 self.assertEqual(meta["ui"]["resourceUri"], widgets.TOOL_WIDGETS[name])
             else:
-                # Absent rather than null: it is fifty tools' worth of a key that says nothing.
+                # Absent rather than null: fifty tools' worth of a key that says nothing.
                 self.assertNotIn("_meta", descriptor, f"{name} has no widget but carries ui metadata")
 
-    #: The two writes allowed to carry a widget, and why. Both of them draw the thing they just
-    #: acted on rather than the thing they are about to do -- the widget is the receipt, not the
-    #: button -- which is what keeps "a host may render this" from meaning "a host may run this".
+    #: The two writes allowed to carry a widget. Both draw the thing they just acted on rather than
+    #: the thing they are about to do -- the widget is the receipt, not the button.
     #:
-    #: ``send_membership_card`` came off this list, and so did the three selling-console writes.
-    #: The card because it can now send *another* member's card and must not hand the sender that
-    #: member's barcode; the selling ones because the console itself was scrapped -- see
-    #: :mod:`auctions.mcp.widgets` for why a second, smaller copy of the set-lot-winners page
-    #: inside a chat window was the wrong thing to build.
+    #: ``send_membership_card`` came off this list because it can send another member's card, and
+    #: the selling-console writes because the console was scrapped; see :mod:`auctions.mcp.widgets`.
     WRITES_THAT_MAY_RENDER = {
         "set_invoice_status": "the invoice it just settled is what a checkout desk needs to see",
         "add_invoice_adjustment": "the invoice it just added a line to, so the new total is visible",
     }
 
     def test_a_widget_only_ever_decorates_a_read(self):
-        """Rendering something must never be a reason to run a write.
+        """A widget only ever decorates a read: rendering something must never be a reason to run a write.
 
-        Everything else on the list is a lookup, which is the shape a host may render without
-        asking anybody. See :data:`WRITES_THAT_MAY_RENDER` for the exceptions and their reasons.
+        See :data:`WRITES_THAT_MAY_RENDER` for the exceptions and their reasons.
         """
         for name in widgets.TOOL_WIDGETS:
             action = palette_actions.ACTIONS[name]
@@ -124,8 +116,8 @@ class DocumentTests(SimpleTestCase):
     def test_nothing_is_fetched_from_anywhere(self):
         """The iframe's CSP blocks every external request, so a widget that makes one half-loads."""
         html = widgets.read_resource("ui://auction.fish/lot")["text"]
-        # The vendored bundle mentions plenty of URLs in its own strings; what matters is that the
-        # document never asks the browser to go and get one.
+        # The vendored bundle mentions URLs in its own strings; what matters is that the document
+        # never asks the browser to fetch one.
         for tag in ("<link ", "<script src", "@import", "<iframe"):
             self.assertNotIn(tag, html.lower(), f"the widget document contains {tag!r}")
 
@@ -134,11 +126,10 @@ class DocumentTests(SimpleTestCase):
         self.assertIsNone(widgets.read_resource(""))
 
     def test_a_django_template_tag_never_reaches_the_browser(self):
-        """The widget is mostly JavaScript, which is full of braces. See auctions/template_lint.py.
+        """A Django template tag never reaches the browser (see auctions/template_lint.py).
 
-        Checked against the rendered template rather than against the finished document: the
-        vendored runtime is 330 KB of minified JavaScript and contains ``{{`` in its own right,
-        which says nothing about ours.
+        Checked against the rendered template rather than the finished document: the vendored runtime is
+        330 KB of minified JavaScript and contains ``{{`` in its own right.
         """
         from django.template.loader import render_to_string
 
@@ -175,17 +166,15 @@ class ResourceEndpointTests(StandardTestCase):
         payload = json.loads(self.rpc("initialize", {"protocolVersion": protocol.LATEST_PROTOCOL_VERSION}).content)
         capabilities = payload["result"]["capabilities"]
         self.assertIn("resources", capabilities)
-        # Both false and staying false: no session, so nowhere to send the notification a true
-        # here would promise.
+        # Both false and staying false: no session, so nowhere to send the notification.
         self.assertFalse(capabilities["resources"]["subscribe"])
         self.assertFalse(capabilities["resources"]["listChanged"])
 
     def test_listing_the_widgets(self):
         """Every widget is listed, and the data resources share the list without displacing them.
 
-        ``resources/list`` carries the ui:// documents *and* the fixed me:// reads and the public
-        help:// one from ``auctions.mcp.resources``; ``test_mcp_resources`` owns the rule about
-        what may be in there at all, which is that nothing carrying a slug ever is.
+        ``resources/list`` carries the ui:// documents and the fixed me:// and public help:// reads;
+        ``test_mcp_resources`` owns the rule about what may be in there at all.
         """
         payload = json.loads(self.rpc("resources/list").content)
         listed = {resource["uri"] for resource in payload["result"]["resources"]}

@@ -26,8 +26,8 @@ PICKUP_LENGTH = datetime.timedelta(minutes=15)
 def auction_event_window(auction):
     """(start, end) for an auction's calendar entry, or (None, None) when it can't be placed.
 
-    Online auctions span start-of-bidding to end-of-bidding. In-person auctions have no meaningful
-    ``date_end``, so they get a fixed-length block.
+    Online auctions span the bidding window; in-person auctions have no meaningful ``date_end``, so
+    they get a fixed-length block.
     """
     start = auction.date_start
     if not start:
@@ -38,9 +38,9 @@ def auction_event_window(auction):
 
 
 def sync_one_auction_event(auction):
-    """Create, update, or retire the single ClubEvent mirroring one auction.
+    """Create, update or retire the single ClubEvent mirroring one auction, from a post_save signal.
 
-    Called from a post_save signal. Returns the event, or None when it doesn't belong on a calendar.
+    Returns the event, or None when it doesn't belong on a calendar.
     """
     from auctions.models import ClubEvent
 
@@ -51,14 +51,15 @@ def sync_one_auction_event(auction):
     start, end = auction_event_window(auction) if belongs else (None, None)
     if not belongs or not start:
         if event and not event.is_deleted:
-            # DB-only: runs inside the auction's save transaction; purge_retired() removes remote copies later.
+            # DB-only: this runs inside the auction's save transaction, and purge_retired() removes
+            # the remote copies later.
             retire_event(event, remote=False)
         return None
 
     description = _auction_description(auction)
     location = _auction_location(auction)
     if event is None:
-        # get_or_create: the unique index on `auction` guards a concurrent sync from raising.
+        # get_or_create: the unique index on `auction` guards against a concurrent sync.
         event, _created = ClubEvent.objects.get_or_create(
             auction=auction,
             defaults={
@@ -73,8 +74,7 @@ def sync_one_auction_event(auction):
         )
         return event
 
-    # Hand-typed title/description survive (title_is_custom/description_is_custom); everything
-    # else tracks the auction, so a moved auction still moves its event.
+    # Hand-typed title and description survive; everything else tracks the auction.
     keep_title = event.title_is_custom
     keep_description = event.description_is_custom
     changed = (
@@ -103,10 +103,10 @@ def sync_one_auction_event(auction):
 
 
 def sync_auction_events(club):
-    """Reconcile every one of this club's auctions with its calendar.
+    """Reconcile every one of this club's auctions with its calendar; returns how many changed.
 
-    The periodic backstop for the per-auction signal: catches auctions saved before the feature was
-    on, and events left behind by an unpromoted or deleted auction. Returns how many events changed.
+    The periodic backstop for the per-auction signal, catching auctions saved before the feature was on
+    and events left by an unpromoted or deleted auction.
     """
     from auctions.models import Auction, ClubEvent
 
@@ -138,8 +138,8 @@ def sync_auction_events(club):
 def retire_event(event, *, remote=True):
     """Soft-delete an event and take it off Google Calendar and Discord.
 
-    Pass ``remote=False`` from inside a transaction (the auction signal); ``purge_retired(club)``
-    does the remote half later, for any soft-deleted event still carrying a remote id.
+    ``remote=False`` from inside a transaction (the auction signal); ``purge_retired(club)`` does the
+    remote half later.
     """
     event.is_deleted = True
     event.save(update_fields=["is_deleted"])
@@ -171,8 +171,8 @@ def _remove_remote(event):
 
             auction.discord_event_id = ""
             auction.discord_event_needs_update = False
-            # Queryset update, not .save(): also runs from ClubEvent's pre_delete, where saving
-            # the auction would re-enter the mirroring signal mid-cascade.
+            # A queryset update: this also runs from ClubEvent's pre_delete, where saving the
+            # auction would re-enter the mirroring signal mid-cascade.
             Auction.objects.filter(pk=auction.pk).update(discord_event_id="", discord_event_needs_update=False)
 
 
@@ -195,8 +195,9 @@ def _auction_description(auction):
 
 
 def auction_display_location(auction):
-    """The one address worth advertising for an auction, or "" -- same rule the calendar entry
-    uses, so website embeds agree with the club's Google Calendar."""
+    """The one address worth advertising for an auction, or "" -- the same rule the calendar entry uses,
+    so embeds agree with the club's Google Calendar.
+    """
     return _auction_location(auction)
 
 
@@ -205,7 +206,7 @@ def _auction_location(auction):
     if auction.is_online:
         return ""
     # Count distinct addresses, not locations: switching to in-person auto-creates a default
-    # location with no address, which would otherwise blank out the real one.
+    # location with no address.
     addresses = {
         location.address.strip() for location in auction.physical_location_qs if (location.address or "").strip()
     }
@@ -217,14 +218,12 @@ def _auction_location(auction):
 def pickup_slots(auction):
     """Yield (location, slot, start) for each pickup time an online auction advertises.
 
-    Only online auctions get pickup events. An auction with several pickup locations gets none at
-    all -- only its own event -- since a member goes to exactly one location and the auction page,
-    not the calendar, is where they pick it.
+    Online auctions only, and none at all when there are several pickup locations: a member goes to one,
+    and the auction page is where they pick it.
     """
     if not auction.is_online:
         return
-    # Count locations that would produce an event, not rows: a half-filled location with no pickup
-    # time yet shouldn't suppress a real one next to it.
+    # Count locations that would produce an event: a half-filled one shouldn't suppress a real one.
     locations = [
         location
         for location in auction.location_qs.filter(pickup_by_mail=False)
@@ -239,10 +238,9 @@ def pickup_slots(auction):
 
 
 def sync_pickup_events(auction):
-    """Create, update, or retire the calendar events for an online auction's pickup times.
+    """Create, update or retire an online auction's pickup events; returns how many changed.
 
-    Multi-location auctions yield nothing from ``pickup_slots``, and any events picked up before
-    are retired here. Returns how many events changed.
+    Multi-location auctions yield nothing from ``pickup_slots``, and earlier events are retired here.
     """
     from auctions.models import ClubEvent
 
@@ -332,9 +330,9 @@ def _pickup_description(auction, location):
 
 
 def generated_wording(event):
-    """(title, description) as this site would generate them, or ("", "") -- what
-    title_is_custom/description_is_custom would be overwriting. Recomputed, not stored, so it can't
-    fall out of step with the auction it came from."""
+    """(title, description) as this site would generate them, or ("", "") -- what title_is_custom and
+    description_is_custom would overwrite. Recomputed rather than stored.
+    """
     from auctions.models import ClubEvent
 
     if event.source == ClubEvent.SOURCE_AUCTION and event.auction:
@@ -347,10 +345,9 @@ def generated_wording(event):
 
 
 def refresh_recurring_events(club):
-    """Move each repeating event on to the occurrence that's on now, or the next one.
+    """Move each repeating event on to the occurrence that's on now, or the next one; returns how many.
 
-    One row stands for a whole series (see auctions/recurrence.py); nothing else moves
-    ``date_start`` along. Returns how many moved.
+    One row stands for a series (auctions/recurrence.py) and nothing else moves ``date_start``.
     """
     from auctions.models import ClubEvent
 
@@ -414,11 +411,10 @@ def next_member_facing_event(club):
 
 
 def record_website_view(club):
-    """Count one impression of a club's events embed, and stamp when it happened.
+    """Count one impression of a club's events embed and stamp when it happened.
 
-    Counts on the **club**, not on a row, so an embed that came back empty still counts -- a club
-    with nothing coming up has the snippet installed exactly as much as one with ten meetings. The
-    club page itself is not counted, only the embed. ``F()`` avoids read-modify-write races.
+    Counted on the club, not a row, so an empty embed counts too. The club page isn't counted. ``F()``
+    avoids read-modify-write races.
     """
     from auctions.models import Club
 
@@ -443,10 +439,9 @@ def past_events(club, *, limit=5, exclude_pickups=False):
 
 
 def upcoming_events(club, *, limit=None, include_past=False, past_limit=5, exclude_pickups=False):
-    """Events for the club page: everything upcoming, plus a little recent history.
+    """Events for the club page: everything upcoming plus a little recent history, as (upcoming, past).
 
-    Returns (upcoming, past); past is newest-first. ``exclude_pickups`` drops pickup events for the
-    same reason ``next_member_facing_event`` does.
+    ``exclude_pickups`` drops pickup events for the same reason ``next_member_facing_event`` does.
     """
     from auctions.models import ClubEvent
 

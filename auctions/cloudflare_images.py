@@ -1,13 +1,12 @@
 """Cloudflare Images integration.
 
-When the CLOUDFLARE_IMAGES_* settings are configured (see .env.example), images that
-have a `cloudflare_image_id` (set by the migrate_to_cloudflare_images management
-command) are served from Cloudflare's CDN with named variants instead of locally
-generated easy-thumbnails files.  Everything falls back to the local thumbnailer when
-Cloudflare is not configured or an image hasn't been migrated yet, so this can be
-enabled and disabled freely.
+With the CLOUDFLARE_IMAGES_* settings configured (see .env.example), images carrying a
+`cloudflare_image_id` -- set by the `migrate_to_cloudflare_images` command -- are served from
+Cloudflare's CDN with named variants instead of locally generated easy-thumbnails files. Everything
+falls back to the local thumbnailer when Cloudflare is unconfigured or an image hasn't been
+migrated, so this can be enabled and disabled freely.
 
-API reference: https://developers.cloudflare.com/images/
+https://developers.cloudflare.com/images/
 """
 
 import json
@@ -22,12 +21,11 @@ logger = logging.getLogger(__name__)
 
 API_BASE = "https://api.cloudflare.com/client/v4/accounts/{account_id}/images/v1"
 
-# Named variants served by Cloudflare.  Keys deliberately match the easy-thumbnails
-# aliases in THUMBNAIL_ALIASES (settings.py) so the same name works for both systems.
-# "public" (the full-size image) is created by Cloudflare automatically and is not
-# listed here.  Sync these to Cloudflare with `manage.py migrate_to_cloudflare_images --setup`.
-# Note: named variants crop from the center ("cover"); easy-thumbnails' "smart" crop has
-# no direct equivalent, but center crop is close enough for these small thumbnails.
+# Named variants served by Cloudflare. The keys match the easy-thumbnails aliases in
+# THUMBNAIL_ALIASES (settings.py) so one name works for both. "public" (full size) is created by
+# Cloudflare itself. Sync these with `manage.py migrate_to_cloudflare_images --setup`. Named
+# variants crop from the center; easy-thumbnails' "smart" crop has no equivalent, which is close
+# enough at these sizes.
 VARIANTS = {
     "ad": {"fit": "scale-down", "width": 250, "height": 150, "metadata": "none"},
     "lot_list": {"fit": "cover", "width": 250, "height": 150, "metadata": "none"},
@@ -38,9 +36,9 @@ VARIANTS = {
 }
 
 
-# Stored in cloudflare_image_id when Cloudflare permanently rejects a file (unsupported
-# format, too large...).  Serving falls back to the local file, and the migration
-# command stops retrying it; replacing the image file clears this and retries.
+# Stored in cloudflare_image_id when Cloudflare permanently rejects a file (unsupported format, too
+# large...). Serving falls back to the local file and the migration command stops retrying;
+# replacing the image file clears this.
 UPLOAD_FAILED = "upload-failed"
 
 

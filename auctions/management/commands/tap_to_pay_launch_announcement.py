@@ -1,34 +1,26 @@
-"""The Tap to Pay on iPhone launch announcement — Apple marketing requirements 6.1 and 6.3.
+"""The Tap to Pay on iPhone launch announcement (Apple marketing requirements 6.1 and 6.3).
 
-6.1 asks for a dedicated launch email to all eligible users, and 6.3 for an in-app push, both due
-**once the feature is in general availability** (not at first release, and not to a test group).
-6.2, the in-app splash, is already done in the app.
+6.1 asks for a launch email to eligible users and 6.3 for an in-app push, both once the feature is
+generally available. 6.2, the in-app splash, is already in the app.
 
-This command works out who "eligible users" are and sends to them. What it deliberately does *not*
-do is write the copy: Apple's Marketing Guide and Toolkit supplies the launch email template and the
-"Value Proposition" push text, and the guide forbids substituting your own words or artwork. So the
-command **refuses to send until that copy is in place** rather than shipping a plausible-looking
-default that would sail past review and fail it:
+This works out who is eligible and sends to them. It deliberately does not write the copy: Apple's
+Marketing Guide and Toolkit supply both, and forbid substituting your own words or artwork. So it
+**refuses to send until that copy is in place** rather than shipping a plausible default:
 
-* the email body is a post_office template named ``tap_to_pay_launch_email`` — create it in the
-  admin (/admin/post_office/emailtemplate/) by pasting in the toolkit's Launch email;
-* the push title and body are ``--push-title`` / ``--push-body``, pasted from the toolkit's
-  push-notification guidelines.
+* the email body is a post_office template named ``tap_to_pay_launch_email``, pasted in via the
+  admin;
+* the push title and body are ``--push-title`` / ``--push-body``, from the toolkit.
 
-The toolkit's access page and password are on page 23 of the review guide PDF Apple sends with the
-development entitlement. The admin setup checklist (/admin-setup-checklist/) walks through it.
+The toolkit's access page and password are on page 23 of Apple's review guide PDF; the admin setup
+checklist walks through it.
 
 Usage::
 
-    # See who would get it, and check the copy is in place, without sending anything
-    docker exec -it django python3 manage.py tap_to_pay_launch_announcement --dry-run
+    manage.py tap_to_pay_launch_announcement --dry-run
+    manage.py tap_to_pay_launch_announcement --push-title "<toolkit>" --push-body "<toolkit>"
 
-    # Send for real
-    docker exec -it django python3 manage.py tap_to_pay_launch_announcement \
-        --push-title "<from the toolkit>" --push-body "<from the toolkit>"
-
-One-shot, but safe to re-run: nobody is emailed or pushed twice (``PushNotificationSent`` with the
-category below is the ledger for both halves).
+One-shot but safe to re-run: ``PushNotificationSent`` with the category below is the ledger for both
+halves, so nobody is emailed or pushed twice.
 """
 
 import logging
@@ -42,9 +34,8 @@ from auctions.notifications import CATEGORY_TAP_TO_PAY_LAUNCH
 
 logger = logging.getLogger(__name__)
 
-# Its own category so re-running can't be confused with the nightly auction promos, and so the
-# "already told" ledger is exact. Push-only, so an undeliverable push isn't emailed as a third
-# message alongside the launch email -- see auctions.notifications.
+# Its own category so a re-run can't be confused with the nightly promos. Push-only, so an
+# undeliverable push isn't emailed as a third message alongside the launch email.
 CATEGORY = CATEGORY_TAP_TO_PAY_LAUNCH
 
 EMAIL_TEMPLATE_NAME = "tap_to_pay_launch_email"
@@ -106,8 +97,7 @@ class Command(BaseCommand):
                 self._send_push(user, options["push_title"], options["push_body"])
                 pushed += 1
             # The authoritative "we told this person" marker, and what makes a re-run a no-op.
-            # send_push_to_user writes its own rows per device, but asynchronously and only when a
-            # device actually accepted the push -- neither of which is what we need to decide here.
+            # send_push_to_user writes per-device rows, but asynchronously and only on acceptance.
             PushNotificationSent.objects.create(user=user, category=CATEGORY)
 
         logger.info("tap_to_pay_launch_announcement: %s email(s), %s push(es)", emailed, pushed)
@@ -127,14 +117,10 @@ class Command(BaseCommand):
     def eligible_users():
         """Merchants who could actually use Tap to Pay on iPhone today.
 
-        Three conditions, all necessary — announcing a feature to someone who can't use it is worse
-        than not announcing it:
-
-        * they administer an auction or club that could take a payment (the same predicate the
-          warm-up endpoint uses to decide who may hold seller credentials at all),
-        * that seller has a Square account connected with the in-person scope, and
-        * they have an **iPhone** registered. Tap to Pay on iPhone is iOS-only, and Apple's
-          marketing rules don't allow the name to be used towards anyone else.
+        Three necessary conditions: they administer an auction or club that could take a payment (the same
+        predicate the warm-up endpoint uses), that seller's Square account has the in-person scope, and they
+        have an **iPhone** registered -- Tap to Pay on iPhone is iOS-only and Apple's rules don't allow the
+        name to be used towards anyone else.
         """
         from auctions.mobile.services.payments import PaymentService
 
@@ -177,8 +163,8 @@ class Command(BaseCommand):
             user.pk,
             title=title,
             body=body,
-            # The Square info page: what the feature is, and the reconnect button if their account
-            # predates the in-person scope. The natural next step for someone who just tapped.
+            # The Square info page: what the feature is, and the reconnect button for an account
+            # that predates the in-person scope.
             url=f"https://{Site.objects.get_current().domain}{reverse('square_seller')}",
             category=CATEGORY,
         )

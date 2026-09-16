@@ -1,10 +1,9 @@
 """`/static/`: content-hashed names, and the nginx rule that caches them for a year.
 
-Three things have to agree for a CSS edit to reach a browser on deploy, and none of them fails
-loudly on its own: `{% static %}` has to render a hashed name, `collectstatic` has to have written
-a file under that name, and `nginx_fishauctions.conf` has to recognise a hashed name so that it --
-and only it -- is served `immutable`. Drift in any one of those is silent: the page still loads,
-it is just cached for the wrong length of time, which nobody notices until a deploy does not take.
+Three things have to agree for a CSS edit to reach a browser, and none fails loudly: `{% static %}`
+has to render a hashed name, `collectstatic` has to have written that file, and
+`nginx_fishauctions.conf` has to recognise a hashed name so only it is served `immutable`. Drift is
+silent -- the page loads, it is just cached for the wrong length of time.
 """
 
 import re
@@ -31,8 +30,9 @@ def _template_static_names():
 
 
 def _every_static_file():
-    """(finder, name) for every static file the finders can see -- the sources, not the collected
-    copies, since those are what `collectstatic` will hash."""
+    """(finder, name) for every static file the finders see -- the sources, since those are what
+    `collectstatic` will hash.
+    """
     return list(finders.get_finders() and _walk_finders())
 
 
@@ -44,8 +44,8 @@ def _walk_finders():
 def _nginx_immutable_pattern():
     """The nginx regex for a hashed filename, as a Python one.
 
-    Read out of the config file rather than repeated here, so that this cannot agree with a
-    pattern the running nginx does not have.
+    Read out of the config file rather than repeated here, so it cannot agree with a pattern the running
+    nginx does not have.
     """
     location_pattern = None
     for line in (Path(settings.BASE_DIR) / "nginx_fishauctions.conf").read_text().splitlines():
@@ -71,7 +71,7 @@ class TemplatesNameRealFilesTests(SimpleTestCase):
 
 
 class HashedNamesReachTheYearLongCacheTests(SimpleTestCase):
-    """The nginx pattern has to match the names Django actually writes, and nothing else."""
+    """The nginx pattern has to match the names Django writes, and nothing else."""
 
     def test_nginx_recognises_the_names_django_generates(self):
         pattern = _nginx_immutable_pattern()
@@ -85,11 +85,9 @@ class HashedNamesReachTheYearLongCacheTests(SimpleTestCase):
                 )
 
     def test_no_real_static_file_is_mistaken_for_a_hashed_one(self):
-        """A vendored file whose own name happens to carry a 12-hex segment would be cached a year.
-
-        Its contents can change under that name, so it must not match. Every findable static file
-        is checked rather than a handful, because the one that breaks this will be a file somebody
-        drops in later -- and the failure is silent: a stale asset nobody can flush.
+        """A vendored file whose own name carries a 12-hex segment would be cached for a year, and its contents
+        can change under that name. Every findable static file is checked, because the one that breaks this
+        is a file somebody drops in later.
         """
         pattern = _nginx_immutable_pattern()
         looks_hashed = sorted(name for storage_root, name in _every_static_file() if pattern.match(f"/static/{name}"))
@@ -100,10 +98,8 @@ class HashedNamesReachTheYearLongCacheTests(SimpleTestCase):
 
 
 class MissingManifestEntriesDoNotRaiseTests(SimpleTestCase):
-    """The whole reason this storage is a subclass.
-
-    Stock `ManifestStaticFilesStorage` raises on anything it has no manifest entry for, and raising
-    here means an unstyled site or a failed deploy.
+    """The whole reason this storage is a subclass: stock `ManifestStaticFilesStorage` raises on anything
+    with no manifest entry, and raising here means an unstyled site or a failed deploy.
     """
 
     def test_a_name_with_no_manifest_entry_answers_with_the_plain_name(self):
@@ -113,11 +109,10 @@ class MissingManifestEntriesDoNotRaiseTests(SimpleTestCase):
         self.assertEqual(storage.stored_name("css/not_collected_anywhere.css"), "css/not_collected_anywhere.css")
 
     def test_a_name_resolves_when_collectstatic_has_never_run(self):
-        """CI's condition exactly: an empty STATIC_ROOT, so there is no manifest and no file.
+        """CI's condition exactly: an empty STATIC_ROOT, so no manifest and no file.
 
-        This is the case that matters most, because `DEBUG` is forced off in every test run -- so
-        hashing is always *on* in tests and it is the empty `STATIC_ROOT` alone that keeps CI
-        rendering plain names. Without the fallback, `base.html` would fail to render there.
+        `DEBUG` is forced off in every test run, so hashing is always on and it is the empty `STATIC_ROOT`
+        alone that keeps CI rendering plain names. Without the fallback, `base.html` would fail to render.
         """
         with tempfile.TemporaryDirectory() as empty_static_root:
             with override_settings(STATIC_ROOT=empty_static_root, DEBUG=False):
@@ -125,15 +120,14 @@ class MissingManifestEntriesDoNotRaiseTests(SimpleTestCase):
                 self.assertEqual(storage.url("css/auction_site.css"), f"{settings.STATIC_URL}css/auction_site.css")
 
     def test_a_reference_to_a_file_we_never_vendored_is_left_as_written(self):
-        """Our `bootstrap.min.css` ends with a sourceMappingURL naming a `.map` that is not here.
-
-        Stock Django aborts the whole of `collectstatic` over it, which on this deploy means
-        `entrypoint.sh` prints an error and the site serves whatever the statics volume still held.
+        """Our `bootstrap.min.css` ends with a sourceMappingURL naming a `.map` that is not here, and stock
+        Django aborts the whole of `collectstatic` over it -- which on this deploy means the site serves
+        whatever the statics volume still held.
         """
         storage = CacheBustedStaticFilesStorage()
         written = "/*# sourceMappingURL=bootstrap.min.css.map */"
         # Django's own pattern, not one written out here: the override returns `match["matched"]`,
-        # so if a future Django renames that group this fails rather than silently passing.
+        # so a future Django renaming that group fails rather than silently passing.
         source_map_pattern = next(
             compiled for compiled, _template in storage._patterns["*.css"] if "sourceMappingURL" in compiled.pattern
         )
@@ -145,9 +139,9 @@ class MissingManifestEntriesDoNotRaiseTests(SimpleTestCase):
 class DebugSkipsHashingTests(SimpleTestCase):
     @override_settings(DEBUG=True)
     def test_static_urls_are_plain_names_in_dev(self):
-        """Django hashes nothing while DEBUG is on, which is what keeps a dev edit visible.
+        """Django hashes nothing while DEBUG is on, which keeps a dev edit visible.
 
-        `override_settings` is doing real work here: a test run has `DEBUG` forced off by
-        `setup_test_environment`, so this is the only way to reach the branch a dev server takes.
+        `override_settings` is doing real work: a test run has `DEBUG` forced off, so this is the only way
+        to reach the branch a dev server takes.
         """
         self.assertEqual(staticfiles_storage.url("css/auction_site.css"), f"{settings.STATIC_URL}css/auction_site.css")

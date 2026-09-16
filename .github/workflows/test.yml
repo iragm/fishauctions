@@ -26,11 +26,9 @@ jobs:
       - run: ./.github/scripts/prepare-ci.sh --force
       - uses: docker/setup-buildx-action@v3
       - name: Build the app image
-        # The layer cache is the point: mysqlclient and pyheif publish no wheels, so a cold build
-        # compiles them (and pip-wheels 160-odd other packages) every run. cache-from/to keep that
-        # work in the Actions cache, keyed on the layers -- a run that doesn't touch
-        # requirements.txt or the Dockerfile reuses all of it. scope is shared by both test jobs
-        # deliberately: they build the same image, so the second one is a cache hit.
+        # mysqlclient and pyheif publish no wheels, so a cold build compiles them and pip-wheels
+        # 160-odd other packages every run. The scope is shared by both test jobs deliberately:
+        # they build the same image, so the second is a cache hit.
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -86,11 +84,9 @@ jobs:
       - run: ./.github/scripts/prepare-ci.sh --force
       - uses: docker/setup-buildx-action@v3
       - name: Build the app image
-        # The layer cache is the point: mysqlclient and pyheif publish no wheels, so a cold build
-        # compiles them (and pip-wheels 160-odd other packages) every run. cache-from/to keep that
-        # work in the Actions cache, keyed on the layers -- a run that doesn't touch
-        # requirements.txt or the Dockerfile reuses all of it. scope is shared by both test jobs
-        # deliberately: they build the same image, so the second one is a cache hit.
+        # mysqlclient and pyheif publish no wheels, so a cold build compiles them and pip-wheels
+        # 160-odd other packages every run. The scope is shared by both test jobs deliberately:
+        # they build the same image, so the second is a cache hit.
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -146,10 +142,9 @@ jobs:
           done
           docker compose ps
       - name: Install Selenium + Daphne in Django container
-        # daphne is a test-only dep (moved out of requirements.txt): ChannelsLive-
-        # ServerTestCase runs an in-process Daphne server for LiveBiddingTestCase.
-        # Without it, tests_selenium.py's guarded import sets CHANNELS_LIVE_AVAILABLE
-        # =False and the live-bidding websocket tests silently SKIP.
+        # daphne is a test-only dep: ChannelsLiveServerTestCase runs an in-process Daphne server
+        # for LiveBiddingTestCase, and without it tests_selenium.py's guarded import leaves
+        # CHANNELS_LIVE_AVAILABLE False and the live-bidding websocket tests silently skip.
         run: |
           docker exec -u root django pip install selenium daphne
       - name: Run Selenium tests

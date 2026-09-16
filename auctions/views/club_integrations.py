@@ -1,9 +1,7 @@
 """The outside accounts a club connects: Mailchimp, Brevo, Google Calendar, Square links.
 
-Every one of these is an OAuth connect, a callback, a "sync now" and a disconnect, written the same
-way four times over. The club event views in the middle are here because they are what the calendar
-sync writes to. Connecting any of these from inside the mobile app needs the web-session handoff --
-see ``docs/app_oauth_connect_flows.md``.
+Each has a connect, callback, sync and disconnect view; the club event views are here because the
+calendar sync writes them. Connecting from the mobile app: see ``docs/app_oauth_connect_flows.md``.
 """
 
 import json
@@ -50,8 +48,7 @@ from auctions.models import (
 from .base import ClubViewMixin, check_club_permission
 from .payments import SquareAPIMixin
 
-#: The club whose Mailchimp connection is half-finished, carried across the trip to Mailchimp and
-#: back in the session -- which is why the callback cannot be reached from a second cookie jar.
+#: The club being connected, carried in the session across the Mailchimp round trip.
 MAILCHIMP_OAUTH_CLUB_SESSION_KEY = "mailchimp_oauth_club_slug"
 
 logger = logging.getLogger(__name__)
@@ -68,21 +65,20 @@ class MailchimpConnectView(LoginRequiredMixin, View):
         if not settings.MAILCHIMP_CLIENT_ID:
             messages.error(request, "Mailchimp is not configured on this site. Contact your site administrator.")
             return redirect(config_url)
-        # Stash the club so the callback (which has no slug) knows what we're connecting.
+        # The callback has no slug.
         request.session[MAILCHIMP_OAUTH_CLUB_SESSION_KEY] = club.slug
         params = {
             "response_type": "code",
             "client_id": settings.MAILCHIMP_CLIENT_ID,
             "redirect_uri": request.build_absolute_uri(reverse("mailchimp_callback")),
-            # Reuse the per-user unsubscribe UUID as the anti-CSRF state, same as Square.
+            # The per-user unsubscribe UUID as OAuth state, same as Square.
             "state": request.user.userdata.unsubscribe_link,
         }
         return redirect("https://login.mailchimp.com/oauth2/authorize?" + urlencode(params))
 
 
 class MailchimpCallbackView(LoginRequiredMixin, View):
-    """Mailchimp redirects here after the user authorizes. Stores the token, then sends the
-    admin back to the config page to pick an audience."""
+    """Mailchimp's OAuth callback: store the token, then pick an audience."""
 
     def get(self, request):
         from auctions import mailchimp as mc
@@ -133,15 +129,9 @@ class MailchimpCallbackView(LoginRequiredMixin, View):
 
 
 def _prefill_donation_address(club, address, provider):
-    """Fill in the club's donation mailing address from a marketing provider, if it is still blank.
+    """Fill a blank donation mailing address from the marketing provider's required postal address.
 
-    Both providers make a club type a real postal address when it signs up, because US bulk
-    commercial email has to carry one -- and that is the same address the donation letters need
-    (Club.donation_mailing_address, printed under the sign-off of every request a club sends a
-    vendor). A club that has already told Mailchimp where it is should not be asked again here.
-
-    Only ever fills a blank. An address the club typed itself is the club's, and a later reconnect
-    must never quietly rewrite the return address on its mail. Returns True if it filled one in.
+    Never overwrites an address the club typed. Returns True if it filled one in.
     """
     from auctions.models import Club
 
@@ -159,7 +149,7 @@ def _prefill_donation_address(club, address, provider):
 
 
 class MailchimpAudienceSelectView(LoginRequiredMixin, ClubViewMixin, View):
-    """Pick an existing audience or create '{club} Members', then provision + backfill."""
+    """Pick an existing audience or create '{club} Members', then provision and backfill."""
 
     def dispatch(self, request, *args, **kwargs):
         self.get_club(kwargs.get("slug", ""))
@@ -180,8 +170,7 @@ class MailchimpAudienceSelectView(LoginRequiredMixin, ClubViewMixin, View):
         choice = request.POST.get("audience_id", "")
         try:
             if choice == "__new__":
-                # Sender and mailing address come from the club's own Mailchimp account, never
-                # from here -- see mailchimp.account_defaults.
+                # Sender and address come from the club's Mailchimp account; see mailchimp.account_defaults.
                 audience_id, audience_name = mc.create_audience(client, club)
             else:
                 audience_id = choice
@@ -251,7 +240,7 @@ class MailchimpSyncNowView(LoginRequiredMixin, ClubViewMixin, View):
 
 
 class MailchimpDisconnectView(LoginRequiredMixin, ClubViewMixin, View):
-    """Forget the Mailchimp connection. Leaves the audience itself untouched in Mailchimp."""
+    """Forget the Mailchimp connection; the audience stays in Mailchimp."""
 
     def dispatch(self, request, *args, **kwargs):
         self.get_club(kwargs.get("slug", ""))
@@ -373,11 +362,8 @@ class ClubGoogleCalendarConfigView(LoginRequiredMixin, ClubViewMixin, View):
         return render(request, "auctions/club_google_calendar_settings.html", context)
 
     def post(self, request, slug):
-        """Save the checkboxes on the settings page.
-
-        There is deliberately no "this calendar is public" box among them any more. Sharing is a
-        fact about the calendar rather than a preference about this site, and we can read it — see
-        google_calendar.refresh_public_flag, which every sync runs.
+        """Save the settings checkboxes. Calendar sharing is read from Google, not set here; see
+        google_calendar.refresh_public_flag.
         """
         club = self.club
         club.add_auctions_to_calendar = "add_auctions_to_calendar" in request.POST
@@ -393,7 +379,7 @@ class ClubGoogleCalendarConfigView(LoginRequiredMixin, ClubViewMixin, View):
 
 
 class GoogleCalendarConnectView(LoginRequiredMixin, View):
-    """Start the Google Calendar OAuth flow for a club (requires permission_edit_club)."""
+    """Start the Google Calendar OAuth flow (requires permission_edit_club)."""
 
     def get(self, request, slug):
         from auctions import google_calendar as gcal
@@ -405,11 +391,9 @@ class GoogleCalendarConnectView(LoginRequiredMixin, View):
         if not gcal.is_configured():
             messages.error(request, "Google Calendar is not configured on this site. Contact your site administrator.")
             return redirect(config_url)
-        # Stash the club so the callback (which has no slug) knows what we're connecting.
+        # The callback has no slug.
         request.session[GOOGLE_CALENDAR_OAUTH_CLUB_SESSION_KEY] = club.slug
-        # A fresh nonce per attempt, not the per-user unsubscribe UUID: that one is printed in
-        # the footer of every email we send, so anyone holding one could hand this club's admin a
-        # callback URL that connects their calendar to someone else's Google account.
+        # A fresh nonce, not the unsubscribe UUID, which is in every email footer.
         state = secrets.token_urlsafe(32)
         request.session[GOOGLE_CALENDAR_OAUTH_STATE_SESSION_KEY] = state
         redirect_uri = request.build_absolute_uri(reverse("google_calendar_callback"))
@@ -417,8 +401,7 @@ class GoogleCalendarConnectView(LoginRequiredMixin, View):
 
 
 class GoogleCalendarCallbackView(LoginRequiredMixin, View):
-    """Google redirects here after the admin authorizes. Stores the tokens, provisions the
-    calendar, and pushes whatever the club already has on its event list."""
+    """Google's OAuth callback: store tokens, provision the calendar, push existing events."""
 
     def get(self, request):
         from auctions import google_calendar as gcal
@@ -476,15 +459,13 @@ class GoogleCalendarCallbackView(LoginRequiredMixin, View):
             gcal.ensure_calendar(club)
         except gcal.GoogleCalendarError as exc:
             logger.exception("Could not set up the Google calendar for club %s", club.pk)
-            # Deliberately one message. ensure_calendar only stores a calendar id once the calendar
-            # exists, so an id still on the club here is the *old* one from a previous connection --
-            # reading it as "the calendar exists" told admins the half that failed had worked.
+            # One message: a calendar id still on the club is from the previous connection.
             club.google_calendar_last_error = str(exc)[:500]
             club.save(update_fields=["google_calendar_last_error"])
             messages.error(request, f"Connected to Google, but we couldn't set up the calendar: {exc}")
             return redirect(config_url)
 
-        # Mirror the club's auctions and push everything, so the calendar isn't empty on arrival.
+        # So the calendar isn't empty on arrival.
         club_events.sync_auction_events(club)
         gcal.sync_club(club)
         ClubHistory.objects.create(
@@ -498,7 +479,7 @@ class GoogleCalendarCallbackView(LoginRequiredMixin, View):
 
 
 class GoogleCalendarSyncNowView(LoginRequiredMixin, ClubViewMixin, View):
-    """Run a full sync right now, so an admin doesn't have to wait for the periodic task."""
+    """Run a full sync now."""
 
     def dispatch(self, request, *args, **kwargs):
         self.get_club(kwargs.get("slug", ""))
@@ -519,16 +500,14 @@ class GoogleCalendarSyncNowView(LoginRequiredMixin, ClubViewMixin, View):
         if club.google_calendar_last_error:
             messages.error(request, f"Sync failed: {club.google_calendar_last_error}")
             return redirect(config_url)
-        # An admin pressing this has usually just changed something in Google Calendar, and one of
-        # the things they change is sharing. Skipping the hourly rate limit here is what makes
-        # "I ticked the box in Google, why does this still say Private" answerable in one click.
+        # Force the sharing check past its rate limit.
         gcal.refresh_public_flag(club, force=True)
         messages.success(request, "Calendar synced.")
         return redirect(config_url)
 
 
 class GoogleCalendarDisconnectView(LoginRequiredMixin, ClubViewMixin, View):
-    """Forget the Google connection. The calendar itself stays in the club's Google account."""
+    """Forget the Google connection; the calendar stays in the club's Google account."""
 
     def dispatch(self, request, *args, **kwargs):
         self.get_club(kwargs.get("slug", ""))
@@ -590,11 +569,7 @@ class ClubEventCreateView(LoginRequiredMixin, ClubViewMixin, View):
 
 
 def _browser_timezone(request):
-    """The timezone the admin is actually looking at times in.
-
-    base.html renders every page inside {% timezone user_timezone %}, so a form shows its times
-    in this zone; the form has to parse them back in the same one.
-    """
+    """The admin's timezone, which forms render and must parse in."""
     return request.COOKIES.get("user_timezone", settings.TIME_ZONE)
 
 
@@ -606,9 +581,7 @@ class ClubEventUpdateView(LoginRequiredMixin, ClubViewMixin, View):
         self.event = get_object_or_404(ClubEvent, club=self.club, pk=kwargs.get("pk"), is_deleted=False)
         if request.user.is_authenticated and not self._can_manage():
             raise PermissionDenied()
-        # A generated event reaches this form too, and the form narrows itself to the two fields
-        # a club owns there. It used to 404, which left "our meeting is at the auction" with
-        # nowhere to be typed except Google Calendar, where the next push overwrote it.
+        # Generated events can be edited too; the form narrows to the fields the club owns.
         if not self.event.details_are_editable:
             raise Http404
         return super().dispatch(request, *args, **kwargs)
@@ -620,12 +593,7 @@ class ClubEventUpdateView(LoginRequiredMixin, ClubViewMixin, View):
             or self.user_has_club_permission("permission_edit_club")
         ):
             return True
-        # An admin of the auction behind a generated event, who may hold no club role at all --
-        # the auction's own creator is the usual one. The wording of that event is the auction's
-        # to write: ClubEventForm narrows itself to the title and description on anything
-        # generated, and delete is refused below, so this reaches nothing else on the calendar.
-        # Without it the "customize this event" prompt on the auction page led to a 403 for
-        # exactly the person it was written for.
+        # An admin of the generated event's auction may edit its wording without a club role.
         related_auction = self.event.related_auction
         return bool(related_auction and related_auction.permission_check(self.request.user))
 
@@ -636,8 +604,7 @@ class ClubEventUpdateView(LoginRequiredMixin, ClubViewMixin, View):
     def post(self, request, slug, pk):
         club_url = reverse("club_detail", kwargs={"slug": self.club.slug})
         if request.POST.get("action") == "delete":
-            # Never for a generated event: the auction is what put it here, and deleting the row
-            # only means the next sync builds it again. Unpromote the auction instead.
+            # Never for a generated event: the next sync would rebuild it.
             if not self.event.is_editable:
                 raise Http404
             title = self.event.title
@@ -651,9 +618,7 @@ class ClubEventUpdateView(LoginRequiredMixin, ClubViewMixin, View):
             return render(request, "auctions/club_event_form.html", self._context(form))
         event = form.save(commit=False)
         if event.is_recurring and event.date_start != previous_start:
-            # The form edits one occurrence of a series, but the series is what's stored. Moving
-            # the occurrence moves the whole thing by the same amount, which is what an admin who
-            # pushed a weekly meeting an hour later means.
+            # Moving one occurrence moves the stored series by the same amount.
             event.recurrence_start += event.date_start - previous_start
         event.needs_google_sync = True
         event.needs_discord_sync = True
@@ -670,11 +635,8 @@ class ClubEventUpdateView(LoginRequiredMixin, ClubViewMixin, View):
 
 
 def _push_event_to_integrations(request, event):
-    """Send a just-saved event to Google Calendar and Discord.
-
-    Done inline so an admin sees the result immediately rather than waiting for the periodic
-    task. Failures are reported but never block the save — the event is already on the club page,
-    and the periodic task retries the push.
+    """Push a just-saved event to Google Calendar and Discord inline. Failures are reported, never
+    block the save; the periodic task retries.
     """
     from auctions import google_calendar as gcal
 
@@ -685,17 +647,11 @@ def _push_event_to_integrations(request, event):
         except gcal.GoogleCalendarError as exc:
             logger.warning("Could not push event %s to Google Calendar: %s", event.pk, exc)
             messages.warning(request, f"Saved, but Google Calendar didn't accept it yet: {exc}")
-    # Creates it, moves it, or takes it back down if the event was just called off.
     discord_events.sync_one_event(club, event)
 
 
 class ClubEventsICalView(View):
-    """A public iCal feed of a club's events, at /clubs/<slug>/events.ics.
-
-    Works whether or not the club has connected Google Calendar, so any club can hand members a
-    subscribe link. Anyone with the URL can read it — the same events are already on the public
-    club page.
-    """
+    """Public iCal feed of a club's events at /clubs/<slug>/events.ics, Google connected or not."""
 
     def get(self, request, slug):
         club = get_object_or_404(Club, slug=slug)
@@ -708,10 +664,9 @@ class ClubEventsICalView(View):
             "CALSCALE:GREGORIAN",
             "METHOD:PUBLISH",
             f"X-WR-CALNAME:{_ical_escape(club.name)} events",
-            # Without a timezone, all-day events and floating times land on the wrong day for
-            # anyone reading the feed from elsewhere.
+            # Without it, all-day and floating times land on the wrong day elsewhere.
             f"X-WR-TIMEZONE:{settings.TIME_ZONE}",
-            # Both spellings of "check back in an hour": the standard one and Outlook/Google's.
+            # The standard spelling and Outlook/Google's.
             "REFRESH-INTERVAL;VALUE=DURATION:PT1H",
             "X-PUBLISHED-TTL:PT1H",
         ]
@@ -720,13 +675,9 @@ class ClubEventsICalView(View):
                 "BEGIN:VEVENT",
                 f"UID:{event.uuid}@{domain}",
                 f"DTSTAMP:{_ical_datetime(event.updated_at)}",
-                # Clients keep the copy they already imported unless the sequence goes up, so an
-                # edit here would never reach them. Seconds since the epoch is monotonic and fits
-                # the 32-bit integer the spec asks for.
+                # Clients only take edits when the sequence increases; epoch seconds fit 32 bits.
                 f"SEQUENCE:{int(event.updated_at.timestamp())}",
                 *_ical_event_times(event),
-                # The rule itself, so a subscriber's calendar repeats the event the way Google
-                # does instead of receiving one copy of it.
                 *event.recurrence_lines,
                 f"SUMMARY:{_ical_escape(event.title)}",
                 f"URL:https://{domain}{event.get_absolute_url()}",
@@ -744,15 +695,7 @@ class ClubEventsICalView(View):
 
 
 def _ical_event_times(event):
-    """DTSTART/DTEND for one event.
-
-    A repeating event starts where its series is anchored, not at the occurrence the club page
-    happens to be showing — the RRULE that follows is measured from DTSTART, so anything else
-    would hand subscribers a different set of dates than Google has.
-
-    All-day events are dates, not times, or a calendar shows them as a midnight-to-midnight
-    appointment instead of a day.
-    """
+    """DTSTART/DTEND for one event: a series starts at its anchor, and all-day events are dates."""
     start = event.recurrence_start if event.is_recurring else event.date_start
     end = start + event.occurrence_length
     if not event.all_day:
@@ -769,8 +712,7 @@ def _ical_datetime(value):
 
 
 def _ical_escape(value):
-    """Escape the characters iCal treats as structure. Long-line folding is not needed here —
-    every consumer we care about handles long lines, and folding is easy to get wrong."""
+    """Escape iCal structural characters. No line folding."""
     return (
         str(value)
         .replace("\\", "\\\\")
@@ -782,12 +724,7 @@ def _ical_escape(value):
 
 
 def _log_esp_member_events(club, members, action_for_member):
-    """Record what a mailing-list provider just told us about a member, one entry each.
-
-    The member did this at Mailchimp/Brevo rather than on the site, so the club's admins have no
-    other way to see it — the on-site equivalent (ClubMemberSelfServiceView) already logs. There is
-    no acting user: the actor is the ESP.
-    """
+    """Log mailing-list provider events about members to ClubHistory, with no acting user."""
     ClubHistory.objects.bulk_create(
         [
             ClubHistory(club=club, user=None, action=action_for_member(member), applies_to="MEMBERS")
@@ -797,11 +734,10 @@ def _log_esp_member_events(club, members, action_for_member):
 
 
 class MailchimpWebhookView(View):
-    """Receive Mailchimp unsubscribe/cleaned/upemail/profile callbacks.
+    """Mailchimp unsubscribe/cleaned/upemail/profile callbacks.
 
-    One-way sync means we only honor unsubscribe-style events here: we record the member's
-    Mailchimp status so we never re-subscribe them, but we never touch their site email prefs.
-    The shared secret lives in the URL path (Mailchimp does not sign webhooks).
+    One-way sync: we record Mailchimp status so we never resubscribe them, but never touch site email
+    prefs. The secret is in the URL path, since Mailchimp doesn't sign webhooks.
     """
 
     @method_decorator(csrf_exempt)
@@ -812,13 +748,13 @@ class MailchimpWebhookView(View):
         club = Club.objects.filter(slug=slug).first()
         if not club or not club.mailchimp_webhook_secret:
             return None
-        # Constant-time compare: this URL-path secret is the only thing authenticating the webhook.
+        # Constant-time: the path secret is the only authentication.
         if not secrets.compare_digest(club.mailchimp_webhook_secret.encode(), (secret or "").encode()):
             return None
         return club
 
     def get(self, request, slug, secret):
-        # Mailchimp GETs the URL once to verify it when the webhook is created.
+        # Mailchimp GETs the URL to verify it.
         if not self._get_club(slug, secret):
             return HttpResponseForbidden("invalid")
         return HttpResponse("ok")
@@ -838,7 +774,7 @@ class MailchimpWebhookView(View):
             old_email = request.POST.get("data[old_email]") or request.POST.get("data[email]")
             new_email = request.POST.get("data[new_email]")
             if old_email and new_email:
-                # Reflect the new address locally; explicitly NOT a site-wide account change.
+                # Local only, not a site account change.
                 renamed = list(members.filter(email__iexact=old_email))
                 members.filter(email__iexact=old_email).update(email=new_email)
                 _log_esp_member_events(
@@ -848,8 +784,7 @@ class MailchimpWebhookView(View):
 
         email = request.POST.get("data[email]") or request.POST.get("data[email_address]")
         if not email:
-            # Every real unsubscribe/cleaned event names a contact. Without one there is nobody to
-            # act on, and acting on the unfiltered queryset would mark the whole club unsubscribed.
+            # Without an email, the unfiltered queryset would unsubscribe the whole club.
             return HttpResponse("ok")
         members = members.filter(email__iexact=email)
         if event_type == "unsubscribe":
@@ -867,11 +802,7 @@ class MailchimpWebhookView(View):
 
 
 class ClubMemberSelfServiceView(View):
-    """Public, UUID-keyed self-service email-preference links embedded in Mailchimp merge fields.
-
-    These only change the member's *club* contact status; they never touch the user's site
-    account or other clubs. ``action`` is set per-URL.
-    """
+    """Public UUID-keyed email-preference links in Mailchimp merge fields. Changes club contact status only."""
 
     action = None  # "unsubscribe" | "resubscribe" | "nocomm"
 
@@ -881,9 +812,7 @@ class ClubMemberSelfServiceView(View):
         return get_object_or_404(ClubMember, uuid=uuid, club__slug=slug, is_deleted=False)
 
     def get(self, request, slug, uuid):
-        # Read-only. The write happens in post() so that email link-scanners and prefetchers
-        # (Outlook SafeLinks, etc.), which routinely GET links, can't silently flip a member's
-        # contact status. GET just renders a confirmation page with a button that POSTs.
+        # GET only renders a confirmation; link scanners GET links, so the write is in post().
         member = self._get_member(slug, uuid)
         prompts = {
             "unsubscribe": (
@@ -922,7 +851,7 @@ class ClubMemberSelfServiceView(View):
             history_action = f"{member} unsubscribed from marketing emails (self-service)"
         elif self.action == "resubscribe":
             member.contact_status = "contact"
-            # Clear the remembered opt-out so the next sync actually re-subscribes them.
+            # Clear the remembered opt-out so the next sync resubscribes.
             member.mailchimp_status = ""
             member.brevo_status = ""
             member.save(update_fields=["contact_status", "mailchimp_status", "brevo_status"])
@@ -948,13 +877,11 @@ class ClubMemberSelfServiceView(View):
         )
 
 
-# --- Brevo: built the same way as the Mailchimp views above (OAuth connect, list select,
-# sync/disconnect, status page, and an inbound unsubscribe webhook). See auctions/brevo.py. ---
+# --- Brevo: same structure as the Mailchimp views. See auctions/brevo.py. ---
 
 
 class BrevoConnectView(LoginRequiredMixin, ClubViewMixin, View):
-    """Store the club's Brevo API key (validated against Brevo) — the API-key analog of an OAuth
-    connect, since Brevo's public OAuth program is private/org-scoped. The key is held encrypted."""
+    """Store the club's Brevo API key, validated and encrypted; Brevo's OAuth isn't public."""
 
     def dispatch(self, request, *args, **kwargs):
         self.get_club(kwargs.get("slug", ""))
@@ -972,14 +899,13 @@ class BrevoConnectView(LoginRequiredMixin, ClubViewMixin, View):
             messages.error(request, "Please paste your Brevo API key.")
             return redirect(config_url)
 
-        # Validate the key with a lightweight authenticated call before saving it.
         club.brevo_api_key = api_key
         try:
             brevo.list_contact_lists(brevo.get_client(club))
         except brevo.BrevoApiError as e:
             blocked_ip = brevo.blocked_ip_from_error(e)
             if blocked_ip is not None:
-                # Valid-looking key, but Brevo is blocking this server's IP. Tell them what to allow.
+                # Valid key, but Brevo is blocking this server's IP.
                 where = blocked_ip or brevo.outbound_ip() or "this server's IP address"
                 logger.warning("Brevo blocked IP for club %s: %s", club.pk, e.detail)
                 messages.error(
@@ -1176,7 +1102,7 @@ class ClubBrevoConfigView(LoginRequiredMixin, ClubViewMixin, View):
             "club": club,
             "view": self,
             "lists": lists,
-            # Only looked up while showing the connect form, so admins can pre-authorize the IP.
+            # Only for the connect form, so admins can allowlist the IP.
             "server_ip": brevo.outbound_ip() if not club.brevo_api_key else "",
             "in_scope_count": brevo.in_scope_members(club).count(),
             "subscribed_count": synced.filter(brevo_status="subscribed").count(),
@@ -1189,11 +1115,10 @@ class ClubBrevoConfigView(LoginRequiredMixin, ClubViewMixin, View):
 
 
 class BrevoWebhookView(View):
-    """Receive Brevo marketing unsubscribe/bounce/spam/delete callbacks.
+    """Brevo unsubscribe/bounce/spam/delete callbacks.
 
-    One-way sync means we only honor opt-out-style events here: we record the member's Brevo
-    status so we never re-subscribe them, but we never touch their site email prefs. Brevo sends
-    a JSON body and does not sign it, so (like Mailchimp) the shared secret lives in the URL path.
+    One-way sync like Mailchimp's: record status, never touch site prefs. Unsigned, so the secret is
+    in the URL path.
     """
 
     @method_decorator(csrf_exempt)
@@ -1204,7 +1129,7 @@ class BrevoWebhookView(View):
         club = Club.objects.filter(slug=slug).first()
         if not club or not club.brevo_webhook_secret:
             return None
-        # Constant-time compare: this URL-path secret is the only thing authenticating the webhook.
+        # Constant-time: the path secret is the only authentication.
         if not secrets.compare_digest(club.brevo_webhook_secret.encode(), (secret or "").encode()):
             return None
         return club
@@ -1226,8 +1151,7 @@ class BrevoWebhookView(View):
         except ValueError:
             return HttpResponse("ok")
 
-        # Brevo's inbound event names use snake_case (unsubscribe / hard_bounce / contact_deleted),
-        # unlike the camelCase used when registering the webhook. Normalize before matching.
+        # Inbound events are snake_case, unlike registration's camelCase.
         event = (payload.get("event") or "").lower().replace("_", "")
         email = payload.get("email")
         if not email:
@@ -1286,13 +1210,9 @@ class SquareSuccessView(View):
     """Handle redirect after Square payment"""
 
     def get(self, request, *args, **kwargs):
-        # Square payment link can include order_id or reference_id in query params
-        # For now, show processing message and redirect to home
-        # The webhook will update the invoice status
+        # The webhook updates the invoice.
         messages.info(request, "Square payment processing... Your invoice will be updated shortly.")
 
-        # Try to get invoice reference if available
-        # Square may pass back custom data in query params depending on configuration
         return redirect(reverse("home"))
 
 

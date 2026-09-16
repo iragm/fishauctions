@@ -1,15 +1,10 @@
 """One-way Django -> Mailchimp sync for clubs.
 
-A club connects its own Mailchimp account via OAuth (see the Mailchimp*View classes in
-views.py). From then on this module keeps the club's chosen audience in sync: members are
-pushed as Mailchimp contacts with rich merge fields and lifecycle/value tags, so club admins
-can build automations and targeted campaigns.
+A club connects its Mailchimp account via OAuth (views/club_integrations.py). Members sync to the
+chosen audience with merge fields and tags. Only unsubscribe/cleaned status flows back, via the
+webhook, and never touches site email preferences.
 
-The sync is intentionally one-way. The only thing that flows back is unsubscribe/cleaned
-status (via the webhook) so we stop emailing those people in Mailchimp without ever touching
-their site-level email preferences.
-
-All Mailchimp API access goes through get_client(); tests mock that single entry point.
+All API access goes through get_client(), which tests mock.
 """
 
 import hashlib
@@ -24,8 +19,7 @@ from auctions.helper_functions import scrub_emails
 
 logger = logging.getLogger(__name__)
 
-# Custom merge fields provisioned on connect. (FNAME / LNAME already exist on every new list.)
-# Each tuple is (tag, name, type). Mailchimp limits merge tags to 10 characters.
+# Merge fields provisioned on connect, as (tag, name, type); tags are at most 10 characters.
 MERGE_FIELDS = (
     ("MEMBERNO", "Member number", "number"),
     ("EXPIRES", "Membership expires", "date"),
@@ -44,8 +38,7 @@ class MailchimpError(Exception):
 
 
 def _readable_api_error(exc):
-    """Extract the human-readable 'detail' field from a Mailchimp 400/4xx JSON body, or
-    fall back to the raw text.  Used so the last_error column stays short and scannable."""
+    """The 'detail' from a Mailchimp error body, or the raw text."""
     import json as _json
 
     text = getattr(exc, "text", "") or str(exc)
@@ -73,11 +66,7 @@ def get_client(club):
 
 
 def exchange_oauth_code(code, redirect_uri):
-    """Exchange an OAuth authorization code for (access_token, server_prefix).
-
-    Uses plain HTTP for the handshake (the marketing SDK only covers data-plane calls),
-    mirroring SquareCallbackView. Returns (token, dc) or raises MailchimpError.
-    """
+    """Exchange an OAuth code for (access_token, server_prefix) over plain HTTP, like SquareCallbackView."""
     import requests
 
     token_resp = requests.post(
@@ -138,25 +127,11 @@ def list_audiences(client):
 
 
 def account_defaults(client):
-    """Return {'from_name', 'from_email', 'contact'} as Mailchimp already has them, or None.
+    """{'from_name', 'from_email', 'contact'} from the club's Mailchimp account, or None.
 
-    A campaign is sent by the club's own Mailchimp account, from a domain verified inside that
-    account, against that account's suppression list -- so the sender cannot come from this site.
-    Our address is not verified there (the send is refused), and the club's site contact email
-    usually isn't either. Both are also the wrong answer even when they work: mail from this club
-    should arrive looking like the mail this club already sends.
-
-    Mailchimp holds the answer in two places, in this order of trust:
-
-    1. An audience the account already has. Its `campaign_defaults` are what Mailchimp itself
-       prefills on every campaign the club sends by hand, so they are a sender that demonstrably
-       works, and its `contact` block is the physical address that audience passes CAN-SPAM with.
-    2. The account root, for an account with no audience yet -- the login email and the mailing
-       address the club typed when it signed up.
-
-    Returns None when neither has an email, which is a real state (a brand-new account) and the
-    one case worth stopping on: creating the audience anyway would bake an unsendable default
-    into it, and the club would only find out at the first send.
+    Campaigns send from the club's own verified domain, so the sender can't come from this site.
+    Prefers an existing audience's campaign_defaults, then the account root. None when neither has an
+    email; creating an audience then would bake in an unsendable default.
     """
     try:
         lists = client.lists.get_all_lists(count=200).get("lists", [])
@@ -186,12 +161,8 @@ def account_defaults(client):
 
 
 def format_mailing_address(contact):
-    """Turn a Mailchimp `contact` block into the multi-line address a letter is signed with.
-
-    Mailchimp requires a real postal address on every audience because US bulk commercial email
-    has to carry one, which makes it the same address a club's donation letters need -- see
-    Club.donation_mailing_address. The company line is dropped: the letter already says who is
-    writing, and every club that types its own name into that box ends up saying it twice.
+    """A Mailchimp `contact` block as a multi-line postal address for donation letters, without the
+    company line.
     """
     if not contact:
         return ""
@@ -201,19 +172,14 @@ def format_mailing_address(contact):
         city_line = f"{city_line} {contact['zip']}".strip()
     lines.append(city_line)
     country = contact.get("country") or ""
-    # Two-letter country codes read as noise on a domestic letter; only non-US is worth printing.
+    # Only non-US countries are printed.
     if country and country.upper() not in {"US", "USA"}:
         lines.append(country)
     return "\n".join(x.strip() for x in lines if x and x.strip())
 
 
 def create_audience(client, club):
-    """Create a '{club name} Members' audience and return (id, name).
-
-    The sender and the mailing address are the account's own (see account_defaults); nothing
-    about the new audience is taken from this site except its name and permission reminder,
-    which are about the club rather than about who the mail is from.
-    """
+    """Create a '{club name} Members' audience and return (id, name), using account_defaults for the sender."""
     defaults = account_defaults(client)
     if not defaults:
         msg = (
@@ -229,8 +195,7 @@ def create_audience(client, club):
         "permission_reminder": f"You are receiving this because you are a member of {club.name}.",
         "email_type_option": True,
         "campaign_defaults": {
-            # from_name is a display name Mailchimp doesn't validate, so the club's own name is a
-            # fine fallback; from_email is validated at send time and has no fallback at all.
+            # from_name isn't validated; from_email is, so has no fallback.
             "from_name": defaults["from_name"] or club.name,
             "from_email": defaults["from_email"],
             "subject": "",
@@ -266,11 +231,7 @@ def ensure_merge_fields(club):
 
 
 def ensure_segments(club):
-    """Pre-create a named static segment for each tag so admins get ready-to-use audiences.
-
-    Tags and static segments share Mailchimp's backend, so creating them up front means the
-    segments appear immediately and get populated as members sync.
-    """
+    """Pre-create a static segment for each tag so they're ready as members sync."""
     from auctions.models import Category, ClubMember
 
     client = get_client(club)
@@ -291,12 +252,12 @@ def ensure_segments(club):
         try:
             client.lists.create_segment(club.mailchimp_audience_id, {"name": tag, "static_segment": []})
         except Exception:
-            # A 400 here usually means the tag/segment already exists under a different case.
+            # Usually already exists under a different case.
             logger.debug("Could not pre-create Mailchimp segment %s for club %s", tag, club.pk)
 
 
 def ensure_webhook(club):
-    """Register the unsubscribe/cleaned/upemail webhook for the club's audience (idempotent)."""
+    """Register the unsubscribe/cleaned/upemail webhook for the audience (idempotent)."""
     client = get_client(club)
     if not client or not club.mailchimp_audience_id or not club.mailchimp_webhook_secret:
         return
@@ -317,7 +278,7 @@ def ensure_webhook(club):
                     "upemail": True,
                     "campaign": False,
                 },
-                # Ignore changes our own API makes, so we never echo our writes back to ourselves.
+                # Ignore our own API changes.
                 "sources": {"user": True, "admin": True, "api": False},
             },
         )
@@ -341,12 +302,12 @@ def _self_service_url(member, urlname):
 
 
 def _desired_status(member):
-    """Map our contact model to a Mailchimp status.
+    """Map contact status to Mailchimp status.
 
     contact        -> subscribed
-    non_essential  -> unsubscribed (no marketing, kept so they can resubscribe)
-    do_not_contact -> archived (removed from the active audience)
-    A bad/blank email or a deactivated member is also archived.
+    non_essential  -> unsubscribed (can resubscribe)
+    do_not_contact -> archived
+    A bad or blank email or a deactivated member is also archived.
     """
     if member.is_deleted or not member.email or member.email_address_status == "BAD":
         return "archived"
@@ -376,11 +337,9 @@ def member_merge_fields(member):
 
 
 def sync_member(member, force_status=False):
-    """Upsert one member into the club's Mailchimp audience and reconcile their tags.
+    """Upsert one member into the audience and reconcile tags. Returns False when there's nothing to do.
 
-    Returns True on a successful sync/archive, False when there's nothing to do.
-    Respects Mailchimp-side unsubscribes (won't resubscribe) unless force_status=True
-    (used by the explicit resubscribe self-service action).
+    Won't resubscribe a Mailchimp-side unsubscribe unless force_status=True.
     """
     from mailchimp_marketing.api_client import ApiClientError
 
@@ -395,7 +354,6 @@ def sync_member(member, force_status=False):
     list_id = club.mailchimp_audience_id
     desired = _desired_status(member)
 
-    # Keep the power-seller/buyer tags accurate before we compute the tag set.
     member.refresh_cached_totals(save=True)
 
     try:
@@ -409,7 +367,6 @@ def sync_member(member, force_status=False):
             "status_if_new": "subscribed" if desired == "subscribed" else "unsubscribed",
             "merge_fields": member_merge_fields(member),
         }
-        # Force the status unless we'd be overriding a Mailchimp-side unsubscribe.
         respect_remote_optout = (
             desired == "subscribed" and not force_status and member.mailchimp_status in ("unsubscribed", "cleaned")
         )
@@ -425,24 +382,19 @@ def sync_member(member, force_status=False):
         detail = _readable_api_error(e)
         status_code = getattr(e, "status_code", None)
         if status_code == 400:
-            # Mailchimp rejected this specific address (fake/invalid email, bad merge field, etc.).
-            # Record it on the member row but don't propagate — other members in the batch should still sync.
-            # The member pk is enough to identify them; addresses never go to the logs.
+            # Rejected address: record on the member and continue. Log the pk, never the address.
             logger.warning("Mailchimp rejected member %s: %s", member.pk, scrub_emails(detail))
             _record_sync(member, status="cleaned", web_id=member.mailchimp_web_id or "")
         else:
-            # 4xx auth or 5xx — record on the club so admins see it in the status panel.
+            # Auth or server error: record on the club for the status panel.
             _record_error(club, detail)
             logger.error("Mailchimp sync failed for member %s (club %s): %s", member.pk, club.pk, scrub_emails(detail))
         return False
 
 
 def _top_category_names(member):
-    """Return the set of up-to-5 category names most relevant to this member.
-
-    If the member has a linked user with UserInterestCategory records, those drive the
-    ranking.  Otherwise fall back to aggregating sold/won lots across all of this club's
-    auctions filtered by the member's email address (seller or winner both count equally).
+    """Up to five category names relevant to this member: from UserInterestCategory, else from their
+    lots in this club's auctions.
     """
     from collections import Counter
     from itertools import chain
@@ -500,8 +452,7 @@ def _sync_tags(client, member, list_id):
     try:
         client.lists.update_list_member_tags(list_id, subscriber_hash(member.email), {"tags": tags})
     except ApiClientError as e:
-        # No logger.exception here: the traceback would include the raw API response, which
-        # echoes back the address we sent. The readable detail is scrubbed and enough to debug.
+        # No traceback: the API response echoes the address.
         logger.error(
             "Failed to update Mailchimp tags for member %s: %s", member.pk, scrub_emails(_readable_api_error(e))
         )
@@ -519,11 +470,8 @@ def _archive_member(client, member, list_id):
 
 
 def delete_contact_by_email(club, email):
-    """Permanently delete a contact from *club*'s audience by address, with no member row needed.
-
-    Account deletion, unlike an unsubscribe, has to actually remove the person: the archive an
-    ordinary opt-out leaves behind still holds their address. Mailchimp calls this a permanent
-    delete, and it's irreversible on their side too. Returns True when a call was made.
+    """Permanently delete a contact from the audience by address, for account deletion. Returns True
+    when a call was made.
     """
     from mailchimp_marketing.api_client import ApiClientError
 
@@ -561,7 +509,7 @@ def change_member_email(member, old_email):
             # Old address was never synced; just create the new contact.
             sync_member(member)
         else:
-            # Not logger.exception: the traceback carries the old/new addresses in the API body.
+            # No traceback: the API body carries the addresses.
             logger.error(
                 "Failed to update Mailchimp email for member %s: %s", member.pk, scrub_emails(_readable_api_error(e))
             )
@@ -571,22 +519,14 @@ def change_member_email(member, old_email):
 
 
 def in_scope_members(club):
-    """Members eligible for syncing into this club's audience (see plan: 'club consent only').
-
-    Always excludes deactivated members and those with no email. do_not_contact / bad-email
-    members are still returned (sync_member archives them so Mailchimp reflects the opt-out).
-    """
+    """Members eligible to sync: not deactivated, with an email. Opted-out members are included so they get archived."""
     from auctions.models import ClubMember
 
     return ClubMember.objects.filter(club=club, is_deleted=False).exclude(email__isnull=True).exclude(email="")
 
 
 def backfill(club):
-    """Queue a sync for every in-scope member after an initial connection.
-
-    Reuses the per-member task path so each contact's web_id/status is captured locally
-    (Mailchimp's batch endpoint returns asynchronously and makes that bookkeeping harder).
-    """
+    """Queue a per-member sync for every in-scope member after connecting."""
     from auctions.tasks import sync_club_member_to_mailchimp
 
     count = 0
@@ -639,20 +579,11 @@ def member_in_mailchimp_url(member):
 
 # --- announcement campaigns -------------------------------------------------------------------
 #
-# A club announcement mailed through the club's own Mailchimp, as a *campaign* rather than a
-# transactional send. That distinction is the whole point: a campaign goes to the audience, which
-# means Mailchimp applies the audience's unsubscribes, cleaned addresses and compliance footer for
-# us. Sending the same text through this site's own mail server would reach the people who
-# unsubscribed from the club, which is the one thing these integrations exist to prevent.
+# Sent as campaigns to the audience, so Mailchimp applies its unsubscribes and compliance footer.
 
 
 def verified_sender(client, club):
-    """Return (from_name, from_email) for a campaign, or raise MailchimpError saying why not.
-
-    The sender is the audience's own campaign defaults -- what Mailchimp prefills when the club
-    writes a campaign by hand -- because a from address this site invented is one Mailchimp will
-    refuse at send time. See account_defaults for where it comes from.
-    """
+    """(from_name, from_email) from the audience's campaign defaults, or raise MailchimpError."""
     try:
         settings_ = client.lists.get_list(club.mailchimp_audience_id).get("campaign_defaults") or {}
     except Exception as e:
@@ -669,11 +600,7 @@ def verified_sender(client, club):
 
 
 def send_announcement_campaign(club, *, subject, html, plain_text):
-    """Create and send one campaign to the club's audience. Returns the campaign id.
-
-    Four calls, which is why this runs in a Celery task rather than in a form POST. Raises
-    MailchimpError with something an admin can act on; the caller records it on the announcement.
-    """
+    """Create and send one campaign to the audience, returning its id. Raises MailchimpError; runs in Celery."""
     client = get_client(club)
     if not client or not club.mailchimp_audience_id:
         msg = "Mailchimp is not connected to an audience."
@@ -685,16 +612,12 @@ def send_announcement_campaign(club, *, subject, html, plain_text):
                 "type": "regular",
                 "recipients": {"list_id": club.mailchimp_audience_id},
                 "settings": {
-                    # title is Mailchimp's internal name for the campaign; the club sees it in its
-                    # own campaign list, so it says where the thing came from.
+                    # Mailchimp's internal campaign name, visible in the club's list.
                     "title": f"{club.name} announcement — {subject}"[:100],
                     "subject_line": subject[:150],
                     "from_name": from_name[:100],
                     "reply_to": from_email,
-                    # Mailchimp's own footer, which carries the unsubscribe link and the audience's
-                    # physical address. Not optional in either direction: with it off, Mailchimp
-                    # refuses any content that has no *|UNSUB|* tag of its own, and writing our own
-                    # unsubscribe link would point at something other than the list this went to.
+                    # Required: carries the unsubscribe link and address.
                     "auto_footer": True,
                 },
             }
@@ -718,11 +641,7 @@ def send_announcement_campaign(club, *, subject, html, plain_text):
 
 
 def campaign_opens(club, campaign_id):
-    """Unique opens on a sent campaign, or None when Mailchimp can't tell us yet.
-
-    None and 0 are different answers -- a report that isn't ready yet is not a campaign nobody
-    opened -- so the caller can leave the number off the row rather than printing a wrong one.
-    """
+    """Unique opens on a sent campaign, or None when the report isn't ready (not 0)."""
     client = get_client(club)
     if not client or not campaign_id:
         return None

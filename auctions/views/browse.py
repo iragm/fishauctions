@@ -1,8 +1,7 @@
 """The lot lists people browse, and what they do to a lot without opening it.
 
-Everything a signed-in member sees of somebody else's lots: the main list, the recommendation
-feeds, "my bids"/"my watched", the select2 autocompletes those pages are backed by, and the two
-writes that happen from a list rather than a page -- watching and bidding.
+The main list, the recommendation feeds, "my bids" and "my watched", the autocompletes behind them,
+and the two writes that happen from a list: watching and bidding.
 """
 
 import logging
@@ -88,9 +87,7 @@ class ClickAd(RedirectView):
 
 
 class RenderAd(DetailView):
-    """
-    loaded async with js on ad.html, this view will spit out some raw html (with no css) suitable for displaying as part of a template
-    """
+    """Loaded async by ad.html; returns raw HTML with no CSS, to embed in another template."""
 
     template_name = "ad_internal.html"
     model = AdCampaignResponse
@@ -117,13 +114,11 @@ class RenderAd(DetailView):
             except Category.DoesNotExist:
                 pass
         if user and not category:
-            # There wasn't a category on this page, so pick one of the user's interests instead.
+            # No category on this page, so use one of the user's interests.
             #
-            # `random.sample` wants a sequence and a QuerySet is not one, so this raised TypeError --
-            # which the except did not name -- for every signed-in visitor, on an endpoint every page
-            # fetches asynchronously. It only ever surfaced with DEBUG off (CI runs with it on), and
-            # `sample` returns a *list*, so on the day it did not raise it assigned a list where the
-            # comparison below expects a Category and quietly matched nothing.
+            # `random.sample` wants a sequence and raised TypeError on a QuerySet -- which the
+            # except didn't name -- for every signed-in visitor, and returns a list where the
+            # comparison below expects a Category.
             categories = list(UserInterestCategory.objects.filter(user=user).order_by("-as_percent")[:5])
             if categories:
                 category = choice(categories).category
@@ -151,13 +146,12 @@ class RenderAd(DetailView):
 
 
 class LotListView(AjaxListView):
-    """This is a base class that shows lots, with a filter.  This class is never used directly, but it's a parent for several other classes.
-    The context is overridden to set the view type"""
+    """Base class for lot lists with a filter; never used directly."""
 
     model = Lot
     template_name = "all_lots.html"
     auction = None
-    # to display the banner telling users why they are not seeing lots for all auctions
+    # Shows the banner explaining why lots from other auctions aren't listed.
     routeByLastAuction = False
 
     def get_page_template(self):
@@ -169,14 +163,12 @@ class LotListView(AjaxListView):
     def get_context_data(self, **kwargs):
         # set default values
         data = self.request.GET.copy()
-        # if len(data) == 0:
-        #    data['status'] = "open" # this would show only open lots by default
         context = super().get_context_data(**kwargs)
         if self.request.GET.get("page"):
             del data["page"]  # required for pagination to work
-        # gotta check to make sure we're not trying to filter by an auction, or no auction
+        # Don't override the auction when one is being filtered for.
         if "auction" in data.keys():
-            # now we have tried to search for something, so we should not override the auction
+            # A search was made, so don't override the auction.
             self.auction = None
         context["routeByLastAuction"] = self.routeByLastAuction
         context["filter"] = LotFilter(
@@ -193,8 +185,7 @@ class LotListView(AjaxListView):
             # probably not signed in
             context["lotsAreHidden"] = -1
         if self.request.user.is_authenticated:
-            # values_list, so this reads one column off the biggest table on the site rather than
-            # building a whole PageView to read one field off it
+            # values_list, so this reads one column off the biggest table on the site.
             context["lastView"] = (
                 PageView.objects.filter(user=self.request.user, lot_number__isnull=False)
                 .order_by("-date_start")
@@ -227,15 +218,13 @@ class LotListView(AjaxListView):
                 context["auction_tos"] = AuctionTOS.objects.filter(
                     auction=context["auction"].pk, user=self.request.user.pk
                 ).first()
-            #     # this message gets added to every scroll event.  Also, it's just noise
-            #     messages.error(self.request, f"Please <a href='/auctions/{context['auction'].slug}/'>read the auction's rules and confirm your pickup location</a> to bid")
         else:
             # this will be a mix of auction and non-auction lots
             context["display_auction_on_lots"] = True
         if not self.request.COOKIES.get("longitude"):
             context["location_message"] = "Set your location to see lots near you"
-        # The beacon tags a page view with this auction. Only the three pages that are a
-        # visitor looking at an auction do -- see base_page_view.html.
+        # The beacon tags a page view with this auction; only pages that are a visitor looking at
+        # an auction do. See base_page_view.html.
         context["page_view_auction"] = context["auction"].pk if context["auction"] else None
         context["src"] = "lot_list"
         return context
@@ -336,11 +325,10 @@ class ClubMemberAutocomplete(LoginRequiredMixin, autocomplete.Select2QuerySetVie
 
 
 class ClubMemberMergeAutocomplete(LoginRequiredMixin, autocomplete.Select2QuerySetView):
-    """Autocomplete for the club-member merge target selector.
+    """Autocomplete for the club-member merge target.
 
-    Forwards: club_slug, exclude_member (pk of the source being merged away).
-    Includes both active and deactivated members; labels deactivated ones.
-    Requires permission_add_edit on the club.
+    Forwards club_slug and exclude_member. Includes deactivated members, labelled; needs
+    permission_add_edit.
     """
 
     def get_result_label(self, result):
@@ -399,7 +387,7 @@ class AuctionAutocomplete(LoginRequiredMixin, autocomplete.Select2QuerySetView):
             .order_by("-date_start")
         )
 
-        # Exclude the current auction if provided (via DAL forwarded params or plain query params)
+        # Exclude the current auction, from forwarded or plain query params.
         current_slug = (
             self.forwarded.get("current_slug")
             or self.request.GET.get("current")
@@ -431,20 +419,13 @@ class LotQRView(RedirectView):
 
 
 class AllRecommendedLots(TemplateView):
-    """
-    Show all recommended lots as a standalone page
-    Lots are loaded async on the template via javascript
-    """
+    """Show all recommended lots as a standalone page; the lots load async via JavaScript."""
 
     template_name = "recommended_lots.html"
 
 
 class RecommendedLots(ListView):
-    """
-    Return a somewhat random list of lots that have not been seen by the current user.
-    This is rendered html ready to embed in another view
-    It shouldn't really be called directly as there's no CSS in the templates
-    """
+    """A somewhat random list of lots the user hasn't seen, as HTML to embed in another view."""
 
     model = Lot
 
@@ -536,8 +517,8 @@ class MyLots(HTMxTableView):
     # paginate_by = 100
 
     def dispatch(self, request, *args, **kwargs):
-        # Legacy ?filter=X bookmarks: canonicalize to ?query=X so the shared HTMX
-        # template's input pre-populates and its URL-sync stays consistent.
+        # Legacy ?filter=X bookmarks are canonicalized to ?query=X so the shared template's input
+        # pre-populates.
         if "query" not in request.GET and request.GET.get("filter") and not request.htmx:
             params = request.GET.copy()
             params["query"] = params.pop("filter")[0]
@@ -637,15 +618,10 @@ class WatchOrUnwatch(APIView):
 
 
 class PlaceBid(APIView):
-    """Place a bid over HTTP - POST only.
+    """Place a bid over HTTP; POST only.
 
-    Bidding used to happen entirely over the lot websocket, which meant a dropped
-    or stalled socket could silently lose a bid. This endpoint persists the bid via
-    a normal request and then broadcasts the result over the websocket as before, so
-    the user experience is unchanged but the bid no longer depends on the socket.
-
-    The client does not need to parse this response -- it keeps listening on the
-    websocket for the broadcast -- but we return the result for robustness/tests.
+    Bidding used to happen over the lot websocket, where a stalled socket could silently lose a bid.
+    This persists the bid and then broadcasts as before; the client still listens on the websocket.
     """
 
     authentication_classes = [SessionAuthentication, TokenAuthentication]
@@ -655,14 +631,13 @@ class PlaceBid(APIView):
         lot = Lot.objects.filter(pk=pk, is_deleted=False).first()
         if not lot:
             return JsonResponse({"type": "ERROR", "message": "Lot not found"}, status=404)
-        # Persist the bid first (best-effort websocket broadcast happens inside).
+        # Persist first; the best-effort broadcast happens inside.
         result = place_bid_and_broadcast(lot, request.user, request.POST.get("bid"))
         high_bid = result.get("current_high_bid")
         if isinstance(high_bid, Decimal):
             high_bid = float(high_bid)
-        # Always 200 for a processed bid (including validation errors like "bid too
-        # low"): those are surfaced to the user via the websocket broadcast, so a
-        # non-2xx here would make the client show a second, generic error toast.
+        # Always 200 for a processed bid, including "bid too low": those reach the user over the
+        # websocket, and a non-2xx would show a second, generic error.
         return JsonResponse(
             {
                 "type": result["type"],
@@ -715,9 +690,9 @@ class IgnoreAuction(APIView):
 
 
 class NoLotAuctions(APIView):
-    """POST-only method that returns an empty string if most recent auction you've used accepts lots
-    or the name of the auction and the end date
-    Used on the lot creation form"""
+    """POST only: the name and end date of the most recent auction you've used, or an empty string if it
+    accepts lots. Used on the lot creation form.
+    """
 
     authentication_classes = [SessionAuthentication, TokenAuthentication]
     permission_classes = [IsAuthenticated]
@@ -762,9 +737,8 @@ class NoLotAuctions(APIView):
 
 
 class AuctionNotifications(APIView):
-    """
-    POST-only method that will return a count of auctions as well as some info about the closest one.
-    This is mostly a wrapper to go around models.nearby_auctions so that all info isn't accessible to anyone
+    """POST only: a count of nearby auctions and some detail about the closest, wrapping
+    models.nearby_auctions so not everything is exposed.
     """
 
     authentication_classes = [SessionAuthentication, TokenAuthentication]
@@ -828,7 +802,7 @@ class AuctionNotifications(APIView):
 
 
 class SetCoordinates(APIView):
-    """Set user location coordinates - POST only.  I don't think this is used anywhere any more"""
+    """Set user location coordinates; POST only. Probably unused now."""
 
     authentication_classes = [SessionAuthentication, TokenAuthentication]
     permission_classes = [IsAuthenticated]

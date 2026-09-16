@@ -1,11 +1,6 @@
-"""Request and response shapes for the mobile app's own API.
+"""Request and response shapes for the mobile app's API under ``/api/mobile/``.
 
-The app talks to ``/api/mobile/`` rather than to the club API, because it is a different kind of
-client: it holds a JWT pair, it works offline and replays what it queued, and it needs the site to
-describe itself (config, menus, feature flags) before anybody has signed in.
-
-Session IDs the app generates are stored as **char, not UUID** -- MariaDB's native UUID column
-rejects a variant nibble outside 8-b and silently killed about half of these.
+App-generated session IDs are char, not UUID: MariaDB's UUID column rejects some variant nibbles.
 """
 
 import math
@@ -44,17 +39,16 @@ class MobileGoogleAuthSerializer(serializers.Serializer):
 
 
 class MobileSocialAuthSerializer(serializers.Serializer):
-    """Request body for POST /api/mobile/auth/social/ — one shape for all three providers.
+    """POST /api/mobile/auth/social/ — one shape for all three providers.
 
-    Field-level checks are deliberately thin: verification lives in
-    ``auctions.mobile.services.social_auth`` so a serializer change can't weaken it.
+    Verification lives in ``auctions.mobile.services.social_auth``, not here.
     """
 
     provider = serializers.ChoiceField(choices=SUPPORTED_PROVIDERS)
     id_token = serializers.CharField(required=False, allow_blank=True, write_only=True)
     access_token = serializers.CharField(required=False, allow_blank=True, write_only=True)
     authorization_code = serializers.CharField(required=False, allow_blank=True, write_only=True)
-    # Raw nonce; provider holds sha256() of it -- the hash comparison is the real check.
+    # Raw nonce; the provider token holds its sha256.
     nonce = serializers.CharField(required=False, allow_blank=True, max_length=256, write_only=True)
     email = serializers.CharField(required=False, allow_blank=True, max_length=254)
     first_name = serializers.CharField(required=False, allow_blank=True, max_length=150)
@@ -85,11 +79,9 @@ class MobileUserSerializer(serializers.Serializer):
 
 
 class MobileClubSerializer(serializers.Serializer):
-    """A club the authenticated user belongs to, for GET /api/mobile/clubs/mine/.
+    """A club the user belongs to, for GET /api/mobile/clubs/mine/.
 
-    ``url`` is the server-relative web club page (opened in the WebView); ``icon_url`` is an
-    absolute URL (or null) so the app can load the square club logo directly. ``is_admin`` reflects
-    a ClubMember row with permission_admin for this user — the view annotates each Club with it.
+    ``url`` is relative, ``icon_url`` absolute or null; the view annotates ``is_admin``.
     """
 
     name = serializers.CharField()
@@ -149,23 +141,16 @@ class MobileDeviceUnregisterSerializer(serializers.Serializer):
 
 
 class MobileDeviceHeartbeatSerializer(serializers.Serializer):
-    """Request body for POST /api/mobile/devices/heartbeat/ — "this phone is awake and can print".
+    """POST /api/mobile/devices/heartbeat/ — the phone is awake, and whether it can print.
 
-    Posted at shell mount, on resume, and every 5 minutes while foregrounded. It is the only thing
-    that makes printing from a computer to the phone possible at all: the phone cannot be woken on
-    demand, so the website has to know whether it is already awake before it offers.
-
-    ``print_ready`` is the app's own answer to "is a printer paired AND does its profile resolve",
-    not something derived from ``print_method``: a printer saved by an older build, or one whose
-    profile the site has since withdrawn, cannot print and must be reported not-ready rather than
-    advertised and then failed.
+    ``print_ready`` is the app's own answer (printer paired and profile resolves), not derived from
+    ``print_method``.
     """
 
     device_uuid = serializers.UUIDField()
     print_ready = serializers.BooleanField(required=False, default=False)
     printer_name = serializers.CharField(required=False, allow_blank=True, default="", max_length=100)
-    # Echoed by the app so the website can see the method the phone is actually set to; it is
-    # deliberately NOT what print_ready is computed from.
+    # Echoed for display; not what print_ready is computed from.
     print_method = serializers.CharField(required=False, allow_blank=True, default="", max_length=20)
 
 
@@ -175,11 +160,7 @@ class MobileDeviceHeartbeatSerializer(serializers.Serializer):
 
 
 class MobileLabelPrefsSerializer(serializers.ModelSerializer):
-    """The user's UserLabelPrefs plus the computed mismatch warnings.
-
-    Used by GET/PATCH /api/mobile/labels/prefs/. ``warnings`` is read-only and comes from the same
-    ``auctions.printing.label_prefs_warnings`` the web /printing/ page uses, so app and web agree.
-    """
+    """The user's UserLabelPrefs plus ``auctions.printing.label_prefs_warnings``, as on /printing/."""
 
     warnings = serializers.SerializerMethodField()
 
@@ -203,33 +184,18 @@ class MobileLabelPrefsSerializer(serializers.ModelSerializer):
 
 
 class MobileLabelsPrintedSerializer(serializers.Serializer):
-    """Request body for POST /api/mobile/labels/printed/ — lots whose labels actually came out.
-
-    The PDF views set ``label_printed`` as a side effect of rendering, but native Bluetooth
-    printing never goes through them, so "print unprinted labels" would never shrink for anyone
-    printing over Bluetooth. The app posts this after the labels that really went out — including
-    the ones sent before a failure or a cancel — so a partially-printed batch marks exactly what
-    printed.
-    """
+    """POST /api/mobile/labels/printed/ — lots whose labels actually came out, including before a failure."""
 
     lots = serializers.ListField(child=serializers.IntegerField(min_value=1), allow_empty=True, max_length=1000)
-    # The other half of the same report: labels that were *sent* and did not come out -- the jam, the
-    # cover left open, the roll that ran out mid-run. Optional, because only an app that can read its
-    # printer's status can fill it in (see STATUS_CONDITIONS below and the note on the view), and a
-    # printer with no status program has nothing to say. A lot named here is put back to unprinted
-    # and flagged for reprinting, so clearing the jam and pressing "print unprinted labels" prints
-    # exactly what is missing.
+    # Labels sent that didn't come out; they go back to unprinted and are flagged for reprint.
     failed = serializers.ListField(
         child=serializers.IntegerField(min_value=1), required=False, allow_empty=True, max_length=1000, default=list
     )
-    # Machine-readable printer conditions, from the vocabulary the profiles' status_flags already
-    # decode into (auctions.printer_programs.STATUS_CONDITIONS) -- one list, not two, or the profile
-    # that says "02 means paper_jam" and the report that says "jammed" drift apart.
+    # Conditions from auctions.printer_programs.STATUS_CONDITIONS, the profiles' vocabulary.
     conditions = serializers.ListField(
         child=serializers.CharField(max_length=40), required=False, allow_empty=True, max_length=20, default=list
     )
-    # The app's own words for what went wrong, kept verbatim in the log the same way the remote-print
-    # job keeps them for the page.
+    # The app's own words, logged verbatim.
     message = serializers.CharField(required=False, allow_blank=True, default="", max_length=1000)
 
     def validate_conditions(self, value):
@@ -243,12 +209,9 @@ class MobileLabelsPrintedSerializer(serializers.Serializer):
 
 
 class MobileLabelBatchSerializer(serializers.Serializer):
-    """Request body for POST /api/mobile/labels/batch/ — render a whole print run in one request.
+    """POST /api/mobile/labels/batch/ — render a print run; unrendered lots come back as ``remaining``.
 
-    ``lots`` is the run in print order; the endpoint answers with as many as it rendered and hands
-    back the rest as ``remaining``, so the app's loop is "post what is left, print what comes back"
-    and the server decides the chunk size. ``resolution``/``dpi`` mean exactly what they mean on
-    GET labels/<pk>/ and default the same way (600x400 @ 203dpi).
+    ``resolution`` and ``dpi`` default as on GET labels/<pk>/ (600x400 @ 203dpi).
     """
 
     lots = serializers.ListField(child=serializers.IntegerField(min_value=1), allow_empty=False, max_length=1000)
@@ -257,13 +220,7 @@ class MobileLabelBatchSerializer(serializers.Serializer):
 
 
 class MobileRemotePrintProgressSerializer(serializers.Serializer):
-    """Body for POST /api/mobile/printjobs/<uuid>/progress/ — one label went out.
-
-    Best-effort and throttled by the app (at most one per label, never two inside a second, dropped
-    silently on error). A phone that can print but has lost the network mid-batch must still finish
-    the batch; the waiting page's 20-second silence rule will then call the job unreachable, which is
-    a survivable wrong answer. The *result* post is the one that matters.
-    """
+    """POST /api/mobile/printjobs/<uuid>/progress/ — one label went out. Best-effort."""
 
     status = serializers.ChoiceField(
         choices=[RemotePrintJob.STATUS_PRINTING], required=False, default=RemotePrintJob.STATUS_PRINTING
@@ -273,13 +230,7 @@ class MobileRemotePrintProgressSerializer(serializers.Serializer):
 
 
 class MobileRemotePrintResultSerializer(serializers.Serializer):
-    """Body for POST /api/mobile/printjobs/<uuid>/result/ — the batch is over, one way or the other.
-
-    ``message`` is the app's own failure text and is shown to the person at the computer *verbatim*.
-    The app already distinguishes no-printer-paired from couldn't-connect from lost-the-link-mid-print
-    from label-wider-than-the-printhead; restating those here would be a second copy of the same
-    vocabulary, free to drift.
-    """
+    """POST /api/mobile/printjobs/<uuid>/result/ — the batch is over. ``message`` is shown verbatim."""
 
     status = serializers.ChoiceField(choices=[RemotePrintJob.STATUS_PRINTED, RemotePrintJob.STATUS_FAILED])
     printed = serializers.IntegerField(min_value=0, required=False, default=0)
@@ -293,12 +244,7 @@ class MobileRemotePrintResultSerializer(serializers.Serializer):
 
 
 class MobileNotificationPrefsSerializer(serializers.ModelSerializer):
-    """The two push toggles the app's opt-in flow owns, for GET/PATCH /api/mobile/notifications/prefs/.
-
-    Both are optional on write so a PATCH can carry either one; the app sends both when the user
-    accepts its "enable notifications" offer. Short names rather than the model's field names: the
-    app's contract is about push, not about which of them replaces email.
-    """
+    """GET/PATCH /api/mobile/notifications/prefs/ — the app's two push toggles, both optional on write."""
 
     push_instead_of_email = serializers.BooleanField(source="push_notifications_instead_of_email", required=False)
     push_when_lots_sell = serializers.BooleanField(source="push_notifications_when_lots_sell", required=False)
@@ -310,12 +256,9 @@ class MobileNotificationPrefsSerializer(serializers.ModelSerializer):
 
 
 class PrinterObservationSerializer(serializers.Serializer):
-    """Request body for POST /api/mobile/printers/observed/ — one successful pairing.
+    """POST /api/mobile/printers/observed/ — one pairing.
 
-    Deliberately permissive: the app fires this and ignores the response, so a row it can't
-    parse back is a row we simply never see. Strings carry no max_length (the service truncates
-    to the column width instead of 400-ing), and everything except ``matched_by`` is optional —
-    a printer that reports no model/manufacturer is itself a finding worth storing.
+    Permissive: strings are truncated by the service, and only ``matched_by`` is required.
     """
 
     ble_name = serializers.CharField(required=False, allow_blank=True, allow_null=True, default="")
@@ -330,18 +273,14 @@ class PrinterObservationSerializer(serializers.Serializer):
         allow_null=True,
         default=list,
     )
-    # Null/absent when the user cancelled out of the manual dialog — no profile was chosen.
+    # Empty when the user cancelled the manual dialog.
     profile_slug = serializers.CharField(required=False, allow_blank=True, allow_null=True, default="")
     matched_by = serializers.ChoiceField(choices=[c[0] for c in ObservedPrinter.MATCHED_BY_CHOICES])
-    # Not sent by the app yet: reserved for the post-first-print confirmation, so "what works"
-    # can mean printed rather than merely paired.
+    # Reserved for a post-first-print confirmation; not sent yet.
     printed_ok = serializers.BooleanField(required=False, default=False)
 
-    # ── What the printer answered, and what its answers mean ──
-    # All optional and absent when the printer was matched without probing. Typed as JSONField
-    # rather than nested serializers on purpose: this is evidence about a printer nobody here
-    # owns, and a shape we didn't anticipate is still worth recording. The service caps the size
-    # and drops anything unusable; nothing here may 400 a report away.
+    # Probe results, absent when matched without probing. JSONField so unexpected shapes are
+    # still recorded; the service caps size and never 400s.
     probe_replies = serializers.JSONField(required=False, allow_null=True, default=dict)
     probed_language = serializers.CharField(required=False, allow_blank=True, allow_null=True, default="")
     gatt = serializers.JSONField(required=False, allow_null=True, default=list)
@@ -368,17 +307,13 @@ class MobilePaymentCreateResponseSerializer(serializers.Serializer):
     amount = serializers.CharField(help_text="Decimal string, e.g. '15.00'")
     currency = serializers.CharField()
     location_id = serializers.CharField()
-    # The client must charge with this reference_id so confirm (and the Square webhook) can bind the
-    # payment to the invoice. Matches the web convention (str(invoice.pk)).
+    # Confirm and the Square webhook bind the payment to the invoice with this (str(invoice.pk)).
     reference_id = serializers.CharField()
-    # The Mobile Payments SDK authorizes on-device with authorize(accessToken, locationId), so we
-    # ship the seller's OAuth access token to the device by design (the SDK requires it).
+    # The SDK's authorize(accessToken, locationId) needs the seller's token on the device.
     access_token = serializers.CharField()
-    # One per call, recorded as an open attempt against the invoice. The app hands it to the Mobile
-    # Payments SDK as paymentAttemptId, which names one attempt -- a repeat is an error, not a
-    # dedup. See TapToPayAttempt for what replaced the old stable-key protection.
+    # Unique per call: the SDK's paymentAttemptId. See TapToPayAttempt.
     attempt_id = serializers.CharField(help_text="Per-attempt id for the on-device charge (paymentAttemptId)")
-    # The same value under the old name, for app builds that predate attempt_id.
+    # Old name, for older app builds.
     idempotency_key = serializers.CharField(help_text="Deprecated alias of attempt_id")
     square_environment = serializers.CharField()
 
@@ -400,12 +335,7 @@ class MobilePaymentConfirmSerializer(serializers.Serializer):
 
 
 class MobilePaymentAttemptCloseSerializer(serializers.Serializer):
-    """Request body for POST /api/mobile/payments/attempt/close/.
-
-    Load-bearing: declines are routine, and without this a declined card would leave the attempt
-    open, ``create`` would refuse the retry, and the cashier would be blocked from the one action
-    that is definitely correct.
-    """
+    """POST /api/mobile/payments/attempt/close/ — without it a declined card blocks the retry."""
 
     attempt_id = serializers.CharField(max_length=45)
     outcome = serializers.ChoiceField(
@@ -428,13 +358,10 @@ class MobilePaymentConfirmResponseSerializer(serializers.Serializer):
 
 
 class CommandPaletteLogSerializer(serializers.Serializer):
-    """Request body for POST /api/mobile/command-palette/log/.
+    """POST /api/mobile/command-palette/log/, like the web ``command_palette_log``.
 
-    Mirrors the web ``command_palette_log`` view: every field is optional so the client can
-    upsert a single search-session row as the query is refined, then finalise it as ``clicked``
-    / ``abandoned`` / ``bounce``. ``result`` is intentionally a free CharField (not a ChoiceField):
-    ``command_palette.log_search`` coerces any unknown value to ``pending``, matching the web's
-    leniency and keeping the contract forward-compatible.
+    All optional; ``result`` is a free CharField because ``log_search`` coerces unknown values to
+    ``pending``.
     """
 
     id = serializers.IntegerField(
@@ -455,9 +382,7 @@ class CommandPaletteLogSerializer(serializers.Serializer):
 
 
 class FiniteOrNullFloatField(serializers.FloatField):
-    """A float where a non-finite value (``inf``, ``nan``, or the strings ``"Infinity"``/``"NaN"``)
-    means "unknown" and becomes None. Plain FloatField rejects those since DRF 3.18.1, which would 400
-    the whole AR batch over one bad sensor reading."""
+    """A float where inf or nan becomes None, rather than 400ing the whole AR batch."""
 
     def to_internal_value(self, data):
         try:
@@ -469,8 +394,7 @@ class FiniteOrNullFloatField(serializers.FloatField):
 
 
 class ArDetectionSerializer(serializers.Serializer):
-    """One QR sighting inside a camera frame. Angle bounds are checked in the service (a junk
-    detection is dropped, not a 400), so only structure is validated here."""
+    """One QR sighting; angle bounds are checked in the service, which drops junk."""
 
     lot = serializers.IntegerField()
     bearing_deg = serializers.FloatField()
@@ -479,47 +403,32 @@ class ArDetectionSerializer(serializers.Serializer):
 
 
 class ArFrameSerializer(serializers.Serializer):
-    """All detections seen in a single camera frame (they share a pose, so they constrain lots
-    relative to each other)."""
+    """All detections in one camera frame, which share a pose."""
 
     frame_id = serializers.CharField(max_length=32)
     captured_at = serializers.DateTimeField()
-    # Phone's integrated gyro heading at capture (deg, ccw-positive about gravity, zero at session
-    # start, cumulative/unwrapped). Absent/null ⇒ no gyro data ("unknown", never "didn't turn"); the
-    # solver uses it as heading odometry between frames.
+    # Cumulative gyro heading (deg, ccw, zero at session start). Null means unknown.
     yaw_deg = FiniteOrNullFloatField(required=False, allow_null=True)
-    # Phone's absolute compass heading at capture: degrees CW from MAGNETIC north (0=N, 90=E),
-    # tilt-compensated, for the camera's forward axis. Absent/null ⇒ no compass reading ("unknown").
-    # The server corrects magnetic→true (WMM declination) and uses it to fix each island's absolute
-    # orientation. Unlike yaw_deg (relative gyro odometry), this is an absolute bearing.
+    # Tilt-compensated compass heading, degrees CW from magnetic north. Null means unknown. The
+    # server corrects to true north and uses it to orient islands.
     heading_deg = FiniteOrNullFloatField(required=False, allow_null=True)
-    # Phone GPS fix at capture (WGS84 degrees). Send both or neither; absent/null ⇒ no fix. The solver
-    # no longer positions/translates anything with GPS (a ≤10 m venue is finer than any consumer fix);
-    # it is used only to look up magnetic declination for the heading correction, so a single coarse
-    # fix is plenty and the app may omit GPS entirely. Never send (0, 0); just omit when there's no fix.
+    # GPS fix (WGS84), both or neither, never (0, 0). Only used to look up magnetic declination.
     latitude = FiniteOrNullFloatField(required=False, allow_null=True)
     longitude = FiniteOrNullFloatField(required=False, allow_null=True)
-    # Phone's cumulative planar dead-reckoning displacement since session start (metres), in the same
-    # session-fixed frame as yaw_deg: origin at the session's first tracked position, +x = camera
-    # forward at yaw 0, +y = 90° ccw from +x (camera's left). Send both or neither; absent/null ⇒ no
-    # tracking ("unknown", never "didn't move"). Unlike GPS, (0, 0) is a VALID value — the session's
-    # origin, which the first frame legitimately reports. The solver uses consecutive frames'
-    # difference as measured translation odometry.
+    # Cumulative dead-reckoning displacement (m) in yaw_deg's frame: +x camera forward at yaw 0,
+    # +y to its left. Both or neither; (0, 0) is valid (the origin).
     odo_x_m = FiniteOrNullFloatField(required=False, allow_null=True)
     odo_y_m = FiniteOrNullFloatField(required=False, allow_null=True)
     detections = ArDetectionSerializer(many=True, max_length=MAX_DETECTIONS_PER_FRAME)
 
     def validate_yaw_deg(self, value):
-        # Junk guard: a runaway integrator can report absurd values; drop them (treat as "unknown")
-        # rather than 400 the whole batch.
+        # Absurd values from a runaway integrator become unknown.
         if value is not None and abs(value) > 36000:
             return None
         return value
 
     def validate_heading_deg(self, value):
-        # Same "junk is dropped, never 400" philosophy as yaw: null (or non-finite, nulled by the
-        # field) passes through, and a wildly out-of-range value is discarded as "unknown". A survivor
-        # is normalized to [0, 360) since it is an absolute compass bearing.
+        # Out-of-range becomes unknown; survivors are normalized to [0, 360).
         if value is None:
             return None
         if not (-360.0 <= value <= 360.0):
@@ -527,9 +436,7 @@ class ArFrameSerializer(serializers.Serializer):
         return value % 360.0
 
     def validate(self, attrs):
-        # GPS is all-or-nothing and must be in range; an out-of-range or half-supplied fix is dropped
-        # (treated as "no fix") rather than 400-ing the batch, and (0, 0) is the classic "no fix"
-        # sentinel so we discard it too.
+        # Out-of-range, half-supplied or (0, 0) fixes are dropped.
         lat = attrs.get("latitude")
         lon = attrs.get("longitude")
         bad = (
@@ -543,10 +450,7 @@ class ArFrameSerializer(serializers.Serializer):
             attrs["latitude"] = None
             attrs["longitude"] = None
 
-        # Odometry is all-or-nothing too, but — unlike GPS — (0, 0) is legitimate (the session origin),
-        # so it is never treated as a "no data" sentinel. A half-supplied pair (a non-finite value was
-        # already nulled by the field, so it lands here) or an implausible magnitude (>10 km of walking
-        # is junk) drops BOTH to null ("unknown"), never 400.
+        # Half-supplied or over 10 km drops both; (0, 0) is valid.
         ox = attrs.get("odo_x_m")
         oy = attrs.get("odo_y_m")
         odo_bad = (ox is None) != (oy is None) or (ox is not None and (abs(ox) > 10000.0 or abs(oy) > 10000.0))
@@ -557,23 +461,16 @@ class ArFrameSerializer(serializers.Serializer):
 
 
 class MobileWatchSerializer(serializers.Serializer):
-    """Request body for POST /api/mobile/lots/<pk>/watch/ — set (not toggle) the caller's watch state."""
-
     watch = serializers.BooleanField()
 
 
 class ArEventSerializer(serializers.Serializer):
-    """One AR interaction event: the user scanned a lot, zoomed in on it, or zoomed all the way in."""
-
     lot = serializers.IntegerField()
     event = serializers.ChoiceField(choices=AR_EVENT_TYPES)
 
 
 class ArEventBatchSerializer(serializers.Serializer):
-    """Request body for POST /api/mobile/ar/events/ — a batch of AR interaction events.
-
-    Foreign/unknown lots are dropped in the service (never a 400); only the envelope is enforced here.
-    """
+    """POST /api/mobile/ar/events/ — unknown lots are dropped in the service."""
 
     auction = serializers.CharField()
     events = ArEventSerializer(many=True, max_length=MAX_AR_EVENTS_PER_BATCH)
@@ -583,12 +480,9 @@ class ArObservationBatchSerializer(serializers.Serializer):
     """Request body for POST /api/mobile/ar/observations/."""
 
     auction = serializers.CharField()
-    # Opaque client-generated grouping token — see LotObservation.session_id. Accept it as a plain
-    # string (not a UUIDField): the app doesn't guarantee RFC-4122 variant bits, and the DB column is
-    # a varchar, so validating/normalizing it as a UUID here would only reintroduce breakage.
+    # Opaque client token (see LotObservation.session_id); not validated as a UUID.
     session_id = serializers.CharField(max_length=36)
-    # Device-reported horizontal camera FOV the bearings were computed against. Present ⇒ the batch's
-    # rows are marked fov_calibrated (tighter bearing σ in the solver); absent ⇒ assumed-FOV fallback.
+    # The camera's horizontal FOV; present marks rows fov_calibrated.
     fov_hdeg = serializers.FloatField(required=False, allow_null=True)
     frames = ArFrameSerializer(many=True, max_length=MAX_FRAMES_PER_BATCH)
 
@@ -625,13 +519,10 @@ class CheckinSetLocationSerializer(serializers.Serializer):
 
 
 class OfflineSyncSerializer(serializers.Serializer):
-    """Request body for POST /api/mobile/offline/sync/.
+    """POST /api/mobile/offline/sync/.
 
-    ``ops`` is deliberately validated loosely — as a list of free-form dicts — not with a per-type
-    serializer. The contract is per-op and never all-or-nothing: a malformed or conflicting op must
-    still let the rest of the batch apply, so structure/semantics are checked op-by-op in
-    ``auctions.mobile.services.offline`` (which returns a per-op status), not rejected here. Only the
-    batch envelope is enforced: an auction slug and at most ``MAX_OPS_PER_SYNC`` ops (the app chunks).
+    ``ops`` are free-form dicts, checked one at a time in ``auctions.mobile.services.offline`` so one
+    bad op doesn't reject the batch. At most ``MAX_OPS_PER_SYNC``.
     """
 
     auction = serializers.CharField()

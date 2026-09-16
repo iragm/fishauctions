@@ -17,21 +17,19 @@ logger = logging.getLogger(__name__)
 class OptionalJWTAuthentication(JWTAuthentication):
     """Authenticate a Bearer token when one is sent, and never turn a bad one into a 401.
 
-    For an endpoint that is public but has one per-user field in it -- /api/mobile/config/, whose
-    `menu` block is built from the caller. The app sends `Authorization` on every request including
-    that one, so it authenticates whenever it can; but the config endpoint is also read *before*
-    sign-in, to wire up Square, Firebase and the social sign-in buttons, and it has always answered
-    200 to anybody.
+    For an endpoint that is public but has one per-user field in it -- /api/mobile/config/, whose `menu`
+    block is built from the caller. The app sends `Authorization` on every request, so it authenticates
+    whenever it can; but config is also read *before* sign-in, to wire up Square, Firebase and the
+    social sign-in buttons, and it has always answered 200 to anybody.
 
-    Hence the swallowed failure. An expired or malformed token means "anonymous", not 401: a phone
-    whose access token aged out overnight would otherwise get no config at all -- no Square
-    application id, no Firebase, no voice grammar -- because one optional block of it needed a
-    fresh token. The cost is that such a phone briefly sees the signed-out menu; the app refetches
-    on sign-in (`ConfigService.loadForCurrentUser`) and keeps the last good payload meanwhile, so
-    that resolves itself, while a 401 here would not.
+    Hence the swallowed failure. An expired or malformed token means "anonymous", not 401: a phone whose
+    access token aged out overnight would otherwise get no config at all because one optional block of
+    it needed a fresh token. The cost is that such a phone briefly sees the signed-out menu, and the app
+    refetches on sign-in (`ConfigService.loadForCurrentUser`) meanwhile keeping the last good payload --
+    so that resolves itself, where a 401 would not.
 
-    Use it only where the endpoint is genuinely public. Anything that returns private data wants
-    plain `JWTAuthentication` + `IsMobileAuthenticated`, where a bad token must be an error.
+    Use it only where the endpoint is genuinely public. Anything returning private data wants plain
+    `JWTAuthentication` + `IsMobileAuthenticated`, where a bad token must be an error.
     """
 
     def authenticate(self, request):

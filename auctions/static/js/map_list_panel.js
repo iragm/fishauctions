@@ -1,38 +1,28 @@
 /**
  * A filtered list and the same set drawn on a map, with the two kept in step.
  *
- * Two pages are built this way -- the speaker directory and the club finder -- and the part they
- * share is that filtering must move both halves at once. The htmx table response carries every
- * matching row's coordinates back out of band (see the *_table.html partials) and this redraws the
- * markers from that payload, so the map and the list can never show different sets.
+ * Two pages are built this way -- the speaker directory and the club finder -- and what they share
+ * is that filtering must move both halves at once. The htmx table response carries every matching
+ * row's coordinates back out of band (see the *_table.html partials) and this redraws the markers
+ * from that payload, so the map and the list can never show different sets.
  *
- * Where they differ is what a result opens, and that is what `panelUrl` selects:
+ * What a result opens is what `panelUrl` selects. With it (the speaker directory) a row and its own
+ * pin both open a detail panel over the list, pushing a URL worth sharing: speakers are a page you
+ * compare on, so keeping the list, the map and the filters underneath is worth a panel. Without it
+ * (the club finder) a pin opens a small info window and the rows are already plain links to the
+ * club's page; what may go in that window is decided in auctions/views/club_finder.py.
  *
- *   * With `panelUrl` (the speaker directory) a row and its own pin both open a detail panel that
- *     slides in over the list, pushing a URL worth sharing. Speakers are a page you compare on --
- *     filter by topic, check who is nearest, look at three of them -- so keeping the list, the map
- *     and the filters underneath is worth a panel.
- *   * Without it (the club finder) a pin opens a small info window: the club's name, its website
- *     and Facebook links and interests, and "View all club info" to the club's own page; rows are
- *     already plain links to that page. What may go in the window is decided server-side, in
- *     auctions/views/club_finder.py.
+ * The first view is framed around the visitor -- their location plus NEAREST_PINS of the nearest
+ * pins, because framing a continent of results put the neighbours a few pixels apart. With no
+ * location to measure from it frames everything.
  *
- * The first view of the map is framed around the visitor: their location plus the few nearest pins
- * (NEAREST_PINS), not every pin -- framing a continent of results put the neighbours a few pixels
- * apart. With no location to measure from it frames everything.
- *
- * The map follows Google's current Maps JavaScript API guidance:
- *
- *   * The page includes Google's dynamic library import bootstrap loader
- *     (partials/google_maps_loader.html) rather than a script tag, and this imports the `maps`,
- *     `marker` and `core` libraries through `google.maps.importLibrary` the first time the map is
- *     shown -- so a visitor who stays on the list never downloads the Maps API at all.
- *   * Pins are `AdvancedMarkerElement`s (`google.maps.Marker` is deprecated). Advanced markers
- *     require a Map ID -- "If the map ID is missing, advanced markers cannot load" -- which is the
- *     `mapId` below; see GOOGLE_MAPS_MAP_ID in .env.example.
- *   * Clicks follow the accessible-marker pattern: `gmpClickable: true`, a `title` screen readers
- *     announce, and `addEventListener('gmp-click')`, which Google only supports through
- *     addEventListener, never google.maps.event's addListener.
+ * Following Google's current Maps JavaScript API guidance: the page includes the dynamic library
+ * import bootstrap loader (partials/google_maps_loader.html) rather than a script tag, and this
+ * imports `maps`, `marker` and `core` the first time the map is shown, so a visitor who stays on
+ * the list never downloads the API at all; pins are `AdvancedMarkerElement`s, which cannot load
+ * without the Map ID below (GOOGLE_MAPS_MAP_ID); and clicks follow the accessible-marker pattern --
+ * `gmpClickable: true`, a `title` screen readers announce, and `addEventListener('gmp-click')`,
+ * which is the only way Google supports that event.
  *
  * Element ids stay per-page (`club-map`, `speaker-map`) so one page's markup can't reach into the
  * other's; everything that differs lives in the config object:

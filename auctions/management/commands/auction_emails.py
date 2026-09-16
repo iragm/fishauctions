@@ -153,9 +153,9 @@ class Command(BaseCommand):
         self._create_discord_events(now, current_site.domain)
 
     def _send_discord_notifications(self, now, domain):
-        # Only promoted auctions get broadcast to a club's Discord channel. Non-promoted auctions are
-        # excluded at the DB level (like _create_discord_events): they're never announced, and their
-        # sent flags stay False so they still qualify if the auction is promoted later while in-window.
+        # Only promoted auctions are broadcast to a club's Discord channel, excluded at the DB level
+        # like _create_discord_events. Their sent flags stay False, so one promoted later while
+        # still in-window still qualifies.
         pending = (
             Auction.objects.exclude(is_deleted=True)
             .select_related("club")

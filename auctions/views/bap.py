@@ -492,11 +492,12 @@ class BapAwardDeleteView(APIView):
 
 
 class BapAwardCSVImportView(LoginRequiredMixin, CSVContactImportMixin, ClubViewMixin, View):
-    """Create-only CSV import for BapAward records (never updates or deletes).
+    """Create-only CSV import for BapAward records: never updates, never deletes.
 
-    Routes through the shared preview: each row is matched to an existing club member by email and, on
-    confirm, a BapAward is created. There is no duplicate-resolution choice (awards are always new), so the
-    review page just shows the awards to create and the skipped rows with reasons."""
+    Routes through the shared preview -- each row is matched to an existing club member by email, and on
+    confirm an award is created. No duplicate-resolution choice, since awards are always new, so the
+    review page shows the awards to create and the skipped rows with reasons.
+    """
 
     import_record_kind = "award"
     import_supports_duplicates = False

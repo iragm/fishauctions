@@ -1,8 +1,7 @@
-"""Getting people in at once: bulk add users, and a club's shared spreadsheet.
+"""Bulk-adding people: bulk add users, and a club's shared spreadsheet.
 
-:class:`CSVContactImportMixin` does the column matching for every importer on the site, including
-the club member one in :mod:`auctions.views.club_reports`, so it lives here with the first thing
-that used it.
+:class:`CSVContactImportMixin` does column matching for every importer, including the club member
+one in :mod:`auctions.views.club_reports`.
 """
 
 import csv
@@ -48,23 +47,10 @@ logger = logging.getLogger(__name__)
 
 
 class CSVContactImportMixin:
-    """Mixin providing shared CSV parsing utilities for importing contact records.
+    """Shared CSV parsing for contact imports (AuctionTOS, ClubMember).
 
-    Use this with views that need to import contacts (e.g., AuctionTOS or ClubMember)
-    from CSV files. Subclass and implement `process_csv_data(csv_reader, filename=None)`
-    to define how parsed rows are applied to your model.
-
-    Example usage in a view::
-
-        class MyImportView(LoginRequiredMixin, CSVContactImportMixin, View):
-            def post(self, request, *args, **kwargs):
-                csv_file = request.FILES.get("csv_file")
-                return self.handle_csv_upload(csv_file)
-
-            def process_csv_data(self, csv_reader, filename=None):
-                for row in csv_reader:
-                    email = self.extract_csv_field(row, self.EMAIL_FIELD_NAMES)
-                    ...
+    Subclasses implement ``process_csv_data(csv_reader, filename=None)`` and call
+    ``handle_csv_upload(csv_file)`` from post().
     """
 
     EMAIL_FIELD_NAMES = ["email", "e-mail", "email address", "e-mail address"]
@@ -93,7 +79,7 @@ class CSVContactImportMixin:
     CONTACT_STATUS_FIELD_NAMES = ["contact status", "contact_status", "contact"]
     DATE_JOINED_FIELD_NAMES = ["date joined", "createdon", "created on", "joined", "join date", "date_joined"]
 
-    # Maps human-readable contact status values (lowercased) to model values
+    # Lowercased contact status values -> model values.
     CONTACT_STATUS_MAP = {
         "contact": "contact",
         "contact normally": "contact",
@@ -113,19 +99,16 @@ class CSVContactImportMixin:
             return None
         return CSVContactImportMixin.CONTACT_STATUS_MAP.get(value.strip().lower())
 
-    # Values a yes/no cell may hold.  A cell that matches neither list (including a blank one) is
-    # "unspecified", not False -- see parse_csv_boolean.
+    # A cell matching neither list is "unspecified", not False.
     CSV_TRUE_VALUES = frozenset({"yes", "y", "true", "t", "1", "x", "✓", "checked", "on", "allowed", "enabled"})
     CSV_FALSE_VALUES = frozenset({"no", "n", "false", "f", "0", "unchecked", "off", "blocked", "disabled"})
 
     @staticmethod
     def parse_csv_boolean(value, extra_true=None):
-        """Read a yes/no cell as True/False, or None when the file didn't say either way.
+        """Read a yes/no cell as True, False, or None when unspecified.
 
-        None means "unspecified": callers use the field's own default when creating a record and leave an
-        existing record alone when updating.  A blank cell must never read as False -- the user CSV export
-        writes an empty "Bidding allowed" cell for everyone who *can* bid, so blank-means-no turned a
-        re-imported export into a mass revocation and locked whole auctions out of bidding.
+        None means use the default on create and leave alone on update. Blank must never mean False: the
+        user CSV export leaves "Bidding allowed" blank for everyone who can bid.
         """
         text = (value or "").strip().lower()
         if not text:
@@ -140,7 +123,7 @@ class CSVContactImportMixin:
 
     @staticmethod
     def parse_flexible_date(value):
-        """Parse a date string, supporting incomplete formats: '2025' → Jan 1 2025, '2025-06' → Jun 1 2025."""
+        """Parse a date, including partial ones: '2025' → Jan 1 2025, '2025-06' → Jun 1 2025."""
         if not value or not value.strip():
             return None
         value = value.strip()
@@ -172,12 +155,8 @@ class CSVContactImportMixin:
 
     @staticmethod
     def extract_csv_field(row, field_name_list, default_response=""):
-        """Pass a row, and a lowercase list of field names.
-        Extract the first match found (case insensitive) and return the value from the row.
-        Empty string returned if the value is not found in the row."""
-        # Skip falsy keys: csv.DictReader stores any surplus cells of a ragged row (more columns than
-        # the header) under a None key, and None.lower() would raise. Dropping it keeps a malformed row
-        # importable instead of 500-ing the whole upload.
+        """The first matching value (case-insensitive) from a lowercase list of field names, or ``default_response``."""
+        # A ragged row's surplus cells are under a None key.
         case_insensitive_row = {k.lower(): v for k, v in row.items() if k}
         for name in field_name_list:
             value = case_insensitive_row.get(name)
@@ -188,8 +167,7 @@ class CSVContactImportMixin:
     @staticmethod
     def csv_columns_exist(field_names, columns):
         """Returns True if any value in the list `columns` exists in the file headers."""
-        # Skip falsy entries: a ragged row's surplus cells surface as a None header key (see
-        # extract_csv_field), and None.lower() would raise.
+        # A ragged row's surplus cells are under a None key.
         case_insensitive_row = {k.lower() for k in field_names if k}
         for column in columns:
             if column in case_insensitive_row:
@@ -197,7 +175,7 @@ class CSVContactImportMixin:
         return False
 
     def handle_csv_upload(self, csv_file):
-        """If a CSV file has been uploaded, parse it and redirect. Calls process_csv_data()."""
+        """Parse an uploaded CSV via process_csv_data() and redirect."""
         try:
             csv_file.seek(0)
             csv_reader = csv.DictReader(TextIOWrapper(csv_file.file, encoding="utf-8-sig", newline=""))
@@ -212,27 +190,25 @@ class CSVContactImportMixin:
     # ------------------------------------------------------------------
     # Preview / confirm framework
     #
-    # Every CSV importer parses the upload into a list of JSON-serializable "planned actions", stashes them
-    # in Redis under a one-time token, and shows a review page (auctions/csv_import_preview.html) before
-    # anything is written. The user can cancel, see skipped rows with reasons, and for contact imports choose
-    # per possible-duplicate whether to merge into the existing record (default) or create a new one.
+    # Importers turn the upload into JSON-serializable planned actions, cached under a one-time
+    # token, and show auctions/csv_import_preview.html before writing anything.
     #
     # A subclass implements:
-    #   plan_row(self, row) -> dict|None        classify one CSV row (see action schema below)
+    #   plan_row(self, row) -> dict|None              classify one CSV row
     #   apply_action(self, action, decision) -> str   write one planned action, return a result tag
     #   import_done_url(self) / import_cancel_url(self)
-    #   import_target_id(self)                  binds the token to its auction/club
+    #   import_target_id(self)                        binds the token to its auction/club
     #   record_import_history(self, results, filename)
-    # and sets class attrs import_record_kind / import_supports_duplicates / import_preview_columns.
+    # and sets import_record_kind / import_supports_duplicates / import_preview_columns.
     #
     # Planned-action dict:
     #   {"action": "create"|"update"|"duplicate"|"skip",
-    #    "fields": {...normalized values for display + apply...},
-    #    "target_pk": <existing record pk or None>,   # update/duplicate
-    #    "target_display": "<existing record label>", # update/duplicate
+    #    "fields": {...},
+    #    "target_pk": <existing pk or None>,          # update/duplicate
+    #    "target_display": "<existing label>",        # update/duplicate
     #    "match_type": "email"|"name"|None,
     #    "reason": "<why skipped / note>",
-    #    "raw": {...original row...}}                  # filled in by build_preview if omitted
+    #    "raw": {...original row...}}                 # filled in by build_preview if omitted
     # ------------------------------------------------------------------
 
     PREVIEW_CACHE_PREFIX = "csv_import"
@@ -243,20 +219,19 @@ class CSVContactImportMixin:
     import_record_kind = "record"
     import_supports_duplicates = False
     import_preview_columns = ()  # list of (header, field_key)
-    # A field key in each planned action's "fields" dict used to collapse rows that refer to the same
-    # record within a single file (e.g. "email" for contact importers, where one row == one person). Leave
-    # None for importers where a repeated value is legitimate (e.g. several lots/awards for one seller).
+    # A "fields" key that identifies one record within a file (e.g. "email"), to collapse repeats.
+    # None where repeats are legitimate.
     import_dedupe_field = None
 
     def import_target_id(self):
-        """A stable id binding a preview token to one auction/club so it cannot be replayed elsewhere."""
+        """A stable id binding a preview token to one auction or club."""
         return
 
     def _preview_cache_key(self, token):
         return f"{self.PREVIEW_CACHE_PREFIX}:{token}"
 
     def _dedupe_key(self, action):
-        """Key used to collapse same-record rows within one file, or None to never collapse this action."""
+        """Key for collapsing same-record rows, or None."""
         field = self.import_dedupe_field
         if not field or action.get("action") == "skip":
             return None
@@ -265,12 +240,10 @@ class CSVContactImportMixin:
 
     @staticmethod
     def _merge_planned_fields(primary, duplicate):
-        """Fold a later same-key row's data into the primary planned action: fill only unset fields (so
-        complementary rows combine without loss) while leaving the primary's existing non-empty values,
-        booleans and ints untouched (so a conflicting value can't be silently flipped). A tri-state
-        boolean's explicit ``False`` counts as data and fills a primary that left it unspecified.
-        Optional-column ``present`` flags are OR-ed so a column that appears in either row still drives
-        an update."""
+        """Fold a later same-key row into the primary action, filling only unset fields.
+
+        An explicit tri-state ``False`` counts as data. ``present`` flags are OR-ed.
+        """
         primary_fields = primary.setdefault("fields", {})
         for key, value in duplicate.get("fields", {}).items():
             if value in (None, ""):
@@ -284,11 +257,9 @@ class CSVContactImportMixin:
                     primary_present[key] = True
 
     def build_preview(self, csv_reader, filename=None):
-        """Run plan_row over every row, stash the planned actions in Redis, and return the token."""
+        """Plan every row, cache the actions, and return the token."""
         actions = []
-        # Maps a dedupe key (e.g. normalized email) -> index of the first action that "owns" it, so later
-        # rows for the same record fold into it instead of creating a duplicate or being silently merged
-        # away by the model layer (which would drop the later row's differing fields).
+        # Dedupe key -> index of the action that owns it.
         primary_by_key = {}
         for raw in csv_reader:
             planned = self.plan_row(raw)
@@ -321,11 +292,7 @@ class CSVContactImportMixin:
         return token
 
     def load_preview(self, token):
-        """Return the cached payload for *token*, or None if missing/expired/not owned by this request.
-
-        Binding to the requesting user, the auction/club target, and the originating view class prevents a
-        leaked or guessed token from being replayed by another user or against a different auction/club.
-        """
+        """The cached payload for *token*, or None if missing, expired, or bound to another user, target or view."""
         if not token:
             return None
         payload = cache.get(self._preview_cache_key(token))
@@ -344,7 +311,7 @@ class CSVContactImportMixin:
             cache.delete(self._preview_cache_key(token))
 
     def _hx_aware_redirect(self, url):
-        """Redirect that becomes a full-page navigation even from an HTMx (hx-post) request."""
+        """A redirect that navigates the full page even from an hx-post."""
         if self.request.headers.get("HX-Request"):
             response = HttpResponse(status=204)
             response["HX-Redirect"] = url
@@ -369,8 +336,7 @@ class CSVContactImportMixin:
         for action in actions:
             kind = action["action"]
             summary[kind] = summary.get(kind, 0) + 1
-            # Precompute display cells aligned to import_preview_columns (templates can't index a dict by a
-            # variable key), so the template just iterates row.cells.
+            # Cells aligned to the columns, since templates can't index a dict by a variable key.
             row = {**action, "cells": [action.get("fields", {}).get(key, "") for _, key in columns]}
             if kind == "duplicate":
                 duplicate_rows.append(row)
@@ -399,24 +365,21 @@ class CSVContactImportMixin:
         if payload is None:
             messages.error(self.request, "This import preview expired or was not found. Please upload the file again.")
             return redirect(self.import_cancel_url())
-        # Atomically claim this token before doing any writes. cache.add() is a Redis SET-NX, so only the
-        # first of two concurrent (or double-submitted) confirms wins the claim; the rest bail out here
-        # instead of applying the same batch twice. The JS submit-disable on the review page handles the
-        # common accidental double-click; this guards the race / replay it can't.
+        # cache.add() is SET-NX, so only one concurrent confirm claims the token.
         claim_key = f"{self._preview_cache_key(token)}:applying"
         if not cache.add(claim_key, 1, self.PREVIEW_TTL_SECONDS):
             messages.info(self.request, "This import is already being processed.")
             return redirect(self.import_done_url())
         results = {}
         try:
-            # Apply the whole batch atomically: if one row raises, nothing is half-written.
+            # One transaction for the whole batch.
             with transaction.atomic():
                 for action in payload["actions"]:
                     decision = post_data.get(f"decision_{action['i']}", "merge")
                     tag = self.apply_action(action, decision)
                     results[tag] = results.get(tag, 0) + 1
         except Exception:
-            # The batch rolled back and wrote nothing; release the claim so the admin can retry the token.
+            # Rolled back, so release the claim for a retry.
             cache.delete(claim_key)
             raise
         self.clear_preview(token)
@@ -426,7 +389,7 @@ class CSVContactImportMixin:
         return redirect(self.import_done_url())
 
     def record_import_history(self, results, filename=None):
-        """Optional hook: write an audit/history entry after a confirmed import. No-op by default."""
+        """Hook for an audit entry after a confirmed import. No-op by default."""
 
     def message_import_results(self, results):
         """Flash a summary message after a confirmed import."""
@@ -441,10 +404,7 @@ class CSVContactImportMixin:
             messages.success(self.request, ", ".join(parts))
 
     def handle_import_post(self, request, csv_field_names=("csv_file",)):
-        """Shared POST router for the confirm and cancel phases.
-
-        Returns a response for a confirm/cancel submission, or None if this POST is not part of the
-        preview flow (so the caller can handle a file upload or its own form, e.g. a formset)."""
+        """Route confirm and cancel POSTs; returns None for anything else."""
         if request.POST.get("_confirm"):
             return self.apply_preview(request.POST["_confirm"], request.POST)
         if request.POST.get("_cancel"):
@@ -504,7 +464,7 @@ class BulkAddUsers(LoginRequiredMixin, CSVContactImportMixin, AuctionViewMixin, 
             self.extra_rows = len(initial_formset_data) + 1
             del self.request.session["initial_formset_data"]
         else:
-            # next, check GET to see if they're asking for an import from a past auction
+            # ?import= copies users from a past auction.
             import_from_auction = self.request.GET.get("import")
             if import_from_auction:
                 other_auction = Auction.objects.exclude(is_deleted=True).filter(slug=import_from_auction).first()
@@ -573,11 +533,9 @@ class BulkAddUsers(LoginRequiredMixin, CSVContactImportMixin, AuctionViewMixin, 
         return label
 
     def _parse_user_row(self, row):
-        """Extract + normalize one CSV row into the fields dict, plus which optional columns the file has.
+        """Normalize one CSV row into fields, plus which optional columns the file has.
 
-        The three permission-ish booleans are tri-state: True/False when the row says so, None when the
-        cell is blank or unreadable.  None means "use the field default" on a create and "leave it alone"
-        on an update, so a column of blank cells can never strip bidding or admin from a whole roster.
+        The three permission booleans are tri-state; None leaves defaults on create and values on update.
         """
         club_member_fields = ["member", "club member", self.auction.alternative_split_label.lower()]
         is_club_member = self.parse_csv_boolean(
@@ -598,8 +556,7 @@ class BulkAddUsers(LoginRequiredMixin, CSVContactImportMixin, AuctionViewMixin, 
             "is_admin": is_admin,
         }
         cols = list(row.keys())
-        # Only the non-boolean optional columns need a header-level "present" flag; the booleans carry
-        # their own None-means-unspecified sentinel, which is per row rather than per file.
+        # Only non-boolean optional columns need a header-level flag.
         present = {"memo": self.csv_columns_exist(cols, self.MEMO_FIELDS)}
         return fields, present
 
@@ -653,23 +610,19 @@ class BulkAddUsers(LoginRequiredMixin, CSVContactImportMixin, AuctionViewMixin, 
         }
         if bidding_allowed is not None:
             create_kwargs["bidding_allowed"] = bidding_allowed
-        # When the file said nothing, bidding_allowed is left off entirely so AuctionTOS.save() decides it
-        # from the auction's own rules (only_approved_bidders and the manually-added/past-participant
-        # exemptions) -- exactly what this person would have got had an admin added them by hand.
+        # Unspecified: let AuctionTOS.save() apply the auction's rules.
         tos = AuctionTOS.objects.create(**create_kwargs)
         if bidding_allowed is not None and tos.bidding_allowed != bidding_allowed:
-            # Those same rules force-allow bidding for every manually added user in an approval auction,
-            # so an explicit "no" in the file has to be re-applied over the top of them; otherwise a club
-            # that runs its allow/deny list through the importer can never deny anyone.
+            # Those rules force-allow manually added users, so re-apply an explicit "no".
             tos.bidding_allowed = bidding_allowed
             tos.save(update_fields=["bidding_allowed"])
         return tos
 
     def _update_tos(self, tos, fields, present):
-        """Apply CSV fields onto an existing record. Optional booleans are only overwritten when the row
-        actually said yes or no (a blank cell leaves the current value alone); the CSV bidder number wins
-        (when non-conflicting) so the number physically assigned at check-in is the one the scanner
-        resolves to. Returns True if anything changed."""
+        """Apply CSV fields to an existing record and return True if anything changed.
+
+        Booleans are only overwritten when the row says so; a non-conflicting CSV bidder number wins.
+        """
         changed = False
         name = fields.get("name", "")
         if name and tos.name != name:
@@ -732,7 +685,7 @@ class BulkAddUsers(LoginRequiredMixin, CSVContactImportMixin, AuctionViewMixin, 
                     possible_duplicate=tos.pk
                 )
             return "created"
-        # update (email match) or merge (name-match duplicate the admin chose to merge)
+        # Email match, or a name-match duplicate the admin chose to merge.
         tos = AuctionTOS.objects.filter(pk=target_pk, auction=self.auction).first() if target_pk else None
         if not tos:
             self._create_tos(fields)
@@ -758,7 +711,7 @@ class BulkAddUsers(LoginRequiredMixin, CSVContactImportMixin, AuctionViewMixin, 
         self.auction.create_history(applies_to="USERS", action=msg, user=self.request.user)
 
     def process_csv_data(self, csv_reader, filename=None, *args, **kwargs):
-        """Parse the upload into planned actions and show the review page; nothing is written yet."""
+        """Plan the upload and show the review page; nothing is written yet."""
         fieldnames = csv_reader.fieldnames or []
         recognized = self.csv_columns_exist(
             fieldnames, self.EMAIL_FIELDS + self.NAME_FIELDS + self.PHONE_FIELDS + self.ADDRESS_FIELDS
@@ -777,7 +730,7 @@ class BulkAddUsers(LoginRequiredMixin, CSVContactImportMixin, AuctionViewMixin, 
         redirected = self._block_if_club_managed()
         if redirected is not None:
             return redirected
-        # A preview confirm/cancel submission takes priority over file uploads and the manual formset.
+        # Confirm/cancel takes priority over uploads and the formset.
         import_response = self.handle_import_post(request)
         if import_response is not None:
             return import_response
@@ -826,7 +779,7 @@ class BulkAddUsers(LoginRequiredMixin, CSVContactImportMixin, AuctionViewMixin, 
         return context
 
     def tos_is_in_auction(self, auction, name, email):
-        """Return the tos if the name or email are already present in the auction, otherwise None"""
+        """Deprecated: use auction.find_user()."""
         logger.warning("tos_is_in_auction is deprecated, use auction.find_user() instead")
         qs = AuctionTOS.objects.filter(auction=auction)
         if email:
@@ -881,9 +834,7 @@ class ImportFromGoogleDrive(LoginRequiredMixin, AuctionViewMixin, TemplateView, 
             return redirect(url)
 
         try:
-            # Convert Google Sheets sharing link to export CSV URL
-            # Example: https://docs.google.com/spreadsheets/d/SPREADSHEET_ID/edit#gid=0
-            # Convert to: https://docs.google.com/spreadsheets/d/SPREADSHEET_ID/export?format=csv&gid=0
+            # Sharing link (.../d/ID/edit#gid=0) -> export URL (.../d/ID/export?format=csv&gid=0).
             link = self.auction.google_drive_link
 
             # Extract the spreadsheet ID from the URL
@@ -901,21 +852,18 @@ class ImportFromGoogleDrive(LoginRequiredMixin, AuctionViewMixin, TemplateView, 
             response = requests.get(csv_url, timeout=30)
             response.raise_for_status()
 
-            # Create a CSV reader from the response text (handles encoding automatically)
             csv_reader = csv.DictReader(response.text.splitlines())
 
-            # Reuse BulkAddUsers' row planning, but show the same review page before anything is written.
-            # Any exceptions from build_preview are caught by the outer try/except blocks.
+            # BulkAddUsers' planning, with the same review page.
             bulk_add_view = BulkAddUsers()
             bulk_add_view.request = self.request
             bulk_add_view.auction = self.auction
             token = bulk_add_view.build_preview(csv_reader, filename="Google Drive sync")
 
-            # Record that we pulled the sheet; the actual user changes happen when the admin confirms.
+            # User changes happen when the admin confirms.
             self.auction.last_sync_time = timezone.now()
             self.auction.save()
             self.auction.create_history("USERS", action="Pulled Google Drive sheet for import review")
-            # Send the admin to the BulkAddUsers preview, which renders and (on confirm) applies the token.
             preview_url = reverse("bulk_add_users", kwargs={"slug": self.auction.slug}) + f"?preview={token}"
             return redirect(preview_url)
 

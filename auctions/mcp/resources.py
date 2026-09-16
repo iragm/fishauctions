@@ -1,29 +1,15 @@
-"""Addressable reads: the same answers the read-only tools give, reachable by URI.
+"""Addressable reads: the read-only tools' answers, reachable by URI.
 
-A tool is something the *model* chooses. A resource is something the **person** attaches, the way
-they attach a file, and the difference is where the decision is made. "Here is my auction, now
-write the announcement" costs no tool-selection turn, no arguments guessed from a sentence, and no
-round trip to correct them -- the host fetches the URI and the content is simply in the context.
+A tool is chosen by the model; a resource is attached by the person, which saves the tool-selection
+turn and the arguments guessed from a sentence. It also makes ``?tools=read`` usable, since
+:data:`TEMPLATES` is a fraction of the tool schemas' size.
 
-That is also the token argument, and it is worth being precise about it because it is easy to
-overstate. Attaching a resource does not shrink ``tools/list``: a host still lists the tools. What
-it saves is the *turn* -- the model deciding which tool, filling in the auction slug, and being
-told it guessed the wrong auction -- and it makes ``?tools=read`` a genuinely usable narrowing for
-an integration that only ever reads, because the reads it wants are addressable without the
-catalogue. :data:`TEMPLATES` is under two kilobytes against the tool schemas' forty-seven.
+Every read is a tool call wearing a URI: a template names a registered read-only action and how to
+fill its parameters, and the read goes through :func:`auctions.mcp.tools.call_tool` with the
+caller's request, so the resolver's own permission check runs. There is no second path to the data.
 
-**Every read is a tool call wearing a URI, and that is the whole security design.** A template
-names a registered read-only action and how to fill its parameters out of the URI; the read goes
-through :func:`auctions.mcp.tools.call_tool` with the caller's own request, so the resolver runs
-its own permission check, the same one it runs for a model. There is no second path to the data
-and no second place a permission could be forgotten. It is the same property that makes the
-``ui://`` widgets safe, for the same reason.
-
-**Nothing concrete is ever listed.** ``resources/list`` returns the widget documents and the two
-``me://`` reads, which are the same URI for every caller and so say nothing about anybody;
-``resources/templates/list`` returns patterns. A list of ``auction://spring-2027`` would be a list
-of which auctions exist, handed to anyone who asked -- so the enumeration stays in the tools,
-where it is behind a permission check that knows whose auctions they are.
+Nothing concrete is listed: ``resources/list`` returns the widgets, the ``me://`` reads and public
+documents, which say nothing about anybody; enumeration stays in the tools, behind permissions.
 """
 
 from __future__ import annotations
@@ -32,18 +18,15 @@ import json
 from typing import Any, NamedTuple
 from urllib.parse import unquote
 
-#: What a data resource is served as. Not ``application/json``: the body is the tool's own text
-#: block, which is JSON, but a host that renders resources as documents should show it as text
-#: rather than offering to parse it into something.
+#: What a data resource is served as. The body is the tool's own text block.
 DATA_MIME_TYPE = "application/json"
 
 
 class Template(NamedTuple):
-    """One addressable read. ``uri`` is an RFC 6570 level-1 template, which is all MCP allows.
+    """One addressable read. ``uri`` is an RFC 6570 level-1 template, all MCP allows.
 
-    ``action`` is the registered read-only action that answers it, and ``fields`` maps each
-    ``{placeholder}`` in the template onto the parameter name that action expects. ``extra`` is
-    anything the action needs that the URI does not carry -- a page size, a status filter.
+    ``action`` is the read-only action answering it, ``fields`` maps each ``{placeholder}`` to its
+    parameter, and ``extra`` is anything the URI doesn't carry.
     """
 
     uri: str
@@ -55,8 +38,7 @@ class Template(NamedTuple):
     extra: dict[str, Any] = {}
 
 
-#: The catalogue. Every ``action`` here must be read-only; ``test_mcp_resources`` fails the build
-#: if one stops being, because a URI a host may fetch on a person's behalf must never be a write.
+#: The catalogue. Every ``action`` must be read-only; ``test_mcp_resources`` enforces it.
 TEMPLATES: tuple[Template, ...] = (
     Template(
         "auction://{auction}",
@@ -95,9 +77,7 @@ TEMPLATES: tuple[Template, ...] = (
         "exactly as the tool does.",
         "recent_changes",
         ("auction",),
-        # 50 rather than the 100 the lot and people templates use: a history line is a whole
-        # sentence plus a long-form date, so a hundred of them lands within a rounding error of
-        # ``tools.MAX_RESULT_CHARS`` and a resource that refuses itself is worse than a short one.
+        # 50: a history line is long, and 100 would approach ``tools.MAX_RESULT_CHARS``.
         {"limit": 50},
     ),
     Template(
@@ -146,16 +126,12 @@ TEMPLATES: tuple[Template, ...] = (
         "as a refusal, exactly as the tool does.",
         "club_history",
         ("club",),
-        # 50 rather than the 100 the lot and people templates use: a history line is a whole
-        # sentence plus a long-form date, so a hundred of them lands within a rounding error of
-        # ``tools.MAX_RESULT_CHARS`` and a resource that refuses itself is worse than a short one.
+        # 50: a history line is long, and 100 would approach ``tools.MAX_RESULT_CHARS``.
         {"limit": 50},
     ),
 )
 
-#: Fixed resources -- no placeholders, and the same URI for everybody. Both are about the caller,
-#: which is what makes them safe to list: the URI says "me", so knowing it exists tells nobody
-#: anything about anybody.
+#: Fixed resources: no placeholders, the same URI for everybody, and about the caller.
 FIXED: tuple[Template, ...] = (
     Template(
         "me://context",
@@ -176,10 +152,7 @@ FIXED: tuple[Template, ...] = (
     ),
 )
 
-#: Concrete resources that are the same document for everybody and hold nobody's data. Listable
-#: for the same reason the ``me://`` pair is: knowing this URI exists tells you nothing about
-#: anybody. The FAQ is the site's own written help, most of it already on a page anyone can read
-#: without signing in, and there is nothing in it worth hiding from a host that wants to attach it.
+#: Concrete resources that are the same for everybody and hold nobody's data.
 PUBLIC: tuple[Template, ...] = (
     Template(
         "help://faq",
@@ -218,16 +191,14 @@ def template_descriptors() -> list[dict[str, Any]]:
 
 
 def fixed_descriptors() -> list[dict[str, Any]]:
-    """The concrete data resources for ``resources/list``, alongside the widget documents.
-
-    :data:`FIXED` is about the caller and :data:`PUBLIC` is about nobody, which is the whole test
-    for appearing here: a listed URI must say nothing about who exists on this site.
+    """The concrete data resources for ``resources/list``: :data:`FIXED` (about the caller) and
+    :data:`PUBLIC` (about nobody).
     """
     return [_descriptor(template, as_template=False) for template in FIXED + PUBLIC]
 
 
 def _scheme_and_parts(uri: str) -> tuple[str, list[str]]:
-    """``"lot://spring/14"`` -> ``("lot", ["spring", "14"])``. Empty scheme when it isn't one."""
+    """``"lot://spring/14"`` -> ``("lot", ["spring", "14"])``; empty scheme when it isn't one."""
     scheme, separator, rest = uri.partition("://")
     if not separator:
         return "", []
@@ -241,13 +212,10 @@ def _shape(template: Template) -> tuple[str, list[str]]:
 
 
 def match(uri: str) -> tuple[Template, dict[str, str]] | None:
-    """Which template a concrete URI is, and the parameters it carries. ``None`` for no match.
+    """Which template a URI is, and its parameters, or ``None``.
 
-    Matched on the scheme and the *shape* of the path rather than by a regex over the whole
-    thing, because the values are slugs and lot numbers people type -- ``BOB-1`` is an ordinary lot
-    number in a seller-dash auction, and a pattern tight enough to be safe would refuse it. Nothing
-    is interpolated anywhere: each part becomes one parameter to a registered action, which
-    resolves it the same way it resolves the same parameter from a model.
+    Matched on scheme and path shape rather than a regex, because the values are slugs and lot numbers
+    people type (``BOB-1``). Each part becomes one parameter to a registered action.
     """
     scheme, parts = _scheme_and_parts(uri.strip())
     if not scheme:
@@ -273,11 +241,9 @@ def match(uri: str) -> tuple[Template, dict[str, str]] | None:
 
 
 def read(request, uri: str) -> dict[str, Any] | None:
-    """One data resource, or ``None`` for a URI this server does not publish.
+    """One data resource, or ``None`` for a URI this server doesn't publish.
 
-    The answer is the tool's own text block verbatim -- not a second rendering of it. A resource
-    and a tool call that return different things for the same question is the drift this whole
-    layer is written to avoid, and it is also what would make the permission checks diverge.
+    The answer is the tool's own text block verbatim, so a resource and a tool call can never drift.
     """
     from . import tools
 
@@ -291,10 +257,8 @@ def read(request, uri: str) -> dict[str, Any] | None:
     blocks = [block for block in result.get("content", []) if block.get("type") == "text"]
     text = blocks[0]["text"] if blocks else ""
     if result.get("isError") or not text:
-        # A refused read is still served as ``application/json``, so it has to *be* JSON. A tool
-        # error's text block is one sentence written for a person -- correct there, and a lie about
-        # the mime type here -- so it is wrapped rather than passed through. The sentence is kept
-        # word for word: it already says what to do instead, which is what makes it recoverable.
+        # A refused read is served as JSON too, so the tool's one-sentence error is wrapped rather
+        # than passed through. The sentence is kept, since it says what to do instead.
         text = json.dumps({"error": text or "That answered with nothing."})
     return {
         "uri": uri,
@@ -305,10 +269,8 @@ def read(request, uri: str) -> dict[str, Any] | None:
     }
 
 
-#: How many ``resource_link`` blocks one tool result may carry. A link is about 150 bytes with its
-#: name and description, and the point of them is to save a turn rather than to enumerate an
-#: auction: twelve is every club a person belongs to and every auction running at once, which is
-#: the shape of ``my_context``, and it is nowhere near a hundred lots.
+#: How many ``resource_link`` blocks one result may carry. Twelve covers a person's clubs and
+#: running auctions (the shape of ``my_context``) without enumerating lots.
 MAX_LINKS = 12
 
 
@@ -326,10 +288,8 @@ def _link(template: Template, uri: str) -> dict[str, Any]:
 def _uris(about: dict[str, Any]) -> list[str]:
     """The URIs one ``_about`` block names, most specific first.
 
-    ``_about`` is written by the resolver that is holding the object (see
-    ``palette_actions.KEY_ABOUT``), so the slugs here are real slugs. Nothing is sniffed out of the
-    answer itself, because the answer cannot be: ``auction`` is a slug in some results and a title
-    in others, and a URI built from a title is a link that does not resolve.
+    ``_about`` is written by the resolver holding the object (``palette_actions.KEY_ABOUT``), so the
+    slugs are real; nothing is sniffed out of the answer, where ``auction`` may be a title.
     """
     found: list[str] = []
     auction = about.get("auction")
@@ -338,9 +298,8 @@ def _uris(about: dict[str, Any]) -> list[str]:
     if auction and lot:
         found.append(f"lot://{auction}/{lot}")
     if auction and person:
-        # A bidder number, which is what ``find_invoice`` resolves. A name with a slash in it builds
-        # a URI ``match`` will not accept, and :func:`links_for` drops those silently -- which is the
-        # right outcome: a decoration must never fail a call that otherwise worked.
+        # A bidder number, which ``find_invoice`` resolves. A name with a slash builds a URI
+        # ``match`` rejects, and :func:`links_for` drops those silently.
         found.append(f"invoice://{auction}/{person}")
     if auction:
         found.append(f"auction://{auction}")
@@ -354,12 +313,9 @@ def _uris(about: dict[str, Any]) -> list[str]:
 
 
 def _children(uri: str) -> list[str]:
-    """The sub-resources of one subject URI: an auction's lots and people, a club's events.
+    """The sub-resources of a subject URI: an auction's lots and people, a club's events.
 
-    Offered only in place of a **dropped self-link** (see :func:`links_for`), which is what makes
-    them precise rather than noise: ``describe_auction`` has just answered ``auction://spring``, so
-    what is left to point at is what is underneath it. ``list_lots`` has not, so it gets the
-    auction itself and no siblings it did not ask about.
+    Offered only in place of a dropped self-link (see :func:`links_for`).
     """
     return [
         child.uri.replace("{auction}", uri.removeprefix("auction://")).replace("{club}", uri.removeprefix("club://"))
@@ -371,17 +327,9 @@ def _children(uri: str) -> list[str]:
 def links_for(action: str, about: Any) -> list[dict[str, Any]]:
     """The ``resource_link`` blocks to hang off one tool result.
 
-    A link says "there is more about this, at this address, and you can fetch it without asking me
-    again". It is the cheap half of this module: a host that supports resources can pull the whole
-    auction after a write that named one, and a host that has never heard of ``resource_link``
-    ignores an unknown content block, which is what the spec requires of it.
-
-    The tool's **own** answer is never linked. ``describe_lot`` returning a link to
-    ``lot://spring/14`` is a pointer at the document it just sent, which costs bytes and says
-    nothing -- so a URI whose template is answered by *this* action is dropped, and what goes in its
-    place is what sits underneath it (:func:`_children`). That is why ``describe_auction`` offers
-    the auction's lots and its people while ``list_lots`` offers only the auction: one of them has
-    already answered the top-level thing and the other has not.
+    A host that supports resources can fetch the whole auction after a write that named one; one that
+    doesn't ignores the unknown block. The tool's own answer is never linked: a URI answered by this
+    action is dropped and replaced by what sits underneath it (:func:`_children`).
     """
     if not isinstance(about, dict) or not about:
         return []
@@ -394,9 +342,7 @@ def links_for(action: str, about: Any) -> list[dict[str, Any]]:
             continue
         seen.add(uri)
         matched = match(uri)
-        # Unmatched means this server does not publish it -- a slug with a slash in it, or a
-        # scheme that has been retired. Silently skipped: a decoration must never be able to fail
-        # a call that otherwise worked.
+        # Unmatched means this server doesn't publish it; a decoration must never fail a call.
         if matched is None:
             continue
         if matched[0].action == action:

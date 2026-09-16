@@ -1,33 +1,26 @@
 """The DMCA designated agent, the takedown, and the repeat-infringer policy.
 
-Photographs on this site are uploaded by the people selling the fish, so the site is a service
-provider hosting material at the direction of its users, and 17 U.S.C. 512(c) is what stands
-between it and their mistakes. That protection is conditional, and the conditions are chores rather
-than judgement calls:
+Photographs here are uploaded by sellers, so the site hosts material at its users' direction and
+17 U.S.C. 512(c) is what stands between it and their mistakes. That protection is conditional:
 
-1. **A designated agent, registered and published.** 512(c)(2) requires the agent's name, address,
-   phone number and email to be filed with the Copyright Office *and* made available to the public
-   on the site. The filing costs $6 at https://dmca.copyright.gov/osp/ and lapses after three
-   years. This module reads the published half out of the environment (:func:`agent`) and
-   ``/dmca/`` renders it; the filing is the operator's job and no code can do it for them.
-2. **Expeditious removal.** Deleting the row has to delete the file, the CDN copy and the cached
-   copy at the edge, or the material is still there. That part lives in
+1. **A designated agent, registered and published.** 512(c)(2) wants the agent's name, address,
+   phone and email filed with the Copyright Office and published on the site. The filing costs $6 at
+   https://dmca.copyright.gov/osp/ and lapses after three years. :func:`agent` reads the published
+   half out of the environment and ``/dmca/`` renders it; the filing is the operator's job.
+2. **Expeditious removal**, which has to take the file, the CDN copy and the edge cache with it --
    :func:`auctions.signals.on_uploaded_image_deleted` and :mod:`auctions.cloudflare_cache`.
-3. **A repeat-infringer policy, adopted, published, and reasonably implemented.** 512(i)(1)(A).
-   :func:`record_strike` and :data:`STRIKES_BEFORE_TERMINATION` are the implementation, and
-   :class:`auctions.moderation_models.CopyrightStrike` is the evidence that it ran.
+3. **A repeat-infringer policy, adopted, published and reasonably implemented** (512(i)(1)(A)):
+   :func:`record_strike`, :data:`STRIKES_BEFORE_TERMINATION` and
+   :class:`auctions.moderation_models.CopyrightStrike`.
 
-Why the third strike does not terminate an account by itself: 512(f) exists because false notices
-are sent, and an automatic ban wired to a number a stranger controls is a way to lose somebody
-their account over a form. So the third strike sends the operator a message saying the policy calls
-for termination and :func:`terminate` does it in one click. The strike table records both halves,
-which is the thing a court actually asks for -- Cox lost the safe harbour for having a written
-policy it did not follow, while the one-man site in *Ventura Content v. Motherless* kept it with no
+The third strike doesn't terminate an account by itself: 512(f) exists because false notices are
+sent, and an automatic ban wired to a number a stranger controls loses somebody their account over a
+form. It messages the operator instead, and :func:`terminate` is one click. Cox lost the safe
+harbour for having a policy it didn't follow, while *Ventura Content v. Motherless* kept it with no
 written procedure at all, because it acted.
 
-Every value published here is per-deployment, out of ``.env``. A fork that has not registered an
-agent publishes nothing: ``/dmca/`` 404s and the footer link does not render, which is honest, and
-much better than a fork publishing this site's agent as though it were their own.
+Every published value is per-deployment, from ``.env``. A fork with no registered agent publishes
+nothing: ``/dmca/`` 404s and the footer link doesn't render.
 """
 
 import logging
@@ -37,12 +30,12 @@ from django.utils import timezone
 
 logger = logging.getLogger(__name__)
 
-#: What ``MAILING_ADDRESS`` says when nobody has set it (see settings.py). Falling back to it would
-#: publish the words "No address configured" as the agent's address, which is worse than 404ing.
+#: What ``MAILING_ADDRESS`` says when unset (settings.py); falling back to it would publish "No
+#: address configured" as the agent's address.
 _UNSET_MAILING_ADDRESS = "No address configured"
 
-#: Strikes an account may collect before the policy calls for terminating it. Published in the
-#: terms and in the /dmca/ page, and the number in all three places has to stay the same one.
+#: Strikes before the policy calls for termination. Published in the terms and on /dmca/, so all
+#: three have to agree.
 STRIKES_BEFORE_TERMINATION = 3
 
 
@@ -51,15 +44,12 @@ def _setting(name):
 
 
 def agent():
-    """The designated agent block as ``/dmca/`` publishes it, or ``None`` if none is configured.
+    """The designated agent block as ``/dmca/`` publishes it, or ``None``.
 
     ``DMCA_AGENT_EMAIL`` and ``DMCA_AGENT_ADDRESS`` fall back to ``ADMIN_EMAIL`` and
-    ``MAILING_ADDRESS``, which most deployments have already set to the right thing -- so the
-    minimum an operator has to add after filing is the legal entity name, the agent's name and a
-    phone number.
-
-    All five values are required together. 512(c)(2) names exactly these four as what has to be
-    published, and a page carrying three of them tells a rightsholder they cannot reach anybody.
+    ``MAILING_ADDRESS``, so the minimum to add after filing is the entity name, the agent's name and a
+    phone number. All five are required together: 512(c)(2) names them, and a page with three tells a
+    rightsholder they can't reach anybody.
     """
     email = (
         _setting("DMCA_AGENT_EMAIL") or _setting("ADMIN_EMAIL") or (settings.ADMINS[0][1] if settings.ADMINS else "")
@@ -80,16 +70,15 @@ def agent():
 
 
 def is_configured():
-    """Whether this deployment has an agent to publish. ``/dmca/`` and the footer link key off this."""
+    """Whether this deployment has an agent to publish; ``/dmca/`` and the footer link key off this."""
     return agent() is not None
 
 
 def agent_email():
-    """Where a notice goes. The agent's address when there is one, the site admin otherwise.
+    """Where a notice goes: the agent's address, or the site admin.
 
-    Separate from :func:`agent` because the notice form and the report button still have to reach
-    somebody on a deployment that has not registered -- not being in the directory is a reason to
-    lose the safe harbour, not a reason to drop the mail.
+    Separate from :func:`agent` because the notice form still has to reach somebody on a deployment
+    that hasn't registered -- that loses the safe harbour, not the mail.
     """
     block = agent()
     if block:
@@ -98,11 +87,10 @@ def agent_email():
 
 
 def strike_count(user):
-    """How many strikes count against this account right now.
+    """How many strikes count against this account now.
 
-    Withdrawn strikes stay on the record and stop counting -- a notice that was withdrawn, or one
-    where the material went back up after a counter-notice, is not a strike, and 512(g) would be a
-    trap if it were.
+    Withdrawn strikes stay on the record and stop counting: a withdrawn notice, or one where the
+    material went back up after a counter-notice, is not a strike, and 512(g) would be a trap if it were.
     """
     from auctions.moderation_models import CopyrightStrike
 
@@ -114,8 +102,8 @@ def strike_count(user):
 def record_strike(user, notice=None, reason="", issued_by=None):
     """Add a strike, tell the user, and tell the operator when the policy calls for termination.
 
-    Returns the strike. The caller does not need to look at the count: the two emails this sends
-    are the whole of what happens at each step, and :func:`terminate` is a separate, deliberate act.
+    Returns the strike. The caller needn't check the count: the two emails are the whole of what
+    happens, and :func:`terminate` is a separate, deliberate act.
     """
     from django.contrib.sites.models import Site
     from django.urls import reverse
@@ -127,8 +115,8 @@ def record_strike(user, notice=None, reason="", issued_by=None):
     count = strike_count(user)
     domain = Site.objects.get_current().domain
     remaining = STRIKES_BEFORE_TERMINATION - count
-    # /dmca/ does not exist on a deployment with no agent configured, so the sentence telling
-    # somebody how to answer a takedown must not be a link to a 404.
+    # /dmca/ doesn't exist without a configured agent, so the sentence explaining how to answer a
+    # takedown must not link to a 404.
     counter_notice_route = (
         f"How to do that is at https://{domain}{reverse('dmca')}" if is_configured() else f"Write to {agent_email()}."
     )
@@ -179,15 +167,11 @@ def record_strike(user, notice=None, reason="", issued_by=None):
 
 
 def take_down(notice, admin=None):
-    """Remove the material a notice complains about, and record a strike for it.
+    """Remove the material a notice complains about, and record a strike; returns how many images went.
 
-    Deletes every image on the lot the notice names. The row deletions are what actually remove the
-    file, the Cloudflare Images copy and the cached copy at the edge -- see
-    ``auctions.signals.on_uploaded_image_deleted``. The lot itself is left alone: a notice is about
-    a photograph, and deleting somebody's listing along with it removes bids and an auction entry
-    that were nothing to do with the complaint.
-
-    Returns the number of images removed.
+    Deletes every image on the named lot, which is what removes the file, the Cloudflare copy and the
+    edge cache (``auctions.signals.on_uploaded_image_deleted``). The lot is left alone: a notice is
+    about a photograph, and deleting the listing would remove bids and an auction entry too.
     """
     from auctions.models import LotImage
 
@@ -198,7 +182,7 @@ def take_down(notice, admin=None):
             image.delete()
         removed = len(images)
         if notice.lot.image:
-            # The legacy single image on Lot itself, from before LotImage existed.
+            # The legacy single image on Lot itself, from before LotImage.
             notice.lot.image.delete(save=True)
 
     notice.status = "REMOVED"
@@ -219,11 +203,10 @@ def take_down(notice, admin=None):
 
 
 def terminate(user, admin=None, reason=""):
-    """Close an account for repeat infringement. The third-strike action, done by a person.
+    """Close an account for repeat infringement: the third-strike action, done by a person.
 
-    ``is_active = False`` is the same switch account deletion uses: the account cannot be signed
-    into again, and everything it is part of -- invoices, past auctions, other people's records --
-    stays exactly where it is.
+    ``is_active = False`` is the switch account deletion uses, so everything the account is part of
+    stays where it is.
     """
     from django.contrib.sites.models import Site
     from post_office import mail

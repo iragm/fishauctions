@@ -1,7 +1,6 @@
 #!/bin/bash
-# Download script for self-hosted vendor resources (JavaScript libraries, CSS frameworks, etc.)
-# This script downloads all external dependencies to enable self-hosting and avoid CDN dependencies
-# Run this script when setting up the project or to update vendor libraries to their latest versions
+# Fetch the vendored JS and CSS this site serves itself instead of from a CDN. Run it when setting
+# the project up, or to update a library.
 
 set -e  # Exit on error
 
@@ -95,9 +94,7 @@ curl -L -o auctions/static/js/vendor/zxing.min.js \
   "https://cdn.jsdelivr.net/npm/@zxing/library@0.21.3/umd/index.min.js"
 echo "✓ zxing.min.js downloaded"
 
-# Note: Popper.js is included in Bootstrap 5.3.3 bundle, no need to download separately
-# Note: Bootstrap 4.5.2 is not needed - all templates now use Bootstrap 5.3.3
-# Note: jQuery 3.6.1 is not needed - all templates use jQuery 3.5.1
+# Popper is in the Bootstrap bundle above, so it is not fetched separately.
 
 echo ""
 echo "======================================================================"

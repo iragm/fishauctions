@@ -1,18 +1,17 @@
 """One view per page, recorded on every page, with no timer in front of it.
 
 The beacon used to be opt-in -- 38 templates out of 247 called ``pageView()`` -- and fired two
-seconds after load.  Both biases ran the same way: a page nobody instrumented read as *absent*
-rather than unvisited, and a page somebody bounced off in a second recorded nothing at all, which
-deletes exactly the confused mis-clicks a funnel is about.  ``base_page_view.html`` now fires one
-view at ``DOMContentLoaded`` on every page that extends ``base.html``.
+seconds after load. Both biases ran the same way: an uninstrumented page read as *absent* rather
+than unvisited, and a page somebody bounced off in a second recorded nothing, which deletes exactly
+the confused mis-clicks a funnel is about. ``base_page_view.html`` now fires one view at
+``DOMContentLoaded`` on every page that extends ``base.html``.
 
-Which auction (if any) that view is *about* comes from the view, in ``page_view_auction`` and
-``page_view_lot``.  Three pages set it, and the list is not an accident of which templates have an
-``auction`` in context: it is the definition of ``Auction.unique_views`` -- "distinct visitors who
-viewed this auction's rules page or any of its lots" -- which organizers read on their own stats
-page.  The bidder list, the stats page and the auction edit form all have an ``auction`` in scope
-and must not tag, or an organizer's traffic number fills up with their own admin visits.  The
-class below that opens all six pages is what holds that line.
+Which auction a view is *about* comes from the view, in ``page_view_auction`` and ``page_view_lot``.
+Three pages set it, and that list is the definition of ``Auction.unique_views`` -- "distinct
+visitors who viewed this auction's rules page or any of its lots" -- rather than an accident of
+which templates have an ``auction`` in context. The bidder list, the stats page and the auction edit
+form all have one in scope and must not tag, or an organizer's traffic number fills with their own
+admin visits. The class below that opens all six pages holds that line.
 """
 
 from pathlib import Path

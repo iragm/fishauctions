@@ -1,8 +1,4 @@
-"""The auction as a thing you join: the TOS, creating one, and the auction's own page.
-
-``AuctionTOSAdmin`` and ``AuctionTOSDelete`` are the admin's view of who has joined;
-``AuctionCreateView`` and ``AuctionInfo`` are the auction's setup and its public front page.
-"""
+"""The auction as a thing you join: the TOS, creating one, and the auction's own page."""
 
 import logging
 from urllib.parse import urlencode
@@ -202,14 +198,8 @@ class AuctionTOSDelete(LoginRequiredMixin, TemplateView, FormMixin, AuctionViewM
                 review_form = AuctionTOSMergeReviewForm(request.POST, instance=target, auction=self.auction)
                 if review_form.is_valid():
                     with transaction.atomic():
-                        # Merge (which deletes the source) BEFORE saving the reviewed fields onto the
-                        # target. The review form typically copies the source's email onto the target,
-                        # and saving the target with that email while the source still exists trips
-                        # AuctionTOS.save()'s exact-email auto-merge — which keeps the *older* record
-                        # (the source) and deletes the target out from under us, raising
-                        # "Unsaved model instance ... cannot be used in an ORM query" on the next line
-                        # (and merging in the wrong direction). Deleting the source first makes the
-                        # email unique so the auto-merge can't fire.
+                        # Merge (deleting the source) before saving the target: saving the target
+                        # with the source's email would trigger save()'s auto-merge in the wrong direction.
                         target.merge_duplicate(
                             self.auctiontos,
                             reason=f"merged by {request.user.username}",
@@ -233,10 +223,7 @@ class AuctionTOSDelete(LoginRequiredMixin, TemplateView, FormMixin, AuctionViewM
         form = self.get_form()
         if form.is_valid():
             success_url = reverse("auction_tos_list", kwargs={"slug": self.auctiontos.auction.slug})
-            # Deleting an AuctionTOS cascades away its invoice, adjustments, and payments.
-            # Block that when an invoice exists; a merge (which moves that history to another
-            # user) is required instead. The form already enforces this, but guard here too
-            # since this is where the irreversible delete happens.
+            # Deleting an AuctionTOS cascades its invoice, so require a merge when one exists.
             performing_merge = bool(form.cleaned_data.get("merge_with")) and not form.cleaned_data.get("delete_lots")
             if not performing_merge and Invoice.objects.filter(auctiontos_user=self.auctiontos).exists():
                 messages.error(
@@ -274,7 +261,6 @@ class AuctionTOSDelete(LoginRequiredMixin, TemplateView, FormMixin, AuctionViewM
                     self.auctiontos, reason=f"merged by {request.user.username}", user=request.user
                 )
             else:
-                # No lots to delete and no merge target selected; delete this AuctionTOS
                 self.auction.create_history(
                     applies_to="USERS", action=f"Deleted {self.auctiontos.name}", user=request.user
                 )
@@ -293,7 +279,7 @@ class AuctionTOSAdmin(LoginRequiredMixin, TemplateView, FormMixin, AuctionViewMi
     allow_non_admins = True  # we gate via can_add_edit_people for finer control
 
     def dispatch(self, request, *args, **kwargs):
-        # this can be an int if we are updating, or a string (auction slug) if we are creating
+        # An int when updating, the auction slug when creating.
         pk = kwargs.pop("pk")
         self.is_edit_form = True
         try:
@@ -310,7 +296,6 @@ class AuctionTOSAdmin(LoginRequiredMixin, TemplateView, FormMixin, AuctionViewMi
                 raise Http404
         _ = self.can_add_edit_people  # raises PermissionDenied if not allowed
         if self.auction.is_club_managed:
-            # In club-managed mode, member details are edited in the club admin, not here.
             if self.is_edit_form and self.auctiontos and self.auctiontos.clubmember_id:
                 target = reverse("clubmember_admin", kwargs={"pk": self.auctiontos.clubmember_id})
                 target += f"?tos={self.auctiontos.pk}"
@@ -321,8 +306,7 @@ class AuctionTOSAdmin(LoginRequiredMixin, TemplateView, FormMixin, AuctionViewMi
                 if self.auction.manage_users_through_club == "checkin":
                     target += f"?auction={self.auction.slug}"
                 return redirect(target)
-            # Editing an existing TOS that has no club member link (e.g. added before club
-            # management was enabled) — fall through and show the regular AuctionTOS form.
+            # An existing TOS without a club member link uses the regular form.
         return super().dispatch(request, *args, **kwargs)
 
     def get_form_kwargs(self):
@@ -347,11 +331,6 @@ class AuctionTOSAdmin(LoginRequiredMixin, TemplateView, FormMixin, AuctionViewMi
             context["tooltip"] = (
                 "This is an online auction: users should join through this site. You probably don't want to add them here."
             )
-        # context['new_form'] = CreateEditAuctionTOS(
-        #     is_edit_form=self.is_edit_form,
-        #     auctiontos=self.auctiontos,
-        #     auction=self.auction
-        # )
         context["unsold_lot_warning"] = ""
         if self.auctiontos:
             try:
@@ -564,9 +543,7 @@ class AuctionTOSAdmin(LoginRequiredMixin, TemplateView, FormMixin, AuctionViewMi
 
 
 class AuctionConfirmView(LoginRequiredMixin, TemplateView):
-    """
-    Confirmation page for auction creation - allows user to choose between creating a club auction or selling a single item
-    """
+    """Choose between creating a club auction and selling a single item."""
 
     template_name = "auction_confirm.html"
 
@@ -584,10 +561,8 @@ class AuctionConfirmView(LoginRequiredMixin, TemplateView):
 
 
 def _add_club_admins_as_auction_tos(auction, requesting_user):
-    """Create AuctionTOS admin records for club members with admin/manage_auctions permissions.
-
-    Only runs when the auction has a club and at least one pickup location.
-    Skips the requesting user (already an admin as the auction creator).
+    """Add club members with admin or manage_auctions permission as auction admins. Needs a club and a
+    pickup location; skips the requesting user.
     """
     if not auction.club:
         return
@@ -629,9 +604,7 @@ def _add_club_admins_as_auction_tos(auction, requesting_user):
 
 
 class AuctionCreateView(FormFrictionMixin, CreateView, LoginRequiredMixin):
-    """
-    Creating a new auction
-    """
+    """Creating a new auction."""
 
     model = Auction
     template_name = "auction_create_form.html"
@@ -639,30 +612,14 @@ class AuctionCreateView(FormFrictionMixin, CreateView, LoginRequiredMixin):
     redirect_url = None  # really only used if this is a cloned auction
     cloned_from = None
 
-    #: Auction settings a copy inherits.  The list itself lives in
-    #: :data:`auctions.services.AUCTION_FIELDS_TO_CLONE`, because the copy button on this page is
-    #: no longer its only caller -- ``palette_actions.create_auction`` makes the same copy for an
-    #: agent.  Kept as a class attribute so a test can read it: see
-    #: ``tests.AuctionCloneCustomFieldsTests``, which fails if the custom fields form grows a field
-    #: the list does not carry.
+    #: See :data:`auctions.services.AUCTION_FIELDS_TO_CLONE`; tests read it here.
     fields_to_clone = AUCTION_FIELDS_TO_CLONE
 
     def dispatch(self, request, *args, **kwargs):
-        """Both gates run *before* the view does, which is the whole of the fix here.
+        """Both gates run before the view: ``can_create_club_auctions`` and contact info.
 
-        This used to call ``super().dispatch()`` first and check permission afterwards, so a POST
-        from somebody without ``can_create_club_auctions`` created the auction and then threw the
-        response away in favour of a redirect to the home page.  The auction stayed.  A gate that
-        runs after the thing it gates is not a gate, and the contact-info one below has exactly the
-        same shape.
-
-        The contact-info gate is the answer to auctions that belong to no club.  ``Auction.club``
-        is filled in from ``UserData.club`` (:func:`~auctions.services.finish_new_auction`), and
-        nothing else on the way to creating an auction asks for it -- so an organizer who has never
-        opened the contact info page creates auction after auction that ``club_health`` cannot see.
-        Sending them there first is not about the address: it is the one moment the club picker is
-        in front of the one person who knows the answer.  The picker itself stays optional, because
-        plenty of auctions genuinely have no club.
+        The contact-info page is where organizers set their club, which ``Auction.club`` is filled from
+        (:func:`~auctions.services.finish_new_auction`).
         """
         auction_creation_allowed = False
         if self.request.user.is_authenticated and self.request.user.userdata.can_create_club_auctions:
@@ -673,9 +630,7 @@ class AuctionCreateView(FormFrictionMixin, CreateView, LoginRequiredMixin):
             return redirect(reverse("home"))
         missing = missing_contact_info(request.user, require_phone=True)
         if missing:
-            # The page has to ask for the phone number this gate just refused them for, and it only
-            # asks when it is told to.  See services.CONTACT_GATE_NEEDS_PHONE for why that is a
-            # session flag rather than something in the URL.
+            # Session flag so the page asks for the phone; see services.CONTACT_GATE_NEEDS_PHONE.
             request.session[CONTACT_GATE_NEEDS_PHONE] = True
             messages.error(request, f"Please add your {readable_list(missing)} before creating an auction")
             return redirect(f"{reverse('contact_info')}?{urlencode({'next': request.get_full_path()})}")
@@ -696,7 +651,7 @@ class AuctionCreateView(FormFrictionMixin, CreateView, LoginRequiredMixin):
         context["title"] = "New auction"
         context["new"] = True
         userData = self.request.user.userdata
-        # a bit of logic used on auction_create_form.html to suggest auction names
+        # For suggesting auction names in auction_create_form.html.
         context["club"] = ""
         club = userData.club
         if club:
@@ -717,13 +672,8 @@ class AuctionCreateView(FormFrictionMixin, CreateView, LoginRequiredMixin):
         return kwargs
 
     def form_valid(self, form, **kwargs):
-        """Rules for new auction creation.
-
-        Three buttons post to this, and the querystring says which: ``?clone=true`` copies the
-        auction named in ``cloned_from``, ``?online`` makes a fresh online one, and anything else
-        makes a fresh in-person one.  The copy itself is :func:`auctions.services.clone_auction`,
-        shared with the assistant so an auction copied by asking for one is the same auction as one
-        copied by clicking.
+        """Create the auction: ``?clone=true`` copies ``cloned_from`` via :func:`auctions.services.clone_auction`,
+        ``?online`` makes an online one, otherwise in-person.
         """
         if "clone" in str(self.request.GET):
             source = Auction.objects.filter(slug=form.cleaned_data["cloned_from"], is_deleted=False).first()
@@ -735,18 +685,16 @@ class AuctionCreateView(FormFrictionMixin, CreateView, LoginRequiredMixin):
                     date_start=form.cleaned_data["date_start"],
                     created_by=self.request.user,
                 )
-                # because we will almost certainly have locations, default to the main auction page
+                # Locations are almost certain, so go to the auction page.
                 self.redirect_url = self.object.get_absolute_url()
                 return HttpResponseRedirect(self.get_success_url())
-            # Nothing to copy, or not theirs to copy.  Fall through and make a fresh one rather
-            # than 500ing on them: they asked for an auction and they get an auction.
+            # Nothing to copy or not theirs: make a fresh one.
         auction = form.save(commit=False)
         auction.created_by = self.request.user
         auction.promote_this_auction = False  # all auctions start not promoted
         auction.date_start = form.cleaned_data["date_start"]
         auction.is_online = "online" in str(self.request.GET)
-        # The model default ("custom") preserves behavior for pre-existing and cloned
-        # auctions; brand-new auctions start with the alternate split off.
+        # New auctions start with the alternate split off; the model default is "custom".
         auction.alternate_split_mode = "off"
         if not auction.is_online:
             # override default settings for new in-person auctions
@@ -816,27 +764,17 @@ class AuctionInfo(FormFrictionMixin, FormMixin, DetailView, AuctionViewMixin):
                     creator = self.auction.created_by
                     creator_club = getattr(creator.userdata, "club", None)
                     if creator_club:
-                        # Count the creator's clubless auctions before saving: granting
-                        # permission_admin fires the on_club_member_saved signal, which associates
-                        # those auctions with the club and books their club ledger. Capturing the
-                        # count first keeps the success message accurate.
+                        # Count before saving: granting permission_admin files these auctions via a signal.
                         assigned_count = Auction.objects.filter(
                             created_by=creator, club__isnull=True, is_deleted=False
                         ).count()
-                        # One implementation of "make this person an admin of that club", shared
-                        # with assign_auction_to_club and the unlinked auctions page. This button
-                        # was a third copy of it; the club's own contact fields are filled in from
-                        # the account there, without overwriting anything the club already has.
+                        # Shared with assign_auction_to_club and the unlinked auctions page.
                         note = "via the auction admin panel" + (
                             f", assigning {assigned_count} auction(s) to the club" if assigned_count else ""
                         )
                         newly_admin = ensure_club_admin(creator_club, creator, note=note, actor=request.user)
                         if not newly_admin and assigned_count:
-                            # The button is also offered to file a clubless auction for somebody who
-                            # is *already* an admin (see can_make_club_admin, which is an OR). Saving
-                            # a ClubMember is what normally files those auctions -- the
-                            # `_associate_auctions_for_member` signal -- and there is no save to make
-                            # when the permission is already there, so nothing would happen at all.
+                            # Already an admin, so no save fires the filing signal; file them directly.
                             for clubless in Auction.objects.filter(
                                 created_by=creator, club__isnull=True, is_deleted=False
                             ):
@@ -848,9 +786,7 @@ class AuctionInfo(FormFrictionMixin, FormMixin, DetailView, AuctionViewMixin):
                             f"{creator.username} is now an admin of {creator_club.name}"
                             + (f" and {assigned_count} auction(s) assigned to club" if assigned_count else ""),
                         )
-            # created_by is nullable (SET_NULL when an account is deleted, and blank on auctions
-            # made before it existed), so this cannot go straight through to .pk -- it 500s the
-            # auction page for everyone, not just the creator.
+            # created_by is nullable.
             if self.auction.created_by_id == request.user.pk:
                 if str(request.GET.get("enable_online_payments", "")).lower() in ("1", "true"):
                     self.auction.enable_online_payments = True
@@ -924,20 +860,16 @@ class AuctionInfo(FormFrictionMixin, FormMixin, DetailView, AuctionViewMixin):
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
-        # The beacon tags a page view with this auction. Only the three pages that are a
-        # visitor looking at an auction do -- see base_page_view.html.
+        # Tags page views with this auction; see base_page_view.html.
         context["page_view_auction"] = self.auction.pk
         context["pickup_locations"] = self.auction.locations
         current_site = Site.objects.get_current()
         context["domain"] = current_site.domain
         context["google_maps_api_key"] = settings.LOCATION_FIELD["provider.google.api_key"]
-        # Offer "make this the current club auction" to admins when the auction has a club
-        # and isn't already that club's current auction.
         context["can_make_current_auction"] = bool(
             self.auction.club_id and self.is_auction_admin and self.auction.club.current_auction_id != self.auction.pk
         )
-        # Show "make club admin" button to superusers when auction creator has a club in their profile.
-        # Show when: creator isn't yet an admin of that club, OR this auction has no club assigned yet.
+        # Superusers: offer "make club admin" if the creator isn't one yet, or the auction has no club.
         if self.request.user.is_superuser and self.auction.created_by:
             creator_club = getattr(self.auction.created_by.userdata, "club", None)
             if creator_club:
@@ -998,7 +930,7 @@ class AuctionInfo(FormFrictionMixin, FormMixin, DetailView, AuctionViewMixin):
             )
         else:
             context["user_has_lots"] = False
-        # created_by is nullable; see the note on the same comparison in dispatch().
+        # created_by is nullable.
         if self.request.user.is_authenticated and self.request.user.pk == self.auction.created_by_id:
             invalidPickups = self.auction.pickup_locations_before_end
             if invalidPickups:
@@ -1041,7 +973,6 @@ class AuctionInfo(FormFrictionMixin, FormMixin, DetailView, AuctionViewMixin):
             },
         )
         context["rewrite_url"] = self.rewrite_url
-        # Email button: shown to authenticated users when the auction belongs to a club
         if self.auction.club:
             from auctions.email_routing import email_routing_enabled
 
@@ -1054,12 +985,7 @@ class AuctionInfo(FormFrictionMixin, FormMixin, DetailView, AuctionViewMixin):
         return context
 
     def post(self, request, *args, **kwargs):
-        """Join. The hundred lines that used to live here are ``services.join_auction``.
-
-        Extracted so the assistant can sign somebody up without sending them to this page: the
-        rules, the duplicate-record merge, the club member link and the history line are one
-        implementation with two callers rather than two that drift.
-        """
+        """Join, via ``services.join_auction``."""
         auction = self.auction
         form = self.get_form()
         if request.user.is_authenticated and form.is_valid():

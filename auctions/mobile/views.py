@@ -1,15 +1,10 @@
 """Mobile API views: everything under /api/mobile/.
 
-Auth: JWT Bearer required, except auth/login, auth/google, auth/social(/complete), auth/refresh
-(these issue/rotate tokens) and config/ (bearer optional, personalises only the `menu` block).
-auth/social/continue/, auth/social/done/ and auth/web-session/consume/ are loaded by the WebView
-itself and use a Django session, not JWT.
+JWT Bearer auth, except the auth endpoints that issue tokens and config/ (bearer optional). The
+WebView-loaded social continue/done and web-session consume views use a Django session.
 
-The contract is the serializers and the view code below, plus docs/app_printing_contract.md
-(printing) and the app repo's BACKEND_SPEC.md — do not re-document request/response shapes here.
-
-MobileConfigView is PUBLIC: never add secrets to its response, only values already safe to ship
-in the app or the web client's own JS.
+The contract is the serializers, this code, docs/app_printing_contract.md and the app repo's
+BACKEND_SPEC.md. MobileConfigView is public: never put secrets in it.
 """
 
 import base64
@@ -108,8 +103,7 @@ from .services.social_auth import (
 )
 from .services.web_session import WebSessionService, mark_session_opened_by_app
 
-# The allauth backend is what the web login uses; logging the handoff in under the same backend
-# keeps the resulting session indistinguishable from a normal web sign-in.
+# Log handoffs in under allauth's backend so the session matches a normal web sign-in.
 _ALLAUTH_BACKEND = "allauth.account.auth_backends.AuthenticationBackend"
 
 logger = logging.getLogger(__name__)
@@ -141,7 +135,7 @@ class MobileLoginView(APIView):
         if user is None:
             return Response({"detail": "Invalid credentials."}, status=status.HTTP_401_UNAUTHORIZED)
 
-        # Signing in cancels a pending account deletion, same as the web user_logged_in signal.
+        # Same as the web user_logged_in signal.
         cancel_deletion(user)
         refresh = RefreshToken.for_user(user)
         return Response(
@@ -228,7 +222,6 @@ class MobileGoogleAuthView(APIView):
                 suffix += 1
             user = User.objects.create_user(username=username, email=email)
 
-        # Google attested this email; make allauth agree so verification doesn't block it.
         try:
             addr = EmailAddress.objects.get(user=user, email__iexact=email)
             if not addr.verified or not addr.primary:
@@ -248,10 +241,9 @@ class MobileGoogleAuthView(APIView):
 
 
 class MobileSocialAuthView(APIView):
-    """POST /api/mobile/auth/social/ — sign in with Apple, Google or Facebook via allauth's pipeline.
+    """POST /api/mobile/auth/social/ — Apple, Google or Facebook sign-in through allauth's pipeline.
 
-    Never find-or-creates users itself: allauth owns unique-email conflicts and the
-    verification gate, since a second implementation is where an account-takeover bug would live.
+    Never find-or-creates users itself: allauth owns email conflicts and verification.
     """
 
     authentication_classes = []
@@ -265,8 +257,7 @@ class MobileSocialAuthView(APIView):
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
         data = serializer.validated_data
 
-        # allauth reads/writes the session and sets request.user on login; DRF's wrapper caches
-        # its own anonymous user, so we operate on the underlying Django request instead.
+        # DRF caches its own anonymous user, so use the underlying Django request.
         django_request = request._request
 
         try:
@@ -284,8 +275,7 @@ class MobileSocialAuthView(APIView):
         user = getattr(django_request, "user", None)
 
         if user is not None and user.is_authenticated:
-            # Belt-and-suspenders: re-check verification so a settings change can't weaken this
-            # endpoint below the web login's gate.
+            # Re-check so a settings change can't weaken this below the web login.
             if not MobileAuthService.email_verification_satisfied(user):
                 logger.warning("Social sign-in produced a session for unverified user %s; refusing.", user.pk)
                 return Response({"detail": "Please verify your email address first."}, status=status.HTTP_403_FORBIDDEN)
@@ -297,7 +287,6 @@ class MobileSocialAuthView(APIView):
                 status=status.HTTP_200_OK,
             )
 
-        # Resolved to a real but disabled account: say so rather than sending them to a signup form.
         resolved = getattr(sociallogin, "user", None)
         if resolved is not None and resolved.pk and not resolved.is_active:
             logger.info("Social sign-in refused for inactive user %s.", resolved.pk)
@@ -310,10 +299,7 @@ class MobileSocialAuthView(APIView):
 
     @staticmethod
     def _store_apple_refresh_token(sociallogin, provider, uid, data):
-        """Redeem Apple's one-shot authorization_code so account deletion can revoke it later.
-
-        Sign-in doesn't depend on this succeeding, so every failure path is a log line, not an error.
-        """
+        """Redeem Apple's authorization_code so account deletion can revoke it; failures only log."""
         from allauth.socialaccount.models import SocialAccount
 
         from auctions.apple_signin import redeem_authorization_code, store_tokens
@@ -335,12 +321,10 @@ class MobileSocialAuthView(APIView):
 
     @staticmethod
     def _pending(request, django_request, response, sociallogin, provider, uid):
-        """allauth couldn't finish unattended (no email, or needs confirming) — park the flow and
-        point the app at a real allauth page on the web rather than reimplementing it."""
+        """allauth couldn't finish unattended, so park the flow and send the app to allauth's web page."""
         session = django_request.session
         serialized_login = session.get("socialaccount_sociallogin")
-        # user is set when allauth connected a real account but stopped short of signing in
-        # (usually an unconfirmed address) -- lets a plain retry finish it later.
+        # Set when allauth connected an account but didn't sign in, so a retry can finish.
         resolved_user_pk = getattr(getattr(sociallogin, "user", None), "pk", None)
         pending_token, continue_token = PendingSocialLogin.create(
             provider=provider,
@@ -348,7 +332,7 @@ class MobileSocialAuthView(APIView):
             serialized_login=serialized_login,
             user_pk=resolved_user_pk,
         )
-        # State now lives in the cache record; drop this session so a reused one can't race it.
+        # State is in the cache record now; flush so a reused session can't race it.
         session.flush()
 
         continue_url = request.build_absolute_uri(f"{reverse('mobile-auth-social-continue')}?t={continue_token}")
@@ -371,11 +355,9 @@ class MobileSocialAuthView(APIView):
 
 
 class MobileSocialCompleteView(APIView):
-    """POST /api/mobile/auth/social/complete/ — pick up a login the user finished on the web.
+    """POST /api/mobile/auth/social/complete/ — pick up a login finished on the web.
 
-    The pending token says *which* flow to look at. Whether its user may actually be signed in is
-    re-derived from the database every time (active, verified address, still connected to the
-    provider account the flow started from) — see ``resolve_completed_user``.
+    Whether the user may sign in is re-derived every time; see ``resolve_completed_user``.
     """
 
     authentication_classes = []
@@ -409,8 +391,7 @@ class MobileSocialCompleteView(APIView):
 class MobileSocialContinueView(APIView):
     """GET /api/mobile/auth/social/continue/?t=<token> — hand an unfinished login to the WebView.
 
-    Loaded by the WebView itself (no JWT, no session): the token in the query string is the
-    credential. Rebuilds allauth's pending-signup state in this session and redirects into it.
+    The query-string token is the credential.
     """
 
     authentication_classes = []
@@ -424,15 +405,13 @@ class MobileSocialContinueView(APIView):
             return HttpResponseRedirect(reverse("account_login"))
         pending_token, record = claimed
 
-        # Sign out anyone already in this session, so the done view can only bind this flow's
-        # account. request._request: authentication_classes=[] makes DRF's own request.user
-        # anonymous regardless of the session cookie.
+        # Sign out any existing user so the done view binds only this flow's account.
         if request._request.user.is_authenticated:
             logout(request._request)
 
         serialized_login = record.get("sociallogin")
         if serialized_login:
-            # /social/ alias, not allauth's /3rdparty/: the app's WebView allowlist only covers /social/.
+            # The app's WebView allowlist covers /social/, not /3rdparty/.
             request.session["socialaccount_sociallogin"] = serialized_login
             target = reverse("mobile_socialaccount_signup")
         else:
@@ -442,11 +421,9 @@ class MobileSocialContinueView(APIView):
 
 
 class MobileSocialDoneView(APIView):
-    """GET /api/mobile/auth/social/done/ — where the web continuation ends.
+    """GET /api/mobile/auth/social/done/ — the app closes the WebView on this exact path; don't change it.
 
-    The app watches for this exact path and closes the WebView — the path is a constant in the
-    app and must not change. Binds whoever is signed in here to the pending record; safe because
-    the continue view above signs out any pre-existing user first.
+    Binds the signed-in user to the pending record; the continue view signed out anyone else first.
     """
 
     authentication_classes = []
@@ -460,7 +437,7 @@ class MobileSocialDoneView(APIView):
         finished = bool(pending_token) and user.is_authenticated
         if finished:
             PendingSocialLogin.bind_user(pending_token, user.pk)
-        # Human-readable, not JSON: the app closes the WebView instantly and never reads this body.
+        # The app closes the WebView without reading this.
         message = (
             "You're all set. You can close this window."
             if finished
@@ -489,11 +466,7 @@ class MobileUserMeView(APIView):
 
 
 class MobileWebSessionView(APIView):
-    """POST /api/mobile/auth/web-session/ — mint a one-time WebView handoff token.
-
-    No session is established here: only a single-use, short-TTL token bound to the user. The
-    consume view sets the real session cookie server-side; it never reaches the Dart layer.
-    """
+    """POST /api/mobile/auth/web-session/ — mint a single-use, short-lived WebView handoff token."""
 
     permission_classes = [IsMobileAuthenticated]
     throttle_scope = "mobile_auth"
@@ -508,8 +481,7 @@ class MobileWebSessionView(APIView):
 class MobileWebSessionConsumeView(APIView):
     """GET /api/mobile/auth/web-session/consume/?t=<token> — log the WebView in, then redirect.
 
-    Loaded by the WebView (no Authorization header — the token is the credential). A
-    missing/expired/already-used token establishes no session and redirects to web login instead.
+    A bad token creates no session and redirects to web login.
     """
 
     authentication_classes = []
@@ -523,13 +495,12 @@ class MobileWebSessionConsumeView(APIView):
             return HttpResponseRedirect(reverse("account_login"))
 
         login(request, user, backend=_ALLAUTH_BACKEND)
-        # Must run after login(), which cycles the session key and would otherwise drop this.
+        # After login(), which cycles the session key.
         mark_session_opened_by_app(request.session)
         return HttpResponseRedirect(self._safe_next(request))
 
     @staticmethod
     def _safe_next(request):
-        """Honour ?next= only if it points back at this host, else fall back to the web home."""
         next_url = request.GET.get("next")
         if next_url and url_has_allowed_host_and_scheme(
             next_url, allowed_hosts={request.get_host()}, require_https=request.is_secure()
@@ -544,11 +515,9 @@ class MobileWebSessionConsumeView(APIView):
 
 
 class MobileConfigView(APIView):
-    """GET /api/mobile/config/ — public deployment config for the app, fetched before sign-in.
+    """GET /api/mobile/config/ — public deployment config, fetched before sign-in. Never secrets.
 
-    PUBLIC VALUES ONLY, never secrets: everything here ships to every device (same values already
-    in the web client's JS). `menu` is the one per-user block (bearer token read if sent, still
-    200 + public menu if anonymous/stale) — never cache this response without varying on caller.
+    `menu` is per-user when a bearer token is sent, so never cache without varying on the caller.
     """
 
     authentication_classes = [OptionalJWTAuthentication]
@@ -564,12 +533,11 @@ class MobileConfigView(APIView):
             "brand_name": settings.NAVBAR_BRAND,
             "icon_url": request.build_absolute_uri(static("android-chrome-512x512.png")),
             "terms_url": reverse("tos"),
-            # Apple is a bool (native flow needs nothing else at runtime); Facebook's id must match
-            # the value compiled into the app's Info.plist/AndroidManifest, so a fork needs its own.
+            # Facebook's id must match the one compiled into the app.
             "apple_sign_in_enabled": bool(settings.APPLE_ALLOWED_AUDIENCES),
             "facebook_app_id": settings.FACEBOOK_APP_ID,
         }
-        # Each of these is omitted rather than pointing at a 404 when unset on this deployment.
+        # Omitted when unset, rather than linking to a 404.
         if BlogPost.objects.filter(slug=PRIVACY_POLICY_SLUG).exists():
             data["privacy_policy_url"] = reverse("privacy_policy")
         if dmca.is_configured():
@@ -577,7 +545,6 @@ class MobileConfigView(APIView):
         firebase = getattr(settings, "FIREBASE_CLIENT_CONFIG", None)
         if firebase:
             data["firebase"] = firebase
-        # Configured VoiceGrammar row, or this deployment's defaults (auctions/voice.py) if unset.
         data["voice"] = voice.serialize_grammar(VoiceGrammar.load())
         data["menu"] = menu_for(request.user)
         return Response(data)
@@ -601,8 +568,7 @@ class MobileDeviceRegisterView(APIView):
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
         data = serializer.validated_data
-        # Only pass fcm_token through when the client actually sent the key, so a registration that
-        # omits it doesn't wipe a previously stored token.
+        # Only when sent, so omitting it doesn't wipe a stored token.
         fcm_token = data.get("fcm_token") if "fcm_token" in serializer.initial_data else None
         try:
             device, created = DeviceService.register_or_update(
@@ -626,11 +592,7 @@ class MobileDeviceRegisterView(APIView):
 
 
 class MobileDeviceUnregisterView(APIView):
-    """POST /api/mobile/devices/unregister/ — clear a device's FCM token at sign-out.
-
-    Keeps the row (for stats) but stops pushes to it. The app calls this during sign-out, right
-    before dropping the JWT, so a signed-out phone never shows the previous user's notifications.
-    """
+    """POST /api/mobile/devices/unregister/ — clear the FCM token at sign-out; the row stays."""
 
     permission_classes = [IsMobileAuthenticated]
     throttle_scope = "mobile_api"
@@ -648,11 +610,9 @@ class MobileDeviceUnregisterView(APIView):
 
 
 class MobileDeviceHeartbeatView(APIView):
-    """POST /api/mobile/devices/heartbeat/ — "this phone is awake, here's whether it can print".
+    """POST /api/mobile/devices/heartbeat/ — the phone is awake, and whether it can print.
 
-    Posted at shell mount, on resume, and every 5 min foregrounded: a phone can't be woken on
-    demand, so remote printing measures liveness instead (see services.remote_print). A 404
-    self-disables the feature for the app process, so an older server costs nothing.
+    Remote printing depends on it; see services.remote_print.
     """
 
     permission_classes = [IsMobileAuthenticated]
@@ -682,8 +642,7 @@ class MobileDeviceHeartbeatView(APIView):
 
 
 class MobileRemotePrintJobMixin:
-    """Shared lookup: the job, or 404 — including for another user's job (uuid is unguessable,
-    so a 403 would add nothing)."""
+    """The job, or 404, including for another user's job."""
 
     permission_classes = [IsMobileAuthenticated]
     throttle_scope = "mobile_api"
@@ -694,10 +653,7 @@ class MobileRemotePrintJobMixin:
 
 
 class MobileRemotePrintProgressView(MobileRemotePrintJobMixin, APIView):
-    """POST /api/mobile/printjobs/<uuid>/progress/ — one more label came out.
-
-    Best-effort; a job that already reported a result ignores late progress.
-    """
+    """POST /api/mobile/printjobs/<uuid>/progress/ — best-effort; ignored once a result is in."""
 
     def post(self, request, job_uuid):
         job = self.get_job(request, job_uuid)
@@ -719,10 +675,9 @@ class MobileRemotePrintProgressView(MobileRemotePrintJobMixin, APIView):
 
 
 class MobileRemotePrintResultView(MobileRemotePrintJobMixin, APIView):
-    """POST /api/mobile/printjobs/<uuid>/result/ — the batch is over, one way or the other.
+    """POST /api/mobile/printjobs/<uuid>/result/ — the batch is over.
 
-    ``message`` is the app's own text, stored and shown verbatim. ``printed > 0`` also marks
-    those labels printed, so the app needn't post to ``labels/printed/`` separately.
+    ``message`` is shown verbatim; ``printed > 0`` also marks those labels printed.
     """
 
     def post(self, request, job_uuid):
@@ -733,8 +688,7 @@ class MobileRemotePrintResultView(MobileRemotePrintJobMixin, APIView):
         if not serializer.is_valid():
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
         data = serializer.validated_data
-        # A job the page gave up on can still report (the phone was reachable); a cancelled one
-        # can't -- the person at the computer said stop.
+        # A cancelled job can't report; one the page gave up on can.
         if job.status == RemotePrintJob.STATUS_CANCELLED:
             return Response(status=status.HTTP_204_NO_CONTENT)
         job.status = data["status"]
@@ -753,10 +707,7 @@ class MobileRemotePrintResultView(MobileRemotePrintJobMixin, APIView):
 
 
 class MobileMyClubsView(APIView):
-    """GET /api/mobile/clubs/mine/ — clubs the user belongs to, sorted by name.
-
-    Same membership scoping as the web ``user_clubs`` context processor.
-    """
+    """GET /api/mobile/clubs/mine/ — the user's clubs, scoped like the web ``user_clubs``."""
 
     permission_classes = [IsMobileAuthenticated]
     throttle_scope = "mobile_api"
@@ -780,10 +731,9 @@ class MobileMyClubsView(APIView):
 
 
 class MobileLotLabelView(APIView):
-    """GET /api/mobile/labels/<pk>/?fmt=png&resolution=600x400&dpi=203 — rendered label image.
+    """GET /api/mobile/labels/<pk>/?fmt=png&resolution=600x400&dpi=203 — a rendered label.
 
-    renderer_classes must list JSONRenderer first: DRF negotiates content before the view runs,
-    and without a renderer for it, ``Accept: image/png`` etc. 406 before this code ever runs.
+    JSONRenderer first in renderer_classes, or image Accept headers 406 before the view runs.
     """
 
     permission_classes = [IsMobileAuthenticated]
@@ -793,7 +743,7 @@ class MobileLotLabelView(APIView):
 
     @staticmethod
     def _can_access(user, lot):
-        """Seller of the lot, or an admin of its auction — mirrors web SingleLotLabelView."""
+        """Seller of the lot, or an admin of its auction, like web SingleLotLabelView."""
         tos = lot.auctiontos_seller
         if tos:
             if lot.is_owned_by(user):
@@ -820,8 +770,7 @@ class MobileLotLabelView(APIView):
                 status=status.HTTP_403_FORBIDDEN,
             )
 
-        # ?fmt=pdf uses the same WeasyPrint pipeline as web SingleLotLabelView, so the deep-link
-        # print matches a web print.
+        # Same WeasyPrint pipeline as web SingleLotLabelView.
         fmt = (request.GET.get("fmt") or "").lower()
         if fmt == "pdf":
             from .services.label_pdf import render_single_lot_pdf
@@ -833,7 +782,7 @@ class MobileLotLabelView(APIView):
                 return Response({"detail": "Invalid label request."}, status=status.HTTP_400_BAD_REQUEST)
             return HttpResponse(content, content_type=content_type)
 
-        # "fmt", not "format" -- DRF reserves ?format= for its own content negotiation.
+        # "fmt": DRF reserves ?format=.
         try:
             content, content_type = LabelService.render_label(
                 lot,
@@ -853,11 +802,10 @@ class MobileLotLabelView(APIView):
 
 
 class MobileLotLabelBatchView(APIView):
-    """POST /api/mobile/labels/batch/ — a whole print run's PNGs in one request, not one per lot.
+    """POST /api/mobile/labels/batch/ — a print run's PNGs in one request.
 
-    Response is partial by design: ``labels`` rendered, ``remaining`` not yet -- the app loops
-    posting what's left (see ``render_lot_labels_png``'s time budget). Lots the caller can't
-    print are skipped, not a batch failure. Nothing here marks anything printed.
+    Returns ``labels`` rendered and ``remaining``; the app posts the rest again. Lots the caller can't
+    print are skipped. Marks nothing printed.
     """
 
     permission_classes = [IsMobileAuthenticated]
@@ -874,9 +822,7 @@ class MobileLotLabelBatchView(APIView):
         try:
             width, height, dpi = LabelService.parse_dimensions(data.get("resolution"), data.get("dpi"))
         except ValueError:
-            # The message is logged, not returned: every other handler in this module answers a bad
-            # request with a fixed string, and echoing an exception back to a caller is what CodeQL
-            # flags here whether or not this particular one is safe to show.
+            # Logged, not returned: never echo an exception to the caller.
             logger.warning("Invalid label batch request.", exc_info=True)
             return Response({"detail": "Invalid label request."}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -904,7 +850,7 @@ class MobileLotLabelBatchView(APIView):
         labels = []
         for lot, png in rendered:
             if png is None:
-                # No auction means no label config to render against; fall back like the single-lot endpoint.
+                # No auction: fall back like the single-lot endpoint.
                 png, _content_type = LabelService.render_label(
                     lot, "png", resolution=data.get("resolution") or None, dpi=dpi
                 )
@@ -921,12 +867,10 @@ class MobileLotLabelBatchView(APIView):
 
 
 class MobileLabelsPrintedView(APIView):
-    """POST /api/mobile/labels/printed/ — what came out of the printer, and what didn't.
+    """POST /api/mobile/labels/printed/ — which labels came out and which didn't.
 
-    Native Bluetooth printing bypasses the PDF views' ``label_printed`` side effect, so this
-    closes the gap. The server can't see the printer: the app decodes the status byte via
-    ``ThermalPrinterProfile`` and reports which lots failed; ``failed`` puts those back to
-    unprinted and flags them for reprinting.
+    Bluetooth printing bypasses the PDF views' ``label_printed`` side effect. ``failed`` lots go back
+    to unprinted and are flagged for reprinting.
     """
 
     permission_classes = [IsMobileAuthenticated]
@@ -981,10 +925,7 @@ class MobileLabelsPrintedView(APIView):
 
 
 class MobilePrinterProfilesView(APIView):
-    """GET /api/mobile/printers/profiles/ — every enabled thermal printer profile, priority-ordered.
-
-    Weak-ETagged so the app's offline cache gets a 304 when nothing changed.
-    """
+    """GET /api/mobile/printers/profiles/ — enabled thermal printer profiles, weak-ETagged."""
 
     permission_classes = [IsMobileAuthenticated]
     throttle_scope = "mobile_api"
@@ -1006,10 +947,9 @@ class MobilePrinterProfilesView(APIView):
 
 
 class MobileVoiceVocabularyView(APIView):
-    """GET /api/mobile/auctions/<slug>/voice/vocabulary/ — lot/bidder numbers voice may match.
+    """GET /api/mobile/auctions/<slug>/voice/vocabulary/ — lot and bidder numbers for voice.
 
-    Auction-scoped, admin-only (same ``permission_check`` as the set-winners page), weak-ETagged
-    since it's refetched on a timer as bidders join at check-in.
+    Admin-only, weak-ETagged since it's refetched as bidders join.
     """
 
     permission_classes = [IsMobileAuthenticated]
@@ -1039,11 +979,7 @@ class MobileVoiceVocabularyView(APIView):
 
 
 class MobilePrinterObservedView(APIView):
-    """POST /api/mobile/printers/observed/ — record a printer that paired, and how it was identified.
-
-    Fire-and-forget: lenient by design (over-long strings truncated, only ``matched_by`` required).
-    A ``matched_by: "manual"`` row is a printer no profile claimed yet.
-    """
+    """POST /api/mobile/printers/observed/ — record a paired printer. Lenient; ``matched_by`` required."""
 
     permission_classes = [IsMobileAuthenticated]
     throttle_scope = "mobile_api"
@@ -1062,11 +998,7 @@ class MobilePrinterObservedView(APIView):
 
 
 class MobileLabelPrefsView(APIView):
-    """GET/PATCH /api/mobile/labels/prefs/ — the user's label prefs + computed warnings.
-
-    PATCH accepts any writable subset (used by the app's "use printer-reported size" confirmation);
-    prefs are auto-created if missing and are always the caller's own.
-    """
+    """GET/PATCH /api/mobile/labels/prefs/ — the caller's label prefs and warnings, auto-created."""
 
     permission_classes = [IsMobileAuthenticated]
     throttle_scope = "mobile_api"
@@ -1091,10 +1023,9 @@ class MobileLabelPrefsView(APIView):
 
 
 class MobileNotificationPrefsView(APIView):
-    """GET/PATCH /api/mobile/notifications/prefs/ — the two push toggles, for the app's opt-in flow.
+    """GET/PATCH /api/mobile/notifications/prefs/ — the two push toggles.
 
-    Stores intent: a write is never refused just because push isn't configured or the account
-    has no device token yet, same as the web form.
+    Stores intent, like the web form: never refused for lack of push config or a device token.
     """
 
     permission_classes = [IsMobileAuthenticated]
@@ -1123,8 +1054,6 @@ class MobileNotificationPrefsView(APIView):
 
 
 class MobilePaymentCreateView(APIView):
-    """POST /api/mobile/payments/create/ — validate invoice and return Square SDK params."""
-
     permission_classes = [IsMobileAuthenticated]
     throttle_scope = "mobile_api"
     throttle_classes = [ScopedRateThrottle]
@@ -1146,8 +1075,7 @@ class MobilePaymentCreateView(APIView):
                 {"detail": "You do not have permission to perform this action."}, status=status.HTTP_403_FORBIDDEN
             )
         except TapToPayAttemptOpen as exc:
-            # An unfinished attempt on this invoice; the card may already be charged with the
-            # confirm lost. exc.user_message is cashier-facing and shown verbatim.
+            # An open attempt may already have charged the card; user_message is shown verbatim.
             logger.info("Mobile payment create blocked: an attempt is still open.", exc_info=exc)
             return Response(
                 {"detail": exc.user_message, "code": "attempt_in_progress"},
@@ -1169,9 +1097,7 @@ class MobilePaymentCreateView(APIView):
 class MobilePaymentAuthorizationView(APIView):
     """GET /api/mobile/payments/authorization/ — seller credentials for warming up Tap to Pay.
 
-    Always 200 for a signed-in user; ``eligible`` says whether they can charge at all. Hands out
-    the seller's merchant-wide OAuth token, so it needs the same admin gate as create/confirm --
-    a buyer must never reach this.
+    Hands out the seller's OAuth token, so it has the same admin gate as create and confirm.
     """
 
     permission_classes = [IsMobileAuthenticated]
@@ -1185,8 +1111,7 @@ class MobilePaymentAuthorizationView(APIView):
 class MobilePaymentAttemptCloseView(APIView):
     """POST /api/mobile/payments/attempt/close/ — the SDK returned without capturing.
 
-    ``create`` refuses while an attempt is open, so without this a declined card would block the
-    retry. Best-effort; an already-closed attempt is a success, not a conflict.
+    Without it, ``create`` refuses the retry after a decline. Closing a closed attempt succeeds.
     """
 
     permission_classes = [IsMobileAuthenticated]
@@ -1247,8 +1172,7 @@ class MobilePaymentConfirmView(APIView):
                 {"detail": "You do not have permission to perform this action."}, status=status.HTTP_403_FORBIDDEN
             )
         except PaymentAlreadyChargedError as exc:
-            # Idempotency-key reuse returned an earlier charge already on the invoice; no new money
-            # moved. Caught before its parent, PaymentVerificationError.
+            # Idempotency-key reuse returned an earlier charge; caught before PaymentVerificationError.
             logger.info("Mobile payment confirm: idempotency-key reuse returned a prior charge.", exc_info=exc)
             return Response({"detail": exc.user_message, "code": "already_charged"}, status=status.HTTP_409_CONFLICT)
         except PaymentVerificationError as exc:
@@ -1276,15 +1200,9 @@ class MobilePaymentConfirmView(APIView):
 
 
 class MobileCommandPaletteView(APIView):
-    """GET /api/mobile/command-palette/?q=<query> — grouped palette results.
+    """GET /api/mobile/command-palette/?q=<query> — ``command_palette.search`` with JWT auth.
 
-    Thin wrapper over ``command_palette.search`` (the same function the web view calls) so the
-    behaviour is identical; only the auth differs (JWT here, session+CSRF on the web).
-
-    One exception: the native palette this serves injects its own "Lot scanning" and "Tap to Pay"
-    rows, so the server's copies are left out here and the user isn't offered each twice. The web
-    palette — which the app opens in preference to this one, and which can't inject anything —
-    gets them from the same function.
+    Leaves out the "Lot scanning" and "Tap to Pay" rows, which the native palette adds itself.
     """
 
     permission_classes = [IsMobileAuthenticated]
@@ -1296,17 +1214,13 @@ class MobileCommandPaletteView(APIView):
 
         groups = command_palette.search(request, request.GET.get("q", ""), app_deep_links=False)
         response = Response({"groups": groups})
-        # Results are personalised — keep them out of any intermediary cache (matches the web view).
+        # Personalised results.
         response["Cache-Control"] = "private, no-store"
         return response
 
 
 class MobileCommandPaletteLogView(APIView):
-    """POST /api/mobile/command-palette/log/ — upsert the current search-session row.
-
-    Mirrors the web ``CommandPaletteLogView``; reuses ``command_palette.log_search`` so page-hit
-    bumping and the one-row-per-session behaviour stay consistent across web and mobile.
-    """
+    """POST /api/mobile/command-palette/log/ — ``command_palette.log_search``, like the web view."""
 
     permission_classes = [IsMobileAuthenticated]
     throttle_scope = "mobile_search"  # paired with each palette search; shares the search budget
@@ -1333,11 +1247,9 @@ class MobileCommandPaletteLogView(APIView):
 
 
 class MobileLastUsedAuctionView(APIView):
-    """GET /api/mobile/auctions/last-used/ — the caller's current auction, for client-side gating.
+    """GET /api/mobile/auctions/last-used/ — the caller's current auction. Read-only, always 200.
 
-    Read-only, unlike ``checkin/ping/`` (a geofence with real side effects). Always 200; every
-    field is null when unset/deleted. ``latitude``/``longitude`` are null unless the auction has
-    exactly one physical PickupLocation with real (non-(0,0)) coordinates.
+    Coordinates are null unless the auction has exactly one physical PickupLocation with real ones.
     """
 
     permission_classes = [IsMobileAuthenticated]
@@ -1358,7 +1270,7 @@ class MobileLastUsedAuctionView(APIView):
                 }
             )
         location = _single_pickup_location(auction)
-        # (0, 0) is the codebase's "unset" sentinel for coordinates; report null, not Gulf of Guinea.
+        # (0, 0) means unset.
         has_coordinates = location is not None and not (location.latitude == 0 and location.longitude == 0)
         return Response(
             {
@@ -1385,11 +1297,7 @@ def _get_ar_auction(slug):
 
 
 class MobileArLotsView(APIView):
-    """GET /api/mobile/ar/lots/?auction=<slug>&lots=<pk,pk,...> — overlay + card metadata.
-
-    Any authenticated user: returns nothing beyond the public lot page plus the caller's own
-    watch/recommendation state. Up to 50 scanned pks per call.
-    """
+    """GET /api/mobile/ar/lots/?auction=<slug>&lots=<pk,...> — overlay and card data, up to 50 lots."""
 
     permission_classes = [IsMobileAuthenticated]
     throttle_scope = "mobile_ar"
@@ -1419,11 +1327,7 @@ class MobileArLotsView(APIView):
 
 
 class MobileArObservationsView(APIView):
-    """POST /api/mobile/ar/observations/ — ingest a batch of QR angle sightings.
-
-    Any authenticated user (every scanning attendee is a data source). Junk detections (bad angles,
-    stray/removed lots) are dropped silently; the batch still returns 202 with the accepted count.
-    """
+    """POST /api/mobile/ar/observations/ — QR sightings. Junk is dropped silently; still 202."""
 
     permission_classes = [IsMobileAuthenticated]
     throttle_scope = "mobile_ar"
@@ -1450,10 +1354,7 @@ class MobileArObservationsView(APIView):
 
 
 class MobileArEventsView(APIView):
-    """POST /api/mobile/ar/events/ — record AR interaction events (scan/zoom/zoom-all-the-way).
-
-    Each event becomes a lot PageView tagged with an ``ar_*`` source, de-duped per user/lot/type.
-    """
+    """POST /api/mobile/ar/events/ — AR events as lot PageViews with an ``ar_*`` source, de-duped."""
 
     permission_classes = [IsMobileAuthenticated]
     throttle_scope = "mobile_ar"
@@ -1474,10 +1375,7 @@ class MobileArEventsView(APIView):
 
 
 class MobileArPositionsView(APIView):
-    """GET /api/mobile/ar/positions/?auction=<slug> — solved positions for not-sold, not-removed lots.
-
-    Any authenticated user (locate mode needs it).
-    """
+    """GET /api/mobile/ar/positions/?auction=<slug> — solved positions for unsold, unremoved lots."""
 
     permission_classes = [IsMobileAuthenticated]
     throttle_scope = "mobile_ar"
@@ -1491,10 +1389,7 @@ class MobileArPositionsView(APIView):
 
 
 class MobileLotWatchView(APIView):
-    """POST /api/mobile/lots/<pk>/watch/ — set (not toggle) the caller's watch state on a lot.
-
-    Mirrors the web ``WatchOrUnwatch``; idempotent so a retry is harmless.
-    """
+    """POST /api/mobile/lots/<pk>/watch/ — set (not toggle) the watch state, like ``WatchOrUnwatch``."""
 
     permission_classes = [IsMobileAuthenticated]
     throttle_scope = "mobile_api"
@@ -1523,11 +1418,9 @@ class MobileLotWatchView(APIView):
 
 
 class MobileCheckinPingView(APIView):
-    """POST /api/mobile/checkin/ping/ — the phone reports its position; the server decides everything.
+    """POST /api/mobile/checkin/ping/ — the phone's position; returns display-ready ``actions``.
 
-    Returns display-ready ``actions`` (join offer / check-in confirmation / admin location offer).
-    Never 404s for "nothing nearby" (that would trip the app's endpoint-missing degradation) — an
-    empty ``{"actions": []}`` means no nudge right now.
+    Never 404s for nothing nearby (the app reads 404 as a missing endpoint); returns empty actions.
     """
 
     permission_classes = [IsMobileAuthenticated]
@@ -1547,12 +1440,10 @@ class MobileCheckinPingView(APIView):
 
 
 class MobileCheckinJoinView(APIView):
-    """POST /api/mobile/checkin/join/ — join the auction from the welcome prompt (no scrolling rules).
+    """POST /api/mobile/checkin/join/ — join from the welcome prompt. Idempotent.
 
-    Idempotent; auto-checks-in on check-in-mode auctions and returns the bidder number that check-in
-    assigned. No distance re-check (the offer already required it and phones drift), but the auction
-    must still be inside the welcome window, and 403s when the auction has app self-check-in turned
-    off (``Auction.allow_self_checkin``) — those auctions hand out bidder numbers at the door.
+    Auto-checks-in on check-in-mode auctions. No distance re-check, but must be in the welcome window;
+    403 when ``Auction.allow_self_checkin`` is off.
     """
 
     permission_classes = [IsMobileAuthenticated]
@@ -1587,8 +1478,6 @@ class MobileCheckinJoinView(APIView):
 
 
 class MobileCheckinSetLocationView(APIView):
-    """POST /api/mobile/checkin/set-location/ — an admin pins the auction's location from their phone."""
-
     permission_classes = [IsMobileAuthenticated]
     throttle_scope = "mobile_checkin"
     throttle_classes = [ScopedRateThrottle]
@@ -1622,10 +1511,9 @@ class MobileCheckinSetLocationView(APIView):
 
 
 class MobileOfflineSnapshotView(APIView):
-    """GET /api/mobile/offline/snapshot/ — the caller's last admin auction + offline-screen data.
+    """GET /api/mobile/offline/snapshot/ — the caller's last admin auction and offline-screen data.
 
-    Returns ``auction: null`` (still 200) when the caller administers no auction. A real 404 means
-    the deployment predates this endpoint, and the app disables offline mode for the process.
+    ``auction: null`` when they administer none; a 404 means an older deployment.
     """
 
     permission_classes = [IsMobileAuthenticated]
@@ -1640,11 +1528,9 @@ class MobileOfflineSnapshotView(APIView):
 
 
 class MobileOfflineSyncView(APIView):
-    """POST /api/mobile/offline/sync/ — apply a batch of queued offline ops, then return a snapshot.
+    """POST /api/mobile/offline/sync/ — apply queued offline ops, then return a snapshot.
 
-    The named auction must belong to the caller (``permission_check``); 403 otherwise. Ops apply in
-    order, idempotently and per-op (never all-or-nothing); the response pairs each op's result with a
-    fresh snapshot so one round trip both drains the queue and refreshes the phone.
+    Ops apply in order, idempotently, one at a time (never all-or-nothing).
     """
 
     permission_classes = [IsMobileAuthenticated]

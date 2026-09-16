@@ -8,16 +8,10 @@ MILES_TO_KM = 1.60934
 
 @register.filter
 def convert_distance(miles, user):
+    """``miles`` in the user's preferred unit, as ``(value, unit)`` -- or None when it is zero or
+    unreadable. The stored value may be a number or a string.
     """
-    Convert distance from miles to the user's preferred unit.
-    Args:
-        miles: Distance in miles (as stored in the database) - can be a number or string
-        user: The user object to check preferred unit
-    Returns:
-        Tuple of (converted_value, unit_string) or None if distance is 0 or invalid
-    """
-    # Convert miles to float to handle both numeric and string inputs from database
-    # Return None for None/invalid inputs or zero distance
+    # Zero means the user's location is unset, or the lot is part of an auction: show nothing.
     if miles is None:
         return None
 
@@ -26,7 +20,6 @@ def convert_distance(miles, user):
     except (ValueError, TypeError):
         return None
 
-    # Don't show distance if it's 0 (user location not set or lot is part of an auction)
     if miles == 0:
         return None
 
@@ -55,14 +48,7 @@ def convert_distance(miles, user):
 
 @register.filter
 def distance_display(miles, user):
-    """
-    Format distance for display with appropriate unit.
-    Args:
-        miles: Distance in miles (as stored in the database)
-        user: The user object to check preferred unit
-    Returns:
-        Formatted string like "10 miles" or "16 km", or empty string if distance is 0 or invalid
-    """
+    """``miles`` ready to print -- '10 miles', '16 km' -- or '' when there is nothing to say."""
     result = convert_distance(miles, user)
     if result is None:
         return ""

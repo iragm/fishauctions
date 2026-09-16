@@ -13,12 +13,10 @@ def declare_winners_on_lots(lots):
     """Set the winner and winning price on all lots"""
     for lot in lots:
         if lot.ended:
-            # note - lots that are part of in-person auctions will not get here
-            # if they are active, they always have lot.ended = False, and if they are sold,
-            # the method that sells them should set active=False, so they won't be filtered here
-            # But, see https://github.com/iragm/fishauctions/issues/116
-            # Core: mark inactive and set winner/price. Everything else is "extra"
-            # and must be guarded so it cannot prevent the lot from being sold.
+            # Lots in in-person auctions don't reach here: active ones always have ended=False, and
+            # whatever sells them sets active=False. See issue #116.
+            # Mark inactive and set winner/price; everything after that is "extra" and guarded, so
+            # it cannot stop the lot being sold.
             try:
                 lot.active = False
                 if not lot.sold:
@@ -68,7 +66,7 @@ def declare_winners_on_lots(lots):
             except Exception:
                 logger.exception("auto_award_bap_points failed for lot %s", lot.pk)
         else:
-            # note: once again, lots that are part of an in-person auction are not included here
+            # Again, lots in an in-person auction are not included here.
             try:
                 lot.send_ending_very_soon_message()
             except Exception as e:
@@ -89,16 +87,14 @@ def _club_awards_unsold_lots(club):
 def deactivate_pretty_much_over_lots():
     """Wind down auctions that are pretty_much_over: award BAP for unsold lots, then deactivate.
 
-    Once an auction has been fully wound down for 24h+ (Auction.pretty_much_over), its still-active
-    lots are stray: they clutter the default /lots/ browse view (which shows active=True). We flip
-    them inactive so they drop out of that view. This is safe:
-      * Lot.sold depends only on winner/auctiontos_winner + winning_price, never on active, so these
-        lots can still be marked sold later.
-      * "View lots for an auction" uses ?status=all, which skips the active filter, so they still
-        show there.
-    We also auto-award BAP for eligible *unsold* lots first, for clubs that award unsold lots. This
-    is the moment in-person auction lots (which never flow through declare_winners_on_lots) finally
-    get their points; auto_award_bap_points() is idempotent so already-awarded lots are untouched.
+    24h after an auction is fully wound down its still-active lots are stray, and clutter the default
+    /lots/ browse view (which shows active=True), so they are flipped inactive. Safe both ways:
+    ``Lot.sold`` depends only on winner and winning price, never on ``active``, so these can still be
+    marked sold later, and "view lots for an auction" uses ``?status=all``.
+
+    Eligible *unsold* lots get their BAP points first, for clubs that award them. This is the moment
+    in-person lots -- which never flow through declare_winners_on_lots -- finally get points;
+    auto_award_bap_points() is idempotent, so already-awarded lots are untouched.
     """
     active_auction_ids = (
         Lot.objects.filter(active=True, is_deleted=False, banned=False, deactivated=False, auction__isnull=False)

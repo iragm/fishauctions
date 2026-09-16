@@ -150,7 +150,7 @@ class LotBapEligibilityTests(TestCase):
         self.assertEqual(lot.unsold_lot_no_bap_reason, "not_long_enough")
 
     def test_same_species_rule_blocks_the_same_fish_under_a_different_name(self):
-        """The point of the rule: the name rule cannot see that these are one fish bred twice."""
+        """The same-species rule catches one fish bred twice under different names."""
         self.club.days_between_same_species_lots = 30
         self.club.save(update_fields=["days_between_same_species_lots"])
         yellow_lab = Species.objects.create(genus="Labidochromis", species="caeruleus", common_name="Yellow lab")
@@ -167,7 +167,7 @@ class LotBapEligibilityTests(TestCase):
         self.assertEqual(lot.unsold_lot_no_bap_reason, "not_long_enough")
 
     def test_a_different_strain_of_the_same_species_still_earns_points(self):
-        """Blue and red cherry shrimp are two things to breed, and the strains are separate rows."""
+        """A different strain of the same species still earns points."""
         self.club.days_between_same_species_lots = 30
         self.club.save(update_fields=["days_between_same_species_lots"])
         neocaridina = Species.objects.create(genus="Neocaridina", species="davidi", common_name="Cherry shrimp")
@@ -209,8 +209,7 @@ class LotBapEligibilityTests(TestCase):
         self.club.save(update_fields=["days_between_same_species_lots"])
         species = Species.objects.create(genus="Poecilia", species="reticulata", common_name="Guppy")
         prior = self._make_lot(lot_name="Guppies", species=species, user=self.user, bap_points_awarded=5)
-        # update(), not save(): Lot._do_save pulls date_end back to the auction's, which would put
-        # this lot inside the window again and quietly test nothing.
+        # update(), not save(): Lot._do_save would pull date_end back to the auction's.
         Lot.objects.filter(pk=prior.pk).update(date_end=timezone.now() - datetime.timedelta(days=45))
         lot = self._make_lot(lot_name="Guppies", species=species, user=self.user, date_end=timezone.now())
         self.assertIsNone(lot.unsold_lot_no_bap_reason)
@@ -242,12 +241,10 @@ class LotBapEligibilityTests(TestCase):
         self.assertIsNone(lot.unsold_lot_no_bap_reason)
 
     def test_two_lots_with_no_species_are_both_judged_on_their_names(self):
-        """No species means no *opinion*, not a match against every other unnamed lot.
+        """Two lots with no species are judged on their names.
 
-        The rule is guarded on ``self.species_id``, so a lot with nothing picked falls straight
-        through to the next check rather than colliding with every other one.  That is why there is
-        no separate setting for it: the club already has ``days_between_same_name_lots`` for the
-        case it actually cares about, and it is the rule that can see these two are different.
+        The rule is guarded on ``self.species_id``, so a lot with nothing picked falls through to the next
+        check rather than colliding with every other unnamed lot.
         """
         self.club.days_between_same_species_lots = 30
         self.club.days_between_same_name_lots = 30
@@ -449,12 +446,13 @@ class LotBapEligibilityTests(TestCase):
 
 
 class AuctionCalendarButtonTests(StandardTestCase):
-    """The auction page's add-to-calendar control renders a web dropdown, but a single native
-    button inside the mobile app (and never leaks raw calendar JS onto the page)."""
+    """The auction page's add-to-calendar control is a dropdown on the web and one native button in the
+    app, and never leaks raw calendar JS onto the page.
+    """
 
     def setUp(self):
         super().setUp()
-        # Keep the auction current so the join card / pickup block render normally.
+        # Keep the auction current so the join card and pickup block render.
         self.online_auction.date_start = timezone.now() - datetime.timedelta(days=1)
         self.online_auction.date_end = timezone.now() + datetime.timedelta(days=2)
         self.online_auction.save()
@@ -478,10 +476,8 @@ class AuctionCalendarButtonTests(StandardTestCase):
         self.assertNotIn("Google Calendar", html)  # no web provider menu in the app
 
     def test_map_info_window_fragment_has_no_script_tag(self):
-        # Regression: the map info-window interpolates a location fragment into a JS backtick
-        # string. In the app the old fragment emitted a <script>, whose </script> prematurely
-        # closed the map script and dumped initMap onto the page as visible text. The map
-        # fragment must never contain a script tag.
+        # The map info window interpolates a location fragment into a JS template string, so a
+        # <script> in the fragment closed the map script early and dumped initMap onto the page.
         from django.template.loader import render_to_string
 
         rendered = render_to_string(
@@ -493,7 +489,7 @@ class AuctionCalendarButtonTests(StandardTestCase):
 
 
 class EndauctionsPrettyMuchOverTests(TestCase):
-    """Tests for endauctions.deactivate_pretty_much_over_lots: deactivation + unsold BAP awards."""
+    """endauctions.deactivate_pretty_much_over_lots: deactivation and unsold BAP awards."""
 
     def setUp(self):
         self.user = User.objects.create_user(username="pmo_seller", password="testpass", email="pmo@example.com")
@@ -595,7 +591,7 @@ class EndauctionsPrettyMuchOverTests(TestCase):
         deactivate_pretty_much_over_lots()
         lot.refresh_from_db()
         self.assertFalse(lot.active)
-        # sold is independent of active: set a winner + price and it reads as sold.
+        # sold is independent of active: a winner and a price read as sold.
         lot.auctiontos_winner = self.tos
         lot.winning_price = 15
         lot.save()
@@ -604,16 +600,11 @@ class EndauctionsPrettyMuchOverTests(TestCase):
 
 
 class LotFilterRegardingAuctionStatusTests(TestCase):
-    """LotFilter.status must stay "open" (active=True lots only) by default when scoped to a
-    still-running auction via regardingAuction/?auction=slug, unless the caller explicitly passes
-    ?status= or the auction is already closed (filter_by_auction already forces "all" once
-    auction.closed is True -- that part is existing, intentional behavior and out of scope here).
+    """LotFilter.status stays "open" by default when scoped to a still-running auction.
 
-    This covers the /lots/?auction=slug path used by AllLots (e.g. the "last auction you used"
-    redirect in ToDefaultLandingPage) and AuctionInfo's embedded lot list, while the auction is
-    still live. Forcing status="all" unconditionally for any regardingAuction scope would make
-    already-ended lots reappear in that default view even for a running auction, which is the
-    exact regression a prior "fix lot list showing closed lots" commit avoided."""
+    Forcing "all" for any regardingAuction scope would make ended lots reappear in the default view of a
+    running auction. ``filter_by_auction`` already forces "all" once the auction is closed.
+    """
 
     def setUp(self):
         self.user = User.objects.create_user(username="lf_seller", password="testpass", email="lf@example.com")
@@ -634,8 +625,7 @@ class LotFilterRegardingAuctionStatusTests(TestCase):
         self.ended_lot = Lot.objects.create(
             lot_name="Ended lot", auction=self.auction, auctiontos_seller=self.tos, quantity=1, active=False
         )
-        # LotFilter excludes lots posted in the last 20 minutes ("very new lot") for online auctions;
-        # backdate so both lots are eligible to show up regardless of that unrelated exclusion.
+        # LotFilter hides lots posted in the last 20 minutes in online auctions.
         Lot.objects.filter(pk__in=[self.active_lot.pk, self.ended_lot.pk]).update(
             date_posted=timezone.now() - datetime.timedelta(hours=1)
         )
@@ -876,9 +866,8 @@ class ClubBapLotsViewTests(TestCase):
         self.assertContains(response, "bapLotListChanged")
 
     # --- the three buttons on each row --------------------------------------
-    #
-    # These went through ``services.review_lot_points`` when ``review_points`` needed to press them
-    # without being a browser, and until then nothing tested them at all.
+    # They go through ``services.review_lot_points``, which is what let ``review_points`` press them
+    # without being a browser.
 
     def _press(self, lot, action, **extra):
         return self.client.post(reverse("lot_bap_points", kwargs={"pk": lot.pk}), {"action": action, **extra})
@@ -916,8 +905,9 @@ class ClubBapLotsViewTests(TestCase):
         self.assertFalse(BapAward.objects.filter(lot=self.pending_lot).exists())
 
     def test_the_default_the_button_offers_follows_the_genus_rule(self):
-        """It read the category override and not the genus one, so the row re-rendered with a
-        number the table had never shown."""
+        """The button's default follows the genus rule; it read the category override, so the row re-rendered
+        with a number the table never showed.
+        """
         species = Species.objects.create(scientific_name="Tropheus moorii", genus="Tropheus", species="moorii")
         self.pending_lot.species = species
         self.pending_lot.save()
@@ -1095,7 +1085,7 @@ class ClubMemberCreateAPITests(TestCase):
         self.assertEqual(member.name, "Carol Q Smith")
 
     def test_mapped_first_name_combined_with_last_name(self):
-        """Field mappings can rename external fields to first_name/last_name; the result is one name."""
+        """Field mappings can rename external fields to first_name and last_name, which combine into one name."""
         ClubAPIKeyFieldMap.objects.create(api_key=self.api_key, external_field="given", internal_field="first_name")
         ClubAPIKeyFieldMap.objects.create(api_key=self.api_key, external_field="surname", internal_field="last_name")
         self._post({"email": "mapped@example.com", "given": "Mapped", "surname": "User"})
@@ -1130,12 +1120,9 @@ class ClubMemberCreateAPITests(TestCase):
 class OrphanColumnRepairTests(TransactionTestCase):
     """A column no model describes can stop a table taking rows at all.
 
-    Live databases collected several of these from feature branches migrated against them and
-    then abandoned -- ``auctions_clubapikey.can_add_species``, ``auctions_club.enable_event_rsvp``
-    and ``auctions_clubevent.rsvp_enabled`` among them.  ``NOT NULL`` with no default, each one
-    turned every insert on its table into ``IntegrityError (1364)``: creating an API key, a club
-    or an event was a 500 with no workaround anywhere in application code.  Migration 0418 drops
-    them, and drops only the fatal ones.
+    Live databases collected these from abandoned branches -- ``auctions_clubapikey.can_add_species``
+    among them. ``NOT NULL`` with no default turned every insert into ``IntegrityError (1364)``, so
+    creating an API key was a 500 with no workaround. Migration 0418 drops only the fatal ones.
     """
 
     TABLE = "auctions_clubapikey"
@@ -1190,8 +1177,7 @@ class OrphanColumnRepairTests(TransactionTestCase):
         ClubAPIKey.objects.create(club=club, name="k", prefix="ck_orph2", key_hash="x")
 
     def test_an_inert_orphan_is_left_alone(self):
-        """Nullable, or carrying a default, means nothing is blocked -- and dropping it would be
-        the one version of this that could lose data."""
+        """An inert orphan (nullable, or with a default) blocks nothing, and dropping it could lose data."""
         self._add_column("leftover_note varchar(20) NULL")
         self._add_column("leftover_flag tinyint(1) NOT NULL DEFAULT 0")
         try:
