@@ -115,9 +115,7 @@ class AuctionModelTests(TestCase):
 
 class LotModelTests(TestCase):
     def test_calculated_end_bidding_closed(self):
-        """
-        Lot.ended should return true if the bidding has closed
-        """
+        """Lot.ended is true once bidding has closed."""
         time = timezone.now() + datetime.timedelta(days=30)
         user = User.objects.create(username="Test user")
         testLot = Lot.objects.create(
@@ -130,9 +128,7 @@ class LotModelTests(TestCase):
         assert testLot.ended is False
 
     def test_calculated_end_bidding_open(self):
-        """
-        Lot.ended should return false if the bidding is still open
-        """
+        """Lot.ended is false while bidding is open."""
         time = timezone.now() - datetime.timedelta(days=1)
         user = User.objects.create(username="Test user")
         testLot = Lot.objects.create(
@@ -313,7 +309,7 @@ class LotModelTests(TestCase):
         assert lot.high_bid == 5
 
     def test_lot_multiple_bids_per_user_only_latest_counts(self):
-        """When a user has multiple bid records for a lot, only their latest (highest) bid should count"""
+        """Only a user's latest bid counts when they have several on a lot."""
         time = timezone.now() + datetime.timedelta(days=30)
         lotuser = User.objects.create(username="lotowner_multi")
         lot = Lot.objects.create(
@@ -341,7 +337,7 @@ class LotModelTests(TestCase):
         assert Bid.objects.filter(user=userA, lot_number=lot, is_deleted=False).count() == 2
 
     def test_bid_on_lot_creates_new_record_not_update(self):
-        """bid_on_lot should create a new bid record when a user raises their proxy bid, not update the old one"""
+        """Raising a proxy bid creates a new bid record rather than updating the old one."""
         from auctions.bidding import bid_on_lot
 
         time = timezone.now() + datetime.timedelta(days=30)
@@ -356,7 +352,7 @@ class LotModelTests(TestCase):
             quantity=1,
             species_category=category,
         )
-        # Backdate date_posted so the lot is old enough to accept bids (>20 minutes)
+        # Backdate date_posted past the 20-minute new-lot hold.
         lot.date_posted = pastTime
         lot.save()
         userA = User.objects.create_user(username="User_A_bidtest", password="x")
@@ -368,7 +364,7 @@ class LotModelTests(TestCase):
         bid_on_lot(lot, userB, 10)
         assert Bid.objects.filter(user=userB, lot_number=lot, is_deleted=False).count() == 1
         assert lot.high_bidder.pk == userA.pk
-        # userA raises their proxy bid - should create a NEW record, not update the old one
+        # Raising the proxy bid creates a new record.
         bid_on_lot(lot, userA, 15)
         userA_bids = Bid.objects.filter(user=userA, lot_number=lot, is_deleted=False)
         assert userA_bids.count() == 2, "userA should have 2 bid records (old + new), not 1 updated record"
@@ -377,7 +373,7 @@ class LotModelTests(TestCase):
         assert lot.high_bid == 11  # $10 + 1 (one more than userB's $10)
 
     def test_sealed_bid_creates_exactly_one_record_per_bid(self):
-        """For sealed bids, each call to bid_on_lot should create exactly one bid record (no duplicates)"""
+        """Each sealed bid creates exactly one record."""
         from auctions.bidding import bid_on_lot
 
         time = timezone.now() + datetime.timedelta(days=30)
@@ -404,13 +400,14 @@ class LotModelTests(TestCase):
         # First bid by userA — should create exactly 1 record
         bid_on_lot(lot, userA, 10)
         assert Bid.objects.filter(user=userA, lot_number=lot, is_deleted=False).count() == 1
-        # Second bid by userA (raising proxy) — should add 1 more record, total 2
+        # A second bid by userA adds one more record.
         bid_on_lot(lot, userA, 15)
         assert Bid.objects.filter(user=userA, lot_number=lot, is_deleted=False).count() == 2
 
     def test_user_cannot_bid_against_themselves(self):
-        """A user who is already the high bidder should raise their proxy bid silently (INFO),
-        not generate a NEW_HIGH_BIDDER event — i.e., they cannot bid against themselves."""
+        """A user who is already the high bidder raises their proxy silently (INFO), rather than bidding
+        against themselves.
+        """
         from auctions.bidding import bid_on_lot
 
         time = timezone.now() + datetime.timedelta(days=30)
@@ -436,8 +433,7 @@ class LotModelTests(TestCase):
         # userB places a competing bid, raising the price
         bid_on_lot(lot, userB, 10)
         assert lot.high_bidder.pk == userA.pk  # userA still wins (first bid)
-        # userA raises their proxy bid — they are already the high bidder
-        # This should be an INFO message, NOT a NEW_HIGH_BIDDER event
+        # Raising a proxy while already high bidder is INFO, not NEW_HIGH_BIDDER.
         result = bid_on_lot(lot, userA, 20)
         assert result["type"] == "INFO", "Raising proxy while already high bidder should be INFO, not NEW_HIGH_BIDDER"
         assert lot.high_bidder.pk == userA.pk
@@ -446,10 +442,10 @@ class LotModelTests(TestCase):
 
 
 class LotModelConcurrencyTests(TransactionTestCase):
-    """Tests that require real database transactions (not wrapped in TestCase transaction)"""
+    """Tests that need real database transactions."""
 
     def test_concurrent_lot_number_assignment(self):
-        """Test that concurrent lot creation does not result in duplicate lot_number_int values"""
+        """Concurrent lot creation doesn't produce duplicate lot_number_int values."""
         from concurrent.futures import ThreadPoolExecutor
 
         # Create an auction and user
@@ -499,7 +495,7 @@ class LotModelConcurrencyTests(TransactionTestCase):
         self.assertEqual(lot_numbers, expected, f"Lot numbers are not sequential: {lot_numbers}")
 
     def test_concurrent_lot_number_assignment_with_seller_dash(self):
-        """Test that concurrent lot creation with seller_dash_lot_numbering doesn't create duplicates"""
+        """Concurrent creation with seller-dash numbering doesn't create duplicates either."""
         from concurrent.futures import ThreadPoolExecutor
 
         # Create an auction with seller_dash_lot_numbering enabled
@@ -564,7 +560,7 @@ class LotModelConcurrencyTests(TransactionTestCase):
             self.assertTrue(lot_number.startswith("KM-8-"), f"Lot number {lot_number} doesn't start with KM-8-")
 
     def test_duplicate_lot_number_int_generates_new_number(self):
-        """Test that if a duplicate lot_number_int is detected, a new number is generated for the newest lot"""
+        """A duplicate lot_number_int is detected and the newest lot gets a new number."""
         # Create an auction and user
         user = User.objects.create(username="Test user")
         auction = Auction.objects.create(
@@ -584,7 +580,7 @@ class LotModelConcurrencyTests(TransactionTestCase):
         )
         original_lot1_number = lot1.lot_number_int
 
-        # Manually create a second lot with the same lot_number_int (simulating race condition)
+        # A second lot with the same lot_number_int, simulating a race.
         lot2 = Lot(
             lot_name="Second Lot",
             auction=auction,
@@ -592,10 +588,8 @@ class LotModelConcurrencyTests(TransactionTestCase):
             quantity=1,
             reserve_price=5,
         )
-        # Force the same lot_number_int to simulate a duplicate that slipped through
         lot2.lot_number_int = lot1.lot_number_int
-        # Use _do_save to bypass the locking mechanism for testing the duplicate detection logic
-        # This is intentional to test the post-save duplicate check that catches edge cases
+        # _do_save bypasses the locking, to test the post-save duplicate check.
         lot2._do_save()
 
         # Refresh from database
@@ -608,7 +602,7 @@ class LotModelConcurrencyTests(TransactionTestCase):
         self.assertGreater(lot2.lot_number_int, lot1.lot_number_int)
 
     def test_duplicate_custom_lot_number_generates_new_number(self):
-        """Test that if a duplicate custom_lot_number is detected, a new number is generated for the newest lot"""
+        """A duplicate custom_lot_number is detected and the newest lot gets a new number."""
         from auctions.models import AuctionTOS, PickupLocation
 
         # Create an auction with seller_dash_lot_numbering enabled
@@ -653,10 +647,8 @@ class LotModelConcurrencyTests(TransactionTestCase):
             quantity=1,
             reserve_price=5,
         )
-        # Force the same custom_lot_number to simulate a duplicate that slipped through
         lot2.custom_lot_number = lot1.custom_lot_number
-        # Use _do_save to bypass the locking mechanism for testing the duplicate detection logic
-        # This is intentional to test the post-save duplicate check that catches edge cases
+        # _do_save bypasses the locking, to test the post-save duplicate check.
         lot2._do_save()
 
         # Refresh from database
@@ -668,7 +660,7 @@ class LotModelConcurrencyTests(TransactionTestCase):
         self.assertNotEqual(lot2.custom_lot_number, lot1.custom_lot_number)
 
     def test_seller_dash_lot_numbering_format(self):
-        """Test that seller_dash_lot_numbering creates lots with bidder_number-N format"""
+        """seller_dash_lot_numbering creates lots numbered bidder_number-N."""
         from auctions.models import AuctionTOS, PickupLocation
 
         # Create an auction with seller_dash_lot_numbering enabled
@@ -899,7 +891,7 @@ class ChatSubscriptionTests(TestCase):
         assert lot_owner_data.other_lot_subscriptions_count == 0
         assert lot_owner_data.unnotified_subscriptions_count == 0
 
-        # other_user posts a message - this should count as unread for lot_owner
+        # A message from another user counts as unread for the lot owner.
         future_time = timezone.now() + datetime.timedelta(minutes=5)
         history1 = LotHistory.objects.create(
             user=other_user,
@@ -914,7 +906,7 @@ class ChatSubscriptionTests(TestCase):
         assert lot_owner_data.other_lot_subscriptions_count == 1
         assert lot_owner_data.unnotified_subscriptions_count == 1
 
-        # lot_owner posts their own message - this should NOT count as unread for lot_owner
+        # The owner's own message does not.
         future_time2 = timezone.now() + datetime.timedelta(minutes=10)
         history2 = LotHistory.objects.create(
             user=lot_owner,
@@ -925,7 +917,6 @@ class ChatSubscriptionTests(TestCase):
         history2.timestamp = future_time2
         history2.save()
 
-        # lot_owner should still only see 1 unread (from other_user, not their own)
         assert lot_owner_data.other_lot_subscriptions_count == 1
         assert lot_owner_data.unnotified_subscriptions_count == 1
 

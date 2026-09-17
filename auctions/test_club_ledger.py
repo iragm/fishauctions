@@ -26,11 +26,8 @@ from auctions.tests import StandardTestCase
 
 
 class ClubMoneyLedgerCashBasisTests(TestCase):
-    """The cash-basis club ledger booked from invoices (Invoice.sync_club_money).
-
-    A PAID invoice books one entry per component (buyer payment, seller payout, tax,
-    membership, adjustment, first-bid payout, rounding); they sum to the cash that moves
-    and the club's auction commission is sales minus payouts. Booking is reversible.
+    """The cash-basis club ledger booked from invoices (Invoice.sync_club_money): per-component entries
+    summing to the cash that moved, reversibly.
     """
 
     def setUp(self):
@@ -100,7 +97,7 @@ class ClubMoneyLedgerCashBasisTests(TestCase):
 
         self.assertEqual(self._by_category(seller_invoice)[ClubMoney.CATEGORY_AUCTION_SELLER_PAYOUT], Decimal("-80.00"))
         self.assertEqual(self._by_category(buyer_invoice)[ClubMoney.CATEGORY_AUCTION_SALE], Decimal("100.00"))
-        # Commission (club cut) = sales - payouts = 100 - 80 = 20, which is the club's balance.
+        # Commission = 100 - 80.
         self.assertEqual(self._ledger_total(club=self.club), Decimal("20.00"))
 
     def test_tax_is_broken_out(self):
@@ -133,7 +130,7 @@ class ClubMoneyLedgerCashBasisTests(TestCase):
         self.assertEqual(self._by_category(buyer_invoice)[ClubMoney.CATEGORY_MEMBERSHIP], Decimal("25.00"))
 
     def test_rounding_is_broken_out(self):
-        # club_pct=15 on a $10 lot -> seller cut 8.50; rounding (in the seller's favor) pays 9.
+        # 15% on $10 -> 8.50, rounded in the seller's favour to 9.
         auction = self._auction(club_pct=15, rounding=True)
         seller, buyer = self._tos(auction), self._tos(auction)
         self._sold_lot(auction, seller, buyer, 10)
@@ -141,7 +138,6 @@ class ClubMoneyLedgerCashBasisTests(TestCase):
         entries = self._by_category(seller_invoice)
         self.assertEqual(entries[ClubMoney.CATEGORY_AUCTION_SELLER_PAYOUT], Decimal("-8.50"))
         self.assertEqual(entries[ClubMoney.CATEGORY_ROUNDING], Decimal("-0.50"))
-        # The entries still sum to the cash that actually changed hands (a whole 9 dollars out).
         self.assertEqual(self._ledger_total(invoice=seller_invoice), Decimal("-9.00"))
 
     def test_entries_sum_to_rounded_invoice_total(self):
@@ -194,8 +190,7 @@ class ClubMoneyLedgerCashBasisTests(TestCase):
         self.assertEqual(summary["auction_commission"], Decimal("20.00"))
 
     def test_legacy_category_rows_are_not_perpetuated(self):
-        # A database carried over from the old ledger may hold rows in retired categories.
-        # Reconciling an invoice must not write new rows in those dead categories.
+        # Rows in retired categories from the old ledger must not get new siblings.
         auction = self._auction(club_pct=20)
         seller, buyer = self._tos(auction), self._tos(auction)
         self._sold_lot(auction, seller, buyer, 100)
@@ -209,22 +204,17 @@ class ClubMoneyLedgerCashBasisTests(TestCase):
         )
         buyer_invoice.status = "PAID"
         buyer_invoice.save()
-        # The seeded legacy row is left as-is (count stays 1) and current categories are booked.
         self.assertEqual(ClubMoney.objects.filter(invoice=buyer_invoice, category="auction_profit").count(), 1)
         self.assertTrue(
             ClubMoney.objects.filter(invoice=buyer_invoice, category=ClubMoney.CATEGORY_AUCTION_SALE).exists()
         )
 
-    # --- Cash-basis dating: entries date to when the cash moved, not auction.date_start ---
-    #
-    # Every auction built by self._auction() starts on 2026-03-15. An online invoice can be
-    # paid weeks later, and the ledger must book that revenue to the settlement date so the
-    # treasurer's date-range reports attribute it to the right period.
+    # Entries date to when cash moved, not auction.date_start (2026-03-15 for self._auction()).
     AUCTION_START = datetime.date(2026, 3, 15)
     PAID_ON = datetime.datetime(2026, 4, 20, 10, 0, tzinfo=datetime.timezone.utc)
 
     def _record_payment(self, invoice, when, amount="100.00"):
-        """Attach a recorded payment dated ``when`` (bypassing createdon's auto_now_add)."""
+        """Attach a payment dated ``when``, bypassing auto_now_add."""
         payment = InvoicePayment.objects.create(invoice=invoice, amount=Decimal(amount))
         InvoicePayment.objects.filter(pk=payment.pk).update(createdon=when)
         return payment
@@ -233,7 +223,6 @@ class ClubMoneyLedgerCashBasisTests(TestCase):
         return {entry.date for entry in ClubMoney.objects.filter(invoice=invoice)}
 
     def test_ledger_dates_to_payment_date_not_auction_start(self):
-        # An invoice paid weeks after the auction opened books to the payment date.
         auction = self._auction(club_pct=20)
         seller, buyer = self._tos(auction), self._tos(auction)
         self._sold_lot(auction, seller, buyer, 100)
@@ -246,7 +235,7 @@ class ClubMoneyLedgerCashBasisTests(TestCase):
         self.assertNotIn(self.AUCTION_START, self._entry_dates(buyer_invoice))
 
     def test_ledger_dates_to_date_paid_when_no_recorded_payment(self):
-        # Cash paid at the door has no InvoicePayment; the stamped date_paid drives the date.
+        # Cash at the door has no InvoicePayment; date_paid drives the date.
         auction = self._auction(club_pct=20)
         seller, buyer = self._tos(auction), self._tos(auction)
         self._sold_lot(auction, seller, buyer, 100)
@@ -257,7 +246,6 @@ class ClubMoneyLedgerCashBasisTests(TestCase):
         self.assertEqual(self._entry_dates(buyer_invoice), {self.PAID_ON.date()})
 
     def test_date_paid_is_stamped_on_paid_transition(self):
-        # Marking an invoice PAID stamps date_paid, and the ledger books to that date.
         auction = self._auction(club_pct=20)
         seller, buyer = self._tos(auction), self._tos(auction)
         self._sold_lot(auction, seller, buyer, 100)
@@ -267,10 +255,7 @@ class ClubMoneyLedgerCashBasisTests(TestCase):
         self.assertEqual(self._entry_dates(buyer_invoice), {timezone.localdate(buyer_invoice.date_paid)})
 
     def test_resync_does_not_shift_entry_dates(self):
-        # A re-sync appends its deltas under the ORIGINAL booking date rather than moving them to
-        # a new period. Settled invoices are frozen against plain re-saves (see Invoice.save), so
-        # the legitimate way to re-book is the admin un-pay -> edit -> re-pay correction cycle;
-        # that cycle must still respect the original settlement date.
+        # A re-sync via un-pay, edit, re-pay books its deltas on the original settlement date.
         auction = self._auction(club_pct=20)
         seller, buyer = self._tos(auction), self._tos(auction)
         self._sold_lot(auction, seller, buyer, 100)
@@ -279,9 +264,6 @@ class ClubMoneyLedgerCashBasisTests(TestCase):
         buyer_invoice.status = "PAID"
         buyer_invoice.save()
         self.assertEqual(self._entry_dates(buyer_invoice), {self.PAID_ON.date()})
-        # Un-pay, add an adjustment, record a brand-new (later) payment, then re-pay. The reversal,
-        # the re-booking, and the new adjustment delta must all land on the original settlement
-        # date -- never on the later payment's date.
         buyer_invoice.status = "UNPAID"
         buyer_invoice.save()
         InvoiceAdjustment.objects.create(invoice=buyer_invoice, adjustment_type="ADD", amount=5, notes="late fee")
@@ -292,8 +274,6 @@ class ClubMoneyLedgerCashBasisTests(TestCase):
         self.assertEqual(self._entry_dates(buyer_invoice), {self.PAID_ON.date()})
 
     def test_paid_unpaid_paid_keeps_stable_date(self):
-        # Toggling PAID -> UNPAID -> PAID never overwrites date_paid and books every reversal
-        # and re-booking to the one stable date, so the entries stay in a single period.
         auction = self._auction(club_pct=20)
         seller, buyer = self._tos(auction), self._tos(auction)
         self._sold_lot(auction, seller, buyer, 100)
@@ -311,8 +291,7 @@ class ClubMoneyLedgerCashBasisTests(TestCase):
         self.assertEqual(self._ledger_total(invoice=buyer_invoice), Decimal("100.00"))
 
     def test_treasurer_report_attributes_revenue_to_payment_period(self):
-        # The revenue lands in the month the invoice was paid (April), not the month the
-        # auction opened (March).
+        # Revenue lands in April, when paid, not March.
         from auctions.views import ClubTreasurerReportView
 
         auction = self._auction(club_pct=20)
@@ -339,13 +318,8 @@ class ClubMoneyLedgerCashBasisTests(TestCase):
 
 
 class PaidInvoiceFreezeTests(StandardTestCase):
-    """Item 9: once an invoice is PAID it is settled and frozen.
-
-    Viewing it must not recalculate its total, and a plain re-save must not re-sync the
-    ClubMoney ledger from current auction/club settings -- otherwise a later change to
-    membership_annual_fee or the auction's tax rate would silently rewrite booked history the
-    next time a settled invoice is merely touched. Only a status transition books (mark paid) or
-    reverses (un-pay) the ledger; un-paying is the correction escape hatch that thaws the invoice.
+    """A PAID invoice is frozen: viewing or re-saving doesn't recalculate or re-sync the ledger from
+    current settings. Only status transitions book or reverse; un-paying thaws it.
     """
 
     def setUp(self):
@@ -365,20 +339,19 @@ class PaidInvoiceFreezeTests(StandardTestCase):
         return result
 
     def _ledger_rows(self, invoice):
-        """A stable snapshot of the booked rows -- byte-for-byte equal iff nothing re-booked."""
+        """A snapshot of the booked rows."""
         return sorted(ClubMoney.objects.filter(invoice=invoice).values_list("pk", "amount", "date", "category"))
 
     def _ledger_total(self, invoice):
         return sum((entry.amount for entry in ClubMoney.objects.filter(invoice=invoice)), Decimal("0.00"))
 
     def _view_invoice(self, invoice):
-        # A real admin GET of the invoice page -- this is the exact path (InvoiceView.get ->
-        # recalculate) that used to silently rewrite a settled invoice's total on every view.
+        # InvoiceView.get used to recalculate settled invoices on every view.
         self.client.login(username=self.admin_user.username, password="testpassword")
         return self.client.get(reverse("invoice_by_pk", kwargs={"pk": invoice.pk}))
 
     def test_marking_paid_books_correct_ledger(self):
-        # tosB bought three $10 lots (sale 30) in a 25%-tax auction and renews (dues 25).
+        # tosB bought three $10 lots with 25% tax and renews (dues 25).
         self.invoiceB.renewal_needed = True
         self.invoiceB.status = "PAID"
         self.invoiceB.save()
@@ -387,8 +360,7 @@ class PaidInvoiceFreezeTests(StandardTestCase):
         self.assertEqual(by_cat[ClubMoney.CATEGORY_TAX], Decimal("7.50"))
         self.assertEqual(by_cat[ClubMoney.CATEGORY_MEMBERSHIP], Decimal("25.00"))
         self.invoiceB.refresh_from_db()
-        # The settled total is snapshotted at the transition, and the booked entries reconcile
-        # to it (buyer entries are the cash into the club, i.e. -rounded_net).
+        # Buyer entries are cash in, i.e. -rounded_net.
         self.assertEqual(self.invoiceB.calculated_total, self.invoiceB.rounded_net)
         self.assertEqual(self._ledger_total(self.invoiceB), -Decimal(self.invoiceB.rounded_net))
 
@@ -402,16 +374,13 @@ class PaidInvoiceFreezeTests(StandardTestCase):
         self.assertIsNotNone(frozen_total)
         self.assertEqual(self._ledger_by_category(self.invoiceB)[ClubMoney.CATEGORY_MEMBERSHIP], Decimal("25.00"))
 
-        # The club triples its dues and the auction drops its tax -- the classic "rewrite settled
-        # history" triggers. None of this may touch the already-settled invoice.
+        # Change dues and tax after settlement.
         self.club.membership_annual_fee = Decimal("75.00")
         self.club.save(update_fields=["membership_annual_fee"])
         self.online_auction.tax = 0
         self.online_auction.save(update_fields=["tax"])
 
-        # Viewing the invoice (InvoiceView.get -> recalculate) must not rewrite the total...
         self.assertEqual(self._view_invoice(self.invoiceB).status_code, 200)
-        # ...and neither may a plain re-save nor a direct recalculate() re-sync the ledger.
         self.invoiceB.save()
         self.invoiceB.recalculate()
 
@@ -429,21 +398,17 @@ class PaidInvoiceFreezeTests(StandardTestCase):
         paid_total = self.invoiceB.calculated_total
         self.assertNotEqual(self._ledger_total(self.invoiceB), Decimal("0.00"))
 
-        # Un-pay: the ledger reverses to zero (existing behavior) and the invoice thaws.
         self.invoiceB.status = "UNPAID"
         self.invoiceB.save()
         self.assertEqual(self._ledger_total(self.invoiceB), Decimal("0.00"))
 
-        # Now a settings change DOES flow through, because the invoice is no longer settled.
         self.online_auction.tax = 0
         self.online_auction.save(update_fields=["tax"])
-        # Reload the invoice so it sees the auction's new tax (as a fresh request would), rather
-        # than the auction object cached on this in-memory instance from the earlier saves.
+        # Reload so it sees the auction's new tax.
         invoice = Invoice.objects.get(pk=self.invoiceB.pk)
         invoice.recalculate()
         invoice.refresh_from_db()
         self.assertNotEqual(invoice.calculated_total, paid_total)
-        # With tax removed the buyer owes less, so the (negative) total moved toward zero.
         self.assertGreater(invoice.calculated_total, paid_total)
 
     def test_refund_on_paid_invoice_keeps_totals_and_ledger_frozen(self):
@@ -462,8 +427,7 @@ class PaidInvoiceFreezeTests(StandardTestCase):
         frozen_total = self.invoiceB.calculated_total
         frozen_ledger = self._ledger_rows(self.invoiceB)
 
-        # A refund arrives: the webhook records a negative InvoicePayment, decrements the
-        # refundable balance, then calls invoice.recalculate() (see handle_refund).
+        # The refund webhook records a negative payment, then recalculates (see handle_refund).
         InvoicePayment.objects.create(
             invoice=self.invoiceB,
             external_id="REFUND-FREEZE-1",
@@ -475,8 +439,7 @@ class PaidInvoiceFreezeTests(StandardTestCase):
         payment.save()
         self.invoiceB.recalculate()
 
-        # The refund is recorded (payment row + reduced refundable balance) but the settled
-        # line-item total and the booked ledger are untouched -- exactly the freeze.
+        # The refund is recorded, but the settled total and ledger are untouched.
         payment.refresh_from_db()
         self.assertEqual(payment.amount_available_to_refund, Decimal("42.50"))
         self.assertTrue(InvoicePayment.objects.filter(external_id="REFUND-FREEZE-1", amount=Decimal("-20.00")).exists())
@@ -486,14 +449,9 @@ class PaidInvoiceFreezeTests(StandardTestCase):
 
 
 class InvoiceDedupeLedgerTests(StandardTestCase):
-    """Item 10: Invoice.save() dedupes duplicate invoices for one AuctionTOS, keeping the oldest
-    and deleting the rest. ClubMoney.invoice is SET_NULL, so a deleted duplicate that carried
-    booked ledger rows used to orphan them (invoice=NULL), break ledger<->invoice traceability,
-    and (for a PAID duplicate) leave the club double-booked.
-
-    The dedupe now re-homes a duplicate's ledger rows onto the canonical invoice and reverses the
-    duplicate's own contribution, so nothing is orphaned, nothing is double-booked, and a settled
-    (PAID) canonical stays frozen (Item 9) because it is never re-derived from current settings.
+    """Invoice.save() dedupes a TOS's invoices by moving a duplicate's ledger rows onto the canonical
+    invoice and reversing its contribution: nothing orphaned or double-booked, and a PAID canonical
+    stays frozen.
     """
 
     def setUp(self):
@@ -505,8 +463,6 @@ class InvoiceDedupeLedgerTests(StandardTestCase):
         self.online_auction.save(update_fields=["club"])
         ClubMoney.objects.all().delete()
 
-    # --- helpers -----------------------------------------------------------------------------
-
     def _by_category(self, invoice):
         result = {}
         for entry in ClubMoney.objects.filter(invoice=invoice):
@@ -514,26 +470,21 @@ class InvoiceDedupeLedgerTests(StandardTestCase):
         return result
 
     def _ledger_rows(self, invoice):
-        """Byte-for-byte snapshot of an invoice's booked rows -- equal iff nothing re-booked them."""
+        """A snapshot of an invoice's booked rows."""
         return sorted(ClubMoney.objects.filter(invoice=invoice).values_list("pk", "amount", "date", "category"))
 
     def _ledger_total(self, **filters):
         return sum((entry.amount for entry in ClubMoney.objects.filter(**filters)), Decimal("0.00"))
 
     def _paid_canonical(self):
-        """Mark self.invoiceB PAID so it books its own ledger, and return it as the canonical."""
+        """Mark self.invoiceB PAID and return it as the canonical."""
         self.invoiceB.status = "PAID"
         self.invoiceB.save()
         self.invoiceB.refresh_from_db()
         return self.invoiceB
 
     def _make_duplicate(self, canonical, paid=True):
-        """Create a second invoice for the canonical's AuctionTOS that coexists with it.
-
-        bulk_create bypasses Invoice.save(), so the duplicate is not immediately deduped and can
-        carry booked ledger rows -- the state production reaches via races or backdated imports.
-        The duplicate is dated after the canonical so the canonical stays the oldest.
-        """
+        """A second invoice for the same TOS via bulk_create, bypassing dedupe, dated after the canonical."""
         tos = canonical.auctiontos_user
         Invoice.objects.bulk_create(
             [Invoice(auctiontos_user=tos, auction=canonical.auction, status="PAID" if paid else "DRAFT")]
@@ -552,8 +503,6 @@ class InvoiceDedupeLedgerTests(StandardTestCase):
             "dedupe left ClubMoney rows orphaned with invoice=NULL",
         )
 
-    # --- tests -------------------------------------------------------------------------------
-
     def test_dedupe_unpaid_duplicate_leaves_canonical_untouched(self):
         canonical = self._paid_canonical()
         frozen_ledger = self._ledger_rows(canonical)
@@ -561,7 +510,7 @@ class InvoiceDedupeLedgerTests(StandardTestCase):
         self.assertTrue(frozen_ledger)
 
         self._make_duplicate(canonical, paid=False)
-        # A plain re-save of the PAID canonical runs the dedupe (Path 2) without a status change.
+        # A plain re-save runs the dedupe (Path 2).
         canonical.save()
 
         self.assertEqual(Invoice.objects.filter(auctiontos_user=self.tosB).count(), 1)
@@ -571,7 +520,7 @@ class InvoiceDedupeLedgerTests(StandardTestCase):
         self.assertEqual(self._ledger_rows(canonical), frozen_ledger)
 
     def test_dedupe_paid_duplicate_path2_no_double_booking(self):
-        # Path 2: the canonical (oldest) is the one being saved; newer PAID duplicate is absorbed.
+        # Path 2: saving the canonical absorbs a newer PAID duplicate.
         canonical = self._paid_canonical()
         canonical_total = self._ledger_total(invoice=canonical)
         canonical_by_cat = self._by_category(canonical)
@@ -579,19 +528,18 @@ class InvoiceDedupeLedgerTests(StandardTestCase):
         dup = self._make_duplicate(canonical, paid=True)
         dup_total = self._ledger_total(invoice=dup)
         self.assertNotEqual(dup_total, Decimal("0.00"))  # the duplicate really carries booked rows
-        # Bug precondition: the club is double-booked while both invoices exist.
+        # Precondition: double-booked while both exist.
         self.assertEqual(self._ledger_total(club=self.club), canonical_total + dup_total)
 
         canonical.save()  # triggers dedupe Path 2
 
         self.assertEqual(Invoice.objects.filter(auctiontos_user=self.tosB).count(), 1)
         self._assert_no_orphans()
-        # The double-booking is gone: the ledger reflects only the canonical's own booking.
         self.assertEqual(self._ledger_total(club=self.club), canonical_total)
         self.assertEqual(self._by_category(canonical), canonical_by_cat)
 
     def test_dedupe_paid_duplicate_path1_no_double_booking(self):
-        # Path 1: the newer duplicate is the one being saved and merges itself into the canonical.
+        # Path 1: saving the duplicate merges it into the canonical.
         canonical = self._paid_canonical()
         canonical_total = self._ledger_total(invoice=canonical)
         canonical_by_cat = self._by_category(canonical)
@@ -607,14 +555,12 @@ class InvoiceDedupeLedgerTests(StandardTestCase):
         self.assertEqual(self._by_category(canonical), canonical_by_cat)
 
     def test_dedupe_paid_duplicate_keeps_canonical_frozen(self):
-        # Item 9 guard: dedupe of a duplicate must not re-derive the settled canonical from
-        # current settings -- its snapshotted total and its own booked rows stay put.
+        # The dedupe must not re-derive the settled canonical from current settings.
         canonical = self._paid_canonical()
         frozen_total = canonical.calculated_total
         frozen_ledger = set(self._ledger_rows(canonical))
         canonical_by_cat = self._by_category(canonical)
 
-        # The classic "rewrite settled history" triggers fire between payment and dedupe.
         self.club.membership_annual_fee = Decimal("75.00")
         self.club.save(update_fields=["membership_annual_fee"])
         self.online_auction.tax = 0
@@ -626,8 +572,6 @@ class InvoiceDedupeLedgerTests(StandardTestCase):
         self._assert_no_orphans()
         canonical.refresh_from_db()
         self.assertEqual(canonical.calculated_total, frozen_total)
-        # The canonical's own rows are still present, byte-for-byte, and its net per category is
-        # unchanged -- the tax drop and dues hike never touched the settled ledger.
         self.assertTrue(frozen_ledger.issubset(set(self._ledger_rows(canonical))))
         self.assertEqual(self._by_category(canonical), canonical_by_cat)
 
@@ -647,16 +591,8 @@ class InvoiceDedupeLedgerTests(StandardTestCase):
 
 
 class ClubMembershipDuesReversalTests(TestCase):
-    """Item 11: un-paying a club-only (no-auction) membership/dues invoice must reverse the dues
-    entry it booked into the club ledger (ClubMoney).
-
-    Club-only membership invoices have no auction, so they don't share the auction-invoice ledger
-    computation; their single membership-dues entry is booked and reversed by
-    Invoice.sync_club_money on the PAID/un-pay status transition. The ledger stays append-only:
-    un-paying appends a negated reversal row (the original is never deleted), repeated saves in the
-    un-paid state don't stack reversals, and re-paying books a fresh entry so the net stays correct.
-    Previously the entry was booked directly by _process_invoice_membership_renewal and un-paying
-    never reversed it, so the ledger permanently overstated dues income.
+    """Un-paying a club-only dues invoice appends a reversal; re-paying books a fresh entry. Append-only,
+    with no stacked reversals.
     """
 
     def setUp(self):
@@ -708,7 +644,6 @@ class ClubMembershipDuesReversalTests(TestCase):
         invoice.status = "UNPAID"
         invoice.save()
 
-        # Reversal appended -> net zero, and the original booked row is still there (append-only).
         self.assertEqual(self._ledger_total(invoice), Decimal("0.00"))
         self.assertEqual(self._membership_rows(invoice).count(), 2)
         self.assertTrue(booked_pks.issubset(set(self._membership_rows(invoice).values_list("pk", flat=True))))
@@ -722,8 +657,7 @@ class ClubMembershipDuesReversalTests(TestCase):
         rows_after_first_unpay = self._row_count(invoice)
         self.assertEqual(self._ledger_total(invoice), Decimal("0.00"))
 
-        # Saving again while un-paid (a DRAFT hop and even a direct re-sync) must not append more
-        # reversals -- the ledger is already reconciled to zero for this invoice.
+        # Further saves while un-paid add no reversals.
         invoice.save()
         invoice.status = "DRAFT"
         invoice.save()
@@ -742,7 +676,6 @@ class ClubMembershipDuesReversalTests(TestCase):
         invoice.status = "PAID"
         invoice.save()
 
-        # A fresh dues entry is appended (three rows: book, reverse, re-book) and the net is one fee.
         self.assertEqual(self._membership_rows(invoice).count(), 3)
         self.assertEqual(self._ledger_total(invoice), Decimal("40.00"))
 
@@ -753,15 +686,13 @@ class ClubMembershipDuesReversalTests(TestCase):
             invoice.status = status
             invoice.save()
             counts.append(self._row_count(invoice))
-        # Every transition only ever appends, so the row count is monotonically non-decreasing.
         self.assertEqual(counts, sorted(counts))
         self.assertEqual(counts[0], 1)  # the first PAID booked exactly one row
         # The final state is PAID, so the net is exactly one membership fee.
         self.assertEqual(self._ledger_total(invoice), Decimal("40.00"))
 
     def test_non_renewal_club_invoice_books_nothing(self):
-        # A club-only invoice that isn't renewing dues (renewal_needed False) moves no cash, so
-        # marking it PAID must not book a membership entry.
+        # No renewal means no cash, so no entry.
         invoice = Invoice.objects.create(
             club=self.club, club_member=self.member, buyer=self.member_user, status="UNPAID", renewal_needed=False
         )
@@ -771,8 +702,7 @@ class ClubMembershipDuesReversalTests(TestCase):
         self.assertEqual(self._ledger_total(invoice), Decimal("0.00"))
 
     def test_full_admin_endpoint_pay_then_unpay(self):
-        # End-to-end through the admin pay-invoice endpoint: the dues entry is booked exactly once
-        # (by sync_club_money, no longer by the renewal helper) and un-paying reverses it to zero.
+        # Through the admin pay-invoice endpoint: booked once, reversed on un-pay.
         User.objects.create_superuser("dues_admin", "dues_admin@example.com", "pw")
         invoice = self._invoice()
         client = Client()
@@ -784,14 +714,11 @@ class ClubMembershipDuesReversalTests(TestCase):
 
         self.assertEqual(client.post(f"/api/payinvoice/{invoice.pk}/UNPAID").status_code, 200)
         self.assertEqual(self._ledger_total(invoice), Decimal("0.00"))
-        # Append-only: the reversal is a new row, the original booking is retained.
         self.assertEqual(self._membership_rows(invoice).count(), 2)
 
 
 class MakeClubAdminAssignsAuctionsTests(TestCase):
-    """The superuser "make {creator} admin of {club}" button assigns the creator's clubless
-    auctions to their club and books the club ledger for them, but never reassigns auctions
-    that already belong to a club."""
+    """The superuser "make admin of club" button assigns the creator's clubless auctions to the club and books them."""
 
     def setUp(self):
         self.creator = User.objects.create_superuser("mca_creator", "mca@example.com", "pw")
@@ -844,7 +771,7 @@ class MakeClubAdminAssignsAuctionsTests(TestCase):
         self.assertEqual(response.status_code, 200)
         auction.refresh_from_db()
         self.assertEqual(auction.club, self.club)
-        # The bulk assignment bypassed Auction.save(), but the ledger is still booked.
+        # The bulk assignment bypassed Auction.save().
         self.assertTrue(
             ClubMoney.objects.filter(invoice=buyer_invoice, category=ClubMoney.CATEGORY_AUCTION_SALE).exists()
         )
@@ -857,12 +784,7 @@ class MakeClubAdminAssignsAuctionsTests(TestCase):
 
 
 class BapTop10ChartTests(TestCase):
-    """Cumulative points-over-time chart for the top 10 club members.
-
-    Green = current user, red = current first place, blue = everyone else; the chart
-    mirrors the data behind the "my points" chart but for the leaderboard's top 10,
-    and respects the year-to-date toggle.
-    """
+    """Cumulative points chart for the top 10 members: green is you, red the leader, blue everyone else."""
 
     GREEN = "#198754"
     RED = "#dc3545"
@@ -912,7 +834,7 @@ class BapTop10ChartTests(TestCase):
         self.assertEqual(by_label["Third Member"]["borderColor"], self.BLUE)
 
     def test_current_user_wins_when_also_first_place(self):
-        # If the viewer is the leader, the current-user color (green) takes precedence.
+        # Green takes precedence for a viewer who leads.
         data = self._chart_data(current_member=self.first)
         by_label = {d["label"]: d for d in data["datasets"]}
         self.assertEqual(by_label["First Place"]["borderColor"], self.GREEN)
@@ -941,7 +863,6 @@ class BapTop10ChartTests(TestCase):
         self.assertIsNone(self._chart(empty, "bap_points", "points", None, self._all_months, is_ytd=False))
 
     def test_ytd_excludes_prior_years(self):
-        # An award from a prior year must not appear in the YTD running total.
         self._award(self.current, points=100, year=self.this_year - 1, month_offset=0)
         self.current.refresh_from_db()
         data = self._chart_data(current_member=self.current, is_ytd=True)
@@ -956,8 +877,7 @@ class BapTop10ChartTests(TestCase):
         self.assertEqual(by_label["Current User"]["data"][-1], 125)
 
     def test_deleted_lot_award_excluded_to_match_leaderboard(self):
-        # Awards tied to a deleted lot are dropped from the leaderboard totals, so the
-        # chart must drop them too (otherwise the line ends above the leaderboard number).
+        # Awards on deleted lots are dropped, matching the leaderboard.
         auction = Auction.objects.create(
             created_by=self.current.user,
             title="Chart Auction",
@@ -990,7 +910,6 @@ class BapTop10ChartTests(TestCase):
         response = client.get(reverse("club_detail_tab", kwargs={"slug": self.club.slug, "tab": "bap"}))
         self.assertEqual(response.status_code, 200)
         html = response.content.decode()
-        # Both the canvas and its json_script payload must be present for the chart to draw.
         self.assertIn('id="bap-top10-chart-ytd"', html)
         self.assertIn('id="bap-top10-chart-ytd-data"', html)
         self.assertIsNotNone(response.context.get("bap_top10_chart_ytd"))
@@ -1079,12 +998,7 @@ class ClubTreasurerReportViewTests(TestCase):
 
 
 class ClubTreasurerOutstandingInvoiceTests(TestCase):
-    """The treasurer report's "outstanding invoices" figure.
-
-    An invoice is outstanding only when, after payments, the member still owes the club.
-    Regression guard for invoices being reported as outstanding when they had actually
-    been paid (the old code looked at the invoice total before payments).
-    """
+    """The treasurer report's outstanding invoices: owed after payments."""
 
     def setUp(self):
         self.owner = User.objects.create_user(username="oi_owner", password="pw", email="oi_owner@example.com")
@@ -1132,18 +1046,14 @@ class ClubTreasurerOutstandingInvoiceTests(TestCase):
         self.assertEqual(result["amount"], Decimal("50.00"))
 
     def test_invoice_owing_cents_is_outstanding(self):
-        """A member owing $0.75 must be counted and its balance reported.
-
-        Regression for calculated_total being an IntegerField: -0.75 was truncated to 0, so the
-        balance came out to 0 and the invoice was silently dropped from the outstanding total.
-        """
+        """Owing $0.75 counts (calculated_total used to be an IntegerField)."""
         self._invoice(calculated_total=Decimal("-0.75"), status="UNPAID")
         result = self._summary()
         self.assertEqual(result["count"], 1)
         self.assertEqual(result["amount"], Decimal("0.75"))
 
     def test_fully_paid_invoice_is_not_outstanding(self):
-        # Paid in full but still UNPAID (admin hasn't flipped status) — must NOT be counted.
+        # Paid in full but still UNPAID.
         self._invoice(calculated_total=-30, status="UNPAID", payment=30)
         result = self._summary()
         self.assertEqual(result["count"], 0)
@@ -1160,7 +1070,7 @@ class ClubTreasurerOutstandingInvoiceTests(TestCase):
         self.assertEqual(self._summary()["count"], 0)
 
     def test_seller_invoice_owed_by_club_is_not_outstanding(self):
-        # Positive total == the club owes the seller; that is a payout, not an outstanding receivable.
+        # Positive means a payout.
         self._invoice(calculated_total=40, status="UNPAID")
         self.assertEqual(self._summary()["count"], 0)
 

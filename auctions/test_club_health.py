@@ -1,8 +1,8 @@
-"""Tests for the club lifecycle rollup and the outreach queue that comes out of it.
+"""Tests for the club lifecycle rollup and the outreach queue.
 
-The rule the whole thing turns on is that a club is judged against its **own** cadence, so most of
-these are about a club with an unusual schedule not being called dormant, and a club with a fast
-one being caught quickly. See auctions/club_health.py.
+The rule it turns on is that a club is judged against its **own** cadence, so most of these are
+about a club with an unusual schedule not being called dormant, and one with a fast schedule being
+caught quickly. See auctions/club_health.py.
 """
 
 import datetime
@@ -221,8 +221,9 @@ class ComputeClubHealthTests(StandardTestCase):
 
 class QueueTests(StandardTestCase):
     def test_the_queue_leads_with_the_recoverable_cases(self):
-        """A club that set up and never ran an auction is a different conversation from one that ran
-        twelve and stopped, and is much likelier to come back."""
+        """The queue leads with the recoverable cases: a club that never ran an auction is a different
+        conversation from one that ran twelve and stopped.
+        """
         for name, stage in (("Stopped", "dormant"), ("Tried it", "trial"), ("Late", "slipping")):
             ClubHealth.objects.create(
                 club=Club.objects.create(name=name), stage=stage, due_for_checkin=True, overdue_ratio=3
@@ -230,11 +231,10 @@ class QueueTests(StandardTestCase):
         self.assertEqual([row.club.name for row in due_for_checkin()], ["Tried it", "Late", "Stopped"])
 
     def test_the_recoverable_cases_survive_the_limit(self):
-        """Ordering has to happen before the cut, not after.
+        """Ordering happens before the cut.
 
-        Meta.ordering is "-overdue_ratio" and a trial or empty club has no ratio at all. NULLs sort
-        last under DESC on MariaDB, so slicing the queryset and sorting the slice throws away
-        exactly the two stages this queue is meant to lead with.
+        Meta.ordering is "-overdue_ratio" and trial and empty clubs have none; NULLs sort last under DESC on
+        MariaDB, so slicing then sorting throws away the two stages this queue leads with.
         """
         for index in range(30):
             ClubHealth.objects.create(
@@ -279,7 +279,7 @@ class ClubHealthDashboardTests(StandardTestCase):
         self.assertNotEqual(self.client.get(reverse("admin_club_health")).status_code, 200)
 
     def test_marking_a_club_contacted_takes_it_off_the_queue(self):
-        """The trigger the rollup exists to feed -- without it this is another chart nobody opens."""
+        """Marking a club contacted takes it off the queue -- the trigger the rollup exists to feed."""
         club = Club.objects.create(name="About to be contacted")
         self.assertTrue(compute_club_health(club).due_for_checkin)
         self.client.login(username="admin_user", password="testpassword")
@@ -298,7 +298,7 @@ class ClubHealthDashboardTests(StandardTestCase):
 
 
 class LadderTests(StandardTestCase):
-    """The two halves of a club's stage, on one order, with the furthest-along one winning."""
+    """The two halves of a club's stage, on one order, with the furthest-along winning."""
 
     def test_a_club_nobody_has_approved_starts_at_the_bottom(self):
         club = Club.objects.create(name="Found on a directory page")
@@ -314,7 +314,9 @@ class LadderTests(StandardTestCase):
         self.assertEqual(position["source"], "hand")
 
     def test_the_derived_half_wins_when_it_is_further_along(self):
-        """A club we only ever emailed can be further along than we think, and usually is."""
+        """The derived half wins when it is further along: a club we only emailed may already be running
+        auctions.
+        """
         club = Club.objects.create(name="Quietly running auctions", outreach_stage=Club.CONTACTED)
         health = ClubHealth.objects.create(club=club, stage="active")
         position = club_health.ladder_position(club, health)
@@ -322,8 +324,7 @@ class LadderTests(StandardTestCase):
         self.assertEqual(position["source"], "derived")
 
     def test_an_empty_rollup_never_pushes_a_club_up_the_ladder(self):
-        """Every prospect derives "empty", so ranking it would report a club nobody has heard of as
-        further along than one somebody just wrote to."""
+        """An empty rollup never pushes a club up the ladder: every prospect derives "empty"."""
         club = Club.objects.create(name="A name and a postcode")
         health = ClubHealth.objects.create(club=club, stage="empty")
         self.assertEqual(club_health.ladder_position(club, health)["stage"], "unaware")
@@ -336,7 +337,7 @@ class LadderTests(StandardTestCase):
         self.assertLess(club_health.LADDER_RANK["slipping"], club_health.LADDER_RANK["active"])
 
     def test_the_nightly_rollup_never_writes_the_hand_set_half(self):
-        """It is rebuilt from scratch every night; anything a person decided has to survive that."""
+        """The nightly rollup never writes the hand-set half, which has to survive being rebuilt from scratch."""
         club = Club.objects.create(name="Hand set", outreach_stage=Club.CONTACTED)
         compute_club_health(club)
         club.refresh_from_db()
@@ -349,8 +350,9 @@ class LadderTests(StandardTestCase):
         self.assertEqual(sum(row["clubs"] for row in rows), Club.objects.count())
 
     def test_counting_the_ladder_is_two_queries_however_many_clubs_have_no_rollup(self):
-        """Clubs with no rollup are the ones club discovery adds in bulk, so a fetch per club here
-        is a page that gets slower every time the campaign works."""
+        """Counting the ladder is two queries however many clubs have no rollup, which is what club discovery
+        adds in bulk.
+        """
         for number in range(5):
             Club.objects.create(name=f"No rollup {number}")
         with self.assertNumQueries(2):
@@ -360,7 +362,7 @@ class LadderTests(StandardTestCase):
             club_health.ladder_counts()
 
     def test_a_club_asked_about_on_its_own_still_looks_its_rollup_up(self):
-        """The sentinel default is what keeps that convenience without costing the loop above."""
+        """A club asked about on its own still looks its rollup up: what the sentinel default is for."""
         club = Club.objects.create(name="Asked about alone", outreach_stage=Club.CONTACTED)
         compute_club_health(club)
         ClubHealth.objects.filter(club=club).update(stage="active")
@@ -368,7 +370,7 @@ class LadderTests(StandardTestCase):
 
 
 class AwareStageTests(StandardTestCase):
-    """A club with members here and no auctions is not the same club as a name on a list."""
+    """A club with members here and no auctions is not a name on a list."""
 
     def test_a_club_with_a_member_here_is_aware_rather_than_empty(self):
         club = Club.objects.create(name="Has a member")
@@ -427,11 +429,10 @@ class MapGateTests(StandardTestCase):
 
     @override_settings(LOCATION_FIELD={**settings.LOCATION_FIELD, "provider.google.api_key": "test-key"})
     def test_a_prospect_is_not_on_the_map(self):
-        """The key is pinned because the pins only exist when there is a map to put them on.
+        """A prospect is not on the map.
 
-        clubs.html renders every club name inside ``{% if google_maps_api_key %}``, and CI runs with
-        an empty ``GOOGLE_MAPS_API_KEY`` while a dev .env has a real one -- so without this the test
-        asserts against an empty page in CI and a full one here.
+        The key is pinned because clubs.html renders every name inside ``{% if google_maps_api_key %}``, and
+        CI runs with an empty key while a dev .env has a real one.
         """
         response = self.client.get(reverse("clubs"))
         if response.status_code != 200:
@@ -469,8 +470,7 @@ class StallReasonTests(StandardTestCase):
         self.assertEqual(club.stall_reason, "paper")
 
     def test_a_post_that_says_nothing_about_the_reason_leaves_it_alone(self):
-        """ "" is a legal value in this vocabulary ("Not known"), so an absent field must not read
-        as one."""
+        """ "" is a legal value in this vocabulary ("Not known"), so an absent field must not read as one."""
         club = Club.objects.create(name="Already answered", stall_reason="cost")
         compute_club_health(club)
         self.client.post(reverse("club_mark_contacted", kwargs={"pk": club.pk}))
@@ -486,7 +486,7 @@ class StallReasonTests(StandardTestCase):
         self.assertEqual(club.stall_reason, "")
 
     def test_a_reason_outside_the_vocabulary_is_ignored(self):
-        """Free text here would be Club.notes again, which is the thing that cannot be counted."""
+        """A reason outside the vocabulary is ignored: free text here would be Club.notes again."""
         club = Club.objects.create(name="Said something else")
         compute_club_health(club)
         self.client.post(reverse("club_mark_contacted", kwargs={"pk": club.pk}), {"stall_reason": "they hate blue"})
@@ -507,7 +507,7 @@ class RefreshAllTests(StandardTestCase):
         Club.objects.create(name="Fine one")
         with self.assertLogs("auctions.club_health", level="ERROR"):
             written = club_health.refresh_all(Club.objects.all())
-            # Nothing is actually broken here; assertLogs needs at least one record, so provoke one.
+            # Nothing is broken; assertLogs needs a record, so provoke one.
             club_health.logger.error("provoked")
         self.assertGreater(written, 0)
 
@@ -515,14 +515,13 @@ class RefreshAllTests(StandardTestCase):
 class LadderSnapshotTests(TestCase):
     """The ladder as a trend, which is the only part of phase 8f that is code.
 
-    ``ClubHealth`` is a ``OneToOneField`` rewritten nightly, so it holds only today: the moment a
-    club moves up a rung, where it used to be is gone.  These tests are about the two properties
-    that makes the snapshot worth a table at all -- it is idempotent within a month, and a month
-    nobody recorded reads as a gap rather than as zero clubs.
+    ``ClubHealth`` is rewritten nightly and holds only today, so these cover the two properties that
+    make a snapshot worth a table: idempotent within a month, and a month nobody recorded reads as a gap
+    rather than zero clubs.
     """
 
     def test_a_month_is_recorded_once_and_then_refreshed_in_place(self):
-        """The nightly task calls this unconditionally; it must not write thirty rows a month."""
+        """The nightly task calls this unconditionally, so it must not write thirty rows a month."""
         Club.objects.create(name="Snapshot club one")
         club_health.snapshot_ladder()
         first = ClubLadderSnapshot.objects.count()
@@ -541,7 +540,7 @@ class LadderSnapshotTests(TestCase):
         self.assertEqual(history["months"], sorted(history["months"]))
 
     def test_a_month_nobody_recorded_is_a_gap_and_not_a_zero(self):
-        """A zero would say every club left that rung.  The truth is that nobody was looking."""
+        """A zero would say every club left that rung; the truth is that nobody was looking."""
         Club.objects.create(name="Snapshot club four")
         club_health.snapshot_ladder()
         ClubLadderSnapshot.objects.filter(stage="listed").delete()
@@ -554,14 +553,12 @@ class LadderSnapshotTests(TestCase):
 
 
 class Migration0435RerunTests(TransactionTestCase):
-    """Migration 0435 has to survive being run against a database that already had half of it.
+    """Migration 0435 has to survive a database that already had half of it.
 
-    MariaDB commits each ``ALTER TABLE`` as it runs and discards the transaction Django wrapped
-    the migration in, so an interrupted migration leaves its finished operations behind with no
-    row in ``django_migrations``, and the retry replays the whole thing.  Staging sat in exactly
-    that state and refused to come up: first ``1091 Can't DROP COLUMN date_links_checked``, then
-    ``1060 Duplicate column name 'contact_method'``.  entrypoint.sh will not start on a failed
-    migrate, so each of those is the whole site down until somebody edits the schema by hand.
+    MariaDB commits each ``ALTER TABLE`` as it runs and discards Django's transaction, so an interrupted
+    migration leaves its finished operations with no ``django_migrations`` row and the retry replays it.
+    Staging refused to come up: first ``1091 Can't DROP COLUMN date_links_checked``, then ``1060
+    Duplicate column name 'contact_method'``, and entrypoint.sh won't start on a failed migrate.
     """
 
     TABLE = "auctions_club"
@@ -616,7 +613,7 @@ class Migration0435RerunTests(TransactionTestCase):
         Club.objects.create(name="Rerun club two")
 
     def test_contact_method_is_created_when_it_is_missing(self):
-        """The half of the migration staging had already done -- on a database that has not."""
+        """The half of the migration staging had done, on a database that hasn't."""
         self._execute(f"ALTER TABLE {self.TABLE} DROP COLUMN contact_method")
         try:
             self._apply()
@@ -628,7 +625,7 @@ class Migration0435RerunTests(TransactionTestCase):
         self.assertEqual(Club.objects.get(pk=club.pk).contact_method, "facebook")
 
     def test_an_existing_contact_method_keeps_its_data(self):
-        """A re-add would be ``1060``; a re-add that somehow worked would drop what clubs answered."""
+        """A re-add would be ``1060``, and one that worked would drop what clubs answered."""
         club = Club.objects.create(name="Rerun club four", contact_method="webform")
         self._apply()
         self.assertEqual(Club.objects.get(pk=club.pk).contact_method, "webform")

@@ -1,11 +1,9 @@
 """The admin's own query counts: no dropdown over an unbounded table, and no query per inline row.
 
-Both halves of `auctions/admin_performance.py` are invisible when they break. Delete the rule that
-places the lookup widgets and every page still renders -- the change page for one pickup location
-just goes back to listing every `AuctionTOS` on the site as an `<option>`, three queries deep
-apiece. So there are two kinds of test here: a structural one that walks every form in the admin
-and fails on the first dropdown over a table that grows, and growth tests that add rows to an
-inline and assert the page does not get more expensive.
+Both halves of `auctions/admin_performance.py` are invisible when they break -- delete the rule and
+every page still renders, the change page for one pickup location just lists every `AuctionTOS` on
+the site again. So there is a structural test walking every admin form, and growth tests that add
+inline rows and assert the page doesn't get more expensive.
 """
 
 from django.apps import apps
@@ -36,9 +34,9 @@ from auctions.tests import StandardTestCase
 
 
 def _widget_of(field):
-    """The real widget. The admin wraps every relation field in a `RelatedFieldWidgetWrapper`
-    (that is the little green + beside it), so the class on `field.widget` says nothing about
-    whether the thing renders a dropdown."""
+    """The real widget: the admin wraps every relation field in a `RelatedFieldWidgetWrapper`, so the class
+    on `field.widget` says nothing about whether it renders a dropdown.
+    """
     return getattr(field.widget, "widget", field.widget)
 
 
@@ -49,10 +47,8 @@ def _relation_fields(form):
 
 
 def _our_forms():
-    """Every form the admin renders that we are responsible for: a change page or an inline on one.
-
-    Yields (name, form). Third-party admins are that package's business and are skipped, the same
-    way the rule itself skips them.
+    """Every form the admin renders that we are responsible for, as (name, form). Third-party admins are
+    skipped, as the rule itself skips them.
     """
     request = RequestFactory().get("/")
     request.user = User(is_superuser=True, is_staff=True, is_active=True)
@@ -63,18 +59,17 @@ def _our_forms():
             for inline in model_admin.inlines
         ]
         for owner, build in owners:
-            # Filter before building: post_office's own EmailAdmin raises on a form with no
-            # instance, which is its business and not something to work around here.
+            # Filter before building: post_office's EmailAdmin raises on a form with no instance.
             if owner.__module__.split(".")[0] == "auctions":
                 yield owner.__name__, build()
 
 
 class NoDropdownOverAnUnboundedTableTests(TestCase):
     def test_every_relation_the_admin_shows_is_a_search_box_or_a_short_list(self):
-        """The rule, asserted from the other end: what the rendered forms actually got.
+        """The rule asserted from the other end: what the rendered forms actually got.
 
-        A new foreign key on any model, or a new `ModelAdmin`, is covered the moment it exists --
-        which is the point of applying this to the registry rather than declaring it fifty times.
+        A new foreign key or `ModelAdmin` is covered the moment it exists, which is the point of applying
+        this to the registry.
         """
         dropdowns = []
         for name, form in _our_forms():
@@ -94,16 +89,16 @@ class NoDropdownOverAnUnboundedTableTests(TestCase):
         )
 
     def test_bounded_tables_all_name_a_real_model(self):
-        """A typo in that set is otherwise completely silent -- it just never matches anything."""
+        """A typo in that set is otherwise silent: it just never matches anything."""
         labels = {model._meta.label for model in apps.get_models()}
         self.assertEqual(sorted(BOUNDED_TABLES - labels), [])
 
     def test_every_model_something_autocompletes_to_has_an_order(self):
-        """An autocomplete paginates its matches, and paginating an unordered queryset lies.
+        """Every model something autocompletes to has an order.
 
-        Page 2 can repeat a row or skip one -- Django says so as an `UnorderedObjectListWarning`
-        from inside the autocomplete view, where nobody sees it. Giving a model a lookup widget is
-        therefore also a decision to give it an order, and this is the half that is easy to forget.
+        An autocomplete paginates, and paginating an unordered queryset lies: page 2 can repeat or skip a
+        row, which Django reports as an `UnorderedObjectListWarning` from inside the view, where nobody sees
+        it.
         """
         unordered = set()
         for name, model_admin, _target in every_admin(django_admin.site):
@@ -122,12 +117,12 @@ class NoDropdownOverAnUnboundedTableTests(TestCase):
         )
 
     def test_applying_the_rule_again_changes_nothing(self):
-        """It runs at import; a second call must not append a field twice or fight a declaration."""
+        """It runs at import, so a second call must not append a field twice or fight a declaration."""
         self.assertEqual(use_lookup_widgets(django_admin.site), {})
 
 
 class AdminChangePageGrowthTests(StandardTestCase):
-    """An inline row must not cost a query. What it costs is declared on the inline as `FlatInline`."""
+    """An inline row must not cost a query; what it costs is declared on the inline as `FlatInline`."""
 
     def setUp(self):
         super().setUp()
@@ -138,7 +133,7 @@ class AdminChangePageGrowthTests(StandardTestCase):
         self.client.force_login(self.admin_user)
 
     def assert_flat(self, url, make_rows, extra=4):
-        """Load `url` with N rows and then with N+extra, and assert the cost did not move."""
+        """Load `url` with N rows and then N+extra, and assert the cost didn't move."""
         make_rows(extra)
         self.client.get(url)
         with CaptureQueriesContext(connection) as before:
@@ -220,9 +215,8 @@ class AdminChangePageGrowthTests(StandardTestCase):
     def test_the_ad_campaign_group_page_does_not_query_per_campaign(self):
         """Four queries a row: a category dropdown, the group's name, and `__str__`'s click rate.
 
-        The click rate is the one worth naming, because nothing on the page asks for it -- each
-        row's heading is `AdCampaign.__str__`, and that prints it, so two `COUNT`s over every ad
-        ever shown were being paid for a string.
+        The click rate is the one worth naming, because nothing on the page asks for it: each row's heading
+        is `AdCampaign.__str__`, which prints it, so two `COUNT`s over every ad ever shown paid for a string.
         """
         group = AdCampaignGroup.objects.create(title="Query count group")
 
@@ -233,10 +227,8 @@ class AdminChangePageGrowthTests(StandardTestCase):
         self.assert_flat(reverse("admin:auctions_adcampaigngroup_change", args=[group.pk]), make_rows)
 
     def test_the_ad_changelists_do_not_query_per_row(self):
-        """Both list an object per row and print counts over `AdCampaignResponse` for each one.
-
-        That table holds a row per ad ever shown, so this is the one place in the ads admin where
-        the count itself is expensive, not just the number of them.
+        """Both changelists print counts over `AdCampaignResponse` per row, and that table holds a row per ad
+        ever shown.
         """
         group = AdCampaignGroup.objects.create(title="Changelist group")
 
@@ -266,11 +258,10 @@ class AdminChangePageGrowthTests(StandardTestCase):
         self.assert_flat(reverse("admin:auctions_adcampaigngroup_changelist"), make_groups)
 
     def test_the_annotated_group_totals_are_the_same_numbers_the_properties_give(self):
-        """Two multi-valued joins in one query, which is exactly where `Count` would multiply.
+        """The annotated group totals match the properties.
 
-        The group's totals reach through campaigns to responses while also counting the campaigns,
-        so a naive double `Count` would report campaigns x responses. Subqueries do not, and this
-        counts real rows to prove it: two campaigns, three responses between them, two clicks.
+        Two multi-valued joins in one query is where `Count` would multiply -- campaigns x responses -- so
+        this counts real rows: two campaigns, three responses, two clicks.
         """
         group = AdCampaignGroup.objects.create(title="Totalled group")
         first = AdCampaign.objects.create(campaign_group=group, title="first")
@@ -298,11 +289,10 @@ class AdminChangePageGrowthTests(StandardTestCase):
         self.assertEqual((empty.number_of_campaigns, empty.number_of_impressions, empty.number_of_clicks), (0, 0, 0))
 
     def test_the_annotated_ad_counts_are_the_same_numbers_the_properties_give(self):
-        """The counts moved into the queryset, and a wrong annotation would be silently wrong.
+        """The annotated ad counts match the properties.
 
-        Two aggregates over one join is where that goes wrong, so this counts real responses:
-        three impressions on one campaign, two of them clicks, and a second campaign to prove the
-        join is not mixing them.
+        Two aggregates over one join is where that goes wrong, so this counts three impressions, two clicks,
+        and a second campaign to prove the join isn't mixing them.
         """
         group = AdCampaignGroup.objects.create(title="Counted group")
         campaign = AdCampaign.objects.create(campaign_group=group, title="counted")
@@ -326,12 +316,11 @@ class AdminChangePageGrowthTests(StandardTestCase):
         self.assertEqual((annotated_other.number_of_impressions, annotated_other.number_of_clicks), (1, 1))
 
     def test_a_lookup_widget_still_reads_back_what_it_renders(self):
-        """A changed widget is a changed HTML control, and this walks its half of the round trip.
+        """A lookup widget still reads back what it renders.
 
-        `value_from_datadict` is the widget's own reading of the POST -- the step that a dropdown
-        and a search box could plausibly disagree on -- and `clean` then turns that into the object
-        that gets saved. Both kinds of lookup widget are exercised over `auth.User`, whichever
-        fields happen to carry them.
+        `value_from_datadict` is the widget's own reading of the POST -- the step a dropdown and a search box
+        could disagree on -- and `clean` turns that into the saved object. Both kinds are exercised over
+        `auth.User`.
         """
         checked = {}
         for name, form in _our_forms():

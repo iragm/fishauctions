@@ -1,9 +1,4 @@
-"""
-Penetration tests to verify no data leaks from public endpoints.
-
-These tests attempt to access sensitive data as unauthenticated users
-and non-admin authenticated users to ensure proper security controls.
-"""
+"""Penetration tests: no data leaks from public endpoints, as an unauthenticated user or a non-admin."""
 
 from django.contrib.auth import get_user_model
 from django.test import TestCase
@@ -167,7 +162,7 @@ class DataLeakPenetrationTests(TestCase):
         response = self.client.get(url)
         self.assertEqual(response.status_code, 200)
 
-        # Check that user emails are not in the response (except creator if email_visible)
+        # User emails are not in the response, except the creator's when email_visible.
         self.assertNotContains(response, "seller@example.com")
         self.assertNotContains(response, "buyer@example.com")
         self.assertNotContains(response, "admin@example.com")
@@ -220,7 +215,6 @@ class DataLeakPenetrationTests(TestCase):
         url = reverse("auction_tos_list", kwargs={"slug": self.auction.slug})
         response = self.client.get(url)
         self.assertEqual(response.status_code, 200)
-        # Admin should see the user list (though emails may not be directly in HTML)
 
     def test_no_direct_auctiontos_access_via_api(self):
         """Direct AuctionTOS API access should be blocked for non-admins"""
@@ -242,8 +236,6 @@ class DataLeakPenetrationTests(TestCase):
         url = reverse("lot_by_pk", kwargs={"pk": self.lot.pk})
         response = self.client.get(url)
         self.assertEqual(response.status_code, 200)
-        # Should not contain "Exchange info" section
-        # (We can't check for exact text as it might not be shown for various reasons)
 
         # Seller should see exchange info
         self.client.login(username="seller", password="testpassword")

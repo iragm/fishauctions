@@ -1,12 +1,10 @@
-"""Proximity check-in & welcome service.
+"""Proximity check-in and welcome.
 
-The app POSTs the phone's position to ``checkin/ping/`` while the WebView shell is up (mount,
-app-resume, every 10 min). The server owns all the logic: it evaluates the geofence + welcome window
-+ join/check-in/admin state, performs the auto-check-in itself, and returns display-ready actions the
-app renders (bottom sheet / snackbar / dialog). All copy comes from here.
+The app POSTs the phone's position to ``checkin/ping/`` while the shell is up. The server evaluates
+the geofence, welcome window and join/check-in/admin state, performs the auto-check-in, and returns
+display-ready actions with all the copy in them.
 
-Also backs the ``checkin/join/`` and ``checkin/set-location/`` mutations. Every mutation lands in the
-auction history.
+Also backs ``checkin/join/`` and ``checkin/set-location/``. Every mutation lands in auction history.
 """
 
 import logging
@@ -18,25 +16,24 @@ from auctions.services import apply_club_member_to_tos, ensure_club_member
 
 logger = logging.getLogger(__name__)
 
-# Geofence radii, miles. 500 ft ≈ 0.095 mi for the welcome/check-in nudge; the admin location-fix
-# offer uses a generous 2 mi because the whole point is that the stored location may be wrong.
+# Geofence radii, miles: 500 ft for the welcome nudge, and a generous 2 mi for the admin
+# location-fix offer, whose whole point is that the stored location may be wrong.
 WELCOME_RADIUS_MI = 0.095
 ADMIN_RADIUS_MI = 2.0
-# distance_to CEILING-rounds to this bucket (a privacy feature); 0.005 mi (~26 ft) is fine enough for
-# a 500 ft geofence without exposing an exact distance.
+# distance_to ceiling-rounds to this bucket (a privacy feature), which is fine for a 500 ft fence.
 DISTANCE_RESOLUTION_MI = 0.005
 
 
 def _single_pickup_location(auction):
-    """The auction's one physical (non-mail) pickup location, or None unless exactly one exists."""
+    """The auction's one physical pickup location, or None unless exactly one exists."""
     locations = list(auction.location_qs.exclude(pickup_by_mail=True))
     return locations[0] if len(locations) == 1 else None
 
 
 def _find_and_bind_tos(user, auction):
-    """The user's AuctionTOS for this auction, matched by user FK or (added-by-email) by email.
-
-    An email-matched row with no user is bound to this user now — the same claim the web join does."""
+    """The user's AuctionTOS, matched by user FK or by email; an email-matched row with no user is bound
+    here, the same claim the web join makes.
+    """
     tos = AuctionTOS.objects.filter(auction=auction, user=user).first()
     if tos:
         return tos
@@ -51,16 +48,17 @@ def _find_and_bind_tos(user, auction):
 
 
 def _record_nudge(user, auction, kind):
-    """Create the one-shot nudge row; return True only the first time (so we don't re-nudge)."""
+    """Create the one-shot nudge row; True only the first time."""
     _, created = CheckinNudge.objects.get_or_create(user=user, auction=auction, kind=kind)
     return created
 
 
 def _set_last_auction_used(user, auction):
-    """Make ``auction`` the user's current auction (drives the command palette, AR, lot queue, etc.).
+    """Make ``auction`` the user's current auction (the palette, AR and lot queue read it).
 
-    Arriving near an in-person auction you're part of (joined or admin-added) is a strong signal it's
-    the auction you're now working with. Guarded so a routine ping doesn't write on every fix."""
+    Arriving near an in-person auction you're part of is a strong signal. Guarded so a routine ping
+    doesn't write on every fix.
+    """
     userdata = getattr(user, "userdata", None)
     if userdata is None or userdata.last_auction_used_id == auction.pk:
         return
@@ -73,12 +71,10 @@ def _rules_url(auction):
 
 
 def _check_in(user, auction, tos, now):
-    """Auto-check-in: stamp checked_in, grant bidding, log history. Idempotent (checked_in is a
-    timestamp).
+    """Auto-check-in: stamp checked_in, grant bidding, log history. Idempotent.
 
-    Joining a check-in-mode auction deliberately leaves ``bidding_allowed`` False — checking in is
-    what grants it (see AuctionTOSFormView and the admin check-in modal, which both set it). Without
-    this the app's self-check-in stamped the timestamp but still left the user unable to bid."""
+    Joining a check-in-mode auction leaves ``bidding_allowed`` False, and checking in is what grants it.
+    """
     tos.checked_in = now
     update_fields = ["checked_in"]
     if not tos.bidding_allowed:
@@ -94,37 +90,32 @@ def _check_in(user, auction, tos, now):
 
 
 def _evaluate_auction(user, auction, location, now):
-    """Return ``(actions, is_member)`` for a single candidate auction.
+    """``(actions, is_member)`` for one candidate auction.
 
-    ``actions`` is the display-ready list (usually 0-2). ``is_member`` is True when the user already
-    has an AuctionTOS here — i.e. they've joined or been added by an admin — so the caller can point
-    ``last_auction_used`` at the nearest auction the user actually belongs to."""
+    ``is_member`` is True when the user already has an AuctionTOS, so the caller can point
+    ``last_auction_used`` at the nearest auction they belong to.
+    """
     actions = []
     distance = location.distance  # miles, annotated
-    # The 500 ft welcome radius assumes the stored coordinates really are the front door. Until an
-    # admin has pinned the location from their phone (``exact_location_set``), they're a geocoded
-    # street address that can be off by far more than that, so everything except the auto-check-in
-    # falls back to the generous 2 mi radius the admin location-fix offer already uses.
+    # The 500 ft radius assumes the coordinates are the front door; until an admin pins them
+    # (``exact_location_set``) they are a geocoded street address, so everything but the
+    # auto-check-in falls back to the 2 mi radius.
     #
-    # Auto-check-in is deliberately never widened: it happens with no user intent at all (a ping
-    # while driving past would put a bidder number on the floor for someone who isn't there), and
-    # somebody who really has arrived will be inside 500 ft within a minute. Tapping "join" on the
-    # widened offer is different — that's explicit intent from someone who says they're here — so it
-    # still checks them in.
+    # Auto-check-in is never widened: it happens with no user intent, and somebody who has really
+    # arrived will be inside 500 ft within a minute. Tapping "join" on the widened offer is explicit
+    # intent, so it still checks them in.
     within_checkin = distance <= WELCOME_RADIUS_MI
     within_welcome = within_checkin or (not auction.exact_location_set and distance <= ADMIN_RADIUS_MI)
     title = auction.title
 
     tos = _find_and_bind_tos(user, auction)
-    # An auction that assigns bidder numbers at the door turns self-check-in off; then neither the
-    # join offer nor the auto-check-in is offered (checking the flag first so no one-shot nudge row
-    # is burned while the feature is off).
+    # An auction that assigns bidder numbers at the door turns self-check-in off; check the flag
+    # first, so no one-shot nudge is burned while the feature is off.
     self_checkin = auction.allows_app_self_checkin
 
     if tos is None:
-        # Strictly one join offer per person per auction, whichever band it fired in: an offer
-        # dismissed from a mile away is spent. Deliberate — hardly anybody lives inside the widened
-        # radius of a venue, so a second prompt would cost more in nagging than it saves.
+        # One join offer per person per auction, whichever band it fired in: hardly anybody lives
+        # inside the widened radius, so a second prompt costs more in nagging than it saves.
         if self_checkin and within_welcome and _record_nudge(user, auction, "join_offer"):
             actions.append(
                 {
@@ -150,7 +141,7 @@ def _evaluate_auction(user, auction, location, now):
             }
         )
 
-    # The admin location-fix offer can coexist with a join/check-in action.
+    # The admin location-fix offer can coexist with a join or check-in action.
     if not auction.exact_location_set and auction.permission_check(user):
         if _record_nudge(user, auction, "set_location_offer"):
             actions.append(
@@ -165,18 +156,14 @@ def _evaluate_auction(user, auction, location, now):
 
 
 def evaluate_ping(user, latitude, longitude, now=None):
-    """Evaluate one position ping and return the list of display-ready actions (possibly empty)."""
+    """Evaluate one position ping and return the display-ready actions, possibly none."""
     now = now or timezone.now()
-    # Candidate physical pickup locations within the (larger) admin radius; the auction is filtered
-    # down to in-person, single-location, in-window below.
+    # Physical pickup locations within the admin radius; the auction is filtered below.
     #
-    # ``promote_this_auction`` is the disclosure gate and belongs here rather than in the app: an
-    # unpromoted auction is one whose creator has not agreed to it being shown to strangers, and
-    # every auction starts that way (AuctionCreateView sets it False). Without this filter, standing
-    # within two miles of the venue during the window pushed the full title and a working Join button
-    # to any signed-in app user who happened to be nearby. It gates the admin nudges too, not just the
-    # join offer -- a reminder to set the location is still a mention of an auction we should not be
-    # mentioning.
+    # ``promote_this_auction`` is the disclosure gate: every auction starts unpromoted, and without
+    # this filter standing near the venue pushed the full title and a working Join button to any
+    # signed-in app user nearby. It gates the admin nudges too -- a reminder to set the location
+    # still mentions an auction we should not be mentioning.
     locations = (
         PickupLocation.objects.filter(
             auction__is_online=False,
@@ -203,7 +190,7 @@ def evaluate_ping(user, latitude, longitude, now=None):
             continue
         auction_actions, is_member = _evaluate_auction(user, auction, location, now)
         actions.extend(auction_actions)
-        # Locations are distance-ordered, so the first auction the user belongs to is the nearest one.
+        # Locations are distance-ordered, so the first is the nearest.
         if is_member and nearest_member_auction is None:
             nearest_member_auction = auction
     if nearest_member_auction is not None:
@@ -212,31 +199,28 @@ def evaluate_ping(user, latitude, longitude, now=None):
 
 
 def join_auction(user, auction, now=None):
-    """Join ``auction`` as ``user`` via the app welcome prompt; return (tos, checked_in).
+    """Join ``auction`` from the app welcome prompt; returns (tos, checked_in).
 
-    Mirrors the essentials of the web rules-page confirm: bind an added-by-email row, otherwise
-    create the AuctionTOS against the single pickup location, mark it a real (not manually-added)
-    join, create/link the ClubMember in a club-managed auction (the club owns the bidder number),
-    and — for check-in-mode auctions — check the user in at the same time. Idempotent.
+    Mirrors the web rules-page confirm: bind an added-by-email row or create the AuctionTOS against the
+    single pickup location, mark it a real join, create or link the ClubMember in a club-managed
+    auction, and check the user in for check-in-mode auctions. Idempotent.
 
-    Returns ``(None, False)`` when the auction has app self-check-in turned off; nothing is written
-    (the endpoint turns that into a 403)."""
+    Returns ``(None, False)``, writing nothing, when app self-check-in is off (the endpoint 403s).
+    """
     now = now or timezone.now()
     if not auction.allows_app_self_checkin:
         return None, False
     tos = _find_and_bind_tos(user, auction)
     member = None
     if tos is None and auction.is_club_managed:
-        # No participant record yet in a club-managed auction: make the club member first, because
-        # creating one also creates its shadow AuctionTOS (signals.propagate_clubmember_to_shadow_tos).
-        # Adopting that row is how the app join ends up with the club's bidder number instead of
-        # racing it with a second record that AuctionTOS.save() would then have to merge away.
+        # In a club-managed auction, make the club member first: creating one also creates its
+        # shadow AuctionTOS, which is adopted rather than raced with a second record.
         member, _created = ensure_club_member(
             auction,
             user=user,
             name=user.get_full_name() or user.username,
             email=user.email or "",
-            # The user is signing themselves up; no admin has touched this record yet.
+            # The user is signing themselves up; no admin has touched this record.
             admin_edited=False,
         )
         tos = _find_and_bind_tos(user, auction)
@@ -260,8 +244,7 @@ def join_auction(user, auction, now=None):
             tos.email = user.email or None
     if auction.is_club_managed:
         if member is None:
-            # Already had a participant record (admin-added, or a member from a previous ping): the
-            # member may still be missing, so resolve it the same way.
+            # An existing participant record may still be missing its member.
             member, _created = ensure_club_member(
                 auction,
                 user=user,
@@ -277,7 +260,7 @@ def join_auction(user, auction, now=None):
 
     checked_in = tos.checked_in is not None
     if auction.use_check_in_mode and tos.checked_in is None:
-        # Same path as arriving with an existing TOS, so bidding_allowed and the history entry match.
+        # The same path as arriving with an existing TOS, so bidding and history match.
         _check_in(user, auction, tos, now)
         checked_in = True
 
@@ -287,7 +270,7 @@ def join_auction(user, auction, now=None):
             action=f"{tos.name or user.username} joined via the app's welcome prompt",
             user=user,
         )
-    # Joining from the welcome prompt makes this the auction the user is working with.
+    # Joining makes this the auction the user is working with.
     _set_last_auction_used(user, auction)
     return tos, checked_in
 
@@ -295,7 +278,8 @@ def join_auction(user, auction, now=None):
 def set_auction_location(auction, user, latitude, longitude):
     """Write the phone's position onto the auction's single pickup location and flag it exact.
 
-    Returns False when the auction has no single physical location to pin."""
+    False when there is no single physical location to pin.
+    """
     location = _single_pickup_location(auction)
     if location is None:
         return False

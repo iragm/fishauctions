@@ -1,9 +1,7 @@
 """The ``django_tables2`` tables behind every list on the site.
 
-One class per table, paired with the filter of the same subject in :mod:`auctions.filters` and
-rendered through ``views.base.HTMxTableView``, which is what makes them sort and paginate without a
-page load. Columns that render HTML do it with ``format_html``; a table column is a place where an
-unescaped lot name written by a member of the public would become a script tag.
+Each pairs with a filter in :mod:`auctions.filters` and renders through
+``views.base.HTMxTableView``. HTML columns use ``format_html``: lot names are public input.
 """
 
 from urllib.parse import urlencode
@@ -38,8 +36,6 @@ class AuctionTOSHTMxTable(tables.Table):
     show_on_mobile_string = ""
     # show_on_mobile_string = "d-sm-table-cell d-md-none"
     bidder_number = tables.Column(accessor="bidder_number", verbose_name="ID", orderable=True)
-    # id = tables.Column(accessor='display_name_for_admins', verbose_name="ID", orderable=False)
-    # phone = tables.Column(accessor='phone_as_string', verbose_name="Phone", orderable=False)
     invoice_link = tables.Column(
         accessor="invoice_link_html",
         verbose_name="Invoice",
@@ -58,7 +54,6 @@ class AuctionTOSHTMxTable(tables.Table):
         orderable=False,
         attrs={"th": {"class": hide_string}, "cell": {"class": hide_string}},
     )
-    # email = tables.Column(attrs={"th": {"class": hide_string}, "cell": {"class": hide_string}})
     membership = tables.Column(
         accessor="pk",
         verbose_name="Membership",
@@ -72,8 +67,7 @@ class AuctionTOSHTMxTable(tables.Table):
     )
 
     def render_membership(self, value, record):
-        """Expiration date + Expired badge + Renew button for club-managed auctions,
-        mirroring ClubMemberHTMxTable. Blank when the row has no linked ClubMember."""
+        """Expiration, Expired badge and Renew button for club-managed auctions, like ClubMemberHTMxTable."""
         from django.utils import timezone
 
         cm = record.clubmember
@@ -118,13 +112,9 @@ class AuctionTOSHTMxTable(tables.Table):
         return value
 
     def is_club_auction_admin(self, record):
-        """Whether this row runs the auction by way of the club rather than AuctionTOS.is_admin.
+        """Whether this row administers the auction through club permissions (Auction.permission_check).
 
-        In a club-managed auction the is_admin checkbox is hidden and disabled (AuctionTOSAdminForm):
-        who may run the auction is decided by the club permissions, exactly as Auction.permission_check
-        reads them. Without this the Admin badge is never shown in those auctions.
-
-        The clubmember is already loaded by the membership column, which is only present in this mode.
+        The clubmember is already loaded by the membership column, only present in this mode.
         """
         if not self.is_managed:
             return False
@@ -134,9 +124,6 @@ class AuctionTOSHTMxTable(tables.Table):
         return bool(club_member.permission_admin or club_member.permission_manage_auctions)
 
     def render_name(self, value, record):
-        # as a button, looks awful
-        # result = f"<span class='btn btn-secondary btn-sm' style='cursor:pointer;' hx-get='/api/auctiontos/{record.pk}' hx-target='#modals-here' hx-trigger='click'>{value}</span>"
-        # as a link, looks better
         result = (
             f"<a href='' hx-noget hx-get='/api/auctiontos/{record.pk}' hx-target='#modals-here' hx-trigger='click'>"
         )
@@ -145,18 +132,14 @@ class AuctionTOSHTMxTable(tables.Table):
         else:
             result += "<i class='bi bi-person-fill-gear me-1'></i>"
         result += f"{value}</a>"
-        # created_by is nullable (the account that made the auction can be deleted), and comparing
-        # ids rather than objects keeps this from fetching a user and a creator for every row.
+        # created_by is nullable; compare ids to avoid fetching users per row.
         if (
             record.is_admin
             or (record.user_id and record.auction.created_by_id == record.user_id)
             or self.is_club_auction_admin(record)
         ):
             result += '<span class="badge bg-danger ms-1 me-1" title="Can add users and lot">Admin</span>'
-        # The alternate-split badge stays bg-info and the Check in button below is btn-primary:
-        # they sat side by side in the same colour, and one is a fact about the person while the
-        # other is a thing to press.  This whole table is admin-only, which is what makes primary
-        # right for the button (style_reference.md: btn-info marks the admin half of a *shared* page).
+        # Different colours for the badge (a fact) and the Check in button (an action).
         if record.is_club_member:
             label = record.auction.alternative_split_label.capitalize()
             result += (
@@ -179,20 +162,7 @@ class AuctionTOSHTMxTable(tables.Table):
             result += "<i class='bi bi-envelope-exclamation-fill text-danger ms-1' title='Unable to send email to this address'></i>"
         if record.email_address_status == "VALID":
             result += "<i class='bi bi-envelope-check-fill ms-1' title='Verified email'></i>"
-        # if not record.bidding_allowed:
-        #     result += '<i class="text-danger ms-1 bi bi-cash-coin" title="Selling not allowed"></i>'
-        # for mobile, put other columns in a dropdown menu:
         return mark_safe(result)
-
-    # def render_email(self, value, record):
-    #     """No longer used, but keeping it here for reference"""
-    #     email_string = f'<a href="mailto:{value}">{value}</a>'
-    #     # email_string = value
-    #     if record.email_address_status == "BAD":
-    #         email_string += "<i class='bi bi-envelope-exclamation-fill text-danger ms-1' title='Unable to send email to this address'></i>"
-    #     if record.email_address_status == "VALID":
-    #         email_string += "<i class='bi bi-envelope-check-fill ms-1' title='Verified email'></i>"
-    #     return mark_safe(email_string)
 
     class Meta:
         model = AuctionTOS
@@ -206,20 +176,12 @@ class AuctionTOSHTMxTable(tables.Table):
             "add_lot_link",
             "invoice_link",
         )
-        # row_attrs = {
-        #     'style':'cursor:pointer;',
-        #     'hx-get': lambda record: "/api/auctiontos/" + str(record.pk),
-        #     'hx-target':"#modals-here",
 
-    #     'hx-trigger':"click",
-    #     #'_':"on htmx:afterOnLoad wait 10ms then add .show to #modal then add .show to #modal-backdrop"
-    # }
     def __init__(self, *args, **kwargs):
         self.request = kwargs.pop("request", None)
         self.can_manage_check_in = kwargs.pop("can_manage_check_in", False)
         self.is_managed = is_managed = kwargs.pop("is_managed", False)
         exclude = list(kwargs.pop("exclude", None) or [])
-        # The membership column is only meaningful for club-managed/check-in auctions.
         if not is_managed:
             exclude.append("membership")
         super().__init__(*args, exclude=exclude, **kwargs)
@@ -320,7 +282,7 @@ class LotHTMxTable(tables.Table):
         result += "</div>"
         if record.banned:
             result += '<span class="badge bg-danger">Removed</span>'
-        # on mobile, reduce the number of columns and show info below the lot name
+        # On mobile, show info below the lot name.
         result += f'<span class="d-block d-md-none"><b>Seller:</b> {record.auctiontos_seller} '
         if record.auctiontos_winner:
             result += f"<b>Winner:</b> {record.auctiontos_winner} (${record.winning_price})"
@@ -340,15 +302,7 @@ class LotHTMxTable(tables.Table):
             "winner",
             "winning_price",
         )
-        # row_attrs = {
-        #     'class': lambda record: str(record.table_class),
-        #     'style':'cursor:pointer;',
-        #     'hx-get': lambda record: "/api/lot/" + str(record.pk),
-        #     'hx-target':"#modals-here",
 
-    #     'hx-trigger':"click",
-    #     '_':"on htmx:afterOnLoad wait 10ms then add .show to #modal then add .show to #modal-backdrop"
-    # }
     def __init__(self, *args, **kwargs):
         self.auction = kwargs.pop("auction")
         if self.auction and self.auction.use_seller_dash_lot_numbering:
@@ -371,10 +325,6 @@ class AuctionHTMxTable(tables.Table):
         orderable=False,
         attrs={"th": {"class": hide_string}, "cell": {"class": hide_string}},
     )
-
-    # def render_date(self, value, record):
-    #    localized_date = formats.date_format(record.template_date_timestamp, use_l10n=True)
-    #    return mark_safe(f"{record.template_status}{localized_date}{record.ended_badge}")
 
     def render_auction(self, value, record):
         from auctions.templatetags.distance_filters import convert_distance
@@ -411,34 +361,20 @@ class AuctionHTMxTable(tables.Table):
             "date",
             "lots",
         )
-        row_attrs = {
-            # 'class': lambda record: str(record.table_class),
-            # 'style':'cursor:pointer;',
-            # 'hx-get': lambda record: "/api/lot/" + str(record.pk),
-            # 'hx-target':"#modals-here",
-            # 'hx-trigger':"click",
-            # '_':"on htmx:afterOnLoad wait 10ms then add .show to #modal then add .show to #modal-backdrop"
-        }
+        row_attrs = {}
 
 
 class InvoiceHTMxTable(tables.Table):
-    """The current user's own invoices -- /invoices/
+    """The current user's own invoices, /invoices/, newest first; every column sorts on a real field."""
 
-    Sorted newest first by default (Meta.order_by); every column here is backed by a real
-    database field so each header is a working sort, not just a label.
-    """
-
-    #: status code -> badge class.  Success fills need dark text, see style_reference.md.
+    #: status code -> badge class. Success fills need dark text; see style_reference.md.
     STATUS_BADGES = {
         "DRAFT": "bg-secondary",
         "UNPAID": "bg-info",
         "PAID": "bg-success text-dark",
     }
 
-    # These two accessors are `pk` rather than the field they display: django-tables2 skips
-    # render_*() entirely when the accessed value is empty, and both an auction-less invoice
-    # and an unstamped calculated_total are empty.  pk is never empty, so render always runs
-    # and order_by carries the real sort.
+    # Accessor `pk`: django-tables2 skips render_*() for empty values, and pk is never empty.
     invoice = tables.Column(accessor="pk", verbose_name="Invoice", order_by=("auction__title",))
     total = tables.Column(accessor="pk", verbose_name="Total", order_by=("calculated_total",))
     status = tables.Column(accessor="status", verbose_name="Status")
@@ -448,18 +384,14 @@ class InvoiceHTMxTable(tables.Table):
         return format_html("<a href='{}'>{}</a>", record.get_absolute_url(), record.label or str(record))
 
     def render_total(self, value, record):
-        """Money the user owes the club shows red and parenthesized, a payout owed to them plain.
+        """Owed to the club shows red in parentheses; a payout plain.
 
-        `calculated_total` is the stamped copy of `rounded_net`, so reading it here keeps the
-        displayed number and the column's sort in agreement -- and spares this page the handful
-        of queries per row that recomputing `net` costs.  It is only ever NULL on a draft that
-        was never recalculated, which is the one case that falls back.
+        Reads the stamped `calculated_total` so display and sort agree; falls back only for NULL.
         """
         amount = record.calculated_total
         if amount is None:
             amount = record.rounded_net
-        # format_html() escapes its arguments into SafeString first, which has no numeric
-        # format codes, so the rounding has to happen before it gets there.
+        # Format the number before format_html(), which escapes it to a string.
         if amount < 0:
             return format_html("<span class='text-danger'>({}{})</span>", record.currency_symbol, f"{abs(amount):.2f}")
         return format_html("{}{}", record.currency_symbol, f"{amount:.2f}")
@@ -485,16 +417,12 @@ class InvoiceHTMxTable(tables.Table):
 
 class LotHTMxTableForUsers(tables.Table):
     hide_string = "d-md-table-cell d-none"
-    # seller = tables.Column(accessor='auctiontos_seller', verbose_name="Seller")
-    # winner = tables.Column(accessor='auctiontos_winner', verbose_name="Winner")
-    # winning_price = tables.Column(accessor='winning_price', verbose_name="Price")
     lot_number = tables.Column(
         accessor="lot_number_display",
         verbose_name="Lot number",
         orderable=False,
         attrs={"th": {"class": hide_string}, "cell": {"class": hide_string}},
     )
-    # lot_number = tables.Column(accessor='lot_number_display', verbose_name="Lot number", orderable=False)
     active = tables.Column(accessor="active", verbose_name="Status")
     price = tables.Column(accessor="high_bid", verbose_name="Price", orderable=False)
     views = tables.Column(
@@ -503,8 +431,6 @@ class LotHTMxTableForUsers(tables.Table):
         orderable=False,
         attrs={"th": {"class": hide_string}, "cell": {"class": hide_string}},
     )
-    # bids = tables.Column(accessor='number_of_bids', verbose_name="Bids")
-    # chats = tables.Column(accessor='all_chats', verbose_name="Messages")
     actions = tables.Column(accessor="all_chats", verbose_name="Actions")
     auction = tables.Column(attrs={"th": {"class": hide_string}, "cell": {"class": hide_string}})
 
@@ -578,14 +504,7 @@ class LotHTMxTableForUsers(tables.Table):
             "auction",
             "views",
         )
-        row_attrs = {
-            # 'class': lambda record: str(record.table_class),
-            # 'style':'cursor:pointer;',
-            # 'hx-get': lambda record: "/api/lot/" + str(record.pk),
-            # 'hx-target':"#modals-here",
-            # 'hx-trigger':"click",
-            # '_':"on htmx:afterOnLoad wait 10ms then add .show to #modal then add .show to #modal-backdrop"
-        }
+        row_attrs = {}
 
 
 _PERMISSION_BADGES = [
@@ -702,10 +621,7 @@ class ClubMemberHTMxTable(tables.Table):
                 renew_url,
             )
 
-        # Members whose dues were recorded as a last-paid date only (CSV imports, older
-        # rosters) still have a real expiration -- the one is_paid_member and the member-list
-        # filters use.  Show that derived date, marked as derived, instead of calling them
-        # expired and disagreeing with every other membership surface.
+        # A last-paid date alone still implies an expiration; show it marked as derived.
         derived = False
         if not value:
             effective = record.effective_expiration_date
@@ -778,7 +694,6 @@ class ClubMemberHTMxTable(tables.Table):
         edit_items = format_html("")
         if self.can_add_edit:
             if record.is_deleted:
-                # Deactivated member: offer reactivate (no confirm) and permanent delete
                 reactivate_url = reverse("club_member_reactivate", kwargs={"pk": record.pk})
                 perm_delete_url = reverse("club_member_confirm", kwargs={"pk": record.pk, "action": "permanent_delete"})
                 edit_items = format_html(
@@ -809,8 +724,7 @@ class ClubMemberHTMxTable(tables.Table):
                         record.email,
                         icon_class,
                     )
-                # Member-number and membership-card actions are hidden entirely when the club has
-                # the barcode feature disabled — there is no card to show or send.
+                # No card to show or send when the barcode feature is off.
                 membership_number_item = format_html("")
                 if record.club.show_member_barcode:
                     membership_number_url = reverse("club_member_membership_number", kwargs={"pk": record.pk})
@@ -825,7 +739,7 @@ class ClubMemberHTMxTable(tables.Table):
                         membership_number_url,
                         resend_card_url,
                     )
-                # Renew and set-expiry are only meaningful when the club charges a membership fee.
+                # Only with a membership fee.
                 renewal_items = format_html("")
                 if record.club.membership_annual_fee:
                     renew_confirm_url = reverse("club_member_renew", kwargs={"pk": record.pk})
@@ -956,9 +870,7 @@ class ClubHistoryHTMxTable(tables.Table):
     applies_to = tables.Column(accessor="applies_to", verbose_name="Modified")
     timestamp = tables.Column(accessor="timestamp", verbose_name="Time")
 
-    # One icon per ClubHistory.applies_to. Every choice is listed: three of them used to be missing
-    # here, so a membership renewal, a BAP award and an announcement all rendered as bare text next
-    # to rows that had an icon, which reads as "this one is different" rather than "nobody got to it".
+    # One icon per ClubHistory.applies_to choice.
     APPLIES_TO_ICONS = {
         "RULES": "bi-gear-fill",
         "MEMBERS": "bi-people-fill",
@@ -1119,8 +1031,7 @@ class ClubBapLotHTMxTable(tables.Table):
         except Exception:
             award = None
         record.bap_award_cached = award
-        # Same precedence as Lot.bap_points_for_club, but off prefetched dicts: this runs once per
-        # row and the pending-BAP page shows hundreds.
+        # Same precedence as Lot.bap_points_for_club, from prefetched dicts.
         genus = record.species.genus if record.species_id else ""
         override = self._genus_override_cache.get(genus) if genus else None
         if override is None and record.species_category_id:
@@ -1130,7 +1041,7 @@ class ClubBapLotHTMxTable(tables.Table):
         elif not self.club:
             default_points = 0
         elif self.club.points_per_lot is not None:
-            # See Lot.bap_points_for_club: a club that sets 0 means 0, not "use the category".
+            # 0 means 0, not "use the category".
             default_points = self.club.points_per_lot
         else:
             default_points = record.species_category.bap_points if record.species_category_id else 5
@@ -1160,11 +1071,7 @@ class ClubBapLotHTMxTable(tables.Table):
 
 
 class SpeakerHTMxTable(tables.Table):
-    """The list half of the speaker directory.
-
-    Clicking a row loads the speaker panel over htmx (see `speaker_list.html`), which is also
-    what the map markers do, so both views open the same thing.
-    """
+    """The speaker directory list; rows open the same htmx panel as the map markers."""
 
     hide_string = "d-md-table-cell d-none"
     photo = tables.Column(accessor="pk", verbose_name="", orderable=False)
@@ -1186,29 +1093,17 @@ class SpeakerHTMxTable(tables.Table):
     class Meta:
         model = Speaker
         fields = ("photo", "name", "location", "topics", "speaker_tags")
-        # Same template every other table on the site uses. The django-tables2 default renders
-        # its pagination as bare <li><a> with no .page-item/.page-link, so none of the site's
-        # pagination styling reaches it, and the page links are plain hrefs that reload the
-        # whole page -- losing the map, the panel and the filters with it.
+        # The default django-tables2 template lacks the site's pagination classes and reloads the page.
         template_name = "tables/bootstrap_htmx.html"
-        # Row-level click target; the anchor in the name column carries the htmx attributes.
         row_attrs = {"class": "speaker-row"}
 
     def __init__(self, *args, **kwargs):
-        # With no origin the Location column still renders, it just doesn't gain a "· 40 miles"
-        # suffix -- there is nothing to measure from.
+        # Without an origin there's no distance suffix.
         self.has_origin = kwargs.pop("has_origin", False)
         super().__init__(*args, **kwargs)
 
     def order_location(self, queryset, is_descending):
-        """Sort the Location column by distance when there is somewhere to measure from.
-
-        The list itself is newest-first (see SpeakerListView.get_queryset); this column header
-        is where "who is nearest?" lives now.  nulls_last matters as much here as it did when
-        distance was the default sort: the annotation is NULL for every speaker without
-        coordinates, and most of the directory has none, so an ascending sort without it fills
-        page one with "No location set".
-        """
+        """Sort Location by distance when there's an origin, nulls last."""
         if not self.has_origin:
             return queryset.order_by(("-" if is_descending else "") + "location"), True
         distance = F("distance").desc(nulls_last=True) if is_descending else F("distance").asc(nulls_last=True)
@@ -1226,13 +1121,7 @@ class SpeakerHTMxTable(tables.Table):
         )
 
     def render_name(self, value, record):
-        """Open the panel over htmx, but push the speaker's *page* URL, not the fragment's.
-
-        hx-push-url='true' would push the /panel/ URL that was actually requested, so a copied
-        link would hand someone a bare unstyled fragment. Naming the page URL explicitly means
-        the address bar always holds something worth sharing, and href keeps the row working
-        as an ordinary link when JavaScript hasn't loaded.
-        """
+        """Open the panel over htmx, but push the speaker page URL rather than the fragment's."""
         page_url = reverse("speaker_detail", kwargs={"slug": record.slug})
         link = format_html(
             "<a href='{}' class='speaker-open' hx-get='{}' hx-target='#speaker-panel' "
@@ -1244,8 +1133,7 @@ class SpeakerHTMxTable(tables.Table):
         )
         if not record.is_recently_added:
             return link
-        # text-dark because bg-success is light enough that white text fails AA on it --
-        # see style_reference.md.
+        # bg-success needs dark text for contrast; see style_reference.md.
         return format_html("{} <span class='badge bg-success text-dark'>New</span>", link)
 
     def render_location(self, value, record):
@@ -1280,17 +1168,7 @@ class SpeakerHTMxTable(tables.Table):
 
 
 class ClubHTMxTable(tables.Table):
-    """The list half of the public club finder.
-
-    Clicking a row loads the club's card over htmx (see `clubs.html`), which is also what the map
-    pins do, so both views open the same thing.
-
-    Every column here is public: the club's name, what it has coming up, what it is into, and how
-    far away it is. There is deliberately no column for the club's address -- this page has never
-    printed one, only a pin -- and none for anything about its members. The distance is measured
-    from the pin to a location the reader supplied, so it says something to them without saying
-    anything about the club.
-    """
+    """The public club finder list. Public columns only: no address, nothing about members."""
 
     hide_string = "d-md-table-cell d-none"
     icon = tables.Column(accessor="pk", verbose_name="", orderable=False)
@@ -1312,22 +1190,16 @@ class ClubHTMxTable(tables.Table):
     class Meta:
         model = Club
         fields = ("icon", "name", "next_event", "interests", "distance")
-        # Same template every other table on the site uses; see SpeakerHTMxTable for why the
-        # django-tables2 default is not an option here.
+        # See SpeakerHTMxTable.
         template_name = "tables/bootstrap_htmx.html"
         row_attrs = {"class": "club-row"}
 
     def __init__(self, *args, **kwargs):
-        # With no origin the Distance column still renders, it just has nothing to put in it.
         self.has_origin = kwargs.pop("has_origin", False)
         super().__init__(*args, **kwargs)
 
     def order_distance(self, queryset, is_descending):
-        """Sort by distance when there is somewhere to measure from, otherwise by name.
-
-        nulls_last matters: the annotation is NULL for every club without coordinates, and an
-        ascending sort without it fills page one with clubs whose distance is unknown.
-        """
+        """Sort by distance when there's an origin, nulls last; otherwise by name."""
         if not self.has_origin:
             return queryset.order_by(("-" if is_descending else "") + "name"), True
         distance = F("distance").desc(nulls_last=True) if is_descending else F("distance").asc(nulls_last=True)
@@ -1345,13 +1217,7 @@ class ClubHTMxTable(tables.Table):
         )
 
     def render_name(self, value, record):
-        """A plain link to the club's own page.
-
-        Unlike the speaker table this opens no panel, and deliberately: a summary beside the list
-        would be a second public surface carrying the same privacy rules as the club page, and
-        finding a club is a find-one task where the page load it would save is not worth that. See
-        :mod:`auctions.views.club_finder`.
-        """
+        """A plain link to the club's page. See :mod:`auctions.views.club_finder`."""
         link = format_html(
             "<a href='{}'>{}</a>",
             reverse("club_detail", kwargs={"slug": record.slug}),
@@ -1359,8 +1225,7 @@ class ClubHTMxTable(tables.Table):
         )
         if not record.allow_joining:
             return link
-        # text-dark because bg-success is light enough that white text fails AA on it --
-        # see style_reference.md.
+        # bg-success needs dark text for contrast; see style_reference.md.
         return format_html("{} <span class='badge bg-success text-dark'>Taking members</span>", link)
 
     def render_next_event(self, record):
@@ -1407,7 +1272,7 @@ class DonationVendorHTMxTable(tables.Table):
         accessor="latest_reply_summary",
         verbose_name="Latest reply",
         default="—",
-        # Annotated by ClubDonationVendorsView, and there is nothing to sort a one-line summary by.
+        # Annotated by ClubDonationVendorsView.
         orderable=False,
         attrs={"th": {"class": hide_string}, "cell": {"class": hide_string}},
     )
@@ -1415,13 +1280,12 @@ class DonationVendorHTMxTable(tables.Table):
     followup_due = tables.Column(accessor="followup_due", verbose_name="Follow-up", default="—")
     contact = tables.Column(accessor="pk", verbose_name="Contact", orderable=False)
 
-    #: Bootstrap background for each status, so the pipeline reads at a glance. Kept here rather
-    #: than in the template because the status column is rendered as HTML either way.
+    #: Badge background per status.
     STATUS_BADGES = {
         "new": "bg-secondary",
         "sent": "bg-info",
         "interested": "bg-primary",
-        # success and warning fills need dark text on this theme -- see style_reference.md.
+        # Success and warning fills need dark text; see style_reference.md.
         "promised": "bg-warning text-dark",
         "received": "bg-success text-dark",
         "not_interested": "bg-dark",
@@ -1434,13 +1298,11 @@ class DonationVendorHTMxTable(tables.Table):
         fields = ()
 
     def __init__(self, *args, **kwargs):
-        # Counted once by the view and handed down, so rendering a page of vendors doesn't ask the
-        # same question of the database for every row.
+        # Counted once by the view rather than per row.
         self.quota = kwargs.pop("quota", None)
         super().__init__(*args, **kwargs)
 
     def render_name(self, value, record):
-        """The vendor name opens the side panel with their email history and edit form."""
         return format_html(
             "<a href='' hx-noget hx-get='{}' hx-target='#modals-here' hx-trigger='click'>"
             "<i class='bi bi-shop me-1'></i>{}</a>",
@@ -1448,16 +1310,11 @@ class DonationVendorHTMxTable(tables.Table):
             value,
         )
 
-    #: How much of a summary the table shows. The whole of it is a hover away, and all of it is in
-    #: the vendor panel next to the message it was written from.
+    #: Preview length; the full summary is in the title and the vendor panel.
     SUMMARY_PREVIEW_LENGTH = 120
 
     def render_latest_reply(self, value):
-        """What the vendor last said, in the model's words.
-
-        Only ever reached with something to show: django-tables2 uses ``default`` for a vendor who
-        has not replied, and for a reply that was stored without a summary.
-        """
+        """The vendor's latest reply summary; ``default`` covers vendors with none."""
         summary = str(value).strip()
         shown = summary
         if len(shown) > self.SUMMARY_PREVIEW_LENGTH:
@@ -1482,12 +1339,7 @@ class DonationVendorHTMxTable(tables.Table):
         return format_html("<span title='{}'>{}</span>", record.last_contact, naturalday(record.last_contact))
 
     def order_followup_due(self, queryset, is_descending):
-        """Sort by follow-up date, keeping the vendors that have none at the bottom either way.
-
-        Without this the database decides where nulls go, which puts every vendor who unsubscribed
-        or had their date cleared at the top of the ascending sort -- a screenful of rows there is
-        nothing to do about, above the overdue ones the page is meant to surface.
-        """
+        """Sort by follow-up date with empty dates last either way."""
         field = F("followup_due")
         return (
             queryset.order_by(field.desc(nulls_last=True) if is_descending else field.asc(nulls_last=True), "name"),
@@ -1507,16 +1359,10 @@ class DonationVendorHTMxTable(tables.Table):
         return format_html("<span title='{}'>{}</span>", record.followup_due, formatted)
 
     def render_contact(self, value, record):
-        """A button that opens the write-an-email dialog.
-
-        A vendor we may not write to keeps a clickable button that explains why rather than a
-        disabled one -- see the unavailable-action standard in style_reference.md. Running out of
-        the club's daily allowance blocks the button the same way, and says when it comes back.
-        """
+        """A button that opens the email dialog, or explains why the vendor can't be contacted."""
         reason = donations.contact_blocked_reason(record, self.quota)
         if reason:
-            # Stays clickable and explains itself in a toast; the handler is delegated from
-            # club_donation_vendors.html so it survives htmx swaps of the table.
+            # The toast handler is delegated from club_donation_vendors.html, surviving htmx swaps.
             return format_html(
                 "<button type='button' class='btn btn-sm btn-primary donation-contact-blocked' "
                 "data-reason='{}'><i class='bi bi-envelope-slash me-1'></i>Contact</button>",

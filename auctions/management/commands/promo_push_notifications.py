@@ -89,9 +89,9 @@ class Command(BaseCommand):
                 max_distance = userdata.email_me_about_new_in_person_auctions_distance
             if max_distance is not None and distance > max_distance:
                 continue
-            # Fixed short title: an auction name in the title is cut off on both platforms, taking
+            # A fixed short title: an auction name in the title is cut off on both platforms, taking
             # the "this is a new auction" part with it. Name and distance go in the body, where
-            # there's room for them and where they're what decides whether the person taps.
+            # there is room and where they are what decides whether the person taps.
             body = f"{auction.title} — {kind}"
             # "" when the distance rounds to zero, i.e. nothing worth saying.
             distance_text = distance_display(distance, user)

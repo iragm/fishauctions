@@ -1,9 +1,7 @@
-"""Tests for club announcements, the website-integration snippets, and the embeds behind them.
+"""Tests for club announcements, the website-integration snippets, and the embeds.
 
-The announcement feature is three deliveries with three failure modes, so the tests below are
-mostly about keeping them apart: a Discord outage must not cost the club the push, a push must not
-turn into a surprise email, and only the announcements ticked "show on website" may ever reach the
-public page or the embed.
+Three deliveries with three failure modes: a Discord outage must not cost the push, a push must not
+become a surprise email, and only announcements ticked "show on website" reach the public page.
 """
 
 import datetime
@@ -214,13 +212,10 @@ class AnnouncementReachTests(TestCase):
 
 @override_settings(FIREBASE_CREDENTIALS_JSON="test-firebase-key")
 class AnnouncementDeliveryTests(TestCase):
-    """Push has to be *configured* for the form to accept the ticked box at all.
+    """Push must be configured for the form to accept the ticked box.
 
-    With no FCM credentials ``member_counts()`` reports nobody reachable, ``ClubAnnouncementForm``
-    disables ``send_to_push``, and a disabled field drops the submitted value -- so an undecorated
-    test here measures whatever ``FIREBASE_CREDENTIALS_JSON`` happens to be in the environment, or
-    whatever the last ``override_settings`` in the run left behind. It belongs on the class rather
-    than on the two methods that happened to have it: every test in here posts the form.
+    Without FCM credentials ``member_counts()`` reports nobody reachable and ``ClubAnnouncementForm``
+    disables ``send_to_push``, so an undecorated test measures the environment instead.
     """
 
     def setUp(self):
@@ -240,10 +235,9 @@ class AnnouncementDeliveryTests(TestCase):
         return ClubMember.objects.create(club=self.club, user=user, email=user.email)
 
     def _grace_expires(self):
-        """Run the send the way the queued task does, once the retract window has passed.
+        """Run the send as the queued task does, once the retract window has passed.
 
-        Posting the form no longer delivers anything -- every announcement waits GRACE_SECONDS so
-        it can be retracted -- so a test that wants to see what came out has to let the clock run.
+        Posting the form delivers nothing: every announcement waits GRACE_SECONDS so it can be retracted.
         """
         return announcements.send_due(now=timezone.now() + datetime.timedelta(seconds=announcements.GRACE_SECONDS + 5))
 
@@ -268,8 +262,7 @@ class AnnouncementDeliveryTests(TestCase):
 
     @override_settings(FIREBASE_CREDENTIALS_JSON="test-firebase-key")
     def test_posting_sends_to_every_ticked_channel_and_records_what_happened(self):
-        # Without FCM credentials the form disables send_to_push and drops the ticked box, so this
-        # would measure the machine's .env rather than the delivery. See the failed-Discord test.
+        # Without FCM credentials the form drops the ticked box.
         member = self._reachable_member()
         self.client.force_login(self.admin)
         with (
@@ -422,8 +415,7 @@ class AnnouncementsEmbedTests(TestCase):
         self.assertContains(self.client.get(self.url, {"format": "iframelight"}), "Nothing new")
 
     def test_every_render_is_counted_whatever_the_format(self):
-        """A render count, not a read count -- it answers "is my snippet showing this at all".
-        JSON counts too: a club rendering the JSON itself has put it on a page just the same."""
+        """Every render is counted, in any format: a render count, not a read count. JSON counts too."""
         announcement = self._announce("Counted")
         for fmt in ("json", "iframelight", "unstyledhtml"):
             self.client.get(self.url, {"format": fmt})
@@ -607,11 +599,9 @@ class AnnouncementsHereCommandTests(TestCase):
 class AnnouncementEmailChannelTests(TestCase):
     """The two email providers, which are two channels rather than one.
 
-    A club with both connected has two lists with two different sets of people on them, so "email"
-    as a single channel would mail whoever is on both of them twice. Everything below is about
-    keeping the pair independent: either one alone, both, or neither; one failing must not take the
-    other with it; and neither may ever be sent through this site's own mail server, because the
-    provider is what owns the unsubscribe list.
+    A club with both has two lists with different people on them, so one "email" channel would mail
+    anyone on both twice. Either alone, both, or neither; one failing must not take the other with it;
+    and neither goes through this site's mail server, because the provider owns the unsubscribe list.
     """
 
     def setUp(self):
@@ -673,8 +663,9 @@ class AnnouncementEmailChannelTests(TestCase):
         self.assertNotIn("subject", ClubAnnouncementForm(None, club=self.club).fields)
 
     def test_the_other_provider_is_hidden_once_one_is_connected(self):
-        """A permanently disabled "Connect Brevo" box beside a working Mailchimp one can only ever
-        be wrong. Both are offered while neither is connected, because then it is a menu."""
+        """A permanently disabled "Connect Brevo" box beside a working Mailchimp one can only be wrong. Both
+        are offered while neither is connected, because then it's a menu.
+        """
         both = ClubAnnouncementForm(None, club=self.club).fields
         self.assertIn("send_to_mailchimp", both)
         self.assertIn("send_to_brevo", both)
@@ -690,8 +681,9 @@ class AnnouncementEmailChannelTests(TestCase):
         self.assertIn("send_to_brevo", fields)
 
     def test_nothing_is_ticked_when_the_form_opens(self):
-        """Including the website box, whose model default is True: a pre-ticked channel is one
-        nobody chose, and an empty form is refused rather than published quietly."""
+        """Nothing is ticked when the form opens, including the website box (whose model default is True): a
+        pre-ticked channel is one nobody chose, and an empty form is refused.
+        """
         form = ClubAnnouncementForm(None, club=self.club)
         for field_name in ("send_to_discord", "send_to_push", "send_to_mailchimp", "send_to_brevo"):
             self.assertFalse(form.fields[field_name].initial, field_name)
@@ -705,8 +697,8 @@ class AnnouncementEmailChannelTests(TestCase):
         self.client.force_login(self.admin)
         with patch("auctions.tasks.send_announcement_emails.delay") as task:
             self.client.post(self.url, {"text": "Swap night", "send_to_mailchimp": "on"})
-            # Not during the window: an email cannot be retracted, so it must not go out while
-            # the club still thinks it can stop it.
+            # Not during the window: an email can't be retracted, so it must not go out while the
+            # club still thinks it can stop it.
             task.assert_not_called()
             announcements.send_due(now=timezone.now() + datetime.timedelta(seconds=announcements.GRACE_SECONDS + 5))
         announcement = ClubAnnouncement.objects.get()
@@ -723,7 +715,7 @@ class AnnouncementEmailChannelTests(TestCase):
         announcement = ClubAnnouncement.objects.create(club=self.club, text="Hello everyone")
         mailchimp_html, _ = announcements.render_email(announcement, greeting=announcements.MAILCHIMP_GREETING)
         brevo_html, _ = announcements.render_email(announcement, greeting=announcements.BREVO_GREETING)
-        # Marked safe on the way in, so the provider sees its own syntax rather than escaped text.
+        # Marked safe on the way in, so the provider sees its own syntax.
         self.assertIn("*|IF:FNAME|*", mailchimp_html)
         self.assertIn("{{ contact.FIRSTNAME", brevo_html)
         self.assertNotIn("&quot;", brevo_html)
@@ -783,8 +775,9 @@ class AnnouncementEmailChannelTests(TestCase):
             self.assertTrue(form.is_valid(), form.errors)
 
     def test_the_subject_is_always_the_club_and_the_word_announcement(self):
-        """Not the first line, and not anything the club typed: a one-sentence announcement in the
-        subject *and* the body shows the same words twice in an inbox."""
+        """The subject is always the club and the word announcement: a one-sentence announcement in the
+        subject and the body shows the same words twice in an inbox.
+        """
         announcement = ClubAnnouncement.objects.create(club=self.club, text="Bring plants\nand buckets")
         self.assertEqual(announcement.email_subject, f"{self.club.name} announcement")
         announcement.subject = "Saturday"
@@ -945,12 +938,11 @@ class AnnouncementRetractTests(TestCase):
 
 
 class AnnouncementUnsubscribeTests(TestCase):
-    """Who an announcement can reach, per channel, and why the answers differ.
+    """Who an announcement can reach, per channel.
 
-    The email half is not ours to decide: a campaign goes to the provider's list, and this site's
-    contribution is having kept that list right. "No non-essential emails" makes a member
-    unsubscribed at the provider, so the campaign skips them -- while push still reaches them,
-    because that preference is about email and installing the app was its own opt-in.
+    The email half isn't ours: a campaign goes to the provider's list. "No non-essential emails"
+    unsubscribes a member there, so the campaign skips them, while push still reaches them because that
+    preference is about email and installing the app was its own opt-in.
     """
 
     def setUp(self):
@@ -992,11 +984,8 @@ class AnnouncementUnsubscribeTests(TestCase):
 
 
 class AnnouncementSchedulingTests(TestCase):
-    """ "Send at 9am Friday", and the row that exists in between.
-
-    A scheduled announcement is written now and delivered later, which means there is a window
-    where the row exists and nobody may see it: not on the club's website, not at its own URL, and
-    not counted as sent. Most of the tests below are about that window.
+    """ "Send at 9am Friday", and the row that exists in between: written now, delivered later, and in the
+    window nobody may see it -- not on the website, not at its own URL, not counted as sent.
     """
 
     def setUp(self):

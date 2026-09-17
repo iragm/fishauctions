@@ -64,7 +64,7 @@ class ClubAPITests(TestCase):
         self.assertGreaterEqual(len(data), 1)
 
     def test_api_does_not_expose_lat_lng(self):
-        """lat/lng coordinates must never appear in the API response to protect member location privacy."""
+        """Coordinates must never appear in the API response."""
         from rest_framework.authtoken.models import Token  # noqa: PLC0415
 
         token = Token.objects.create(user=self.owner)
@@ -251,7 +251,7 @@ class ClubBapLotAPITests(TestCase):
             winning_price=5 if winner else None,
             **kwargs,
         )
-        # date_end is set by the ending/selling code paths, not by Lot.save(), so tests set it here
+        # date_end is set by the ending and selling paths, not Lot.save().
         Lot.objects.filter(pk=lot.pk).update(date_end=timezone.now() - datetime.timedelta(days=days_ago))
         lot.refresh_from_db()
         return lot
@@ -317,7 +317,7 @@ class ClubBapLotAPITests(TestCase):
         self.assertTrue(lot["timestamp"].startswith(str(self.recent_lot.date_end.year)))
 
     def test_all_times_are_utc(self):
-        """Mixing the club's local offset into some fields and UTC into others would be a trap."""
+        """Every time is UTC: mixing the club's local offset into some fields would be a trap."""
         self.enable_bap_permission()
         with override_settings(TIME_ZONE="America/New_York", USE_TZ=True):
             data = self.get(start="2026-01-01").json()
@@ -326,7 +326,7 @@ class ClubBapLotAPITests(TestCase):
         self.assertTrue(data["results"][0]["timestamp"].endswith("Z"), data["results"][0]["timestamp"])
 
     def test_lot_id_is_the_lots_permanent_id(self):
-        """lot_id is the caller's idempotency key, so it has to be the real primary key."""
+        """lot_id is the caller's idempotency key, so it's the real primary key."""
         self.enable_bap_permission()
         lot = self.get().json()["results"][0]
         self.assertEqual(lot["lot_id"], self.recent_lot.pk)
@@ -356,14 +356,14 @@ class ClubBapLotAPITests(TestCase):
 
     def test_ineligible_lot_says_why(self):
         self.enable_bap_permission()
-        # Nobody ticked the breeder checkbox, so this lot was never a BAP candidate
+        # Nobody ticked the breeder checkbox, so this was never a BAP candidate.
         lot = self.get().json()["results"][0]
         self.assertFalse(lot["bap_eligible"])
         self.assertEqual(lot["bap_ineligible_reason"], "not_bred")
         self.assertEqual(lot["bap_ineligible_reason_display"], "Didn't breed this fish")
 
     def test_ineligible_reason_is_recomputed_not_read_from_the_stored_one(self):
-        """bap_auto_reason is a historical record; bap_ineligible_reason answers "right now"."""
+        """bap_ineligible_reason is recomputed; bap_auto_reason is the historical record."""
         self.enable_bap_permission()
         Lot.objects.filter(pk=self.recent_lot.pk).update(bap_auto_reason="not_club_member")
         lot = self.get().json()["results"][0]
@@ -389,7 +389,7 @@ class ClubBapLotAPITests(TestCase):
         self.assertEqual(lot["bap_award"]["hap_points"], 0)
         self.assertEqual(lot["bap_award"]["cap_points"], 0)
         self.assertEqual(lot["bap_award"]["notes"], "Bred corydoras")
-        # awarded_by is null on this award, which is how the site records an automatic one
+        # awarded_by is null, which is how an automatic award is recorded.
         self.assertTrue(lot["bap_award"]["auto_awarded"])
 
     def test_manually_awarded_points_are_not_reported_as_automatic(self):
@@ -435,7 +435,7 @@ class ClubBapLotAPITests(TestCase):
         self.enable_bap_permission()
         response = self.get(start="last tuesday")
         self.assertEqual(response.status_code, 400)
-        # The error names the accepted formats without echoing what the caller sent
+        # The error names the accepted formats without echoing what was sent.
         self.assertIn("YYYY-MM-DD", response.json()["error"])
         self.assertNotIn("last tuesday", response.json()["error"])
 
@@ -637,7 +637,7 @@ class ClubAuctionReadAPITests(WritableMediaRoot, TestCase):
         self.assertEqual([row["slug"] for row in data["results"]], [newer.slug, self.auction.slug])
 
     def test_latest_includes_an_unpromoted_auction(self):
-        """The point of `latest`: an auction that has not been announced yet is still the newest."""
+        """`latest` includes an unpromoted auction: it's still the newest."""
         self.allow("can_read_auction_info")
         draft = Auction.objects.create(
             created_by=self.owner,
@@ -712,7 +712,7 @@ class ClubAuctionReadAPITests(WritableMediaRoot, TestCase):
         self.assertEqual(private["created_by"], "auction_api_owner")
 
     def test_the_google_drive_link_is_never_returned(self):
-        """The sheet is shared "anyone with the link can view", so the link is the credential."""
+        """The Google Drive link is never returned: the sheet is shared to anyone with the link."""
         self.allow("can_read_auction_info", "can_read_public_lots", "can_read_private_lots")
         Auction.objects.filter(pk=self.auction.pk).update(
             google_drive_link="https://docs.google.com/spreadsheets/d/secret/edit"
@@ -879,7 +879,7 @@ class ClubAuctionReadAPITests(WritableMediaRoot, TestCase):
         self.assertEqual(self.names(lot_name="nothing here"), [])
         self.assertEqual(self.names(description="driftwood"), ["Anubias nana"])
         self.assertEqual(self.names(custom_field_1="cares"), ["Anubias nana"])
-        # A dropdown is a controlled vocabulary, so this one matches the whole value.
+        # A dropdown is a controlled vocabulary, so this matches the whole value.
         self.assertEqual(self.names(custom_dropdown="10 GALLON"), ["Anubias nana"])
         self.assertEqual(self.names(custom_dropdown="gallon"), [])
 
@@ -904,12 +904,12 @@ class ClubAuctionReadAPITests(WritableMediaRoot, TestCase):
                 self.assertEqual(self.names(filter=term), expected)
 
     def test_a_number_in_the_generic_filter_is_a_lot_number(self):
-        """Otherwise "1" matches "10 gallon" and half the descriptions, and buries the lot."""
+        """A number in the generic filter is a lot number, or "1" would match half the descriptions."""
         self.allow("can_read_public_lots")
         self.extra_lots()
         self.assertEqual(self.names(filter=str(self.lot.lot_number_display)), ["6 Corydoras panda fry"])
         self.assertEqual(self.names(filter=str(self.anubias.lot_number_display)), ["Anubias nana"])
-        # The per-column parameter is still there for somebody who really does want digits in text.
+        # The per-column parameter still matches digits in text.
         self.assertEqual(self.names(custom_dropdown="10 gallon"), ["Anubias nana"])
 
     def test_the_generic_filter_never_reaches_a_persons_name(self):
@@ -1047,7 +1047,7 @@ class ClubAuctionReadAPITests(WritableMediaRoot, TestCase):
         self.assertEqual(lot["images"], [])
 
     def test_the_thumbnail_falls_back_to_an_auto_added_image(self):
-        """The same picture the lot list on this site shows, so a club's own page isn't blank."""
+        """The thumbnail falls back to an auto-added image, as the lot list does, so a club's page isn't blank."""
         self.allow("can_read_public_lots")
         older = Auction.objects.create(
             created_by=self.owner,
@@ -1064,8 +1064,8 @@ class ClubAuctionReadAPITests(WritableMediaRoot, TestCase):
             lot_name="6 Corydoras panda fry", auction=older, auctiontos_seller=older_tos, quantity=6
         )
         self.make_image(older_lot, is_primary=True)
-        # Lot.auto_image only reaches back into auctions run by *this* auction's admin team, and
-        # membership of that team is an AuctionTOS row rather than the created_by column.
+        # Lot.auto_image only reaches auctions run by this auction's admin team, and membership is
+        # an AuctionTOS row rather than created_by.
         AuctionTOS.objects.create(
             name="Admin",
             email="a@example.com",
@@ -1127,9 +1127,8 @@ class ParseBoolEnvTests(TestCase):
                 self.assertTrue(parse_bool_env(value, default=False))
 
     def test_falsy_spellings(self) -> None:
-        # "False" is the legacy spelling in .env.example; "false" was the
-        # previously-broken case under the old `== "False"` check.
-        # "   " covers the whitespace-only path documented in _env.py.
+        # "False" is .env.example's spelling; "false" was broken under the old `== "False"` check,
+        # and "   " covers the whitespace-only path in _env.py.
         for value in ("0", "false", "False", "FALSE", "no", "off", "f", "n", "", "   "):
             with self.subTest(value=value):
                 self.assertFalse(parse_bool_env(value, default=True))
@@ -1174,8 +1173,7 @@ class RequireSecureProdSecretsTests(TestCase):
         )
 
     def test_each_insecure_value_raises(self) -> None:
-        # None covers "env var unset"; "" and "unsecure" are the literal
-        # placeholders shipped in settings.py and docker-compose.yaml.
+        # None is "unset"; "" and "unsecure" are the placeholders in settings.py and compose.
         for value in (None, "", "unsecure"):
             with self.subTest(value=value):
                 with self.assertRaises(ImproperlyConfigured) as ctx:
@@ -1236,7 +1234,7 @@ class ClubAuctionIntegrationTests(TestCase):
         return response
 
     def test_auction_associated_with_club_on_creation(self):
-        """Auction is automatically associated with club when creator has admin permission"""
+        """An auction is associated with the club when its creator has admin permission."""
         response = self._create_auction_via_view(self.owner)
         # Should redirect (success)
         self.assertEqual(response.status_code, 302)
@@ -1259,7 +1257,7 @@ class ClubAuctionIntegrationTests(TestCase):
         self.assertEqual(self.owner.userdata.last_auction_used, auction)
 
     def test_no_club_association_when_no_permission(self):
-        """Auction is not associated with club if user has no admin/manage_auctions permission"""
+        """No club association without admin or manage_auctions permission."""
         user_no_perm = User.objects.create_user(username="no_perm", password="testpass", email="no_perm@example.com")
         user_no_perm.userdata.club = self.club
         user_no_perm.userdata.save()
@@ -1271,7 +1269,7 @@ class ClubAuctionIntegrationTests(TestCase):
         self.assertIsNone(auction.club)
 
     def test_club_detail_shows_promoted_auctions(self):
-        """The club page's event list includes promoted auctions belonging to that club"""
+        """The club page's event list includes that club's promoted auctions."""
         auction = Auction.objects.create(
             title="Club Promoted Auction",
             date_start=timezone.now() + timezone.timedelta(days=7),
@@ -1301,7 +1299,7 @@ class ClubAuctionIntegrationTests(TestCase):
         self.assertEqual(len(list(response.context["upcoming_events"])), 0)
 
     def test_club_detail_lists_soonest_events_first(self):
-        """The list is a calendar now, so it reads forward in time rather than newest-first."""
+        """The club page lists the soonest events first: it's a calendar, not a feed."""
         sooner = Auction.objects.create(
             title="Sooner Auction",
             date_start=timezone.now() + timezone.timedelta(days=7),
@@ -1324,9 +1322,9 @@ class ClubAuctionIntegrationTests(TestCase):
         self.assertEqual([event.auction_id for event in events[:2]], [sooner.pk, later.pk])
 
     def test_role_assignment_fills_club_on_existing_auctions(self):
-        """When a member gains manage_auctions permission, existing auctions get club filled in"""
+        """Gaining manage_auctions permission fills in the club on existing auctions."""
         user2 = User.objects.create_user(username="role_assign", password="testpass", email="role_assign@example.com")
-        # User must have the same club in preferences for the signal to associate
+        # The signal only associates when the user's preferences name the same club.
         user2.userdata.club = self.club
         user2.userdata.save()
         # Create auction without club
@@ -1347,7 +1345,7 @@ class ClubAuctionIntegrationTests(TestCase):
     def test_role_assignment_creates_history_notes(self):
         """Auction history note is created when club is set via permission assignment"""
         user2 = User.objects.create_user(username="role_hist", password="testpass", email="role_hist@example.com")
-        # User must have the same club in preferences for the signal to associate
+        # The signal only associates when the user's preferences name the same club.
         user2.userdata.club = self.club
         user2.userdata.save()
         auction = Auction.objects.create(
@@ -1375,7 +1373,7 @@ class ClubAuctionIntegrationTests(TestCase):
         )
         ClubMember.objects.create(club=self.club, user=user3, name="No Pref", permission_manage_auctions=True)
         auction.refresh_from_db()
-        # club should remain None since user's preferences don't point to this club
+        # The club stays None, since the user's preferences point elsewhere.
         self.assertIsNone(auction.club)
 
     def test_club_abbreviation_auto_filled_on_save(self):
@@ -1416,7 +1414,7 @@ class ClubAuctionIntegrationTests(TestCase):
         self.assertEqual(response.status_code, 200)
 
     def test_club_admins_added_as_tos_on_pickup_location_create(self):
-        """When first pickup location is created for a club auction, club admin members get AuctionTOS"""
+        """Club admins get an AuctionTOS when a club auction's first pickup location is created."""
         # Create a second user with manage_auctions permission
         user2 = User.objects.create_user(username="admin2_tos", password="testpass", email="admin2_tos@example.com")
         ClubMember.objects.create(

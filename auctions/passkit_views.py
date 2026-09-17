@@ -1,9 +1,8 @@
-"""Apple PassKit web service — the endpoints installed Wallet passes talk to.
+"""Apple PassKit web service: the endpoints installed Wallet passes talk to.
 
-Every .pkpass we generate embeds webServiceURL (https://<domain>/passkit) and a
-per-member authenticationToken (ClubMember.apple_pass_auth_token).  iOS appends
-/v1/... to that base URL, so the five routes here implement Apple's Web Service
-Reference verbatim:
+Every .pkpass embeds webServiceURL (https://<domain>/passkit) and a per-member authenticationToken
+(ClubMember.apple_pass_auth_token). iOS appends /v1/..., so these five routes implement Apple's Web
+Service Reference verbatim:
 
     POST   /passkit/v1/devices/<dlid>/registrations/<passTypeId>/<serial>  register device
     DELETE /passkit/v1/devices/<dlid>/registrations/<passTypeId>/<serial>  unregister device
@@ -11,15 +10,12 @@ Reference verbatim:
     GET    /passkit/v1/passes/<passTypeId>/<serial>                        latest .pkpass
     POST   /passkit/v1/log                                                 device error reports
 
-The update flow: a signal notices a wallet-visible change, a Celery task bumps
-ClubMember.apple_pass_updated and pokes APNs (auctions/apple_wallet.py), the
-device calls the registrations endpoint to learn which serials changed, then
-re-fetches each pass from the passes endpoint.
+The update flow: a signal notices a wallet-visible change, a task bumps ClubMember.apple_pass_updated
+and pokes APNs (auctions/apple_wallet.py), the device asks which serials changed, then re-fetches.
 
-Endpoints that take a serial authenticate with "Authorization: ApplePass
-<token>"; the registrations-list endpoint has no auth header in Apple's spec
-(the device library identifier, generated on-device, is the capability).  CSRF
-is exempted — callers are iPhones, not browsers with our session cookies.
+Endpoints taking a serial authenticate with "Authorization: ApplePass <token>"; the registrations
+list has no auth header in Apple's spec (the device library identifier is the capability). CSRF is
+exempt: the callers are iPhones.
 """
 
 import json
@@ -41,8 +37,8 @@ logger = logging.getLogger(__name__)
 def _member_from_serial(pass_type_id, serial_number):
     """Resolve a serial like "member-123" to its ClubMember, or None.
 
-    Soft-deleted members are included on purpose: their pass must keep being
-    served (voided) so installed copies gray out instead of erroring forever.
+    Soft-deleted members are included so their pass keeps being served (voided) and installed copies
+    grey out rather than erroring forever.
     """
     from .apple_wallet import is_configured
 
@@ -55,10 +51,9 @@ def _member_from_serial(pass_type_id, serial_number):
 
 
 def _is_authorized(request, member):
-    """Check the ApplePass auth header against the member's pass token.
+    """Check the ApplePass header against the member's token.
 
-    An empty stored token (pass never generated) can never authorize — otherwise
-    a blank Authorization header would compare equal to it.
+    An empty stored token can never authorize, or a blank header would compare equal to it.
     """
     scheme, _, token = request.headers.get("Authorization", "").partition(" ")
     return (
@@ -69,11 +64,10 @@ def _is_authorized(request, member):
 
 
 def _update_tag(member) -> int:
-    """The member's pass version as a unix timestamp (whole seconds).
+    """The member's pass version as a unix timestamp.
 
-    Used both as the Last-Modified value on pass delivery and as the
-    lastUpdated / passesUpdatedSince tag on the registrations endpoint, so the
-    two update channels can never disagree.
+    Used as Last-Modified on pass delivery and as the lastUpdated tag on the registrations endpoint, so
+    the two channels can't disagree.
     """
     return int(member.apple_pass_updated.timestamp())
 
@@ -94,8 +88,7 @@ class PassKitRegistrationView(View):
             push_token = ""
         if not push_token:
             return HttpResponse(status=400)
-        # update_or_create rather than get_or_create: APNs tokens rotate (device
-        # restore, OS update) and the registration must track the newest one.
+        # update_or_create, since APNs tokens rotate and the registration tracks the newest.
         _registration, created = AppleDeviceRegistration.objects.update_or_create(
             member=member,
             device_library_identifier=device_library_id,
@@ -114,9 +107,9 @@ class PassKitRegistrationView(View):
 
 
 class PassKitDeviceRegistrationsView(View):
-    """List serial numbers of this device's passes updated since a tag.
+    """List serials of this device's passes updated since a tag.
 
-    204 = registered but nothing new; 404 = this device holds none of our passes.
+    204 means registered with nothing new; 404 means this device holds none of our passes.
     """
 
     def get(self, request, device_library_id, pass_type_id):
@@ -150,9 +143,8 @@ class PassKitDeviceRegistrationsView(View):
 class PassKitPassView(View):
     """Serve the freshest signed .pkpass for a serial.
 
-    Unlike the user-facing download views, this must NOT 404 when barcodes are
-    turned off or the member was deactivated — the pass is served voided instead
-    (see _build_pass_json), which is the only way to kill an installed pass.
+    Unlike the user-facing download, this must not 404 when barcodes are off or the member is
+    deactivated: the pass is served voided, which is the only way to kill an installed pass.
     """
 
     def get(self, request, pass_type_id, serial_number):
@@ -175,10 +167,8 @@ class PassKitPassView(View):
 
 @method_decorator(csrf_exempt, name="dispatch")
 class PassKitLogView(View):
-    """Devices report pass errors here (bad signature, fetch failures, ...).
-
-    Always 200 — this is fire-and-forget telemetry, but it is the only
-    visibility Apple gives into why a pass misbehaves on-device, so log it.
+    """Devices report pass errors here. Always 200 -- fire-and-forget telemetry, but the only visibility
+    Apple gives into why a pass misbehaves on-device.
     """
 
     def post(self, request):

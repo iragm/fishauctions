@@ -95,8 +95,8 @@ class DonationRoutingTests(DonationTestMixin, TestCase):
         info = resolve_routing_info(f"{self.club.slug}-donations-{self.vendor.routing_key}")
         self.assertEqual(info["kind"], "donation")
         self.assertEqual(info["vendor_key"], self.vendor.routing_key)
-        # No donation contact set, so there is nobody to forward to -- but the alias still resolves
-        # so the message reaches the webhook and is recorded.
+        # No donation contact, so nobody to forward to, but the alias still resolves and the
+        # message reaches the webhook.
         self.assertEqual(info["recipient"], "")
 
     @override_settings(**ROUTING_SETTINGS)
@@ -148,13 +148,10 @@ class DonationRoutingTests(DonationTestMixin, TestCase):
 
     @override_settings(**ROUTING_SETTINGS)
     def test_the_resolve_endpoint_passes_the_donation_kind_through(self):
-        """The seam the Lambda actually reads.
+        """The resolve endpoint passes the donation kind through.
 
-        ``resolve_routing_info`` marking an address as a donation is worth nothing if the view in
-        front of it drops the flag: the Lambda decides *both* whether to post the body back here
-        and whether an empty recipient means "forward to nobody" from this one field.  Without it
-        no vendor reply is ever recorded, and a club with no donation contact has its vendors'
-        replies forwarded to the site's fallback inbox instead.
+        The Lambda reads it to decide whether to post the body back and whether an empty recipient means
+        "forward to nobody"; without it no reply is recorded and replies go to the fallback inbox.
         """
         url = reverse("inbound_email_routing")
         address = f"{self.club.slug}-donations-{self.vendor.routing_key}"
@@ -420,11 +417,8 @@ class DraftingTests(DonationTestMixin, TestCase):
         self.assertEqual(donations.draft_mode("theirs"), donations.DRAFT_MODE_REPLY)
 
     def test_a_reply_is_not_briefed_as_a_donation_request(self):
-        """The bug this guards: one first-approach system prompt for all three emails.
-
-        A heading in the user turn asking for a reply loses to a system prompt that says "you write
-        donation request emails, say who the club is, make the ask, say what the business gets" --
-        so the answer to "sure, what's the next step?" came back reading like a fresh solicitation.
+        """A reply isn't briefed as a donation request: one first-approach system prompt for all three emails
+        made "sure, what's the next step?" come back as a fresh solicitation.
         """
         donations.draft_request(self.vendor, last_email="Sure, what's the next step?")
         system = self.provider.calls[0]["system"]
@@ -446,7 +440,7 @@ class DraftingTests(DonationTestMixin, TestCase):
         self.assertNotIn("Make one clear, modest ask", system)
 
     def test_every_kind_keeps_the_contract_and_the_footer_rule(self):
-        """The shared base, checked per mode: the tax rule has a test of its own in SendingTests."""
+        """The shared contract and footer rule, per mode; the tax rule has its own test in SendingTests."""
         for mode in (donations.DRAFT_MODE_FIRST, donations.DRAFT_MODE_FOLLOWUP, donations.DRAFT_MODE_REPLY):
             system = donations.draft_system_prompt(mode)
             with self.subTest(mode=mode):
@@ -581,10 +575,9 @@ class SendingTests(DonationTestMixin, TestCase):
         self.assertIn("Test Aquarium Society\n1 Main St", footer)
 
     def test_the_draft_prompt_keeps_the_address_out_of_the_body(self):
-        """It is in the footer of every email already; repeating it is what made them long.
+        """The draft prompt keeps the address out of the body, since it's already in the footer.
 
-        Only while nobody has asked. A vendor who writes back wanting to know what happens next is
-        answered in the body -- see ``DraftingTests`` for that half.
+        Only while nobody has asked: a vendor who wants to know what happens next is answered in the body.
         """
         for mode in (donations.DRAFT_MODE_FIRST, donations.DRAFT_MODE_FOLLOWUP):
             with self.subTest(mode=mode):
@@ -1038,8 +1031,8 @@ class VendorListOrderTests(DonationTestMixin, TestCase):
 class LatestReplyColumnTests(DonationTestMixin, TestCase):
     """The vendor table's one-line summary of what each vendor last said.
 
-    The summary itself is written when the reply arrives (see :class:`IncomingStatusRulesTests`);
-    this is about getting it in front of somebody without opening every vendor in turn.
+    The summary is written when the reply arrives (:class:`IncomingStatusRulesTests`); this is about
+    seeing it without opening every vendor.
     """
 
     def setUp(self):
@@ -1176,12 +1169,8 @@ class DonationContactOnEmailSettingsTests(DonationTestMixin, TestCase):
         self.assertIn("Turn on donation tracking", form.fields["donation_email_member"].help_text)
 
     def test_it_recommends_leaving_the_contact_unset(self):
-        """The recommendation stays on the field; the reasoning for it moved to a note above.
-
-        Both used to say the whole thing, on one screen, which made the recommendation easier to
-        skim past rather than harder. The note is on the email settings page (where the field is)
-        rather than the donation settings page (where the field isn't), and only when the club
-        actually runs donation tracking.
+        """The recommendation stays on the field and the reasoning moved to a note above it, on the email
+        settings page and only when the club runs donation tracking.
         """
         self.assertIn("Leave blank (recommended)", self.form().fields["donation_email_member"].help_text)
 
@@ -1407,10 +1396,9 @@ class ReviewStepButtonsTests(DonationTestMixin, TestCase):
             self.assertNotContains(response, 'hx-vals=\'{"step": "generate"}\'', msg_prefix=mode)
 
     def test_the_footer_is_not_clipped_out_of_a_scrollable_modal(self):
-        """The buttons live in a <form> inside .modal-content, which Bootstrap alone would hide.
+        """The buttons are in a <form> inside .modal-content, which Bootstrap alone hides.
 
-        See the .modal-dialog-scrollable rule in auction_site.css: without it a long email pushes
-        the footer past the content box and it is silently cropped away.
+        See the .modal-dialog-scrollable rule in auction_site.css: without it a long email crops the footer.
         """
         response = self.review()
         self.assertContains(response, "modal-dialog-scrollable")
@@ -1615,12 +1603,10 @@ class TextHandlingTests(TestCase):
         self.assertIn("Yes, we can donate a filter.", cleaned)
 
     def test_a_body_built_to_be_slow_is_still_fast(self):
-        """Bodies arrive from strangers, so the stripping has to stay linear in their length.
+        """A body built to be slow is still fast: stripping must stay linear in length.
 
-        Each of these used to backtrack from every opening tag to the end of the string looking for
-        a closer that never comes: at this size the script/style pattern alone took ~13 seconds, and
-        a real multi-megabyte email would have taken hours of CPU. Anything near the old cost fails
-        this even on a slow machine.
+        Each of these used to backtrack from every opening tag looking for a closer that never comes; the
+        script/style pattern alone took ~13 seconds at this size.
         """
         import time
 

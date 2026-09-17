@@ -1,15 +1,14 @@
 """Turn a characterized :class:`~auctions.models.ObservedPrinter` into a draft printer profile.
 
-The ask this answers: *pick a printer → it either works, or we collect everything we can and
-generate a request to add it.* The app can learn most of what a profile needs by asking the printer
-— which command language answers, what its GATT tree looks like — and the one thing no query can
-discover, what its status byte *means*, it derives by walking the user through four physical states
-whose meaning is known in advance. Working that out for the Y486BT took someone with the hardware
-and an afternoon; this is that afternoon as four button presses, done by whoever owns the printer.
+The app learns most of what a profile needs by asking the printer -- which command language answers,
+what its GATT tree looks like -- and derives the one thing no query can discover, what its status
+byte means, by walking the user through four physical states whose meaning is known in advance.
+Working that out for the Y486BT took someone with the hardware and an afternoon; this is that
+afternoon as four button presses, done by whoever owns the printer.
 
-What arrives here is therefore evidence, and this module assembles it into a hypothesis. The
-drafted profile is created **disabled** on purpose: the person who submitted the observation is the
-one holding the printer, and "Print test label" in the app is what confirms it.
+What arrives is evidence, and this assembles it into a hypothesis. The drafted profile is created
+**disabled**: the person who submitted the observation is holding the printer, and "Print test
+label" is what confirms it.
 """
 
 import logging
@@ -21,8 +20,7 @@ from auctions.printer_programs import LANGUAGE_TEMPLATES
 
 logger = logging.getLogger(__name__)
 
-# Standard GATT services every BLE device carries. None of them is the printer's data pipe, so the
-# vendor service is whatever is left over once these are removed.
+# Standard GATT services every BLE device carries; the vendor service is what's left after these.
 _GENERIC_SERVICE_PREFIXES = ("1800", "1801", "180a", "180f", "1802", "1803", "1804", "181c")
 # The short forms above expand into the Bluetooth base UUID.
 _BASE_UUID_SUFFIX = "-0000-1000-8000-00805f9b34fb"
@@ -40,9 +38,8 @@ class DraftError(Exception):
 def profile_matches_observation(profile, observation):
     """Would *profile* now claim the printer in *observation*?
 
-    Mirrors the app's matching: case-insensitive regexes against the advertised BLE name and what
-    the printer reports over the GATT Device Information Service. Used to work out whose
-    hand-identified printer a newly enabled profile has just started supporting.
+    Mirrors the app's matching against the advertised BLE name and the GATT Device Information Service.
+    Used to find whose hand-identified printer a newly enabled profile has started supporting.
     """
     candidates = (
         (profile.ble_name_patterns, observation.ble_name),
@@ -57,7 +54,7 @@ def profile_matches_observation(profile, observation):
                 if re.search(pattern, value, re.IGNORECASE):
                     return True
             except re.error:
-                # A bad regex is rejected on save, but a row saved before that check exists must
+                # A bad regex is rejected on save, but a row saved before that check existed must
                 # not break every later profile edit.
                 logger.warning("Ignoring invalid match pattern %r on profile %s", pattern, profile.slug)
     return False
@@ -82,16 +79,14 @@ def _properties(characteristic):
 def pick_gatt_ids(gatt):
     """Choose (service, write characteristic, notify characteristic) from a reported GATT tree.
 
-    Returns blanks when the tree doesn't say — a blank means "discover at runtime", which is the
-    existing fallback behaviour and better than a confidently wrong id.
+    Blanks mean "discover at runtime", which is better than a confidently wrong id. Picking these wrong
+    is silent: the Y486BT's first writable characteristic belongs to its radio module's control channel,
+    so labels went into the radio's configuration with nothing printed and nothing errored.
 
-    Picking these wrong is *silent*: the Y486BT's first writable characteristic belongs to its radio
-    module's control channel, so labels went into the radio's configuration and nothing printed and
-    nothing errored. So only a non-generic (vendor) service is considered, and within it writable
-    characteristics are ranked by how much they look like a data pipe rather than a config channel:
-    a pipe takes write-without-response and is not readable; a control channel is usually
-    read+write. That is a heuristic, not a proof — which is the other reason a drafted profile ships
-    disabled, and why the full tree goes into the notes for a human to check.
+    So only a non-generic service is considered, and its writable characteristics are ranked by how much
+    they look like a data pipe rather than a config channel -- a pipe takes write-without-response and
+    isn't readable. A heuristic, which is the other reason a draft ships disabled and the full tree goes
+    into the notes.
     """
     if not isinstance(gatt, list):
         return "", "", ""
@@ -113,7 +108,7 @@ def pick_gatt_ids(gatt):
 
 
 def _pipe_rank(characteristic):
-    """Sort key: lower is more likely to be the print data pipe (not a config channel)."""
+    """Sort key: lower is more likely to be the print data pipe rather than a config channel."""
     properties = _properties(characteristic)
     takes_writenr = bool(properties & {"writenr", "writewithoutresponse", "write_without_response"})
     readable = "read" in properties
@@ -123,8 +118,8 @@ def _pipe_rank(characteristic):
 def draft_slug(observation):
     """A stable, readable slug from the model or BLE name.
 
-    Deliberately *not* uniquified per observation: two people reporting the same printer should
-    refresh one draft, not race to create two rows that differ only by suffix.
+    Deliberately not uniquified: two people reporting the same printer should refresh one draft rather
+    than race to create two rows differing by suffix.
     """
     return (slugify(observation.model or observation.ble_name or "") or f"printer-{observation.pk}")[:50]
 
@@ -140,10 +135,9 @@ def _draft_notes(observation):
         "profile stays disabled until a test label confirms it.",
     ]
     if observation.manufacturer:
-        # The DIS frequently names the radio module rather than the printer -- a VEVOR Y486BT
-        # reports "Feasycom", a Bluetooth module that ships in dozens of unrelated products, so
-        # matching on it would claim other vendors' hardware. Drafted anyway (it is what the
-        # printer said), flagged so whoever confirms the row deletes it if that is what happened.
+        # The DIS often names the radio module rather than the printer -- a Y486BT reports
+        # "Feasycom", which ships in dozens of unrelated products -- so matching on it would claim
+        # other vendors' hardware. Drafted anyway, and flagged.
         lines += [
             "",
             f"CHECK manufacturer_patterns: the printer reported {observation.manufacturer!r}. If that is "
@@ -155,8 +149,8 @@ def _draft_notes(observation):
     if observation.probe_replies:
         lines += ["", f"Probe replies: {observation.probe_replies}"]
     if observation.gatt:
-        # The service/characteristic ids above are a heuristic pick from this tree — check them
-        # against it. A wrong write characteristic prints nothing and reports nothing.
+        # The ids above are a heuristic pick from this tree; a wrong write characteristic prints
+        # nothing and reports nothing.
         lines += ["", f"GATT tree: {observation.gatt}"]
     if observation.status_captures:
         lines += ["", f"Status captures: {observation.status_captures}"]
@@ -167,14 +161,13 @@ def _draft_notes(observation):
 
 
 def draft_profile_from_observation(observation):
-    """Create (or refresh) a disabled :class:`ThermalPrinterProfile` from *observation*.
+    """Create or refresh a disabled :class:`ThermalPrinterProfile` from *observation*.
 
-    Returns ``(profile, created)``. Raises :class:`DraftError` when the observation doesn't carry
-    enough to draft from — there is no useful profile to write without a command language, since
-    the print program is the one part no probe can discover.
+    Returns ``(profile, created)``, raising :class:`DraftError` without a command language, since the
+    print program is the one part no probe can discover.
 
-    Re-running on the same observation updates its existing draft rather than piling up rows, but
-    never touches a profile that has been enabled: at that point a human has taken ownership of it.
+    Re-running updates the existing draft rather than piling up rows, but never touches an enabled
+    profile: at that point a human has taken ownership of it.
     """
     from auctions.models import ThermalPrinterProfile
 
@@ -191,20 +184,20 @@ def draft_profile_from_observation(observation):
 
     status_values = observation.derived_status_values if isinstance(observation.derived_status_values, dict) else {}
     status_flags = {"byte": 0, "values": status_values} if status_values else {}
-    # v2 is required by the template's own program (ZPL/CPCL need {total_bytes} and a hex raster)
-    # or by an exact-code status map, whichever applies.
+    # v2 is required by the template's own program (ZPL and CPCL need {total_bytes} and a hex
+    # raster) or by an exact-code status map.
     schema_version = max(template["schema_version"], 2 if status_values else 1)
 
     slug = draft_slug(observation)
-    # An enabled row is one a human has taken ownership of (including every seeded profile), so a
-    # draft never overwrites one. A disabled draft is refreshed in place with the newer evidence.
+    # An enabled row is one a human owns, including every seeded profile, so a draft never
+    # overwrites one; a disabled draft is refreshed in place.
     if ThermalPrinterProfile.objects.filter(slug=slug, enabled=True).exists():
         msg = f"profile {slug} already exists and is enabled; edit it directly rather than redrafting"
         raise DraftError(msg)
 
     fields = {
         "name": (observation.model or observation.ble_name or slug)[:100],
-        # Disabled: a drafted profile is a hypothesis until a test label confirms it.
+        # Disabled: a draft is a hypothesis until a test label confirms it.
         "enabled": False,
         # Behind every hand-written row, ahead of the escpos-raster catch-all.
         "priority": 500,

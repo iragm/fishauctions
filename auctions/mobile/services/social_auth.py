@@ -1,22 +1,11 @@
 """Native social sign-in for the mobile app: verify a provider credential, then let allauth decide.
 
-The app obtains a credential natively (Sign in with Apple, Google Sign-In, Facebook Login) and POSTs
-it to ``/api/mobile/auth/social/``. Everything after verification — finding an existing user,
-connecting to one, creating one, the email-verification gate — is allauth's, not ours. That is the
-whole design:
+The app POSTs a native credential to ``/api/mobile/auth/social/``. After verification, finding,
+connecting or creating the user and the email-verification gate are allauth's: this module must
+never decide which local account to sign into. Each provider ends with
+``provider.sociallogin_from_response()`` and ``complete_social_login()``, giving a JWT pair or a
+pending web flow (:class:`PendingSocialLogin`).
 
-    Verifying a token proves *which provider account* is calling. It says nothing about which local
-    account that should sign into. Deciding that is where account-takeover bugs live, and allauth
-    already does it, using settings this deployment has run in production for the web flow. The one
-    thing this module must never do is decide it a second time, differently.
-
-So each provider path ends the same way: build the provider's response dict, hand it to
-``provider.sociallogin_from_response()``, and hand the result to ``complete_social_login()``. What
-comes back is either a signed-in session (→ a JWT pair) or an unfinished flow the user has to
-finish on the web (→ a pending token and a URL; see :class:`PendingSocialLogin`).
-
-Trust boundaries, provider by provider
---------------------------------------
 ================  =====================================  =========================================
 Provider          What proves identity                   Email
 ================  =====================================  =========================================
@@ -26,27 +15,13 @@ Facebook (iOS)    Limited Login JWT + audience + nonce   Never trusted — allau
 Facebook (Droid)  ``debug_token`` says it's our app      Never trusted — allauth confirms it
 ================  =====================================  =========================================
 
-Two rules that are easy to get wrong, enforced here rather than left to a comment:
+* **The nonce.** Apple and Facebook Limited Login tokens must carry ``sha256`` of the raw nonce the
+  app sends us, or a captured token works anywhere.
+* **Apple's name/email hints** arrive outside the token and are unauthenticated: a hint email is
+  used only when the token has none, and never as verified.
 
-* **The nonce.** Apple and Facebook Limited Login tokens are bound to a nonce the app generated:
-  the app sends ``sha256(raw)`` to the provider and the raw value to us, and we reject unless they
-  match. Without it a captured ID token is a working credential from any app or any session.
-* **Apple's name/email hints.** Apple returns the user's name and email exactly once, on the first
-  authorization, *outside* the token — so the app forwards them as plain request fields. They are
-  unauthenticated: identity comes from the token's ``sub``, and a hint email is used only when the
-  verified token carries none, always as an *unverified* address. Treating a caller-supplied
-  address as verified would let anyone sign in as anyone.
-
-One deliberate difference from the legacy ``/auth/google/`` endpoint
---------------------------------------------------------------------
-When a provider's verified address matches a *local* account whose own address was never confirmed,
-the old endpoint flipped that address to verified and signed the person straight in. allauth instead
-wipes the local account's password (``wipe_password``) and still requires the address to be
-confirmed. That is the better behaviour and the reason not to hand-roll this: the unconfirmed local
-account may have been opened by someone who typed in a stranger's address and knows its password,
-waiting for the real owner to arrive. Auto-verifying leaves both of them with access; allauth locks
-the squatter out and costs the real owner one confirmation email. It is also what the website has
-always done, so the app and the web now agree.
+Unlike the legacy ``/auth/google/``, a match on an unconfirmed local address isn't auto-verified:
+allauth wipes that account's password and requires confirmation, locking out a squatter.
 """
 
 from __future__ import annotations
@@ -60,32 +35,27 @@ from django.core.cache import cache
 
 logger = logging.getLogger(__name__)
 
-# allauth's own provider ids, so the native and web flows write identical SocialAccount.provider
-# values and converge on one account with no mapping table.
+# allauth's provider ids, so native and web flows share SocialAccount rows.
 PROVIDER_APPLE = "apple"
 PROVIDER_GOOGLE = "google"
 PROVIDER_FACEBOOK = "facebook"
 SUPPORTED_PROVIDERS = (PROVIDER_APPLE, PROVIDER_GOOGLE, PROVIDER_FACEBOOK)
 
-# Where the web continuation sends the browser when it's finished. The app watches for this exact
-# path to know the flow is over (AllauthWebScreen.defaultSocialCompletionPath), so changing it needs
-# an app release — don't.
+# The app watches for this exact path; changing it needs an app release.
 SOCIAL_DONE_PATH = "/api/mobile/auth/social/done/"
 
-# Long enough to fill in a signup form and read a confirmation email in another app, short enough
-# that an unused one isn't left lying around. Single-use either way.
+# Single-use either way.
 PENDING_TTL_SECONDS = 15 * 60
 
 _PENDING_PREFIX = "mobile_social_pending:"
 _CONTINUE_PREFIX = "mobile_social_continue:"
 
-# Holds the pending token in the WebView's session while the user finishes on the web, so the done
-# view knows which record to bind the resulting user to.
+# Tells the done view which pending record to bind.
 PENDING_TOKEN_SESSION_KEY = "mobile_social_pending_token"
 
 
 class SocialAuthError(Exception):
-    """The credential could not be verified, or isn't one we accept. Surfaces as a 401."""
+    pass
 
 
 def _sha256_hex(value: str) -> str:
@@ -93,14 +63,8 @@ def _sha256_hex(value: str) -> str:
 
 
 def _check_nonce(raw_nonce: str, claims: dict) -> None:
-    """Reject unless the token was minted for the nonce this request carries.
-
-    The app sends the provider ``sha256(raw)`` and sends us ``raw``; a token captured from another
-    session or another app was minted against a different nonce and fails here. Apple and Facebook
-    Limited Login both echo the hashed value back in the ``nonce`` claim.
-
-    A token carrying no nonce claim at all is rejected just as firmly — accepting it would let a
-    caller opt out of replay protection simply by stripping the claim.
+    """Reject unless the token's ``nonce`` claim is ``sha256`` of this request's raw nonce. A missing
+    claim is rejected too.
     """
     token_nonce = claims.get("nonce")
     if not token_nonce:
@@ -109,8 +73,6 @@ def _check_nonce(raw_nonce: str, claims: dict) -> None:
     if not raw_nonce:
         msg = "A nonce is required for this provider."
         raise SocialAuthError(msg)
-    # Neither side is a secret, so constant time isn't required here; it costs nothing and keeps the
-    # habit intact for the places where it does matter.
     if not secrets.compare_digest(str(token_nonce), _sha256_hex(raw_nonce)):
         msg = "Nonce mismatch."
         raise SocialAuthError(msg)
@@ -123,7 +85,7 @@ def _get_provider(request, provider_id: str):
     try:
         return get_adapter().get_provider(request, provider_id)
     except Exception as exc:
-        # Almost always SocialApp.DoesNotExist: this deployment hasn't configured the provider.
+        # Usually SocialApp.DoesNotExist: the provider isn't configured.
         logger.warning("Social provider %s is not configured on this deployment.", provider_id, exc_info=exc)
         msg = f"{provider_id} sign-in is not configured."
         raise SocialAuthError(msg) from exc
@@ -135,12 +97,7 @@ def _get_provider(request, provider_id: str):
 
 
 def _verify_google(request, data: dict):
-    """Verify a Google ID token exactly the way the long-standing ``/auth/google/`` path does.
-
-    Same library, same audience, same "reject an unverified email" rule — only what happens *after*
-    verification changed (allauth now owns it). Google binds the token to us by audience, so there
-    is no nonce in this flow.
-    """
+    """Verify a Google ID token like ``/auth/google/``: audience-bound, unverified email rejected, no nonce."""
     id_token = data.get("id_token")
     if not id_token:
         msg = "id_token is required for Google."
@@ -175,10 +132,8 @@ def _verify_google(request, data: dict):
 def _verify_apple(request, data: dict):
     """Verify a native Sign in with Apple identity token.
 
-    The audience is the *app's bundle id*, not the web Services ID — the single most common way a
-    native Apple integration fails, because the two are different strings and the web flow uses the
-    other one. Both are accepted (``APPLE_ALLOWED_AUDIENCES``, wired into the provider app's
-    comma-separated ``client_id``), so one deployment serves both flows.
+    The audience is the app's bundle id, not the web Services ID; ``APPLE_ALLOWED_AUDIENCES`` accepts
+    both.
     """
     from allauth.socialaccount.providers.apple.views import AppleOAuth2Adapter
 
@@ -189,8 +144,7 @@ def _verify_apple(request, data: dict):
 
     provider = _get_provider(request, PROVIDER_APPLE)
     try:
-        # Signature against Apple's JWKS, plus issuer, audience and expiry, plus jti replay
-        # blacklisting. Raises OAuth2Error (or a requests error) on anything it doesn't like.
+        # Signature, issuer, audience, expiry and jti replay; raises on failure.
         claims = AppleOAuth2Adapter.get_verified_identity_data(provider, id_token)
     except Exception as exc:
         logger.warning("Apple identity token verification failed.", exc_info=exc)
@@ -205,29 +159,16 @@ def _verify_apple(request, data: dict):
 
 
 def _apply_apple_first_authorization_hints(response: dict, data: dict) -> None:
-    """Fold Apple's one-time name/email into the provider response, without ever trusting them.
+    """Fold Apple's one-time name and email into the provider response, without trusting them.
 
-    Apple sends ``email``, ``given_name`` and ``family_name`` only on the very first authorization
-    for a given Apple ID + app, and outside the identity token. Every later sign-in carries the
-    ``sub`` and nothing else, so if they aren't stored now they're unrecoverable short of the user
-    revoking the app in their Apple Account settings. The app forwards them precisely so they can
-    be stored.
-
-    The name is free text either way and safe to keep. The email is the dangerous one, so:
-
-    * it is used **only** when the verified token carries no email of its own, and
-    * it is never marked verified, whatever the request says.
-
-    A hint address therefore goes through allauth's ordinary confirmation: unique and unclaimed →
-    an account that cannot sign in until the address is confirmed; already claimed → allauth's
-    enumeration-prevention path, which creates nothing and signs nobody in. That is exactly what a
-    caller-supplied address should be worth.
+    Apple sends them only on first authorization, so store them now. The name is kept. The email is
+    used only when the token has none, and never marked verified, so it goes through allauth's
+    ordinary confirmation.
     """
     first_name = (data.get("first_name") or "").strip()
     last_name = (data.get("last_name") or "").strip()
     if first_name or last_name:
-        # The shape AppleProvider.extract_common_fields reads, and the shape allauth's own web flow
-        # builds from Apple's `user` form field.
+        # The shape AppleProvider.extract_common_fields reads.
         response["name"] = {"firstName": first_name, "lastName": last_name}
 
     if response.get("email"):
@@ -236,23 +177,19 @@ def _apply_apple_first_authorization_hints(response: dict, data: dict) -> None:
     if not hint_email:
         return
     response["email"] = hint_email
-    # Belt and braces: the token carried no email, so nothing here is attested. Force the claim off
-    # rather than merely leaving it absent, in case a provider default ever flips.
+    # Explicitly unverified.
     response["email_verified"] = False
 
 
 def _verify_facebook(request, data: dict):
-    """Verify a Facebook credential, in either of the two shapes the app can produce.
+    """Verify a Facebook credential in either shape the app sends.
 
-    * ``id_token`` — Limited Login, which iOS uses when App Tracking Transparency consent is denied.
-      An OIDC JWT: signature against Facebook's JWKS, issuer, and audience = our app id. Nonce-bound.
-    * ``access_token`` — the classic flow (Android). Verified through Facebook's ``debug_token``
-      endpoint by allauth's ``inspect_token``; the part that matters is that it checks
-      ``data.app_id`` against ours. Skipping that check accepts a token minted for *any* Facebook
-      app, which is a complete authentication bypass rather than a missing nicety.
+    * ``id_token``: Limited Login (iOS without tracking consent). JWKS signature, issuer, audience,
+      nonce.
+    * ``access_token``: classic (Android), via ``inspect_token``, which must check ``data.app_id`` or
+      any Facebook app's token would be accepted.
 
-    Neither shape produces a trusted email: Facebook does not attest that a profile address is
-    confirmed, and frequently supplies none at all.
+    Neither produces a trusted email.
     """
     from allauth.socialaccount.providers.facebook import flows as facebook_flows
 
@@ -275,8 +212,7 @@ def _verify_facebook(request, data: dict):
             logger.warning("Facebook Limited Login token verification failed.", exc_info=exc)
             msg = "Invalid ID token."
             raise SocialAuthError(msg) from exc
-        # allauth's own verify_limited_login_token drops the nonce when it maps claims onto a fake
-        # Graph response, so the check happens here, against the raw claims, before that mapping.
+        # allauth's verify_limited_login_token drops the nonce, so check the raw claims first.
         _check_nonce(data.get("nonce", ""), claims)
         fake_response = {
             graph_field: claims[jwt_field]
@@ -307,9 +243,7 @@ _VERIFIERS = {
 def build_sociallogin(request, data: dict):
     """Verify the credential in ``data`` and return an unsaved allauth ``SocialLogin``.
 
-    The returned login's ``state`` points at the mobile completion path, so that when the flow has
-    to detour through the web (signup form, email confirmation) it comes back somewhere the app is
-    watching for. Raises :class:`SocialAuthError` for anything that doesn't verify.
+    Its ``state`` points at the mobile completion path. Raises :class:`SocialAuthError`.
     """
     provider_id = (data.get("provider") or "").strip().lower()
     if provider_id not in _VERIFIERS:
@@ -327,21 +261,13 @@ def build_sociallogin(request, data: dict):
 
 
 class PendingSocialLogin:
-    """A social login allauth couldn't finish unattended, parked so the web can finish it.
+    """A social login allauth couldn't finish unattended, parked for the web to finish.
 
-    Rather than reimplement the signup form and the email-confirmation gate natively, the app hands
-    the user to the real web flow and picks the result back up. Three server-side pieces:
-
-    1. :meth:`create` stores the unfinished state (allauth's own serialized ``SocialLogin``, plus
-       the user it already resolved to, if any) under an opaque ``pending_token``, and mints a
-       *second* single-use token for the URL the WebView loads. The URL needs its own credential
-       because the WebView has neither a JWT nor a session yet.
-    2. :meth:`consume_continue_token` burns that second token, so the continue view can rebuild the
-       flow in the WebView's own session.
-    3. :meth:`bind_user` records who the web flow signed in, and :func:`resolve_completed_user`
-       hands that back to the app — after re-checking from scratch that the user is active, has a
-       verified email, and really is connected to the provider account this record was made for.
-       The record carries the flow between requests; it is never what authorizes the JWT.
+    1. :meth:`create` stores the serialized ``SocialLogin`` and any resolved user under a
+       ``pending_token``, plus a single-use continue token for the WebView URL.
+    2. :meth:`consume_continue_token` burns it so the continue view can rebuild the flow.
+    3. :meth:`bind_user` records who signed in; :func:`resolve_completed_user` re-checks everything
+       before the app gets a JWT. The record is never what authorizes it.
     """
 
     @staticmethod
@@ -353,10 +279,7 @@ class PendingSocialLogin:
             "provider": provider,
             "uid": uid,
             "sociallogin": serialized_login,
-            # Set when allauth already resolved the provider account to a real user but couldn't
-            # sign them in yet (almost always: their address still needs confirming). Lets the app
-            # finish with a plain retry once they've clicked the link in their inbox, with no
-            # WebView round trip at all.
+            # Resolved but not yet signed in (usually an unconfirmed address), so a retry can finish.
             "user_pk": user_pk,
             "completed_user_pk": None,
         }
@@ -366,10 +289,8 @@ class PendingSocialLogin:
 
     @staticmethod
     def consume_continue_token(continue_token: str) -> tuple[str, dict] | None:
-        """Atomically burn a continue token, returning ``(pending_token, record)`` or ``None``.
-
-        Single-use is enforced by the delete, not the read: only one caller wins the delete, so two
-        requests racing on the same URL can't both start the flow.
+        """Burn a continue token atomically, returning ``(pending_token, record)`` or ``None``. The delete
+        enforces single use.
         """
         if not continue_token:
             return None
@@ -403,19 +324,11 @@ class PendingSocialLogin:
 
 
 def resolve_completed_user(pending_token: str):
-    """The user a finished continuation belongs to, or ``None`` if it isn't finished (or isn't safe).
+    """The user a finished continuation belongs to, or ``None`` if unfinished or unsafe.
 
-    Identity comes from the ``SocialAccount`` row for the ``(provider, uid)`` the record was created
-    for — the pair that was cryptographically verified when the flow started. Not from the cached
-    primary key: the record says *which flow*, the database says *who*. If that row doesn't exist,
-    the flow never completed and there is nobody to sign in.
-
-    That also makes the common case work without any WebView round trip at all. A user who signs up
-    through allauth's form, closes the app and later clicks the confirmation link in their inbox has
-    completed everything the site needs; the next retry finds the account and hands over tokens.
-
-    The gates below are the same ones the web and password logins apply, re-checked here from
-    scratch so this endpoint can't become the weakest door into an account.
+    Identity comes from the ``SocialAccount`` for the verified ``(provider, uid)``, not the cached pk,
+    so a user who confirmed their email later can finish with a plain retry. The web login's gates are
+    re-checked from scratch.
     """
     from allauth.socialaccount.models import SocialAccount
 
@@ -430,15 +343,13 @@ def resolve_completed_user(pending_token: str):
     if account is None:
         return None
     user = account.user
-    # If the flow already named a user, it has to still be the same one. Nothing should be able to
-    # move a SocialAccount between users mid-flow; refusing is the right answer if something did.
+    # A SocialAccount must not have moved between users mid-flow.
     expected_pk = record.get("completed_user_pk") or record.get("user_pk")
     if expected_pk and expected_pk != user.pk:
         logger.warning("Pending social login %s resolved to an unexpected user; refusing.", record["provider"])
         return None
     if not user.is_active:
         return None
-    # An unconfirmed address can't sign in on the web, so it can't sign in here either.
     if not MobileAuthService.email_verification_satisfied(user):
         return None
     return user

@@ -1,24 +1,18 @@
-"""Every view on the site, split by what part of it the view belongs to.
+"""Every view on the site, split by the part of it the view belongs to.
 
-``views.py`` was a single 27,621-line module, which meant that finding a view meant grepping
-for it and reading it meant a line number. The split is by *area*, along the seams the file
-already had -- it was written in thematic runs, with each block of constants sitting just above
-the views that use them, so almost every module below is one contiguous stretch of the original
-file.
+``views.py`` was one 27,621-line module, so finding a view meant grepping and reading it meant a
+line number. The split follows the seams the file already had -- it was written in thematic runs --
+so almost every module here is one contiguous stretch of the original.
 
-``git log --follow`` does **not** carry that history across: one file becoming 34 is not a
-rename, so every module here starts at the commit that made it. For anything older, ask git
-about the content instead of the path -- ``git log -S'class SquareConnectView'`` finds every
-commit that touched a view wherever it lived, and ``git log -- auctions/views.py`` still has all
-1,036 commits of the file it came out of.
+``git log --follow`` does not carry that history: one file becoming 34 is not a rename. Ask git
+about the content instead -- ``git log -S'class SquareConnectView'`` finds every commit that touched
+a view wherever it lived, and ``git log -- auctions/views.py`` still has all 1,036 commits.
 
-:mod:`auctions.views.base` holds the mixins and the permission helpers; every other module
-imports from it and none of them import from each other in a circle. That property is checked:
-the split was chosen so the module graph is acyclic, and it has to stay that way.
+:mod:`auctions.views.base` holds the mixins and permission helpers; every other module imports from
+it and none import from each other in a circle, which is checked.
 
-Names are re-exported here so ``from auctions import views`` and ``views.SomeView`` mean what
-they always did -- ``urls.py`` refers to 347 of them that way. Import a *private* helper from
-the module that defines it rather than from the package.
+Names are re-exported here so ``views.SomeView`` still works -- ``urls.py`` refers to 347 of them
+that way. Import a *private* helper from the module that defines it.
 """
 
 from .account import *  # noqa: F403

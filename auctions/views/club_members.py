@@ -1,8 +1,7 @@
 """The club's list of people: joining, renewing, permissions, cards.
 
-The member admin pages, the self-service renewal, and the wallet passes and barcodes a member
-carries. Renewal state is worked out in :mod:`auctions.views.base` so that this module, the
-invoices and the webhooks all reach the same answer.
+Renewal state is worked out in :mod:`auctions.views.base`, so this module, the invoices and the
+webhooks all reach the same answer.
 """
 
 import logging
@@ -50,6 +49,7 @@ from auctions.models import (
     ClubMoney,
 )
 from auctions.services import (
+    attachment_filename,
     bidder_number_holder_in,
     club_managed_auctions_for,
     club_managed_shadows_for,
@@ -75,10 +75,8 @@ logger = logging.getLogger(__name__)
 
 
 class ClubMemberValidation(ClubViewMixin, APIPostView):
-    """Real-time validation for the club member add/edit form.
-
-    Returns JSON with tooltip messages for duplicate name/email detection and
-    auto-fill suggestions from existing club member records.
+    """Real-time validation for the club member add/edit form: duplicate name and email tooltips, and
+    auto-fill suggestions from existing members.
     """
 
     def dispatch(self, request, *args, **kwargs):
@@ -92,8 +90,8 @@ class ClubMemberValidation(ClubViewMixin, APIPostView):
             pk = int(request.POST.get("pk") or 0) or None
         except (ValueError, TypeError):
             pk = None
-        # In check-in create mode the form has no pk but may carry the pk of an already-matched
-        # existing member; exclude that member so its own bidder_number/email don't flag as duplicates.
+        # In check-in create mode there's no pk but there may be a matched member; exclude them so
+        # their own values don't flag as duplicates.
         try:
             existing_member_pk = int(request.POST.get("existing_member_pk") or 0) or None
         except (ValueError, TypeError):
@@ -116,15 +114,14 @@ class ClubMemberValidation(ClubViewMixin, APIPostView):
         if pk:
             base_qs = base_qs.exclude(pk=pk)
             deactivated_qs = deactivated_qs.exclude(pk=pk)
-        # For email/bidder_number duplicate checks only, also exclude the already-matched existing
-        # member so its own values don't flag as duplicates. The name check intentionally still
-        # finds that member to keep returning id_existing_member_pk on later blurs.
+        # For email and bidder_number only: the name check still finds that member, to keep
+        # returning id_existing_member_pk.
         contact_base_qs = base_qs
         contact_deactivated_qs = deactivated_qs
         if existing_member_pk and not pk:
             contact_base_qs = contact_base_qs.exclude(pk=existing_member_pk)
             contact_deactivated_qs = contact_deactivated_qs.exclude(pk=existing_member_pk)
-        # Auto-fill from manageable club members or auction histories when name typed without email.
+        # Auto-fill from manageable members or auction histories when a name is typed without an email.
         if name and not email and not pk:
             member_match = (
                 ClubMember.objects.filter(
@@ -148,14 +145,14 @@ class ClubMemberValidation(ClubViewMixin, APIPostView):
                     result["id_email"] = old_tos.email
                     result["id_phone_number"] = old_tos.phone_number or ""
                     result["id_address"] = old_tos.address or ""
-        # Duplicate name check within this club (active and deactivated). Use the same exact-or-rhyming
-        # match as AuctionTOSFilter.generic so e.g. "Dave Banks" surfaces an existing "David Banks".
+        # Duplicate names in this club, active and deactivated, using the same rhyming match as
+        # AuctionTOSFilter.generic so "Dave Banks" surfaces "David Banks".
         if name:
             name_q = Q(name__iexact=name) | rhyming_name_q(name)
             dup = base_qs.filter(name_q).first()
             if dup:
                 result["name_tooltip"] = f"{dup} is already in this club"
-                # Return full member data so the create form can pre-fill and check in
+                # Full member data, so the create form can pre-fill and check in.
                 result["id_existing_member_pk"] = dup.pk
                 result["id_name"] = dup.name
                 result["id_email"] = dup.email or ""
@@ -178,15 +175,10 @@ class ClubMemberValidation(ClubViewMixin, APIPostView):
             elif contact_deactivated_qs.filter(bidder_number=bidder_number).exists():
                 result["bidder_number_tooltip"] = "Bidder number matches a deactivated member"
         if bidder_number and not result["bidder_number_tooltip"]:
-            # Not an error: saving this takes the number off whoever has it in the club's auctions
-            # and gives them another (services.set_member_bidder_number). Say whose card is about to
-            # stop matching, before the save rather than after it.
-            #
-            # Creating a member displaces people exactly as editing one does -- the new member gets
-            # a row in every club-managed auction (signals.propagate_clubmember_to_shadow_tos) and
-            # the number is cleared in each -- so the warning cannot be for edits only. With no pk
-            # there is no row of this person's to exclude, which is right: they are not in any of
-            # these auctions yet.
+            # Not an error: saving takes the number off whoever has it
+            # (services.set_member_bidder_number), so say whose card will stop matching first.
+            # Creating displaces people exactly as editing does, since the new member gets a row in
+            # every club-managed auction, so the warning can't be for edits only.
             member = ClubMember.objects.filter(pk=pk, club=self.club).first() if pk else None
             if member is not None:
                 candidates = [(shadow.auction, shadow) for shadow in club_managed_shadows_for(member)]
@@ -203,13 +195,10 @@ class ClubMemberValidation(ClubViewMixin, APIPostView):
 
 
 class ClubMemberAdminView(APIView):
-    """DRF-based HTMX view for editing a club member.
+    """HTMX view for editing a club member.
 
-    Supports an optional ``tos`` query-string parameter with an AuctionTOS pk.
-    When present the form shows auction-scoped fields (pickup_location,
-    is_club_member) and hides club-wide fields (contact_status, Discord).
-    Saving writes TOS-specific fields to the AuctionTOS and everything else to
-    the ClubMember.
+    With a ``tos`` query parameter (an AuctionTOS pk) the form shows auction-scoped fields and hides
+    club-wide ones, writing each to the right record.
     """
 
     authentication_classes = [TokenAuthentication, SessionAuthentication]
@@ -246,7 +235,7 @@ class ClubMemberAdminView(APIView):
     def _build_context(self, request, member, form, read_only=False, auctiontos=None):
         validation_url = reverse("clubmember_validation", kwargs={"slug": member.club.slug})
         extra_script = self._get_validation_script(request, pk=member.pk, validation_url=validation_url)
-        # Header: "{name} - {member_number}" when the club uses membership numbers
+        # "{name} - {member_number}" when the club uses membership numbers.
         title = str(member)
         if member.club.show_member_barcode and member.membership_number:
             title = f"{member} — #{member.membership_number}"
@@ -258,8 +247,8 @@ class ClubMemberAdminView(APIView):
             "extra_script": mark_safe(extra_script),
             "read_only": read_only,
         }
-        # When opened from an auction's user list (via ?tos=), surface the invoice
-        # summary and status controls in the modal header exactly like AuctionTOSAdmin does.
+        # Opened from an auction's user list (?tos=): show the invoice summary and status controls
+        # in the header, as AuctionTOSAdmin does.
         if auctiontos:
             try:
                 invoice = auctiontos.invoice
@@ -276,7 +265,7 @@ class ClubMemberAdminView(APIView):
     def _get_validation_script(request, pk, validation_url, checkin_auction=None):
         pk_js = f"var member_pk={pk};" if pk else "var member_pk=null;"
         csrf = get_token(request)
-        # In check-in create mode (no pk, auction present) we support selecting existing members
+        # Check-in create mode (no pk, auction present) supports selecting existing members.
         is_checkin_create_js = "true" if (not pk and checkin_auction) else "false"
         return f"""<script>
 {pk_js}
@@ -458,7 +447,7 @@ $("#id_name, #id_email, #id_bidder_number").on("blur", cmValidateField);
         )
         if form.is_valid():
             saved = form.save()
-            # If in auction context, also save TOS-specific fields to the AuctionTOS
+            # In auction context, save TOS-specific fields to the AuctionTOS.
             if auctiontos:
                 auction = auctiontos.auction
                 tos_update_fields = ["is_club_member"]
@@ -466,13 +455,13 @@ $("#id_name, #id_email, #id_bidder_number").on("blur", cmValidateField);
                     auctiontos.pickup_location = form.cleaned_data["pickup_location"]
                     tos_update_fields.append("pickup_location_id")
                 if auction.alternate_split_mode == "club_member":
-                    # Auto-managed: paid club members (or an invoice renewing their
-                    # membership) get the alternate split.
+                    # Auto-managed: paid members, or an invoice renewing their membership, get the
+                    # alternate split.
                     invoice = auctiontos.invoice
                     auctiontos.is_club_member = invoice.treat_as_club_member if invoice else saved.is_paid_member
                 elif auction.alternate_split_mode == "custom":
                     auctiontos.is_club_member = form.cleaned_data.get("is_club_member", auctiontos.is_club_member)
-                # Sync bidding/selling permissions to AuctionTOS when the auction uses them
+                # Sync bidding and selling permissions when the auction uses them.
                 if auction.only_approved_sellers and "selling_allowed" in form.cleaned_data:
                     auctiontos.selling_allowed = form.cleaned_data["selling_allowed"]
                     tos_update_fields.append("selling_allowed")
@@ -542,10 +531,7 @@ class ClubMemberPermissionsView(LoginRequiredMixin, View):
 
 
 class ClubMemberDiscordAdminView(LoginRequiredMixin, View):
-    """HTMX modal for managing a club member's Discord integration settings.
-
-    Only accessible to users with permission_admin or permission_edit_club.
-    """
+    """HTMX modal for a club member's Discord settings; permission_admin or permission_edit_club only."""
 
     def _get_member(self, request, pk):
         member = get_object_or_404(ClubMember, pk=pk, is_deleted=False)
@@ -622,11 +608,9 @@ class ClubMemberDiscordAdminView(LoginRequiredMixin, View):
 
 
 class ClubMemberCreateView(APIView):
-    """DRF-based HTMX view for creating a new club member.
+    """HTMX view for creating a club member.
 
-    Supports an optional ``auction`` query-string parameter (auction slug).
-    When present and the auction is in check-in mode, a linked AuctionTOS is
-    created automatically after the ClubMember is saved.
+    With an ``auction`` slug in check-in mode, a linked AuctionTOS is created after the member is saved.
     """
 
     authentication_classes = [TokenAuthentication, SessionAuthentication]
@@ -659,7 +643,7 @@ class ClubMemberCreateView(APIView):
         auction = self._get_auction_context(request, club)
         post_url = self._post_url(slug, auction)
         validation_url = reverse("clubmember_validation", kwargs={"slug": slug})
-        # Pre-populate from URL params (name, email, phone) when coming from no-results search
+        # Pre-populate from URL params when coming from a no-results search.
         initial = {}
         for field, param in (("name", "name"), ("email", "email"), ("phone_number", "phone")):
             val = request.query_params.get(param, "").strip()
@@ -724,13 +708,13 @@ class ClubMemberCreateView(APIView):
                 pass
 
         if existing_member:
-            # Existing member check-in: create AuctionTOS without creating a new ClubMember.
-            # We still validate auction-specific fields via a partial form.
+            # Existing member check-in: create the AuctionTOS without creating a member, still
+            # validating auction-specific fields.
             form = ClubMemberAdminForm(
                 request.POST, instance=existing_member, post_url=post_url, club=club, auction=auction
             )
             if form.is_valid():
-                # Don't save the ClubMember itself (no changes intended from check-in form)
+                # Don't save the ClubMember: no changes are intended from the check-in form.
                 tos = self._create_auction_tos(auction, existing_member, form.cleaned_data)
                 action_detail = f"Checked in existing member {existing_member} to auction {auction}"
                 if not tos:
@@ -808,11 +792,10 @@ class ClubMemberCreateView(APIView):
 
 
 def renew_club_member(member, *, acting_user=None, actor="", money_description=""):
-    """Extend a membership by one period and record it, returning the member.
+    """Extend a membership by one period, record it, and return the member.
 
-    Shared by the Renew button on the member list and the API-key renew endpoint so the two
-    can't drift: same expiration math, same club history, same ledger entry, same confirmation
-    email.  ``actor`` names a non-user actor (an API key) for the history line.
+    Shared by the Renew button and the API-key renew endpoint: same expiration maths, club history,
+    ledger entry and confirmation email. ``actor`` names a non-user actor, such as an API key.
     """
     today = timezone.now().date()
     member.membership_expiration_date = _compute_member_renewal_expiration(member.club, member, today)
@@ -901,7 +884,7 @@ class ClubMembershipNumberView(APIView):
         if not check_club_permission(request.user, member.club, "permission_add_edit"):
             raise PermissionDenied()
         if not member.club.show_member_barcode:
-            # Feature is off for this club — admin endpoint should not be reachable.
+            # The feature is off for this club.
             raise Http404
         return member
 
@@ -938,7 +921,7 @@ class ClubMemberResendCardView(APIView):
         if not check_club_permission(request.user, member.club, "permission_add_edit"):
             raise PermissionDenied()
         if not member.club.show_member_barcode:
-            # No membership cards for this club — admin endpoint should not be reachable.
+            # No membership cards for this club.
             raise Http404
         return member
 
@@ -946,7 +929,7 @@ class ClubMemberResendCardView(APIView):
         from auctions.tasks import send_membership_card_email
 
         member = self._get_member(pk, request)
-        # Rather than hiding the action for members we can't email, say why on click.
+        # Rather than hiding the action for members with no email, say why on click.
         if not member.email:
             return close_modal_response(
                 toast=f"{member.display_name} has no email address on file.", toast_type="danger"
@@ -976,11 +959,10 @@ class ClubMemberResendCardView(APIView):
 
 
 class ClubMemberAppleWalletPassView(LoginRequiredMixin, View):
-    """Serve a signed .pkpass file for a member.
+    """Serve a signed .pkpass for a member.
 
-    Only the member's owning account may download — UUID renewal links must NOT
-    be able to download someone else's wallet card. We use the same identity
-    check as the Google Wallet save URL: request.user.id == member.user_id.
+    Only the member's own account may download it: UUID renewal links must not reach somebody else's
+    card. Same check as the Google Wallet save URL.
     """
 
     def get(self, request, pk):
@@ -991,22 +973,20 @@ class ClubMemberAppleWalletPassView(LoginRequiredMixin, View):
         member = get_object_or_404(ClubMember, pk=pk, is_deleted=False)
         if not request.user.is_authenticated or member.user_id != request.user.id:
             raise PermissionDenied()
-        # Honor the club's number-mode gating — disabled or (paid_only + unpaid) → 404.
+        # Honour the club's number-mode gating.
         if not member.club.show_member_barcode:
             raise Http404
         pkpass_bytes = generate_pkpass_for_member(member)
         response = HttpResponse(pkpass_bytes, content_type="application/vnd.apple.pkpass")
-        response["Content-Disposition"] = f'attachment; filename="{member.club.slug}-membership.pkpass"'
-        # Wallet passes are personalized — don't cache them at intermediaries.
+        filename = attachment_filename(f"{member.club.slug}-membership")
+        response["Content-Disposition"] = f'attachment; filename="{filename}.pkpass"'
+        # Wallet passes are personalized.
         response["Cache-Control"] = "private, no-store"
         return response
 
 
 class ClubMemberAppleWalletByUUIDView(View):
-    """UUID-keyed Apple Wallet download — no login required.
-
-    Anyone with the UUID link can download the .pkpass; the UUID is the capability token.
-    """
+    """UUID-keyed Apple Wallet download; the UUID is the capability token, so no login is needed."""
 
     def get(self, request, slug, uuid):
         from auctions.apple_wallet import generate_pkpass_for_member, is_configured
@@ -1019,16 +999,17 @@ class ClubMemberAppleWalletByUUIDView(View):
         member.update_last_club_activity()
         pkpass_bytes = generate_pkpass_for_member(member)
         response = HttpResponse(pkpass_bytes, content_type="application/vnd.apple.pkpass")
-        response["Content-Disposition"] = f'attachment; filename="{member.club.slug}-membership.pkpass"'
+        filename = attachment_filename(f"{member.club.slug}-membership")
+        response["Content-Disposition"] = f'attachment; filename="{filename}.pkpass"'
         response["Cache-Control"] = "private, no-store"
         return response
 
 
 class ClubBarcodeView(View):
-    """Render an SVG barcode for an arbitrary value.
+    """Render an SVG barcode for a value.
 
-    Public endpoint so the URL can be embedded in outgoing emails as an <img src>.
-    The view only renders the barcode bars — no membership lookup, no caller validation.
+    Public so the URL can be an <img src> in email. It renders bars only: no membership lookup, no
+    caller validation.
     """
 
     def get(self, request, slug, value):
@@ -1050,17 +1031,15 @@ class ClubBarcodeView(View):
         except Exception:
             raise Http404
         response = HttpResponse(svg, content_type="image/svg+xml")
-        # Barcodes are stable for a given value — let the CDN / browser cache them.
+        # Barcodes are stable for a value.
         response["Cache-Control"] = "public, max-age=86400"
         return response
 
 
 class ClubBarcodePNGView(View):
-    """Render a PNG barcode for an arbitrary value.
+    """Render a PNG barcode for a value, which renders better than SVG in email clients.
 
-    Public endpoint so the URL can be embedded in outgoing emails as an <img src>.
-    PNG format renders better in email clients like Gmail than SVG.
-    The view only renders the barcode bars — no membership lookup, no caller validation.
+    Public so the URL can be an <img src>. Bars only: no membership lookup, no caller validation.
     """
 
     def get(self, request, slug, value):
@@ -1083,7 +1062,7 @@ class ClubBarcodePNGView(View):
         except Exception:
             raise Http404
         response = HttpResponse(png_data, content_type="image/png")
-        # Barcodes are stable for a given value — let the CDN / browser cache them.
+        # Barcodes are stable for a value.
         response["Cache-Control"] = "public, max-age=86400"
         return response
 

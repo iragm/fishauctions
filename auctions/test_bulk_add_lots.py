@@ -79,7 +79,7 @@ class BulkAddLotsAutoTests(StandardTestCase):
         self.assertContains(response, 'data-field="custom_dropdown" required')
 
     def test_bulk_add_lots_auto_saves_text_fields_on_change(self):
-        """Auto-save wiring should use change events and avoid input/keyup-style listeners."""
+        """Auto-save listens for change events, not input or keyup."""
         self.client.login(username="no_lots", password="testpassword")
         response = self.client.get(
             reverse("bulk_add_lots_auto_for_myself", kwargs={"slug": self.in_person_auction.slug})
@@ -91,7 +91,6 @@ class BulkAddLotsAutoTests(StandardTestCase):
         self.assertNotIn("input.addEventListener('blur'", html)
 
     def test_bulk_add_lots_whole_dollar_inputs_use_integer_step(self):
-        """Price inputs use whole-dollar client-side validation when auction requires whole-dollar bids"""
         self.in_person_auction.only_whole_dollar_bids = True
         self.in_person_auction.save()
         self.client.login(username="no_lots", password="testpassword")
@@ -110,7 +109,6 @@ class BulkAddLotsAutoTests(StandardTestCase):
         )
 
     def test_bulk_add_lots_decimal_inputs_use_cent_step(self):
-        """Price inputs use cent-level client-side validation when auction allows decimal bids"""
         self.in_person_auction.only_whole_dollar_bids = False
         self.in_person_auction.save()
         self.client.login(username="no_lots", password="testpassword")
@@ -182,8 +180,7 @@ class BulkAddLotsAutoTests(StandardTestCase):
         self.assertTrue(any("admin" in str(m).lower() for m in messages))
 
     def test_save_lot_ajax_anonymous_is_rejected_not_500(self):
-        """An unauthenticated POST (e.g. expired session) should be rejected cleanly by
-        DRF's IsAuthenticated, not crash with AttributeError on AnonymousUser.email"""
+        """An anonymous POST is rejected by IsAuthenticated, not a 500."""
         self.client.logout()
         response = self.client.post(
             reverse("save_lot_ajax", kwargs={"slug": self.in_person_auction.slug}),
@@ -611,7 +608,6 @@ class BulkAddLotsAutoTests(StandardTestCase):
         self.assertFalse(lot.can_be_edited)
 
     def test_admin_can_add_lots_for_user_with_selling_not_allowed(self):
-        """Test that admins can add lots for users whose selling_allowed is False, with a warning flag"""
         # Set in_person_buyer's selling_allowed to False
         self.in_person_buyer.selling_allowed = False
         self.in_person_buyer.save()
@@ -632,7 +628,6 @@ class BulkAddLotsAutoTests(StandardTestCase):
         self.assertTrue(data.get("admin_bypassed_selling_allowed", False))
 
     def test_non_admin_cannot_add_lots_when_selling_not_allowed(self):
-        """Test that non-admin users cannot add lots when their selling_allowed is False"""
         # Set in_person_buyer's selling_allowed to False
         self.in_person_buyer.selling_allowed = False
         self.in_person_buyer.save()
@@ -676,7 +671,6 @@ class BulkAddLotsAutoTests(StandardTestCase):
         self.assertEqual(lot.auctiontos_seller, self.admin_in_person_tos)
 
     def test_decimal_minimum_bid_accepted(self):
-        """Test that decimal minimum bids (e.g. 2.50) are accepted when auction allows them"""
         self.in_person_auction.only_whole_dollar_bids = False
         self.in_person_auction.save()
 
@@ -692,7 +686,6 @@ class BulkAddLotsAutoTests(StandardTestCase):
         self.assertEqual(lot.reserve_price, Decimal("2.50"))
 
     def test_decimal_minimum_bid_rejected_when_whole_dollar_required(self):
-        """Test that decimal minimum bids are rejected when auction requires whole dollar amounts"""
         self.in_person_auction.only_whole_dollar_bids = True
         self.in_person_auction.save()
 
@@ -719,7 +712,7 @@ class UpdateAuctionStatsCommandTestCase(StandardTestCase):
         # Set up multiple auctions with due stats updates
         now = timezone.now()
 
-        # Ensure setUp auctions don't interfere by setting their next_update_due to far future
+        # Keep setUp's auctions out of the way.
         self.online_auction.next_update_due = now + datetime.timedelta(days=365)
         self.online_auction.save()
         self.in_person_auction.next_update_due = now + datetime.timedelta(days=365)
@@ -761,7 +754,6 @@ class UpdateAuctionStatsCommandTestCase(StandardTestCase):
         original_due_2 = auction2.next_update_due
         original_due_3 = auction3.next_update_due
 
-        # Run the command once (using --sync to run synchronously for testing)
         call_command("update_auction_stats", "--sync")
 
         # Refresh from database
@@ -787,7 +779,7 @@ class UpdateAuctionStatsCommandTestCase(StandardTestCase):
 
         now = timezone.now()
 
-        # Ensure setUp auctions don't interfere by setting their next_update_due to far future
+        # Keep setUp's auctions out of the way.
         self.online_auction.next_update_due = now + datetime.timedelta(days=365)
         self.online_auction.save()
         self.in_person_auction.next_update_due = now + datetime.timedelta(days=365)
@@ -848,7 +840,6 @@ class UpdateAuctionStatsCommandTestCase(StandardTestCase):
         future_auction.next_update_due = now + datetime.timedelta(hours=5)
         future_auction.save()
 
-        # Run the command - should not raise any errors (using --sync to run synchronously for testing)
         call_command("update_auction_stats", "--sync")
 
         # Refresh from database
@@ -860,8 +851,6 @@ class UpdateAuctionStatsCommandTestCase(StandardTestCase):
 
 
 class LotsByUserViewTest(StandardTestCase):
-    """Test for the LotsByUser view to ensure it handles missing 'user' parameter correctly"""
-
     def test_lots_by_user_missing_user_parameter(self):
         """Test that the view doesn't crash when 'user' parameter is missing"""
         # Access the URL without user parameter, only with auction parameter
@@ -1012,10 +1001,7 @@ class ImportLotsFromCSVViewTests(StandardTestCase):
         assert new_lot.auctiontos_seller == new_tos
 
     def test_import_lots_csv_new_seller_gets_a_club_member(self):
-        """In a club-managed auction, an imported seller needs a ClubMember like any participant.
-
-        The club owns the bidder number there, so a seller row with no member behind it carries a
-        number the club has never heard of."""
+        """An imported seller in a club-managed auction gets a ClubMember."""
         club = Club.objects.create(name="Import Club")
         ClubMember.objects.create(club=club, user=self.admin_user, name="Admin", permission_admin=True)
         self.in_person_auction.club = club
@@ -1235,7 +1221,7 @@ class ImportLotsFromCSVViewTests(StandardTestCase):
         return self.run_csv_import(url, csv_file)
 
     def test_update_without_a_donation_column_keeps_the_flags(self):
-        """These feed the invoice, so an unrelated column update must not silently clear them."""
+        """Updating without a donation column keeps the invoice flags."""
         self.lot.donation = True
         self.lot.i_bred_this_fish = True
         self.lot.custom_checkbox = True

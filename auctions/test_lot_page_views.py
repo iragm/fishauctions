@@ -1,23 +1,17 @@
 """The two page-view history modals: one lot's, and every lot on the selling dashboard.
 
-Both are the same helper (``views.page_view_history``) and the same partial at two scopes, so the
-tests are grouped the same way: the counting rules once, then the gate on each surface.
+Both use the same helper (``views.page_view_history``) and the same partial at two scopes, so the
+counting rules are tested once and then the gate on each surface.
 
-Four things here are worth stating out loud, because getting any of them wrong is silent:
+Four things are worth stating, because getting any wrong is silent:
 
-* **The window is the bound.** ``PageView`` is the largest table on the site, so every query the
-  helper makes carries a date *and* an owner. A test that only checked the numbers were right would
-  still pass if the window quietly stopped being applied, which is why there is a test for a view
-  just outside it.
-* **``PageView.date_start`` is ``auto_now_add``**, so a row cannot be created with a date in the
-  past -- ``_view_on`` writes it with ``update()`` afterwards.
-* **The chart is the only day-by-day output**, and the template hands it straight to
-  ``json_script``, so anything in it that is not a string or a number is a 500 on the modal rather
-  than a wrong-looking label -- which is what ``test_the_chart_survives_json`` is for.
-* **The seller of a fixture lot is the seller *TOS*, not ``Lot.user``.** ``StandardTestCase``'s lots
-  have ``user=None`` and ``auctiontos_seller=online_tos``, which is exactly the case
-  ``Lot.is_owned_by`` exists for -- so these tests exercise the TOS path for free, and the
-  standalone lot below covers the ``Lot.user`` one.
+* **The window is the bound.** ``PageView`` is the largest table on the site, so every query carries
+  a date and an owner; hence a test for a view just outside the window.
+* **``PageView.date_start`` is ``auto_now_add``**, so ``_view_on`` writes it with ``update()``.
+* **The chart is the only day-by-day output** and goes straight to ``json_script``, so anything in
+  it that isn't a string or number is a 500 on the modal.
+* **The seller of a fixture lot is the seller TOS**, not ``Lot.user``, which is the case
+  ``Lot.is_owned_by`` exists for; the standalone lot below covers the ``Lot.user`` path.
 """
 
 import json
@@ -40,9 +34,8 @@ from auctions.views import (
 
 
 def _view_on(lot, days_ago=0, *, source="", user=None, session_id=None, referrer=None):
-    """One PageView on ``lot``, ``days_ago`` days back.
-
-    ``date_start`` is ``auto_now_add``, so it has to be written after the insert.
+    """One PageView on ``lot``, ``days_ago`` days back. ``date_start`` is ``auto_now_add``, so it is
+    written after the insert.
     """
     row = PageView.objects.create(lot_number=lot, source=source, user=user, session_id=session_id, referrer=referrer)
     when = timezone.now() - timedelta(days=days_ago)
@@ -73,7 +66,7 @@ class PageViewHistoryHelperTests(StandardTestCase):
         self.assertEqual((history["total_views"], history["unique_viewers"]), (3, 2))
 
     def test_anything_older_than_the_window_is_left_out(self):
-        """The bound that keeps this cheap. Without it the modal reads the whole table."""
+        """The bound that keeps this cheap: without it the modal reads the whole table."""
         _view_on(self.lot, 1, user=self.user)
         _view_on(self.lot, PAGE_VIEW_HISTORY_DAYS + 5, user=self.user)
         history = self._history()
@@ -130,7 +123,7 @@ class PageViewHistoryHelperTests(StandardTestCase):
         self.assertEqual(chart["busiest"], 2)
 
     def test_the_long_tail_of_sources_is_one_band(self):
-        """``?src=`` is not a closed vocabulary -- a club API key writes its own name into it."""
+        """``?src=`` is not a closed vocabulary: a club API key writes its own name into it."""
         for number in range(PAGE_VIEW_HISTORY_CHART_SOURCES + 3):
             _view_on(self.lot, 0, source=f"club-website-{number}", user=self.user)
         chart = self._history()["chart"]
@@ -140,7 +133,7 @@ class PageViewHistoryHelperTests(StandardTestCase):
         self.assertEqual(sum(band[-1] for band in chart["data"]), PAGE_VIEW_HISTORY_CHART_SOURCES + 3)
 
     def test_one_view_does_not_fill_the_chart(self):
-        """Most lots get five to fifteen views in the whole fortnight; the axis has to suit that."""
+        """Most lots get five to fifteen views in a fortnight, so the axis has to suit that."""
         _view_on(self.lot, 0, user=self.user)
         chart = self._history()["chart"]
         self.assertEqual(chart["y_max"], PAGE_VIEW_HISTORY_MIN_Y)
@@ -190,15 +183,15 @@ class PageViewHistoryHelperTests(StandardTestCase):
 class LotPageViewHistoryViewTests(StandardTestCase):
     """The button on the lot page and the modal behind it.
 
-    The permission lives in the view, not in the template: the URL is guessable, so every
-    "who cannot see this" test asks for the modal itself rather than only checking the page.
+    The permission is in the view, not the template: the URL is guessable, so every "who cannot see
+    this" test asks for the modal itself.
     """
 
     @classmethod
     def setUpTestData(cls):
         super().setUpTestData()
-        # Auction.permission_check passes any superuser, so this one reaches the modal without
-        # being the seller or an admin of the auction -- which is the point of it here.
+        # Auction.permission_check passes any superuser, so this one reaches the modal without being
+        # the seller or an admin of the auction.
         cls.site_admin = User.objects.create_superuser(
             username="site_admin_lot_history", password="testpassword", email="site_admin_lot@example.com"
         )
@@ -206,7 +199,7 @@ class LotPageViewHistoryViewTests(StandardTestCase):
     def setUp(self):
         super().setUp()
         self.url = reverse("lot_page_view_history", kwargs={"pk": self.lot.pk})
-        # A lot with no auction at all, and with Lot.user set rather than a seller TOS.
+        # A lot with no auction, and with Lot.user set rather than a seller TOS.
         self.standalone_lot = Lot.objects.create(lot_name="No auction lot", quantity=1, user=self.user)
 
     def test_the_seller_sees_the_button_on_an_online_lot(self):
@@ -251,12 +244,12 @@ class LotPageViewHistoryViewTests(StandardTestCase):
         url = reverse("lot_page_view_history", kwargs={"pk": self.standalone_lot.pk})
         response = self.client.get(url)
         self.assertEqual(response.status_code, 200)
-        # The seller has no source table, so the label arrives as a chart band in the json_script
-        # block -- which escapes < > and & and leaves the apostrophe alone.
+        # The seller has no source table, so the label arrives as a chart band in json_script, which
+        # escapes < > and & and leaves the apostrophe alone.
         self.assertContains(response, "From a user's page")
 
     def test_an_in_person_lot_keeps_the_collapse_and_does_not_get_the_modal(self):
-        """The in-person breakdown already exists below the same line; two of them is worse."""
+        """An in-person lot keeps the collapse and doesn't get the modal: the breakdown is already below it."""
         self.client.force_login(self.admin_user)
         page = self.client.get(reverse("lot_by_pk", kwargs={"pk": self.in_person_lot.pk}))
         self.assertFalse(page.context["show_page_view_history"])
@@ -273,8 +266,9 @@ class LotPageViewHistoryViewTests(StandardTestCase):
         self.assertEqual(self.client.get(self.url).status_code, 403)
 
     def test_the_seller_does_not_get_the_source_table_but_does_get_the_chart(self):
-        """Which of our own pages sent somebody is detail a seller has no use for -- but it is
-        still the thing the chart is split by, and the referrer list is still theirs."""
+        """The seller doesn't get the source table but does get the chart: which of our pages sent somebody is
+        detail they have no use for, but it is what the chart is split by.
+        """
         _view_on(self.lot, 0, source="lot_list", user=self.user_with_no_lots)
         self.client.force_login(self.user)
         response = self.client.get(self.url)
@@ -337,7 +331,7 @@ class SellingDashboardPageViewHistoryTests(StandardTestCase):
         self.assertEqual({row["source"]: row["views"] for row in history["sources"]}, {"lot_list": 2, "qr": 1})
 
     def test_somebody_elses_lots_are_not_in_it(self):
-        """in_person_lot belongs to admin_user; self.user must never see its views here."""
+        """in_person_lot belongs to admin_user, so self.user must never see its views here."""
         _view_on(self.in_person_lot, 0, source="qr", user=self.user_with_no_lots)
         self.client.force_login(self.user)
         self.assertEqual(self.client.get(self.url).context["history"]["total_views"], 0)

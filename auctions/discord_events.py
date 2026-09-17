@@ -1,21 +1,18 @@
 """Discord scheduled events for clubs.
 
-Two things create Discord events, and they deliberately don't overlap:
+Two paths create them and deliberately don't overlap:
 
-* Auctions, from the ``auction_emails`` management command — long-standing behavior, gated on
-  ``Club.create_events_for_auctions`` and the auction being promoted. The event's id is kept on
-  the auction so ``sync_auction_events`` below can move or call it off later.
-* Everything else on a club's calendar (meetings, swaps, talks — including events pulled in from
-  the club's Google Calendar), from ``sync_club_events`` below, gated on
+* Auctions, from the ``auction_emails`` command, gated on ``Club.create_events_for_auctions`` and
+  the auction being promoted. The event id is kept on the auction so ``sync_auction_events`` can
+  move or cancel it.
+* Everything else on a club's calendar, from ``sync_club_events``, gated on
   ``Club.create_discord_events_for_club_events``.
 
-Because generated ClubEvents (auctions and their pickup times) are skipped in ``sync_club_events``,
-an auction never gets two Discord events, and a club's Discord server never fills up with an
-entry for every pickup slot.
+``sync_club_events`` skips generated ClubEvents, so an auction never gets two events and a server
+never fills up with one per pickup slot.
 
-Both paths reconcile rather than fire once: an event that moved is patched, an event someone
-deleted in Discord is recreated, and an event that was called off — or whose club turned the
-feature off — is removed from Discord.
+Both reconcile rather than fire once: a moved event is patched, a deleted one recreated, and a
+cancelled one removed.
 """
 
 from __future__ import annotations
@@ -35,7 +32,7 @@ TIMEOUT = 10
 PRIVACY_GUILD_ONLY = 2
 ENTITY_TYPE_EXTERNAL = 3
 
-# Discord has no record of the event any more; ours is stale and should be made again.
+# Discord has no record of it any more, so ours is stale.
 GONE_STATUSES = (404, 410)
 
 
@@ -48,7 +45,7 @@ def _headers():
 
 
 def _send(method, path, payload=None):
-    """One Discord API call. Returns (status, body); status is 0 when Discord was unreachable."""
+    """One Discord API call, returning (status, body); status is 0 when Discord was unreachable."""
     try:
         resp = requests.request(method, f"{API_BASE}{path}", headers=_headers(), json=payload, timeout=TIMEOUT)
     except requests.RequestException:
@@ -64,11 +61,10 @@ def _send(method, path, payload=None):
 
 
 def send_channel_message(channel_id, content):
-    """POST a plain-text message to a Discord channel. Returns its message id, or "" on failure.
+    """POST a plain-text message to a channel; returns its id, or "" on failure.
 
-    Lives here rather than next to its first caller so that everything that talks to Discord goes
-    through one place with one timeout and one error path. ``auction_emails`` keeps its own thin
-    wrapper for the boolean it has always returned.
+    Here rather than next to its caller so everything reaching Discord has one timeout and one error
+    path. ``auction_emails`` keeps a thin wrapper for the boolean it returns.
     """
     if not _bot_token() or not channel_id:
         return ""
@@ -79,11 +75,9 @@ def send_channel_message(channel_id, content):
 
 
 def delete_channel_message(channel_id, message_id):
-    """DELETE one message the bot posted. True when it is gone (or was already).
+    """DELETE one message the bot posted; True when it is gone or already was.
 
-    Discord answers 404 for a message somebody deleted by hand, which is the same outcome the
-    caller wanted, so it counts as success -- retracting an announcement must not fail because
-    a moderator got there first.
+    Discord answers 404 for a message deleted by hand, which is the outcome the caller wanted.
     """
     if not _bot_token() or not channel_id or not message_id:
         return False
@@ -92,7 +86,7 @@ def delete_channel_message(channel_id, message_id):
 
 
 def _event_payload(name, start_time, end_time, location, description="", *, creating=False):
-    """The body Discord wants. Only a create may set the privacy level and entity type."""
+    """The body Discord wants; only a create may set the privacy level and entity type."""
     payload = {
         "name": name[:100],
         "scheduled_start_time": start_time.isoformat(),
@@ -108,10 +102,9 @@ def _event_payload(name, start_time, end_time, location, description="", *, crea
 
 
 def create_scheduled_event(guild_id, name, start_time, end_time, location, description=""):
-    """Create a Discord Guild Scheduled Event (external type).
+    """Create an external Guild Scheduled Event, returning its id or None.
 
-    Returns the new event's id on success, or None. Discord requires a location string and a
-    start time in the future for external events.
+    Discord requires a location string and a start time in the future.
     """
     if not _bot_token() or not guild_id:
         return None
@@ -143,8 +136,9 @@ def cancel_scheduled_event(guild_id, event_id):
 
 
 def _delete_scheduled_event(guild_id, event_id):
-    """Delete an event and report the status. 0 means we never reached Discord — worth retrying;
-    404 means someone already removed it there, which is the state we wanted anyway."""
+    """Delete an event and report the status: 0 means Discord was unreachable and is worth retrying; 404
+    means someone already removed it, which was the goal.
+    """
     if not _bot_token() or not guild_id or not event_id:
         return 0
     status, _body = _send("DELETE", f"/guilds/{guild_id}/scheduled-events/{event_id}")
@@ -152,24 +146,23 @@ def _delete_scheduled_event(guild_id, event_id):
 
 
 def sync_club_events(club):
-    """Bring this club's Discord scheduled events in line with its calendar. Returns how many
-    events were created, changed or removed."""
+    """Bring a club's Discord events in line with its calendar; returns how many changed."""
     if not (club.discord_server_id and _bot_token()):
         return 0
     return _sync_member_events(club) + sync_auction_events(club)
 
 
 def _sync_member_events(club):
-    """Meetings, swaps and anything pulled from Google — everything but the generated events.
+    """Meetings, swaps and Google-sourced events: everything but the generated ones.
 
-    Each event is attempted once per change (``needs_discord_sync``), so a permanent failure —
-    the bot lacking Manage Events, say — isn't retried every run, but an edit does get another go.
+    Each is attempted once per change (``needs_discord_sync``), so a permanent failure isn't retried
+    every run, but an edit gets another go.
     """
     from auctions.models import ClubEvent
 
     touched = 0
     if not club.create_discord_events_for_club_events:
-        # Turned off: take back the events we made rather than leaving them stranded in Discord.
+        # Turned off: take back the events we made rather than stranding them.
         for event in club.events.exclude(discord_event_id="").exclude(source__in=ClubEvent.AUTOMATIC_SOURCES):
             changed, _retry = _remove(club, event)
             if changed:
@@ -186,10 +179,9 @@ def _sync_member_events(club):
 
 
 def sync_one_event(club, event):
-    """Create, move or take down one club event in Discord. Returns True when Discord changed.
+    """Create, move or take down one club event; True when Discord changed.
 
-    Called for each pending event by the periodic sync, and directly by the event form so an
-    admin sees the result of their edit without waiting a quarter of an hour for it.
+    Called by the periodic sync and directly by the event form, so an admin sees the result at once.
     """
     from auctions.models import ClubEvent
 
@@ -198,8 +190,7 @@ def sync_one_event(club, event):
     if event.source in ClubEvent.AUTOMATIC_SOURCES:
         return False
     if event.is_deleted or event.cancelled or event.date_start <= timezone.now():
-        # Called off, or already under way — Discord won't take a past start time, and an event
-        # that isn't happening shouldn't sit in the server's list.
+        # Cancelled, or already under way: Discord won't take a past start time.
         changed, retry = _remove(club, event)
         event.needs_discord_sync = retry
         event.save(update_fields=["needs_discord_sync"])
@@ -226,8 +217,7 @@ def _push_member_event(club, event):
             event.save(update_fields=["needs_discord_sync"])
             return True
         if status not in GONE_STATUSES:
-            # A refusal isn't worth repeating until something changes; a Discord we couldn't
-            # reach at all is, so leave that one queued.
+            # A refusal isn't worth repeating; an unreachable Discord is, so leave that queued.
             event.needs_discord_sync = status == 0
             event.save(update_fields=["needs_discord_sync"])
             return False
@@ -249,10 +239,10 @@ def _push_member_event(club, event):
 
 
 def _remove(club, event):
-    """Take one club event out of Discord and forget its id.
+    """Take one event out of Discord and forget its id.
 
-    Returns (changed, worth_retrying): a refusal repeated every run helps nobody, but a Discord
-    we simply couldn't reach deserves another go.
+    Returns (changed, worth_retrying): a refusal repeated every run helps nobody, an unreachable
+    Discord deserves another go.
     """
     if not event.discord_event_id:
         return (False, False)
@@ -265,18 +255,16 @@ def _remove(club, event):
 
 
 def sync_auction_events(club):
-    """Keep the Discord events that ``auction_emails`` made for auctions honest.
+    """Keep the events ``auction_emails`` made for auctions honest.
 
-    Creation stays in that command (it waits a day after an auction is posted). This only moves,
-    renames or calls off an event that already exists, which is what nothing did before: an
-    auction whose date moved, or that was unpromoted or deleted, kept its original Discord event
-    for ever.
+    Creation stays in that command (it waits a day after posting); this only moves, renames or cancels
+    an existing event, which nothing did before.
     """
     from auctions.models import Auction
 
     auctions = Auction.objects.filter(club=club).exclude(discord_event_id="")
     if not club.create_events_for_auctions:
-        # Turned off: clear out what we already made, same as for club events.
+        # Turned off: clear out what we made, as for club events.
         auctions = list(auctions)
     else:
         auctions = list(auctions.filter(discord_event_needs_update=True))
@@ -288,7 +276,7 @@ def sync_auction_events(club):
 
 
 def _sync_one_auction_event(club, auction):
-    """Move, remake or call off one auction's Discord event. Returns True when Discord changed."""
+    """Move, remake or cancel one auction's Discord event; True when Discord changed."""
     from auctions.club_events import auction_event_window
 
     gone = auction.is_deleted or not auction.promote_this_auction or not club.create_events_for_auctions
@@ -298,14 +286,14 @@ def _sync_one_auction_event(club, auction):
         removed = status in (200, 204, *GONE_STATUSES)
         if removed:
             auction.discord_event_id = ""
-        # Only an unreachable Discord is worth another go; a refusal would just repeat forever.
+        # Only an unreachable Discord is worth retrying.
         auction.discord_event_needs_update = status == 0
         _store_auction_event_state(auction)
         return removed
 
     auction.discord_event_needs_update = False
     if start <= timezone.now():
-        # Under way already; Discord starts it on its own and refuses most edits from here.
+        # Already under way: Discord starts it itself and refuses most edits.
         _store_auction_event_state(auction)
         return False
 
@@ -315,7 +303,7 @@ def _sync_one_auction_event(club, auction):
     )
     changed = status == 200
     if status in GONE_STATUSES:
-        # Someone deleted it in Discord. auction_emails only ever makes one, so remake it here.
+        # Deleted in Discord; auction_emails only ever makes one, so remake it here.
         new_id = create_scheduled_event(
             guild_id=club.discord_server_id,
             name=auction.title,
@@ -330,10 +318,8 @@ def _sync_one_auction_event(club, auction):
 
 
 def _store_auction_event_state(auction):
-    """Write back just the two Discord columns.
-
-    A queryset update rather than auction.save(): saving an auction re-runs the calendar
-    mirroring signals, and none of that has anything to do with recording a Discord event id.
+    """Write back the two Discord columns with a queryset update: saving an auction re-runs the calendar
+    mirroring signals.
     """
     from auctions.models import Auction
 

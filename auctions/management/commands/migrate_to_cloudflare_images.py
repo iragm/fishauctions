@@ -1,12 +1,10 @@
 """Move locally stored images to Cloudflare Images.
 
-Only the original upload of each image is sent -- never the locally generated
-thumbnail files, which Cloudflare replaces with on-the-fly variants (uploading them
-would just cost storage).  Runs automatically every minute via celery beat (a no-op
-unless the CLOUDFLARE_IMAGES_* settings in .env are configured); celery's 5 minute
-task time limit chunks a large initial migration, and a Redis lock lets the next run
-resume where the last one left off.  Run --setup once before anything else to create
-the image variants on Cloudflare.
+Only each image's original upload is sent, never the locally generated thumbnails, which Cloudflare
+replaces with on-the-fly variants. Runs every minute via celery beat, and is a no-op unless the
+CLOUDFLARE_IMAGES_* settings are configured; celery's 5 minute time limit chunks a large initial
+migration, and a Redis lock lets the next run resume where the last left off. Run --setup once first
+to create the variants on Cloudflare.
 """
 
 from django.core.cache import cache
@@ -88,14 +86,14 @@ class Command(BaseCommand):
                 continue
             except cloudflare_images.CloudflareImagesError as e:
                 if e.status_code and 400 <= e.status_code < 500 and e.status_code not in (401, 403, 429):
-                    # Cloudflare rejected this particular file (unsupported format, too
-                    # large...): mark it so it isn't retried forever; it keeps being
-                    # served from the local file, and replacing the image retries.
+                    # Cloudflare rejected this file (unsupported format, too large...): mark it so
+                    # it isn't retried for ever. It keeps being served locally, and replacing the
+                    # image retries.
                     instance.cloudflare_image_id = cloudflare_images.UPLOAD_FAILED
                     instance.save(update_fields=["cloudflare_image_id"])
                     self.stderr.write(f"Cloudflare rejected {label} ({field_file.name}): {e}")
                     continue
-                # an API problem (bad token, rate limit, outage...) will affect every upload: stop
+                # An API problem (bad token, rate limit, outage...) affects every upload: stop.
                 msg = f"Uploading {label} ({field_file.name}) failed: {e}"
                 raise CommandError(msg) from e
             instance.cloudflare_image_id = image_id

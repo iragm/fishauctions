@@ -1,17 +1,9 @@
 """Two-way Google Calendar sync for clubs.
 
-A club admin authorizes this site against their own Google account (see the GoogleCalendar*View
-classes in views.py). We then create a *secondary* calendar in that account — "<Club> Events" —
-and keep it in step with the club's ClubEvent rows:
-
-    site  -> Google   push_event() / delete_event(), driven by needs_google_sync
-    Google -> site    pull_events(), an incremental sync using Google's syncToken
-
-Because we only ever touch the calendar we created, the default OAuth scope is
-``calendar.app.created`` rather than full calendar access. That keeps the site out of Google's
-sensitive-scope verification track while still doing everything the integration needs.
-
-All Google API access goes through _request(); tests mock that single entry point.
+A club admin authorizes their Google account; we create a secondary "<Club> Events" calendar and
+keep it in step with ClubEvent rows: ``push_event()``/``delete_event()`` out, ``pull_events()`` in
+(syncToken). Only touching our own calendar allows the ``calendar.app.created`` scope, outside
+Google's sensitive-scope review. All API calls go through ``_request()``, which tests mock.
 """
 
 from __future__ import annotations
@@ -32,32 +24,22 @@ TOKEN_URL = "https://oauth2.googleapis.com/token"  # noqa: S105 - a URL, not a s
 CALENDAR_API_BASE = "https://www.googleapis.com/calendar/v3"
 USERINFO_URL = "https://www.googleapis.com/oauth2/v3/userinfo"
 
-# The one scope every Calendar call here needs. Checked against what Google says it actually
-# granted (see exchange_code): asking for a scope and being handed a token without it is a real
-# state, and the only place it can be caught before it turns into a 403 hours later.
+# Checked against what Google actually granted (exchange_code): a token without it 403s hours later.
 CALENDAR_SCOPE = "https://www.googleapis.com/auth/calendar.app.created"
 
-# Google rejects a syncToken once it's too old (or after we change what we ask for). When that
-# happens the only fix is to forget the token and do a fresh full pull.
+# An expired syncToken: forget it and do a full pull.
 SYNC_TOKEN_GONE = 410
 
 TIMEOUT = 15
 
-# A first pull asks for a bounded window rather than everything. Without an upper bound a single
-# never-ending weekly meeting expands (singleEvents=true) into an instance per week forever, and
-# each one would become a club event, a club-page row and a Discord event.
+# First pull window. Unbounded, a never-ending weekly meeting expands forever.
 PULL_WINDOW_BEFORE = datetime.timedelta(days=30)
 PULL_WINDOW_AHEAD = datetime.timedelta(days=400)
 
-# Hard stop on pagination, so a response that keeps handing back the same page token can't spin.
-# At 250 events a page this is far more than a club calendar holds in the window above.
+# Pagination hard stop against a repeating page token.
 MAX_PULL_PAGES = 20
 
-# How stale the "is it shared?" answer is allowed to get. The probe is one anonymous GET, but it
-# rides on a sync that already runs every 15 minutes for every connected club, and sharing is a
-# thing an admin changes roughly once. An hour is quick enough that somebody following the
-# instructions on the settings page sees the banner clear itself while they still remember doing
-# it, and slow enough that it isn't four requests an hour per club for ever.
+# How stale the "is it shared?" answer may get: quick enough to see the banner clear, cheap per club.
 PUBLIC_CHECK_INTERVAL = datetime.timedelta(hours=1)
 
 
@@ -80,8 +62,7 @@ def authorize_url(redirect_uri, state):
         "response_type": "code",
         "scope": settings.GOOGLE_CALENDAR_SCOPE,
         "state": state,
-        # offline + consent is the only combination that reliably returns a refresh token,
-        # including for an admin who has authorized this site before.
+        # offline + consent reliably returns a refresh token, even for repeat authorizations.
         "access_type": "offline",
         "prompt": "consent",
         "include_granted_scopes": "true",
@@ -90,10 +71,7 @@ def authorize_url(redirect_uri, state):
 
 
 def exchange_code(code, redirect_uri):
-    """Swap an OAuth authorization code for tokens.
-
-    Returns (refresh_token, access_token, expires_in, account_email).
-    """
+    """Swap an OAuth code for ``(refresh_token, access_token, expires_in, account_email)``."""
     data = {
         "code": code,
         "client_id": settings.GOOGLE_CALENDAR_CLIENT_ID,
@@ -117,10 +95,7 @@ def exchange_code(code, redirect_uri):
             "https://myaccount.google.com/permissions and try connecting again."
         )
         raise GoogleCalendarError(msg)
-    # What Google *granted*, which is not the same as what we asked for. A partial grant still
-    # returns a code and a refresh token, so without this check the connection is recorded as a
-    # success and the first Calendar call comes back "insufficient authentication scopes" -- an
-    # error about the token, surfacing on a page that has nothing to do with consent.
+    # A partial grant still returns tokens; without this check the connection looks successful.
     granted = set((payload.get("scope") or "").split())
     if granted and CALENDAR_SCOPE not in granted:
         msg = (
@@ -133,11 +108,8 @@ def exchange_code(code, redirect_uri):
 
 
 def _account_email(access_token, granted_scopes=()):
-    """Best-effort lookup of which Google account authorized us, for display only.
-
-    Skipped entirely unless userinfo.email was granted, which by default it isn't -- see the
-    GOOGLE_CALENDAR_SCOPE comment in settings.py for why the calendar scope now travels alone.
-    Kept working for a site that deliberately widens the scope, and a doomed request otherwise.
+    """Which Google account authorized us, for display, only if userinfo.email was granted (not by default;
+    see settings.py).
     """
     if not access_token:
         return ""
@@ -153,7 +125,7 @@ def _account_email(access_token, granted_scopes=()):
 
 
 def _readable_error(resp):
-    """Pull the human-readable message out of a Google error body, for last_error / messages."""
+    """The readable message from a Google error body."""
     try:
         payload = resp.json()
     except ValueError:
@@ -189,8 +161,7 @@ def get_access_token(club):
         msg = f"Could not reach Google: {exc}"
         raise GoogleCalendarError(msg) from exc
     if resp.status_code != 200:
-        # A revoked or expired refresh token can never recover on its own — clear the connection
-        # so the settings page prompts the admin to reconnect instead of failing silently forever.
+        # A revoked or expired refresh token never recovers: disconnect so the page prompts reconnection.
         detail = _readable_error(resp)
         if resp.status_code in (400, 401):
             disconnect(club, error=f"Google access was revoked ({detail}). Please reconnect.")
@@ -207,10 +178,8 @@ def get_access_token(club):
 
 
 def _request(club, method, path, *, params=None, json=None, allow_status=()):
-    """Make an authenticated Calendar API call. Returns the parsed body (or {} for 204s).
-
-    ``allow_status`` lists extra status codes the caller wants to handle itself; those come back
-    as the integer status instead of raising.
+    """An authenticated Calendar API call; the parsed body, or {} for 204. ``allow_status`` codes are
+    returned as ints instead of raising.
     """
     token = get_access_token(club)
     url = f"{CALENDAR_API_BASE}{path}"
@@ -231,22 +200,14 @@ def _request(club, method, path, *, params=None, json=None, allow_status=()):
 
 
 def ensure_calendar(club):
-    """Get or create this club's calendar.
+    """Get or create this club's calendar, verifying an existing one still exists.
 
-    Safe to call repeatedly — it only creates a calendar when the club doesn't have one yet, and
-    verifies an existing one still exists (an admin may have deleted it in Google Calendar).
-
-    Deliberately does *not* touch the calendar's sharing (ACL) rules. Doing that needs the
-    ``calendar.acls`` or ``calendar`` scope, both of which grant control over every calendar the
-    admin owns and put the OAuth app into Google's sensitive-scope verification track — the exact
-    trade this integration is built to avoid. Admins make the calendar public themselves, in
-    Google Calendar, in a few clicks; ``Club.google_calendar_is_public`` records that they have.
+    Never touches sharing (ACLs): that needs a scope over all the admin's calendars. Admins share it
+    themselves; ``Club.google_calendar_is_public`` records it.
     """
     if club.google_calendar_id:
-        # 404 only. A 403 is "you may not touch this" -- a missing scope, a rate limit, a calendar
-        # that now belongs to a different Google account -- and none of those mean the admin
-        # deleted it. Treating them the same used to throw away every event link on this club for
-        # a temporary error, and re-push each event as a duplicate afterwards.
+        # 404 only. A 403 is a scope, rate limit or ownership problem, not a deletion; treating it as
+        # one threw away every event link and duplicated events.
         existing = _request(club, "GET", f"/calendars/{_quote(club.google_calendar_id)}", allow_status=(404,))
         if existing != 404:
             return club.google_calendar_id
@@ -262,10 +223,8 @@ def ensure_calendar(club):
             "timeZone": settings.TIME_ZONE,
         },
     )
-    # Nothing is thrown away until the replacement exists. The old id and the events' google_event_ids
-    # are the only record of what is already in somebody's calendar, and a POST that fails after they
-    # were cleared leaves the club pointing at a calendar whose events it can no longer recognize --
-    # which is how a later reconnect ends up duplicating every event members subscribed to.
+    # Old ids are kept until the replacement exists: they're the only record of what's in members'
+    # calendars.
     club.google_calendar_id = created.get("id", "")
     club.google_calendar_sync_token = ""
     club.save(update_fields=["google_calendar_id", "google_calendar_sync_token"])
@@ -296,15 +255,8 @@ def _event_body(event):
 
 
 def _event_times(event):
-    """The start/end half of the payload, written the way Google writes it.
-
-    A repeating event goes back anchored where its series is anchored, not at whichever occurrence
-    we happen to be showing — Google generates the rest from there, and sending the next occurrence
-    instead would walk the whole series forward a step on every push.
-
-    An all-day event has to go back as ``date``, not ``dateTime``: sending a datetime would quietly
-    turn the club's all-day event into a timed one the first time anyone edits it here. Google's
-    all-day end date is exclusive, which is exactly what ``date_end`` holds for these.
+    """The start/end payload, as Google writes it. A series is anchored at its series start, or each push
+    walks it forward. All-day events go as ``date`` (exclusive end).
     """
     start = event.recurrence_start if event.is_recurring else event.date_start
     end = start + event.occurrence_length
@@ -326,13 +278,12 @@ def _absolute_auction_url(event):
 
 
 def push_event(event):
-    """Create or update one ClubEvent in the club's Google Calendar. Returns True on success."""
+    """Create or update one ClubEvent in the club's Google Calendar. True on success."""
     club = event.club
     if not club.google_calendar_connected:
         return False
     if event.cancelled and not event.google_event_id:
-        # Nothing to call off over there, and Google has no use for an event that arrives
-        # already cancelled.
+        # A cancelled event never pushed has nothing to cancel.
         event.needs_google_sync = False
         event.save(update_fields=["needs_google_sync"])
         return False
@@ -344,7 +295,7 @@ def push_event(event):
             "PUT",
             f"/calendars/{calendar_id}/events/{_quote(event.google_event_id)}",
             json=body,
-            # If the event vanished on Google's side, fall through and recreate it.
+            # Gone on Google's side: recreate.
             allow_status=(404, 410),
         )
         if result in (404, 410):
@@ -379,12 +330,8 @@ def delete_event(event):
 
 
 def push_pending(club):
-    """Push every event that's waiting to go to Google.
-
-    Returns (pushed, first_error). One event Google won't accept — a title it dislikes, a
-    date it rejects — must not stop the rest of the club's events from syncing, or stop the
-    pull that runs after this, so failures are collected rather than raised. The caller
-    surfaces the first one on the club's settings page.
+    """Push every pending event. Returns ``(pushed, first_error)``; one rejected event doesn't stop the
+    rest or the pull.
     """
     pushed = 0
     first_error = None
@@ -400,10 +347,7 @@ def push_pending(club):
 
 
 def _parse_google_datetime(value):
-    """Parse a Google start/end block into an aware datetime, or None.
-
-    All-day events come back as {"date": "2026-08-01"}; timed ones as {"dateTime": "..."}.
-    """
+    """A Google start/end block to an aware datetime, or None. All-day is ``date``, timed is ``dateTime``."""
     if not value:
         return None
     if value.get("dateTime"):
@@ -418,24 +362,19 @@ def _parse_google_datetime(value):
 
 
 def pull_events(club):
-    """Pull changes from Google into ClubEvent rows. Returns (created, updated, deleted).
-
-    Uses Google's syncToken so each run only fetches what changed. Events that originated on
-    this site are recognized by their extendedProperties and only have their *content* updated
-    — we never let a pull resurrect something we deleted, or flip a generated event's identity.
+    """Pull changes into ClubEvent rows. Returns ``(created, updated, deleted)``. Our own events (by
+    extendedProperties) only get content updates; a pull never resurrects or re-identifies them.
     """
     if not club.google_calendar_connected:
         return (0, 0, 0)
 
     calendar_id = _quote(club.google_calendar_id)
-    # Deliberately *not* singleEvents: a repeating event comes back once, as itself, with its
-    # rule attached. Asking Google to expand it instead turned one weekly meeting into an event
-    # per week here — see auctions/recurrence.py.
+    # Not singleEvents: a series comes back once with its rule (auctions/recurrence.py).
     base_params = {"showDeleted": "true", "maxResults": 250}
     if club.google_calendar_sync_token:
         base_params["syncToken"] = club.google_calendar_sync_token
     else:
-        # First run: a bounded window, not years of history or an endless recurrence.
+        # First run: a bounded window.
         now = timezone.now()
         base_params["timeMin"] = (now - PULL_WINDOW_BEFORE).isoformat()
         base_params["timeMax"] = (now + PULL_WINDOW_AHEAD).isoformat()
@@ -446,14 +385,13 @@ def pull_events(club):
     for page_number in range(1, MAX_PULL_PAGES + 1):
         page = _request(club, "GET", f"/calendars/{calendar_id}/events", params=params, allow_status=(SYNC_TOKEN_GONE,))
         if page == SYNC_TOKEN_GONE:
-            # Token expired. Start over from scratch on the next run rather than looping here.
+            # Expired token: full pull next run.
             logger.info("Google sync token expired for club %s; will do a full pull next time.", club.pk)
             club.google_calendar_sync_token = ""
             club.save(update_fields=["google_calendar_sync_token"])
             return (created, updated, deleted)
 
-        # Series before their own exceptions, so "this one occurrence moved" always has the
-        # series it belongs to to attach itself to.
+        # Series before their exceptions, so an exception finds its series.
         for item in sorted(page.get("items", []), key=lambda item: bool(item.get("recurringEventId"))):
             outcome = _apply_pulled_event(club, item)
             if outcome == "created":
@@ -468,13 +406,11 @@ def pull_events(club):
         if not page_token:
             break
         if page_number == MAX_PULL_PAGES:
-            # Give up rather than spin. Leaving the token empty means the next run starts the
-            # window again, which is the right thing if this was a one-off flood.
+            # Give up rather than spin; an empty token restarts the window next time.
             logger.warning("Stopped pulling club %s's calendar after %s pages.", club.pk, MAX_PULL_PAGES)
             next_sync_token = ""
             break
-        # Every page of a listing has to carry the same query, or page two quietly reverts to
-        # Google's defaults: deletions hidden and recurring events unexpanded.
+        # Every page must repeat the query, or page two reverts to defaults.
         params = dict(base_params, pageToken=page_token)
 
     club.google_calendar_sync_token = next_sync_token
@@ -493,11 +429,8 @@ def _apply_pulled_event(club, item):
 
 
 def _apply_pulled_instance(club, item, google_id):
-    """One occurrence of a series that Google keeps its own record of — moved, or called off.
-
-    Either way that occurrence stops being generated from the rule (an EXDATE), so the series and
-    the changed occurrence can't both claim the same slot. A moved one then lives on as an
-    ordinary event of its own; a cancelled one simply doesn't happen.
+    """One occurrence Google tracks separately, moved or cancelled: EXDATE it from the rule; a moved one
+    becomes its own event.
     """
     from auctions.models import ClubEvent
 
@@ -507,8 +440,7 @@ def _apply_pulled_instance(club, item, google_id):
         _exclude_occurrence(master, original_start)
 
     if item.get("status") == "cancelled":
-        # Excluding it from the rule is the whole story, unless we'd already made a row for a
-        # moved copy of this occurrence.
+        # The EXDATE is enough unless we'd made a row for the moved copy.
         moved_copy = ClubEvent.objects.filter(club=club, google_event_id=google_id, is_deleted=False).first()
         if not moved_copy:
             return ""
@@ -533,27 +465,22 @@ def _exclude_occurrence(master, moment):
 
 
 def _series_times(item, start, end, existing):
-    """(anchor, rule, start, end) for one pulled item.
-
-    A plain event is its own start and end and has no rule. A series keeps Google's start as the
-    anchor the rule is measured from, and takes ``date_start``/``date_end`` from the occurrence
-    that's on now or next, so the club page, the membership emails and Discord all see a date
-    that means something without knowing anything about recurrence.
+    """``(anchor, rule, start, end)`` for a pulled item. A series anchors at Google's start and takes
+    ``date_start``/``date_end`` from the current or next occurrence.
     """
     from auctions import recurrence
 
     lines = recurrence.clean_lines(item.get("recurrence"))
     if not lines:
         return (None, "", start, end)
-    # Occurrences called off here (Google records those separately, as instances) would come back
-    # every time the series itself is edited, so they're carried across.
+    # Keep EXDATEs we recorded; Google stores them as instances, lost when the series is edited.
     if existing and existing.recurrence:
         kept = [line for line in existing.recurrence_lines if line.upper().startswith("EXDATE") and line not in lines]
         lines = lines + kept
     length = (end - start) if (end and end > start) else datetime.timedelta(hours=2)
     occurrence = recurrence.current_or_next(start, lines, length, timezone.now())
     if not occurrence:
-        # An unreadable rule: keep the event, treat it as the one-off Google says it starts as.
+        # Unreadable rule: treat as a one-off.
         return (None, "", start, end)
     return (start, recurrence.to_text(lines), occurrence, occurrence + length)
 
@@ -568,8 +495,7 @@ def _apply_event_item(club, item, google_id):
         if not existing or existing.is_deleted:
             return ""
         if existing.is_automatic:
-            # The auction or pickup time is still real — someone deleted its calendar entry.
-            # Put it back on the next push rather than dropping it from the club page.
+            # The auction or pickup is still real; re-push rather than drop it.
             existing.google_event_id = ""
             existing.needs_google_sync = True
             existing.save(update_fields=["google_event_id", "needs_google_sync"])
@@ -590,11 +516,10 @@ def _apply_event_item(club, item, google_id):
 
     if existing:
         if existing.is_automatic:
-            # Generated events are owned by the auction; a Google-side edit doesn't win.
+            # Generated events belong to the auction; Google edits don't win.
             return ""
         if existing.needs_google_sync:
-            # We have an edit of our own that hasn't reached Google yet (a push that failed, or
-            # one that hasn't run). Taking Google's copy here would silently throw it away.
+            # An unpushed local edit wins over Google's copy.
             logger.info("Keeping the unsynced local copy of event %s rather than Google's.", existing.pk)
             return ""
         changed = (
@@ -618,16 +543,13 @@ def _apply_event_item(club, item, google_id):
         existing.recurrence = rule
         existing.recurrence_start = anchor
         existing.is_deleted = False
-        # Content came *from* Google, so don't bounce it straight back — but Discord hasn't
-        # heard about it, and this is the only place that would ever tell it.
+        # Came from Google, so don't push back, but Discord needs to hear.
         existing.needs_google_sync = False
         existing.needs_discord_sync = True
         existing.save()
         return "updated"
 
-    # An event we've never seen. It might still be one of ours if a push succeeded but we failed
-    # to record the id — match on the uuid we stamp into extendedProperties. Anything carrying our
-    # uuid is ours either way, so it never becomes a second, Google-sourced club event.
+    # Unknown id: may still be ours if a push succeeded without recording the id (match our uuid).
     private = (item.get("extendedProperties") or {}).get("private") or {}
     our_uuid = private.get("auctionSiteEventUuid")
     if our_uuid:
@@ -636,9 +558,7 @@ def _apply_event_item(club, item, google_id):
             claimed.google_event_id = google_id
             claimed.needs_google_sync = False
             claimed.save(update_fields=["google_event_id", "needs_google_sync"])
-        # Already knowing this event by a *different* id means this is a second copy of it — an
-        # instance of a recurring series, or a duplicate the admin made in Google. Claiming it
-        # would repoint us at the copy and orphan the original.
+        # Known under a different id: this is a copy (series instance or duplicate); don't claim it.
         return ""
 
     ClubEvent.objects.create(
@@ -659,18 +579,13 @@ def _apply_event_item(club, item, google_id):
 
 
 def sync_club(club):
-    """One full round trip for a club: push what's pending, then pull what changed.
-
-    Errors are recorded on the club (and surfaced on the settings page) rather than raised, so a
-    single broken connection can't stop the periodic task from servicing every other club.
-    """
+    """One round trip for a club: push pending, then pull. Errors are recorded on the club, not raised."""
     if not club.google_calendar_connected:
         return False
     try:
         ensure_calendar(club)
         _pushed, push_error = push_pending(club)
-        # Pull regardless of a push failure, so a single rejected event can't cut the club off
-        # from changes made in Google Calendar.
+        # Pull even after a push failure.
         pull_events(club)
         if push_error:
             raise push_error
@@ -679,25 +594,20 @@ def sync_club(club):
         club.save(update_fields=["google_calendar_last_error"])
         logger.warning("Google Calendar sync failed for club %s: %s", club.pk, exc)
         return False
-    # Stamped here rather than inside pull_events, so "last sync" means a round trip that worked
-    # and not a run that gave up on an expired token half way through.
+    # Stamped here, so "last sync" means a round trip that worked.
     club.google_calendar_last_sync = timezone.now()
     club.google_calendar_last_error = ""
     club.save(update_fields=["google_calendar_last_sync", "google_calendar_last_error"])
-    # Last, and only once the round trip has already been recorded as a success: this is the one
-    # thing that decides whether the club page offers the Google links, and it is a fact we read
-    # rather than something an admin asserts. Rate-limited inside, and it never raises.
+    # Last, after success is recorded. Rate-limited; never raises.
     refresh_public_flag(club)
     return True
 
 
 def disconnect(club, error=""):
-    """Forget this club's Google connection. The calendar itself stays in their account.
+    """Forget this club's Google connection; the calendar stays in their account.
 
-    The calendar id and the events' Google ids are kept on purpose. Reconnecting the same Google
-    account then picks up the same calendar and *updates* the events already in it — members who
-    subscribed keep the calendar they subscribed to. Reconnecting a different account can't see
-    that calendar, and ``ensure_calendar()`` notices, drops the stale ids and starts a new one.
+    Calendar and event ids are kept, so reconnecting the same account updates the same calendar.
+    A different account can't see it, and ``ensure_calendar()`` starts fresh.
     """
     club.google_calendar_refresh_token = ""
     club.google_calendar_access_token = ""
@@ -706,9 +616,7 @@ def disconnect(club, error=""):
     club.google_calendar_sync_token = ""
     club.google_calendar_connected_on = None
     club.google_calendar_last_error = error
-    # Forget what we knew about sharing. Reconnecting a *different* Google account gets a brand
-    # new (and private) calendar from ensure_calendar(), and a leftover "it's public" would have
-    # the club page advertising it in the window before the next probe runs.
+    # A different account gets a new private calendar; don't advertise the old one as public.
     club.google_calendar_is_public = False
     club.google_calendar_public_checked = None
     club.save(
@@ -724,18 +632,12 @@ def disconnect(club, error=""):
             "google_calendar_public_checked",
         ]
     )
-    # Everything is queued to go back out, so reconnecting catches the calendar up on whatever
-    # changed while it was disconnected.
+    # Queue everything so a reconnect catches up.
     club.events.filter(is_deleted=False).update(needs_google_sync=True)
 
 
 def is_calendar_public(club):
-    """True when the club's calendar really is shared publicly.
-
-    We can't read sharing through the API — that needs a scope over every calendar the admin owns
-    (see ``ensure_calendar``). But a public calendar has a public iCal feed, so asking for it
-    without credentials answers the question the honest way: 200 means members can subscribe.
-    """
+    """True when the calendar is really public: its iCal feed answers 200 without credentials."""
     url = club.google_calendar_ical_url_candidate
     if not url:
         return False
@@ -748,20 +650,9 @@ def is_calendar_public(club):
 
 
 def refresh_public_flag(club, *, force=False):
-    """Bring ``club.google_calendar_is_public`` in line with what Google will actually serve.
+    """Set ``club.google_calendar_is_public`` from what Google serves. Returns True when it changed.
 
-    This used to be a checkbox on the settings page — the admin's word, checked once, at the
-    moment they said it. That got both halves wrong. A club that followed the four steps in
-    Google Calendar and never came back never got its subscribe links, and a club that later
-    un-shared the calendar went on advertising links that 404 for every member, because nothing
-    ever asked again. Sharing is a fact about a calendar, not a preference about this site, so it
-    is read rather than stored on somebody's say-so.
-
-    Failing to reach Google is **not** evidence either way, so a network error leaves the flag
-    exactly as it was — flipping a working calendar to private because of one timeout would take
-    the links off the club page for an hour for no reason.
-
-    Returns True when the flag changed.
+    Sharing is read, not an admin checkbox (which went stale both ways). A network error leaves the flag alone.
     """
     if not club.google_calendar_connected:
         return False

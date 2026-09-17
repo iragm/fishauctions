@@ -423,7 +423,8 @@ class LotRefundDialog(LoginRequiredMixin, DetailView, FormMixin, AuctionViewMixi
                 "This lot has not sold, there's nothing to refund.  If there's a problem with this lot, remove it."
             )
         else:
-            # if a refund has already been issued for this lot, we need to calculate how much is unpaid by temporarily removing it
+            # A refund already issued for this lot has to come off before working out what is
+            # unpaid, then go back on.
             existing_refund = self.lot.partial_refund_percent
             if existing_refund:
                 self.lot.partial_refund_percent = 0

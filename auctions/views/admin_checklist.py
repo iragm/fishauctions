@@ -29,11 +29,11 @@ class AdminSetupChecklistView(AdminOnlyViewMixin, TemplateView):
 
     @staticmethod
     def _apple_sign_in_items(base_url, site_host):
-        """Sign in with Apple: the app half, the web half, and the things Apple requires of both.
+        """Sign in with Apple: the app half, the web half, and what Apple requires of both.
 
-        Split up because these fail independently and a deployment can legitimately stop after the
-        first. The bundle id alone is a complete, working native sign-in — verifying an Apple
-        identity token only needs Apple's public keys.
+        Split up because they fail independently and a deployment can legitimately stop after the first: the
+        bundle id alone is a complete native sign-in, since verifying an identity token needs only Apple's
+        public keys.
         """
         from auctions.apple_notifications import notifications_configured
         from auctions.apple_signin import revocation_configured
@@ -146,9 +146,8 @@ class AdminSetupChecklistView(AdminOnlyViewMixin, TemplateView):
             {
                 "section": section,
                 "name": "Server-to-server notifications",
-                # Green once the endpoint can actually verify a notification, which needs an
-                # identifier to check the audience against. Whether Apple has been *told* the URL
-                # can't be seen from here — that half is the setup steps below.
+                # Green once the endpoint can verify a notification, which needs an identifier to
+                # check the audience against. Whether Apple has been told the URL can't be seen here.
                 "configured": notifications_configured(),
                 "what_it_does": (
                     "Apple tells this site when someone disconnects the app, deletes their Apple ID, or turns "
@@ -232,10 +231,8 @@ class AdminSetupChecklistView(AdminOnlyViewMixin, TemplateView):
 
     @staticmethod
     def _tap_to_pay_items():
-        """Tap to Pay on iPhone: the Apple-side steps that sit on top of a working Square connection.
-
-        Only shown once Square is set up, because Tap to Pay charges through Square and none of this
-        means anything without it.
+        """Tap to Pay on iPhone: the Apple-side steps on top of a working Square connection, shown only once
+        Square is set up.
         """
         from post_office.models import EmailTemplate
 
@@ -248,8 +245,8 @@ class AdminSetupChecklistView(AdminOnlyViewMixin, TemplateView):
             {
                 "section": section,
                 "name": "Apple's publishing entitlement",
-                # Not a .env value — an Apple-side request. "Done" here means "nothing to configure
-                # in this file", the same way the branding item does.
+                # Not a .env value but an Apple-side request, so "Done" means "nothing to configure
+                # in this file", as the branding item does.
                 "configured": True,
                 "what_it_does": (
                     "<strong>Nothing to configure here, and this page can't tell whether Apple has granted it.</strong> "
@@ -320,8 +317,8 @@ class AdminSetupChecklistView(AdminOnlyViewMixin, TemplateView):
 
         context = super().get_context_data(**kwargs)
 
-        # Asked through the same helper the palette itself uses, so the checklist can never claim
-        # the assistant is on while the palette quietly treats it as off.
+        # Asked through the same helper the palette uses, so the checklist can't claim the assistant
+        # is on while the palette treats it as off.
         llm_configured = assist_enabled()
         llm_window_max = palette_assist.WINDOW_MAX_CALLS
         llm_window_minutes = palette_assist.WINDOW_SECONDS // 60
@@ -338,8 +335,7 @@ class AdminSetupChecklistView(AdminOnlyViewMixin, TemplateView):
                 "(an A record) that point to this server's public IP address."
             )
 
-        # Build https://your-host from SITE_DOMAIN so the payment redirect/webhook
-        # URLs below are copy-paste ready for this install.
+        # Built from SITE_DOMAIN so the redirect and webhook URLs below are copy-paste ready.
         raw_domain = (settings.SITE_DOMAIN or "example.com").strip() or "example.com"
         site_host = urlsplit(raw_domain if "://" in raw_domain else f"//{raw_domain}").hostname or raw_domain
         base_url = f"https://{site_host}"
@@ -380,7 +376,7 @@ class AdminSetupChecklistView(AdminOnlyViewMixin, TemplateView):
             {
                 "section": "Core setup",
                 "name": "Site identity & branding",
-                # A preference, not a credential: always "Done", the help text explains it.
+                # A preference, not a credential: always "Done"; the help text explains it.
                 "configured": True,
                 "what_it_does": (
                     "Branding shown across the site and on emails:"
@@ -733,9 +729,8 @@ class AdminSetupChecklistView(AdminOnlyViewMixin, TemplateView):
                 "section": "Mobile push notifications",
                 "name": "Mobile push notifications (Firebase)",
                 "hide_title": True,
-                # The service-account key is what actually enables sending; without it every
-                # notification falls back to email. The two client files let the app register to
-                # receive — flagged in the help text below.
+                # The service-account key is what enables sending; without it every notification
+                # falls back to email. The two client files let the app register to receive.
                 "configured": bool(getattr(settings, "FIREBASE_CREDENTIALS_JSON", "")),
                 "what_it_does": (
                     "Sends push notifications to the mobile app (invoices, watched lots, chat, and more) "

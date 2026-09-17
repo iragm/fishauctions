@@ -1,18 +1,17 @@
-"""
-Security tests to ensure AuctionTOS and user data is properly protected.
-
-These tests verify that:
-1. Unauthenticated users cannot access user/AuctionTOS data
-2. Non-admin authenticated users cannot access user/AuctionTOS data
-3. Auction admins CAN access user/AuctionTOS data for their auctions only
+"""Tests that AuctionTOS and user data are protected: unauthenticated and non-admin users can't reach
+them, and auction admins can reach only their own auctions'. Also that a hostile query string on a
+public page is ignored rather than stored in a response header.
 """
 
 from django.contrib.auth import get_user_model
+from django.http import HttpResponse
 from django.test import TestCase
 from django.urls import reverse
 from django.utils import timezone
 
 from auctions.models import Auction, AuctionTOS, PickupLocation
+from auctions.services import attachment_filename
+from auctions.tests import StandardTestCase
 
 User = get_user_model()
 
@@ -312,3 +311,92 @@ class AuctionTOSSecurityTestCase(TestCase):
         response = self.client.post(url, {"name": "Test"})
         # Should be allowed
         self.assertEqual(response.status_code, 200)
+
+
+class LotOrderCookieTestCase(StandardTestCase):
+    """?order= is echoed into the lot_order cookie, so it has to be a real sort choice."""
+
+    def setUp(self):
+        super().setUp()
+        self.url = reverse("allLots")
+
+    def stored_order(self, response):
+        cookie = response.cookies.get("lot_order")
+        return cookie.value if cookie else None
+
+    def test_control_characters_in_order_do_not_break_the_page(self):
+        """set_cookie() raises CookieError on a newline, which used to 500 the whole page."""
+        response = self.client.get(self.url, {"order": "\nexpr 811401678 + 962228785\n"})
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(self.stored_order(response))
+
+    def test_an_unknown_order_is_not_remembered(self):
+        response = self.client.get(self.url, {"order": "bogus"})
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(self.stored_order(response))
+
+    def test_a_real_order_is_remembered(self):
+        response = self.client.get(self.url, {"order": "unloved"})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(self.stored_order(response), "unloved")
+
+    def test_a_remembered_order_is_used_on_the_next_page(self):
+        self.client.cookies["lot_order"] = "unloved"
+        response = self.client.get(self.url)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context["filter"].data["order"], "unloved")
+
+    def test_a_junk_cookie_is_cleared_rather_than_used(self):
+        self.client.cookies["lot_order"] = "bogus"
+        response = self.client.get(self.url)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(self.stored_order(response), "")
+        self.assertNotIn("order", response.context["filter"].data)
+
+
+class AttachmentFilenameTestCase(TestCase):
+    """Downloads name themselves after user-supplied text, which then has to survive a header."""
+
+    def test_control_characters_are_stripped(self):
+        cleaned = attachment_filename("report-\nexpr 811401678 + 962228785\n")
+        self.assertNotIn("\n", cleaned)
+        # The point of the helper: this assignment is what used to raise BadHeaderError.
+        HttpResponse()["Content-Disposition"] = f'attachment; filename="{cleaned}.csv"'
+
+    def test_quotes_and_semicolons_cannot_end_the_filename(self):
+        cleaned = attachment_filename('a";x=1;y="b')
+        self.assertNotIn('"', cleaned)
+        self.assertNotIn(";", cleaned)
+
+    def test_a_slug_is_left_alone(self):
+        self.assertEqual(attachment_filename("njas-spring-2023-auction"), "njas-spring-2023-auction")
+
+    def test_a_name_with_nothing_usable_falls_back(self):
+        self.assertEqual(attachment_filename(""), "download")
+        self.assertEqual(attachment_filename(None), "download")
+        self.assertEqual(attachment_filename("///"), "download")
+
+    def test_a_long_name_is_capped(self):
+        self.assertEqual(len(attachment_filename("x" * 500)), 80)
+
+
+class ExportFilenameTestCase(StandardTestCase):
+    """The CSV exports build their filename out of ?query=, which lands in a response header."""
+
+    PAYLOAD = "\nexpr 811401678 + 962228785\n"
+
+    def setUp(self):
+        super().setUp()
+        self.client.login(username=self.user, password="testpassword")
+
+    def assert_survives(self, url_name):
+        url = reverse(url_name, kwargs={"slug": self.online_auction.slug})
+        response = self.client.get(url, {"query": self.PAYLOAD})
+        self.assertEqual(response.status_code, 200)
+        self.assertNotIn("\n", response["Content-Disposition"])
+
+    def test_auction_report_survives_a_hostile_query(self):
+        self.assert_survives("user_list")
+
+    def test_lot_list_survives_a_hostile_query(self):
+        self.assert_survives("lot_list")

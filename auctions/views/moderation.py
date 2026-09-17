@@ -2,21 +2,16 @@
 
 Three pages that exist because this site hosts photographs uploaded by its users:
 
-* ``/dmca/`` publishes the designated agent. 17 U.S.C. 512(c)(2) requires the agent's name,
-  address, phone number and email to be both filed with the Copyright Office and made available to
-  the public on the site, and the safe harbour is conditioned on doing both. The page 404s on a
-  deployment that has not configured one -- see :mod:`auctions.dmca` for why that is the right
-  answer rather than a placeholder.
-* ``/dmca/notice/`` collects a notice with the six parts 512(c)(3)(A) asks for. It is a
-  convenience, not the channel: the agent's address is what the statute designates.
-* ``/lots/<pk>/report/`` is everything else -- a scam, an animal that should not be sold, abuse.
-  App Store Review Guideline 1.2 requires an app carrying user-generated content to offer "a
-  mechanism to report offensive content and timely responses to concerns"; this is that mechanism,
-  and the blocking half of the same guideline is ``CreateUserBan``, which already exists.
+* ``/dmca/`` publishes the designated agent, which 17 U.S.C. 512(c)(2) requires to be both filed
+  with the Copyright Office and published here. It 404s on a deployment with no agent configured --
+  see :mod:`auctions.dmca` for why that beats a placeholder.
+* ``/dmca/notice/`` collects a notice with the six parts 512(c)(3)(A) asks for. A convenience, not
+  the channel: the agent's address is what the statute designates.
+* ``/lots/<pk>/report/`` is everything else. App Store Review Guideline 1.2 requires a mechanism to
+  report offensive content; the blocking half is ``CreateUserBan``.
 
-All three are open to people who are not signed in, and all three are rate limited per IP on top of
-the invisible reCAPTCHA. A rightsholder is not going to make an account to file a notice, and
-somebody who has just been scammed should not have to either.
+All three are open to people who are not signed in, and rate limited per IP on top of the invisible
+reCAPTCHA: a rightsholder will not make an account to file a notice.
 """
 
 import logging
@@ -38,10 +33,8 @@ from auctions.moderation_forms import CopyrightNoticeForm, ReportContentForm
 
 logger = logging.getLogger(__name__)
 
-#: Submissions one address may send in an hour, matching SupportView.MESSAGES_PER_HOUR. Generous:
-#: a rightsholder with a real complaint sends one or two, and somebody working through a catalogue
-#: of stolen photographs should be writing to the agent rather than filling the form out eleven
-#: times.
+#: Submissions one address may send in an hour, matching SupportView.MESSAGES_PER_HOUR. Generous: a
+#: rightsholder sends one or two, and somebody working through a catalogue should write to the agent.
 SUBMISSIONS_PER_HOUR = 5
 
 
@@ -60,13 +53,11 @@ def _over_the_limit(request, bucket):
 
 
 class DmcaPolicyView(TemplateView):
-    """The copyright policy, and the designated agent's details.
+    """The copyright policy and the designated agent's details.
 
-    404s when no agent is configured. That reads oddly for a legal page until you remember this is
-    open source and forks exist: a fork operator is their own service provider with their own
-    agent, and a page that fell back to this site's details would be publishing a Vermont fish
-    club's address as the place to send notices about somebody else's website. No page is the
-    honest answer, and the setup checklist is where an operator finds out they need one.
+    404s with no agent configured. That reads oddly for a legal page until you remember forks exist: a
+    fork operator is their own service provider, and falling back to this site's details would publish a
+    Vermont fish club's address as where to send notices about somebody else's website.
     """
 
     template_name = "dmca.html"
@@ -135,8 +126,8 @@ class CopyrightNoticeCreate(FormView):
                     f"Complete notice under 512(c)(3)(A): {'yes' if notice.is_complete else 'NO'}\n\n"
                     f"Act on it here: https://{domain}/admin/auctions/copyrightnotice/{notice.pk}/change/"
                 ),
-                # Reply-To rather than From: the From address is the site's own routed sender, and
-                # a stranger's address there fails SPF and lands the one email that matters in spam.
+                # Reply-To rather than From: the From is the site's routed sender, and a stranger's
+                # address there fails SPF.
                 headers={"Reply-To": notice.email},
             )
         messages.success(
@@ -195,8 +186,8 @@ class ReportContentCreate(FormView):
             if report.reported_by:
                 reporter = report.reported_by.username
             else:
-                # Signed out: whatever they told us, and "anonymous" when they told us nothing.
-                # Both fields are optional -- a report worth reading is worth reading unsigned.
+                # Signed out: whatever they told us, or "anonymous". Both fields are optional -- a
+                # report worth reading is worth reading unsigned.
                 named = form.cleaned_data.get("reporter_name") or ""
                 reporter = " ".join(filter(None, [named, report.reporter_email])) or "anonymous"
             mail.send(
@@ -217,9 +208,8 @@ class ReportContentCreate(FormView):
 def _lot_from_urls(text):
     """Best-effort: pick the lot out of the URLs a notice quotes, so the admin has one click.
 
-    Wrong or absent is fine and expected -- a notice can name a club icon, a speaker photo, or a
-    page that no longer exists. It only saves the operator a search when it works, and the
-    operator confirms what actually comes down either way.
+    Wrong or absent is expected -- a notice can name a club icon, a speaker photo, or a page that no
+    longer exists -- and the operator confirms what comes down either way.
     """
     match = re.search(r"/lots/(\d+)", text or "")
     if not match:

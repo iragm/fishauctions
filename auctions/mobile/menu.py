@@ -1,46 +1,34 @@
 """The app's navigation drawer, built here and served in /api/mobile/config/.
 
-The drawer used to be a hand-copied mirror of the web navbar's account dropdown, compiled into the
-app: every link the navbar gained needed an app-store release before a phone could see it, so the
-app was permanently a release or two behind, and two things it could never carry at all were the
-superuser **Admin** menu and the **About site** link -- *who may see them* is a server question.
+The drawer used to be compiled into the app as a copy of the web navbar's account dropdown, so
+every new link needed an app-store release, and the superuser **Admin** menu and **About site**
+link could never be carried at all -- who may see them is a server question.
 
-This module answers it. `menu_for(user)` returns the whole drawer for one user, gated exactly the
-way `base.html` gates the navbar (`is_superuser` for Admin, `ENABLE_PROMO_PAGE` for About site,
-authenticated for the two account groups), and `MobileConfigView` serves it. Adding a row, or a
-whole section, is now a Django deploy.
+`menu_for(user)` returns the whole drawer for one user, gated exactly as `base.html` gates the
+navbar, and `MobileConfigView` serves it.
 
-Deliberately *not* shared with `base.html`. The drawer and the navbar are different surfaces with
-different needs -- the drawer has no Clubs dropdown (the app builds that from `clubs/mine/`), no
-sign-in/sign-up pair, and an ordering chosen for a phone -- so this is a second list rather than a
-refactor of the template. `auctions/test_mobile_menu.py` is what keeps them from drifting apart: it
-renders the real navbar for a user, pulls the account dropdown's links back out of the HTML, and
-fails if one of them is missing here. Web-only links go in that test's allowlist, with a reason.
+Deliberately not shared with `base.html`: the drawer has no Clubs dropdown, no sign-in pair, and its
+own ordering. `auctions/test_mobile_menu.py` keeps them from drifting -- it pulls the real navbar's
+account links out of the HTML and fails if one is missing here. Web-only links go in its allowlist.
 
-Four rows in the drawer are the app's own and are deliberately absent here, because none of them is
-a URL: **Sign out** (it clears the JWT pair, the WebView cookie jar, the cached profile, the offline
-files and the Square authorization -- a web `/logout/` link does one of those), **Offline mode** and
-**Tap to Pay** (native screens with their own gating), and **Clubs** (already server-driven,
-through `clubs/mine/`). The app merges those in itself.
+Four drawer rows are the app's own, because none is a URL: **Sign out** (it clears the JWT pair, the
+cookie jar, the cached profile, the offline files and the Square authorization), **Offline mode**
+and **Tap to Pay** (native screens), and **Clubs** (from `clubs/mine/`).
 
-Shape, and what the app does with a mistake:
+Shape::
 
     {"version": 1, "sections": [{"id": "main", "title": "…", "icon": "bi-…",
                                  "collapsed": true, "items": [{"title": …, "path": …, "icon": …}]}]}
 
-`id` is the merge anchor for the app's own rows and is never shown; `main` and `account` are the two
-it knows, every other id is an ordinary section, so adding one needs no release. `title` is the group
-header (omitted on the top group). `collapsed` renders the group as an expandable tile carrying
-`icon` -- what the navbar's dropdowns already are, and what keeps a twelve-item Admin menu from
-burying the rest. Icons are Bootstrap Icons class names written exactly as the template writes them;
-the app maps each to the nearest Material icon and falls back to a neutral chevron for one it does
-not know, so a new icon never breaks anything and never needs a release either.
+`id` is the merge anchor for the app's own rows: `main` and `account` are known, any other id is an
+ordinary section. `collapsed` renders the group as an expandable tile, which keeps a twelve-item
+Admin menu from burying the rest. Icons are Bootstrap Icons class names; the app maps each to a
+Material icon and falls back to a chevron, so a new icon needs no release.
 
-The app reads three tiers -- this payload, the last good one persisted on the device, then a tiny
-bundled skeleton -- so a payload it cannot read is *ignored* and yesterday's menu keeps rendering.
-Bad rows are dropped one at a time and a section left empty is dropped with them. That makes a bad
-deploy cheap, but it also means a row that quietly stops being emitted here disappears silently:
-prefer failing the drift test to trusting the client to notice.
+The app reads this payload, then the last good one on the device, then a bundled skeleton, so an
+unreadable payload is ignored and yesterday's menu keeps rendering. Bad rows are dropped one at a
+time -- which makes a bad deploy cheap, but means a row that stops being emitted disappears
+silently, so prefer failing the drift test.
 """
 
 from django.conf import settings
@@ -49,24 +37,19 @@ from django.utils.http import url_has_allowed_host_and_scheme
 
 from auctions import dmca
 
-# Advisory; the app ignores it today. Bump it if the *shape* ever changes incompatibly -- not for
-# adding a row, a section or a key, all of which are free (unknown keys are ignored on both sides).
+# Advisory; the app ignores it. Bump it only if the shape changes incompatibly.
 MENU_VERSION = 1
 
 
 def _row(title, path, icon=""):
     """One drawer row, or None if it isn't fit to send.
 
-    `title` and `path` are required. `path` must be site-relative: these rows load in the app's own
-    WebView chrome, under the same rule `terms_url` and `privacy_policy_url` already live under, so
-    an absolute URL on another host is dropped rather than followed. Query strings survive -- the
-    `?days=30` on the admin links is load-bearing. Nothing built below can fail these checks (they
-    all come from `reverse()`); the point is that a future row cannot smuggle an off-site link into
-    the drawer by accident.
+    `title` and `path` are required, and `path` must be site-relative: these load in the app's own
+    WebView chrome. Query strings survive -- the `?days=30` on the admin links is load-bearing.
     """
     if not title or not path:
         return None
-    # allowed_hosts=None means "no other host is allowed", i.e. site-relative only.
+    # allowed_hosts=None means site-relative only.
     if not url_has_allowed_host_and_scheme(path, allowed_hosts=None):
         return None
     row = {"title": title, "path": path}
@@ -92,9 +75,8 @@ def _section(section_id, rows, *, title="", icon="", collapsed=False):
 
 
 def _main_section():
-    """The two public destinations, which everyone gets signed in or out.
-
-    The app appends Offline mode and Clubs to the end of this section, which is why it stays short.
+    """The two public destinations, which everyone gets. The app appends Offline mode and Clubs here,
+    which is why it stays short.
     """
     return _section(
         "main",
@@ -120,16 +102,13 @@ def _lots_section():
 
 
 def _account_section():
-    """The navbar's account rows, which are now three: Invoices, Feedback, Account.
+    """The navbar's account rows: Invoices, Feedback, Account.
 
-    It used to be a flat list of every settings page. The web folded them behind one **Account**
-    row (``auctions/account_nav.py``) that lands on the page you were last on, and each of those
-    pages carries the Account setup sidebar -- which is the app's navigation there too, since the
-    app draws no navbar. Keeping the flat list here would have been a second menu of the same pages
-    that nothing kept in step with the first.
+    The web folded its settings pages behind one **Account** row (``auctions/account_nav.py``) that
+    lands where you were last, and each of those pages carries the Account setup sidebar, which is the
+    app's navigation there too.
 
-    Sign out is not here -- the app owns it (see the module docstring), and it merges Tap to Pay
-    into this section by its ``id``, which is why the id stays ``account`` however short it gets.
+    Sign out is the app's own, and it merges Tap to Pay into this section by its ``id``.
     """
     return _section(
         "account",
@@ -143,10 +122,10 @@ def _account_section():
 
 
 def _admin_section():
-    """Superusers only, and collapsed: twelve rows would bury everything else in a phone drawer.
+    """Superusers only, and collapsed: twelve rows would bury everything else.
 
-    This has never been in the app before. The query strings are the defaults the navbar links carry
-    -- an admin page opened without them shows a different window of data, not an error.
+    The query strings are the navbar's defaults; without them an admin page shows a different window of
+    data.
     """
     return _section(
         "admin",
@@ -174,10 +153,10 @@ def _admin_section():
 
 
 def _about_section():
-    """Collapsed, and last. Two rows here are gated exactly as the navbar gates them, because a
-    row only one side gates is the bug ``NavbarDriftTests`` exists to catch: "About site" on
-    ENABLE_PROMO_PAGE, since a deployment with the promo page off has no such page, and the
-    copyright row on whether a DMCA agent is configured, since ``/dmca/`` 404s without one."""
+    """Collapsed, and last. "About site" is gated on ENABLE_PROMO_PAGE and the copyright row on whether a
+    DMCA agent is configured, exactly as the navbar gates them -- a row only one side gates is what
+    ``NavbarDriftTests`` exists to catch.
+    """
     rows = []
     if settings.ENABLE_PROMO_PAGE:
         rows.append(_row("About site", reverse("promo"), "bi-globe"))
@@ -190,10 +169,10 @@ def _about_section():
 
 
 def menu_for(user):
-    """The whole drawer for `user` (an AnonymousUser is fine, and is the signed-out navbar).
+    """The whole drawer for `user`; an AnonymousUser gets the signed-out navbar.
 
-    This is the one part of /api/mobile/config/ that varies by user, which is why that endpoint must
-    never be cached without varying on the caller.
+    The one part of /api/mobile/config/ that varies by user, so that endpoint must never be cached
+    without varying on the caller.
     """
     signed_in = bool(user and user.is_authenticated)
     sections = [_main_section()]

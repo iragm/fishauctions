@@ -1,11 +1,9 @@
 """What the assistant does when nobody is looking at a page.
 
-The command palette runs inside a browser, so "which auction?" was always answered by the URL the
-person was standing on. An agent connected over MCP has no URL, and every one of these tests is a
-thing that went wrong -- or would have -- the first time a club used it that way.
-
-The MCP transport, its authentication and the OAuth server are in ``test_mcp``. This file is about
-the resolvers underneath, which both surfaces share.
+The palette runs in a browser, so "which auction?" was answered by the URL. An agent over MCP has no
+URL, and every test here is a thing that went wrong, or would have, the first time a club used it
+that way. The transport, authentication and OAuth server are in ``test_mcp``; this is the resolvers
+underneath, which both surfaces share.
 """
 
 import datetime
@@ -25,7 +23,7 @@ class NoPageTestCase(PaletteAssistTestCase):
     def _run(self, action, params=None, user=None):
         request = RequestFactory().post("/")
         request.user = user or self.user
-        # What ``mcp.tools.call_tool`` sets, explicitly. An agent is not looking at anything.
+        # What ``mcp.tools.call_tool`` sets: an agent is not looking at anything.
         request.palette_page = {}
         return palette_actions.run_action(request, action, params or {})
 
@@ -42,11 +40,9 @@ class NoPageTestCase(PaletteAssistTestCase):
     def _join(self, auction, user=None):
         from auctions.models import PickupLocation
 
-        # The pickup time follows the auction's own end date rather than being stamped ``now``.
-        # ``Auction.wind_down_time`` for an online auction is the latest of ``date_end`` and any
-        # pickup time, so a ``now`` pickup on a year-old auction made it not ``pretty_much_over``
-        # -- an auction that finished last autumn but claimed a pickup window open today. Nothing
-        # here is about pickup scheduling; this is the value a real one would have.
+        # The pickup time follows the auction's own end date rather than being stamped ``now``:
+        # ``wind_down_time`` is the latest of ``date_end`` and any pickup, so a ``now`` pickup on a
+        # year-old auction made it not ``pretty_much_over``.
         location = auction.location_qs.first() or PickupLocation.objects.create(
             name=f"{auction.slug} pickup",
             auction=auction,
@@ -69,30 +65,27 @@ class WhichAuctionTests(NoPageTestCase):
         self.assertIsNotNone(auction)
 
     def test_a_stale_pointer_never_beats_a_running_auction(self):
-        """The failure this whole change exists for: spring setup morning, autumn's auction acted on."""
+        """The failure this exists for: spring setup morning, autumn's auction acted on."""
         old = self._make_auction("Last Autumn", days_ahead=-400)
         self._join(old)
-        # The premise, stated rather than assumed. ``resolve_auction`` reads the pointer before it
-        # reads what is running, and ``pretty_much_over`` is the only thing that makes this one
-        # stale -- so a fixture that is not actually wound down would test nothing.
+        # Stated rather than assumed: ``resolve_auction`` reads the pointer before what is running,
+        # and ``pretty_much_over`` is the only thing that makes this one stale.
         self.assertTrue(old.pretty_much_over)
         self.user.userdata.last_auction_used = old
         self.user.userdata.save()
         auction, problem = palette_actions.resolve_auction(self.user, "", {})
-        # Either it picks a running one or it asks which; what it must never do is quietly pick the
-        # one that finished a year ago because the browser pointer still names it.
+        # Either it picks a running one or it asks which; it must never quietly pick the one that
+        # finished a year ago.
         self.assertNotEqual(getattr(auction, "pk", None), old.pk)
         if problem:
             self.assertNotIn(old.title, [option["label"] for option in problem["options"]])
 
     def test_an_auction_still_winding_down_is_not_stale(self):
-        """The deliberate other half of the test above, and the reason it turns on pickup times.
+        """An auction still winding down is not stale.
 
-        ``pretty_much_over`` is the whole staleness test, so an auction whose bidding finished long
-        ago but whose pickup window is still open counts as current -- and it should: that is an
-        auction somebody is still handing fish over for, printing labels for and invoicing. It
-        beats a different auction that happens to be running, because it is the one they were
-        working on and nobody has said otherwise.
+        ``pretty_much_over`` is the whole staleness test, so an auction whose bidding finished but whose
+        pickup window is open counts as current -- and it should: somebody is still handing fish over and
+        invoicing for it.
         """
         from auctions.models import PickupLocation
 
@@ -141,7 +134,7 @@ class WhichAuctionTests(NoPageTestCase):
         self.assertEqual(auction.pk, second.pk)
 
     def test_a_club_officer_is_in_their_clubs_auctions(self):
-        """They never joined it as a bidder, which used to mean they had no relationship with it."""
+        """A club officer is in their club's auctions: they never joined as a bidder."""
         club = Club.objects.create(name="Officer Club", abbreviation="OC")
         auction = self._make_auction("Club Run Auction", creator=self.userB)
         auction.club = club
@@ -151,7 +144,7 @@ class WhichAuctionTests(NoPageTestCase):
         self.assertIn(auction.pk, list(joined.values_list("pk", flat=True)))
 
     def test_a_promoted_auction_can_be_reached_by_name(self):
-        """Asking about one before joining is a fair question; writing to it still is not."""
+        """A promoted auction can be reached by name; writing to it still needs joining."""
         stranger = self._make_auction("Public Swap Meet", creator=self.userB, promoted=True)
         auction, problem = palette_actions.resolve_auction(self.user, "Public Swap Meet", {})
         self.assertIsNone(problem)
@@ -224,11 +217,10 @@ class WhichClubTests(NoPageTestCase):
 
 
 class SayingWhichOneTests(NoPageTestCase):
-    """The other half of the no-page problem: being *told* which auction and club, up front.
+    """Being told which auction and club, up front.
 
     ``remember_auction`` writes the pointer whenever an action resolved an auction, which covers
-    everything after the first call. These two cover the first one -- somebody sitting down and
-    saying what they are working on before doing anything with it.
+    everything after the first call; these cover the first one.
     """
 
     def setUp(self):
@@ -252,9 +244,8 @@ class SayingWhichOneTests(NoPageTestCase):
     def test_the_next_command_means_that_auction(self):
         """The point of the tool: one sentence instead of the auction's name on every call.
 
-        The pointer is ``resolve_auction``'s tie-break *between live auctions*, so this is the
-        shape that shows it doing anything: two of them running, which with nothing set is a
-        question, and saying which one is what turns it into an answer.
+        The pointer is ``resolve_auction``'s tie-break between live auctions, so this needs two running --
+        with nothing set that is a question, and saying which one turns it into an answer.
         """
         second = self._make_auction("Second Live One", days_ahead=-1)
         self._join(second)

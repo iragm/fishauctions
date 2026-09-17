@@ -143,7 +143,7 @@ class ClubBapSettingsViewTests(TestCase):
         self.assertTrue(ClubBapCategoryOverride.objects.filter(pk=override.pk).exists())
 
     def test_save_override_is_idempotent_upsert(self):
-        """Saving the same category twice updates points rather than creating a duplicate."""
+        """Saving the same category twice updates the points rather than creating a duplicate."""
         category = Category.objects.create(name="Livebearers", bap_points=5)
         self.client.login(username="bap_user", password="testpass")
         url = reverse("club_bap_category_override_save", kwargs={"slug": self.club.slug})
@@ -278,8 +278,7 @@ class ClubSettingsViewTests(TestCase):
         with override_settings(PAYPAL_CLIENT_ID="test_id", PAYPAL_SECRET="test_secret"):
             response = self.client.get(self.membership_url)
         self.assertEqual(response.status_code, 200)
-        # The Payments section is always rendered; without a connected account or site PayPal,
-        # the user is prompted to connect.
+        # The Payments section always renders; without an account the user is prompted to connect.
         self.assertContains(response, "Payments")
         self.assertContains(response, "Connect a PayPal account for this club")
 
@@ -368,10 +367,8 @@ class ClubSettingsViewTests(TestCase):
             self.assertIn(message, form.errors.get("welcome_opening", []), value)
 
     def test_a_value_built_to_be_slow_is_validated_quickly(self):
-        """The tag check runs on submitted text, so it has to stay linear in its length.
-
-        The old ``<[^>]+>`` scanned to the end of the value from every "<" in it, and took ~15
-        seconds on this input; it now takes milliseconds.
+        """The tag check runs on submitted text, so it stays linear in its length: the old ``<[^>]+>`` scanned
+        to the end of the value from every "<" and took ~15 seconds on this input.
         """
         import time
 
@@ -418,9 +415,10 @@ class ClubEmailRoutingTests(TestCase):
         ADMINS=[("Admin", "admin@example.com")], SES_ROUTE_EMAILS_ENABLED=True, EMAIL_ROUTING_DOMAIN="auction.fish"
     )
     def test_resolve_routed_recipient_returns_none_for_unknown_aliases(self):
-        """Unrecognized aliases and missing clubs/auctions return None so the caller can drop them."""
+        """Unrecognized aliases and missing clubs or auctions return None, so the caller can drop them."""
         club = Club.objects.create(name="Fallback Club")
-        # Club exists but no members configured → auctions falls back to site admin, contact is dropped
+        # The club exists with no members configured, so auctions falls back to the site admin and
+        # contact is dropped.
         self.assertEqual(resolve_routed_recipient(f"{club.slug}-auctions"), "admin@example.com")
         self.assertIsNone(resolve_routed_recipient(f"{club.slug}-contact"))
         # No club with this slug → None (drop)
@@ -434,8 +432,8 @@ class ClubEmailRoutingTests(TestCase):
 class RoutedSenderDisplayNameTests(TestCase):
     """What the From line reads as once SES stops rewriting it.
 
-    Gmail shows the display name and hides the address, so a routed alias with no name on it reads
-    as a slug -- "spring-fling-2026" -- which tells a recipient less than "info" did.
+    Gmail shows the display name and hides the address, so a routed alias with no name reads as a slug
+    -- "spring-fling-2026" -- which tells a recipient less than "info" did.
     """
 
     routing = {"SES_ROUTE_EMAILS_ENABLED": True, "EMAIL_ROUTING_DOMAIN": "auction.fish"}
@@ -461,7 +459,7 @@ class RoutedSenderDisplayNameTests(TestCase):
 
     @override_settings(**routing)
     def test_an_auction_with_no_club_falls_back_to_the_site(self):
-        """Quoted because a dot is a special character in a display name; clients show it plain."""
+        """Quoted because a dot is special in a display name; clients show it plain."""
         self.auction.club = None
         self.assertEqual(self.auction.sender_email_with_name, f'"auction.fish" <{self.auction.slug}@auction.fish>')
 
@@ -492,13 +490,10 @@ class RoutedSenderDisplayNameTests(TestCase):
 class SesSendsTheMessagesOwnFromAddressTests(TestCase):
     """django-ses must not be told to override the From address of every message.
 
-    ``settings.AWS_SES_FROM_EMAIL`` is handed to the SES API as ``FromEmailAddress`` (``Source`` on
-    the v1 path), and that parameter wins over the From header of the message.  While it was set to
-    ``DEFAULT_FROM_EMAIL`` every email left the site as ``info@<domain>``, so the per-auction,
-    per-club and per-vendor aliases that :mod:`auctions.email_routing` exists to put on the From
-    line were built, queued, and then thrown away by SES -- replies went to the site admin instead
-    of the club, and the From line read "info".  Nothing else in the suite can see this: every test
-    above stops at what post_office stored, which was right all along.
+    ``settings.AWS_SES_FROM_EMAIL`` is handed to SES as ``FromEmailAddress`` and wins over the message's
+    From header, so while it was set to ``DEFAULT_FROM_EMAIL`` every email left as ``info@<domain>`` --
+    the per-auction and per-club aliases were built, queued and thrown away. Nothing else in the suite
+    can see this: every test above stops at what post_office stored.
     """
 
     def test_django_ses_sends_the_alias_the_caller_asked_for(self):
@@ -658,10 +653,8 @@ class AuctionEmailSenderTests(StandardTestCase):
         with patch("auctions.management.commands.auctiontos_notifications.mail.send") as mock_send:
             send_tos_notification("online_auction_welcome", self.online_tos)
 
-        # The From line carries a display name as well now -- which one is
-        # RoutedSenderDisplayNameTests' business, and it depends on whether this auction ended up
-        # with a club, which SINGLE_CLUB_MODE decides. What this test is about is the address
-        # behind the name: the auction's own routed alias.
+        # The From line carries a display name now, which RoutedSenderDisplayNameTests owns; this is
+        # about the address behind it.
         name, address = parseaddr(mock_send.call_args.kwargs["sender"])
         self.assertEqual(address, f"{self.online_auction.slug}@auction.fish")
         self.assertTrue(name)

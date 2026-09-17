@@ -1,15 +1,11 @@
-"""Email → mobile-push routing.
+"""Email to mobile-push routing.
 
-App users can opt to receive push notifications (Firebase Cloud Messaging) instead of emails for
-everything *except* account-related mail (verification, password reset, security warnings — always
-email). :func:`notify_user` is the single choke point every send site funnels through: it either
-sends the caller's email or enqueues a push, never both.
+App users can opt into push (Firebase Cloud Messaging) instead of email for everything except
+account mail. :func:`notify_user` is the single choke point: it sends the email or enqueues a push,
+never both, and falls back to email whenever push isn't available.
 
-Push degrades gracefully — if FCM isn't configured, the user hasn't opted in, or they have no live
-device token, the email is sent. This mirrors ``email_routing.email_routing_enabled()``.
-
-This module owns the *decision* and the low-level FCM send; the actual fan-out to a user's devices
-runs in the ``auctions.tasks.send_push_to_user`` Celery task (never send inline in a request).
+This module owns the decision and the FCM send; the fan-out to a user's devices runs in the
+``auctions.tasks.send_push_to_user`` Celery task.
 """
 
 import json
@@ -20,46 +16,35 @@ from django.conf import settings
 
 logger = logging.getLogger(__name__)
 
-# Notification categories. Account mail is never pushed — a signed-out or wrong phone must never
-# receive password resets / security warnings.
+# Notification categories. Account mail is never pushed.
 CATEGORY_ACCOUNT = "account"
 CATEGORY_INVOICE = "invoice"
 CATEGORY_WATCHED = "watched"
 CATEGORY_AUCTION_CONFIRM = "auction_confirm"
-# "You looked at lots in this auction but never joined." Time-limited nudge, ideal as a push.
+# "You looked at lots in this auction but never joined."
 CATEGORY_AUCTION_REMINDER = "auction_reminder"
 CATEGORY_CHAT = "chat"
 CATEGORY_MEMBERSHIP = "membership"
 CATEGORY_AUCTION_ADMIN = "auction_admin"
 CATEGORY_PROMO = "promo"
-# "Your Bluetooth printer is supported now." Push-only by nature: an ObservedPrinter row exists
-# only because someone paired a printer in the app.
+# "Your Bluetooth printer is supported now." Push-only: it follows an in-app pairing.
 CATEGORY_PRINTER = "printer"
-# "Someone needs help right now." Push-only by nature: an email arrives long after the job is done.
+# "Someone needs help right now." Push-only: an email arrives too late.
 CATEGORY_VOLUNTEER = "volunteer"
-# "A lot you're watching is being sold right now." Distinct from CATEGORY_WATCHED (the nightly
-# "watched lots ending soon" mail): this one has no email form and is worthless minutes later.
+# "A lot you're watching is being sold right now." Push-only, unlike the nightly CATEGORY_WATCHED.
 CATEGORY_LOT_SELLING = "lot_selling"
-# "You just won a lot, and here's what you've spent so far." One per auction, not one per lot: the
-# collapse key is the auction, so each sale rewrites the same notification in place. Push-only by
-# nature -- it is a running total, worthless once the auction is over and absurd as a per-lot email.
+# "You just won a lot, and here's what you've spent." One per auction, collapsed on the auction.
 CATEGORY_RUNNING_TOTAL = "running_total"
-# The one-time "this is a setting you can turn off" tip that follows a person's first running total.
-# Separate category so it is never folded into the running total's own collapse key.
+# The one-time "you can turn this off" tip after a first running total; its own category so it
+# isn't folded into the running total's collapse key.
 CATEGORY_RUNNING_TOTAL_TIP = "running_total_tip"
-# "Tap to Pay on iPhone is here." Apple's marketing requirements ask for a launch email (6.1) AND an
-# in-app push (6.3) with different, separately-specified copy, so the push must not fall back to
-# emailing its own text -- that would be a third message that is neither of the two required ones,
-# on top of the launch email the same command already sent.
+# "Tap to Pay on iPhone is here." Apple requires separate email (6.1) and push (6.3) copy, so this
+# must never fall back to emailing its own text.
 CATEGORY_TAP_TO_PAY_LAUNCH = "tap_to_pay_launch"
-# "Your club just said something." Push-only by nature: the club picks its channels one by one on
-# the announcement form, and a member who didn't get the push is reached by the Discord post or the
-# club's own website -- not by a surprise email nobody ticked a box for.
+# "Your club just said something." Push-only: the club picks its channels one by one.
 CATEGORY_CLUB_ANNOUNCEMENT = "club_announcement"
 
-# Categories with no email equivalent -- either app-native, or so time-critical that a late email is
-# worse than nothing. A push that can't be delivered in these categories is simply dropped; every
-# other category falls back to email (see send_push_to_user).
+# Categories with no email equivalent; an undeliverable push is dropped rather than emailed.
 PUSH_ONLY_CATEGORIES = frozenset(
     {
         CATEGORY_PROMO,
@@ -73,12 +58,10 @@ PUSH_ONLY_CATEGORIES = frozenset(
     }
 )
 
-# Categories that are always emailed, never pushed:
-#   account     - a signed-out or wrong phone must never receive password resets / security warnings
-#   membership  - effectively account correspondence for a club; a durable record in an inbox is the
-#                 point, and members are often not site users at all
-#   auction_admin - running an auction is desk work done from an inbox (invoices ready, follow-ups),
-#                 and the emails carry detail a notification can't hold
+# Always emailed, never pushed:
+#   account       - a wrong or signed-out phone must never get password resets
+#   membership    - club correspondence, often to people who aren't site users
+#   auction_admin - desk work done from an inbox, with detail a notification can't hold
 PUSH_EXEMPT_CATEGORIES = frozenset({CATEGORY_ACCOUNT, CATEGORY_MEMBERSHIP, CATEGORY_AUCTION_ADMIN})
 
 # Result of a single-token FCM send.
@@ -91,15 +74,14 @@ _firebase_lock = threading.Lock()
 
 
 def push_configured():
-    """True when FCM credentials are configured; when False, everything falls back to email."""
+    """True when FCM credentials are configured; otherwise everything falls back to email."""
     return bool(getattr(settings, "FIREBASE_CREDENTIALS_JSON", ""))
 
 
 def user_prefers_push(user):
-    """Whether *user*'s notifications should go to the app instead of email.
+    """Whether *user*'s notifications go to the app instead of email.
 
-    Thin module-level wrapper over ``UserData.user_prefers_push`` so send sites can call a plain
-    function. Safe if userdata is missing (returns False rather than raising).
+    Wraps ``UserData.user_prefers_push``; False when userdata is missing.
     """
     userdata = getattr(user, "userdata", None)
     if userdata is None:
@@ -108,11 +90,9 @@ def user_prefers_push(user):
 
 
 def user_has_app_push(user):
-    """Whether *user* can be reached through the app right now, regardless of the email toggle.
+    """Whether *user* can be reached through the app at all, regardless of the email toggle.
 
-    Thin module-level wrapper over ``UserData.has_app_push``, for the notification categories that
-    were never emails (watched-lot "selling now" pushes) and so aren't governed by
-    ``push_notifications_instead_of_email``. Safe if userdata is missing (returns False).
+    Wraps ``UserData.has_app_push``, for categories that were never emails.
     """
     userdata = getattr(user, "userdata", None)
     if userdata is None:
@@ -121,11 +101,9 @@ def user_has_app_push(user):
 
 
 def notify_user(user, *, category, title, body, url, send_email, auction_pk=None, invoice_pk=None, collapse_key=None):
-    """Push if *user* prefers push and *category* is push-eligible; otherwise call ``send_email``.
+    """Push if *user* prefers push and *category* allows it, otherwise call ``send_email``.
 
-    ``send_email`` is a zero-arg callable that performs the site's existing email exactly as before,
-    so non-push users are entirely unaffected. Returns True if a push was enqueued, False if the
-    email path was taken.
+    ``send_email`` is a zero-arg callable. Returns True if a push was enqueued.
     """
     if category in PUSH_EXEMPT_CATEGORIES or not user_prefers_push(user):
         send_email()
@@ -147,23 +125,15 @@ def notify_user(user, *, category, title, body, url, send_email, auction_pk=None
 
 
 def notify_running_total(lot):
-    """Push the winner their updated total the moment a lot is knocked down to them.
+    """Push the winner their updated total as a lot is knocked down to them.
 
-    In-person auctions only, and only to a winner whose account can receive an app notification:
-    this is a number somebody wants while they are still standing in the room, and the same figure
-    delivered by email hours later is noise. **One notification per auction, not per lot** -- the
-    collapse key is the auction, so every sale rewrites the same alert in place and the phone shows
-    the newest lot and the newest total rather than a column of them.
+    In-person auctions only, and only to a winner reachable in the app. One notification per auction:
+    the collapse key is the auction, so each sale rewrites the same alert.
 
-    The first running total a person ever receives is followed by a second, separate notification
-    saying the setting exists. ``UserData.running_total_tip_sent`` is what holds that to once per
-    person: without it the tip would arrive after every lot. It is set before the push is enqueued
-    rather than after it lands, because a failed send that re-armed the tip would eventually deliver
-    it twice, and a tip nobody sees costs less than one that repeats.
+    The first running total is followed by a one-time tip about the setting; ``UserData.running_total_tip_sent``
+    is set before enqueueing, since a repeat costs more than a missed tip.
 
-    This lives here rather than in the set-winners view because two callers need it -- that view and
-    the app's offline sync (``mobile.services.offline``), which mirrors it. Returns True when a push
-    was enqueued.
+    Shared by the set-winners view and the app's offline sync. Returns True when a push was enqueued.
     """
     from django.contrib.sites.models import Site
     from django.db import transaction
@@ -178,7 +148,7 @@ def notify_running_total(lot):
     tos = lot.auctiontos_winner
     user = tos.user if tos else None
     if not user:
-        # In-person bidders often have no account at all; there is nobody to notify.
+        # In-person bidders often have no account.
         return False
     userdata = getattr(user, "userdata", None)
     if userdata is None or not userdata.show_running_total_notification:
@@ -213,8 +183,7 @@ def notify_running_total(lot):
             invoice_pk=invoice.pk,
         )
         if send_tip:
-            # Deliberately no collapse key: this must not replace, or be replaced by, the running
-            # total it arrives alongside.
+            # No collapse key: this must not replace the running total it arrives with.
             send_push_to_user.delay(
                 user.pk,
                 title="Notifications as you win lots",
@@ -224,14 +193,13 @@ def notify_running_total(lot):
                 auction_pk=auction.pk,
             )
 
-    # The invoice this total was read off is written in the caller's transaction; enqueueing inside
-    # it would let the task run against rows that are still uncommitted.
+    # The invoice is written in the caller's transaction, so enqueue after commit.
     transaction.on_commit(_enqueue)
     return True
 
 
 def _get_firebase_app():
-    """Lazily initialise (once) and return the firebase_admin app, or None if unavailable."""
+    """Lazily initialise and return the firebase_admin app, or None."""
     global _firebase_app
     if _firebase_app is not None:
         return _firebase_app
@@ -260,14 +228,11 @@ def _get_firebase_app():
 
 
 def send_fcm_message(token, *, title, body, url, category, collapse_key=None):
-    """Send a single FCM notification+data hybrid message to *token*.
+    """Send one FCM notification+data message to *token*.
 
-    Returns :data:`SEND_OK`, :data:`SEND_INVALID_TOKEN` (dead token — caller should prune it), or
-    :data:`SEND_ERROR` (transient). Never raises.
-
-    Hybrid message: the ``notification`` block lets the OS display the alert itself when the app is
-    backgrounded or terminated (on both Android and iOS), while the ``data`` block carries the same
-    fields for tap-routing — the WebView opens ``url`` on tap when the app handles the notification.
+    Returns :data:`SEND_OK`, :data:`SEND_INVALID_TOKEN` (prune it) or :data:`SEND_ERROR` (transient).
+    Never raises. The ``notification`` block lets the OS display the alert when the app is backgrounded;
+    the ``data`` block carries the same fields for tap-routing.
     """
     app = _get_firebase_app()
     if app is None:
@@ -279,9 +244,7 @@ def send_fcm_message(token, *, title, body, url, category, collapse_key=None):
 
     apns_headers = {"apns-priority": "10"}
     if collapse_key:
-        # iOS has no notion of android's collapse_key; apns-collapse-id is the equivalent, and
-        # without it a phone that gets "coming up soon" then "about to be sold" stacks two alerts
-        # for the same lot instead of replacing the first. Apple caps the id at 64 bytes.
+        # iOS uses apns-collapse-id (capped at 64 bytes) instead of collapse_key.
         apns_headers["apns-collapse-id"] = collapse_key[:64]
     message = messaging.Message(
         notification=messaging.Notification(title=title or "", body=body or ""),
@@ -315,19 +278,11 @@ def send_fcm_message(token, *, title, body, url, category, collapse_key=None):
 
 
 def send_fcm_data_message(token, data):
-    """Send a **data-only** FCM message to *token*. Same return values as :func:`send_fcm_message`.
+    """Send a data-only FCM message to *token*, with the same return values as :func:`send_fcm_message`.
 
-    No ``notification`` block, deliberately: this is used to tell an app that is already open and on
-    screen to do something (print a batch of labels), and it draws its own progress UI. A notification
-    block would make the OS post an alert as well, which is wrong for a job the user started from
-    their computer thirty seconds ago and is watching on that computer.
-
-    FCM data values must be strings — the caller is responsible for that, and this asserts nothing
-    about the keys beyond what the app agrees to read.
-
-    iOS needs ``apns-push-type: background`` with ``content-available``, and Apple requires priority
-    5 (not 10) for those; a background push at priority 10 is rejected outright. That is fine here:
-    the contract for this feature is already that the app is foregrounded, where delivery is prompt.
+    No ``notification`` block: this tells an app already on screen to do something (print a batch) and
+    it draws its own UI. Values must be strings. iOS needs ``apns-push-type: background`` with
+    ``content-available`` at priority 5, which is fine since the app is foregrounded.
     """
     app = _get_firebase_app()
     if app is None:

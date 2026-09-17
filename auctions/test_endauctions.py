@@ -1,8 +1,4 @@
-"""The ``endauctions`` command and the websocket layer that tells everyone what happened.
-
-This is the job that closes lots and creates invoices. It runs on a 60-second beat under a 300-second
-limit and takes a cache lock, because two runs both seeing a lot as unsold both invoice it.
-"""
+"""Tests for the ``endauctions`` command and the websocket consumers."""
 
 import datetime
 import unittest
@@ -77,7 +73,6 @@ class LotEndauctionsMethodsTests(StandardTestCase):
 
     def test_send_lot_end_message_with_winner(self):
         """Test that correct message is sent when lot ends with a winner"""
-        # Create a lot with a high bidder (without an auction to avoid complications)
         lot_end_time = timezone.now() - datetime.timedelta(hours=1)
         bid_time = timezone.now() - datetime.timedelta(hours=2)
 
@@ -128,8 +123,6 @@ class LotEndauctionsMethodsTests(StandardTestCase):
 
     def test_send_non_auction_lot_emails_with_winner(self):
         """Test that emails are sent for non-auction lots with winners"""
-        # Create a non-auction lot with a winner
-        # Use user_with_no_lots which has a valid email
         lot = Lot.objects.create(
             lot_name="Non-auction lot",
             user=self.user,
@@ -337,9 +330,7 @@ class LotEndauctionsMethodsTests(StandardTestCase):
 
 
 class WebsocketClientDisconnectTests(TestCase):
-    """A user closing the tab (or losing signal) mid-handshake makes uvicorn raise
-    ClientDisconnected out of accept().  That's routine, so it must not be logged at ERROR:
-    auctions.consumers is wired to mail_admins in settings.LOGGING, and it would email admins."""
+    """A ClientDisconnected during the websocket handshake isn't logged at ERROR, which would email admins."""
 
     def test_client_disconnected_during_connect_is_not_logged_as_an_error(self):
         import logging as logging_module
@@ -374,15 +365,9 @@ class WebsocketClientDisconnectTests(TestCase):
 
 @unittest.skipUnless(CHANNELS_TESTING_AVAILABLE, "channels.testing requires daphne (test-only dependency)")
 class WebSocketConsumerTests(TransactionTestCase):
-    """Tests for websocket consumers (LotConsumer, UserConsumer, AuctionConsumer)
+    """Websocket consumers (LotConsumer, UserConsumer, AuctionConsumer), with timeouts and cleanup.
 
-    Best practices for websocket tests in CI:
-    - All operations have timeouts
-    - Proper cleanup with try-finally blocks
-    - Simplified message handling to avoid hanging
-
-    Note: Uses TransactionTestCase instead of TestCase to properly handle
-    database transactions with async code and channels' database_sync_to_async
+    TransactionTestCase because channels' database_sync_to_async needs real transactions.
     """
 
     # Timeout constants for CI reliability
@@ -391,7 +376,7 @@ class WebSocketConsumerTests(TransactionTestCase):
     RECEIVE_TIMEOUT = 3
 
     def setUp(self):
-        """Set up test data needed for websocket tests - mirrors StandardTestCase setup"""
+        """Test data mirroring StandardTestCase."""
         time = timezone.now() - datetime.timedelta(days=2)
         timeStart = timezone.now() - datetime.timedelta(days=3)
         theFuture = timezone.now() + datetime.timedelta(days=3)
@@ -405,11 +390,7 @@ class WebSocketConsumerTests(TransactionTestCase):
         self.user_who_does_not_join = User.objects.create_user(
             username="no_joins", password="testpassword", email="zxcgv@example.com"
         )
-        # ``promote_this_auction`` is spelled out on both fixture auctions because the model's
-        # default is False (an auction is not on the public list until somebody puts it there),
-        # and several things this fixture is used to test are scoped to promoted auctions --
-        # notably ``models.guess_category``, which excludes lots in unpromoted auctions. Leaving
-        # it to the default made those tests depend on a column default rather than on a fixture.
+        # Explicit, since the model default is False and some tested code only sees promoted auctions.
         self.online_auction = Auction.objects.create(
             created_by=self.user,
             title="This auction is online",
@@ -443,11 +424,7 @@ class WebSocketConsumerTests(TransactionTestCase):
         self.in_person_location = PickupLocation.objects.create(
             name="location", auction=self.in_person_auction, pickup_time=theFuture
         )
-        # Every fixture participant gets an explicit bidder number. AuctionTOS.save() auto-assigns
-        # with randint(1, 999) when the number is left blank, so a fixture row that generates its own
-        # can land on a number a test hard-codes ("88", "70", ...) and fail that test roughly one run
-        # in 500: the auction already holds that number under a different name. These are kept out of
-        # the range tests pick their own numbers from.
+        # Explicit bidder numbers, so random assignment can't collide with numbers tests hard-code.
         self.in_person_buyer = AuctionTOS.objects.create(
             user=self.user_with_no_lots,
             auction=self.in_person_auction,
@@ -637,8 +614,7 @@ class WebSocketConsumerTests(TransactionTestCase):
             # Try to send a chat message
             await communicator.send_json_to({"message": "Hello from anonymous!"})
 
-            # Anonymous users should not get a response for their message
-            # The consumer just passes without doing anything
+            # Anonymous messages get no response.
         finally:
             await communicator.disconnect(timeout=self.DISCONNECT_TIMEOUT)
 
@@ -836,14 +812,12 @@ class HasEverGrantedPermissionTests(StandardTestCase):
     """Test the has_ever_granted_permission annotation"""
 
     def test_user_who_joined_has_permission(self):
-        """User who joined an auction (not manually_added) should have has_ever_granted_permission=True"""
         # online_tos is created with manually_added=False by default
         tos_qs = self.online_auction.tos_qs.filter(user=self.user)
         tos = tos_qs.first()
         self.assertTrue(tos.has_ever_granted_permission)
 
     def test_manually_added_user_without_prior_join_has_no_permission(self):
-        """User who was manually added and never joined should have has_ever_granted_permission=False"""
         # Create a new user who was manually added
         new_user = User.objects.create_user(username="manually_added_user", password="testpassword")
         AuctionTOS.objects.create(
@@ -855,7 +829,7 @@ class HasEverGrantedPermissionTests(StandardTestCase):
         self.assertFalse(tos.has_ever_granted_permission)
 
     def test_manually_added_user_with_prior_join_has_permission(self):
-        """User who was manually added but joined another auction by same creator should have has_ever_granted_permission=True"""
+        """A manually added user who joined another auction by the same creator has permission."""
         # Create a new user
         new_user = User.objects.create_user(username="returning_user", password="testpassword")
 
@@ -896,7 +870,6 @@ class HasEverGrantedPermissionTests(StandardTestCase):
         self.assertFalse(tos.has_ever_granted_permission)
 
     def test_different_creator_auctions_dont_grant_permission(self):
-        """User who joined an auction by a different creator should not have permission"""
         # Create a different auction creator
         other_creator = User.objects.create_user(username="other_creator", password="testpassword")
 
@@ -923,8 +896,7 @@ class HasEverGrantedPermissionTests(StandardTestCase):
             user=new_user, auction=self.online_auction, pickup_location=self.location, manually_added=True
         )
 
-        # Check the manually added TOS - should be False because user never joined
-        # an auction by self.user (the creator of online_auction)
+        # False: never joined an auction by this creator.
         tos_qs = self.online_auction.tos_qs.filter(user=new_user)
         tos = tos_qs.first()
         self.assertFalse(tos.has_ever_granted_permission)

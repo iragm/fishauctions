@@ -1,25 +1,18 @@
 """Turn recurring assistant answers into zero-token shortcuts.
 
-The command palette's assistant costs one or more model calls per query, every time, forever. But
-a lot of that traffic is the same handful of phrases: "where do I pay my dues", "print my labels",
-"what does everyone owe me". Each time, the model is asked the same question and gives the same
-answer.
+The palette's assistant costs a model call per query, but much of that traffic is the same handful
+of phrases: "where do I pay my dues", "print my labels".
 
-This command finds those and writes them down. A phrase that has been asked at least
-``--min-count`` times and resolved to the *same* destination every single time is one the model
-never needs to be asked about again: it becomes a :class:`~auctions.models.CommandPalettePage`
-pointing at that route, and from then on ``palette_assist.shortcut_match`` answers it locally for
-nothing.
+A phrase asked at least ``--min-count`` times that resolved to the *same* destination every time is
+one the model never needs again: it becomes a :class:`~auctions.models.CommandPalettePage` and
+``palette_assist.shortcut_match`` answers it locally for nothing.
 
-**The model's own repeated answers are the ground truth**, which is what makes this safe. Nothing
-here scores or guesses at what a query means -- a phrase is only ever written down when the
-assistant has already agreed with itself about it several times over. Unanimity is required, not a
-majority: one disagreement and the phrase is left alone, because a query that resolves two
-different ways is one where context matters and a fixed shortcut would be wrong some of the time.
+**The model's own repeated answers are the ground truth**, which is what makes this safe: nothing
+here scores or guesses. Unanimity is required, not a majority -- one disagreement and the phrase is
+left alone, because a query that resolves two ways is one where context matters.
 
-The shortcut is still resolved per user at the point of use (``route:<key>`` targets go through
-``palette_routes.resolve_route``, which re-runs every permission check), so writing one down never
-grants access to anything.
+The shortcut is still resolved per user at the point of use (``route:<key>`` goes through
+``palette_routes.resolve_route``, which re-runs every permission check).
 
 Usage::
 
@@ -38,9 +31,8 @@ from auctions.models import CommandPalettePage, LLMUsage
 
 logger = logging.getLogger(__name__)
 
-#: How many times a phrase must have been asked before it is worth writing down. Low enough to
-#: catch the long tail on a busy site, high enough that one person experimenting doesn't create
-#: shortcuts for everybody.
+#: How many times a phrase must be asked before it is worth writing down: low enough for the long
+#: tail, high enough that one person experimenting doesn't create shortcuts for everybody.
 DEFAULT_MIN_COUNT = 5
 
 
@@ -120,15 +112,12 @@ class Command(BaseCommand):
     def mine(self, min_count):
         """Group recorded navigations by normalized phrase.
 
-        Returns ``(candidates, rejected)``: phrases that always resolved to one destination, and
-        phrases common enough to qualify that didn't.
+        Returns ``(candidates, rejected)``: phrases that always resolved to one destination, and phrases
+        common enough to qualify that didn't.
 
-        ``destination`` also carries ``lookup:<name>`` rows now -- phrases the assistant answered
-        out of a single lookup rather than by going anywhere. Those are deliberately dropped here:
-        a lookup has no URL to write a shortcut to, and its answer differs per user, so a
-        ``CommandPalettePage`` built from one would point at nothing. They are already handled, and
-        already cheaper, through ``palette_assist.preloadable_lookup``; :meth:`mine_lookups` reports
-        them so this command still shows the whole picture.
+        ``lookup:<name>`` rows are dropped: a lookup has no URL to point a shortcut at and its answer
+        differs per user. They are already handled by ``palette_assist.preloadable_lookup``, and
+        :meth:`mine_lookups` reports them so the command still shows the whole picture.
         """
         destinations = defaultdict(set)
         counts = defaultdict(int)
@@ -154,9 +143,8 @@ class Command(BaseCommand):
     def mine_lookups(self, min_count):
         """Phrases the assistant keeps answering out of one lookup, and how often.
 
-        Nothing to create -- ``palette_assist.preloadable_lookup`` already acts on these on its own,
-        turning a two-round query into a one-round one. This is here so the report says so, because
-        "why is this phrase not in the shortcut list" has an answer and it should be on screen.
+        Nothing to create -- ``palette_assist.preloadable_lookup`` already acts on these -- but "why is this
+        phrase not in the shortcut list" has an answer and it should be on screen.
         """
         counts = defaultdict(int)
         names = defaultdict(set)

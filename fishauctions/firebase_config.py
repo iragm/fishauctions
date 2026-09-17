@@ -1,13 +1,13 @@
 """Parse the public Firebase client-config files that ship with the mobile build.
 
 ``google-services.json`` (Android) and ``GoogleService-Info.plist`` (iOS) hold only *public* values
-— api key, app id, messaging sender id, project id, and the package/bundle id. They are NOT the
-service-account key (that is ``FIREBASE_CREDENTIALS_JSON``, a secret used server-side to *send*
-pushes). We parse them so the mobile config endpoint can hand the app the right Firebase project per
+-- api key, app id, messaging sender id, project id, and the package/bundle id. They are not the
+service-account key (``FIREBASE_CREDENTIALS_JSON``, a secret used server-side to *send* pushes).
+Parsed here so the mobile config endpoint can hand the app the right Firebase project per
 deployment.
 
-Parsing never raises: a missing, unreadable, or malformed file yields ``None`` for that platform and
-push simply isn't advertised for it (mirrors the graceful-degradation elsewhere in the app).
+Parsing never raises: a missing, unreadable or malformed file yields ``None`` for that platform and
+push simply isn't advertised for it.
 """
 
 import json

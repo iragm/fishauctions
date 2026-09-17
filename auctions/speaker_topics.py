@@ -1,31 +1,24 @@
 """The speaker directory's fixed topic vocabulary.
 
-Topics are a closed list, not free text: people adding a speaker pick from these, and nothing
-in the UI creates new ones.  That is deliberate -- the NEC WordPress export arrived with three
-spellings of "cichlids", two of "africa", and a "Cichids" typo, which is exactly what happens
-when every contributor can coin a topic.  A new topic is an admin decision, made here or in the
-Django admin.
+Topics are a closed list: people pick from these and nothing in the UI creates new ones. The NEC
+WordPress export arrived with three spellings of "cichlids", two of "africa" and a "Cichids" typo,
+which is what happens when every contributor can coin a topic. A new topic is an admin decision.
 
-:data:`STARTER_TOPICS` is the vocabulary.  :data:`TOPIC_ALIASES` maps the old NEC taxonomy (and
-the obvious typos and synonyms) onto it, so importing the export lands on these names rather
-than adding 49 more.  Anything unrecognised becomes "Other" rather than a new row, and the few
-old names that meant nothing at all (:data:`DISCARDED_TOPICS`) are dropped instead.
-:data:`REVIEW_TOPICS` is the third case: old names whose topic has since been retired and that
-nothing can re-file automatically, so they land on "Other" *and* flag the speaker for a human.
+:data:`STARTER_TOPICS` is the vocabulary and :data:`TOPIC_ALIASES` maps the old NEC taxonomy onto
+it. Anything unrecognised becomes "Other"; the names that meant nothing (:data:`DISCARDED_TOPICS`)
+are dropped; and :data:`REVIEW_TOPICS` -- old names whose topic was retired and that nothing can
+re-file -- land on "Other" *and* flag the speaker for a human.
 
-The rows are created by migration 0374, so they land as part of ``migrate`` on every deploy and
-every fresh database.  ``ensure_site_defaults`` calls :func:`ensure_speaker_topics` on every
-start as well, which is what picks up a topic added to this list *after* 0374 has already run
-on a database.  Both are idempotent.
+Migration 0374 creates the rows, and ``ensure_site_defaults`` calls :func:`ensure_speaker_topics` on
+every start, which picks up a topic added after 0374 ran. Both are idempotent.
 
-One consequence to know about: a full test run flushes the test database, so a subsequent
-``--keepdb`` run starts with these rows gone.  Tests that need topics call
-:func:`ensure_speaker_topics` themselves rather than relying on the migration.
+A full test run flushes the test database, so a ``--keepdb`` run starts without these rows: tests
+that need topics call :func:`ensure_speaker_topics` themselves.
 """
 
 OTHER = "Other"
 
-#: The vocabulary, in the order it should read in a dropdown ("Other" is forced last).
+#: The vocabulary, in dropdown order ("Other" is forced last).
 STARTER_TOPICS = [
     "African Cichlids",
     "Aquascaping",
@@ -69,14 +62,11 @@ STARTER_TOPICS = [
     OTHER,
 ]
 
-#: Old NEC taxonomy names (casefolded) that are deliberately thrown away rather than mapped.
-#:
-#: These two say nothing: every freshwater speaker is a "Freshwater species" speaker, and
-#: "General" was the export's shrug.  They cover 112 of the 405 speakers, so folding them into
-#: "Other" would make the largest topic in the directory the one that carries no information --
-#: and "Other" is meant to be the safety net for names we don't recognise, not a bucket we fill
-#: on purpose.  A speaker whose only export topic was one of these ends up with no topics, which
-#: is exactly what the old taxonomy told us about them.
+#: Old NEC names (casefolded) thrown away rather than mapped: every freshwater speaker is a
+#: "Freshwater species" speaker, and "General" was the export's shrug. They cover 112 of 405
+#: speakers, so folding them into "Other" would make the largest topic the one carrying no
+#: information. A speaker whose only topic was one of these ends up with none, which is what the old
+#: taxonomy told us about them.
 DISCARDED_TOPICS = {
     "freshwater species",
     "freshwater fish",
@@ -84,17 +74,13 @@ DISCARDED_TOPICS = {
     "general interest",
 }
 
-#: Old names (casefolded) whose topic has been retired and that nothing can re-file on its own.
+#: Old names (casefolded) whose topic was retired and that nothing can re-file on its own.
 #:
-#: "Cichlids" went because 55 of the 67 speakers carrying it also carried a specific cichlid
-#: topic, so the generic row was mostly a duplicate that made the topic menu longer without
-#: telling anyone anything.  "Freshwater Invertebrates" went because it was two subjects in a
-#: trench coat: shrimp people and snail people, who now belong under "Shrimp" and "Other"
-#: respectively.  Which one a given speaker belongs under is a judgement call that needs
-#: somebody to read their talk list, so these land on "Other" and set
-#: :attr:`Speaker.topics_need_review` -- the admin's "Topics need review" filter is the
-#: worklist.  Deliberately not folded into :data:`TOPIC_ALIASES`: an alias is a mapping we
-#: trust, and the whole point of these is that we don't.
+#: "Cichlids" went because 55 of its 67 speakers also carried a specific cichlid topic. "Freshwater
+#: Invertebrates" was two subjects in a trench coat: shrimp people and snail people, now under
+#: "Shrimp" and "Other". Which one a speaker belongs under needs somebody to read their talk list,
+#: so these set :attr:`Speaker.topics_need_review` and the admin filter is the worklist. Not aliases:
+#: an alias is a mapping we trust, and the point of these is that we don't.
 REVIEW_TOPICS = {
     "cichlids",
     "cichids",
@@ -108,9 +94,8 @@ TOPIC_ALIASES = {
     "africa": "African Cichlids",
     "african": "African Cichlids",
     "west african": "West African Cichlids",
-    # One topic for all the rift lakes, on purpose. The export's "Rift Lakes" doesn't say which
-    # lake, and a talk on Malawi haps is usually a talk on Tanganyikans too -- splitting them
-    # meant guessing on import and asking people to guess again on the add-speaker form.
+    # One topic for all the rift lakes: the export's "Rift Lakes" doesn't say which, and a talk on
+    # Malawi haps is usually a talk on Tanganyikans too.
     "rift lakes": "Rift Lake Cichlids",
     "rift lake": "Rift Lake Cichlids",
     "lake victoria region": "Rift Lake Cichlids",
@@ -161,8 +146,7 @@ TOPIC_ALIASES = {
     "reef & brackish": "Reef & Invertebrates",
     "shrimp": "Shrimp",
     "dwarf shrimp": "Shrimp",
-    # Snails are the half of the old invertebrates topic that has nowhere better to go.  Said
-    # out loud here so the next person doesn't read it as an oversight and "fix" it.
+    # Snails are the half of the old invertebrates topic with nowhere better to go.
     "snails": OTHER,
     "us native fish": "Native & Wild-Caught Fish",
     "water quality": "Water Quality",
@@ -172,12 +156,11 @@ TOPIC_ALIASES = {
 def canonical_topic_name(raw_name):
     """Map an incoming topic name onto the vocabulary.
 
-    Returns a name from :data:`STARTER_TOPICS`, falling back to "Other" for anything not
-    recognised -- so an import can never widen the vocabulary on its own.  Returns None for a
-    blank name and for a :data:`DISCARDED_TOPICS` name, both of which callers skip entirely.
+    Returns a name from :data:`STARTER_TOPICS`, falling back to "Other", so an import can't widen the
+    vocabulary. Returns None for a blank name and for a :data:`DISCARDED_TOPICS` name.
 
-    A :data:`REVIEW_TOPICS` name also lands on "Other", but that is a placeholder rather than an
-    answer: callers should ask :func:`topic_needs_review` as well and flag the speaker.
+    A :data:`REVIEW_TOPICS` name also lands on "Other", but as a placeholder: callers should ask
+    :func:`topic_needs_review` too and flag the speaker.
     """
     cleaned = " ".join((raw_name or "").split())
     if not cleaned:
@@ -198,8 +181,8 @@ def canonical_topic_name(raw_name):
 def topic_needs_review(raw_name):
     """True when this name lands on "Other" only because its real topic was retired.
 
-    Separate from :func:`canonical_topic_name` because the two answers go to different places:
-    the name goes on the speaker, this goes on the worklist.
+    Separate from :func:`canonical_topic_name` because the two answers go to different places: the name
+    to the speaker, this to the worklist.
     """
     return " ".join((raw_name or "").split()).casefold() in REVIEW_TOPICS
 
@@ -210,8 +193,7 @@ def ensure_speaker_topics():
 
     created = 0
     for name in STARTER_TOPICS:
-        # iexact so a differently-cased row that already exists is left alone rather than
-        # gaining a near-duplicate twin.
+        # iexact, so a differently-cased existing row is left alone rather than twinned.
         if not SpeakerTopic.objects.filter(name__iexact=name).exists():
             SpeakerTopic.objects.create(name=name)
             created += 1

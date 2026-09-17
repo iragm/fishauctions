@@ -45,7 +45,7 @@ class LotLabelViewTestCase(StandardTestCase):
         response = self.client.get(self.url)
         # messages = list(response.wsgi_request._messages)
         assert response.status_code == 200
-        # note that weasyprint currently requires pydyf==0.8.0 in requirements.txt
+        # weasyprint currently requires pydyf==0.8.0.
         assert "attachment;filename=" in response.headers["Content-Disposition"]
 
     def test_small_labels(self):
@@ -232,14 +232,14 @@ class LotLabelViewTestCase(StandardTestCase):
         self.assertIsNone(custom_size)
 
     def test_seller_email_scales_sooner_for_medium_length(self):
-        """Emails that are moderately long (between old and new threshold) should now be scaled."""
+        """Moderately long emails are scaled now, between the old and new thresholds."""
         from auctions.views import LotLabelView
 
-        # "john.doe@example.com" is 20 chars: above new sm threshold (18) so should scale
+        # 20 characters: above the new sm threshold of 18.
         medium_sm_size = LotLabelView.get_seller_email_font_size("john.doe@example.com", "sm")
-        # "user@longertesthost.com" is 23 chars: above new lg threshold (20) so should scale
+        # 23 characters: above the new lg threshold of 20.
         medium_lg_size = LotLabelView.get_seller_email_font_size("user@longertesthost.com", "lg")
-        # "user@test.com" is 13 chars: below all thresholds, should never scale
+        # 13 characters: below every threshold.
         very_short_sm_size = LotLabelView.get_seller_email_font_size("user@test.com", "sm")
 
         self.assertIsNotNone(medium_sm_size)
@@ -250,7 +250,7 @@ class LotLabelViewTestCase(StandardTestCase):
         self.assertIsNone(very_short_sm_size)
 
     def test_bulk_print_pdf_with_default_label_fields(self):
-        """Admin can print labels for all users via AuctionBulkPrintingPDF with default (custom-field-heavy) config."""
+        """An admin can print labels for all users with the default, custom-field-heavy config."""
         self.client.login(username="admin_user", password="testpassword")
         url = reverse("auction_printing_pdf", kwargs={"slug": self.in_person_auction.slug})
         response = self.client.get(url)
@@ -258,7 +258,7 @@ class LotLabelViewTestCase(StandardTestCase):
         assert "attachment;filename=" in response.headers["Content-Disposition"]
 
     def test_bulk_print_form_uses_fetch(self):
-        """Bulk print form should use fetch() to download PDF without a page navigation."""
+        """The bulk print form uses fetch(), so downloading the PDF doesn't navigate."""
         self.client.login(username="admin_user", password="testpassword")
         url = reverse("auction_printing", kwargs={"slug": self.in_person_auction.slug})
         response = self.client.get(url)
@@ -373,7 +373,7 @@ class LotPushTestNotificationViewTestCase(StandardTestCase):
 
 
 class ViewLotSimpleTestCase(StandardTestCase):
-    """Tests for ViewLotSimple (the htmx_lot endpoint used by auction admins to project lot images)"""
+    """ViewLotSimple, the htmx_lot endpoint auction admins use to project lot images."""
 
     def get_url(self):
         return reverse(
@@ -382,7 +382,7 @@ class ViewLotSimpleTestCase(StandardTestCase):
         )
 
     def _setup_watcher_with_push(self):
-        """Helper: give user_with_no_lots a watch on in_person_lot and a push subscription"""
+        """Give user_with_no_lots a watch on in_person_lot and a push subscription."""
         from webpush.models import PushInformation, SubscriptionInfo
 
         watcher_userdata = UserData.objects.get(user=self.user_with_no_lots)
@@ -409,7 +409,7 @@ class ViewLotSimpleTestCase(StandardTestCase):
         self.assertEqual(response.status_code, 403)
 
     def test_admin_no_watchers(self):
-        """Admin user can view lot; no push notifications sent when there are no watchers"""
+        """An admin can view a lot, and no push is sent when nobody is watching."""
         self.client.login(username=self.admin_user.username, password="testpassword")
         with patch_views("send_user_notification") as mock_notify:
             response = self.client.get(self.get_url())
@@ -417,7 +417,7 @@ class ViewLotSimpleTestCase(StandardTestCase):
         mock_notify.assert_not_called()
 
     def test_admin_push_notification_success(self):
-        """Admin viewing unsold lot triggers a push notification for a watching user with push enabled"""
+        """An admin viewing an unsold lot pushes to a watching user."""
         self._setup_watcher_with_push()
         self.client.login(username=self.admin_user.username, password="testpassword")
         with patch_views("send_user_notification") as mock_notify:
@@ -426,7 +426,7 @@ class ViewLotSimpleTestCase(StandardTestCase):
         mock_notify.assert_called_once()
 
     def test_admin_push_failure_deletes_push_info_and_creates_history(self):
-        """When push notification fails, stale PushInformation is deleted and AuctionHistory is created"""
+        """A failed push deletes the stale PushInformation and records AuctionHistory."""
         import requests
         from webpush.models import PushInformation
 
@@ -438,9 +438,9 @@ class ViewLotSimpleTestCase(StandardTestCase):
         ):
             response = self.client.get(self.get_url())
         self.assertEqual(response.status_code, 200)
-        # Stale PushInformation must be deleted so the endpoint is never retried
+        # Deleted, so the endpoint is never retried.
         self.assertFalse(PushInformation.objects.filter(user=self.user_with_no_lots).exists())
-        # AuctionHistory must record the failure with the exact expected message
+        # And the failure is recorded with the expected message.
         history = AuctionHistory.objects.filter(auction=self.in_person_auction, user=None).first()
         self.assertIsNotNone(history)
         self.assertEqual(
@@ -449,7 +449,7 @@ class ViewLotSimpleTestCase(StandardTestCase):
         )
 
     def test_admin_push_timeout_also_cleans_up(self):
-        """RequestException subclasses other than ConnectionError (e.g. Timeout) are also handled"""
+        """Other RequestException subclasses, such as Timeout, are handled too."""
         import requests
         from webpush.models import PushInformation
 
@@ -464,14 +464,13 @@ class ViewLotSimpleTestCase(StandardTestCase):
         self.assertFalse(PushInformation.objects.filter(user=self.user_with_no_lots).exists())
 
     def test_admin_push_webpush_exception_cleans_up(self):
-        """WebPushException (e.g. FCM returning HTTP 404 for expired token) is also handled"""
+        """A WebPushException (FCM's 404 for an expired token) is handled too."""
         from pywebpush import WebPushException
         from webpush.models import PushInformation
 
         self._setup_watcher_with_push()
         self.client.login(username=self.admin_user.username, password="testpassword")
-        # Simulate django-webpush re-raising WebPushException for a 404 response
-        # (FCM uses 404, not 410, for expired/invalid tokens)
+        # FCM uses 404, not 410, for expired tokens.
         mock_response = type("Response", (), {"status_code": 404, "reason": "Not Found", "text": ""})()
         with patch_views(
             "send_user_notification",
@@ -507,7 +506,7 @@ class ViewLotSimpleTestCase(StandardTestCase):
         self.assertTrue(PushInformation.objects.filter(user=self.user_with_no_lots).exists())
 
     def test_message_users_disabled_no_push_notification(self):
-        """No push notification sent when auction.message_users_when_lots_sell is False"""
+        """No push is sent when auction.message_users_when_lots_sell is False."""
         from webpush.models import PushInformation
 
         self.in_person_auction.message_users_when_lots_sell = False
@@ -629,8 +628,7 @@ class DynamicSetLotWinnerViewTestCase(StandardTestCase):
         assert data.get("price") != "valid"
         assert data.get("winner") != "valid"
 
-        # Test that duplicate lot numbers are automatically fixed
-        # Create a lot with the same custom_lot_number as in_person_lot
+        # A lot created with the same custom_lot_number as in_person_lot.
         new_lot = Lot.objects.create(
             lot_name="dupe",
             auction=self.in_person_auction,
@@ -638,11 +636,9 @@ class DynamicSetLotWinnerViewTestCase(StandardTestCase):
             quantity=1,
             custom_lot_number="101-1",
         )
-        # After creating a duplicate, the duplicate detection should have automatically
-        # changed the new lot's number, so there should only be one lot with "101-1"
+        # Duplicate detection changes the new lot's number, leaving one lot on "101-1".
         new_lot.refresh_from_db()  # Refresh to get the updated custom_lot_number
         lots_with_101_1 = Lot.objects.filter(auction=self.in_person_auction, custom_lot_number="101-1")
-        # Verify duplicate was auto-fixed by checking only one lot has "101-1"
         assert lots_with_101_1.count() == 1, (
             f"Duplicate detection should have changed the duplicate lot's number. New lot number: {new_lot.custom_lot_number}"
         )
@@ -691,8 +687,7 @@ class DynamicSetLotWinnerViewTestCase(StandardTestCase):
 
 
 class LotQueueViewTestCase(StandardTestCase):
-    """Tests for the in-person Lot queue tool (LotQueueView / LotQueueKioskView) and its
-    integration with the set-lot-winners page and watcher push notifications."""
+    """The in-person lot queue (LotQueueView, LotQueueKioskView), the set-winners page and watcher pushes."""
 
     def get_url(self):
         return reverse("auction_lot_queue", kwargs={"slug": self.in_person_auction.slug})
@@ -750,8 +745,7 @@ class LotQueueViewTestCase(StandardTestCase):
         response = self.client.get(self.get_url())
         assert response.status_code == 200
         self.assertContains(response, "Lot queue")
-        # Multi-line {# #} comments leak into the page (Django only parses single-line {# #}); the
-        # queue template uses {% comment %} instead, so these explanatory notes must not render.
+        # Multi-line {# #} comments leak onto the page, so the template uses {% comment %}.
         self.assertNotContains(response, "Reuse the shared barcode pipeline")
         self.assertNotContains(response, "Kiosk / projector view")
 
@@ -886,8 +880,7 @@ class LotQueueViewTestCase(StandardTestCase):
         winners_url = reverse("auction_lot_winners_dynamic", kwargs={"slug": self.in_person_auction.slug})
         response = self.client.get(winners_url)
         assert response.status_code == 200
-        # The head lot number is threaded into the page for the JS prefill (escapejs escapes the
-        # hyphen to -, so assert on the context value rather than the rendered string).
+        # escapejs escapes the hyphen, so assert on the context value.
         assert response.context["queue_head_lot_number"] == "101-1"
 
     # --- notifications -------------------------------------------------------
@@ -897,14 +890,14 @@ class LotQueueViewTestCase(StandardTestCase):
         other = self._make_in_person_lot("Other")
         with patch_views("send_user_notification") as mock_notify:
             self.client.post(self.get_url(), data={"lot_pk": self.in_person_lot.pk})
-            # Adding another lot re-runs the top-10 pass, but the watched lot must not notify twice.
+            # Adding another lot re-runs the top-10 pass; the watched lot must not notify twice.
             self.client.post(self.get_url(), data={"lot_pk": other.pk})
         assert mock_notify.call_count == 1
         assert mock_notify.call_args.kwargs["user"] == self.user_with_no_lots
 
     def test_notification_only_for_top_ten(self):
         self._login_admin()
-        # Fill positions 1-10 with unwatched lots already flagged as notified so they don't push.
+        # Fill positions 1-10 with unwatched lots already flagged notified.
         for i in range(10):
             filler = self._make_in_person_lot(f"filler {i}")
             filler.coming_up_push_sent = True
@@ -919,7 +912,7 @@ class LotQueueViewTestCase(StandardTestCase):
         assert mock_notify.call_count == 0
         watched.refresh_from_db()
         assert watched.coming_up_push_sent is False
-        # Remove the head so the watched lot moves into position 10 -> it now notifies once.
+        # Removing the head moves the watched lot to position 10, which notifies once.
         head = LotQueueEntry.objects.filter(auction=self.in_person_auction).order_by("order").first()
         with patch_views("send_user_notification") as mock_notify:
             self.client.post(self.get_url(), data={"action": "remove", "entry_id": head.pk})
@@ -928,7 +921,7 @@ class LotQueueViewTestCase(StandardTestCase):
         assert watched.coming_up_push_sent is True
 
     def test_notification_deduped_across_queue_then_view(self):
-        """A lot that notified from the queue does not notify again when pulled up in ViewLotSimple."""
+        """A lot that notified from the queue doesn't notify again in ViewLotSimple."""
         self._login_admin()
         self._watch_with_push(self.in_person_lot, self.user_with_no_lots)
         with patch_views("send_user_notification") as mock_notify:
@@ -943,7 +936,7 @@ class LotQueueViewTestCase(StandardTestCase):
         assert mock_notify.call_count == 0
 
     def test_notification_deduped_across_view_then_queue(self):
-        """A lot that notified from ViewLotSimple does not notify again when added to the queue."""
+        """And vice versa."""
         self._login_admin()
         self._watch_with_push(self.in_person_lot, self.user_with_no_lots)
         view_url = reverse(
@@ -961,12 +954,13 @@ class LotQueueViewTestCase(StandardTestCase):
         assert self.in_person_lot.selling_push_notification_sent is True
 
     def test_coming_up_then_about_to_be_sold_overwrites(self):
-        """A lot ≤10 away gets a "coming up soon" push; reaching the head fires "about to be sold"
-        with the SAME notification tag, so the device overwrites the earlier one."""
+        """A lot 10 away gets "coming up soon"; reaching the head fires "about to be sold" with the same tag,
+        so the device overwrites the first.
+        """
         self._login_admin()
         watched = self._make_in_person_lot("watched")
         self._watch_with_push(watched, self.user_with_no_lots)
-        # Put a filler at the head so `watched` lands at position 2 (coming up, not head yet).
+        # A filler at the head puts `watched` at position 2.
         filler = self._make_in_person_lot("filler")
         with patch_views("send_user_notification") as mock_notify:
             self.client.post(self.get_url(), data={"lot_pk": filler.pk})
@@ -979,14 +973,14 @@ class LotQueueViewTestCase(StandardTestCase):
         watched.refresh_from_db()
         assert watched.coming_up_push_sent is True
         assert watched.selling_push_notification_sent is False
-        # Remove the filler -> watched becomes the head -> "about to be sold" fires and overwrites.
+        # Removing the filler makes it the head.
         head_entry = LotQueueEntry.objects.get(auction=self.in_person_auction, lot=filler)
         with patch_views("send_user_notification") as mock_notify:
             self.client.post(self.get_url(), data={"action": "remove", "entry_id": head_entry.pk})
         sold_calls = [c for c in mock_notify.call_args_list if c.kwargs["user"] == self.user_with_no_lots]
         assert len(sold_calls) == 1
         assert "about to be sold" in sold_calls[0].kwargs["payload"]["head"]
-        # Same tag -> the OS replaces the earlier notification rather than stacking a second one.
+        # The same tag replaces rather than stacks.
         assert sold_calls[0].kwargs["payload"]["tag"] == coming_up_tag
         watched.refresh_from_db()
         assert watched.selling_push_notification_sent is True
@@ -999,7 +993,7 @@ class LotQueueViewTestCase(StandardTestCase):
         self.in_person_lot.refresh_from_db()
         assert self.in_person_lot.added_to_queue is True
         assert self.in_person_auction.number_of_lots_added_to_queue == 1
-        # Removing the entry (or selling the lot) leaves the sticky flag/stat intact.
+        # Removing the entry leaves the sticky flag intact.
         entry = LotQueueEntry.objects.get(auction=self.in_person_auction, lot=self.in_person_lot)
         self.client.post(self.get_url(), data={"action": "remove", "entry_id": entry.pk})
         self.in_person_lot.refresh_from_db()

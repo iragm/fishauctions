@@ -1,10 +1,9 @@
 // Shared camera barcode scanner used by the quick check-in, quick checkout and lot queue pages.
 //
-// One place owns the actual barcode-reading logic (native BarcodeDetector with a ZXing
-// fallback, plus per-frame duplicate suppression) so future improvements to how a
-// barcode is read don't drift between the pages. Each page instantiates its own
-// controller with its <video> element and a callback that decides what a decoded value
-// means (check a member in, or pull up an invoice).
+// One place owns the barcode reading -- native BarcodeDetector with a ZXing fallback, plus
+// per-frame duplicate suppression -- so it can't drift between the pages. Each page makes its own
+// controller with its <video> element and a callback that decides what a decoded value means:
+// check a member in, or pull up an invoice.
 //
 //   const scanner = window.createCameraScanner({
 //     video: document.getElementById("scanner-video"),
@@ -17,21 +16,19 @@
 //
 // onCode is awaited, so a slow handler won't be re-entered for the same frame.
 //
-// iPhones take a completely different path through this file than Android does: Safari has
-// never shipped BarcodeDetector, so every iOS device falls back to decoding in JavaScript with
-// ZXing, while Android Chrome decodes natively and never touches that code. Anything below
-// marked "fallback" is therefore effectively iOS-only, and iOS-only bugs live there.
-// window.cameraScannerDiagnostics() dumps what this device actually supports -- see the
-// "Camera not working?" panel on the quick check-in page.
+// iPhones take a completely different path through this file: Safari has never shipped
+// BarcodeDetector, so every iOS device decodes in JavaScript with ZXing while Android Chrome
+// decodes natively and never touches that code. Anything marked "fallback" is therefore iOS-only,
+// and so are its bugs. window.cameraScannerDiagnostics() dumps what this device supports -- see
+// the "Camera not working?" panel on the quick check-in page.
 (function () {
   if (window.createCameraScanner) {
     return;
   }
 
-  // Self-hosted (see VENDOR_LIBRARIES.md): loading this from a CDN meant iPhones -- the only
-  // devices that need it -- couldn't scan at all on the flaky guest wifi typical of an auction
-  // venue, while Android carried on working off the native detector. Resolved relative to this
-  // script's own URL so it follows STATIC_URL without needing anything from the template.
+  // Self-hosted (see VENDOR_LIBRARIES.md): from a CDN, iPhones -- the only devices that need it --
+  // couldn't scan at all on the flaky guest wifi typical of a venue, while Android carried on off
+  // the native detector. Resolved relative to this script's URL, so it follows STATIC_URL.
   var ZXING_SRC = (function () {
     var tag = document.currentScript;
     if (tag && tag.src) {

@@ -1,30 +1,13 @@
-"""Every page on the site, as a thing the command palette's assistant can reach.
+"""Every named URL, as a :class:`Route` the palette assistant can reach or an :data:`EXCLUDED` entry
+with a reason.
 
-The palette's natural-language assist used to navigate by running the ordinary palette search and
-taking the first Go-To hit, which meant it could only reach the handful of destinations someone had
-thought to add as a ``CommandPalettePage``. This module is the other half: a registry of **every**
-named URL in the site, either as a navigable :class:`Route` or as an entry in :data:`EXCLUDED` with
-a written reason.
+``test_palette_routes.py`` walks the URLconf and fails on a name in neither table. One navigation
+skill (``go_to_page``) uses this catalog rather than one tool per URL; :func:`catalog_for_prompt`
+lists every destination in the prompt.
 
-That "or" is enforced, not aspirational. ``auctions/test_palette_routes.py`` walks the real URLconf
-and fails if a name is in neither table, so adding a URL to ``urls.py`` and forgetting the palette
-breaks the build. There is no third state where a page quietly becomes unreachable.
-
-**Why a registry rather than one skill per URL.** 300-odd separate skills would be 300 parameter
-schemas for the model to choose between, and the choice is always the same shape: a destination plus
-the object it applies to. So there is one navigation skill (``go_to_page`` in ``palette_actions``)
-backed by this catalog. The model still sees every destination -- :func:`catalog_for_prompt` writes
-them all into the system prompt -- it just doesn't need a separate tool definition for each.
-
-**Scopes.** A route's ``scope`` says where its URL parameters come from, and resolving them is this
-module's job, not the model's. ``scope="auction"`` means "this URL needs an auction slug"; the
-resolver finds the auction from the user's hint, the page they're on, or their most recent one, and
-always through :func:`~auctions.command_palette._joined_auctions`, so a hint can never reach an
-object the user has no relationship with. The model never supplies a URL or a primary key.
-
-**Permissions.** ``admin`` marks routes that need auction-admin, club-admin or superuser rights.
-This is a pre-filter for a better error message ("only admins can..."), *not* the security boundary
--- every destination is a normal Django view that runs its own checks when the user lands on it.
+A route's ``scope`` says where URL parameters come from; this module resolves them (through
+``_joined_auctions`` for auctions), never the model. ``admin`` is a pre-filter for better errors,
+not security: every view checks its own permissions.
 """
 
 from __future__ import annotations
@@ -64,11 +47,7 @@ ADMIN_SUPERUSER = "superuser"
 
 @dataclass(frozen=True)
 class Route:
-    """One navigable page.
-
-    ``key`` is the URL name, which is also what the model is asked to send back -- so the model's
-    answer is checked against the URLconf rather than against a string we invented.
-    """
+    """One navigable page. ``key`` is the URL name, which is what the model sends back."""
 
     key: str
     label: str
@@ -76,10 +55,9 @@ class Route:
     scope: str = SCOPE_NONE
     admin: str = ADMIN_NONE
     keywords: tuple[str, ...] = ()
-    #: Extra kwargs baked into reverse() for routes whose remaining parameters aren't user-facing.
+    #: Fixed kwargs for reverse() for parameters that aren't user-facing.
     fixed: dict[str, Any] = field(default_factory=dict)
-    #: Overrides the kwarg name the scope's object is passed as, for the handful of URLs that spell
-    #: it differently (``add_image`` takes ``lot``, ``auction_no_show`` takes ``tos``).
+    #: The kwarg name for the scope's object when a URL spells it differently.
     param: str = ""
 
     @property
@@ -102,8 +80,7 @@ def _r(key, label, section, scope=SCOPE_NONE, admin=ADMIN_NONE, keywords=(), fix
 
 # --- the catalog -------------------------------------------------------------
 #
-# Grouped by section, because the section headings are what the model sees in the prompt and they
-# do most of the work of narrowing a query down.
+# Grouped by section; the headings do most of the narrowing in the prompt.
 
 ROUTE_LIST: list[Route] = [
     # --- Browsing ---
@@ -1097,15 +1074,12 @@ ROUTES: dict[str, Route] = {route.key: route for route in ROUTE_LIST}
 
 # --- deliberately not navigable ----------------------------------------------
 #
-# The reason strings are the point of this table: a URL is not allowed to be silently missing from
-# the palette, so anything that isn't a destination has to say why here. The audit test reads it.
+# Every non-destination must say why here. The audit test reads it.
 
 
 def _user_sees_nec_speakers(user):
-    """Whether this user holds any club permission in an NEC member club.
-
-    A local copy of the rule in views.clubs_with_any_permission, kept here because views
-    imports this module and importing it back would be circular.
+    """Whether this user holds any club permission in an NEC club. A copy of
+    ``views.clubs_with_any_permission`` to avoid a circular import.
     """
     from .models import ClubMember
 
@@ -1147,12 +1121,8 @@ EXCLUDED: dict[str, str] = {
         "The Model Context Protocol endpoint. Another program's way in, authenticated by a bearer "
         "token rather than a person's session; there is nothing on it to look at."
     ),
-    # django-oauth-toolkit's authorization server (/o/, plus the discovery documents at the domain
-    # root) is how Claude and other agents get permission to use the MCP endpoint as somebody. It
-    # needs no entry here: its URLs are namespaced, and ``is_third_party`` excuses every namespaced
-    # name for the same reason it excuses allauth's. An entry would in fact *break* the audit --
-    # ``audit()`` drops ``namespace:*`` from the live set, so a reason written for one is a reason
-    # for a URL that is never seen, which is exactly what ``stale`` reports.
+    # django-oauth-toolkit's URLs are namespaced and excused like allauth's; an entry would show up
+    # as stale in the audit.
     # Speaker directory
     "speaker_panel": _API,
     "speaker_tag": _API,
@@ -1188,10 +1158,7 @@ EXCLUDED: dict[str, str] = {
     "delete_auction_chat": _API,
     "auctionlotadmin": _API,
     "lot_bap_points": _API,
-    # The two page-view history modals (a lot's, and every lot on the selling dashboard). Both are
-    # GET-only HTMX fragments that open over the page they were pressed on; there is no page here to
-    # send anybody to, and the pages that carry the buttons -- lot_by_pk and selling -- are both in
-    # the catalog already.
+    # Page-view history modals: GET-only fragments; their host pages are in the catalog.
     "lot_page_view_history": _API,
     "my_lots_page_view_history": _API,
     "auction_custom_dropdown_options": _API,
@@ -1207,8 +1174,7 @@ EXCLUDED: dict[str, str] = {
     "auction_show_high_bidder": _API,
     "auto_image_available": _API,
     "species_suggestions": _AUTOCOMPLETE,
-    # The buttons on the species gaps page, and an API endpoint for a club's own software.  All of
-    # them are POST/GET-with-a-key rather than pages; the palette sends people to species_gaps.
+    # Species gaps page buttons and the club API endpoint; the palette sends people to species_gaps.
     "species_cache_forget": _API,
     "species_approve": _API,
     "species_rejection_delete": _API,
@@ -1296,8 +1262,7 @@ EXCLUDED: dict[str, str] = {
     "api_club_auction_lots": _API,
     "api_club_auction_lot_detail": _API,
     "inbound_email_routing": _API,
-    # Donation tracking. The two real pages are in the catalog; these are the modals opened from
-    # them, all of which need a vendor or a stored email the user can't be asked to name.
+    # Donation modals needing a vendor or email; the two real pages are in the catalog.
     "club_donation_vendor": _API,
     "club_donation_vendor_create": _API,
     "club_donation_contact": _API,
@@ -1355,15 +1320,11 @@ EXCLUDED: dict[str, str] = {
     "mobile_socialaccount_signup": _MOBILE,
     "mobile_socialaccount_connections": _MOBILE,
     "paypal_csv": "Needs a chunk number that only makes sense from the invoices page it's linked from.",
-    # App-association files. Fetched by Google's and Apple's infrastructure to decide whether a link
-    # to this site may open in the app; there is no page and no person on either end. The Apple one is
-    # listed even though `apple_` is in THIRD_PARTY_PREFIXES -- it is ours, not allauth's, and an
-    # explicit entry keeps it from being excused by an accident of naming.
+    # App-association files for Google and Apple. The Apple one is listed explicitly so it isn't
+    # excused by the `apple_` third-party prefix by accident.
     "android_assetlinks": _INFRA,
     "apple_app_site_association": _INFRA,
-    # Printing from a computer to the phone's Bluetooth printer. The waiting page LotLabelView
-    # renders owns all three: it polls the first once a second, and the other two are its "Try
-    # again" and "Cancel" buttons, which only mean anything against the job it is already watching.
+    # Remote print: the waiting page polls the first; the others are its Try again and Cancel.
     "remote_print_job": _API,
     "remote_print_job_retry": _API,
     "remote_print_job_cancel": _API,
@@ -1374,9 +1335,7 @@ EXCLUDED: dict[str, str] = {
     "service_worker": _INFRA,
 }
 
-#: Whole families of routes excluded by prefix, with one reason for the family. Used where listing
-#: every name would be noise -- the mobile API alone is 40-odd endpoints that are all the same kind
-#: of thing. A prefix here still has to be a deliberate decision; it just isn't repeated 40 times.
+#: Route families excluded by prefix with one reason, where listing every name would be noise.
 EXCLUDED_PREFIXES: dict[str, str] = {
     "mobile-": "Mobile app JSON API. The app has its own screens; these return data, not pages.",
 }
@@ -1386,23 +1345,15 @@ EXCLUDED_PREFIXES: dict[str, str] = {
 
 
 def _url_names() -> set[str]:
-    """Every named route in the project's URLconf.
-
-    ``reverse_dict`` is keyed by both the name and the view callable, so only the string keys are
-    names. Namespaced includes are recorded as ``namespace:*`` and skipped by the audit -- they
-    belong to third-party apps, which have their own entry in ``THIRD_PARTY_PREFIXES``.
-    """
+    """Every named route in the URLconf. Namespaced includes show as ``namespace:*`` and are skipped."""
     resolver = get_resolver()
     names = {key for key in resolver.reverse_dict if isinstance(key, str)}
     names.update(f"{namespace}:*" for namespace in resolver.namespace_dict)
     return names
 
 
-#: URL names owned by third-party apps (allauth's login flows, summernote, webpush). They're
-#: outside this project's control and none of them are destinations a person would ask the palette
-#: for, so they're skipped wholesale rather than listed one by one. Anything this module classifies
-#: explicitly wins over these patterns, so the site's own ``account_delete`` isn't mistaken for one
-#: of allauth's ``account_*`` views.
+#: URL name prefixes owned by third-party apps (allauth, summernote, webpush), skipped wholesale.
+#: Explicit entries here win, so ``account_delete`` isn't mistaken for allauth's.
 THIRD_PARTY_PREFIXES = (
     "account_",
     "socialaccount_",
@@ -1440,11 +1391,8 @@ def is_third_party(name: str) -> bool:
 
 
 def audit() -> dict[str, list[str]]:
-    """Compare the live URLconf against this module. Used by the route audit test.
-
-    ``uncovered`` is the one that matters: a name there is a page the assistant can't reach and
-    nobody has said why. ``stale`` catches the opposite -- a route we still describe after the URL
-    it points at has been renamed or deleted, which would fail at reverse() time in front of a user.
+    """Compare the URLconf with this module. ``uncovered``: unreachable with no reason. ``stale``: a route
+    described after its URL was renamed or deleted.
     """
     live = {name for name in _url_names() if not is_third_party(name) and not name.endswith(":*")}
     known = set(ROUTES) | set(EXCLUDED)
@@ -1460,12 +1408,8 @@ def audit() -> dict[str, list[str]]:
 
 
 def _permitted_routes(user=None) -> list[Route]:
-    """Destinations this user could plausibly use, for the prompt and for free-text matching.
-
-    A pre-filter for relevance, *not* the security boundary -- :func:`resolve_route` re-checks every
-    permission when a destination is actually opened. Its job is to keep an ordinary bidder from
-    being offered club administration, and to keep the model from spending its attention on pages it
-    will only ever be refused. ``user=None`` means "don't filter", which is what the audit wants.
+    """Destinations this user could plausibly use, for the prompt and matching. Relevance, not security:
+    :func:`resolve_route` re-checks. ``user=None`` doesn't filter (for the audit).
     """
     from . import command_palette
 
@@ -1502,7 +1446,7 @@ def catalog_for_prompt(user=None) -> str:
 
 _WORD = re.compile(r"[a-z0-9]+")
 
-#: Words that carry no signal when matching a query against a destination label.
+#: Words with no signal for matching a query to a label.
 _STOPWORDS = frozenset(
     [
         "a",
@@ -1574,18 +1518,8 @@ def _tokens(text: str) -> list[str]:
 
 
 def match_routes(query: str, user=None, limit: int = 5) -> list[Route]:
-    """Rank destinations against a free-text query, among the ones *user* could plausibly use.
-
-    Deliberately simple token overlap rather than anything clever: this is the safety net for when
-    the model sends a description instead of a key, and a wrong guess here costs a clarify, not a
-    wrong action.
-
-    ``user`` was accepted and then ignored, so ``find_page`` and the "did you mean one of these?"
-    fallback offered an ordinary bidder destinations like the treasurer report and the site admin
-    dashboard. Nothing leaked -- ``resolve_route`` refuses on the way through, and a label is a
-    static string naming no object -- but it advertised a shape of the site that isn't theirs, and
-    it made this the one place in the module that doesn't filter. It shares
-    :func:`_permitted_routes` with :func:`catalog_for_prompt` now, so the two can't disagree.
+    """Rank this user's permitted destinations by token overlap with a query: a simple safety net for when
+    the model sends a description instead of a key.
     """
     words = _tokens(query)
     if not words:
@@ -1603,7 +1537,7 @@ def match_routes(query: str, user=None, limit: int = 5) -> list[Route]:
         if route.label.lower() in query.lower():
             score += 3.0
         if score:
-            # Index keeps the ordering stable and biases towards the earlier, more common entries.
+            # Index keeps ties stable, favouring earlier entries.
             scored.append((score, -index, route))
     scored.sort(key=lambda item: (item[0], item[1]), reverse=True)
     return [route for _, _, route in scored[:limit]]
@@ -1616,11 +1550,7 @@ def get_route(key: str) -> Route | None:
 
 
 def route_needs_an_auction(key: str) -> bool:
-    """True when this destination is about one particular auction.
-
-    Used to decide whether "Opening the lot list" is worth expanding to "Opening the lot list for
-    the Spring Auction" -- see ``palette_actions.action_context``.
-    """
+    """True when this destination is about one auction, so the narration can name it."""
     route = get_route(key)
     return bool(route and route.scope in (SCOPE_AUCTION, SCOPE_AUCTION_BIDDER, SCOPE_AUCTION_USERNAME))
 
@@ -1681,29 +1611,18 @@ def _lot_from_hint(user, hint: str, auction=None):
 
 
 def _denied(message: str) -> dict[str, Any]:
-    """A permission refusal.
-
-    Flagged so ``go_to_page`` can tell it apart from "I couldn't work out what you meant". Those
-    two must not be handled the same way: guessing another page after a refusal would quietly take
-    the user somewhere they didn't ask for and hide the fact that they aren't allowed in.
-    """
+    """A permission refusal, flagged so ``go_to_page`` doesn't guess another page instead."""
     return {"error": message, "denied": True}
 
 
 def resolve_route(request, route: Route, params: dict[str, Any]) -> dict[str, Any]:
-    """Turn a route plus the model's parameters into ``{"url": ...}`` or a problem.
-
-    Returns the same result shapes the action resolvers use, so the caller doesn't need to know
-    whether an action navigated or acted.
-    """
+    """Turn a route plus parameters into ``{"url": ...}`` or a problem, in the action resolvers' shapes."""
     from . import palette_actions
 
     user = request.user
     kwargs: dict[str, Any] = dict(route.fixed)
     hint = str(params.get("target") or "").strip()
-    # What the destination is *about*, filled in as we resolve it. Navigating somewhere without
-    # saying where is the complaint this answers: "Opening the lot list" is not enough to tell
-    # whether we understood, and "Opening the lot list for the Spring Auction" is.
+    # What the destination is about, so the narration can say so.
     about = ""
 
     page = palette_actions._page(request)
@@ -1818,9 +1737,8 @@ def resolve_route(request, route: Route, params: dict[str, Any]) -> dict[str, An
     elif route.scope == SCOPE_SPEAKER:
         from .models import Speaker
 
-        # Scoped to what this user may see, so the directory's NEC-only rule holds here too --
-        # otherwise "who is <name>" would confirm a speaker exists to someone who can't open
-        # the page. Matches the stored "Last, First" and the spoken "First Last" both ways.
+        # Scoped to the NEC rule, so this can't confirm a hidden speaker. Matches "Last, First" and
+        # "First Last".
         speakers = Speaker.objects.filter(is_deleted=False)
         if not _user_sees_nec_speakers(user):
             speakers = speakers.filter(nec_only=False)
@@ -1843,14 +1761,11 @@ def resolve_route(request, route: Route, params: dict[str, Any]) -> dict[str, An
     except NoReverseMatch:
         logger.exception("Palette route %s could not be reversed with %s", route.key, kwargs)
         return {"error": "I know that page but couldn't work out the link to it."}
-    # Name the destination *and* what it's about, so the user can tell we understood before the page
-    # replaces the palette. The title is what the client shows them on the way there.
+    # Name the destination and its subject before the page replaces the palette.
     title = f"{route.label} — {about}" if about else route.label
     summary = f"Taking you to {route.label.lower()}"
     summary += f" — {about}." if about else "."
-    # ``route`` travels back so the caller can record *which* destination was chosen, not just that
-    # a navigation happened. That is the ground truth the shortcut miner runs on: a query that
-    # resolves to the same route every time is one the model never needs to be asked about again.
+    # ``route`` is recorded; the shortcut miner runs on it.
     return {"ok": True, "url": url, "summary": summary, "title": title, "route": route.key}
 
 
@@ -1858,13 +1773,8 @@ def resolve_route(request, route: Route, params: dict[str, Any]) -> dict[str, An
 
 
 def page_context_from_path(user, path: str) -> dict[str, Any]:
-    """Work out what the user is looking at from the URL they're on.
-
-    Resolved through Django's own URLconf rather than trusted from the client: the browser sends a
-    path, and every object it names is looked up again here. The worst a forged path can do is name
-    something the same path would have shown them anyway.
-
-    This is what makes "add a lot" mean *this* auction rather than whichever one they last touched.
+    """What the user is looking at, from their URL, resolved through the URLconf. This makes "add a lot"
+    mean this auction.
     """
     data: dict[str, Any] = {}
     if not isinstance(path, str) or not path.startswith("/") or len(path) > 500:
@@ -1884,28 +1794,14 @@ def page_context_from_path(user, path: str) -> dict[str, Any]:
     from .models import Auction, Club, Lot
 
     if slug:
-        # Any auction, whether or not this user has joined it -- because this is the auction whose
-        # page they are standing on, and it is on their screen either way.
-        #
-        # This used to be joined-or-administered, on the reasoning that a forged path must not name
-        # an auction the user has no relationship with. That guarantee was worth nothing and cost a
-        # great deal: ``AuctionInfo`` has ``allow_non_admins`` and no permission check, so *anybody*
-        # holding the slug can already read the title, the dates and the rules by loading the page.
-        # A forged path therefore reveals nothing a plain GET wouldn't. Meanwhile everyone who
-        # hadn't joined yet -- which is everyone reading an auction's page for the first time, and
-        # the entire population of "should I sign up for this?" -- asked "when does this start" on
-        # the auction's own page and got an assistant with no idea which auction they meant.
-        #
-        # This widens *context*, not permission. ``resolve_auction`` still re-scopes the slug
-        # through ``_joined_auctions`` before anything is written, and says so by name when the
-        # answer is no.
+        # Any auction by slug, joined or not: the auction page is public to anyone with the slug, so
+        # a forged path reveals nothing, and non-members asking about it need context. This widens
+        # context, not permission: resolve_auction still re-scopes through _joined_auctions.
         auction = Auction.objects.filter(slug=slug, is_deleted=False).first()
         if auction:
             data["auction"] = auction.slug
             data["auction_title"] = auction.title
-            # Whether they are actually in it. The prompt needs this to tell "add a lot here" from
-            # "you'd have to join first", and it is the difference between an assistant that can
-            # answer questions about an auction and one that pretends the user is already in it.
+            # Whether they're in it: "add a lot here" vs "join first".
             data["auction_joined"] = command_palette._joined_auctions(user).filter(pk=auction.pk).exists()
         else:
             club = Club.objects.filter(slug=slug).first()

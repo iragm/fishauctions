@@ -1,41 +1,17 @@
 """Whether a club is still running auctions here, judged against its own cadence.
 
-``Club.active`` is a hand-set boolean defaulting True, flipped when a club dissolves and has to
-come off the map.  It is not a health signal and was never meant to be one, so a club that quietly
-stops using the site keeps reading as active for ever.  That is the wrong way round: a dormant
-bidder is one person, a dormant club is an organizer, its members and a recurring auction that
-stops appearing -- and nothing on the site said so.
+``Club.active`` is a hand-set flag for dissolved clubs, not a health signal.
 
-**The threshold is the club's own gap between auctions, not a number.**  A club running monthly
-that has missed two is in trouble; a club running one big auction a year is healthy at eight
-months.  One global cutoff gets both wrong, which is the likeliest reason nobody trusted ``active``
-enough to maintain it.  So :func:`compute_club_health` measures the club's own median gap and asks
-how many of those have gone by -- :attr:`ClubHealth.overdue_ratio`, where 1.0 is "due now" and 2.0
-is "has missed one".  A club with fewer than :data:`MIN_AUCTIONS_FOR_CADENCE` real auctions has no
-cadence to deviate from, and is judged on its stage instead.
+The threshold is the club's own median gap between auctions: :attr:`ClubHealth.overdue_ratio` is
+1.0 when due and 2.0 after missing one. Clubs with fewer than :data:`MIN_AUCTIONS_FOR_CADENCE` real
+auctions are judged on stage instead. Test auctions are counted separately throughout.
 
-**A threshold with no trigger is another chart nobody opens.**  So the rollup ends in a queue:
-:func:`due_for_checkin` is the list of clubs to contact, ordered worst first, and contacting one
-writes ``Club.date_contacted`` -- the outreach field that already existed and had nothing feeding
-it.  A club stays out of the queue for :data:`CONTACT_COOLDOWN_DAYS` after it is contacted, so the
-queue is a worklist rather than a standing complaint.
+:func:`due_for_checkin` is the outreach queue, worst first. Contacting a club writes
+``Club.date_contacted`` and keeps it off the queue for :data:`CONTACT_COOLDOWN_DAYS`.
 
-Test auctions are counted separately from real ones throughout.  A club whose only auction is
-called "test-auction" has not run an auction here; before this, it was indistinguishable from one
-that had, and it is exactly the club worth reaching out to -- somebody set the site up, tried it,
-and stopped.
-
-The rollup is a table rather than a set of properties because the questions asked of it are
-"which clubs" rather than "this club": sorting every club by how overdue it is cannot be done from
-a property, and recomputing on read would mean a dozen aggregates per club per page.
-
-**The ladder has two halves and only one of them can be derived.**  Everything above is computed
-from rows and is rewritten nightly, so nothing hand-set can live on ``ClubHealth`` -- it would be
-overwritten.  The other half is what nobody can query: has anybody here heard of this club, written
-to it, decided to publish it.  That is ``Club.outreach_stage``, hand-set, and it is also the map
-gate.  :func:`ladder_position` puts the two on one order and says which half answered, because the
-useful reading is always the furthest-along of the two: a club we have merely contacted may already
-be running auctions here, and a club we have listed may have done nothing at all.
+``ClubHealth`` is a nightly-rewritten table so clubs can be sorted by it; nothing hand-set can live
+on it. The hand-set half is ``Club.outreach_stage``, also the map gate. :func:`ladder_position`
+combines both and reports which half answered.
 """
 
 from __future__ import annotations
@@ -49,38 +25,31 @@ from django.utils import timezone
 
 logger = logging.getLogger(__name__)
 
-# The same shape AuctionEditForm refuses to promote, widened by one character class: that one is
-# matched against a slug, and this is matched against the title as well, where the separator is a
-# space. A word boundary alone would be wrong -- it would catch "protest" and "contest".
+# AuctionEditForm's pattern, widened to match titles with spaces. A plain word boundary would catch
+# "protest" and "contest".
 _TEST_WORDS = "test|mock|trial|example|demo"
 TEST_AUCTION_PATTERN = re.compile(
     rf"^({_TEST_WORDS})([-_\s]|$)|([-_\s])({_TEST_WORDS})([-_\s]|$)",
     re.IGNORECASE,
 )
-# Below this, a club has no cadence: one auction says nothing about when the next one was due.
 MIN_AUCTIONS_FOR_CADENCE = 3
-# What "due" means for a club with a cadence. 1.0 is one whole median gap since the last auction --
-# not late yet. Late is having missed one.
+# 1.0 is one median gap since the last auction; due means having missed one.
 OVERDUE_RATIO_DUE = 2.0
-# Twice as late again: the club has missed three of its own gaps and is not coming back on its own.
+# Missed three gaps.
 DORMANT_RATIO = 4.0
-# A club with no cadence yet is judged on plain elapsed time, because there is nothing else.
+# For clubs with no cadence, judged on elapsed time.
 NO_CADENCE_DORMANT_DAYS = 400
 # How long a club stays out of the queue after somebody contacts it.
 CONTACT_COOLDOWN_DAYS = 90
-# A gap this long is a restart, not a cadence; including it drags the median toward "annual" for a
-# club that ran monthly, took a year off, and came back monthly.
+# A gap this long is a restart, and would skew the median.
 MAX_GAP_DAYS_FOR_CADENCE = 730
 
 STAGE_CHOICES = (
-    # Nothing at all: a club record with nobody and nothing behind it. Every club found by club
-    # discovery starts here, which is why this rung carries no information on the ladder below.
+    # A club record with nothing behind it; every discovered club starts here.
     ("empty", "No auctions"),
-    # Somebody here says they are in this club -- a ClubMember row, or a UserData.club pointing at
-    # it -- and the club has never run an auction. Derived, so it separates a club that has heard of
-    # this site from one that has not without anybody being asked.
+    # A ClubMember row or UserData.club points at it, but no auctions.
     ("aware", "Members here, no auctions"),
-    # Tried it, never ran one for real. The most reachable club on this list.
+    # Tried it, never ran one for real.
     ("trial", "Test auctions only"),
     # One real auction, no cadence to judge yet.
     ("new", "First real auction"),
@@ -89,8 +58,7 @@ STAGE_CHOICES = (
     ("dormant", "Stopped"),
 )
 
-# Which club management tools a club has actually used, as (label, how to tell). Each is a plain
-# question about rows or settings, kept here rather than in the model so adding one is a line.
+# Club management tools a club has used, as (label, check).
 TOOL_CHECKS = (
     ("members", lambda club, counts: counts["members"] > 0),
     ("breeder award program", lambda club, counts: club.enable_breeder_award_program),
@@ -107,11 +75,8 @@ TOOL_CHECKS = (
 
 
 class ClubHealth(models.Model):
-    """A derived rollup of one club's use of the site. Written by :func:`compute_club_health`.
-
-    Every column here is computed; nothing on this row is hand-maintained, which is the whole point
-    -- ``Club.active``, ``date_contacted`` and ``date_contacted_for_in_person_auctions`` are the
-    hand-maintained ones and between them they answered none of these questions.
+    """A derived rollup of one club's use of the site, written by :func:`compute_club_health`. Nothing
+    here is hand-maintained.
     """
 
     club = models.OneToOneField("auctions.Club", on_delete=models.CASCADE, related_name="health")
@@ -144,7 +109,7 @@ class ClubHealth(models.Model):
 
     @property
     def is_reachable(self):
-        """Whether there is anybody to contact. A queue entry with no address is not a task."""
+        """Whether there's anybody to contact."""
         return bool(self.club.contact_email or self.club.contact_email_member_id)
 
 
@@ -154,12 +119,7 @@ def is_test_auction(auction) -> bool:
 
 
 def median_gap(dates) -> float | None:
-    """The club's own cadence in days, or None when there is not enough history to have one.
-
-    Median rather than mean: a club that ran four auctions two weeks apart and then one eighteen
-    months later has a cadence of two weeks and a gap, and a mean would report ten months, which
-    describes neither.
-    """
+    """The club's median gap between auctions in days, or None without enough history."""
     dates = sorted(date for date in dates if date)
     if len(dates) < MIN_AUCTIONS_FOR_CADENCE:
         return None
@@ -174,14 +134,10 @@ def median_gap(dates) -> float | None:
 
 
 def classify(real_auctions, test_auctions, days_since_last, cadence, ratio, people_here=0) -> tuple[str, str]:
-    """``(stage, reason)`` -- where this club is in its life here, and why it is in the queue.
+    """``(stage, reason)``: where the club is, and why it's in the queue.
 
-    The reason is written for whoever opens the queue and has to decide what to say, so it names
-    the numbers that put the club there rather than restating the stage.
-
-    ``people_here`` is what separates ``aware`` from ``empty``, and it matters because those are two
-    completely different conversations: one club has members on this site and has never run an
-    auction, the other is a name and a location somebody typed in.
+    The reason names the numbers for whoever reads the queue. ``people_here`` separates ``aware`` from
+    ``empty``.
     """
     if not real_auctions:
         if test_auctions:
@@ -190,7 +146,7 @@ def classify(real_auctions, test_auctions, days_since_last, cadence, ratio, peop
             return "aware", f"{people_here} person/people here say they are in this club, no auctions yet"
         return "empty", "Club exists here but has never had an auction"
     if ratio is None:
-        # No cadence yet: one or two auctions, so all we have is elapsed time.
+        # No cadence yet, only elapsed time.
         if days_since_last is not None and days_since_last > NO_CADENCE_DORMANT_DAYS:
             return "dormant", f"One-off: {real_auctions} auction(s), last one {days_since_last} days ago"
         return "new", f"{real_auctions} auction(s) so far, no cadence yet"
@@ -221,9 +177,7 @@ def compute_club_health(club) -> ClubHealth:
     people_here = _people_here(club)
     stage, reason = classify(len(real), len(tests), days_since, cadence, ratio, people_here)
     counts = {
-        # Removed members are not members. Counting them makes a club that has emptied out look
-        # staffed, and puts "members" in tools_used for a club that stopped using the feature --
-        # which is exactly the club this triage is trying to notice.
+        # Removed members don't count.
         "members": club.members.filter(is_deleted=False).count(),
         "announcements": club.announcements.count(),
         "events": club.events.count(),
@@ -254,16 +208,8 @@ def compute_club_health(club) -> ClubHealth:
 
 
 def _people_here(club) -> int:
-    """How many people on this site say they are in this club.
-
-    Two links, because they are set in two different places and either one on its own would miss
-    half the answer: a ``ClubMember`` row, which the club's own admin creates, and ``UserData.club``,
-    which the member sets on their own contact-info page. Counted as distinct users, since somebody
-    with both is one person.
-
-    The third signal USABILITY.md names -- an ``AuctionTOS`` belonging to one of these people in
-    somebody else's auction -- is the same set of people seen doing something rather than a wider
-    set, so it says "warm", not "aware", and adds nothing to this rung.
+    """How many people on this site say they're in this club: ClubMember rows plus ``UserData.club``, as
+    distinct users, plus members without accounts.
     """
     from auctions.models import ClubMember, UserData
 
@@ -271,7 +217,6 @@ def _people_here(club) -> int:
         ClubMember.objects.filter(club=club, is_deleted=False, user__isnull=False).values_list("user_id", flat=True)
     )
     users.update(UserData.objects.filter(club=club).values_list("user_id", flat=True))
-    # A ClubMember with no account is still a person this club put on the site.
     without_accounts = ClubMember.objects.filter(club=club, is_deleted=False, user__isnull=True).count()
     return len(users) + without_accounts
 
@@ -285,15 +230,11 @@ def _safely(check, club, counts):
 
 
 def _queue_decision(club, stage, reason) -> tuple[bool, str]:
-    """Whether this club belongs on the outreach queue right now.
-
-    A club contacted recently comes off it whatever its numbers say: the queue is a worklist, and a
-    club that has already had the email this quarter is not a task until the cooldown is up.
-    """
+    """Whether this club belongs on the outreach queue; recently contacted clubs don't."""
     if stage not in ("empty", "aware", "trial", "slipping", "dormant"):
         return False, ""
     if not club.active:
-        # `active` is False only when a club has dissolved. There is nobody to check in with.
+        # Dissolved.
         return False, ""
     contacted = club.date_contacted
     if contacted and (timezone.now() - contacted).days < CONTACT_COOLDOWN_DAYS:
@@ -317,32 +258,19 @@ def refresh_all(queryset=None):
 
 
 def due_for_checkin(limit=100):
-    """The outreach queue: clubs to contact, worst first.
-
-    Ordered by stage rather than by ratio, because the stages are not degrees of the same thing --
-    a club that set the site up and never ran an auction is a different conversation from one that
-    ran twelve and stopped, and the first is much more likely to be recoverable.
-    """
+    """The outreach queue, worst first, ordered by stage rather than ratio."""
     order = {"trial": 0, "aware": 1, "empty": 2, "slipping": 3, "dormant": 4}
-    # Ordered first, then cut. Slicing the queryset would apply Meta.ordering -- "-overdue_ratio" --
-    # and a trial or empty club has no ratio at all: NULLs sort last under DESC on MariaDB, so the
-    # two stages this queue is meant to lead with are the two the slice would throw away.
+    # Sort in Python before slicing: Meta.ordering sorts NULL ratios (trial, empty) last on MariaDB.
     rows = ClubHealth.objects.filter(due_for_checkin=True).select_related("club")
     ordered = sorted(rows, key=lambda row: (order.get(row.stage, 9), -(row.overdue_ratio or 0)))
     return ordered[:limit]
 
 
-# The whole ladder in order, as (key, label, which half said so). The first three rungs are the
-# hand-set half (Club.outreach_stage); the rest are derived from rows by classify() above.
+# The whole ladder in order, as (key, label, which half said so). The first three rungs are
+# Club.outreach_stage; the rest come from classify().
 #
-# Two orderings are deliberate and are the judgement in this list:
-#
-# * `aware` sits above `listed`, and `empty` is not on the ladder at all. Approving a club is the
-#   last thing this site does before the club does anything, and "a club row with nothing behind
-#   it" is the absence of a signal rather than a rung -- every prospect starts there, so ranking it
-#   would report a club nobody has heard of as further along than one we just contacted.
-# * `dormant` and `slipping` sit above `new` and below `active`: both ran real auctions, which is
-#   further than a club with its first, and neither is running to a schedule, which is the top.
+# `aware` sits above `listed`, and `empty` isn't a rung: every prospect starts there. `dormant` and
+# `slipping` sit above `new` (they ran real auctions) and below `active`.
 LADDER = (
     ("unaware", "Not contacted", "hand"),
     ("contacted", "Contacted, no reply yet", "hand"),
@@ -356,26 +284,18 @@ LADDER = (
 )
 LADDER_RANK = {key: rank for rank, (key, _label, _half) in enumerate(LADDER)}
 LADDER_LABELS = {key: label for key, label, _half in LADDER}
-# Club.outreach_stage -> the rung it means. Kept here rather than on the model because the ladder is
-# this module's subject and the model's job is to store the field.
+# Club.outreach_stage -> rung.
 HAND_RUNGS = {"prospect": "unaware", "contacted": "contacted", "listed": "listed"}
-# "the caller has not looked this up", as distinct from "there is no rollup" (None).
+# Sentinel for "not looked up yet", distinct from None ("no rollup").
 UNFETCHED = object()
 
 
 def ladder_position(club, health=UNFETCHED) -> dict:
-    """``{stage, label, source}`` -- the furthest-along rung this club has reached, and who says so.
+    """``{stage, label, source}``: the furthest rung this club has reached, and whether ``"hand"`` or
+    ``"derived"`` said so.
 
-    ``source`` is ``"hand"`` when the answer is the field somebody set on the club and ``"derived"``
-    when it is the rollup, which is the part worth showing: a club sitting at ``listed`` because
-    nothing has been derived is a different problem from one sitting at ``listed`` because that is
-    genuinely as far as it got.
-
-    ``health`` distinguishes three states, which is why the default is a sentinel rather than
-    ``None``: a rollup, *no* rollup (``None``, and the caller has already looked), and "not looked
-    yet", which is the only one that fetches. A caller in a loop passes what it has -- including
-    ``None`` -- and gets no query. Getting that wrong is one SELECT per club with no rollup, which
-    is every club club discovery is about to add.
+    ``health`` is a rollup, ``None`` (no rollup), or unset (fetch it). Loops should pass ``None``
+    explicitly to avoid a query per club.
     """
     hand = HAND_RUNGS.get(getattr(club, "outreach_stage", ""), "unaware")
     if health is UNFETCHED:
@@ -388,12 +308,7 @@ def ladder_position(club, health=UNFETCHED) -> dict:
 
 
 def ladder_counts():
-    """``[{stage, label, source, clubs}]`` in ladder order -- how many clubs are on each rung.
-
-    Two queries whatever the number of clubs: one for the clubs and one for the rollups, rather
-    than a join or a fetch per row. A club with no rollup is passed ``None`` explicitly, which is
-    what keeps it two -- see :func:`ladder_position`.
-    """
+    """``[{stage, label, source, clubs}]`` in ladder order, in two queries."""
     from auctions.models import Club
 
     stages = dict(ClubHealth.objects.values_list("club_id", "stage"))
@@ -405,34 +320,18 @@ def ladder_counts():
     return [{"stage": key, "label": label, "source": half, "clubs": counts[key]} for key, label, half in LADDER]
 
 
-#: How many months of ladder history the dashboard reads back.  Twelve, because the question 8f
-#: exists to answer -- is the outreach working -- is a year-over-year one, and a longer window on a
-#: chart of a few dozen clubs is a wider chart rather than a better answer.
+#: Months of ladder history shown; outreach progress is a year-over-year question.
 LADDER_HISTORY_MONTHS = 12
 
 
 class ClubLadderSnapshot(models.Model):
     """How many clubs stood on each rung, on the first of one month.
 
-    The one part of phase 8f that is code.  Everything else in the outreach loop is a person with a
-    queue: the email is drafted per club and sent by hand (settled twice), and marking a club
-    contacted already writes ``Club.date_contacted`` and a stall reason.  What was missing is the
-    only way to tell whether any of that is working, which is the ladder **as a trend** --
-    "unaware -> aware -> trial -> ran a real auction" is a story about movement and a single column
-    of counts cannot show movement at all.
-
-    It needs its own table because :class:`ClubHealth` cannot answer it.  That rollup is a
-    ``OneToOneField`` recomputed nightly from scratch, so it holds only today: the moment a club
-    moves up a rung, every trace of where it used to be is gone.  This is the cheapest possible fix
-    -- one row per rung per month, so about a hundred rows a year whatever happens to the number of
-    clubs, and nothing recomputes or purges it.
-
-    Monthly rather than nightly for the same reason ``ClubHealth`` is nightly: nothing this
-    measures moves faster.  Outreach is somebody writing letters, and a club replies in weeks.
+    ``ClubHealth`` only holds today, so this is the ladder as a trend: one row per rung per month,
+    never purged.
     """
 
-    #: Midnight on the first of the month this snapshot describes -- the key, so a task that runs
-    #: every night writes the month's row once and then updates it in place.
+    #: The first of the month; the nightly task updates the month's row in place.
     month = models.DateField(db_index=True)
     stage = models.CharField(max_length=20, db_index=True)
     clubs = models.PositiveIntegerField(default=0)
@@ -448,12 +347,8 @@ class ClubLadderSnapshot(models.Model):
 
 
 def snapshot_ladder(when=None):
-    """Record this month's ladder counts, replacing the month's row if it is already there.
-
-    Idempotent on purpose, and keyed on the month rather than on the day, so the nightly task can
-    call it unconditionally: every run after the first in a month overwrites that month's row with
-    a fresher count, and the row is final once the month is over.  A task that had to know whether
-    it was the first of the month would silently record nothing on the month it was deployed.
+    """Record this month's ladder counts, replacing the month's row if present, so it's safe to run
+    nightly.
     """
     from auctions.models import ClubLadderSnapshot as Snapshot
 
@@ -465,11 +360,9 @@ def snapshot_ladder(when=None):
 
 
 def ladder_history(months=LADDER_HISTORY_MONTHS):
-    """``{"months": [...], "rows": [{stage, label, source, counts: [...]}]}`` -- the ladder as a trend.
+    """``{"months": [...], "rows": [{stage, label, source, counts: [...]}]}``: the ladder as a trend.
 
-    Shaped for a table rather than returned raw: a rung is a row and a month is a column, and a
-    month with no snapshot is a gap in that row rather than a zero.  A zero would say every club
-    left that rung; the truth is that nobody was looking.
+    A month with no snapshot is a gap (None), not a zero.
     """
     from auctions.models import ClubLadderSnapshot as Snapshot
 
@@ -493,7 +386,5 @@ def ladder_history(months=LADDER_HISTORY_MONTHS):
 
 
 class _StageOnly:
-    """Just enough of a ClubHealth for ladder_position, so ladder_counts needs no second fetch."""
-
     def __init__(self, stage):
         self.stage = stage

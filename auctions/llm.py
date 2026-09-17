@@ -1,28 +1,16 @@
 """Provider abstraction for everything on this site that talks to a language model.
 
-One small seam so the model behind it can be swapped without touching any calling code:
+* ``LLMProvider``: the interface
+* ``OpenAIProvider``: chat-completions over ``httpx``
+* ``get_provider()``: factory reading ``settings.LLM_PROVIDER`` / ``LLM_MODEL``
 
-  * ``LLMProvider``    -- the interface
-  * ``OpenAIProvider`` -- chat-completions over ``httpx`` (already a dependency)
-  * ``get_provider()`` -- factory reading ``settings.LLM_PROVIDER`` / ``LLM_MODEL``
+``complete_json(system, messages)`` returns one JSON object, for data answers (species names,
+donation emails, talk lists). ``complete(system, messages, tools)`` lets the model call a tool
+from JSON Schemas built by :mod:`auctions.mcp.tools`, which the provider enforces; the palette uses
+it. Both return an :class:`LLMResult` with token usage.
 
-**Two ways to ask, and the difference matters.**
-
-``complete_json(system, messages)`` asks for a single JSON object back, in the provider's JSON
-mode. Used where the answer is *data* and there is nothing to call: matching a species name,
-reading a donation email, splitting a speaker's talk list.
-
-``complete(system, messages, tools)`` asks the model to *call something*. The tools are real JSON
-Schema, generated from the action registry by :mod:`auctions.mcp.tools`, and the provider enforces
-them: the name is one of the ones supplied and the arguments fit the schema. This is what the
-command palette uses, and it is why ``palette_assist`` no longer carries several hundred lines
-whose whole job was repairing replies that JSON mode had no way to prevent.
-
-Both return an :class:`LLMResult` carrying token usage for :class:`auctions.models.LLMUsage`.
-Nothing in this module knows about auctions.
-
-Adding a provider: subclass ``LLMProvider``, implement ``complete_json``, ``complete`` and
-``is_configured``, and add it to ``_PROVIDERS``. Set ``LLM_PROVIDER`` in ``.env`` to pick it.
+To add a provider, subclass ``LLMProvider``, implement ``complete_json``, ``complete`` and
+``is_configured``, add it to ``_PROVIDERS``, and set ``LLM_PROVIDER``.
 """
 
 from __future__ import annotations
@@ -37,42 +25,25 @@ from django.conf import settings
 
 logger = logging.getLogger(__name__)
 
-# Per-request wall clock for a single provider call. The assist loop can make several of
-# these, and it has its own overall budget, so keep this tight enough that one slow call
-# doesn't eat the whole budget.
+# Per call; the assist loop has its own overall budget.
 DEFAULT_TIMEOUT_SECONDS = 10.0
 
-# Hard cap on completion size. Actions are small JSON objects, but on a reasoning model this
-# budget covers the hidden reasoning tokens too, and running out of it produces an *empty*
-# reply rather than a short one. Only tokens actually generated are billed, so headroom here
-# is free and running short is not.
+# Includes a reasoning model's hidden tokens; running out gives an empty reply. Unused headroom is free.
 DEFAULT_MAX_TOKENS = 2000
 
-# How hard a reasoning model should think before answering. This is a one-line command with a
-# person waiting on it, and the whole job is picking one entry out of a list that is already in
-# the prompt -- measured on gpt-5-nano, "minimal" answers correctly in ~1s where the default
-# spends 6-8s and several hundred tokens reasoning its way to the same JSON. Set
-# LLM_REASONING_EFFORT to "low"/"medium"/"high" to trade that latency back for accuracy, or to
-# "" to leave the parameter off entirely.
+# "minimal" answers in ~1s on gpt-5-nano where the default takes 6-8s. LLM_REASONING_EFFORT sets
+# low/medium/high, or "" to omit it.
 DEFAULT_REASONING_EFFORT = "minimal"
 
-# Payload keys that not every model generation or OpenAI-compatible server understands. We send
-# the modern shape and step back a key at a time when the endpoint says it doesn't know one, so
-# LLM_MODEL and LLM_BASE_URL stay free to point at something older.
+# Keys older models or compatible servers may not know; dropped one at a time on rejection.
 OPTIONAL_PARAMETERS = ("max_completion_tokens", "reasoning_effort")
 
 
 class LLMError(Exception):
-    """Any failure talking to the provider: transport, HTTP status, or unparseable output.
-
-    Callers are expected to catch this and degrade gracefully -- the palette falls back to
-    ordinary search rather than showing the user a traceback.
-    """
+    """Any failure talking to the provider. Callers degrade gracefully."""
 
 
 class UnsupportedParameter(Exception):
-    """The endpoint rejected one of :data:`OPTIONAL_PARAMETERS`. Internal to this module."""
-
     def __init__(self, name: str) -> None:
         super().__init__(name)
         self.name = name
@@ -80,12 +51,7 @@ class UnsupportedParameter(Exception):
 
 @dataclass(frozen=True)
 class ToolCall:
-    """One tool the model asked to call.
-
-    ``arguments`` is already parsed. The provider validated the name and the shape against the
-    schema it was given, which is the whole reason this type exists instead of a dict fished out
-    of a free-text reply -- but it is still checked again by the caller before anything runs.
-    """
+    """One tool call from the model, with parsed ``arguments``. Callers still validate before running it."""
 
     id: str
     name: str
@@ -94,22 +60,15 @@ class ToolCall:
 
 @dataclass
 class LLMResult:
-    """A single completion: what the model said, and what it cost.
-
-    Exactly one of ``data`` (from :meth:`LLMProvider.complete_json`) or ``text``/``tool_calls``
-    (from :meth:`LLMProvider.complete`) is filled in, depending on which way it was asked.
-    """
+    """A completion and its cost: ``data`` from ``complete_json``, or ``text``/``tool_calls`` from ``complete``."""
 
     data: dict[str, Any] = field(default_factory=dict)
-    #: A plain-language reply. For a tool-calling call this is the model choosing to answer
-    #: rather than to call something, and it is empty whenever ``tool_calls`` is not.
+    #: A plain reply; empty whenever ``tool_calls`` isn't.
     text: str = ""
     tool_calls: list[ToolCall] = field(default_factory=list)
     model: str = ""
     prompt_tokens: int = 0
-    #: The part of ``prompt_tokens`` the provider served from its own cache, billed at a fraction
-    #: of the normal input rate. Worth recording because the palette's system prompt is a large,
-    #: byte-identical prefix on every call, so this is most of it.
+    #: Prompt tokens served from the provider's cache, billed at a fraction.
     cached_prompt_tokens: int = 0
     completion_tokens: int = 0
 
@@ -138,11 +97,7 @@ class LLMProvider:
         self.reasoning_effort = reasoning_effort
 
     def is_configured(self) -> bool:
-        """True when this provider has everything it needs to make a call.
-
-        The palette treats a provider that isn't configured as "assist is turned off" and
-        behaves exactly as it did before this feature existed.
-        """
+        """True when this provider can make calls; otherwise assist is off."""
         return bool(self.api_key)
 
     def complete_json(
@@ -151,10 +106,7 @@ class LLMProvider:
         messages: list[dict[str, str]],
         max_tokens: int = DEFAULT_MAX_TOKENS,
     ) -> LLMResult:
-        """Send ``system`` + ``messages`` and return the parsed JSON object the model replied with.
-
-        Raises :class:`LLMError` on any transport, status, or JSON-parsing failure.
-        """
+        """Send ``system`` + ``messages`` and return the parsed JSON reply. Raises :class:`LLMError`."""
         msg = "complete_json must be implemented by a subclass"
         raise NotImplementedError(msg)
 
@@ -165,33 +117,17 @@ class LLMProvider:
         tools: list[dict[str, Any]] | None = None,
         max_tokens: int = DEFAULT_MAX_TOKENS,
     ) -> LLMResult:
-        """Send ``system`` + ``messages`` and let the model call one of ``tools``, or answer.
+        """Send ``system`` + ``messages`` and let the model call one of ``tools`` or answer.
 
-        ``tools`` is a list of MCP-shaped tool descriptors (``name`` / ``description`` /
-        ``inputSchema``); the provider is responsible for translating them into whatever its own
-        API calls that, and for enforcing them.
-
-        ``messages`` is richer than ``complete_json``'s: an assistant turn may carry
-        ``tool_calls``, and a ``{"role": "tool", "tool_call_id": ..., "content": ...}`` turn
-        carries the result of one. Building those is :func:`tool_call_message` and
-        :func:`tool_result_message`, so a caller never has to know the provider's spelling.
-
-        Raises :class:`LLMError` on any transport, status, or parsing failure.
+        ``tools`` are MCP-shaped descriptors. Assistant ``tool_calls`` and ``tool`` result turns are built
+        with :func:`tool_call_message` and :func:`tool_result_message`. Raises :class:`LLMError`.
         """
         msg = "complete must be implemented by a subclass"
         raise NotImplementedError(msg)
 
 
 class OpenAIProvider(LLMProvider):
-    """OpenAI (or any OpenAI-compatible endpoint) via the chat-completions REST API.
-
-    Built directly on ``httpx`` rather than the ``openai`` SDK so no new dependency is needed.
-    ``response_format={"type": "json_object"}`` makes the model return a single JSON object,
-    which is still validated by the caller -- never trusted.
-
-    Point ``LLM_BASE_URL`` at any compatible server (a local model, a proxy, OpenRouter, ...)
-    to use this same class with something other than OpenAI.
-    """
+    """OpenAI or any compatible endpoint (``LLM_BASE_URL``) via chat-completions, on ``httpx``."""
 
     name = "openai"
     default_base_url = "https://api.openai.com/v1"
@@ -205,8 +141,7 @@ class OpenAIProvider(LLMProvider):
         payload: dict[str, Any] = {
             "model": self.model,
             "messages": [{"role": "system", "content": system}, *messages],
-            # Newer models (gpt-5*) renamed this parameter; send the new name and fall back
-            # to the old one if the endpoint rejects it, so both generations work unchanged.
+            # gpt-5* renamed max_tokens; _send falls back if rejected.
             "max_completion_tokens": max_tokens,
         }
         if self.reasoning_effort:
@@ -214,11 +149,10 @@ class OpenAIProvider(LLMProvider):
         return payload
 
     def _send(self, payload: dict[str, Any], max_tokens: int) -> dict[str, Any]:
-        """POST the payload, stepping back one optional parameter at a time if the endpoint balks."""
+        """POST the payload, dropping one optional parameter at a time if rejected."""
         if not self.is_configured():
             msg = "No API key configured for the OpenAI provider"
             raise LLMError(msg)
-        # One attempt per optional parameter we might have to give up on, plus the real one.
         for _attempt in range(len(OPTIONAL_PARAMETERS) + 1):
             try:
                 return self._post(payload)
@@ -250,17 +184,12 @@ class OpenAIProvider(LLMProvider):
         payload = self._payload(system, messages, max_tokens)
         if tools:
             payload["tools"] = [as_openai_tool(tool) for tool in tools]
-            # "auto", not "required": answering a question in words is a legitimate outcome, and
-            # forcing a call turns "when does this start?" into a lookup nobody asked for.
+            # "auto": answering in words is legitimate.
             payload["tool_choice"] = "auto"
         return self._parse_tools(self._send(payload, max_tokens))
 
     def _post(self, payload: dict[str, Any]) -> dict[str, Any]:
-        """POST the payload and return the parsed response body.
-
-        Raises :class:`UnsupportedParameter` when the endpoint rejected one of the optional keys,
-        so the caller can drop it and try the older shape.
-        """
+        """POST and return the response body; raises :class:`UnsupportedParameter` for a rejected optional key."""
         headers = {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
         try:
             with httpx.Client(timeout=self.timeout) as client:
@@ -283,7 +212,7 @@ class OpenAIProvider(LLMProvider):
             raise LLMError(msg) from error
 
     def _parse(self, body: dict[str, Any]) -> LLMResult:
-        """Pull the JSON object and token usage out of a chat-completions response body."""
+        """The JSON object and token usage from a chat-completions response."""
         try:
             choice = body["choices"][0]
             content = choice["message"]["content"]
@@ -291,11 +220,8 @@ class OpenAIProvider(LLMProvider):
             msg = "Language model response was missing its content"
             raise LLMError(msg) from error
         if not (content or "").strip():
-            # A reasoning model that spends its entire completion budget thinking replies with an
-            # empty string and finish_reason "length" -- a 200, with nothing in it. Parsing that as
-            # `{}` made it look like the model had answered off-contract, so the assist loop
-            # "corrected" it and asked again, burning another several seconds per round on the
-            # identical empty answer. Fail here instead, with the reason.
+            # A reasoning model that exhausts its budget returns an empty 200 with finish_reason
+            # "length"; fail with the reason rather than parsing it as {}.
             if choice.get("finish_reason") == "length":
                 msg = "Language model used its whole completion budget before answering"
                 raise LLMError(msg)
@@ -312,7 +238,7 @@ class OpenAIProvider(LLMProvider):
         return self._with_usage(body, data=data)
 
     def _parse_tools(self, body: dict[str, Any]) -> LLMResult:
-        """Pull the tool calls (or the plain reply) out of a chat-completions response body."""
+        """The tool calls or plain reply from a chat-completions response."""
         try:
             choice = body["choices"][0]
             message = choice["message"]
@@ -328,10 +254,7 @@ class OpenAIProvider(LLMProvider):
             try:
                 arguments = json.loads(function.get("arguments") or "{}")
             except ValueError:
-                # A model that emits unparseable arguments has failed at the one thing the schema
-                # was supposed to guarantee. Keep the call with nothing in it rather than dropping
-                # it: the resolver will ask for what's missing, which is a better answer for the
-                # person waiting than silence about a call that was made.
+                # Keep the call with empty arguments; the resolver will ask for what's missing.
                 logger.warning("Unparseable tool arguments from %s for %s", self.model, name)
                 arguments = {}
             if not isinstance(arguments, dict):
@@ -339,8 +262,7 @@ class OpenAIProvider(LLMProvider):
             calls.append(ToolCall(id=str(raw.get("id") or name), name=str(name), arguments=arguments))
         text = (message.get("content") or "").strip()
         if not calls and not text:
-            # Same trap as in ``_parse``: a reasoning model that spends its whole completion budget
-            # thinking replies with a 200 and nothing in it.
+            # Same empty-reply trap as ``_parse``.
             if choice.get("finish_reason") == "length":
                 msg = "Language model used its whole completion budget before answering"
                 raise LLMError(msg)
@@ -362,13 +284,7 @@ class OpenAIProvider(LLMProvider):
 
 
 def as_openai_tool(tool: dict[str, Any]) -> dict[str, Any]:
-    """One MCP tool descriptor as an OpenAI function definition.
-
-    The two shapes are the same information under different names, and this is the only place on
-    the site that knows that. Keeping the translation here rather than in the caller is what lets
-    ``auctions/mcp/tools.py`` stay the single catalogue: the palette and the ``/mcp/`` endpoint
-    hand out byte-identical descriptors, and the provider adapts them.
-    """
+    """One MCP tool descriptor as an OpenAI function definition, so ``auctions/mcp/tools.py`` stays the single catalogue."""
     return {
         "type": "function",
         "function": {
@@ -380,11 +296,7 @@ def as_openai_tool(tool: dict[str, Any]) -> dict[str, Any]:
 
 
 def tool_call_message(calls: list[ToolCall]) -> dict[str, Any]:
-    """The assistant turn recording that the model asked for these calls.
-
-    It has to go back into the conversation before the results do -- a ``tool`` turn with no
-    matching ``tool_calls`` above it is rejected by the API, not ignored.
-    """
+    """The assistant turn recording tool calls; it must precede their results."""
     return {
         "role": "assistant",
         "content": None,
@@ -408,24 +320,18 @@ _PROVIDERS: dict[str, type[LLMProvider]] = {
     OpenAIProvider.name: OpenAIProvider,
 }
 
-# Set by tests (see ``auctions/test_palette_assist.py``) to run the whole assist stack against a
-# fake provider with no network access. Production code never touches this.
+# Set by tests to use a fake provider.
 _provider_override: LLMProvider | None = None
 
 
 def set_provider_override(provider: LLMProvider | None) -> None:
-    """Install (or clear, with ``None``) a provider used by ``get_provider()``. For tests."""
+    """Install or clear (``None``) a provider override for tests."""
     global _provider_override
     _provider_override = provider
 
 
 def get_provider() -> LLMProvider:
-    """Build the configured provider from settings.
-
-    Swapping models is a one-line ``.env`` change (``LLM_MODEL``); swapping vendors is
-    ``LLM_PROVIDER`` plus a class in ``_PROVIDERS``. The returned provider may not be
-    configured -- callers should check ``is_configured()`` (or use ``assist_enabled()``).
-    """
+    """Build the configured provider from settings. It may be unconfigured; check ``is_configured()``."""
     if _provider_override is not None:
         return _provider_override
     name = (getattr(settings, "LLM_PROVIDER", "") or OpenAIProvider.name).lower()
@@ -435,17 +341,13 @@ def get_provider() -> LLMProvider:
         model=getattr(settings, "LLM_MODEL", "") or "gpt-5-nano",
         api_key=getattr(settings, "OPENAI_API_KEY", "") or "",
         base_url=getattr(settings, "LLM_BASE_URL", "") or "",
-        # An unset setting takes the default; an explicitly empty one means "don't send it".
+        # Unset means the default; empty means don't send it.
         reasoning_effort=DEFAULT_REASONING_EFFORT if effort is None else effort,
     )
 
 
 def assist_enabled() -> bool:
-    """True when natural-language assist should be offered at all.
-
-    Without this, the palette must behave exactly as it did before the feature existed:
-    no mic buttons, no assist calls, Enter falls through to ordinary search.
-    """
+    """True when natural-language assist is offered at all."""
     try:
         return get_provider().is_configured()
     except Exception:

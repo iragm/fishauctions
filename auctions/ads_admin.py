@@ -1,18 +1,18 @@
 """The advertising admin: campaign groups, the campaigns in one, and what they cost to show.
 
-Split out of ``auctions/admin.py`` for the same reason ``moderation_admin`` lives on its own: the
-ads are a self-contained feature and nothing else in the admin touches them. Imported by
-``admin.py`` for the side effect of registering these two pages.
+Split out of ``auctions/admin.py`` for the same reason ``moderation_admin`` is: the ads are a
+self-contained feature nothing else in the admin touches. Imported by ``admin.py`` for the side
+effect of registering these two pages.
 
-Both changelists print counts over ``AdCampaignResponse`` -- a table with a row per ad ever shown --
-for every row they list, so both annotate them: ``AdCampaign.annotate_response_counts`` and
+Both changelists print counts over ``AdCampaignResponse`` -- a row per ad ever shown -- for every
+row they list, so both annotate them: ``AdCampaign.annotate_response_counts`` and
 ``AdCampaignGroup.annotate_totals``, declared next to the properties that read them.
 
 The campaigns **inline** annotates them too, and not for the reason it looks like: its ``fields``
-names five editable columns and ``get_fields`` returns exactly that when it is set, so the
-``readonly_fields`` below are never rendered in the inline. The counts get read anyway, because
-each row's heading is ``AdCampaign.__str__`` and that prints the click rate -- so two counts a row,
-through a string.
+names five editable columns and ``get_fields`` returns exactly that when set, so the
+``readonly_fields`` below never render in the inline. The counts are read anyway, because each row's
+heading is ``AdCampaign.__str__`` and that prints the click rate -- two counts a row, through a
+string.
 """
 
 from django.contrib import admin

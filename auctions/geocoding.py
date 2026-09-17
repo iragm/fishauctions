@@ -1,15 +1,15 @@
 """Turning a typed address into a point on the map.
 
-Two callers wanted the same three lines of Google Geocoding API and had their own copy:
-``tasks.geocode_club_member`` and ``tasks.geocode_speaker``. A third wanted it and could not have
-it -- the assistant, which is handed addresses out loud and has no map to click on.
+Two callers wanted the same three lines of Google Geocoding API and each had their own copy
+(``tasks.geocode_club_member`` and ``tasks.geocode_speaker``). A third wanted it and could not have
+it: the assistant, which is handed addresses out loud and has no map to click on.
 
 That third caller is why this returns the *formatted address* as well as the coordinates. The web
-form geocodes in JavaScript and shows the result as a marker the person can see and drag; an
-assistant has no marker, so the only honest equivalent is to say which place was found and let
-somebody agree with it before anything is saved. A pickup location saved at the wrong point, or at
-no point at all, is the worst outcome here: it is what every "how far away is this auction" answer
-is measured from, and nothing on the page it lands on will ever look wrong.
+form geocodes in JavaScript and shows a marker somebody can see and drag; an assistant has no
+marker, so the only honest equivalent is to say which place was found and let somebody agree before
+anything is saved. A pickup location saved at the wrong point, or none, is the worst outcome here:
+every "how far away is this auction" answer is measured from it, and nothing on the page it lands on
+will ever look wrong.
 """
 
 from __future__ import annotations

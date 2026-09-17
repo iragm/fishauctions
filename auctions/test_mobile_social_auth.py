@@ -1,18 +1,11 @@
-"""Tests for native social sign-in (Sign in with Apple / Google / Facebook) — SOCIAL-0..8.
+"""Tests for native social sign-in (Apple, Google, Facebook).
 
-Sign-in is the feature where a bug is worst and least visible, so most of what's here is about the
-ways it must *refuse*:
+Mostly about the ways it must refuse: no takeover by claiming somebody else's address (Apple's
+unauthenticated hint, Facebook's unverified profile email), no account without a verified email, no
+replayed provider token (the nonce), and no Facebook token minted for another app.
 
-* an account cannot be taken over by claiming someone else's address (Apple's unauthenticated
-  first-authorization hint, and Facebook's never-verified profile email),
-* an account cannot be created or signed into with no email, or with an unverified one,
-* a captured provider token cannot be replayed (the nonce), and
-* a Facebook token minted for somebody else's app cannot sign anyone in.
-
-The provider network calls are mocked at the verification boundary (Apple's JWKS, Google's token
-endpoint, Facebook's Graph API); everything downstream of that — the nonce check, the hint rules and
-the whole allauth pipeline — runs for real, because that pipeline is what the security properties
-actually rest on.
+Only the provider calls are mocked; the nonce check, the hint rules and the allauth pipeline run
+for real.
 """
 
 import datetime
@@ -76,8 +69,7 @@ class SocialAuthTestCase(TestCase):
     """Shared plumbing: the endpoint URLs and one mocked call per provider."""
 
     def setUp(self):
-        # The mobile_auth throttle and our pending-token records both live in the shared Redis
-        # cache, so start every test from a clean one (same pattern as the web-session tests).
+        # The throttle and pending-token records live in the shared cache.
         cache.clear()
         self.url = reverse("mobile-auth-social")
         self.complete_url = reverse("mobile-auth-social-complete")
@@ -85,7 +77,7 @@ class SocialAuthTestCase(TestCase):
         self.done_url = reverse("mobile-auth-social-done")
 
     # -- provider stubs ----------------------------------------------------
-    # Each patches the single call that talks to the provider, and nothing else.
+    # Each patches only the call that talks to the provider.
 
     def apple_claims(self, sub="apple-sub-1", email=None, email_verified=True, nonce=HASHED_NONCE):
         claims = {"sub": sub, "aud": APPLE_BUNDLE_ID, "iss": "https://appleid.apple.com"}
@@ -115,11 +107,10 @@ class SocialAuthTestCase(TestCase):
             return self.client.post(self.url, payload, content_type="application/json")
 
     def post_facebook_classic(self, graph_me, token_app_id=FACEBOOK_APP_ID, **body):
-        """The Android path: classic access token, verified against Facebook's Graph API.
+        """The Android path: a classic access token verified through Facebook's Graph API.
 
-        Only Facebook's HTTP responses are faked, so allauth's real ``inspect_token`` runs — which
-        is the point, because the app-id check that lives inside it is the whole security property
-        being tested. ``token_app_id`` is the app Facebook says the token was minted for.
+        Only the HTTP responses are faked, so allauth's real ``inspect_token`` runs -- the app-id check
+        inside it is the property being tested. ``token_app_id`` is the app Facebook says minted the token.
         """
         payload = {"provider": "facebook", "access_token": "stub", **body}
         responses = {
@@ -159,14 +150,14 @@ class AppleSignInTests(SocialAuthTestCase):
         first = self.post_apple(self.apple_claims(email="repeat@example.com"))
         self.assertEqual(first.status_code, 200, first.content)
         user = User.objects.get(email="repeat@example.com")
-        # Every later sign-in carries only the sub — Apple sends the email exactly once.
+        # Later sign-ins carry only the sub.
         again = self.post_apple(self.apple_claims())
         self.assertEqual(again.status_code, 200, again.content)
         self.assertEqual(User.objects.filter(pk=user.pk).count(), 1)
         self.assertEqual(SocialAccount.objects.filter(provider="apple").count(), 1)
 
     def test_first_authorization_name_is_stored(self):
-        # Apple sends the name once, outside the token. If it isn't kept now it is unrecoverable.
+        # Apple sends the name once, outside the token.
         resp = self.post_apple(
             self.apple_claims(email="named@example.com"),
             first_name="Ada",
@@ -178,11 +169,8 @@ class AppleSignInTests(SocialAuthTestCase):
         self.assertEqual(user.last_name, "Lovelace")
 
     def test_hint_email_cannot_take_over_an_existing_account(self):
-        """The headline attack: a token with no email, plus somebody else's address in the body.
-
-        Apple's ``email`` request field is unauthenticated — it comes from the app, not the token —
-        so it must never be treated as proof of anything. Nothing may be signed in here, and the
-        victim's account must be untouched.
+        """A token with no email plus somebody else's address in the body must sign nobody in and leave the
+        victim's account untouched: Apple's ``email`` request field is unauthenticated.
         """
         victim = User.objects.create_user("victim", "victim@example.com", "pw")
         EmailAddress.objects.create(user=victim, email="victim@example.com", verified=True, primary=True)
@@ -202,7 +190,7 @@ class AppleSignInTests(SocialAuthTestCase):
         """An unclaimed hint address may seed an account, but only an unconfirmed one."""
         resp = self.post_apple(self.apple_claims(sub="hint-sub"), email="hinted@example.com")
         self.assertEqual(resp.status_code, 200, resp.content)
-        # Not signed in: mandatory verification blocks it until the address is confirmed.
+        # Not signed in: mandatory verification blocks it.
         self.assertNotIn("access", resp.json())
         address = EmailAddress.objects.filter(email="hinted@example.com").first()
         if address is not None:
@@ -229,7 +217,7 @@ class AppleSignInTests(SocialAuthTestCase):
         self.assertFalse(User.objects.filter(email="nonce@example.com").exists())
 
     def test_token_without_a_nonce_claim_is_rejected(self):
-        # Otherwise stripping the claim would be a way to opt out of replay protection entirely.
+        # Otherwise stripping the claim would opt out of replay protection.
         resp = self.post_apple(self.apple_claims(email="nononce@example.com", nonce=None))
         self.assertEqual(resp.status_code, 401)
         self.assertFalse(User.objects.filter(email="nononce@example.com").exists())
@@ -264,11 +252,8 @@ class AppleSignInTests(SocialAuthTestCase):
         self.assertTrue(EmailAddress.objects.get(email=relay).verified)
 
     def test_apple_email_verified_matches_an_existing_verified_local_account(self):
-        """The legitimate mirror of the takeover test: Apple *did* attest the address.
-
-        A user who signed up with a password and later signs in with Apple lands on the same
-        account — that's SOCIALACCOUNT_EMAIL_AUTHENTICATION, and it only ever applies to addresses
-        the provider marked verified.
+        """An address Apple did attest matches an existing verified account
+        (SOCIALACCOUNT_EMAIL_AUTHENTICATION).
         """
         existing = User.objects.create_user("existing", "existing@example.com", "pw")
         EmailAddress.objects.create(user=existing, email="existing@example.com", verified=True, primary=True)
@@ -281,7 +266,7 @@ class AppleSignInTests(SocialAuthTestCase):
 
 
 class GoogleSignInTests(SocialAuthTestCase):
-    """The provider that already worked. These are regression guards, not new behaviour."""
+    """Google, which already worked: regression guards."""
 
     def google_claims(self, sub="google-sub-1", email="g@example.com", email_verified=True):
         return {
@@ -300,7 +285,7 @@ class GoogleSignInTests(SocialAuthTestCase):
         self.assertTrue(EmailAddress.objects.get(user=user, email="g@example.com").verified)
 
     def test_existing_google_socialaccount_signs_in_to_the_same_account(self):
-        """Accounts created by the old /auth/google/ endpoint must keep working on the new one."""
+        """Accounts created by the old /auth/google/ endpoint keep working."""
         user = User.objects.create_user("oldgoogle", "old@example.com", "pw")
         EmailAddress.objects.create(user=user, email="old@example.com", verified=True, primary=True)
         SocialAccount.objects.create(user=user, provider="google", uid="google-sub-legacy")
@@ -313,13 +298,8 @@ class GoogleSignInTests(SocialAuthTestCase):
         self.assertEqual(SocialAccount.objects.filter(provider="google").count(), 1)
 
     def test_squatted_unconfirmed_account_locks_out_the_squatter(self):
-        """Someone signed up with a stranger's address and never confirmed it. Then the owner arrives.
-
-        The address is proof of ownership, so the real owner gets the account — but the squatter
-        knows its password, and auto-verifying would leave *both* of them with access. allauth wipes
-        the password and still requires confirmation. (The legacy /auth/google/ endpoint flipped the
-        address to verified and signed the owner straight in, leaving the squatter's password
-        working — which is exactly why this path is allauth's now.)
+        """An unconfirmed account squatting on the owner's address: allauth wipes the password and still
+        requires confirmation, so the squatter loses access and the owner confirms.
         """
         squatter_account = User.objects.create_user("squatter", "owner@example.com", "squatterpassword")
         EmailAddress.objects.create(user=squatter_account, email="owner@example.com", verified=False, primary=True)
@@ -342,11 +322,8 @@ class GoogleSignInTests(SocialAuthTestCase):
         self.assertFalse(User.objects.filter(email="g@example.com").exists())
 
     def test_works_without_a_socialapp_row(self):
-        """The mobile Google flow has only ever needed GOOGLE_OAUTH_CLIENT_ID, and still does.
-
-        The web login is configured with a SocialApp in the admin; a deployment that has the env var
-        but no row must not lose Google sign-in just because this path now runs allauth's pipeline
-        (auctions.social_adapter supplies the fallback app).
+        """The mobile Google flow needs only GOOGLE_OAUTH_CLIENT_ID, with no SocialApp row
+        (auctions.social_adapter supplies the fallback).
         """
         self.assertFalse(
             SocialAccount.objects.filter(provider="google").exists()
@@ -365,10 +342,8 @@ class FacebookSignInTests(SocialAuthTestCase):
         return claims
 
     def test_facebook_email_is_never_verified_so_login_is_not_completed(self):
-        """Facebook does not attest that a profile address is confirmed.
-
-        Creating a verified EmailAddress from one would let anybody claim an account by putting
-        somebody else's address on a Facebook profile. allauth's confirmation email is the gate.
+        """Facebook never attests an address, so no verified EmailAddress is created and allauth's
+        confirmation email is the gate.
         """
         resp = self.post_facebook_limited(self.limited_claims(email="fb@example.com"))
         self.assertEqual(resp.status_code, 200, resp.content)
@@ -390,7 +365,7 @@ class FacebookSignInTests(SocialAuthTestCase):
         self.assertIsNone(resolve_completed_user(resp.json()["pending_token"]))
 
     def test_no_email_at_all_goes_to_the_web_signup_form(self):
-        """Routine on Facebook. No account may exist without an address, so allauth asks for one."""
+        """With no email at all, allauth asks for one on the web signup form."""
         resp = self.post_facebook_limited(self.limited_claims(sub="fb-noemail"))
         self.assertEqual(resp.status_code, 200, resp.content)
         body = resp.json()
@@ -404,11 +379,7 @@ class FacebookSignInTests(SocialAuthTestCase):
         self.assertEqual(resp.status_code, 401)
 
     def test_classic_token_for_another_facebook_app_is_rejected(self):
-        """``debug_token`` must confirm the token was minted for *our* app id.
-
-        Without that check any Facebook app's token would be accepted, which is a complete
-        authentication bypass rather than a missing nicety.
-        """
+        """``debug_token`` must confirm the token was minted for our app id, or any app's token would work."""
         resp = self.post_facebook_classic(
             {"id": "fb-other", "email": "other@example.com"},
             token_app_id="9999999999",
@@ -419,7 +390,7 @@ class FacebookSignInTests(SocialAuthTestCase):
     def test_classic_token_for_our_app_is_accepted(self):
         resp = self.post_facebook_classic({"id": "fb-ours", "email": "ours@example.com"})
         self.assertEqual(resp.status_code, 200, resp.content)
-        # Still not signed in — the address is unconfirmed, like every Facebook address.
+        # Still not signed in: the address is unconfirmed.
         self.assertNotIn("access", resp.json())
 
     def test_missing_credential_is_rejected(self):
@@ -428,7 +399,7 @@ class FacebookSignInTests(SocialAuthTestCase):
 
 
 class DeactivatedAccountTests(SocialAuthTestCase):
-    """A disabled account is refused here exactly as it is by the web and password logins."""
+    """A disabled account is refused here as on the web."""
 
     def test_inactive_user_cannot_sign_in_with_a_linked_provider(self):
         user = User.objects.create_user("banned", "banned@example.com", "pw", is_active=False)
@@ -453,14 +424,14 @@ class SocialContinuationTests(SocialAuthTestCase):
         body = self._pending_facebook_login()
         self.assertIn("/api/mobile/auth/social/continue/", body["continue_url"])
 
-        # 1. The WebView loads continue_url; its token is the only credential it has.
+        # 1. The WebView loads continue_url; its token is the only credential.
         token = body["continue_url"].split("t=")[1]
         resp = self.client.get(self.continue_url, {"t": token})
         self.assertEqual(resp.status_code, 302)
-        # /social/signup/, not allauth's /3rdparty/signup/ — the app's WebView allowlist.
+        # /social/signup/, not allauth's /3rdparty/signup/, for the WebView allowlist.
         self.assertEqual(resp["Location"], reverse("mobile_socialaccount_signup"))
 
-        # 2. allauth's own signup form, with the email Facebook couldn't give us.
+        # 2. allauth's signup form, with the email Facebook couldn't give us.
         resp = self.client.post(
             reverse("mobile_socialaccount_signup"),
             {
@@ -501,7 +472,7 @@ class SocialContinuationTests(SocialAuthTestCase):
         self.assertEqual(self.client.get(self.continue_url, {"t": token})["Location"], reverse("account_login"))
 
     def test_continue_signs_out_whoever_was_already_signed_in(self):
-        """Otherwise the done view could bind a bystander's account to somebody else's flow."""
+        """Continue signs out whoever was signed in, so the done view can't bind a bystander's account."""
         bystander = User.objects.create_user("bystander", "bystander@example.com", "pw")
         EmailAddress.objects.create(user=bystander, email="bystander@example.com", verified=True, primary=True)
         self.client.force_login(bystander)
@@ -510,9 +481,9 @@ class SocialContinuationTests(SocialAuthTestCase):
         token = body["continue_url"].split("t=")[1]
         self.client.get(self.continue_url, {"t": token})
 
-        # The done view now sees nobody, so the bystander is never bound to this flow...
+        # The done view sees nobody...
         self.assertIn(b"isn't finished", self.client.get(self.done_url).content)
-        # ...and the app can't turn the pending token into tokens for their account.
+        # ...and the pending token can't be exchanged for their tokens.
         resp = self.client.post(
             self.complete_url, {"pending_token": body["pending_token"]}, content_type="application/json"
         )
@@ -563,7 +534,9 @@ class SocialContinuationTests(SocialAuthTestCase):
         self.assertEqual(resp.status_code, 400)
 
     def test_complete_refuses_when_the_social_account_belongs_to_someone_else(self):
-        """The record names the flow; the SocialAccount names the user. A disagreement is a refusal."""
+        """Complete refuses when the SocialAccount belongs to someone else: the record names the flow, the
+        SocialAccount names the user.
+        """
         owner = User.objects.create_user("owner", "owner@example.com", "pw")
         EmailAddress.objects.create(user=owner, email="owner@example.com", verified=True, primary=True)
         SocialAccount.objects.create(user=owner, provider="apple", uid="shared-sub")
@@ -647,7 +620,7 @@ class AppleRevocationTests(TestCase):
         self.assertEqual(post.call_count, 1)
         call = post.call_args
         self.assertEqual(call.args[0], "https://appleid.apple.com/auth/revoke")
-        # The refresh token is what actually ends the grant; the access token is only a fallback.
+        # The refresh token ends the grant; the access token is a fallback.
         self.assertEqual(call.kwargs["data"]["token"], "refresh-tok")
         self.assertEqual(call.kwargs["data"]["token_type_hint"], "refresh_token")
         self.assertFalse(SocialAccount.objects.filter(user=self.user).exists())
@@ -675,7 +648,7 @@ class AppleRevocationTests(TestCase):
         self.assertFalse(SocialAccount.objects.filter(user=self.user).exists())
 
     def test_revocation_runs_before_the_tokens_are_deleted(self):
-        """The tokens are the only way to reach Apple; once they're gone the grant is unrevokable."""
+        """Revocation runs before the tokens are deleted, since they're the only way to reach Apple."""
         from auctions.apple_signin import revoke_all_for_user
 
         seen = {}
@@ -720,7 +693,7 @@ class AppleAuthorizationCodeTests(SocialAuthTestCase):
         self.assertEqual(SocialToken.objects.get(account=account).token_secret, "rt")
 
     def test_sign_in_still_works_when_apple_rejects_the_code(self):
-        """Identity was already proved by the identity token; revocation setup is a side quest."""
+        """Sign-in still works when Apple rejects the authorization code: identity came from the token."""
         with patch("auctions.apple_signin.redeem_authorization_code", return_value=None):
             resp = self.post_apple(
                 self.apple_claims(sub="badcode-sub", email="badcode@example.com"),
@@ -751,7 +724,7 @@ class LegacyGoogleEndpointTests(TestCase):
 
 
 class SocialLoginPageTests(TestCase):
-    """SOCIAL-8 — web parity: a provider's button appears only when it's configured for the web."""
+    """Web parity: a provider's button appears only when configured for the web."""
 
     def setUp(self):
         self.url = reverse("account_login")
@@ -796,13 +769,13 @@ class SocialLoginPageTests(TestCase):
         APPLE_SIGN_IN_PRIVATE_KEY="",
     )
     def test_apple_needs_its_team_key_for_the_web_flow(self):
-        # Without the key the redirect reaches Apple and fails there, so don't offer the button.
+        # Without the key the redirect reaches Apple and fails there.
         html = self.client.get(self.url).content.decode()
         self.assertNotIn("sign-in-apple", html)
 
 
 class SocialAdapterTests(TestCase):
-    """The Google fallback app must never be able to create the ambiguity ``get_app`` rejects."""
+    """The Google fallback app must not create the ambiguity ``get_app`` rejects."""
 
     @override_settings(GOOGLE_OAUTH_CLIENT_ID="fallback.apps.googleusercontent.com")
     def test_fallback_is_used_when_no_app_is_configured(self):
@@ -833,13 +806,11 @@ class SocialAdapterTests(TestCase):
 @isolated_cache("settings-configured-provider-tokens")
 @override_settings(SOCIALACCOUNT_PROVIDERS=SOCIAL_PROVIDERS, FACEBOOK_APP_ID=FACEBOOK_APP_ID)
 class SettingsConfiguredProviderTokenTests(TestCase):
-    """A settings-configured provider must still be able to store its tokens.
+    """A settings-configured provider must still store its tokens.
 
-    ``SOCIALACCOUNT_STORE_TOKENS`` is on so Apple's refresh token is available at deletion time.
-    Apple and Facebook are configured in settings rather than as database rows, so their SocialApp
-    has no primary key — and Django refuses to save a foreign key to an unsaved object. Without the
-    adapter's fix that is a 500 on *every* Apple and Facebook signup, on the website as much as in
-    the app, which is exactly the kind of thing the mobile tests wouldn't have caught.
+    ``SOCIALACCOUNT_STORE_TOKENS`` is on for Apple's refresh token, but Apple and Facebook are
+    configured in settings, so their SocialApp has no pk and Django refuses the foreign key. Without
+    the adapter's fix, every Apple and Facebook signup 500s on the web too.
     """
 
     def setUp(self):
@@ -852,10 +823,8 @@ class SettingsConfiguredProviderTokenTests(TestCase):
         from allauth.socialaccount.models import SocialToken
         from django.contrib.auth.models import AnonymousUser
 
-        # A hand-built request rather than self.client, because the point is the *web* entry into
-        # allauth's pipeline — there's no mobile view to go through. The three middlewares allauth
-        # relies on are stubbed in: session/user, the messages store, and (below) its own request
-        # contextvar.
+        # A hand-built request, since the point is the web entry into allauth's pipeline. The
+        # session, message and request-context middleware are stubbed in.
         from django.contrib.messages.storage.fallback import FallbackStorage
         from django.test import RequestFactory
 
@@ -872,8 +841,7 @@ class SettingsConfiguredProviderTokenTests(TestCase):
         )
         sociallogin.token = SocialToken(app=provider.app, token="fb-access-token")
 
-        # Would raise ValueError("save() prohibited ... unsaved related object 'app'") without the
-        # adapter hook. The response is allauth's, and irrelevant here — not crashing is the point.
+        # Without the adapter hook this raises "save() prohibited ... unsaved related object 'app'".
         with context.request_context(request):
             complete_social_login(request, sociallogin)
 

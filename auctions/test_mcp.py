@@ -16,10 +16,8 @@ from auctions.models import UserAPIKey, UserData
 from auctions.test_support import isolated_cache
 from auctions.tests import StandardTestCase
 
-#: Description patterns a connector review rejects: text that tells the model how to behave rather
-#: than what the tool does. Deliberately narrow. Sibling disambiguation ("to find out about a lot
-#: instead of changing it, use describe_lot") is *recommended* practice, not injection, so the
-#: patterns here target instruction shapes and nothing else.
+#: Description patterns a connector review rejects: telling the model how to behave. Sibling
+#: disambiguation ("use describe_lot instead") is allowed.
 INSTRUCTION_SHAPED = [
     r"\balways\b",
     r"\byou must\b",
@@ -32,7 +30,6 @@ INSTRUCTION_SHAPED = [
     r"\bregardless of\b",
 ]
 
-#: Connector review criteria: tool names must be 64 characters or fewer.
 MAX_TOOL_NAME = 64
 
 JSON_SCHEMA_TYPES = {"string", "integer", "number", "boolean", "array", "object", "null"}
@@ -100,8 +97,7 @@ class RegistryConformance(SimpleTestCase):
         for name, descriptor in self.by_name.items():
             self.assertTrue(descriptor["title"].strip(), f"{name} has no title")
             self.assertTrue(descriptor["description"].strip(), f"{name} has no description")
-            # Only once. The spec says the top-level ``title`` wins over ``annotations.title``, so
-            # sending both is the same string twice on every tool on every session.
+            # Top-level ``title`` wins, so sending both repeats it.
             self.assertNotIn("title", descriptor["annotations"], f"{name} sends its title twice")
 
     def test_annotations_declare_the_read_write_split(self):
@@ -113,12 +109,7 @@ class RegistryConformance(SimpleTestCase):
             self.assertEqual(annotations["openWorldHint"], action.open_world, name)
 
     def test_only_the_source_reader_reaches_outside_this_site(self):
-        """``openWorldHint`` is a claim about the internet, and one tool is allowed to make it.
-
-        Everything else answers out of this site's own database. ``read_source`` fetches the
-        published source code from the repository this site is deployed from, which is genuinely
-        the open world, and a host deciding what to allow should be told so.
-        """
+        """Only ``read_source`` sets ``openWorldHint``: it fetches the published source code."""
         reaching = {name for name, built in self.by_name.items() if built["annotations"]["openWorldHint"]}
         self.assertEqual(reaching, {"read_source"})
 
@@ -128,19 +119,14 @@ class RegistryConformance(SimpleTestCase):
             if annotations["readOnlyHint"]:
                 continue
             self.assertIsInstance(annotations["destructiveHint"], bool, f"{name} does not say if it destroys")
-            # ``idempotentHint`` is only sent when it is true: false is the spec's own default for
-            # it, and a write that repeats is the exception rather than the rule here.
+            # Only sent when true, since false is the default.
             if tools.idempotent(palette_actions.ACTIONS[name]):
                 self.assertIs(annotations["idempotentHint"], True, f"{name} repeats but does not say so")
             else:
                 self.assertNotIn("idempotentHint", annotations, f"{name} says the default out loud")
 
     def test_a_read_carries_neither_hint(self):
-        """Both are defined only when readOnlyHint is false, so on a read they are two dead keys.
-
-        tools/list is paid for in full, in context, by every host on every session -- fifty-odd
-        tools times two keys that say nothing is not free.
-        """
+        """Reads carry neither destructive nor idempotent hint; tools/list costs context every session."""
         for name, descriptor in self.by_name.items():
             annotations = descriptor["annotations"]
             if not annotations["readOnlyHint"]:
@@ -160,23 +146,10 @@ class RegistryConformance(SimpleTestCase):
                 )
 
     def test_no_tool_advertises_a_lots_primary_key(self):
-        """A lot is named by the number on its label, and by nothing else.
+        """No tool advertises a lot's primary key; lots are named by ``lot_number_display``.
 
-        ``lot_number_display`` is the identifier a lot genuinely has: it is printed on the label, it
-        is in the URL, it is what somebody in the room says, and it is what every result carries
-        through ``_lot_echo``. The primary key is a second name for the same thing that an agent
-        could only ever have got from us, that means nothing to whoever reads the answer, that
-        addresses a lot in *any* auction rather than a lot in this one, and that disagrees with the
-        label whenever an auction numbers its lots by hand.
-
-        ``lot_id`` stays in the resolvers' ``aliases`` -- the palette reads one off the page context
-        and nothing that had one breaks -- but no tool asks for one and (see
-        ``mcp.tools._INTERNAL_RESULT_KEYS``) no result hands one out.
-
-        ``image_id`` is the deliberate exception and the reason this test names ``lot_id`` rather
-        than every key ending in ``_id``: a photo has no number on a label. It is a handle an agent
-        can only get from ``describe_lot`` in the same conversation, which is the closest thing a
-        picture has to a public name.
+        ``lot_id`` stays a resolver alias and is stripped from results (``mcp.tools._INTERNAL_RESULT_KEYS``).
+        ``image_id`` is the exception: a photo has no printed number.
         """
         for name, action in palette_actions.ACTIONS.items():
             self.assertNotIn("lot_id", action.params, f"{name} advertises a lot's primary key; take the lot number")
@@ -206,7 +179,6 @@ class RegistryConformance(SimpleTestCase):
                 match = tools._PARAM_PREFIX.match(prose)
                 remainder = prose[match.end() :].lstrip(" ,.").strip() if match else prose
                 if not remainder:
-                    # Nothing but the type. The name and the schema say all there is to say.
                     self.assertNotIn("description", properties[param], f"{name}.{param}")
                     continue
                 self.assertEqual(
@@ -282,7 +254,7 @@ class CallToolTests(StandardTestCase):
     def test_an_error_is_an_mcp_error_carrying_the_message(self):
         result = tools.call_tool(self._request_for(self.user), "describe_lot", {})
         self.assertTrue(result["isError"])
-        # Actionable, per the review criteria: the message says what to send instead.
+        # Actionable: says what to send instead.
         self.assertIn("lot number", self._text(result))
 
     def test_finding_nothing_is_not_an_error(self):
@@ -296,15 +268,9 @@ class CallToolTests(StandardTestCase):
         self.assertTrue(self._text(result).strip())
 
     def _keys_naming_a_primary_key(self, node, found=None):
-        """Every key at any depth whose name says the value under it is a row's primary key.
+        """Every key at any depth naming a primary key.
 
-        Structure rather than ``assertNotIn(str(self.lot.pk), json.dumps(result))``, which is what
-        the assertion below used to be and which fails whenever the fixture's lot happens to get a
-        low primary key: the answer carries ``"lot_number": 1`` and a price of ``10.00``, so a lot
-        whose pk is 1 or 2 or 5 "leaks" every time. Which pk it gets is not fixed -- MariaDB does
-        not roll an AUTO_INCREMENT back with the transaction, so it depends on how many rows every
-        class before this one in the same worker inserted, and ``--parallel`` decides that. A pk is
-        handed out by being *named*, and that is exact.
+        Structural, because a low pk collides with lot numbers and prices in a JSON substring search.
         """
         found = [] if found is None else found
         if isinstance(node, dict):
@@ -318,12 +284,7 @@ class CallToolTests(StandardTestCase):
         return found
 
     def test_no_result_hands_out_a_lots_primary_key(self):
-        """Stripped at any depth, because the leak was mostly in rows.
-
-        ``find_lot`` and ``points_queue`` put a ``lot_id`` on every line of a list, and
-        ``watch_lot`` and its neighbours put one at the top of a write's answer. A top-level-only
-        strip would have caught the second and quietly left the first.
-        """
+        """Primary keys are stripped at any depth, including in list rows."""
         for tool, arguments in (
             ("find_lot", {"query": self.lot.lot_name}),
             ("describe_lot", {"lot": self.lot.lot_name}),
@@ -392,12 +353,7 @@ class CallToolTests(StandardTestCase):
         self.assertIn("too big", text)
 
     def test_a_result_that_does_not_fit_is_still_valid_json(self):
-        """It used to be sliced at 20 000 characters, which lands mid-string.
-
-        A host that parses tool output got a parse error where the answer should have been -- and
-        the "narrow the query" note was appended after the break, so the one instruction the caller
-        needed was the part that got cut off.
-        """
+        """A truncated result is still valid JSON, with the "narrow the query" note intact."""
         long_result = {"ok": True, "summary": "fine", "rows": ["x" * 200] * 500}
         parsed = json.loads(tools._text(tools._payload(long_result)))
         self.assertEqual(parsed["summary"], "fine")
@@ -406,19 +362,13 @@ class CallToolTests(StandardTestCase):
 
 @isolated_cache("mcp-endpoint")
 class EndpointTests(StandardTestCase):
-    """The HTTP end of it: the statuses the transport spec attaches to each case.
-
-    Written against the URL rather than against ``transport``/``protocol`` internals, so these
-    keep their meaning if the hand-written wire layer is ever swapped for a library.
-    """
+    """The HTTP statuses the transport spec requires, tested through the URL."""
 
     url = "/mcp/"
 
     def setUp(self):
         super().setUp()
-        # The feature is per-user opt-in (UserData.use_llm_search, off by default while it is in
-        # beta) and the endpoint enforces that, so the fixture has to opt in. OptInTests below is
-        # where the flag itself is tested.
+        # Per-user opt-in; OptInTests covers the flag itself.
         UserData.objects.update(use_llm_search=True)
         raw, prefix, key_hash = UserAPIKey.generate()
         self.raw_key = raw
@@ -455,7 +405,7 @@ class EndpointTests(StandardTestCase):
         self.assertEqual(response.status_code, 401)
         challenge = response["WWW-Authenticate"]
         self.assertTrue(challenge.startswith("Bearer "))
-        # Without the pointer a client has to guess at the well-known paths, or give up.
+        # The pointer saves the client guessing well-known paths.
         self.assertIn("resource_metadata=", challenge)
         self.assertIn("/.well-known/oauth-protected-resource", challenge)
 
@@ -485,14 +435,11 @@ class EndpointTests(StandardTestCase):
     def test_initialize_negotiates_and_advertises_only_what_exists(self):
         result = self.result(self.rpc("initialize", {"protocolVersion": protocol.LATEST_PROTOCOL_VERSION}))
         self.assertEqual(result["protocolVersion"], protocol.LATEST_PROTOCOL_VERSION)
-        # Everything implemented and nothing else: tools, resources (the ui:// widget documents
-        # and the addressable reads), prompts, and completion for the prompts' arguments. Logging,
-        # sampling and elicitation stay out -- all three need the server to speak first, which this
-        # transport cannot do. See docs/mcp_next.md.
+        # No logging, sampling or elicitation: those need the server to speak first. See
+        # docs/mcp_next.md.
         self.assertEqual(set(result["capabilities"]), {"tools", "resources", "prompts", "completions"})
         self.assertTrue(result["serverInfo"]["name"])
         self.assertTrue(result["instructions"].strip())
-        # The site's own mark, for the connector list somebody picks this out of by sight.
         self.assertTrue(result["serverInfo"]["icons"])
         self.assertTrue(result["serverInfo"]["websiteUrl"].startswith("https://"))
 
@@ -523,10 +470,7 @@ class EndpointTests(StandardTestCase):
         self.assertFalse(response.content)
 
     def test_an_unknown_method_is_a_jsonrpc_error_not_a_crash(self):
-        # ``logging/setLevel``, because log level is a deployment decision and this server will
-        # never implement it. This test has now been round the houses twice -- it named
-        # ``resources/list`` until the widgets shipped and ``prompts/list`` until the recipes did --
-        # so it is pointed at something on the "not worth doing" half of docs/mcp_next.md.
+        # Something this server will never implement.
         response = self.rpc("logging/setLevel", {"level": "debug"})
         self.assertEqual(response.status_code, 200)
         self.assertEqual(json.loads(response.content)["error"]["code"], protocol.METHOD_NOT_FOUND)
@@ -596,15 +540,7 @@ class EndpointTests(StandardTestCase):
         self.assertEqual(json.loads(response.content)["error"]["code"], protocol.INVALID_PARAMS)
 
     def test_a_key_cannot_reach_what_its_owner_cannot(self):
-        """A key is a ceiling on its owner's permissions, never a way around them.
-
-        ``user_with_no_lots`` is an ordinary participant in ``online_auction`` — not an admin, and
-        not its creator — so an admin-only tool has to refuse. The key here allows writes, which is
-        the case that would be a privilege escalation if the credential were doing the deciding
-        instead of the resolver. It also proves the point about ``actions_for`` being a relevance
-        filter and not the boundary: this tool is not in that user's ``tools/list`` at all, and
-        naming it anyway still gets them nowhere.
-        """
+        """A key never exceeds its owner's permissions, even for a tool not in their tools/list."""
         raw, prefix, key_hash = UserAPIKey.generate()
         UserAPIKey.objects.create(
             user=self.user_with_no_lots, name="bidder key", prefix=prefix, key_hash=key_hash, allow_writes=True
@@ -636,13 +572,9 @@ class EndpointTests(StandardTestCase):
 
 @isolated_cache("mcp-oauth")
 class OAuthTests(StandardTestCase):
-    """The other way in: an OAuth 2.1 access token from this site's own authorization server.
+    """OAuth 2.1 tokens from this site's authorization server, which is how Claude's apps connect.
 
-    Claude.ai, Claude Desktop, Claude mobile and Claude Code can only connect this way — they run
-    an authorization-code flow and have nowhere to paste an API key. The flow itself is
-    django-oauth-toolkit's and is its own project's to test; what is tested here is the part this
-    codebase wrote: that a token authenticates, that its scopes are a ceiling, and that the
-    discovery documents say the specific things Claude reads before it will even start.
+    Tests the token authenticates, scopes are a ceiling, and discovery documents say what Claude needs.
     """
 
     url = "/mcp/"
@@ -748,12 +680,9 @@ class OAuthTests(StandardTestCase):
 
 
 class DiscoveryDocumentTests(StandardTestCase):
-    """What Claude reads before it will start an OAuth flow at all.
+    """What Claude reads before starting an OAuth flow; failures look like "couldn't reach the MCP server".
 
-    Every assertion here is a documented Claude requirement, and each one fails in a way that is
-    hard to diagnose from the outside — the symptom is "couldn't reach the MCP server", with the
-    authorization server seeing no traffic. See
-    https://claude.com/docs/connectors/building/authentication.
+    See https://claude.com/docs/connectors/building/authentication.
     """
 
     def metadata(self, path):
@@ -766,8 +695,7 @@ class DiscoveryDocumentTests(StandardTestCase):
         self.assertEqual(response.status_code, 401)
         challenge = response["WWW-Authenticate"]
         self.assertIn('resource_metadata="', challenge)
-        # The path-component form (RFC 9728), not the bare origin: the document it points at has
-        # to name this endpoint, and the bare origin's names the whole site.
+        # The RFC 9728 path form, which names this endpoint.
         self.assertIn("/.well-known/oauth-protected-resource/mcp", challenge)
 
     def test_the_resource_matches_the_endpoint_the_user_types_in(self):
@@ -814,14 +742,7 @@ class DiscoveryDocumentTests(StandardTestCase):
 
 @isolated_cache("mcp-opt-in")
 class OptInTests(StandardTestCase):
-    """There is no per-user opt-in on this endpoint, and there is still one on the account.
-
-    It used to require ``UserData.use_llm_search``, the flag that opens the natural-language
-    command palette, on the reasoning that the two are one beta reached two ways. They are not the
-    same feature: the palette spends *this site's* language-model budget on every keystroke, which
-    is what that flag is for, while an agent brings its own model and can do nothing its owner
-    could not do by clicking. What is still checked on every credential is ``is_active``.
-    """
+    """No per-user opt-in on this endpoint, but ``is_active`` is still checked on every credential."""
 
     url = "/mcp/"
 
@@ -865,12 +786,7 @@ class OptInTests(StandardTestCase):
         self.assertEqual(self.rpc().status_code, 200)
 
     def test_a_deactivated_account_is_still_a_403_and_not_a_reauth_loop(self):
-        """The one check that remains, and the status is the part that matters.
-
-        A 401 is an *instruction to authenticate*. A client that got one here would run the whole
-        OAuth flow again, be issued another perfectly valid credential, present it, and be refused
-        again -- a loop with no message in it anywhere. The 403 ends it and carries the sentence.
-        """
+        """A deactivated account gets a 403: a 401 would start an endless re-auth loop."""
         self.user.is_active = False
         self.user.save()
         response = self.rpc()
@@ -915,7 +831,6 @@ class ConnectPageTests(StandardTestCase):
         self.assertIn("/mcp", body)
         self.assertIn("Add a custom connector", body)
         self.assertIn("developer mode", body)
-        # The key form is behind a collapse until somebody asks for it, but it is on the page.
         self.assertIn("Create key", body)
 
     def test_creating_a_key_shows_it_exactly_once(self):
@@ -954,11 +869,7 @@ class ConnectPageTests(StandardTestCase):
 
 @isolated_cache("mcp-oauth-optin")
 class OAuthOptInTests(StandardTestCase):
-    """The same rule, on the credential Claude's own surfaces actually use.
-
-    The key path and the token path have to agree here, and the token path is the one that loops:
-    an OAuth client answered with a 401 goes and gets another token.
-    """
+    """The same rule for OAuth tokens, where a 401 would loop."""
 
     url = "/mcp/"
 
@@ -1009,12 +920,7 @@ class OAuthOptInTests(StandardTestCase):
 
 
 class ConnectedAppsTests(StandardTestCase):
-    """The list of what is signed in, on the page that explains signing in.
-
-    Signing in is how almost everybody connects, and until this list existed the page described a
-    connection it could not show and offered no way to end: "revoke your key" is no help to
-    somebody who never made a key, and the only other route was the Django admin.
-    """
+    """The list of connected apps on /ai/, with a way to disconnect."""
 
     url = "/ai/"
 
@@ -1096,11 +1002,7 @@ class ConnectedAppsTests(StandardTestCase):
 
 @isolated_cache("mcp-dcr")
 class AuthorizationServerHardeningTests(StandardTestCase):
-    """Two things django-oauth-toolkit leaves open that a public site cannot.
-
-    Both are the toolkit behaving correctly for the deployment it assumes -- a service whose only
-    users are its own developers -- and wrongly for one where anybody can sign up.
-    """
+    """Two things django-oauth-toolkit leaves open that a public signup site can't."""
 
     def test_the_application_pages_are_not_open_to_every_signed_in_member(self):
         self.client.force_login(self.user)
@@ -1136,12 +1038,10 @@ class AuthorizationServerHardeningTests(StandardTestCase):
 
 
 class ClientMetadataDocumentTests(SimpleTestCase):
-    """CIMD, which is the only way claude.ai can connect.
+    """CIMD, the only way claude.ai connects.
 
-    The bug these cover was found on staging, not here: every attempt to connect died on
-    ``invalid_request: Invalid client_id parameter value`` with nothing in the message to act on,
-    because Claude's metadata document names a grant type this server doesn't offer and the
-    toolkit refuses any document that names more than one.
+    Claude's metadata document names more than one grant type, which the toolkit refused with
+    ``Invalid client_id parameter value``.
     """
 
     #: What claude.ai actually serves, fetched from the live document.
@@ -1162,7 +1062,7 @@ class ClientMetadataDocumentTests(SimpleTestCase):
 
         narrowed = narrow_grant_types(self.CLAUDE_DOCUMENT)
         self.assertEqual(narrowed["grant_types"], ["authorization_code", "refresh_token"])
-        # This is the call that used to raise, which is what made Claude look like an unknown client.
+        # This used to raise.
         self.assertEqual(_resolve_grant_type(narrowed["grant_types"]), "authorization-code")
 
     def test_it_narrows_rather_than_widens(self):
@@ -1200,12 +1100,7 @@ class ClientMetadataDocumentTests(SimpleTestCase):
 
 
 class InactiveAccountTests(StandardTestCase):
-    """A credential outliving the account behind it.
-
-    On the web ``is_active=False`` stops somebody at the login form. Over ``/mcp/`` nothing looked
-    at the user at all, so deleting an account or banning somebody left whatever they had connected
-    still acting as them.
-    """
+    """Credentials stop working when the account is inactive."""
 
     def setUp(self):
         super().setUp()
@@ -1231,7 +1126,7 @@ class InactiveAccountTests(StandardTestCase):
         self.user.save()
         response = self._rpc()
         self.assertEqual(response.status_code, 403)
-        # A 403 and not a 401: there is no credential they could go and fetch that would work.
+        # 403, not 401: no credential would work.
         self.assertNotIn("WWW-Authenticate", response)
 
 
@@ -1253,13 +1148,7 @@ class ResultUrlTests(StandardTestCase):
         self.assertEqual(absolute["count"], 3)
 
     def test_a_key_that_ends_in_url_is_a_url_too(self):
-        """``renew_url`` on the membership card went out relative and the Renew button did nothing.
-
-        The rule matched the key name ``url`` exactly, so the *second* link a resolver returned was
-        left alone -- and a relative href handed to ``app.openLink`` from inside a sandboxed iframe
-        resolves against nothing at all. A suffix rule costs nothing and cannot be forgotten the
-        next time a result grows a second link.
-        """
+        """Keys ending in ``url`` are made absolute too, not just ``url`` itself."""
         from auctions.mcp import tools as mcp_tools
 
         payload = {"membership": {"renew_url": "/clubs/x/pay/", "barcode_url": "https://auction.test/b.svg"}}
@@ -1277,24 +1166,13 @@ class ResultUrlTests(StandardTestCase):
 
 
 class IconTests(SimpleTestCase):
-    """Every primitive that may carry an icon carries one, and none of them costs much.
-
-    See :mod:`auctions.mcp.icons` for why they are URLs on this site rather than inlined ``data:``
-    URIs, and why there are five of them derived from the registry rather than fifty-four written
-    down by hand.
-    """
+    """Every primitive that may carry an icon has one. See :mod:`auctions.mcp.icons`."""
 
     def setUp(self):
         self.descriptors = tools.tool_descriptors(None)
 
     def icon_file(self, name):
-        """``read.svg``, or ``read.<hash>.svg`` where the statics have been collected.
-
-        Asked of the storage rather than spelled out, because :mod:`auctions.mcp.icons` builds
-        these with ``static()`` and that is content-hashed in production -- see
-        ``fishauctions/static_storage.py``. A literal here passes in CI, whose ``STATIC_ROOT`` is
-        empty, and fails in the container the statics really live in.
-        """
+        """The icon's filename, hashed where statics are collected (see fishauctions/static_storage.py)."""
         return staticfiles_storage.url(f"mcp/{name}.svg").rsplit("/", 1)[-1]
 
     def test_every_tool_carries_exactly_one_icon(self):
@@ -1311,11 +1189,7 @@ class IconTests(SimpleTestCase):
             self.assertEqual(descriptor["icons"][0]["mimeType"], icons.SVG)
 
     def test_no_sizes_on_a_scalable_icon(self):
-        """``["any"]`` is twenty-five characters saying what SVG already says, once per tool.
-
-        Same arithmetic that keeps ``annotations.title`` and a defaulted ``idempotentHint`` out of
-        a descriptor: this list is paid for in full, in context, by every host every session.
-        """
+        """No ``sizes`` on SVG icons; it's paid for in context every session."""
         for descriptor in self.descriptors:
             self.assertNotIn("sizes", descriptor["icons"][0], descriptor["name"])
 
@@ -1348,11 +1222,7 @@ class IconTests(SimpleTestCase):
             self.assertTrue(descriptor.get("icons"), f"resource {descriptor['name']} has no icon")
 
     def test_a_widget_document_deliberately_has_none(self):
-        """A widget is rendered, not browsed. A thumbnail beside its name is a picture of nothing.
-
-        Deriving one would also collapse: four of the five are reads about an auction, so the five
-        would carry two distinct icons between them.
-        """
+        """Widget documents have no icon."""
         from auctions.mcp import widgets
 
         for descriptor in widgets.resource_descriptors():
@@ -1365,12 +1235,7 @@ class IconTests(SimpleTestCase):
 
 
 class ResourceLinkTests(StandardTestCase):
-    """``resource_link`` blocks: "there is more about this, at this address" (MCP 2025-06-18).
-
-    They are built from ``palette_actions.KEY_ABOUT``, which the resolver writes because it is the
-    one holding the object. Nothing is sniffed out of the answer: ``auction`` is the slug in
-    ``_lot_echo`` and the *title* in ``list_lots``, and a URI built from a title does not resolve.
-    """
+    """``resource_link`` blocks, built from ``palette_actions.KEY_ABOUT`` rather than sniffed from results."""
 
     def setUp(self):
         super().setUp()
@@ -1460,13 +1325,7 @@ class ConfirmationTierTests(SimpleTestCase):
             self.assertTrue(tools.idempotent(action), f"{action.name} is not safe to repeat")
 
     def test_everything_else_still_asks(self):
-        """The list is short on purpose, and adding to it is meant to be a decision.
-
-        ``set_my_auction`` and ``set_my_club`` earn it the way ``watch_lot`` does: the card would
-        be most of the cost of the tool. They write a pointer that says which auction or club the
-        person means when they don't say -- nothing is created, saying it twice is saying it once,
-        and the way back is the same tool with the previous name, which the answer carries.
-        """
+        """Only a short, deliberate list of tools skips confirmation."""
         skipping = {name for name, action in palette_actions.ACTIONS.items() if not action.asks_first}
         self.assertEqual(
             skipping,

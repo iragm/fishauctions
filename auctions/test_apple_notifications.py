@@ -1,18 +1,14 @@
 """Tests for Sign in with Apple server-to-server notifications.
 
-Apple sends each of these once, so a notification that isn't handled is not retried by anyone — it
-is gone. That makes two things worth testing hard:
+Apple sends each once, so an unhandled notification is gone. That makes two things worth testing:
 
-* **What we refuse.** The endpoint is public and unauthenticated, and one of the events it acts on
-  means "delete this person's account". Nothing but Apple's signature stands between a POST and
-  that, so the refusals (wrong key, wrong audience, wrong issuer, an ``alg`` the caller picked) get
-  more tests than the happy path.
-* **What we do with a retry.** Apple retries until it gets a 2xx, so a delivery that failed halfway
-  must run again, and one that succeeded must not.
+* **What we refuse.** The endpoint is public and unauthenticated, and one event means "delete this
+  person's account", so the refusals get more tests than the happy path.
+* **What we do with a retry.** Apple retries until it gets a 2xx, so a half-finished delivery must
+  run again and a finished one must not.
 
-Only Apple's JWKS endpoint is faked. The notifications are real JWTs signed with a throwaway key, so
-the signature check, the audience check and the claim parsing all run for real — a test that mocked
-``verify_notification`` would pass just as happily with no verification at all.
+Only Apple's JWKS is faked: the notifications are real JWTs signed with a throwaway key, so the
+signature, audience and claim parsing all run for real.
 """
 
 import datetime
@@ -43,10 +39,9 @@ BUNDLE_ID = "com.fishauctions.app"
 SERVICES_ID = "fish.auction.signin"
 KID = "test-key-1"
 
-# One 2048-bit keypair for the whole module — generating one costs about a tenth of a second and
-# every test needs the same thing: a key Apple's (faked) JWKS will vouch for.
+# One 2048-bit keypair for the module: every test needs a key the faked JWKS will vouch for.
 SIGNING_KEY = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-# A second key that the JWKS never publishes, for "signed by someone who isn't Apple".
+# A second key the JWKS never publishes, for "signed by someone who isn't Apple".
 IMPOSTOR_KEY = rsa.generate_private_key(public_exponent=65537, key_size=2048)
 
 
@@ -77,8 +72,7 @@ class AppleNotificationTestCase(TestCase):
     """Shared plumbing: a fake JWKS, and one helper that builds a real signed notification."""
 
     def setUp(self):
-        # The JWKS cache and the processed-jti records both live in the cache, and SIGNING_KEY is
-        # this process's own -- see auctions.test_support for why that has to be a private one.
+        # The JWKS cache and the processed-jti records are both in the cache.
         cache.clear()
         self.url = reverse("apple_server_notifications")
         self.jti_counter = 0
@@ -110,7 +104,7 @@ class AppleNotificationTestCase(TestCase):
             "aud": audience,
             "iat": int(timezone.now().timestamp()),
             "jti": jti or f"jti-{self.jti_counter}",
-            # Apple ships the event as a JSON *string*, not a nested object. Both are exercised.
+            # Apple ships the event as a JSON string, not a nested object. Both are exercised.
             "events": json.dumps(event) if events_as_string else event,
         }
         return jwt.encode(
@@ -148,7 +142,7 @@ class AppleNotificationTestCase(TestCase):
 
 
 class AppleNotificationVerificationTests(AppleNotificationTestCase):
-    """Everything the endpoint must refuse. A 200 here would be an account-takeover bug."""
+    """Everything the endpoint must refuse: a 200 here would be an account-takeover bug."""
 
     def test_valid_notification_is_accepted(self):
         self.make_apple_user()
@@ -169,7 +163,7 @@ class AppleNotificationVerificationTests(AppleNotificationTestCase):
         self.assertEqual(response.status_code, 400)
 
     def test_notification_for_another_app_is_rejected(self):
-        """The audience check. Without it, anyone's Apple app could delete accounts here."""
+        """The audience check: without it, anyone's Apple app could delete accounts here."""
         user, account = self.make_apple_user()
         response = self.post(self.signed_notification(audience="com.someone.else"))
         self.assertEqual(response.status_code, 400)
@@ -187,7 +181,7 @@ class AppleNotificationVerificationTests(AppleNotificationTestCase):
         self.assertEqual(response.status_code, 400)
 
     def test_caller_cannot_choose_a_symmetric_algorithm(self):
-        """`alg: HS256` with a known kid is the classic key-confusion attack; the header is theirs."""
+        """`alg: HS256` with a known kid is the classic key-confusion attack; the header is the caller's."""
         self.make_apple_user()
         forged = jwt.encode(
             {
@@ -260,10 +254,10 @@ class AppleNotificationVerificationTests(AppleNotificationTestCase):
 
 
 class AppleNotificationForgeryTests(AppleNotificationTestCase):
-    """Nothing reaches a handler without Apple's signature. Each of these tries to get past it.
+    """Nothing reaches a handler without Apple's signature.
 
-    ``account-delete`` is the event used throughout, because it is the one with teeth: if any of
-    these returned 200, an anonymous POST could unlink an account and start its deletion clock.
+    ``account-delete`` is used throughout because it has teeth: a 200 would let an anonymous POST unlink
+    an account and start its deletion clock.
     """
 
     def setUp(self):
@@ -307,8 +301,9 @@ class AppleNotificationForgeryTests(AppleNotificationTestCase):
         self.assert_refused(self.forged({"alg": "HS256", "kid": KID}, self.delete_claims))
 
     def test_alg_swapped_to_another_asymmetric_algorithm(self):
-        """ES256 against Apple's RSA key. Raised a bare TypeError before the JWK became the source
-        of the algorithm — refused either way, but as a 500 it was a way to mail the admins."""
+        """ES256 against Apple's RSA key. It raised a bare TypeError before the JWK became the source of the
+        algorithm -- refused either way, but as a 500 it mailed the admins.
+        """
         self.assert_refused(self.forged({"alg": "ES256", "kid": KID}, self.delete_claims))
 
     def test_valid_signature_from_the_wrong_signer(self):
@@ -350,8 +345,9 @@ class AppleNotificationForgeryTests(AppleNotificationTestCase):
 
     @override_settings(APPLE_ALLOWED_AUDIENCES=[])
     def test_an_unconfigured_deployment_still_refuses_rather_than_accepts(self):
-        """The view answers 503 before verifying. This checks the layer under it fails closed too,
-        because process_notification is importable and PyJWT could have read [] as 'any audience'."""
+        """An unconfigured deployment refuses rather than accepts: the view answers 503 first, and this checks
+        the layer under it fails closed, since PyJWT could have read [] as "any audience".
+        """
         with patch("requests.get", return_value=_FakeResponse(_jwks())):
             with self.assertRaises(AppleNotificationError):
                 process_notification(self.signed_notification(event_type="account-delete"))
@@ -368,8 +364,7 @@ class AppleNotificationForgeryTests(AppleNotificationTestCase):
     def test_the_jwks_is_only_ever_fetched_from_apple(self):
         """Nothing in a request can point key lookup at another host."""
         signed = self.signed_notification()
-        # process_notification rather than self.post: post() patches requests.get itself, so an
-        # outer patch here would be shadowed and never see the call it is meant to inspect.
+        # process_notification rather than self.post: post() patches requests.get itself.
         with patch("requests.get", return_value=_FakeResponse(_jwks())) as fetch:
             process_notification(signed)
         self.assertEqual(fetch.call_args.args[0], "https://appleid.apple.com/auth/keys")
@@ -377,7 +372,7 @@ class AppleNotificationForgeryTests(AppleNotificationTestCase):
 
 class AppleNotificationEventParsingTests(AppleNotificationTestCase):
     def test_events_claim_is_parsed_when_it_is_a_json_string(self):
-        """Apple's `events` is a string containing JSON, not an object. The easy bug to ship."""
+        """Apple's `events` is a string containing JSON, not an object: the easy bug to ship."""
         user, account = self.make_apple_user()
         handled = self.deliver(event_type="consent-revoked", events_as_string=True)
         self.assertEqual(handled, ["consent-revoked"])
@@ -449,7 +444,7 @@ class AppleConsentRevokedTests(AppleNotificationTestCase):
 
 
 class AppleAccountDeleteTests(AppleNotificationTestCase):
-    """The Apple ID is gone. The link always goes; the site account only when it's stranded."""
+    """The Apple ID is gone: the link always goes, the site account only when it's stranded."""
 
     def test_dead_link_is_removed(self):
         user, account = self.make_apple_user()
@@ -519,8 +514,8 @@ class AppleEmailForwardingTests(StandardTestCase):
         cache.clear()
         self.jti_counter = 0
         self.club = Club.objects.create(name="Test club")
-        # A user of its own: AuctionTOS.save() merges a second record for someone who already has
-        # one on the same auction, and StandardTestCase has already signed most of its users up.
+        # A user of its own: AuctionTOS.save() merges a second record for somebody who already has
+        # one on the same auction.
         self.relay_user = User.objects.create_user(username="relay_user", password="pw", email=self.RELAY)
         self.tos = AuctionTOS.objects.create(
             user=self.relay_user,
@@ -530,7 +525,7 @@ class AppleEmailForwardingTests(StandardTestCase):
         )
         self.member = ClubMember.objects.create(club=self.club, name="Relay member", email=self.RELAY)
 
-    # Reuses the signing helpers above without inheriting the plain-TestCase fixtures.
+    # Reuses the signing helpers without inheriting the plain-TestCase fixtures.
     signed_notification = AppleNotificationTestCase.signed_notification
     deliver = AppleNotificationTestCase.deliver
 
@@ -571,20 +566,20 @@ class AppleEmailForwardingTests(StandardTestCase):
 
 
 class AppleNotificationRetryTests(AppleNotificationTestCase):
-    """Apple retries until it gets a 2xx, so 'already done' and 'not done yet' must differ."""
+    """Apple retries until it gets a 2xx, so "already done" and "not done yet" must differ."""
 
     def test_a_redelivered_notification_is_not_processed_twice(self):
         user, account = self.make_apple_user()
         signed = self.signed_notification(event_type="account-delete", jti="same-jti")
         with patch("requests.get", return_value=_FakeResponse(_jwks())):
             self.assertEqual(process_notification(signed), ["account-delete"])
-            # Re-linked in between (they signed in with Apple again); the retry must not re-delete it.
+            # Re-linked in between (they signed in again), so the retry must not re-delete it.
             SocialAccount.objects.create(user=user, provider="apple", uid="apple-sub-1")
             self.assertEqual(process_notification(signed), [])
         self.assertTrue(SocialAccount.objects.filter(provider="apple", uid="apple-sub-1").exists())
 
     def test_a_notification_that_failed_is_processed_on_retry(self):
-        """allauth's own jti blacklist would refuse this one forever — the reason it isn't used."""
+        """allauth's own jti blacklist would refuse this one forever, which is why it isn't used."""
         user, account = self.make_apple_user()
         signed = self.signed_notification(event_type="consent-revoked", jti="same-jti")
         boom = RuntimeError("database went away")

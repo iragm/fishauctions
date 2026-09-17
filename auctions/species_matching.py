@@ -1,40 +1,19 @@
-"""Turn a lot name someone typed into a short list of species to pick from.
+"""Turn a typed lot name into a short list of species to pick from, or nothing.
 
-The user never types a scientific name.  They type "blue dream shrimp" or "F1 Tropheus duboisi
-maswa" or "sponge filter", and this module answers with a handful of species out of the
-:class:`~auctions.models.Species` table -- or nothing, which is the right answer for the sponge
-filter.  "A handful" is :data:`MAX_SUGGESTIONS`, except for a bare genus or epithet where the
-complete set is the answer and the cap is :data:`MAX_GENUS_MATCHES`.
+Four steps, most trustworthy first, stopping at the first that answers:
 
-Four steps, most trustworthy first, stopping at the first one that answers:
+1. **Exact**: the whole name is a scientific or common name.
+2. **Cache**: :class:`~auctions.models.SpeciesSearchCache`. Second, not first: it holds shared
+   guesses and must not outrank the species list.
+3. **Search**: token and phrase matching, ranked.
+4. **Language model**, two rounds. :func:`identify` asks cold what the lot names (reads through
+   misspellings and abbreviations); :func:`llm_match` picks from a shortlist built from our tables.
+   Round two also runs when round one says "not an organism", because that verdict is permanent and
+   site-wide. Both rounds are cached, including "a real species we don't stock", which heals when
+   the species is imported.
 
-1. **Exact** -- the whole typed name is a scientific name or a common name.  "Guppy" is done here.
-2. **Cache** -- :class:`~auctions.models.SpeciesSearchCache`, keyed on the normalised name.  Lot
-   names repeat constantly across clubs, so most lookups that get this far end here.
-3. **Search** -- token and phrase matching against scientific and common names, ranked.  Handles
-   "Tropheus duboisi maswa", where the name is a real species plus a collection location.
-4. **Language model** -- only when the first three found nothing.  Two rounds, and the cheap one
-   comes first: it is shown the lot name *alone* and asked what organism it names, because that
-   is a question about the hobby rather than about our tables, and it is where a misspelling or a
-   trade abbreviation gets read through ("red luwigia" is *Ludwigia*).  The name it gives back is
-   resolved against the species list here.  The second round is the older one: a shortlist we
-   built out of our own tables, to pick from -- built from round one's corrected spelling as well
-   as from what was typed, because a shortlist is equality and substring matching and a
-   misspelling reaches neither.  It runs whenever round one did not land on a species, *including*
-   when round one says the lot is not an organism at all: that verdict is permanent and site-wide,
-   so it takes two calls to write one.  Either way nothing is invented -- both
-   answers are looked up in the same table the lot form validates against.
-
-   Both rounds are written to the cache, including the answer "we know what this is and the list
-   does not have it".  See :class:`~auctions.models.SpeciesSearchCache.scientific_name`: that row
-   heals itself the day the species is imported, where "not a species" never could.
-
-The cache is second rather than first even though it is the cheapest lookup: it holds guesses and
-is shared by every club, so a single bad row must not be able to outrank the species list itself.
-
-Nothing here can return a species that isn't in the database, which is what makes the
-"don't let the user enter anything not on the list" rule enforceable: the form validates the
-submitted pk against the same table, so a hand-crafted POST can't smuggle in free text.
+Nothing here returns a species that isn't in the database, and the form validates the pk against
+the same table.
 """
 
 from __future__ import annotations
@@ -62,95 +41,51 @@ from .models import (
 
 logger = logging.getLogger(__name__)
 
-#: Never offer more than this many, plus "No species".  A picklist you have to read is a picklist
-#: nobody reads -- if we can't get it down to a handful the honest answer is "we don't know".
+#: Never offer more than this many, plus "No species". Past a handful the honest answer is "we
+#: don't know".
 MAX_SUGGESTIONS = 5
 
-#: Except for a bare genus or a bare epithet, where the *complete* set is the answer and a
-#: truncated one would be a lie -- "here are five of the six Tropheus" is worse than nothing.  A
-#: little larger than :data:`MAX_SUGGESTIONS` because the list is homogeneous and reads fast; past
-#: this the genus is telling the user nothing they didn't already type.
+#: Except for a bare genus or epithet, where the complete set is the answer and a truncated one
+#: misleads.
 MAX_GENUS_MATCHES = 8
 
-#: How many species a single word may name and still be treated as naming them.
-#:
-#: The risk with a one-word common name is not that it is wrong, it is that it is *ambiguous* --
-#: "guppy" means one fish and "catfish" means 143 -- so the rule is the ambiguity bound rather
-#: than a hand-kept list of words we trust.  A list would have to be maintained, would always be
-#: behind the hobby, and could not answer for the name somebody adds tomorrow; this can.  Set to
-#: :data:`MAX_SUGGESTIONS` on purpose: the question "can we get it down to a picklist?" is the
-#: same question, and one number should not be able to drift away from the other.
-#:
-#: Where it lands on real data: 91% of the single-word common names in the database resolve to
-#: four species or fewer.  "guppy" is 3, "ram" 1, "cory" 1, "molly" 2, "goldfish" 2, "barb" 4,
-#: "gourami" 4 -- and "tetra" (28), "angelfish" (27), "killifish" (19) and "catfish" (143) are
-#: refused, which is the answer a person would give too.
+#: How many species a single word may name and still be treated as naming them. Tied to
+#: :data:`MAX_SUGGESTIONS`: same question. "guppy" is 3; "tetra" (28) and "catfish" (143) are
+#: refused.
 MAX_SINGLE_WORD_MATCHES = MAX_SUGGESTIONS
 
-#: How many *other* species' names a word may appear inside and still be treated as naming a fish.
-#:
-#: The second guard, and the one that separates a name from a category.  Counting how many species
-#: a word names on its own is not enough: "barb" is the whole common name of exactly one fish in
-#: FishBase (*Pethia ticto*, the ticto barb), so by the ambiguity bound alone "odessa barb" would
-#: confidently answer with a ticto barb.  What gives it away is that "barb" is a *component* of
-#: 218 other names -- it is a kind of fish, and picking one member of a group of 218 is the same
-#: mistake as offering five of the seventy *Ancistrus*.
-#:
-#: Measured on the real table: ram 1, oscar 2, badis 3, koi 5, discus 7, platy 9, goldfish 12,
-#: convict 16, guppy 16, neon 20, gourami 21, swordtail 21, harlequin 23, molly 34 -- against
-#: zebra 60, glass 64, rainbow 99, angelfish 103, cory 122, tetra 134, loach 209, barb 218,
-#: dwarf 228, catfish 480.  Forty sits in the gap.  Losing "cory" is the right outcome and the
-#: one the hobby would agree with: which cory?
+#: How many *other* species' names a word may appear inside and still name a fish rather than a
+#: kind of fish. "barb" is one fish's whole name but part of 218 others. Measured: guppy 16, molly
+#: 34 vs zebra 60, cory 122, barb 218; forty sits in the gap.
 MAX_NAMES_USING_A_WORD = 40
 
-#: How many candidates to put in front of the model.  Big enough that the right answer is usually
-#: in there, small enough to stay cheap on a per-lot call.
+#: Candidates put in front of the model.
 LLM_SHORTLIST_SIZE = 40
 
-#: How long a word has to be before matching a specific epithet counts as evidence.  Six, because
-#: the epithets this layer exists for are long -- *caudopunctatus*, *cacatuoides*, *ramirezi* --
-#: and the short ones are traps: "geo", the hobby's abbreviation for *Geophagus*, is also the
-#: epithet of *Hoplolatilus geo*, a marine tilefish, and a lot called "geo alto sinu" was shortlisted
-#: with it and came back as it.  search_matches has the same rule in a stricter form: it will answer
-#: a bare epithet only when the whole lot name is that one word.
+#: Minimum word length for an epithet match to count. Short epithets are traps: "geo" (the hobby's
+#: *Geophagus*) is also *Hoplolatilus geo*, a marine tilefish.
 MIN_EPITHET_LETTERS = 6
 
-#: Relative weights for :func:`search_matches`.  Only the ordering matters -- a strong match (a
-#: full scientific name, or a multi-word common name) always outranks a weak one (a bare genus),
-#: and results below the best score found are dropped rather than padding the list.
+#: Weights for :func:`search_matches`; only the ordering matters. Results below the best score are
+#: dropped.
 STRONG_SCORE = 10
 WEAK_SCORE = 1
 
-#: Daily cap on model calls per user.  Bulk-adding 50 lots that all miss the cache is a real
-#: scenario; this stops a stuck client from spending the month's budget in an afternoon.
+#: Daily model calls per user. Stops a stuck client, not a 50-lot bulk add.
 MAX_LLM_CALLS_PER_USER_PER_DAY = 100
 
 _RATE_LIMIT_WINDOW_SECONDS = 60 * 60 * 24
 
-#: Words that never help identify a species.  Reuses the list the category guesser already tunes
-#: against real lot names ("pair", "trio", "young", colours...), plus a few that only matter here.
-#: "box" is here for the same reason "filter" is in the site-wide list: it is a container, it turns
-#: up in "breeder box" and "box of misc", and FishBase calls the spotted boxfish "Box" -- so
-#: without it the single-word rule answers a box of hardware with a reef fish.  It is the only
-#: hardware word that collides with an in-trade species; the rest of the vocabulary ("tank",
-#: "heater", "gravel", "media") names nothing in the list and needs no help.
+#: Words that never identify a species, on top of ``settings.IGNORE_WORDS``. "box": FishBase calls
+#: the spotted boxfish "Box".
 _EXTRA_IGNORE_WORDS = {"sp", "spp", "var", "cf", "aff", "unknown", "assorted", "mixed", "misc", "box"}
 
-#: The two sources whose common names arrived in bulk from an ichthyology database rather than
-#: from anybody who sells fish.  Both are worth having -- they are what makes 36,000 species
-#: findable at all -- but a name from one of them is not evidence that the hobby uses it, which is
-#: the distinction :func:`_single_word_matches` turns on.
+#: Sources whose common names came in bulk, so a name from them isn't evidence the hobby uses it.
 IMPORTED_NAME_SOURCES = ("fishbase", "sealifebase")
 
-#: The first round, and the cheap one: no candidate list, just the lot name.  It is a different
-#: question from the one below and the difference is the whole point -- handed forty alphabetical
-#: Corydoras first, the model is answering multiple choice off a menu that mostly looks wrong, and
-#: "none of the above" is the natural reply; asked cold, it is answering from what it knows about
-#: the hobby, which is where a typo or an abbreviation gets read through.  The examples are real
-#: lot names this module used to write off as "not a species".
-#:
-#: What comes back is a *claim*, not an answer: every name is looked up in our own table before it
-#: can reach a lot.  See :func:`_resolve_identification`.
+#: Round one: the lot name alone, no candidate list. A menu of near misses invites "none of the
+#: above"; asked cold, the model reads through typos. The answer is a claim, looked up in
+#: :func:`_resolve_identification`.
 _IDENTIFY_PROMPT = (
     "An aquarium club member typed this lot name at a fish auction. Say what organism it names.\n"
     'Reply with JSON: {"kind": "species" | "unknown" | "not an organism", "scientific_name": '
@@ -178,14 +113,9 @@ _IDENTIFY_PROMPT = (
     "sure of the accepted name, say unknown and let the common name carry it."
 )
 
-# Written defensively because the failure mode is not "no answer", it is a *confident wrong*
-# answer: with a shortlist in front of it a model will happily decide "sponge filter" is a Ball
-# sponge, "Bolivian ram" is a Banded gourami, and "cherry shrimp" is an Amano shrimp. Each of
-# those then gets printed on a label and counted for breeder points. Hence the worked negative
-# examples and the flat instruction that null is the normal answer.
-#: The second round: pick one of ours.  Reached only when :data:`_IDENTIFY_PROMPT` could not name
-#: the lot, or named something the species list does not hold -- which is usually a synonym or a
-#: strain we file under a different name, and is exactly what a list in front of it is good for.
+# Defensive because the failure mode is a confident wrong answer ("sponge filter" -> Ball sponge),
+# which gets printed on a label and counted for points. Hence the negative examples.
+#: Round two: pick one of ours, when round one couldn't name the lot or named something we don't hold.
 _SYSTEM_PROMPT = (
     "You identify the exact species an aquarium club lot is selling. You are given the lot name "
     "and a numbered list of candidate species from a fixed database, which may be empty.\n"
@@ -213,30 +143,18 @@ _SYSTEM_PROMPT = (
     "only for a species you are sure of, never to guess at a name that might exist."
 )
 
-#: How hard the model should think about this. The palette's default is "minimal" because it is
-#: picking from a menu with a person waiting; here the same setting produced confident nonsense,
-#: and the call happens on blur while the user carries on typing, so a slower, more careful answer
-#: costs nothing they will notice.
+#: "low", not the palette's "minimal", which produced confident nonsense here. The call runs on
+#: blur, so the delay goes unnoticed.
 REASONING_EFFORT = "low"
 
 
 def normalize(text):
-    """Lowercase, strip punctuation, collapse whitespace.  The cache key and the match key.
-
-    Defined in models.py so that the *stored* normalised name columns are built by the identical
-    function -- see :func:`auctions.models.normalize_species_name`.  Re-exported here because this
-    is where it is read as part of the matching rules.
-    """
+    """Lowercase, strip punctuation, collapse whitespace. Defined in models.py so stored columns match."""
     return normalize_species_name(text)
 
 
 def singularize(word):
-    """A crude English singular.  ``guppies`` -> ``guppy``, ``tetras`` -> ``tetra``.
-
-    Lot names are almost always plural ("6 cardinal tetras", "guppies") and species lists never
-    are, so without this the most common phrasing on the site matches nothing.  Crude is fine:
-    a wrong singular just fails to match, which is the same as not trying.
-    """
+    """A crude English singular (``guppies`` -> ``guppy``). A wrong singular just fails to match."""
     if len(word) > 3 and word.endswith("ies"):
         return word[:-3] + "y"
     if len(word) > 3 and word.endswith(("ses", "xes", "zes", "ches", "shes")):
@@ -246,59 +164,34 @@ def singularize(word):
     return word
 
 
-#: What counts as a word worth searching on: three or more characters, starting with a letter and
-#: allowed to carry digits after it.
-#:
-#: The digits are not decoration.  Half of what a fish club sells is named by a code rather than by
-#: a species -- "L046", "CW11", "C121", "OB peacock" -- because the fish is undescribed and the
-#: code *is* the identification, agreed on internationally and printed in every catalogue.  A
-#: letters-only pattern threw all of them away before any lookup ran: "l046" became "l", which is
-#: too short to survive, so a lot called "L046 pleco" was searched for as "pleco".  Requiring a
-#: leading letter is what keeps the counts out -- "6" and "10" in "6 guppies" and "10 gallon tank"
-#: are not words, and :func:`strip_quantity` is what deals with those.
+#: A searchable word: three or more characters, a letter first, digits allowed. Digits keep trade
+#: codes ("L046", "CW11"); the leading letter keeps counts out.
 _WORD = re.compile(r"[a-z][a-z0-9]{2,}")
 
 
 def base_words(text):
-    """The words actually typed in *text*, minus the ones that never identify a species.
-
-    One entry per word, unlike :func:`keywords`, which also emits a singular for each -- so this
-    is what to count when the question is "how many things did they type?".
-    """
+    """The words typed in *text*, minus ignored ones, one per word (unlike :func:`keywords`)."""
     ignore = set(settings.IGNORE_WORDS) | _EXTRA_IGNORE_WORDS
     return [word for word in _WORD.findall(normalize(text)) if word not in ignore]
 
 
 def keywords(text):
-    """The words in *text* worth searching on, longest first.
-
-    Longest first because the discriminating word in "young albino bristlenose pleco" is the long
-    one, and the shortlist is capped.
-    """
+    """The words in *text* worth searching on, longest (most discriminating) first."""
     ignore = set(settings.IGNORE_WORDS) | _EXTRA_IGNORE_WORDS
     words = []
     for word in _WORD.findall(normalize(text)):
         for form in (word, singularize(word)):
             if form not in ignore and len(form) >= 3:
                 words.append(form)
-    # dict.fromkeys de-duplicates without losing the order we then sort on
     return sorted(dict.fromkeys(words), key=len, reverse=True)
 
 
-#: Longest common name worth looking for as a phrase.  FishBase's English names run to four words
-#: ("Southern platyfish", "Green swordtail", "Black-banded leporinus"...); beyond that a lot name
-#: is describing the fish, not naming it.  Five rather than four because both sides of the lookup
-#: are normalised, and normalising splits a name on its hyphens: "Black-banded leporinus" is two
-#: words to a reader and three to the matcher.
+#: Longest common name looked for as a phrase. Five, not four: normalising splits on hyphens.
 MAX_PHRASE_WORDS = 5
 
 
 def _phrases(normalized):
-    """Every 2-to-:data:`MAX_PHRASE_WORDS`-word run in *normalized*, plus a singular variant.
-
-    The singular variant only touches the last word, which is where English puts the plural:
-    "6 cardinal tetras" yields "cardinal tetra", which is what the species list actually holds.
-    """
+    """Every 2-to-:data:`MAX_PHRASE_WORDS`-word run in *normalized*, plus a variant with the last word singular."""
     words = normalized.split()
     phrases = set()
     for size in range(2, MAX_PHRASE_WORDS + 1):
@@ -310,44 +203,26 @@ def _phrases(normalized):
 
 
 class LLMBudget:
-    """One named daily allowance of model calls, and what is left of it.
+    """One named daily allowance of model calls.
 
-    Spent at the moment a call is about to be made -- in :func:`_ready_to_ask`, past the exact,
-    cache and search steps -- and never merely because a request arrived.  That distinction is the
-    whole point of the class: a caller doing ten thousand lookups a day that the database answers
-    for free has spent nothing, and must not be told it is out of budget.
-
-    A unit is one **call**, not one lookup, and a lookup the model cannot place on sight takes two
-    of them -- :func:`identify` and then :func:`llm_match`.  Counting calls is what keeps the
-    allowance about money; counting lookups would have made a second round free.
-
-    The day is part of the cache key, so the allowance rolls over at local midnight without
-    anything having to expire it, and the day it names is the day an operator would name.
-
-    *name* says whose allowance it is.  A user has one (the lot forms), and so does a club (the
-    club API), because a key is a script rather than a person: without a bucket of its own every
-    key on the site would share the single anonymous one and one busy integration would switch the
-    model off for everybody.
+    Spent in :func:`_ready_to_ask`, only when a call is about to be made, never because a request
+    arrived. One unit is one call, so a two-round lookup costs two. The day is in the cache key, so it
+    resets at local midnight. A user has one (lot forms) and a club has one (club API), so one busy
+    integration can't switch the model off for everybody.
     """
 
     def __init__(self, name, limit):
         self.name = name
         self.limit = limit
         self.key = f"species_llm_{name}_{timezone.localtime():%Y%m%d}"
-        #: Set once a call has been refused, so a caller can tell "the model found nothing" from
-        #: "the model was never asked".  The club API turns the second into a 429.
+        #: Set once a call is refused: "never asked" vs "found nothing". The club API returns a 429.
         self.blocked = False
-        #: How many calls this object allowed, which for a single request is "did this one cost
-        #: money".  The club API reports it as the response's ``llm`` field.
+        #: Calls this object allowed; the club API reports it as ``llm``.
         self.spent = 0
 
     @classmethod
     def for_user(cls, user, limit=None):
-        """The budget the lot forms spend.  ``user=None`` is the shared anonymous bucket.
-
-        The default is read here rather than bound as an argument default so that changing
-        :data:`MAX_LLM_CALLS_PER_USER_PER_DAY` actually changes the budget.
-        """
+        """The budget the lot forms spend. ``user=None`` is the shared anonymous bucket."""
         return cls(str(user.pk) if user else "anon", MAX_LLM_CALLS_PER_USER_PER_DAY if limit is None else limit)
 
     @classmethod
@@ -355,11 +230,7 @@ class LLMBudget:
         return cls(f"club{club.pk}", limit)
 
     def spend(self):
-        """Consume one unit.  True when the call may proceed.
-
-        ``cache.add`` then ``cache.incr``: one round trip, and no read-modify-write race between
-        two workers handling a bulk-add page's parallel lookups.
-        """
+        """Consume one unit. True when the call may proceed. ``add`` then ``incr``, so no race."""
         cache.add(self.key, 0, timeout=_RATE_LIMIT_WINDOW_SECONDS)
         try:
             used = cache.incr(self.key)
@@ -378,8 +249,7 @@ class LLMBudget:
 
     @property
     def remaining(self):
-        # Clamped: the counter keeps climbing past the limit, because refusing a call is cheaper
-        # than reading the counter first, and a negative "remaining" would only confuse a caller.
+        # The counter climbs past the limit; clamp so "remaining" is never negative.
         return max(0, self.limit - self.used)
 
     @property
@@ -394,9 +264,8 @@ def check_rate_limit(user, limit=None):
     return LLMBudget.for_user(user, limit).spend()
 
 
-#: Words that wrap a name in a quantity rather than saying anything about the animal.  Stripped
-#: only from the *ends* of a lot name, never from the middle: "blue dream shrimp" is a cultivar's
-#: name and two thirds of it are in :data:`settings.IGNORE_WORDS`.
+#: Words that wrap a name in a quantity. Stripped only from the ends: "blue dream shrimp" is a
+#: cultivar made of ignored words.
 _QUANTITY_WORDS = {
     "x",
     "of",
@@ -418,25 +287,10 @@ _QUANTITY_WORDS = {
 
 
 def strip_quantity(normalized):
-    """``"6 guppies"`` -> ``"guppies"``.  The commonest shape a lot name comes in.
+    """``"6 guppies"`` -> ``"guppies"``. Without it, the commonest lot name matched nothing.
 
-    ``exact_matches`` asks whether the *whole* typed name is a species name, so a leading count
-    stopped it dead: "guppies" found the guppy and "6 guppies" found nothing at all, and the
-    search step could not save it either -- its common-name rule needs a two-word phrase, and
-    "guppy" is one word.  Between them that left the single most common phrasing on the site with
-    no answer.
-
-    Only the ends are trimmed, and only counts and quantity words.  Anything that touched the
-    middle of a name would break the cultivars, where the strain is spelled out of ordinary
-    adjectives: *Neocaridina davidi* 'Blue Dream' is reached by typing "blue dream shrimp".
-
-    "Assorted" and "mixed" are deliberately *not* quantity words, though they are ignored
-    everywhere else.  A count says how many of one thing; those two say it is not one thing.
-    Stripping them made "assorted tetras" mean "tetras", which is 28 species, of which the caller
-    then showed five at random -- a picklist for a lot whose whole point is that it is a mixed
-    bag.  Left in place the name simply fails to match, and "assorted guppies" and "assorted
-    platy" still work, because they are answered a step later by the single-word rule, which
-    ignores the word properly instead of deleting it.
+    Only counts and quantity words at the ends. "Assorted" and "mixed" are deliberately not quantity
+    words: they say it is not one thing, and stripping them turned "assorted tetras" into a picklist.
     """
     words = normalized.split()
     while words and (words[0].isdigit() or words[0] in _QUANTITY_WORDS):
@@ -451,68 +305,34 @@ def _visible(user=None, club=None, prefix=""):
     approved = Q(**{f"{prefix}approved": True})
     if user is not None and getattr(user, "is_authenticated", False):
         approved |= Q(**{f"{prefix}added_by": user})
-        # A subquery rather than a list of ids, so this stays one round trip however many clubs
-        # somebody belongs to.
+        # A subquery: one round trip however many clubs.
         member_of = ClubMember.objects.filter(user=user, is_deleted=False).values("club_id")
         approved |= Q(**{f"{prefix}club__in": member_of})
-    # Guarded, and it has to be: `club=None` would read as "every species with no club", which is
-    # every unapproved species on the site.
+    # Guarded: ``club=None`` would mean every unapproved species with no club.
     if club is not None:
         approved |= Q(**{f"{prefix}club": club})
     return approved
 
 
 def visible_species(user=None, club=None):
-    """The species *user* may be offered.  A queryset, so callers keep filtering it.
+    """The species *user* may be offered, as a queryset.
 
-    Everything the importers loaded is approved and visible to everybody.  What is not is a
-    species somebody added *on the site* without the standing to add it to the whole site: an
-    auction admin at a check-in table needs a missing fish on a label in the next thirty seconds,
-    and waiting for a superuser is not an option -- but 36,000 imported rows are a shared asset
-    and one club's guess at a name should not land in another club's picker.
-
-    So an unapproved row is visible three ways, and approving it is what makes it everyone's:
-
-    * to the person who added it, always;
-    * to anyone at the club it was added for, because a check-in table is staffed by more than one
-      person and the volunteer on the next laptop needs the same picker;
-    * to a caller working in the context of that club -- the club API, a lot in one of its
-      auctions.
-
-    :attr:`Species.club` is filled in only when there was an obvious club to fill in, so it can
-    never be the *only* route: plenty of auctions have no club attached at all, and scoping this
-    to clubs alone would leave the feature doing nothing at exactly the auctions most likely to
-    need it.  Hence "user or club", with both optional.
-
-    ``user=None`` and ``club=None`` -- the backfill command, the club API authenticating a script
-    rather than a person -- sees only approved species, which is the conservative answer for a
-    caller writing to old lots or feeding somebody else's breeder-award program.
+    Imported species are approved and visible to all. An unapproved one (added on the site) is visible
+    to its author, to members of ``Species.club``, and to callers working in that club. With neither
+    user nor club, only approved species.
     """
     return Species.objects.filter(_visible(user, club))
 
 
 def visible_common_names(user=None, club=None):
-    """Common names this caller may be answered with.  See :func:`visible_species`.
-
-    Two conditions, not one: the *species* has to be visible and so does the *name*.  A name is
-    scoped the same way a species is -- by ``approved``, ``added_by`` and ``club`` -- because it is
-    read ahead of everything else the matcher does.  "Yellow lab" is answered out of this table, so
-    a club teaching the site a name for the wrong fish would otherwise be everybody's problem, on
-    a row with no approval step in front of it.
-
-    Everything the importers and the curated CSV wrote is ``approved=True``, which is what keeps
-    FishBase's 49,000 names visible to everybody without a migration having to say so.
+    """Common names this caller may be answered with: both the species and the name must be visible.
+    Importer and CSV names are ``approved=True``.
     """
     return SpeciesCommonName.objects.filter(_visible(user, club, prefix="species__")).filter(_visible(user, club))
 
 
 def split_scientific_name(typed):
-    """``"Ancistrus Cirrhosus"`` -> ``("Ancistrus", "cirrhosus")``.  A genus on its own is fine.
-
-    Asked for as one string rather than two boxes -- nobody types a genus and an epithet into
-    separate fields at a check-in table -- and split here, once, so the form and the club API
-    cannot disagree about what "Ancistrus sp. L183" means.
-    """
+    """``"Ancistrus Cirrhosus"`` -> ``("Ancistrus", "cirrhosus")``. One box, split once for form and API."""
     parts = (typed or "").strip().split()
     if not parts:
         return "", ""
@@ -520,15 +340,8 @@ def split_scientific_name(typed):
 
 
 def species_already_named(genus, epithet, variety="", user=None, club=None, is_hybrid=False):
-    """The species this name already belongs to, if the caller can see one.  None otherwise.
-
-    Scoped to what the caller may see, for both halves of the reason :func:`visible_species`
-    exists: pointing somebody at a row they cannot open is no help, and answering "that already
-    exists" when what exists is another club's unapproved row leaks it.
-
-    A hybrid has no genus and no epithet, so the strain name carries the whole comparison -- and
-    the flag has to be part of the query, or *Neocaridina davidi* 'Blue Dream' and a hypothetical
-    cross of the same name would be told they are each other.
+    """The visible species this name already belongs to, or None. Scoped so it can't leak another club's
+    unapproved row. For a hybrid, ``is_hybrid`` and the strain name are the comparison.
     """
     if is_hybrid:
         return visible_species(user, club).filter(is_hybrid=True, variety__iexact=variety or "").first()
@@ -540,16 +353,8 @@ def species_already_named(genus, epithet, variety="", user=None, club=None, is_h
 
 
 def species_carrying_common_name(name, user=None, club=None, exclude=None):
-    """The species this common name already names, ignoring *exclude*.  None if it is free.
-
-    Two places a name can live -- :attr:`Species.common_name`, which is the one designated name,
-    and the :class:`SpeciesCommonName` rows -- so both are asked.
-
-    What it is for is refusing to make an existing name ambiguous.  A name is the strongest signal
-    the matcher has: :func:`exact_matches` answers on it before anything else runs, and one name
-    on two species turns a lookup that used to be ``unambiguous`` into a picklist for every club
-    that could see both.  Adding "guppy" to a second fish is not a new name, it is the loss of an
-    old one, so the answer is to say which species already has it.
+    """The species this common name already names (designated or synonym), ignoring *exclude*, or None.
+    Used to refuse making a name ambiguous: a second "guppy" would turn an exact match into a picklist.
     """
     normalized = normalize(name)
     if not normalized:
@@ -567,18 +372,13 @@ def species_carrying_common_name(name, user=None, club=None, exclude=None):
 
 
 def exact_matches(text, user=None, club=None):
-    """Species whose scientific name or one of whose common names *is* the typed text.
-
-    Ranked by how much each kind of match means: the scientific name, then the species FishBase
-    *designates* by that common name, then anything merely carrying it as a synonym.  Several
-    poeciliids answer to "guppy"; only one of them is the guppy.
+    """Species whose scientific name or a common name *is* the typed text, ranked: scientific name, then
+    the designated common name, then synonyms. Several poeciliids answer to "guppy"; one is the guppy.
     """
     normalized = normalize(text)
     if not normalized:
         return []
-    # "Guppies" and "Guppy" are the same request; the list only ever holds the singular.  The
-    # quantity-stripped form is asked for as well, so "6 guppies" and "guppies" agree -- see
-    # strip_quantity().  A set, so a name with no count in it costs nothing extra.
+    # Singular and quantity-stripped forms too, so "6 guppies" and "guppy" agree.
     candidates = set()
     for form in (normalized, strip_quantity(normalized)):
         if not form:
@@ -586,29 +386,16 @@ def exact_matches(text, user=None, club=None):
         words = form.split()
         candidates.add(form)
         candidates.add(" ".join(words[:-1] + [singularize(words[-1])]))
-    # Separate indexed lookups rather than one join with a CASE ordering: on 139k species and 75k
-    # common names the join plan was the single slowest thing in a lookup, and running them in
-    # order of how much each one means is also how the results get ranked.
+    # Separate indexed lookups, in rank order: the join with a CASE was the slowest part of a lookup.
     found = {}
-    # Nominal species only.  A cultivar shares its parent's scientific name, so "Neocaridina
-    # davidi" would otherwise answer with the species *and* its thirteen colour strains, none of
-    # which the user asked for.  A strain is reached by its own name -- "blue dream shrimp" is one
-    # of its common names, and that is the lookup below.
+    # Nominal species only, or "Neocaridina davidi" also returns its thirteen strains.
     for species in visible_species(user, club).filter(scientific_name__in=candidates, variety="")[:MAX_SUGGESTIONS]:
         found[species.pk] = species
-    # FBname -- the one English name FishBase designates for a species -- before the synonym list.
-    # Several poeciliids carry "Guppy" as *a* common name; only Poecilia reticulata is *the* guppy,
-    # and the per-name PreferredName flag is set on barely 3% of rows, so it can't do this job.
-    # Both of these match the *normalised* column, not the name as written.  The candidates have
-    # had their punctuation stripped by normalize(), and a fifth of FishBase's common names have
-    # punctuation of their own -- so "Ram's horn snail" is only reachable through this column.
+    # The designated name (FBname) before synonyms; PreferredName is set on ~3% of rows. Matches the
+    # normalised column, which is the only way to reach names with punctuation ("Ram's horn snail").
     for species in visible_species(user, club).filter(common_name_normalized__in=candidates)[:MAX_SUGGESTIONS]:
         found.setdefault(species.pk, species)
-    # Ordered before the slice, for the same reason every other LIMIT in this module is: a name
-    # like "Angelfish" is carried by thirty-odd species, and an unordered fifteen of them is how
-    # the freshwater one -- the only one a freshwater club is selling -- ends up not being offered
-    # at all.  Habitat before trade rank because a reef fish is flagged for the aquarium trade
-    # just as firmly as a freshwater one, so trade_rank alone cannot tell them apart.
+    # Ordered before slicing (habitat, then trade rank), or the one freshwater "Angelfish" can be cut.
     common_names = (
         visible_common_names(user, club)
         .filter(name_normalized__in=candidates)
@@ -619,8 +406,7 @@ def exact_matches(text, user=None, club=None):
     for common in common_names:
         if common.species_id not in found:
             carried.append(common.species)
-    # A synonym carried by several species, and nothing stronger to go on: prefer the species whose
-    # *own* designated name says the same thing the typed name does.
+    # A synonym on several species: prefer the one whose designated name agrees.
     if not found:
         carried = _named_after_the_same_thing(normalized, carried)
     for species in carried:
@@ -629,20 +415,10 @@ def exact_matches(text, user=None, club=None):
 
 
 def _named_after_the_same_thing(normalized, candidates):
-    """Narrow a shared common name down to the species that is really called that, if there is one.
+    """Narrow a shared synonym to the species really called that, by its designated name.
 
-    FishBase hands the same synonym to different fish on purpose, and "Peppered cory" is the case
-    that matters: it is listed for *Corydoras paleatus*, which every hobbyist means by it, and also
-    for *Corydoras julii*, whose own name is "Leopard corydoras".  Two candidates is not an answer
-    -- the bulk-add page fills nothing in unless there is exactly one, and the seller is offered a
-    picklist of two fish they cannot tell apart -- so the commonest cory in the hobby was
-    unreachable by the name everybody types.
-
-    The tie-break is the *designated* name, the one name FishBase picks out per species: "Peppered
-    corydoras" shares a word with what was typed and "Leopard corydoras" shares none.  It only
-    ever narrows to a single candidate, and only when nothing better matched at all -- a shared
-    synonym is the weakest evidence :func:`exact_matches` acts on, so refining it cannot cost
-    anything that was already a real answer.
+    "Peppered cory" names *C. paleatus* and *C. julii* ("Leopard corydoras"); a two-fish picklist left
+    the commonest cory unreachable. Only narrows to one, and only when nothing stronger matched.
     """
     if len(candidates) < 2:
         return candidates
@@ -652,38 +428,16 @@ def _named_after_the_same_thing(normalized, candidates):
 
 
 def _trade_first(queryset, prefix=""):
-    """Order *queryset* by :attr:`Species.trade_rank`, so aquarium species come first.
-
-    Applied before every ``LIMIT`` this module takes, which is the whole point: an unordered slice
-    of everything whose common name contains "tetra" is how the one tetra anybody sells ends up
-    not being offered to the model.
-    """
+    """Order by :attr:`Species.trade_rank`. Applied before every ``LIMIT``, so the traded species survive it."""
     return queryset.order_by(f"{prefix}trade_rank")
 
 
 def _rank(species_list, category=None):
-    """Move the likeliest candidates to the front, without disturbing anything else.
+    """Move the likeliest candidates to the front. A stable sort: only ties are broken.
 
-    Three preferences, in this order:
-
-    1. **The category the lot already looks like.**  Only ever a re-ordering -- a category is a
-       guess made from the lot's *name*, so letting it exclude a species would be one guess
-       silently overruling the species list.
-    2. **Whether it lives in fresh water.**  FishBase's habitat columns are on the model for
-       exactly this -- "there are freshwater and saltwater fish called perch" -- and until this
-       used them, "Angelfish" answered with five marine angelfish and never offered *Pterophyllum
-       scalare*, because a reef fish is flagged for the aquarium trade just as firmly as a
-       freshwater one and :attr:`Species.trade_rank` therefore cannot separate them.  It sits
-       *below* the category so a club that really is selling marine fish still gets its own answer
-       first, and it is only ever a tie-break: an exact match on "Emperor angelfish" is unaffected.
-    3. **Whether anyone keeps this fish**, in the three steps of
-       :attr:`Species.trade_rank`.  FishBase carries 36,000 species and about 3,500 of them are
-       flagged as aquarium fish; when a name is shared, the one being sold at a fish club is
-       overwhelmingly the one in the hobby.
-
-    A stable sort on purpose.  Callers arrive with an order that already means something --
-    :func:`exact_matches` puts *the* guppy ahead of the four other fish called one -- and this must
-    only break ties in it, not replace it.
+    1. The category the lot looks like (re-orders only; it is itself a guess).
+    2. Freshwater, because trade rank can't tell a marine angelfish from *Pterophyllum scalare*.
+    3. :attr:`Species.trade_rank`.
     """
     category_pk = getattr(category, "pk", category)
     return sorted(
@@ -702,37 +456,21 @@ def _alphabetical(species_list):
 
 
 def _single_word_matches(words, user=None, club=None):
-    """Species named by *one word* of the lot name, when that word is unambiguous enough to act on.
+    """Species named by one word of the lot name ("male guppy", "L046 pleco"), when it is safe to act on.
 
-    The gap this fills is "male guppy", "black guppy", "young koi", "L046 pleco" -- a lot name
-    where the part that identifies the fish is a single common name and the rest is describing it.
-    :func:`exact_matches` only answers when the *whole* typed name is a species name, and the
-    phrase rule in :func:`search_matches` needs two words to work with, so between them every one
-    of those returned nothing at all.
+    A word answers only when all three hold:
 
-    What makes it safe is three bounds read off our own data rather than a list of words somebody
-    has to keep.  A whitelist would need maintaining, would always be behind the hobby, and would
-    have nothing to say about the name added to the curated list tomorrow.  A word answers only
-    when all three hold:
+    1. It names at most :data:`MAX_SINGLE_WORD_MATCHES` species.
+    2. Its fish is in the trade, unless the name is ours rather than FishBase's. Without this "bronze
+       cory" answers the copper shark.
+    3. It names a fish, not a kind of fish (:data:`MAX_NAMES_USING_A_WORD`).
 
-    1. **It is not ambiguous.**  It names :data:`MAX_SINGLE_WORD_MATCHES` species or fewer, so
-       "guppy" (3) answers and "catfish" (143) does not.
-    2. **Somebody keeps the fish it names** -- :attr:`Species.trade_rank` 0 -- unless the name is
-       one of *ours* rather than one of FishBase's, in which case it is in the list precisely
-       because the hobby uses it.  This is the guard that matters most: without it "bronze cory"
-       answers *Carcharhinus brachyurus*, because FishBase calls the copper shark "Bronze", and
-       "black angel" answers with an angelshark.
-    3. **It names a fish rather than a kind of fish** -- see :data:`MAX_NAMES_USING_A_WORD`.
-
-    When several words qualify, the most *specific* one wins: fewest species, then longest word.
+    Several qualifying words: fewest species, then longest word, wins.
     """
     best = None
     for word in words:
-        # SELECT DISTINCT ... LIMIT n+1: the exact count when it is small, and "more than we will
-        # accept" when it is not, without counting all 143 rows for "catfish".
-        # order_by() before values_list, here and below: SpeciesCommonName.Meta.ordering would
-        # otherwise put `name` into the SELECT DISTINCT, so what comes back is one row per *name*
-        # rather than per species and both bounds count the wrong thing.
+        # DISTINCT ... LIMIT n+1 gives the count when small without counting 143 rows. order_by()
+        # first, or Meta.ordering puts `name` in the DISTINCT and counts names, not species.
         species_ids = list(
             visible_common_names(user, club)
             .filter(name_normalized=word)
@@ -745,8 +483,7 @@ def _single_word_matches(words, user=None, club=None):
             continue
         if best is not None and (len(species_ids), -len(word)) >= (len(best[1]), -len(best[0])):
             continue
-        # Only for a word that got this far: three LIKEs, and the leading wildcard on one of them
-        # means no index helps, so it must not run for every word of every lot name.
+        # Three LIKEs with a leading wildcard; only for a word that got this far.
         component = Q(name_normalized__startswith=f"{word} ") | Q(name_normalized__endswith=f" {word}")
         component |= Q(name_normalized__contains=f" {word} ")
         used_inside = (
@@ -764,39 +501,16 @@ def _single_word_matches(words, user=None, club=None):
 
 
 def search_matches(text, limit=MAX_SUGGESTIONS, category=None, user=None, club=None):
-    """Species the typed text genuinely names, ranked.  Empty when nothing does.
+    """Species the typed text genuinely names, ranked. Empty when nothing does.
 
-    Three rules, all deliberately strict, because a plausible-looking wrong answer is worse here
-    than no answer -- a wrong species gets printed on a label and counted for breeder points,
-    while no answer just leaves "No species" selected and falls through to the model.
+    Strict, because a wrong species gets printed and scored while no answer falls through to the model:
 
-    *Scientific token*
-        A word in the lot name **is** a genus or a specific epithet.  "Tropheus duboisi maswa"
-        matches *Tropheus duboisi* on two tokens; "Betta splendens pair" matches on two.
+    *Scientific token*: a word is a genus or epithet ("Tropheus duboisi maswa").
+    *Common-name phrase*: a whole multi-word common name appears in the lot name.
+    *Single common name*: :func:`_single_word_matches`, only when nothing above matched.
+    *Bare epithet*: the whole lot name is one epithet ("saulosi").
 
-    *Common-name phrase*
-        A species' whole common name appears in the lot name as a phrase.  "6 young cardinal
-        tetras" contains "Cardinal tetra".
-
-    *Single common name*
-        One word of the lot name is a species' whole common name, and that word names few enough
-        species to be worth acting on -- see :func:`_single_word_matches`.  Only when nothing
-        above matched, so "Bolivian ram" is still the Bolivian ram rather than the fish FishBase
-        simply calls "Ram".
-
-    *Bare epithet*
-        The lot name is one word and that word is a specific epithet.  Somebody typing "saulosi"
-        means *Chindongo saulosi* or *Aulonocara saulosi* and would like to be shown both.  It
-        takes a single-word name because that is what makes it safe: in "Neocaridina davidi" the
-        first word is a genus this list has never heard of, and answering with the unrelated fish
-        that happen to share "davidi" would be worse than admitting we don't know.
-
-    What is deliberately excluded is loose substring matching, which is where the obvious
-    implementation goes wrong: "sponge filter" hits *Sponge frillgoby*, "blue dream shrimp" hits
-    *Shrimp scad*, and "Bolivian ram" hits *Abramis brama*.  None of those are the thing being
-    sold, and all of them look like real answers in a dropdown.
-
-    *category*, when given, only ever breaks a tie -- see :func:`_rank`.
+    No loose substring matching: "sponge filter" would hit *Sponge frillgoby*. *category* only breaks ties.
     """
     words = set(keywords(text))
     if not words:
@@ -804,19 +518,10 @@ def search_matches(text, limit=MAX_SUGGESTIONS, category=None, user=None, club=N
     normalized = normalize(text)
     scored = {}
 
-    # Rule 1: words that are exactly a genus and a specific epithet.  Only the genus is asked for
-    # in SQL -- it is the indexed column, and an epithet on its own is handled by rule 3 under much
-    # tighter conditions.  So the epithet is checked in Python against the rows the genus already
-    # narrowed us to, which keeps this a single indexed lookup instead of a full scan.
-    #
-    # Nominal species only (``parent__isnull=True``): a cultivar carries its parent's genus and
-    # epithet, so without this "Neocaridina davidi" would score the species and every one of its
-    # colour strains identically and then show five of them at random.  Strains are reached
-    # through their own names in rule 2.
+    # Rule 1: genus in SQL (indexed), epithet checked in Python. Nominal species only, or strains
+    # score identically with their parent.
     genus_candidates = {word.capitalize() for word in words}
-    # Trade-ordered before the slice: a genus with more species than the bound would otherwise
-    # hand back an arbitrary 80 of them, and the fallback below -- "show the ones people keep" --
-    # can only work on rows it was actually given.
+    # Trade-ordered before the slice, so the in-trade fallback below has rows to work with.
     genus_hits = _trade_first(visible_species(user, club).filter(genus__in=genus_candidates, parent__isnull=True))
     for species in genus_hits[: LLM_SHORTLIST_SIZE * 2]:
         has_genus = species.genus.lower() in words
@@ -826,15 +531,8 @@ def search_matches(text, limit=MAX_SUGGESTIONS, category=None, user=None, club=N
         elif has_genus:
             scored[species.pk] = (WEAK_SCORE, species)
 
-    # Rule 2: a common name of two or more words appearing in the lot name as a phrase.  Asking
-    # for the phrases directly -- every 2-to-4 word run in the lot name, looked up by equality --
-    # rather than searching for names *containing* a keyword: an `icontains` over the common-name
-    # table returns thousands of rows for a word like "tetra", and any bound you put on that is an
-    # unordered slice that quietly loses the right answer.
-    #
-    # Single-word common names are left to exact_matches.  On their own they are as likely to
-    # mislead as to help: "Bolivian ram" would match the species FishBase simply calls "Ram",
-    # which is a different fish.
+    # Rule 2: every 2-to-5-word run looked up by equality; icontains returns thousands for "tetra".
+    # Single-word names are left to later rules ("Bolivian ram" is not "Ram").
     phrases = _phrases(normalized)
     if phrases:
         for common in visible_common_names(user, club).filter(name_normalized__in=phrases).select_related("species"):
@@ -848,33 +546,23 @@ def search_matches(text, limit=MAX_SUGGESTIONS, category=None, user=None, club=N
         ranked = _rank(_alphabetical([species for score, species in scored.values() if score == best]), category)
         if best > WEAK_SCORE:
             return ranked[:limit]
-        # Nothing but a genus matched.  The complete genus is a real answer -- somebody typing
-        # "Tropheus" wants to see the six of them -- but five out of seventy Ancistrus is not an
-        # answer, it is a list that implies one.
+        # Only a genus matched: the complete genus is an answer, a slice of a big one isn't.
         if len(ranked) <= MAX_GENUS_MATCHES:
             return ranked
-        # Unless the hobby has an opinion: seventy-seven Ancistrus in FishBase are two in the
-        # hobby, and those two are what a fish club is selling.  Deliberately the species-level
-        # rank and not the genus one -- every member of a genus shares the genus rank, so it can't
-        # narrow a genus down by definition.
+        # Unless few of them are in the trade (77 Ancistrus, 2 kept). Species-level rank: every
+        # member shares the genus rank.
         in_trade = [species for species in ranked if species.trade_rank == Species.TRADE_RANK_SPECIES]
         if 0 < len(in_trade) <= MAX_GENUS_MATCHES:
             return in_trade
-        # The genus is too broad to be an answer, so it is not one -- and the rules below have not
-        # run yet.  "Male bettas" matched the genus *Betta*, which is 75 species and 20 in the
-        # trade, and stopping here left the commonest lot name at a fish auction with no answer at
-        # all; the common name "betta" is right there and means one fish.
+        # Too broad to answer, so fall through: "male bettas" still reaches the common name "betta".
 
-    # Rule 3: one word of the lot name is a whole common name, and an unambiguous one.  After the
-    # rules above rather than among them, so it can never dilute a real answer -- which is what
-    # keeps "Bolivian ram" as the Bolivian ram rather than the fish FishBase simply calls "Ram".
+    # Rule 3: an unambiguous single-word common name, after the rules above so it can't dilute them.
     single = _single_word_matches(words, user=user, club=club)
     if single:
         return _rank(_alphabetical(single), category)
 
-    # Rule 4: a one-word lot name that is a specific epithet.  Last, so it can never dilute a real
-    # answer.  Counted on base_words, not on `words`: keywords() emits a singular alongside every
-    # word, so a one-word lot name ending in "s" ("Corydoras") arrives here looking like two.
+    # Rule 4: a one-word lot name that is an epithet. Counted on base_words, since keywords() adds
+    # singulars.
     typed = base_words(text)
     if len(typed) == 1:
         forms = {typed[0], singularize(typed[0])}
@@ -887,40 +575,23 @@ def search_matches(text, limit=MAX_SUGGESTIONS, category=None, user=None, club=N
 
 
 def _shortlist(words, normalized, user=None, club=None, reading=""):
-    """Species worth putting in front of the model, for the keywords in a lot name.
+    """Species worth putting in front of the model, best evidence first, until the list is full.
 
-    A wider net than :func:`search_matches` casts -- the model can discard noise, so recall
-    matters more than precision here -- but the net has to be *ordered*.  The obvious version, one
-    ``icontains`` OR with a ``LIMIT``, is an unordered slice: for "german blue ram" it returns
-    forty species whose names merely contain "ram" (*Abramis*, *Abramites*, ...) and leaves out the
-    one FishBase actually calls "Ram", so the model is asked to choose and correctly answers null.
-    Recall failures here look exactly like the model being unhelpful.
+    Recall matters more than precision here, but the list must be ordered: an unordered ``icontains``
+    slice for "german blue ram" missed the fish called "Ram".
 
-    So the layers run best-evidence-first and stop once the list is full:
+    1. a common name equal to a keyword or phrase
+    2. a word that is an epithet ("apisto cacatuoides": the epithet names one fish)
+    3. a genus keyword, and genus siblings of what was found
+    4. common names containing a keyword
 
-    1. a common name that *is* one of the keywords, or one of the phrases in the lot name
-    2. a word that *is* a specific epithet.  Half the fish in this hobby are sold as an
-       abbreviated genus plus a full epithet -- "neolamp caudopunctatus", "apisto cacatuoides" --
-       and the epithet is the discriminating half: it names one fish where the genus names fifty.
-       This layer used not to exist, and "neolamp caudopunctatus red fin" was handed an *empty*
-       shortlist while *Neolamprologus caudopunctatus* sat in the table.
-    3. a genus that is one of the keywords, and the genus siblings of anything found so far --
-       "Ram" finds *Mikrogeophagus ramirezi*, and its sibling is the Bolivian ram
-    4. anything whose common name merely contains a keyword, to fill the remaining space
-
-    ...and then the nominal species of every cultivar that made the list, which is not a layer:
-    see below.
-
-    *reading* is the same lot name with its spelling corrected, normalised, when round one handed
-    one back.  Every layer here is an equality or a substring against a column, so a misspelling
-    reaches none of them -- which is the whole reason :func:`identify` runs first, and the reason
-    its correction has to arrive here rather than being dropped on the way.  It only ever *adds*
-    phrases: the typed name is still searched on, because a "correction" is itself a guess.
+    Then the nominal species of every cultivar on the list. *reading* is round one's corrected
+    spelling; it only adds phrases, since a correction is itself a guess.
     """
     candidates = {}
 
     def add(queryset, limit=LLM_SHORTLIST_SIZE):
-        """Take rows from *queryset* until the shortlist is full.  Earlier layers keep their places."""
+        """Take rows until the shortlist is full; earlier layers keep their places."""
         remaining = limit - len(candidates)
         if remaining <= 0:
             return
@@ -937,13 +608,8 @@ def _shortlist(words, normalized, user=None, club=None, reading=""):
         )
     )
 
-    # Nominal species only, for the reason rule 1 of search_matches gives: a cultivar carries its
-    # parent's epithet, so "Neocaridina davidi" would otherwise spend the shortlist on thirteen
-    # colour strains nobody asked for.  Strains are reached by their own names, in the layer above.
-    #
-    # Long words only, and MIN_EPITHET_LETTERS says why: a short word matching an epithet is a
-    # coincidence rather than evidence, and a coincidence in the shortlist is a wrong species with
-    # a plausible-looking scientific name next to it.
+    # Nominal species only, and long words only (MIN_EPITHET_LETTERS): a short epithet match is
+    # coincidence.
     epithets = {word for word in words if len(word) >= MIN_EPITHET_LETTERS}
     if epithets:
         add(_trade_first(visible_species(user, club).filter(species__in=epithets, parent__isnull=True)))
@@ -956,13 +622,8 @@ def _shortlist(words, normalized, user=None, club=None, reading=""):
         name_q |= Q(name_normalized__icontains=word)
     add(_trade_first(visible_common_names(user, club).filter(name_q), "species__").select_related("species"))
 
-    # The nominal species of every cultivar on the list.  A cultivar is only ever the answer when
-    # the lot names that exact strain, so the prompt's fallback for one we don't stock -- "pick
-    # the plain species it is a strain of" -- can only be taken when that species is in front of
-    # it too.  "Male calico bristlenose" reached three *Ancistrus cirrhosus* colour strains and,
-    # depending on where the cap happened to fall, not the fish itself, which left the model
-    # choosing between three wrong strains and null.  Allowed past the cap because a parent is not
-    # another candidate competing for room; it is half of one that is already there.
+    # Parents of listed cultivars, past the cap, so "pick the plain species" is possible. Without it
+    # the model chose between three wrong strains and null.
     parents = {species.parent_id for species in candidates.values() if species.parent_id} - set(candidates)
     if parents:
         add(visible_species(user, club).filter(pk__in=parents), limit=LLM_SHORTLIST_SIZE + len(parents))
@@ -988,25 +649,12 @@ def _record_usage(user, result, query, kind, *, success=True):
 
 
 class Identification(NamedTuple):
-    """What the model made of one lot name.  The return of both rounds.
+    """What the model made of one lot name; the return of both rounds.
 
-    *species* is the only field that can reach a lot, and it is always a row out of our own table.
-
-    *answered* separates "the model looked, and this is what it says" from "the model never ran" --
-    no provider configured, nothing worth asking about, no budget left, the call failed.  Only the
-    first is worth writing to a cache every club reads: remembering the others would teach the
-    whole site an answer to a question nobody has actually asked yet.
-
-    *scientific_name* is what it says the lot is, whether or not we stock it.  It is the field
-    that stops a correct identification being recorded as a wrong one -- see
-    :attr:`~auctions.models.SpeciesSearchCache.is_a_gap`.
-
-    *corrected_name* is the lot's hobby name with the spelling fixed, and it is worth having even
-    when the model would not commit to a species: "red luwigia" is a genus and a colour, so there
-    is no binomial to give, but "red ludwigia" is something :func:`search_matches` can answer.
-    Splitting the work that way is the point -- the model is good at spelling and we are good at
-    the species list, and neither is much good at the other's half.  It is also what round two
-    builds its shortlist from, for the same reason: see :func:`llm_match`.
+    *species* is the only field that reaches a lot, always a row of ours. *answered* is False when the
+    model never ran; only answered results are cached. *scientific_name* is what it says the lot is,
+    stocked or not (see ``SpeciesSearchCache.is_a_gap``). *corrected_name* is the spelling-fixed hobby
+    name, useful even without a species ("red ludwigia"), and what round two builds its shortlist from.
     """
 
     species: Species | None = None
@@ -1016,26 +664,15 @@ class Identification(NamedTuple):
 
     @property
     def settled(self):
-        """True when a second round has nothing left to add, which means: we have a species.
+        """True only once we have a species.
 
-        Nothing else ends it, and "not an organism" least of all.  A remembered negative is the
-        one answer on this site that nothing walks back on its own -- it is served to every club
-        ahead of the token search, and a lot saved with no species is *agreement* with it, so the
-        ordinary accept/reject machinery never fires.  One call is not enough to earn that.  See
-        :func:`suggest_species`, which asks the shortlist round as well and writes the negative
-        only if the two agree.
-
-        A lot the model could not name, or named something we don't stock, is worth showing our
-        own list to for the older reason: the list is where a synonym, a strain name or a club's
-        own word for a fish lives.
+        "Not an organism" doesn't settle it: a remembered negative is served site-wide and nothing walks it
+        back, so :func:`suggest_species` requires the shortlist round to agree.
         """
         return self.species is not None
 
 
-#: A binomial has two words, or three for a trinomial or an open nomenclature "Genus sp. cf".  The
-#: point of counting is to tell a *name* from a sentence: asked for one the model may reply "some
-#: kind of small brown fish", and that is not something to look up, print on the gaps page, or
-#: keep in a column called scientific_name.
+#: A name has two or three words; "some kind of small brown fish" is not a name.
 def _looks_like_a_binomial(name):
     """True when *name* is shaped like a scientific name rather than like a description."""
     words = (name or "").split()
@@ -1043,20 +680,10 @@ def _looks_like_a_binomial(name):
 
 
 def _resolve_identification(scientific_name, common_name, user=None, club=None):
-    """The species behind an identification the model made, if the list holds it.  None otherwise.
+    """The species behind the model's identification, if we hold it.
 
-    Two names arrive because the hobby uses two and they resolve differently.  The binomial is the
-    precise claim and is looked up as one.  The common name is what recovers everything the
-    binomial cannot say: a cultivar has no scientific name of its own -- *Neocaridina davidi*
-    "Blue Dream" shares its parent's -- so a model correctly answering "Neocaridina davidi" for
-    "blue dream shrimp" would land on the plain species and lose the strain the seller named.  It
-    is also the only route to a name a club added here, which is in our table and in nothing the
-    model was trained on.
-
-    Deliberately asymmetric.  A common name is taken as *refining* a binomial we already resolved
-    (a strain of that same species, never a different fish), and on its own only when it is
-    unambiguous -- several poeciliids answer to "guppy", and a name carried by five species is not
-    an identification.
+    The binomial is looked up exactly. The common name refines it to a strain of that same species
+    (cultivars share the parent's binomial), or stands alone only when unambiguous.
     """
     named = _species_named(scientific_name, user=user, club=club)
     if common_name:
@@ -1071,17 +698,8 @@ def _resolve_identification(scientific_name, common_name, user=None, club=None):
 
 
 def _species_named(scientific_name, user=None, club=None):
-    """The species the model *named*, if we have it.  None otherwise.
-
-    The shortlist is built by keyword search over our own tables, so its recall is our recall:
-    "Yellow lab" only ever reached *Labidochromis caeruleus* because ``icontains "lab"`` happens
-    to hit FishBase's "Labidochromis yellow", which is luck rather than design.  Letting the model
-    answer with a scientific name instead of an id removes that dependency without giving up the
-    guarantee that matters -- the name is looked up here, in the same table the form validates
-    against, so a species we do not have is still no species.
-
-    Nominal species only, and an exact match on the binomial: near-misses are how a plausible
-    wrong answer would get in, and a wrong species is printed on a label and counted for points.
+    """The nominal species with exactly this binomial, or None. Lets the model recover from a shortlist
+    miss without ever returning a species we don't have.
     """
     name = (scientific_name or "").strip()
     if not name or len(name.split()) > 3:
@@ -1090,17 +708,13 @@ def _species_named(scientific_name, user=None, club=None):
 
 
 def _ready_to_ask(text, user, budget):
-    """The three things both rounds check before spending anything: provider, words, budget.
-
-    Returns ``(provider, budget)``, or ``(None, budget)`` when there is no call to make.  Budget is
-    spent here, at the moment a call is about to happen and never merely because a lookup arrived
-    -- see :class:`LLMBudget`.
+    """Provider, words, budget: checked before either round. Returns ``(provider, budget)`` or
+    ``(None, budget)``. Budget is spent here, at the moment of the call.
     """
     provider = get_provider()
     if not provider.is_configured():
         return None, budget
-    # Deliberately not the site-wide effort; see REASONING_EFFORT.  Left alone when the deployment
-    # has switched it off entirely, which is how an operator says "don't send this parameter".
+    # Not the site-wide effort; left alone if the deployment turned the parameter off.
     if provider.reasoning_effort:
         provider.reasoning_effort = REASONING_EFFORT
     if not keywords(text):
@@ -1113,26 +727,11 @@ def _ready_to_ask(text, user, budget):
 
 
 def identify(text, user=None, club=None, budget=None):
-    """Round one: ask what the lot name names, without showing the model our list.
+    """Round one: ask what the lot name names, without showing our list.
 
-    The cheap half of the model step and the one that does most of the work.  The lot name goes on
-    its own -- no candidates, a prompt of a few dozen tokens against the several hundred a
-    shortlist costs -- and what comes back is a claim about the hobby, which is then looked up
-    here.  Nothing about the answer depends on our tables, and that is the point three times over:
-
-    * it is where a **misspelling** gets read through.  "Red luwigia" shortlists nothing at all,
-      because every layer of :func:`_shortlist` is an equality or a substring against a column, and
-      "luwigia" is not a substring of "ludwigia".  Asked cold, the model simply reads it.
-    * the answer is **not list-shaped**, so it survives the list changing.  A binomial we don't
-      stock is written to the cache as itself rather than as "not a species", and the row starts
-      answering the day the species is imported -- see :func:`suggest_species`.
-    * asking it cold is a **different question** from picking off a menu.  Handed forty
-      alphabetical *Corydoras* and a lot called "orange venezuelan corydoras", the model has to
-      decide none of them is right, and it did; asked what the lot is, it says *Corydoras aeneus*.
-
-    Nothing here can invent a species: :func:`_resolve_identification` looks every name up in the
-    same table the lot form validates against, so an identification we don't stock is still no
-    species on the lot -- just a recorded gap instead of a verdict.
+    A few dozen tokens. Reads through misspellings the shortlist can't ("red luwigia"), gives an answer
+    that survives the list changing (a gap, not "not a species"), and avoids the menu effect. Every name
+    is still resolved against our table.
     """
     provider, budget = _ready_to_ask(text, user, budget)
     if provider is None:
@@ -1145,77 +744,40 @@ def identify(text, user=None, club=None, budget=None):
         return Identification()
     kind = str(result.data.get("kind") or "").strip().lower()
     if kind == "not an organism":
-        # Answered, but not settled, and deliberately: this is the verdict that becomes permanent
-        # and site-wide, so it goes to the shortlist round for a second opinion before it is
-        # written down.  Round one is the better instrument for the question -- a menu of near
-        # misses is what talks a model into calling a sponge filter a Ball sponge -- but "better"
-        # is not the standard for an answer nothing can take back.  See Identification.settled.
+        # Answered but not settled: this verdict becomes permanent, so round two must agree.
         _record_usage(user, result, text, "not_an_organism")
         return Identification(None, True, "")
     scientific_name = str(result.data.get("scientific_name") or "").strip()
     common_name = str(result.data.get("common_name") or "").strip()
     if kind != "species" or not _looks_like_a_binomial(scientific_name):
-        # "Unknown", or a sentence where a name should be.  Not an answer about the *name*, so
-        # nothing is written down -- but a corrected spelling is still worth carrying out of here
-        # even when the model would not name a species: "red luwigia" has no binomial to give and
-        # "red ludwigia" is a question the species list can answer on its own.
+        # Not an answer about the name, so nothing is cached, but a corrected spelling still helps.
         _record_usage(user, result, text, "unknown")
         return Identification(corrected_name=common_name)
     species = _resolve_identification(scientific_name, common_name, user, club)
     if species is not None and is_rejected(normalize(text), species):
-        # Named a pairing the site has already retired.  Same reasoning as the shortlist round:
-        # this is the loop record_choice exists to break, so it is dropped rather than remembered.
+        # A retired pairing: dropped, not remembered (see record_choice).
         return _retired_answer(user, result, text)
     _record_usage(user, result, text, "species" if species else "gap")
-    # The binomial is carried only when nothing was resolved.  It is the *gap* column, and a row
-    # naming both a species and a species we don't stock says two different things about one lot:
-    # the assassin snail resolves through its common name while the model calls it "Clea helena",
-    # and recording that pairing would leave the cache asserting a fish it had just identified.
+    # The binomial is kept only when nothing resolved; it is the gap column.
     return Identification(species, True, "" if species else scientific_name, common_name)
 
 
 def llm_match(text, user=None, club=None, budget=None, reading=""):
-    """Round two: ask the model to pick one species out of a shortlist we built.
+    """Round two: ask the model to pick one species from a shortlist we built.
 
-    Reached only when :func:`identify` could not name the lot, or named something the species list
-    does not hold.  That second case is what this round is *for*: the model said "Clea helena" and
-    we file the assassin snail under *Anentome helena*, or it said "Neocaridina davidi" and the
-    strain the seller named is a row of its own.  A synonym, a strain name and a club's own word
-    for a fish are all things that are in our table and not in the model's head, and the only way
-    to use them is to put them in front of it.
+    Reached when round one couldn't name the lot or named something we don't hold under that name
+    (a synonym, a strain, a club's word). An id not on the shortlist is discarded; a named species is
+    resolved via :func:`_species_named`. An empty shortlist is still asked ("Yellow lab"), once per name.
 
-    The shortlist is built from the database by keyword, so this is mostly a ranking problem for
-    the model rather than a recall problem, and an id that isn't in the shortlist is discarded
-    rather than trusted.  Where the shortlist *has* failed, the model may name a species instead,
-    and that name is resolved against the same table -- see :func:`_species_named`.  Either way
-    nothing here can return a species the database doesn't have.
-
-    An **empty** shortlist is the extreme version of that failure, and is asked anyway rather than
-    answered "no species" without looking.  "Yellow lab" is the case: FishBase files
-    *Labidochromis caeruleus* under "Blue streak hap", so the only keyword left after the ignore
-    list is "lab", and whether that shortlists anything at all depends on an ``icontains`` happening
-    to hit -- which is luck, not design.  The cost is bounded the same way every other call here is:
-    one per name ever, because the answer goes into the cache either way.
-
-    *reading* is round one's corrected spelling of the lot name, when it gave one.  Without it
-    this round is handed the misspelling that the step before just established the database cannot
-    match -- "mudflwoer" shortlists nothing at all, so the call is spent asking the model to choose
-    from an empty list, which is the one question it cannot answer.  The shortlist is built from
-    both spellings; everything that has to stay keyed on what the seller actually typed -- the
-    cache row, the rejection veto, the recorded query -- still is.
-
-    *budget* is whose daily allowance this call comes out of, defaulting to *user*'s.  The club API
-    passes the club's -- see :class:`LLMBudget`.
+    *reading* is round one's corrected spelling; the shortlist uses both, while the cache row, veto and
+    recorded query stay keyed on what was typed. *budget* defaults to *user*'s (see :class:`LLMBudget`).
     """
-    # Preflight first: an unconfigured provider or an exhausted budget must not cost the four
-    # queries a shortlist takes.  Spending the budget before building the list is safe because
-    # nothing between here and the call can decide not to make it.
+    # Preflight before the shortlist's four queries.
     provider, budget = _ready_to_ask(text, user, budget)
     if provider is None:
         return Identification()
     normalized = normalize(text)
-    # Longest first is the order _shortlist's capped layers consume, so the merged list is re-sorted
-    # rather than concatenated: the discriminating word may well be the one round one corrected.
+    # Re-sorted longest first, since the discriminating word may be the corrected one.
     reading = normalize(reading)
     words = keywords(text)
     if reading and reading != normalized:
@@ -1223,20 +785,14 @@ def llm_match(text, user=None, club=None, budget=None, reading=""):
     else:
         reading = ""
     candidates = _shortlist(words, normalized, user=user, club=club, reading=reading)
-    # Never put a pairing the site has retired back in front of the model.  A rejection is the one
-    # piece of evidence that outlives the cache row it came from (see record_choice), and the model
-    # would otherwise answer the same question the same way and have the answer written straight
-    # back -- which is exactly the loop the counters exist to break.  Filtered here rather than in
-    # _shortlist so that the shortlist stays a pure "what looks relevant" query.
+    # Never offer a retired pairing again, or the model would re-teach it.
     vetoed = rejected_species_ids(normalized)
     if vetoed:
         candidates = [species for species in candidates if species.pk not in vetoed]
     listing = "\n".join(f"{species.pk}: {species.label_with_common_name}" for species in candidates)
-    # The reading is shown as well as searched on, so the model can see why a candidate is on the
-    # list at all: without it "mudflwoer" and *Micranthemum umbrosum* look unrelated on the page.
+    # Shown as well as searched, so the model sees why candidates are there.
     asked = f"Lot name: {text}" + (f"\nRead as: {reading}" if reading else "")
-    # "(none)" said out loud rather than left as an empty block, so the model reads it as "the list
-    # is empty" rather than as a truncated prompt.
+    # "(none)" explicitly, so an empty list doesn't read as a truncated prompt.
     messages = [{"role": "user", "content": f"{asked}\n\nCandidates:\n{listing or '(none)'}"}]
     try:
         result = provider.complete_json(_SYSTEM_PROMPT, messages, max_tokens=1000)
@@ -1248,15 +804,11 @@ def llm_match(text, user=None, club=None, budget=None, reading=""):
     try:
         chosen_pk = int(raw)
     except (TypeError, ValueError):
-        # No id.  It may have named a species instead, which is the shortlist admitting it missed.
         spoken = str(result.data.get("scientific_name") or "").strip()
         named = _species_named(spoken, user=user, club=club)
         if named and named.pk in vetoed:
             return _retired_answer(user, result, text)
-        # The name is kept even when we can't resolve it: a species we don't stock is a gap in the
-        # list, and writing that down as "not a species" is how adding the fish later stopped
-        # fixing anything.  Only when it is shaped like a name -- "some kind of small brown fish"
-        # is a shrug, not a binomial.
+        # A binomial we don't stock is kept as a gap, never "not a species". A shrug isn't a binomial.
         gap = spoken if not named and _looks_like_a_binomial(spoken) else ""
         _record_usage(user, result, text, "species" if named else ("gap" if gap else "no_species"))
         return Identification(named, True, gap)
@@ -1270,31 +822,19 @@ def llm_match(text, user=None, club=None, budget=None, reading=""):
 
 
 def remember(text, species, source="llm", user=None, scientific_name=""):
-    """Write an answer to the cache, including the answer "this is not a species".
+    """Write an answer to the cache, including "this is not a species".
 
-    *scientific_name* is what the name was identified as when the species list could not supply
-    it.  A row with that filled in and no species is a **gap** rather than a verdict -- the
-    difference between "sponge filter is not a species" and "we have never stocked *Yssichromis
-    piceatus*" -- and it is what lets the row start answering when the species is imported.  See
-    :attr:`~auctions.models.SpeciesSearchCache.is_a_gap` and :func:`suggest_species`.
-
-    *user* is who taught it, when a person did.  Recorded because every row here is served back to
-    every club ahead of the token search, so a wrong one is a site-wide problem and needs to be
-    traceable to whoever created it -- see :class:`~auctions.models.SpeciesSearchCache` and the
-    "names the matcher has already decided" table on the gaps page.
+    *scientific_name* with no species makes the row a **gap** that answers once the species is
+    imported (``SpeciesSearchCache.is_a_gap``). *user* is recorded because every row is served site-wide
+    and a wrong one must be traceable.
     """
     normalized = normalize(text)
     if not normalized:
         return
-    # This table is global and is read ahead of the token search, so a species that is not
-    # everybody's yet has no business in it.  The person who added it still gets it offered, by
-    # visible_species(); what they don't get is to teach the rest of the site a name using it.
+    # Global table: an unapproved species can't teach the site a name.
     if species is not None and not species.approved:
         return
-    # A pairing the site has already retired is not learned again.  Without this the whole
-    # accept/reject mechanism would be a loop: enough people take the species off the lots called
-    # "sponge filter", the row is retired, and the next person to save one writes it straight back.
-    # A site admin can delete the rejection on the gaps page, which is the way back in.
+    # A retired pairing is not re-learned, or accept/reject would loop. The gaps page can undo it.
     if species is not None and is_rejected(normalized, species):
         return
     defaults = {"species": species, "source": source, "scientific_name": (scientific_name or "")[:120]}
@@ -1302,31 +842,22 @@ def remember(text, species, source="llm", user=None, scientific_name=""):
         defaults["created_by"] = user
     existing = SpeciesSearchCache.objects.filter(search_text=normalized).first()
     if existing is not None and existing.species_id != (species.pk if species is not None else None):
-        # The counters score *an answer*, not a name, and this is a different answer.  Carrying
-        # them over would leave a row that had collected two rejections one rejection away from
-        # being retired for something it had never been asked about -- and retiring writes a
-        # SpeciesNameRejection, which outlives the row.  See record_choice.
+        # Counters score an answer, not a name; a different answer starts at zero.
         defaults["accepts"] = 0
         defaults["rejects"] = 0
     SpeciesSearchCache.objects.update_or_create(search_text=normalized, defaults=defaults)
 
 
 def _retired_answer(user, result, text):
-    """The model named a species this name has been retired from.  Discard it, remember nothing.
-
-    Deliberately not written down as "not a species": that is a claim about the *name*, and all
-    anybody has actually said is that it is not this one species -- see :func:`record_choice`.
-    Returning ``answered=False`` is what keeps it out of the cache.
+    """The model named a species this name was retired from: discard, remember nothing (``answered=False``).
+    Not "not a species": only this one species was rejected.
     """
     _record_usage(user, result, text, "no_species")
     return Identification()
 
 
 def is_rejected(normalized, species):
-    """True when this name has already been retired from naming this species.
-
-    Takes an *already normalised* name, because the caller has one in hand.
-    """
+    """True when this (already normalised) name was retired from naming this species."""
     if species is None or not normalized:
         return False
     return SpeciesNameRejection.objects.filter(search_text=normalized, species=species).exists()
@@ -1340,35 +871,15 @@ def rejected_species_ids(normalized):
 
 
 def record_choice(text, species, *, first_save=False, changed=False, user=None):
-    """Score what a person did with the answer this lot name was remembered as.
+    """Score what a person did with this name's remembered answer. One indexed lookup; usually a no-op.
 
-    This is the counterweight to :func:`remember`, and the reason it exists is that the cache is
-    written by *sellers*: the bulk-add page remembers the pairing on a row's first save, and the
-    row is then served to every club on the site ahead of the token search.  One misclick used to
-    become the site's answer forever, and the only way back was a superuser noticing it on the gaps
-    page.  Now the same forms that write the answer also report what happened to it.
+    The cache is written by sellers and served site-wide, so the same forms report back. Both counters
+    count **lots**, not saves: an accept only on the lot's first save; a reject on the first save or a
+    save that changed the species.
 
-    *first_save* and *changed* are what keep the two counters honest against each other, and what
-    makes both of them count **lots** rather than saves.  An **accept** is only counted the first
-    time a lot is saved -- somebody re-saving a lot to fix its price has not re-confirmed the
-    species, and counting it would let a busy club vote a wrong answer permanent.  A **rejection**
-    is counted on the save that created the lot, or on a later save that actually moved the
-    species; re-saving a lot whose species was already cleared is the same non-event, and counting
-    it once per save let one seller editing one lot three times retire an answer by themselves.
-
-    A remembered **"not a species"** is scored here too, and it is the one that needed it most:
-    it is served to every club ahead of the token search, a lot saved with no species is agreement
-    with it rather than evidence against it, and nobody is ever *shown* a negative answer to
-    disagree with -- so it collected nothing, and the only way back was a superuser deleting the
-    row on the gaps page.  Somebody deliberately putting a species on the lot is the disagreement,
-    said out loud, and :attr:`~auctions.models.SpeciesSearchCache.MIN_REJECTS_TO_RETIRE` of them
-    on different lots replace the answer with what those people actually picked.  Not the first
-    one, because one seller's pick becoming the site's answer is the misclick this function exists
-    to prevent; three of them are stronger evidence than the two model calls that wrote the row,
-    and unlike a negative the species they leave behind is something the counters can undo.
-
-    Does nothing at all when the name has no remembered answer, which is the common case -- this
-    runs on every lot save, so it is one indexed lookup and out.
+    A remembered "not a species" is scored too: a lot saved with no species is agreement, and nobody
+    is ever shown a negative, so a deliberate species pick is the disagreement.
+    ``MIN_REJECTS_TO_RETIRE`` picks on different lots replace it with what they chose.
     """
     normalized = normalize(text)
     if not normalized:
@@ -1383,17 +894,14 @@ def record_choice(text, species, *, first_save=False, changed=False, user=None):
         return
     if chosen_pk and str(chosen_pk) == str(row.species_id):
         if first_save:
-            # F() rather than a read-modify-write: two sellers saving at once should count twice.
+            # F(): two concurrent saves count twice.
             SpeciesSearchCache.objects.filter(pk=row.pk).update(accepts=F("accepts") + 1)
         return
     if not (first_save or changed):
-        # The species is not what this name is remembered as, but it was not this save that made
-        # that true -- somebody is editing a price on a lot they fixed a week ago.  Already counted.
+        # Already mismatched before this save (a price edit); already counted.
         return
     SpeciesSearchCache.objects.filter(pk=row.pk).update(rejects=F("rejects") + 1)
-    # Re-read rather than refresh_from_db(): two people can be saving lots with this name at the
-    # same moment, and the other one may have retired the row already.  A lot save must not fail
-    # because of what somebody else's save did to a cache row.
+    # Re-read: a concurrent save may have retired the row, and a lot save must not fail over it.
     row = SpeciesSearchCache.objects.filter(pk=row.pk).first()
     if row and row.is_discredited:
         logger.info(
@@ -1407,18 +915,13 @@ def record_choice(text, species, *, first_save=False, changed=False, user=None):
 
 
 def _reject_a_negative(row, text, species, chosen_pk, *, first_save, changed, user):
-    """Score somebody putting a species on a lot the cache says is not one.  See :func:`record_choice`.
-
-    Counted on the save that created the lot or on a later one that actually moved the species,
-    for the reason the positive half counts the same two: re-saving a lot to fix its price is not
-    a second person disagreeing.  A lot saved with no species is not counted at all -- most lots
-    have no species because nobody filled the field in, so agreement here measures nothing.
+    """Score a species put on a lot the cache calls "not a species". See :func:`record_choice`. A lot
+    saved with no species counts for nothing: most just weren't filled in.
     """
     if not (chosen_pk and (first_save or changed)):
         return
     SpeciesSearchCache.objects.filter(pk=row.pk).update(rejects=F("rejects") + 1)
-    # Re-read rather than refresh_from_db(), for the reason the positive half does: somebody
-    # else's save may have got here first, and a lot save must not fail because of it.
+    # Re-read, as in record_choice.
     row = SpeciesSearchCache.objects.filter(pk=row.pk).first()
     if row and row.is_discredited:
         logger.info(
@@ -1427,26 +930,16 @@ def _reject_a_negative(row, text, species, chosen_pk, *, first_save, changed, us
             species,
             row.rejects,
         )
-        # remember() carries the guards this must not go round: an unapproved species stays out of
-        # a table every club reads, and a retired pairing is not learned again.  It also resets the
-        # counters, because the votes above were about the answer being replaced.
+        # Through remember() for its guards (approval, retirement), and it resets the counters.
         remember(text, species, source="user", user=user)
 
 
 def _is_somebody_elses_name(normalized, species, user=None, club=None):
-    """True when a cached answer is really one club's private word for that fish.
+    """True when a cached answer is really one club's scoped common name for that fish.
 
-    A :class:`SpeciesSearchCache` row is served to every club, which is right for what the table
-    mostly holds: the model working out that "blue dream shrimp" is a *Neocaridina* strain is a
-    fact about the hobby, not about whoever paid for the call.  It is wrong when the text is a
-    **name** somebody added here and it was scoped -- "yellow lab" belongs to the club that taught
-    it until a superuser approves it, and :func:`visible_common_names` is careful about exactly
-    that.  One cached row must not be the way round it: the cache is read before the token search
-    and answers on its own, so a leak here is a leak everywhere, forever, for everybody.
-
-    Two indexed lookups, and only when a row would otherwise answer.  The first one ends it for
-    the common case: nothing in ``SpeciesCommonName`` claims the text at all, because the row is
-    an inference rather than a name, and an inference is nobody's property.
+    The cache is read before the token search and served to every club, so without this a club-scoped
+    name leaks site-wide. Nothing in ``SpeciesCommonName`` claiming the text ends it in one lookup: an
+    inference is nobody's property.
     """
     if species is None:
         return False
@@ -1457,75 +950,43 @@ def _is_somebody_elses_name(normalized, species, user=None, club=None):
 
 
 def suggest_species(text, user=None, use_llm=True, category=None, club=None, budget=None):
-    """The one call the views make: a handful of species for a typed lot name.
+    """The one call views make: ``(species_list, source)`` for a typed lot name.
 
-    Returns ``(species_list, source)`` where source is one of ``cache``, ``exact``, ``search``,
-    ``llm`` or ``none`` -- the caller shows it for debugging and nothing else.  An empty list is
-    a legitimate answer, and the UI turns it into "No species".
-
-    *budget* is whose daily model allowance a call would come out of; the caller keeps the object
-    and can ask it afterwards whether a call was refused.  See :class:`LLMBudget`.
-
-    *category* is the category the lot form currently shows, when the caller has one.  It only
-    ever re-orders candidates that already matched (see :func:`_rank`), never filters them: the
-    category is itself a guess from the lot's name, and one guess quietly vetoing the species list
-    is exactly the failure this module is written to avoid.
-
-    *club* is the club this lookup is happening for, when the caller has one to hand -- the club
-    running the auction, or the club whose API key made the call.  It only ever *widens* the
-    answer, by :func:`visible_species`, so a caller with no club to pass loses nothing that was
-    already everybody's.
+    *source* (``cache``/``exact``/``search``/``llm``/``none``) is for debugging. An empty list is a
+    real answer. *budget* is whose model allowance is spent (:class:`LLMBudget`). *category* only
+    re-orders (:func:`_rank`). *club* only widens visibility (:func:`visible_species`).
     """
     normalized = normalize(text)
     if not normalized:
         return [], "none"
 
-    # Exact matching runs *before* the cache even though the cache is cheaper.  The cache holds
-    # answers that were guessed, and it is shared by every club: one bad row would otherwise
-    # outrank the species list itself, forever, for everybody.  Two indexed lookups is a small
-    # price for the guarantee that a name the list knows is always answered by the list.
+    # Exact before cache: the list must always outrank a shared guess.
     exact = _rank(exact_matches(text, user=user, club=club), category)
     if exact:
         return exact, "exact"
 
     cached = SpeciesSearchCache.objects.filter(search_text=normalized).select_related("species").first()
     if cached:
-        # Cheap and racy on purpose: this counter exists to show which names are carrying the
-        # cache, not to be exact.
+        # Racy on purpose; it only shows which names carry the cache.
         SpeciesSearchCache.objects.filter(pk=cached.pk).update(hits=cached.hits + 1)
         remembered = cached.species
-        # A gap row healing itself.  The row says what this lot is and says the list did not have
-        # it; the list has since been imported into a dozen times, so the question is asked again
-        # -- one indexed lookup, no model call.  This is the whole reason the column exists: an
-        # identification we couldn't supply used to be written down as "not a species", where
-        # adding the fish afterwards changed nothing and only a superuser deleting the row by hand
-        # could undo it.
+        # A gap row healing itself: the fish may have been imported since. One lookup, no model call.
         healed = False
         if remembered is None and cached.scientific_name:
             remembered = _species_named(cached.scientific_name, user=user, club=club)
             if remembered is not None and is_rejected(normalized, remembered):
                 remembered = None
             healed = remembered is not None
-        # A cached answer still has to be one this caller may see.  remember() will not write an
-        # unapproved species in the first place, so the extra query below only ever runs for a
-        # species that was approved when it was remembered and has since been un-approved.  Asking
-        # visible_species rather than re-deriving the rule here is what stops the two drifting.
-        # Falls *through* rather than answering "no species": the name may well match something in
-        # the list, and the whole point of the cache being second is that one row cannot outrank
-        # the species table.
+        # A cached species must still be visible (it may have been un-approved). Falls through
+        # rather than answering "no species", since the cache mustn't outrank the list.
         seen = remembered is None or remembered.approved
         if not seen:
             seen = visible_species(user, club).filter(pk=remembered.pk).exists()
-        # ...and the *name* has to be one they may see, not just the species.  See
-        # _is_somebody_elses_name: without this, one cached row hands a club-scoped common name
-        # to every club, which is the one thing the name table itself refuses to do.
+        # ...and so must the name (see _is_somebody_elses_name).
         if seen and _is_somebody_elses_name(normalized, remembered, user=user, club=club):
             seen = False
         if seen:
-            # Written back only when it is everybody's.  This row is served to every club, so
-            # healing it with a species that is visible to *this* caller alone would hand one
-            # club's private row to the whole site -- the same leak _is_somebody_elses_name is
-            # there to stop.  An unapproved one is still answered with, just not written down.
+            # Written back only when approved; this row is served site-wide.
             if healed and remembered.approved:
                 SpeciesSearchCache.objects.filter(pk=cached.pk).update(species=remembered)
             return ([remembered] if remembered else []), "cache"
@@ -1535,71 +996,36 @@ def suggest_species(text, user=None, use_llm=True, category=None, club=None, bud
         return found, "search"
 
     if use_llm:
-        # Round one: what does this name mean?  Cheap, list-free, and where a misspelling or a
-        # trade abbreviation gets read through.  See identify().
+        # Round one; see identify().
         answer = identify(text, user=user, club=club, budget=budget)
         if not answer.settled and answer.corrected_name and normalize(answer.corrected_name) != normalized:
-            # The model fixed the spelling but would not commit to a species -- "red luwigia" is a
-            # genus and a colour, and there is no binomial that means it.  So the corrected name
-            # goes back through the same two steps the typed name just failed, which is where the
-            # seven *Ludwigia* come from: the model did the spelling, the species list does the
-            # identifying, and neither had to do the other's half.
-            #
-            # Deliberately not remembered.  What comes back here is often several species -- "here
-            # are the seven Ludwigia" is a picker rather than an answer -- and the single-species
-            # case cannot be written to a table every club reads: exact_matches was scoped to this
-            # caller, so the row that answered may be one club's own name for the fish, and the
-            # read guard on the cache checks the name that was *typed*, which is the misspelling
-            # and belongs to nobody.  Costing one short call per lookup is the cheaper mistake; the
-            # lot form writes a row of its own the moment a seller picks one of these and saves.
+            # A corrected spelling with no species ("red ludwigia"): run it through exact and search.
+            # Not remembered: often several species, and the cache's name guard checks the typed
+            # misspelling, so a club-scoped match could leak. The lot form writes its own row on save.
             corrected = _rank(exact_matches(answer.corrected_name, user=user, club=club), category) or search_matches(
                 answer.corrected_name, category=category, user=user, club=club
             )
             if corrected:
                 return corrected, "llm"
-        # Whether the shortlist round ran *and answered*, which is the only thing that can make a
-        # bare "not a species" safe to write down.  See the remember() call below.
+        # Whether round two ran and answered: required before a bare negative is written.
         confirmed = False
         if not answer.settled:
-            # It could not name the lot, named something we don't stock, or said the lot is not an
-            # organism at all.  Round two shows it what we *do* have, which is where a synonym, a
-            # strain name or a club's own word for a fish lives -- and, for that last case, is the
-            # second opinion rather than a lookup: see Identification.settled.  A binomial from
-            # round one is kept whatever round two decides: "this is Yssichromis piceatus and we
-            # don't have it" stays true even when a list that does not contain the fish fails to
-            # produce it.
+            # Round two: our list, where synonyms and strain names live, and the second opinion on
+            # "not an organism". Round one's binomial is kept whatever it decides.
             second = llm_match(text, user=user, club=club, budget=budget, reading=answer.corrected_name)
             confirmed = second.answered
             answer = Identification(
                 second.species,
                 second.answered or answer.answered,
-                # Round one's binomial survives round two failing to place the lot, and only that:
-                # once round two has a species, "and also it is a fish we don't stock" is no longer
-                # true of this row.  See identify().
+                # ...unless round two found a species.
                 second.scientific_name or ("" if second.species else answer.scientific_name),
             )
         if answer.species is not None and _is_somebody_elses_name(normalized, answer.species, user=user, club=club):
-            # The lot name is one club's private word for that fish, and this caller is not in
-            # that club.  The species itself is everybody's, which is exactly what makes this
-            # worth checking here: the model is answering out of its own head rather than out of
-            # visible_common_names, so it will happily identify "yellow lab" for a club that was
-            # never taught the name -- past a name table that refuses to, and then into a cache
-            # every club reads.  Same guard the cache branch above applies, for the same reason.
-            #
-            # Nothing is remembered.  "No species" is the right answer for this caller and the
-            # wrong one for the club that owns the name, and one shared row cannot say both.
+            # The name is another club's scoped word; the model recognised it anyway. Answer
+            # "no species" and remember nothing: one shared row can't be right for both clubs.
             answer = Identification()
-        # Remember the miss as well as the hit, but only when the model actually answered.  A
-        # name nobody has looked at yet (no model configured, no budget left, the call failed)
-        # must not be written down as "not a species" for every club on the site, forever.
-        #
-        # A **bare** negative -- no species and no binomial -- needs both rounds to have answered,
-        # because it is the only thing written here that nothing walks back: record_choice now
-        # scores one, but only once somebody has picked a species for the name, and nobody is
-        # shown a negative to disagree with in the first place.  A species and a gap row are both
-        # written on one round, because both are recoverable: sellers outvote a wrong species, and
-        # a gap heals itself the day the fish is imported.  The cost is two short calls for a
-        # sponge filter, once, for the whole site.
+        # Remember only when the model answered. A species or gap row needs one round (both are
+        # recoverable); a bare negative needs both, because nothing walks it back.
         if answer.answered and (answer.species or answer.scientific_name or confirmed):
             remember(text, answer.species, source="llm", scientific_name=answer.scientific_name)
         if answer.species:

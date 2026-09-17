@@ -86,19 +86,18 @@ class SquarePaymentTests(StandardTestCase):
         """supports_tap_to_pay is True only when the in-person scope was granted."""
         from auctions.models import SQUARE_OAUTH_SCOPES
 
-        # The seller was created without scopes (legacy connection) → must reconnect.
+        # Created without scopes (legacy), so must reconnect.
         self.assertFalse(self.square_seller.supports_tap_to_pay)
-        # A full reconnect records the requested scopes, which include the in-person scope.
         self.square_seller.scopes = " ".join(SQUARE_OAUTH_SCOPES)
         self.square_seller.save()
         self.assertTrue(self.square_seller.supports_tap_to_pay)
-        # A non-empty grant that still lacks the in-person scope is not enough (no substring match).
+        # Missing the in-person scope isn't enough (no substring match).
         self.square_seller.scopes = "PAYMENTS_WRITE PAYMENTS_READ"
         self.square_seller.save()
         self.assertFalse(self.square_seller.supports_tap_to_pay)
 
     def test_find_square_reconnects_command(self):
-        """The audit command lists legacy sellers and drops them once they have the scope."""
+        """The audit command lists legacy sellers until they have the scope."""
         from io import StringIO
 
         from auctions.models import SQUARE_OAUTH_SCOPES
@@ -109,7 +108,6 @@ class SquarePaymentTests(StandardTestCase):
         self.assertIn("Need to reconnect: 1", output)
         self.assertIn(self.admin_user.username, output)
 
-        # Once the scope is recorded (reconnected), the seller drops off the list.
         self.square_seller.scopes = " ".join(SQUARE_OAUTH_SCOPES)
         self.square_seller.save()
         out = StringIO()
@@ -217,15 +215,10 @@ class SquarePaymentTests(StandardTestCase):
         initial_square_refund_possible = self.lot.square_refund_possible
         self.assertTrue(initial_square_refund_possible)
 
-        # Since we can't actually call Square API in tests, we'll just verify
-        # that the refund method can be called without errors
-        # In a real scenario with mocked Square API, this would process a refund
+        # No real Square API in tests; only exercise the code path.
         try:
             self.lot.refund(100, self.admin_user, "Test refund")
-            # The refund method should handle the case where Square API is not available
         except Exception:
-            # We expect this might fail in tests since we don't have real Square credentials
-            # but we want to ensure the code path is exercised
             pass
 
     def test_square_enabled_in_user_preferences(self):
@@ -272,7 +265,7 @@ class SquarePaymentTests(StandardTestCase):
             self.fail(f"change_square management command not found: {e}")
 
     def test_square_oauth_redirect_uri_without_proxy_header(self):
-        """Test that Square OAuth redirect URI defaults to http when no X-Forwarded-Proto header"""
+        """The Square OAuth redirect URI is http without X-Forwarded-Proto."""
         from django.urls import reverse
 
         # Login as admin user
@@ -388,7 +381,6 @@ class SquarePaymentTests(StandardTestCase):
         self.assertIn(self.tosB, filtered_qs)
 
     def test_is_club_member_filter_in_auction_tos(self):
-        """'club member' returns is_club_member=True users; 'unpaid' returns is_club_member=False."""
         from auctions.filters import AuctionTOSFilter
         from auctions.models import AuctionTOS
 
@@ -422,28 +414,24 @@ class SquarePaymentTests(StandardTestCase):
         self.tosB.pickup_location = mail_location
         self.tosB.save()
 
-        # The create_payment_link method should set ask_for_shipping_address=True
-        # We can't test the actual API call, but we can verify the location is set correctly
+        # The API call itself can't be tested.
         self.assertTrue(self.tosB.pickup_location.pickup_by_mail)
 
     def test_sanitize_square_phone(self):
-        """The Square phone pre-fill hint keeps valid numbers and drops junk that would 400."""
+        """The Square phone hint keeps valid numbers and drops junk that would 400."""
         from auctions.models import sanitize_square_phone
 
-        # Valid: US 10-digit (formatting stripped), US 11-digit, and E.164 keep the leading +.
         self.assertEqual(sanitize_square_phone("(555) 123-4567"), "5551234567")
         self.assertEqual(sanitize_square_phone("1-555-123-4567"), "15551234567")
         self.assertEqual(sanitize_square_phone("+44 20 7946 0958"), "+442079460958")
-        # Invalid: dropped to "" so the caller omits the hint instead of failing the link.
         for junk in ["call me", "555-1234", "", None, "x1234", "0", "12345678901234567890"]:
             self.assertEqual(sanitize_square_phone(junk), "", msg=f"expected '' for {junk!r}")
 
     def test_open_invoice_filter_no_duplicates(self):
-        """Filtering should not return duplicate AuctionTOS rows when a user has multiple payments on their invoice"""
+        """Multiple payments on an invoice don't duplicate AuctionTOS rows."""
         from auctions.filters import AuctionTOSFilter
         from auctions.models import AuctionTOS
 
-        # Give tosB's existing invoice multiple payments - a naive JOIN would produce duplicate rows
         InvoicePayment.objects.create(
             invoice=self.test_invoice, payment_method="Cash", amount=10, receipt_number="RCPT1"
         )
@@ -456,7 +444,6 @@ class SquarePaymentTests(StandardTestCase):
 
         filtered_qs = filter_instance.auctiontos_search(qs, "query", "RCPT1")
 
-        # tosB should appear exactly once despite having multiple payments with the same receipt number
         tos_pks = list(filtered_qs.values_list("pk", flat=True))
         self.assertEqual(
             tos_pks.count(self.tosB.pk),
@@ -510,8 +497,6 @@ class SquareRefundFormTests(StandardTestCase):
         # Check that form initializes without errors
         self.assertIsNotNone(form)
 
-        # When square_refund_possible is True, the form should include a message
-        # We can't easily test the rendered HTML here, but we can verify the form works
         self.assertTrue(self.lot.square_refund_possible)
 
     def test_lot_refund_form_without_square(self):
@@ -701,7 +686,7 @@ class SquareOAuthRevocationTests(StandardTestCase):
         self.assertEqual(response.status_code, 200)
 
     def test_payment_webhook_creates_invoice_payment(self):
-        """Test that payment.updated webhook successfully creates InvoicePayment without status field"""
+        """payment.updated creates an InvoicePayment without a status field."""
         from unittest.mock import Mock
 
         from django.urls import reverse
@@ -724,7 +709,6 @@ class SquareOAuthRevocationTests(StandardTestCase):
         mock_client = Mock()
         mock_client.orders = mock_orders_api
 
-        # Patch get_square_client at the class level so any instance returns our mock
         with patch.object(SquareSeller, "get_square_client", return_value=mock_client):
             # Simulate payment.updated webhook with COMPLETED status
             webhook_data = {
@@ -759,16 +743,11 @@ class SquareOAuthRevocationTests(StandardTestCase):
             self.assertEqual(payment.amount, Decimal("50.00"))  # 5000 cents = $50
             self.assertEqual(payment.currency, "USD")
             self.assertEqual(payment.payment_method, "Square")
-            # Verify that the status field is not present (would raise AttributeError if accessed)
             self.assertFalse(hasattr(payment, "status") and payment.status)
 
 
 class SquareWebhookSignatureValidationTests(StandardTestCase):
-    """Tests for Square webhook signature validation
-
-    Confirms that SQUARE_WEBHOOK_SIGNATURE_KEY is actually respected
-    and that we don't validate forged requests.
-    """
+    """Square webhook signatures are validated when SQUARE_WEBHOOK_SIGNATURE_KEY is set."""
 
     def setUp(self):
         super().setUp()
@@ -800,13 +779,7 @@ class SquareWebhookSignatureValidationTests(StandardTestCase):
         }
 
     def compute_signature(self, url, body, key=None):
-        """Compute an HMAC-SHA256 signature for testing using base64 encoding (as Square does)
-
-        Args:
-            url: The notification URL
-            body: The request body
-            key: Optional signature key (defaults to self.signature_key)
-        """
+        """Square's base64 HMAC-SHA256 of url + body, with ``key`` defaulting to self.signature_key."""
         if key is None:
             key = self.signature_key
         message = (url + body).encode("utf-8")
@@ -815,10 +788,8 @@ class SquareWebhookSignatureValidationTests(StandardTestCase):
         return base64.b64encode(hash_bytes).decode("utf-8")
 
     def test_forged_signature_is_rejected(self):
-        """Test that requests with invalid/forged signatures are rejected when key is configured"""
         url = reverse("square_webhook")
 
-        # Test with signature key configured - forged signature should be rejected
         with override_settings(SQUARE_WEBHOOK_SIGNATURE_KEY=self.signature_key):
             # Send with a forged/invalid signature
             response = self.client.post(
@@ -833,10 +804,8 @@ class SquareWebhookSignatureValidationTests(StandardTestCase):
             self.assertIn(b"invalid signature", response.content)
 
     def test_missing_signature_header_is_rejected(self):
-        """Test that requests without signature header are rejected when key is configured"""
         url = reverse("square_webhook")
 
-        # Test with signature key configured - missing signature should be rejected
         with override_settings(SQUARE_WEBHOOK_SIGNATURE_KEY=self.signature_key):
             # Send without signature header
             response = self.client.post(
@@ -850,18 +819,15 @@ class SquareWebhookSignatureValidationTests(StandardTestCase):
             self.assertIn(b"missing signature", response.content)
 
     def test_valid_signature_is_accepted(self):
-        """Test that requests with valid signatures are accepted when key is configured"""
         url = reverse("square_webhook")
         body = json.dumps(self.webhook_data)
 
-        # Build the full URL as the test client would see it
-        # The test client uses HTTP on localhost by default
+        # The test client's URL.
         full_url = "http://testserver" + url
 
         # Compute the correct signature
         valid_signature = self.compute_signature(full_url, body)
 
-        # Test with signature key configured - valid signature should be accepted
         with override_settings(SQUARE_WEBHOOK_SIGNATURE_KEY=self.signature_key):
             response = self.client.post(
                 url,
@@ -882,7 +848,6 @@ class SquareWebhookSignatureValidationTests(StandardTestCase):
         # Compute signature with a DIFFERENT key (attacker's key)
         wrong_signature = self.compute_signature(full_url, body, key="attacker-key-different")
 
-        # Test with correct signature key configured - wrong key signature should be rejected
         with override_settings(SQUARE_WEBHOOK_SIGNATURE_KEY=self.signature_key):
             response = self.client.post(
                 url,
@@ -926,10 +891,9 @@ class SquareWebhookSignatureValidationTests(StandardTestCase):
             self.assertIn(b"invalid signature", response.content)
 
     def test_improperly_configured_in_production_without_webhook_key(self):
-        """Test that ImproperlyConfigured is raised in production when Square is configured but webhook key is missing"""
+        """Production with Square configured but no webhook key raises ImproperlyConfigured."""
         url = reverse("square_webhook")
 
-        # Simulate production mode (DEBUG=False) with Square configured but no webhook signature key
         with override_settings(
             DEBUG=False,
             SQUARE_APPLICATION_ID="test-app-id",

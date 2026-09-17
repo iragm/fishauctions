@@ -1,8 +1,8 @@
 """Club API keys, and the page that documents the API they open.
 
-``club_api_documentation_context`` fills in the documentation include, and is deliberately shared
-with the ``club_api`` assistant tool so that a number in an example is the number the code
-enforces. The endpoints themselves are in :mod:`auctions.views.club_api`.
+``club_api_documentation_context`` fills in the documentation include and is shared with the
+``club_api`` assistant tool, so a number in an example is the number the code enforces. The
+endpoints are in :mod:`auctions.views.club_api`.
 """
 
 import logging
@@ -51,42 +51,6 @@ from .club_api import (
 )
 
 logger = logging.getLogger(__name__)
-
-
-# class ClubMemberIngestAPIView(APIView):
-#     """API key-authenticated endpoint for external services to create ClubMember records."""
-
-#     authentication_classes = [APIKeyAuthentication]
-#     permission_classes = []
-#     throttle_classes = [ApiKeyThrottle]
-
-#     def post(self, request, slug=None):
-#         api_key = request.api_key
-#         club = request.club
-#         if not slug or club.slug != slug:
-#             return Response({"error": "API key does not belong to this club."}, status=403)
-#         if not api_key.can_add_club_members:
-#             return Response({"error": "API key cannot add club members."}, status=403)
-#         mapped = map_fields(dict(request.data), api_key)
-#         serializer = ClubMemberIngestSerializer(data=mapped)
-#         if not serializer.is_valid():
-#             received_fields = ", ".join(mapped.keys()) if mapped else "none"
-#             ClubHistory.objects.create(
-#                 club=club,
-#                 user=None,
-#                 action=(
-#                     f"API ingest rejected [{api_key.prefix}] ({api_key.name}): {serializer.errors} "
-#                     f"— received fields: {received_fields}. "
-#                     f"Set up field mapping on this key to resolve this issue."
-#                 ),
-#                 applies_to="MEMBERS",
-#             )
-#             return Response({"status": "error", "errors": serializer.errors}, status=400)
-#         member, created = create_club_member_from_api(serializer.validated_data, club, api_key)
-#         return Response(
-#             {"status": "created" if created else "duplicate", "member_id": member.pk},
-#             status=201 if created else 200,
-#         )
 
 
 class ClubAPIKeyListView(LoginRequiredMixin, ClubViewMixin, TemplateView):
@@ -191,22 +155,18 @@ class ClubAPIKeyCreateView(LoginRequiredMixin, ClubViewMixin, View):
 
 
 def _as_api_timestamp(value):
-    """Format a datetime the way DRF renders one, so doc examples match real responses."""
+    """Format a datetime the way DRF does, so doc examples match real responses."""
     return value.astimezone(date_tz.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
 def club_api_documentation_context(club, api_key):
     """Everything ``_club_api_endpoints.html`` needs, for the page and for the assistant.
 
-    This page *is* the club API's documentation -- every endpoint is written up in that template,
-    behind the ``{% if %}`` for the permission it needs, and nowhere else. That sentence stayed
-    true when an agent became the second reader: ``palette_actions.club_api`` renders the same
-    include as plain text for somebody writing an integration, so building the context here
-    rather than inside ``get_context_data`` is what makes that a second reader rather than a
-    second copy that drifts.
+    This page is the club API's documentation: every endpoint is written up in that template, behind the
+    ``{% if %}`` for the permission it needs. ``palette_actions.club_api`` renders the same include as
+    plain text, so building the context here makes that a second reader rather than a second copy.
 
-    Every example is filled in from this club, so what it shows is a request its admin can paste
-    and run, and the numbers are read off the code that enforces them.
+    Every example is filled in from this club, so it shows a request its admin can paste and run.
     """
     today = timezone.now().date()
     now = timezone.now()
@@ -215,20 +175,19 @@ def club_api_documentation_context(club, api_key):
         "example_member_id": (
             club.members.filter(is_deleted=False).order_by("-pk").values_list("pk", flat=True).first()
         ),
-        # Dates in the renew example, so it shows what this club's renewal actually returns.
+        # Dates in the renew example, showing what this club's renewal returns.
         "example_last_paid": today,
         "example_new_expiration": _compute_member_renewal_expiration(
             club, ClubMember(club=club, membership_expiration_date=None), today
         ),
-        # The BAP lot example shows the real default window, formatted the way the API returns it.
+        # The real default window, formatted the way the API returns it.
         "bap_lot_default_days": BAP_LOT_DEFAULT_DAYS,
         "example_bap_range_end": _as_api_timestamp(now),
         "example_bap_range_start": _as_api_timestamp(now - timedelta(days=BAP_LOT_DEFAULT_DAYS)),
         "example_bap_lot_timestamp": _as_api_timestamp(now - timedelta(days=2)),
         "example_bap_award_date": (now - timedelta(days=2)).date(),
-        # Field mappings rename incoming *club member* fields, so they mean nothing to a key that
-        # only reads lots or looks up species -- and a settings box that does nothing is worse
-        # than no box.
+        # Field mappings rename incoming club member fields, so they mean nothing to a key that
+        # only reads lots or species -- and a settings box that does nothing is worse than none.
         "key_writes_club_members": any(
             (
                 api_key.can_add_club_members,
@@ -237,19 +196,17 @@ def club_api_documentation_context(club, api_key):
                 api_key.can_renew_memberships,
             )
         ),
-        # Species lookup: the documented numbers come from the matcher itself, so the page can't
-        # drift away from what the endpoint actually does.
+        # The documented numbers come from the matcher itself, so the page can't drift.
         "species_lookup_max_results": MAX_SUGGESTIONS,
         "species_lookup_llm_calls_per_day": SPECIES_LOOKUP_LLM_CALLS_PER_CLUB_PER_DAY,
         "species_lookup_llm_available": assist_enabled(),
-        # What is left of it right now, so the page a club admin reads and the header their
-        # software reads are the same number.
+        # What's left right now, so the page and the header their software reads agree.
         "species_lookup_llm_remaining": LLMBudget.for_club(club, SPECIES_LOOKUP_LLM_CALLS_PER_CLUB_PER_DAY).remaining,
         "example_category": Category.objects.order_by("name").first(),
         "lot_page_size": LOT_PAGE_SIZE,
         "max_lot_page_size": MAX_LOT_PAGE_SIZE,
         "lot_ordering": sorted(LOT_ORDERING),
-        # A real slug from this club, so the example URLs are ones an admin can paste and run.
+        # A real slug from this club, so the example URLs can be pasted and run.
         "example_auction": club_api_current_auction(club) or club_api_latest_auction(club),
     }
 
@@ -383,10 +340,10 @@ class ClubMemberMapView(LoginRequiredMixin, ClubViewMixin, TemplateView):
 
 
 class SelfServeContactLinkView(ClubViewMixin, View):
-    """Allow a club member to update their own communication preferences via a UUID link.
+    """Let a club member update their own communication preferences via a UUID link.
 
-    Accessible without authentication — the UUID in the URL acts as the token.
-    URL levels: none → do_not_contact, essential → non_essential, all → contact
+    No authentication: the UUID is the token. URL levels: none → do_not_contact, essential →
+    non_essential, all → contact.
     """
 
     allow_non_admins = True
@@ -409,8 +366,8 @@ class SelfServeContactLinkView(ClubViewMixin, View):
         new_status = self._LEVEL_TO_STATUS[level]
         ClubMember.objects.filter(pk=member.pk).update(contact_status=new_status)
         label = self._STATUS_LABELS[new_status]
-        # The member acts on their own UUID link, so there's no acting user (matches
-        # ClubMemberSelfServiceView, which logs the same kind of change)
+        # The member acts on their own UUID link, so there is no acting user (like
+        # ClubMemberSelfServiceView, which logs the same kind of change).
         ClubHistory.objects.create(
             club=self.club,
             user=None,

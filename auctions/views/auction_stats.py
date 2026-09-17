@@ -1,7 +1,5 @@
-"""The JSON behind the charts on one auction's stats page.
-
-One view per chart, each returning the series its canvas asks for. They all go through
-:class:`AuctionStatsPermissionsMixin`, because an auction's numbers are its admin's business.
+"""The JSON behind the charts on one auction's stats page, one view per chart, all behind
+:class:`AuctionStatsPermissionsMixin`.
 """
 
 import logging
@@ -66,22 +64,16 @@ class AuctionChartView(View, AuctionStatsPermissionsMixin):
 
 
 class AuctionFunnelChartData(AuctionChartView):
-    """
-    Inverted funnel chart showing user participation
-    """
+    """Inverted funnel chart of user participation."""
 
     def get(self, *args, **kwargs):
-        # Serve only the values cached by recalculate_stats (the update_auction_stats celery task).
-        # Never compute unique_views synchronously here: even the optimized version scans
-        # auctions_pageview, and this endpoint is hit on every chart load. The stats page schedules a
-        # recalculation when opened and refreshes over WebSocket when it finishes (see AuctionStats),
-        # so an auction with no cached stats yet shows 0 briefly rather than blocking the DB.
+        # Cached values only: unique_views scans auctions_pageview. The stats page schedules a
+        # recalculation and refreshes over WebSocket.
         misc = self.auction.get_stat_misc()
         total_views = misc.get("total_unique_views", 0)
         user_views = misc.get("logged_in_unique_views", 0)
         total_bidders = User.objects.filter(bid__lot_number__auction=self.auction).annotate(dcount=Count("id")).count()
-        # Count every sold, live lot's winner -- including admin-declared winners and winners with
-        # no user account, which the old winner__auction join silently dropped.
+        # Includes admin-declared winners and winners without accounts.
         total_winners = self.auction.buyer_tos_qs.count()
         labels = [
             "Total unique views",
@@ -118,8 +110,7 @@ class AuctionLotBiddersChartData(AuctionChartView):
             "Lots with bids from 6 or more users",
         ]
         data = [0, 0, 0, 0, 0, 0, 0]
-        # Distinct bidders per lot for the whole auction in one GROUP BY. This used to be a query
-        # per lot, so a five-hundred-lot auction drew this chart with five hundred queries.
+        # One GROUP BY for the whole auction.
         bidders_per_lot = dict(
             Bid.objects.exclude(is_deleted=True)
             .filter(lot_number__in=lots)
@@ -132,10 +123,7 @@ class AuctionLotBiddersChartData(AuctionChartView):
             if not winning_price:
                 data[0] += 1
             else:
-                # Count distinct bidders (the labels say "users"), not raw Bid rows. Clamp into the
-                # final "6 or more" bucket so lots with >6 bidders are counted rather than silently
-                # dropped. A sold lot with no recorded bids (buy-now / admin-declared winner) still
-                # had a buyer, so floor it at bucket 1 -- never "Not sold" (bucket 0).
+                # Distinct bidders, capped at "6 or more"; a sold lot with no bids counts as 1.
                 data[min(max(bidders_per_lot.get(lot_pk, 0), 1), 6)] += 1
         return JsonResponse(
             data={
@@ -177,7 +165,7 @@ class AuctionCategoriesChartData(AuctionChartView):
         )
         if lot_count:
             shown = list(categories[: self.number_of_categories_to_show])
-            # Three GROUP BYs for the whole chart, rather than three queries per category.
+            # Three GROUP BYs for the whole chart.
             views_by_category = dict(
                 PageView.objects.filter(lot_number__auction=self.auction, lot_number__species_category__in=shown)
                 .order_by()
@@ -223,7 +211,6 @@ class AuctionCategoriesChartData(AuctionChartView):
 
 
 class AuctionStatsActivityJSONView(BaseLineChartView, AuctionStatsPermissionsMixin):
-    # these will no doubt need to be tweaked, perhaps differnt for in-person and online auctions?
     bins = 21
     days_before = 16
     days_after = bins - days_before
@@ -255,14 +242,12 @@ class AuctionStatsActivityJSONView(BaseLineChartView, AuctionStatsPermissionsMix
         else:  # in person
             self.date_start = self.auction.date_start - timezone.timedelta(days=self.days_before)
             self.date_end = self.auction.date_start + timezone.timedelta(days=self.days_after)
-        # if date_end is in the future, shift the graph to show the same range, but for the present
+        # If date_end is in the future, show the same range ending now.
         if self.date_end > timezone.now():
             time_difference = self.date_end - self.date_start
             self.date_end = timezone.now()
             self.date_start = self.date_end - time_difference
             self.dates_messed_with = True
-        # self.bin_size = (self.date_end - self.date_start).total_seconds() / self.bins
-        # self.bin_edges = [self.date_start + timezone.timedelta(seconds=self.bin_size * i) for i in range(self.bins + 1)]
         return super().dispatch(request, *args, **kwargs)
 
     def get_labels(self):
@@ -424,7 +409,6 @@ class AuctionStatsAttritionJSONView(BaseLineChartView, AuctionStatsPermissionsMi
                 [
                     {
                         "x": (lot.date_end - self.end_date).total_seconds() // 60,  # minutes after auction start
-                        # 'x': lot.date_end.timestamp() * 1000, # this one gives js timestamps and would need moment.js to convert to date
                         "y": lot.winning_price,
                     }
                     for lot in self.lots
@@ -528,13 +512,8 @@ class AuctionStatsBarChartJSONView(LoginRequiredMixin, AuctionViewMixin, BaseCol
 
 class AuctionStatsLotSellPricesJSONView(AuctionStatsBarChartJSONView):
     def _fallback_stats(self):
-        """Recompute the sell-price chart when cached_stats is missing.
-
-        Delegates to Auction.set_stat_lot_sell_prices so the fallback labels, providers and
-        data come from the same single source of truth -- previously get_labels() and get_data()
-        each rederived the bins with different math (num_bins = (max-1)//2 vs max//2, and
-        end_bin = start+num*width vs max-1), so the labels and bars disagreed about both the bar
-        count and the bin boundaries. Memoized so the three getters compute it once per request.
+        """Recompute the sell-price chart when cached_stats is missing, via
+        Auction.set_stat_lot_sell_prices. Memoized per request.
         """
         if not hasattr(self, "_fallback_stats_cache"):
             self._fallback_stats_cache = self.auction.set_stat_lot_sell_prices()
@@ -660,61 +639,6 @@ class AuctionStatsReferrersJSONView(AuctionStatsBarChartJSONView):
         return data
 
 
-# # this view and the following collect specific data for the tutorial videos
-# class AdminStatsImages(AuctionStatsBarChartJSONView):
-#     def get_labels(self):
-#         return ['No images', 'Has image']
-
-#     def get_providers(self):
-#         return ['Median sell price', "Average sell price"]
-
-#     def get_data(self):
-#         lots = Lot.objects.filter(auction__slug__in=['njas-in-person-spring-auction-april-2024','nec-2024-auction'], winning_price__isnull=False).annotate(num_images=Count('lotimage'))
-#         lots_with_no_images = lots.filter(num_images=0)
-#         lots_with_one_image = lots.filter(num_images__gt=0)
-#         medians = []
-#         averages = []
-#         counts = []
-#         for lots in [lots_with_no_images, lots_with_one_image]:
-#             try:
-#                 medians.append(median_value(lots, 'winning_price'))
-#             except:
-#                 medians.append(0)
-#             averages.append(lots.aggregate(avg_value=Avg('winning_price'))['avg_value'])
-#         return [medians, averages ]
-
-#     def dispatch(self, request, *args, **kwargs):
-#         # little hack for permissions
-#         return super().dispatch(request, *args, slug="tfcb-2023-annual-auction", **kwargs)
-
-# class AdminStatsDistanceTraveled(AuctionStatsBarChartJSONView):
-#     def get_labels(self):
-#         return ['Less than 10 miles', '10-20 miles', '21-30 miles', '31-40 miles', '41-50 miles', '51+ miles']
-
-#     def get_providers(self):
-#         return ['Number of people']
-#         return ['Sellers', 'Buyers']
-
-#     def get_data(self):
-#         slugs_list = ['tfcb-annual', 'acm', 'ovas', 'njas', 'nec', 'scas']
-#         q_object = Q()
-#         for slug in slugs_list:
-#             q_object |= Q(auction__slug__icontains=slug)
-
-#         buyers = AuctionTOS.objects.filter(q_object, auctiontos_winner__isnull=False, auction__promote_this_auction=True)
-#         #sellers = AuctionTOS.objects.filter(q_object, auctiontos_seller__isnull=False, auction__promote_this_auction=True)
-#         #auctiontos = AuctionTOS.objects.filter(auction__promote_this_auction=True, user__isnull=False)
-#         buyer_histogram = bin_data(buyers, 'distance_traveled', number_of_bins=5, start_bin=1, end_bin=51, add_column_for_high_overflow=True,)
-#         #seller_histogram = bin_data(sellers, 'distance_traveled', number_of_bins=5, start_bin=1, end_bin=51, add_column_for_high_overflow=True,)
-#         logger.debug(buyers.count())
-#         return [buyer_histogram]
-
-#     def dispatch(self, request, *args, **kwargs):
-#         # little hack for permissions
-#         return super().dispatch(request, *args, slug="tfcb-2023-annual-auction", **kwargs)
-# # the two previous views collect specific data for the tutorial videos
-
-
 class AuctionStatsImagesJSONView(AuctionStatsBarChartJSONView):
     def get_labels(self):
         # Check if we have cached stats
@@ -745,8 +669,7 @@ class AuctionStatsImagesJSONView(AuctionStatsBarChartJSONView):
         if self.auction.cached_stats and "images" in self.auction.cached_stats:
             data = self.auction.cached_stats["images"]["data"]
         else:
-            # Fallback to original calculation -- exclude banned/soft-deleted lots to match
-            # set_stat_images and every other sold-lot money stat (see models.Auction.set_stat_images).
+            # Excludes banned and deleted lots, like set_stat_images.
             lots = (
                 self.auction.lots_qs.filter(winning_price__isnull=False)
                 .exclude(banned=True)
@@ -880,9 +803,7 @@ class AuctionStatsPreviousAuctionsJSONView(AuctionStatsBarChartJSONView):
         if self.auction.cached_stats and "previous_auctions" in self.auction.cached_stats:
             data = self.auction.cached_stats["previous_auctions"]["data"]
         else:
-            # Fallback to original calculation
-            # Annotated, not read off each row: AuctionTOS.previous_auctions_count is a COUNT and
-            # this histogram walks every person in the auction.
+            # Annotated rather than previous_auctions_count per row.
             auctiontos = AuctionTOS.objects.filter(auction=self.auction, email__isnull=False).annotate(
                 previous_auctions=Coalesce(
                     Subquery(
@@ -961,9 +882,7 @@ class AuctionStatsLotsSubmittedJSONView(AuctionStatsBarChartJSONView):
         if self.auction.cached_stats and "lots_submitted" in self.auction.cached_stats:
             data = self.auction.cached_stats["lots_submitted"]["data"]
         else:
-            # Fallback to original calculation
-            # Annotated, not read off each row: Invoice.lots_sold counts that person's lots and
-            # this histogram walks every invoice in the auction.
+            # Annotated rather than Invoice.lots_sold per row.
             invoices = Invoice.objects.filter(auction=self.auction).annotate(
                 sold_lot_count=Coalesce(
                     Subquery(

@@ -1,25 +1,22 @@
 """The public club finder: a map of clubs, and the same clubs as a filtered list.
 
-Everything here is visible to anybody, signed in or not, and that is the whole constraint on the
-module. ``Club.objects.listed()`` is the only gate -- approved, and not since folded.
+Everything here is visible to anybody, which is the whole constraint. ``Club.objects.listed()`` --
+approved, and not since folded -- is the only gate.
 
-What that rules out is worth writing down, because the filters are where it would leak: no
-addresses (the map has always shown a pin and deliberately not the street it sits on), no member
-names or counts, no contact addresses, and nothing from the outreach queue -- ``outreach_stage``,
-``stall_reason``, ``date_contacted`` and ``notes`` are a record of our conversations with a club,
-not facts about it. So the filters are built out of interests, what a club has coming up, and
-whether it is taking new members: three things a visitor could already read off the club's page.
+So there are no addresses (the map has always shown a pin, not the street), no member names or
+counts, no contact addresses, and nothing from the outreach queue: ``outreach_stage``,
+``stall_reason``, ``date_contacted`` and ``notes`` are a record of our conversations, not facts
+about the club. The filters are interests, what a club has coming up, and whether it is taking
+members -- three things already on the club's page.
 
-There is deliberately **no summary card** here, which is the one place this differs from the
-speaker directory it is otherwise built like. A row and a map pin both lead to the club's own page.
-A card would be a second public surface carrying the same privacy rules, needing to be kept in step
-with the page forever; and finding a club is a find-one task, unlike comparing speakers, so the
-page load it saves is not worth that. The filters live in the query string, so Back returns to the
-same list.
+There is deliberately **no detail panel**: a row leads to the club's own page. A pin opens a small
+info window with the name, website and Facebook links, interests and "View all club info", because
+making a visitor open the club page to reach its website is a wasted load. That window is a second
+public surface, so it carries nothing the club page doesn't show a signed-out visitor, and
+``test_club_finder`` pins the payload to those fields.
 
-Distance is the one number here that isn't stored on the club. It is measured from the pin, which
-is already public, to a location the *visitor* supplied, so it tells them something without telling
-anybody anything about the club.
+Distance is measured from the public pin to a location the visitor supplied, so it tells them
+something without telling anybody anything about the club.
 """
 
 import logging
@@ -39,19 +36,28 @@ from .base import HTMxTableView, LocationMixin
 
 logger = logging.getLogger(__name__)
 
-#: Ceiling on how many pins one map draws. Far above the number of clubs that exist, and here for
-#: the same reason the speaker map has one: the payload is every *matching* club rather than the
-#: current page, so it is the one query on this page with no natural limit.
+#: Ceiling on pins per map. Far above the number of clubs that exist, and here because the payload
+#: is every matching club rather than the current page.
 CLUB_MAP_LIMIT = 1000
 
 
-def _upcoming_events_subquery():
-    """The club's next event, as a subquery -- the same events its public page lists.
+def _external_url(value):
+    """A club's typed-in website or Facebook page as a link, prefixed as club_detail.html does.
 
-    Pickup times are excluded here exactly as ``club_events.next_member_facing_event`` excludes
-    them: an online auction's pickup window is a logistical detail for people who already bought
-    something, and reading "next event: pickup" tells a stranger nothing about whether this club
-    meets.
+    Anything not starting with ``http`` gets ``https://``, which also stops a typed-in ``javascript:``
+    becoming a live link.
+    """
+    value = (value or "").strip()
+    if not value:
+        return ""
+    return value if value.startswith("http") else f"https://{value}"
+
+
+def _upcoming_events_subquery():
+    """The club's next event as a subquery -- the same events its public page lists.
+
+    Pickup times are excluded as ``club_events.next_member_facing_event`` excludes them: "next event:
+    pickup" tells a stranger nothing about whether this club meets.
     """
     now = timezone.now()
     return (
@@ -65,11 +71,8 @@ def _upcoming_events_subquery():
 class ClubFinderView(LocationMixin, HTMxTableView):
     """Find a club: the list and the map of it, filtered together.
 
-    Built the way the speaker directory is, and for the same reason -- an htmx filter normally
-    swaps the table and nothing else, so the response here also carries an out-of-band payload of
-    every matching club's coordinates and the map redraws its markers from that. Both halves
-    therefore always show the same clubs, and filtering neither reloads the page nor loses the
-    map's pan and zoom.
+    Like the speaker directory, the htmx response carries an out-of-band payload of every matching
+    club's coordinates, so the map redraws without reloading the page or losing its pan and zoom.
     """
 
     model = Club
@@ -87,10 +90,9 @@ class ClubFinderView(LocationMixin, HTMxTableView):
 
     @cached_property
     def origin(self):
-        """Where distances are measured from: (latitude, longitude), or (None, None).
+        """Where distances are measured from, as (latitude, longitude) or (None, None).
 
-        Cached because four different hooks on this view need the same answer, and
-        ``get_coordinates`` reads cookies and may touch ``userdata`` each time it is asked.
+        Cached because four hooks need the same answer and ``get_coordinates`` reads cookies and userdata.
         """
         latitude, longitude = self.get_coordinates()
         if not latitude or not longitude:
@@ -102,11 +104,10 @@ class ClubFinderView(LocationMixin, HTMxTableView):
         return self.origin[0] is not None
 
     def get_queryset(self):
-        """Listed clubs, in alphabetical order, annotated with what's coming up.
+        """Listed clubs in alphabetical order, annotated with what's coming up.
 
-        Alphabetical rather than the speaker directory's newest-first: a club list is something
-        people scan for a name they already half-know, and clubs are added here rarely enough that
-        recency would be a near-random order to a reader.
+        Alphabetical rather than newest-first: people scan a club list for a name they half-know, and clubs
+        are added rarely enough that recency would look random.
         """
         upcoming = _upcoming_events_subquery()
         queryset = (
@@ -136,8 +137,7 @@ class ClubFinderView(LocationMixin, HTMxTableView):
         return kwargs
 
     def get_filter_placeholder_text(self):
-        # Doubles as the only hint that a radius can be searched for, the way the speaker box does.
-        # Short, because this box is the width of a phone.
+        # Also the only hint that a radius can be searched for. Short: this box is a phone wide.
         return 'Search clubs, or "within 50 miles"'
 
     def get_possible_filters(self):
@@ -149,13 +149,8 @@ class ClubFinderView(LocationMixin, HTMxTableView):
         ]
 
     def clubs_for_map(self, filterset):
-        """Coordinates for every club matching the current filters, not just this page.
-
-        A map that only plotted the current page of results would be actively misleading, which is
-        why this deliberately ignores pagination.
-
-        Name and slug are all a pin needs: it opens an info window naming the club, and the name is
-        a link to the club's own page.
+        """Coordinates for every club matching the filters, ignoring pagination: a map of one page would
+        mislead. Everything here is also on the club's public page.
         """
         queryset = filterset.qs.filter(latitude__isnull=False, longitude__isnull=False)
         return [
@@ -164,6 +159,9 @@ class ClubFinderView(LocationMixin, HTMxTableView):
                 "name": club.name,
                 "lat": club.latitude,
                 "lng": club.longitude,
+                "homepage": _external_url(club.homepage),
+                "facebook": _external_url(club.facebook_page),
+                "interests": sorted(interest.name for interest in club.interests.all()),
             }
             for club in queryset[:CLUB_MAP_LIMIT]
         ]
@@ -176,12 +174,12 @@ class ClubFinderView(LocationMixin, HTMxTableView):
         context["origin_latitude"] = latitude
         context["origin_longitude"] = longitude
         context["google_maps_api_key"] = settings.LOCATION_FIELD["provider.google.api_key"]
-        # The interest menu is markup the template writes itself (radios in a dropdown), so the
-        # choices come through the context rather than off a rendered widget.
+        context["google_maps_map_id"] = settings.GOOGLE_MAPS_MAP_ID
+        # The interest menu is markup the template writes, so the choices come through the context.
         context["interest_choices"] = filterset.interest_choices() if filterset else []
         selected_interest = self.request.GET.get("interest", "")
         context["selected_interest"] = selected_interest
-        # Empty unless one is picked, so the button falls back to reading "Interests".
+        # Empty unless one is picked, so the button reads "Interests".
         context["selected_interest_label"] = (
             dict(context["interest_choices"]).get(selected_interest, "") if selected_interest else ""
         )

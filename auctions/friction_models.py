@@ -1,61 +1,37 @@
 """Where people get stuck: one row per rejected form submission.
 
-This is the *failure* half of the usability campaign's three measurements (USABILITY.md).  Reach --
-did anybody open this page -- is ``PageView``.  Adoption -- did anybody ever change this setting --
-is ``AuctionHistory.changed_fields``.  Neither can see the case this table exists for: **a page
-somebody reaches, tries, and gives up on**, which looks exactly like success in every reach metric
-and leaves no trace at all in a changelog, because nothing was saved.
+The *failure* half of the usability campaign's three measurements (USABILITY.md). Reach is
+``PageView``; adoption is ``AuctionHistory.changed_fields``. Neither can see a page somebody
+reaches, tries and gives up on, which looks like success in every reach metric and leaves no trace
+in a changelog, because nothing was saved.
 
-Four questions, four columns:
+Four columns: ``form_name`` (the form class, since one form is reached from several URLs);
+``field_errors`` (which field and why, as Django's error **codes** -- never the message, never the
+value, because a code groups); ``attempt`` (how many times this person has been bounced without
+getting through); and ``resolved`` (whether they finished -- the column the table is for).
 
-``form_name``
-    Which form. The form class, not the URL, because one form is reached from several URLs and one
-    URL serves several forms.
-``field_errors``
-    Which field, and *why*, as Django's error **codes** -- ``required``, ``invalid``,
-    ``max_value`` -- never the message and never the value. A code groups: "of 400 bounces on this
-    form, 380 were ``required`` on one field" is a label problem with an obvious fix, and it is not
-    a sentence anybody could have read off the messages.
-``attempt``
-    How many times this person has been bounced off this form without getting through. The first
-    bounce is a typo; the fourth is a form nobody can fill in.
-``resolved``
-    Whether they eventually finished. This is the column the whole table is for: an unresolved run
-    of four attempts is somebody who left.
+**Two kinds of failure, and the second is the common one here.** A rejection is only visible when a
+validator refuses something, and this site is built so it usually doesn't: nearly every field is
+optional and the rest are filled in on save. A form whose validator never complains still gets
+abandoned, and nothing on the server sees it.
 
-**Two kinds of failure, and the second one is the common one here.**  A rejected submission is
-only visible when a validator actually refuses something, and this site is deliberately built so
-that it usually does not: nearly every field is optional, and most of the rest are filled in on
-save (auction dates, fees, lot numbers).  A form whose validator never complains still gets
-abandoned -- somebody opens the auction settings, changes three things, cannot work out the
-fourth, and closes the tab.  Nothing on the server sees that, which would have made this table a
-record of the rare case and blind to the ordinary one.
+So ``kind="abandoned"`` rows come from the page: ``unsaved_changes.js`` knows which fields changed
+(it has to, to draw the unsaved-changes bar) and beacons that on the way out. ``field_errors`` there
+is the set of field names edited and not saved, and ``seconds_on_page`` is how long they spent.
 
-So ``kind="abandoned"`` rows come from the page: ``unsaved_changes.js`` knows which fields have
-actually changed (it has to, to draw the unsaved-changes bar) and beacons that on the way out.
-``field_errors`` on one of those rows is the set of field names the person had edited and did not
-save, and ``seconds_on_page`` is how long they spent before giving up.  Still no values -- see
-below.
+Here rather than in ``models.py`` for the same reason as :mod:`auctions.moderation_models`.
+:mod:`auctions.form_friction` holds the view mixin that writes these rows.
 
-It lives here rather than in ``models.py`` for the same reason
-:mod:`auctions.moderation_models` does -- that file is at the ceiling ``auctions/module_map.py``
-holds it to, and the ratchet only comes down.  :mod:`auctions.form_friction` holds the view mixin
-that writes these rows.
-
-**Nothing a user typed is stored.**  Not the submitted values, not the rendered error messages --
-only field names, which come from the code, and error codes, which come from the validators.  A
-table of everything that failed validation across the site would otherwise be a table of
-mistyped passwords and half-finished addresses.
+**Nothing a user typed is stored**: only field names, from the code, and error codes, from the
+validators.
 """
 
 from django.db import models
 
 KIND_CHOICES = (
-    # The server said no. Rare on this site by design -- most fields are optional and most of the
-    # rest are filled in on save -- which is exactly why it cannot be the only thing recorded.
+    # The server said no. Rare here by design, which is why it can't be the only thing recorded.
     ("rejected", "Submitted and rejected"),
-    # Edited and left without saving. The common shape of giving up on a form whose validator never
-    # got a chance to complain, and invisible to anything watching the server.
+    # Edited and left without saving: the common shape of giving up, and invisible to the server.
     ("abandoned", "Edited and left without saving"),
 )
 
@@ -86,7 +62,7 @@ class FormFailure(models.Model):
         ordering = ["-timestamp"]
         indexes = [
             # The two queries the report makes: this form's bounces over a window, and the
-            # unresolved ones. Both filter on form_name first.
+            # unresolved ones.
             models.Index(fields=["form_name", "resolved"]),
             models.Index(fields=["kind", "timestamp"]),
         ]

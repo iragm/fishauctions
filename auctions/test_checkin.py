@@ -34,13 +34,12 @@ class CheckinBase(TestCase):
             is_online=False,
             date_start=now,
             date_end=now + datetime.timedelta(hours=6),
-            # Every auction the site creates starts unpromoted, and evaluate_ping deliberately says
-            # nothing about those (see PingIgnoresUnpromotedAuctionTests). The fixture is the
-            # promoted case because that is the one the rest of these tests are about.
+            # Every auction starts unpromoted and evaluate_ping says nothing about those (see
+            # PingIgnoresUnpromotedAuctionTests); the fixture is the promoted case.
             promote_this_auction=True,
         )
-        # In-person auctions get one auto-created default pickup location (signals.py); a real
-        # single-location auction is exactly that one row. Re-save to materialise it, then pin coords.
+        # In-person auctions get one auto-created pickup location (signals.py); re-save to
+        # materialise it, then pin the coordinates.
         self.venue.save()
         self.location = self.venue.location_qs.exclude(pickup_by_mail=True).first()
         self.location.latitude = VENUE[0]
@@ -87,8 +86,8 @@ class CheckinPingGeofenceTests(CheckinBase):
         self.assertEqual(offer["rules_url"], self.venue.get_absolute_url())
 
     def test_no_join_offer_outside_500ft(self):
-        # NEAR is within the 2 mi admin radius but well outside the 500 ft welcome radius. Only
-        # applies once the location is known to be exact -- see WelcomeRadiusWithoutExactLocationTests.
+        # NEAR is inside the 2 mi admin radius but outside the 500 ft welcome radius, which only
+        # applies once the location is exact -- see WelcomeRadiusWithoutExactLocationTests.
         self.venue.exact_location_set = True
         self.venue.save()
         self.assertNotIn("join_offer", self._types(self._ping(self.arrival, *NEAR)))
@@ -134,7 +133,7 @@ class CheckinPingStateTests(CheckinBase):
 
     def test_email_matched_tos_bound_and_checked_in(self):
         self._make_checkin_mode()
-        # Added-by-email row with no user FK; the ping should bind it and auto-check-in.
+        # An added-by-email row with no user: the ping binds it and auto-checks-in.
         AuctionTOS.objects.create(
             auction=self.venue, pickup_location=self.location, email="arrive@example.com", user=None, name="Arrive"
         )
@@ -159,14 +158,14 @@ class CheckinPingStateTests(CheckinBase):
         )
 
     def test_non_checkin_auction_no_checked_in_action(self):
-        # Joined already, but the auction isn't in check-in mode → no auto check-in.
+        # Joined, but not a check-in auction, so no auto check-in.
         AuctionTOS.objects.create(auction=self.venue, pickup_location=self.location, user=self.arrival)
         types = self._types(self._ping(self.arrival, *AT))
         self.assertNotIn("checked_in", types)
         self.assertNotIn("join_offer", types)  # already has a TOS
 
     def test_admin_location_offer_within_2mi(self):
-        # Admin, exact_location_set False, within 2 mi (but outside 500 ft) → only the location offer.
+        # Admin, location not exact, within 2 mi: only the location offer.
         types = self._types(self._ping(self.creator, *NEAR))
         self.assertIn("set_location_offer", types)
 
@@ -176,8 +175,7 @@ class CheckinPingStateTests(CheckinBase):
         self.assertNotIn("set_location_offer", self._types(self._ping(self.creator, *NEAR)))
 
     def test_admin_offer_can_coexist_with_join(self):
-        # The creator has no TOS on their own auction: within 500 ft they get BOTH the join offer and
-        # the admin location offer.
+        # The creator has no TOS on their own auction, so within 500 ft they get both offers.
         types = self._types(self._ping(self.creator, *AT))
         self.assertIn("join_offer", types)
         self.assertIn("set_location_offer", types)
@@ -187,10 +185,8 @@ class CheckinPingStateTests(CheckinBase):
 
 
 class WelcomeRadiusWithoutExactLocationTests(CheckinBase):
-    """Until the auction's exact location is pinned, the geofence widens to 2 mi — except check-in.
-
-    The stored coordinates are a geocoded street address until an admin pins them from their phone,
-    and those can be off by much more than 500 ft.
+    """Until the location is pinned the geofence widens to 2 mi, except check-in: the stored coordinates
+    are a geocoded street address and can be well out.
     """
 
     def _make_checkin_mode(self):
@@ -215,8 +211,7 @@ class WelcomeRadiusWithoutExactLocationTests(CheckinBase):
         self.assertEqual(self._ping(self.arrival, *FAR).json()["actions"], [])  # ~3.45 mi
 
     def test_auto_check_in_is_not_widened(self):
-        # The one action that must not fire from a mile away: nobody gets a bidder number on the
-        # floor without being at the venue.
+        # The one action that must not fire from a mile away.
         self._make_checkin_mode()
         AuctionTOS.objects.create(auction=self.venue, pickup_location=self.location, user=self.arrival, name="Arrive")
         self.assertNotIn("checked_in", self._types(self._ping(self.arrival, *NEAR)))
@@ -231,18 +226,16 @@ class WelcomeRadiusWithoutExactLocationTests(CheckinBase):
         self.assertEqual(self._ping(self.arrival, *NEAR).json()["actions"], [])
 
     def test_exactly_one_join_offer_even_across_bands(self):
-        # One offer per person per auction, period: getting it from a mile away spends it, and
-        # arriving at the venue does not produce a second one.
+        # One offer per person per auction: getting it from a mile away spends it.
         self.assertIn("join_offer", self._types(self._ping(self.arrival, *NEAR)))
         self.assertNotIn("join_offer", self._types(self._ping(self.arrival, *NEAR)))
         self.assertNotIn("join_offer", self._types(self._ping(self.arrival, *AT)))
 
 
 class SelfCheckinDisabledTests(CheckinBase):
-    """``Auction.allow_self_checkin`` off: the app's join/check-in flow disappears for end users.
+    """``Auction.allow_self_checkin`` off hides the app's join and check-in flow.
 
-    Only meaningful in check-in mode — that's where checking in is what assigns a bidder number, so
-    an auction that hands numbers out at the door needs the app to stay out of it.
+    Only meaningful in check-in mode, where checking in assigns the bidder number.
     """
 
     def setUp(self):
@@ -268,7 +261,7 @@ class SelfCheckinDisabledTests(CheckinBase):
         self.assertTrue(Auction(title="x").allow_self_checkin)
 
     def test_flag_only_applies_to_check_in_mode(self):
-        # Same flag, no check-in mode: the app's welcome prompt still offers to join.
+        # The same flag without check-in mode: the welcome prompt still offers to join.
         self.venue.manage_users_through_club = ""
         self.venue.save()
         self.assertTrue(self.venue.allows_app_self_checkin)
@@ -278,7 +271,7 @@ class SelfCheckinDisabledTests(CheckinBase):
         self.assertEqual(self._ping(self.arrival, *AT).json()["actions"], [])
 
     def test_no_nudge_row_burned_while_disabled(self):
-        # Re-enabling later must still offer the join, so the one-shot nudge must not have been used.
+        # Re-enabling must still offer the join, so the one-shot nudge wasn't used.
         self._ping(self.arrival, *AT)
         self.venue.allow_self_checkin = True
         self.venue.save()
@@ -300,7 +293,7 @@ class SelfCheckinDisabledTests(CheckinBase):
 
 
 class CheckinBidderNumberTests(CheckinBase):
-    """Checking in with the app tells the user their bidder number (and lets them bid)."""
+    """Checking in with the app tells the user their bidder number and lets them bid."""
 
     def setUp(self):
         super().setUp()
@@ -323,7 +316,7 @@ class CheckinBidderNumberTests(CheckinBase):
         self.assertEqual(action["bidder_number"], "222")
         self.assertIn("Your bidder number is 222.", action["message"])
         tos.refresh_from_db()
-        # Check-in is what grants bidding in check-in mode, same as the admin check-in modal.
+        # Check-in grants bidding, as the admin modal does.
         self.assertTrue(tos.bidding_allowed)
 
     def test_join_returns_the_bidder_number_it_assigned(self):
@@ -424,11 +417,10 @@ class CheckinSetLocationTests(CheckinBase):
 
 
 class AppJoinClubMemberTests(CheckinBase):
-    """Joining a club-managed auction from the app must create/link the ClubMember.
+    """Joining a club-managed auction from the app creates or links the ClubMember.
 
-    In these auctions the club owns the bidder number and the bidding/selling permissions, so a
-    participant record with no member behind it is a broken record: the number is unknown to the
-    club, no club admin screen can find them, and it isn't theirs again next year.
+    The club owns the bidder number and the permissions, so a participant row with no member behind it
+    is unknown to the club and isn't theirs again next year.
     """
 
     def setUp(self):
@@ -458,13 +450,12 @@ class AppJoinClubMemberTests(CheckinBase):
         self.assertTrue(member.bidder_number)
         tos = AuctionTOS.objects.get(auction=self.venue, user=self.arrival)
         self.assertEqual(tos.clubmember, member)
-        # The number the app shows the user is the club's number, not an auction-only one.
+        # The number shown is the club's, not an auction-only one.
         self.assertEqual(tos.bidder_number, member.bidder_number)
         self.assertEqual(resp.json()["bidder_number"], member.bidder_number)
 
     def test_join_adopts_the_existing_shadow_record_of_a_club_member(self):
-        # Creating a member in a club-managed auction auto-creates its shadow AuctionTOS (signals);
-        # joining from the app must claim that row rather than add a second one.
+        # Creating a member auto-creates its shadow AuctionTOS; joining must claim that row.
         self._club_managed()
         member = ClubMember.objects.create(club=self.club, user=self.arrival, name="Arrive", email=self.arrival.email)
         self.assertTrue(AuctionTOS.objects.filter(auction=self.venue, clubmember=member).exists())
@@ -511,7 +502,7 @@ class AppJoinClubMemberTests(CheckinBase):
         self.assertFalse(member.selling_allowed)
 
     def test_proximity_check_in_reports_the_club_bidder_number(self):
-        # End to end: club-managed check-in auction, member exists, the user walks in with the app.
+        # End to end: a club-managed check-in auction, an existing member, walking in with the app.
         self._club_managed()
         member = ClubMember.objects.create(club=self.club, user=self.arrival, name="Arrive", email=self.arrival.email)
         action = next(a for a in self._ping(self.arrival, *AT).json()["actions"] if a["type"] == "checked_in")
@@ -533,7 +524,7 @@ class CheckinCloneTests(TestCase):
         )
         give_contact_info(creator)  # AuctionCreateView refuses somebody with no contact info
         self.client.force_login(creator)
-        # Cloning is triggered by ?copy=<slug>&clone on the create-auction POST (see AuctionCreateView).
+        # Cloning is ?copy=<slug>&clone on the create POST; see AuctionCreateView.
         self.client.post(
             reverse("create_auction") + f"?copy={original.slug}&clone",
             {
@@ -550,17 +541,15 @@ class CheckinCloneTests(TestCase):
         self.assertTrue(self._clone(exact_location_set=True).exact_location_set)
 
     def test_clone_copies_allow_self_checkin(self):
-        # An auction that assigns bidder numbers at the door will run the same way next year.
+        # An auction that assigns numbers at the door runs the same way next year.
         self.assertFalse(self._clone(allow_self_checkin=False).allow_self_checkin)
 
 
 class ClubManagedAdminBadgeTests(CheckinBase):
-    """The users list has to say who runs the auction in club-managed auctions too.
+    """The users list says who runs a club-managed auction.
 
-    There, AuctionTOS.is_admin is hidden and disabled on the user form (AuctionTOSAdminForm) and
-    who may run the auction is decided by the club's permissions, exactly as Auction.permission_check
-    reads them -- so a badge keyed on is_admin alone never appeared and the list gave no way to tell
-    an admin from an attendee.
+    There, AuctionTOS.is_admin is hidden and the club's permissions decide, so a badge keyed on
+    is_admin alone never appeared.
     """
 
     BADGE = '<span class="badge bg-danger ms-1 me-1" title="Can add users and lot">Admin</span>'
@@ -571,7 +560,7 @@ class ClubManagedAdminBadgeTests(CheckinBase):
         self.venue.club = self.club
         self.venue.manage_users_through_club = "all"
         self.venue.save()
-        # In a club-managed auction each new member gets a shadow AuctionTOS automatically (signals).
+        # Each new member gets a shadow AuctionTOS automatically.
         self.creator_member = ClubMember.objects.create(
             club=self.club, user=self.creator, name="Venue Admin", email="admin@example.com", permission_admin=True
         )
@@ -597,7 +586,7 @@ class ClubManagedAdminBadgeTests(CheckinBase):
         self.assertIn(self.BADGE, self._name_cell(self._users_list(), "Venue Admin"))
 
     def test_manage_auctions_permission_gets_the_badge(self):
-        # The other half of Auction.permission_check: managing auctions is running this one.
+        # The other half of permission_check: managing auctions is running this one.
         self.assertIn(self.BADGE, self._name_cell(self._users_list(), "Ann Helper"))
 
     def test_plain_member_does_not(self):
@@ -608,13 +597,12 @@ class ClubManagedAdminBadgeTests(CheckinBase):
         self.assertNotIn(self.BADGE, self._name_cell(self._users_list(), "Ann Helper"))
 
     def test_deactivated_member_does_not_count(self):
-        # is_deleted members are skipped by permission_check, so they must not look like admins.
+        # permission_check skips deleted members, so they must not look like admins.
         ClubMember.objects.filter(pk=self.helper.pk).update(is_deleted=True)
         self.assertNotIn(self.BADGE, self._name_cell(self._users_list(), "Ann Helper"))
 
     def test_club_permissions_do_not_leak_into_an_unmanaged_auction(self):
-        # With the club attached but not managing participants, only AuctionTOS.is_admin counts --
-        # again matching permission_check, which only consults the club when is_club_managed.
+        # With a club attached but not managing participants, only AuctionTOS.is_admin counts.
         self.venue.manage_users_through_club = ""
         self.venue.save()
         self.assertNotIn(self.BADGE, self._name_cell(self._users_list(), "Ann Helper"))
@@ -626,12 +614,8 @@ class ClubManagedAdminBadgeTests(CheckinBase):
 
 
 class PingIgnoresUnpromotedAuctionTests(CheckinBase):
-    """An auction nobody asked to publicise must not be announced by the welcome ping.
-
-    ``promote_this_auction`` starts False on every auction (AuctionCreateView), so before the filter
-    landed a phone standing at the venue during the window got the auction's full title and a working
-    Join button for an auction its creator had never agreed to show anyone. The failure is silent and
-    only visible from a phone in the right place at the right time, which is why it is tested here.
+    """An unpromoted auction must not be announced by the welcome ping: it would show the full title and a
+    working Join button for an auction its creator never agreed to show anyone.
     """
 
     def setUp(self):
@@ -643,8 +627,7 @@ class PingIgnoresUnpromotedAuctionTests(CheckinBase):
         self.assertEqual(self._ping(self.arrival, *AT).json()["actions"], [])
 
     def test_no_admin_nudge_for_unpromoted_auction(self):
-        # Not even the admin's own set_location_offer: it names an auction the app should not be
-        # mentioning at all, and the admin has the website for that.
+        # Not even the admin's own set_location_offer: it names an auction we shouldn't mention.
         self.venue.exact_location_set = False
         self.venue.save()
         self.assertEqual(self._ping(self.creator, *NEAR).json()["actions"], [])

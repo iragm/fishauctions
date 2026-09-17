@@ -1,8 +1,7 @@
 """Labels: what gets drawn on them, and getting them to a printer.
 
-``LotLabelView`` renders the label sheet and is also where the app's Bluetooth print handoff is
-emitted, so the printing templates themselves must stay free of any "is this the app" test. The
-remote-print views below it are the queue for a printer somebody else's browser is holding open.
+``LotLabelView`` renders the sheet and emits the app's Bluetooth handoff, so the printing templates
+stay free of app checks. The remote-print views handle jobs sent to a phone.
 """
 
 import logging
@@ -48,29 +47,17 @@ class LotLabelView(TemplateView, WeasyTemplateResponseMixin, AuctionViewMixin):
     # these are defined in urls.py and used in get_object(), below
     bidder_number = None
     username = None
-    # This one is the old one, it has some good stuff in it like QR code
-    # template_name = "invoice_labels.html"
     template_name = "label_template.html"
     allow_non_admins = True
     filename = ""  # this will be automatically generated in dispatch
-    # Rendering a label sheet is what marks its labels printed. That is right for a PDF the user is
-    # about to send to a printer, and wrong for the PNG raster path, where the label is only being
-    # *drawn* -- the app posts labels/printed/ for the ones that actually come out.
+    # Rendering marks labels printed. The PNG path overrides this; the app reports what printed.
     mark_labels_printed = True
-    # Size the page to a single label instead of a sheet. The PNG raster is a picture of one label,
-    # so an Avery preset's 8.5x11 page would otherwise come out as a label in the corner of a mostly
-    # blank image. A preset whose page already holds exactly one label (both thermal presets) is
-    # left exactly as it is, so the raster stays a pixel-for-pixel view of the PDF.
+    # One label per page for the PNG raster. Presets already one label per page are left as they are.
     single_label_page = False
-    # A custom-scheme URL has no standard length limit and the app has no cap of its own (it prints
-    # serially and cancellably), but platform URL handling varies, so keep the deep link near 2000
-    # characters. The PDF path's own 100-label cap does not apply -- nothing is being laid out on a
-    # page here.
+    # Keep the deep link near 2000 characters; the PDF's 100-label cap doesn't apply.
     MAX_DEEP_LINK_LOTS = 300
-    # Tuned for known overflow breakpoints (long seller emails/lot numbers) per label preset.
-    # shrink_threshold: start scaling after this length.
-    # ratio_base: numerator for ratio_base / text_length scaling.
-    # min_ratio: floor so text stays readable.
+    # Per preset: start shrinking after shrink_threshold characters, by ratio_base / length, down
+    # to min_ratio.
     SELLER_EMAIL_FONT_CONFIG = {
         "sm": {"shrink_threshold": 18, "ratio_base": 14, "min_ratio": 0.6},
         "lg": {"shrink_threshold": 20, "ratio_base": 15, "min_ratio": 0.55},
@@ -112,13 +99,13 @@ class LotLabelView(TemplateView, WeasyTemplateResponseMixin, AuctionViewMixin):
         checks_pass = False
         if self.is_auction_admin:
             checks_pass = True
-            # if this is an admin printing someone else's lots, the file name should be the name of the person whose lots they're printing
+            # An admin printing someone else's lots: name the file after that person.
             self.filename = self.tos.name or self.tos.bidder_number
         if request.user.is_authenticated:
             if request.user == self.tos.user:
                 printing_for_self = True
                 checks_pass = True
-                # if this is a user printing their own lots, the file name should be the name of the auction
+                # Printing your own lots: name the file after the auction.
                 self.filename = str(self.auction)
         if printing_for_self:
             if self.auction.is_online and not self.auction.closed:
@@ -153,30 +140,14 @@ class LotLabelView(TemplateView, WeasyTemplateResponseMixin, AuctionViewMixin):
         return f"{label_name}.pdf"
 
     def get(self, request, *args, **kwargs):
-        """Three ways to print, in the order they get asked.
+        """Three ways to print, checked in this order. Gated here because every bulk entry point comes
+        through this view; see MobileAppLabelPrintingVisibilityTests.
 
-        Gated here rather than in the templates that build bulk label links, because every bulk
-        entry point funnels through this view -- the users-table anchors, ``?printredirect=``, the
-        command palette, print-after-bulk-add, a bookmarked URL -- and gating them one at a time
-        leaves entry points behind (it also keeps label printing out of the mobile-app UA
-        conditionals the templates are deliberately free of; see
-        MobileAppLabelPrintingVisibilityTests).
+        1. ``?pdf=1``: the escape hatch, checked first so it can't loop back into a handoff.
+        2. The app printing over Bluetooth: a deep link to its own printer.
+        3. A computer with ``print_from_computer`` on: a job pushed to the phone and a waiting page.
 
-        1. ``?pdf=1`` -- the escape hatch, and it is checked first so it can never loop back into a
-           branch. It is what the remote-print waiting page's "Print a PDF here" button links to,
-           and the app arm has to respect it too or that button would bounce a phone straight back
-           to the deep link it was trying to get out of.
-        2. The app printing over Bluetooth: a deep link to its own printer. First of the two real
-           arms, so somebody printing *from the phone* prints directly instead of routing a job
-           through FCM back to the phone they are holding.
-        3. A computer, with ``print_from_computer`` on and a phone that is actually reachable: a job
-           pushed to that phone plus a page that waits on it.
-
-        Everyone else gets the PDF, unchanged.
-
-        All of it deliberately before ``get_context_data``, which marks labels printed as a side
-        effect of rendering: in arms 2 and 3 nothing has printed yet, and what actually came out is
-        reported afterwards (``labels/printed/`` for the deep link, the job's result post for a job).
+        Otherwise, the PDF. All before ``get_context_data``, which marks labels printed.
         """
         if request.GET.get("pdf"):
             return super().get(request, *args, **kwargs)
@@ -189,18 +160,10 @@ class LotLabelView(TemplateView, WeasyTemplateResponseMixin, AuctionViewMixin):
         return super().get(request, *args, **kwargs)
 
     def remote_print_response(self):
-        """The waiting page for a job pushed to the user's phone, or None to render the PDF.
+        """The waiting page for a job pushed to the user's phone, or None for the PDF.
 
-        Only from a *computer*: in the app, arm 2 above has already had its say, and a phone that
-        prints its own labels needs no job.
-
-        The branch is the **preference**, not whether the phone is answering. It used to be both, so
-        a print made while the app was closed fell through to a PDF download with nothing said --
-        the user asked for labels on the printer beside their phone and got a file in their
-        downloads folder, and the only way to find out why was to work it out. Now the page is the
-        same page either way: the job is created, ``dispatch`` marks it unreachable at once because
-        there is no phone to push to, and the page opens on "open the app on your phone" with Try
-        again beside it. The PDF is still there, as a button somebody chooses.
+        Computers only. Decided by the preference, not reachability: an unreachable phone gets the same
+        page opening on "open the app on your phone", with Try again and a PDF button.
         """
         from auctions.mobile.services import remote_print
 
@@ -209,7 +172,7 @@ class LotLabelView(TemplateView, WeasyTemplateResponseMixin, AuctionViewMixin):
             return None
         if not remote_print.wants_print_from_computer(request.user):
             return None
-        # Same queryset and order as the PDF, which is the order they come out of the printer.
+        # Same order as the PDF prints them.
         pks = list(self.get_queryset().values_list("pk", flat=True))
         if not pks:
             return None
@@ -217,27 +180,24 @@ class LotLabelView(TemplateView, WeasyTemplateResponseMixin, AuctionViewMixin):
         context = {
             "job": job,
             "label_count": job.total_count,
-            # A batch bigger than one push can carry; the rest is a second run, the same way the
-            # deep-link path splits one.
+            # More than one push carries; the rest is a second run, like the deep link.
             "truncated_count": len(pks) if len(pks) > job.total_count else 0,
             "printer_name": job.device.printer_name if job.device else "",
             "pdf_url": self.request.get_full_path() + ("&" if self.request.GET else "?") + "pdf=1",
             "back_url": self.auction.get_absolute_url() if self.auction else reverse("selling"),
-            # Painted before the first poll so an already-answered job (no phone, no push token)
-            # opens on its error instead of a second of "Sending..." that was never true.
+            # So an already-failed job opens on its error.
             "initial_state": remote_print.job_state(job),
         }
         return render(self.request, "label_remote_print.html", context)
 
     def bluetooth_deep_link_response(self):
-        """The ``fishauctions://print/?lots=…`` handoff page, or None to render the PDF."""
+        """The ``fishauctions://print/?lots=…`` handoff page, or None for the PDF."""
         if not getattr(self.request, "is_mobile_app", False) or not self.request.user.is_authenticated:
             return None
         prefs = UserLabelPrefs.objects.filter(user=self.request.user).first()
         if not prefs or prefs.print_method != "bluetooth":
             return None
-        # Same queryset, same order as the PDF prints them -- that's the order they come out of the
-        # printer.
+        # Same order as the PDF prints them.
         pks = list(self.get_queryset().values_list("pk", flat=True))
         if not pks:
             return None
@@ -281,16 +241,12 @@ class LotLabelView(TemplateView, WeasyTemplateResponseMixin, AuctionViewMixin):
     def get_context_data(self, **kwargs):
         user_label_prefs, created = UserLabelPrefs.objects.get_or_create(user=self.request.user)
         context = {}
-        # Blank labels are for skipping the used corner of a part-used Avery sheet, and there is no
-        # such thing on a roll -- so a single-label page never gets them. It matters more than it
-        # sounds: single_label_page is the Bluetooth raster path, page one is the picture the printer
-        # is handed, and with empty_labels set that picture was a blank label. Anyone who had ever
-        # printed onto a part-used sheet got blanks out of their thermal printer.
+        # No blank labels on a single-label page: a roll has no used corner, and the raster would
+        # be a blank label.
         context["empty_labels"] = 0 if self.single_label_page else user_label_prefs.empty_labels
         context["print_border"] = user_label_prefs.print_border
         context["first_column_width"] = 0.62
-        # The QR code is drawn at a fixed size rather than a fixed module size, so a longer lot URL
-        # makes denser modules instead of a bigger code that pushes the tags off the label.
+        # Fixed QR size, so longer URLs make denser modules rather than a bigger code.
         context["qr_size"] = 0.5
         # Lines of lot name before it is cut off with an ellipsis.
         context["name_lines"] = 2
@@ -337,7 +293,7 @@ class LotLabelView(TemplateView, WeasyTemplateResponseMixin, AuctionViewMixin):
             context["page_margin_right"] = 0.04
             context["font_size"] = 13
             context["first_column_width"] = 0.75
-            # The whole width of the column: at 0.5in the code sat in a column half again as wide.
+            # The whole column width.
             context["qr_size"] = 0.75
             context["name_lines"] = 3
             context["unit"] = "in"
@@ -363,7 +319,6 @@ class LotLabelView(TemplateView, WeasyTemplateResponseMixin, AuctionViewMixin):
             context.update(
                 {f"{field.name}": getattr(user_label_prefs, field.name) for field in UserLabelPrefs._meta.get_fields()}
             )
-        # Sizes are saved in the unit the user picked; the template writes inches.
         unit = inches_per_unit(context.get("unit"))
 
         context["label_width"] = context.get("label_width") * unit
@@ -384,21 +339,14 @@ class LotLabelView(TemplateView, WeasyTemplateResponseMixin, AuctionViewMixin):
 
         available_height = context["page_height"] - context["page_margin_top"] - context["page_margin_bottom"]
 
-        # Page breaks don't work, see https://github.com/Kozea/WeasyPrint/issues/1967
-        # manually calculating
+        # WeasyPrint page breaks don't work (https://github.com/Kozea/WeasyPrint/issues/1967), so
+        # calculate manually.
         labels_per_row = int(available_width // (context["label_width"] + context["label_margin_right"]))
         labels_per_column = int(available_height // (context["label_height"] + context["label_margin_bottom"]))
         context["labels_per_page"] = labels_per_row * labels_per_column
 
         if self.single_label_page and context["labels_per_page"] != 1:
-            # Shrink the page onto the label. Only reached for sheet presets (and a custom size that
-            # tiles): the thermal presets already describe one physical label per page and keep
-            # their exact geometry.
-            #
-            # The page margins go with it. On a sheet they are the unprintable border of a sheet of
-            # Avery stock -- keeping them here would print the label offset into a corner with a
-            # wide blank margin above and to the left of it, which on a label roll is just wasted
-            # label.
+            # Shrink the page onto one label, margins included; sheet margins would offset it.
             for margin in ("page_margin_top", "page_margin_bottom", "page_margin_left", "page_margin_right"):
                 context[margin] = 0
             context["page_width"] = context["label_width"]
@@ -422,8 +370,7 @@ class LotLabelView(TemplateView, WeasyTemplateResponseMixin, AuctionViewMixin):
             "auctiontos_winner__pickup_location",
             "species_category",
             "species",
-            # A strain with no common name of its own falls back to its parent's, which the label
-            # prints -- see Lot.common_name_line.  One join rather than a query per label.
+            # A strain may print its parent's common name (Lot.common_name_line).
             "species__parent",
             "user",
         )
@@ -432,8 +379,7 @@ class LotLabelView(TemplateView, WeasyTemplateResponseMixin, AuctionViewMixin):
         is_thermal = user_label_prefs.preset in ["thermal_sm", "thermal_very_sm"]
 
         if is_thermal:
-            # Check if we have more than 100 labels efficiently
-            # We fetch 101 labels to determine if there are more than 100
+            # Fetch 101 to tell if there are more than 100.
             labels_list = list(labels[:101])
             if len(labels_list) > 100:
                 # Show warning and limit to first 100
@@ -456,7 +402,7 @@ class LotLabelView(TemplateView, WeasyTemplateResponseMixin, AuctionViewMixin):
                 label.label_needs_reprinting = False
             Lot.objects.bulk_update(labels, ["label_printed", "label_needs_reprinting"])
 
-        # plan_label decides what fits where; the rules it applies are in auctions/printing.py.
+        # Layout rules are in auctions/printing.py.
         print_fields = set(self.auction.label_print_fields.split(","))
         context["print_qr"] = "qr_code" in print_fields
         context["line_height"] = LABEL_LINE_HEIGHT
@@ -521,8 +467,7 @@ class SingleLotLabelView(LotLabelView):
             if self.lot.user and self.lot.user != request.user:
                 messages.error(request, "You can only print labels for your own lots")
                 return redirect(reverse("home"))
-        # ?format=png (or ?fmt=png) returns a single rendered PNG via the shared label renderer
-        # instead of the WeasyPrint PDF sheet, so the web endpoint matches the mobile app. Honors
+        # ?format=png or ?fmt=png returns one PNG like the mobile endpoint, with
         # ?resolution=WIDTHxHEIGHT&dpi=N (default 600x400 @ 203dpi).
         if (request.GET.get("format") or request.GET.get("fmt")) == "png":
             from auctions.mobile.services.labels import LabelService
@@ -548,23 +493,14 @@ class SingleLotLabelView(LotLabelView):
 
 
 class RemotePrintJobMixin(LoginRequiredMixin):
-    """The job, scoped to the signed-in user.
-
-    Session auth, not the mobile JWT: this half of the conversation is the *computer*, watching a job
-    it started. 404 for somebody else's job -- the uuid is unguessable, and a 403 would only confirm
-    that one exists.
-    """
+    """The job, scoped to the signed-in user by session. 404 for someone else's job."""
 
     def get_job(self, request, job_uuid):
         return get_object_or_404(RemotePrintJob, uuid=job_uuid, user=request.user)
 
 
 class RemotePrintJobStatusView(RemotePrintJobMixin, View):
-    """GET /printing/job/<uuid>/ — what the waiting page polls, once a second.
-
-    Deliberately a plain JSON web view rather than a DRF endpoint: it is read by a page in the
-    browser that started the job, on the session it already has.
-    """
+    """GET /printing/job/<uuid>/ — polled once a second by the waiting page. Plain JSON, session auth."""
 
     def get(self, request, job_uuid):
         from auctions.mobile.services.remote_print import job_state
@@ -573,13 +509,7 @@ class RemotePrintJobStatusView(RemotePrintJobMixin, View):
 
 
 class RemotePrintJobRetryView(RemotePrintJobMixin, View):
-    """POST /printing/job/<uuid>/retry/ — "Try again": the same labels, a fresh job.
-
-    A new row rather than a reset of the old one, because the old one is a record of something that
-    really happened (and its phone may yet report on it). The lot list is copied from the job instead
-    of re-derived from the queryset: a lot sold or deleted in between would silently shorten the
-    batch, and the person is standing at the printer expecting the labels they asked for.
-    """
+    """POST /printing/job/<uuid>/retry/ — the same labels as a new job, copying the old job's lot list."""
 
     def post(self, request, job_uuid):
         from auctions.mobile.services import remote_print
@@ -591,11 +521,8 @@ class RemotePrintJobRetryView(RemotePrintJobMixin, View):
 
 
 class RemotePrintJobCancelView(RemotePrintJobMixin, View):
-    """POST /printing/job/<uuid>/cancel/ — the user gave up on this one.
-
-    Only the record is cancelled; a phone already feeding labels is not interrupted, because there is
-    no channel to interrupt it with and it has its own Stop button next to the printer. What this
-    does buy is that a late result post can no longer overwrite the answer the person chose.
+    """POST /printing/job/<uuid>/cancel/ — cancel the record so a late result can't overwrite it. A
+    printing phone isn't interrupted.
     """
 
     def post(self, request, job_uuid):

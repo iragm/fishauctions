@@ -17,22 +17,22 @@ from .species_categories import CategoryResolver
 
 logger = logging.getLogger(__name__)
 
-#: Kept next to the code rather than in a fixture: this is data we maintain, not load once.
+#: Kept next to the code rather than in a fixture: data we maintain, not load once.
 DATA_FILE = Path(__file__).resolve().parent / "data" / "aquarium_species.csv"
 
 #: ``Species.source`` for everything this module writes.
 SOURCE = "aquarium"
 
-#: ``kind`` column -> category hint. ``fish`` is absent: a fish cultivar takes its category from
-#: its FishBase parent's family.
+#: ``kind`` -> category hint. ``fish`` is absent: a fish cultivar takes its category from its
+#: FishBase parent's family.
 KIND_CATEGORY_HINTS = {
     "plant": "plants",
     "invert": "invertebrates",
     "culture": "live food",
 }
 
-#: Invertebrate families a club's "Shrimp" category means (read only for ``kind=invert`` rows).
-#: Crayfish (Cambaridae, Parastacidae) are deliberately excluded: "Shrimp" means shrimp.
+#: Invertebrate families a club's "Shrimp" category means (read for ``kind=invert`` rows only).
+#: Crayfish are excluded: "Shrimp" means shrimp.
 INVERT_FAMILY_HINTS = {
     "Atyidae": "shrimp",
     "Palaemonidae": "shrimp",
@@ -75,8 +75,8 @@ class Row:
     def is_names_only(self):
         """True when this row only adds names to a species some other list owns.
 
-        Declared by leaving every taxonomy column blank. Lets :func:`load` refuse to invent a
-        species for a row that meant to find one instead (e.g. a typo in the scientific name).
+        Declared by leaving every taxonomy column blank, which lets :func:`load` refuse to invent a species
+        for a row that meant to find one.
         """
         return bool(self.scientific_name) and not (self.kind or self.family or self.order or self.habitats)
 
@@ -97,7 +97,7 @@ def read_rows(path=DATA_FILE):
     """Parse the CSV into :class:`Row` objects. Blank and ``#`` lines are comments."""
     rows = []
     with Path(path).open(newline="", encoding="utf-8") as handle:
-        # Strip comments before csv sees them, so a '#' line can sit anywhere including above the header.
+        # Strip comments before csv sees them, so a '#' line can sit anywhere.
         lines = [line for line in handle if line.strip() and not line.lstrip().startswith("#")]
     for raw in csv.DictReader(lines):
         name = (raw.get("scientific_name") or "").strip()
@@ -121,8 +121,8 @@ def read_rows(path=DATA_FILE):
 def kind_hints(path=DATA_FILE):
     """``{(scientific name, variety): category hint}`` for the curated rows.
 
-    Exposed so the category pass can re-run later without re-importing. :data:`INVERT_FAMILY_HINTS`
-    is the one place family gets a say, since "invertebrate" is often two shelves, not one.
+    Exposed so the category pass can re-run without re-importing. :data:`INVERT_FAMILY_HINTS` is the one
+    place family gets a say, since "invertebrate" is often two shelves.
     """
     return {
         (row.scientific_name.lower(), row.variety.lower()): (
@@ -135,10 +135,10 @@ def kind_hints(path=DATA_FILE):
 
 
 def _find_elsewhere(row):
-    """A species some other list already owns, matching this row exactly. Or None.
+    """A species some other list already owns, matching this row exactly, or None.
 
-    What makes a names-only row possible: FishBase has the fish but not the hobby's names for it
-    ("yellow lab", "pea puffer"). Ordered by source so ``admin`` wins over ``fishbase`` on a tie.
+    What makes a names-only row possible: FishBase has the fish but not the hobby's names for it.
+    Ordered by source so ``admin`` wins over ``fishbase``.
     """
     if row.is_hybrid:
         others = Species.objects.filter(is_hybrid=True, variety__iexact=row.variety)
@@ -150,8 +150,8 @@ def _find_elsewhere(row):
 def _find_parent(row, by_name):
     """The nominal species a variety row belongs to, or None.
 
-    Checked in the curated list first (where a plant's parent lives), then anywhere else in the
-    table (how a fish cultivar finds its FishBase row).
+    Checked in the curated list first (where a plant's parent lives), then anywhere else in the table
+    (how a fish cultivar finds its FishBase row).
     """
     parent = by_name.get(row.scientific_name.lower())
     if parent:
@@ -161,13 +161,13 @@ def _find_parent(row, by_name):
 
 def _apply(species, row, resolver, parent):
     """Copy *row* onto *species*. Returns True when anything actually changed."""
-    # A variety takes its parent's category; the kind column decides otherwise (not family, since
-    # this list adds plant families often and an unmapped one would silently blank the category).
+    # A variety takes its parent's category; the kind column decides otherwise, not family, since
+    # this list adds plant families often and an unmapped one would blank the category.
     category = parent.category if parent else resolver.resolve(KIND_CATEGORY_HINTS.get(row.kind))
     values = {
         "category": category,
-        # Species.save() clears genus/epithet/parent on a hybrid; keeps a row that stops being one
-        # in the CSV from staying one in the database.
+        # Species.save() clears genus, epithet and parent on a hybrid, so a row that stops being one
+        # in the CSV stops being one in the database.
         "is_hybrid": row.is_hybrid,
         "genus": row.genus[:100],
         "species": row.epithet[:150],
@@ -175,8 +175,8 @@ def _apply(species, row, resolver, parent):
         "family": row.family[:100],
         "order": row.order[:100],
         "source": SOURCE,
-        # This list exists because somebody sells these; Species.in_aquarium_trade reads the
-        # source for that, so aquarium_use stays empty (FishBase's rating isn't ours to invent).
+        # This list exists because somebody sells these, and Species.in_aquarium_trade reads the
+        # source for that, so aquarium_use stays empty.
         "aquarium_use": "",
     }
     for habitat, attribute in _HABITAT_FIELDS.items():
@@ -195,13 +195,11 @@ def _apply(species, row, resolver, parent):
 
 @transaction.atomic
 def load(path=DATA_FILE, *, dry_run=False):
-    """Upsert every row in the CSV. Safe to re-run; returns a :class:`Result`.
+    """Upsert every row in the CSV; safe to re-run. Returns a :class:`Result`.
 
-    Matched on (scientific name, variety), not a code -- the list has none, so renaming a species
-    in the CSV adds a row rather than moving one; the old row is retired by hand.
-
-    A names-only row (naming a species some other list owns, almost always a FishBase fish) never
-    creates a duplicate and never touches its taxonomy columns -- it only attaches common_names.
+    Matched on (scientific name, variety), not a code, so renaming a species in the CSV adds a row and
+    the old one is retired by hand. A names-only row never creates a duplicate and never touches
+    taxonomy columns: it only attaches common_names.
     """
     result = Result()
     resolver = CategoryResolver()
@@ -223,8 +221,8 @@ def load(path=DATA_FILE, *, dry_run=False):
             species = adopted
             result.adopted += 1
         elif species is None and row.is_names_only:
-            # Claimed to add names to something that already exists, but nothing does -- almost
-            # always a typo; inventing a bare species here would hide it.
+            # Claimed to add names to something that doesn't exist -- almost always a typo, and
+            # inventing a bare species here would hide it.
             result.skipped.append(f"{row.scientific_name} (names-only row, but no such species)")
             continue
         else:
@@ -248,8 +246,8 @@ def load(path=DATA_FILE, *, dry_run=False):
         if not row.is_variety:
             by_name[key[0]] = species
 
-        # Replace rather than merge, so a name dropped from the CSV disappears -- but only ever
-        # our names; an adopted species keeps FishBase's ~49,000 other English names untouched.
+        # Replace rather than merge, so a name dropped from the CSV disappears -- but only our own
+        # names; an adopted species keeps FishBase's other English names.
         wanted = {name.lower(): name for name in row.common_names}
         ours = SpeciesCommonName.objects.filter(species=species, source=SOURCE)
         ours.exclude(name__in=wanted.values()).delete()
@@ -271,8 +269,7 @@ def load(path=DATA_FILE, *, dry_run=False):
         result.common_names += len(new)
         named.add(species.pk)
 
-    # A names-only row removed from the CSV must take its names with it too; scoped to our own
-    # names so this sweep never touches FishBase's.
+    # A names-only row removed from the CSV takes its names with it, scoped to our own names.
     SpeciesCommonName.objects.filter(source=SOURCE).exclude(species_id__in=named).delete()
 
     if dry_run:

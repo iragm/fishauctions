@@ -60,9 +60,8 @@ class Invoices(LoginRequiredMixin, HTMxTableView):
     def get_queryset(self):
         """Newest first.
 
-        The table's own default sort (`InvoiceHTMxTable.Meta.order_by`) is the one that
-        actually decides what the page opens on; this order_by keeps the queryset itself
-        sensible for anything reading it without the table.
+        The table's own ``Meta.order_by`` decides what the page opens on; this keeps the queryset sensible
+        for anything reading it without the table.
         """
         return (
             Invoice.objects.filter(
@@ -163,8 +162,7 @@ class InvoiceView(DetailView, FormMixin, AuctionViewMixin):
 
     template_name = "invoice.html"
     model = Invoice
-    # form_class = InvoiceUpdateForm
-    # expects opened or printed, this field will be set to true when the user the invoice is for opens it
+    # Set to true when the user the invoice is for opens it.
     form_view = "opened"
     allow_non_admins = True
     authorized_by_default = False
@@ -173,9 +171,8 @@ class InvoiceView(DetailView, FormMixin, AuctionViewMixin):
     def get_object(self):
         """The invoice, fetched once.
 
-        dispatch, get and get_context_data all ask for it, and every one of those was its own
-        query *and* its own Invoice instance -- so the whole cached number tree (net, subtotal,
-        tax, the adjustment totals) was derived again for each copy. Memoized on the view.
+        dispatch, get and get_context_data all ask for it, and each was its own query *and* its own Invoice
+        instance -- so the whole cached number tree was derived again for each copy.
         """
         if getattr(self, "object", None) is not None:
             return self.object
@@ -280,8 +277,8 @@ class InvoiceView(DetailView, FormMixin, AuctionViewMixin):
             self.request.user, club, "permission_manage_bap"
         )
         if context["viewer_has_bap"] and club:
-            # Blank rather than None when the club has no flat rate: the value goes straight into a
-            # text box, and the per-lot category rate isn't worth a query per row on an invoice.
+            # Blank rather than None when the club has no flat rate: the value goes into a text box,
+            # and the per-lot category rate isn't worth a query per row.
             context["bap_default_points"] = "" if club.points_per_lot is None else club.points_per_lot
         return context
 
@@ -332,8 +329,7 @@ class InvoiceView(DetailView, FormMixin, AuctionViewMixin):
         context = self.get_context_data(object=self.object)
         context["formset"] = invoice_adjustment_formset
         context["helper"] = helper
-        # recaluclating slows things down,
-        # I am not sure if it's a good idea to have it here or not
+        # Recalculating slows this down; it may not belong here.
         self.object.recalculate()
         return self.render_to_response(context)
 
@@ -369,10 +365,8 @@ class InvoiceNoLoginView(InvoiceView):
 
 
 class SquarePaymentSuccessView(InvoiceNoLoginView):
-    """
-    Success redirect for Square payment links.
-    Marks invoice as opened but does NOT verify email address.
-    This prevents incorrectly marking emails as valid when users scan QR codes.
+    """Square's success redirect: marks the invoice opened but does not verify the email address, since
+    people scan these QR codes.
     """
 
     def dispatch(self, request, *args, **kwargs):
@@ -381,8 +375,7 @@ class SquarePaymentSuccessView(InvoiceNoLoginView):
         # Mark invoice as opened but don't verify email
         invoice.opened = True
         invoice.save()
-        # Skip the parent's dispatch which marks email as VALID
-        # Call grandparent (InvoiceView) dispatch instead
+        # Skip the parent's dispatch, which marks the email VALID, and call InvoiceView's.
         return InvoiceView.dispatch(self, request, *args, **kwargs)
 
     def get_context_data(self, **kwargs):

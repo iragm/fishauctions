@@ -1,16 +1,15 @@
 """DRF renderers for mobile endpoints that return raw bytes.
 
 ``APIView.initial()`` runs content negotiation *before* authentication, against the view's
-renderer_classes. With DRF's default set (JSON + browsable API) a client that honestly asks for
-what the endpoint actually returns — ``Accept: application/pdf`` or ``Accept: image/png`` — gets
-a 406 before the view body ever runs, while ``Accept: */*`` sails through. That produced the
-"Could not load the label. Please try again." bug: *all* label fetching failed, PDF and Bluetooth
-PNG alike.
+renderer_classes. With DRF's default set (JSON + browsable API) a client that honestly asks for what
+the endpoint returns -- ``Accept: application/pdf`` or ``image/png`` -- gets a 406 before the view
+body runs, while ``Accept: */*`` sails through. That produced the "Could not load the label. Please
+try again." bug: *all* label fetching failed, PDF and Bluetooth PNG alike.
 
-The fix is to declare renderers matching what these views really return. The views hand back a
-plain ``HttpResponse`` of bytes, so these renderers never render the successful body; they exist
-so negotiation succeeds. They still have to cope with DRF *error* payloads (403/404/429 render
-through whichever renderer negotiation picked), which is why non-bytes data falls back to JSON.
+So these declare renderers matching what the views really return. The views hand back a plain
+``HttpResponse`` of bytes, so these never render a successful body; they exist so negotiation
+succeeds. They still have to cope with DRF *error* payloads, which render through whichever renderer
+negotiation picked, which is why non-bytes data falls back to JSON.
 """
 
 from rest_framework.renderers import BaseRenderer, JSONRenderer

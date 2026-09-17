@@ -1,10 +1,8 @@
 """The club REST API: ``/api/v1/clubs/<slug>/…``.
 
-Authenticated by a ``ClubAPIKey`` or a signed-in club admin, both through
-``ClubAPIViewMixin.require_club_permission`` so the two callers go through one gate. Three rules
-run through the whole module: everything naming a person is inside a ``private`` block that is
-absent without the privacy flag, ``?filter=`` searches public columns only whoever sends it, and
-``?ordering=`` is an allowlist rather than a pass-through to ``order_by``.
+A ``ClubAPIKey`` or a signed-in club admin, both through ``require_club_permission``. Anything
+naming a person is in a ``private`` block absent without the privacy flag; ``?filter=`` searches
+public columns only; ``?ordering=`` is an allowlist.
 """
 
 import logging
@@ -159,7 +157,7 @@ class ClubMemberListCreateAPIView(ClubAPIViewMixin, generics.ListCreateAPIView):
         try:
             serializer.is_valid(raise_exception=True)
         except Exception:
-            # Log the failed attempt (with raw POST data) to club history so admins can diagnose it.
+            # Logged with the raw POST so admins can diagnose it.
             try:
                 club = self.get_club()
                 actor = f"API key [{request.api_key.prefix}] ({request.api_key.name})"
@@ -268,16 +266,10 @@ class ClubMemberDetailAPIView(ClubAPIViewMixin, generics.RetrieveUpdateDestroyAP
 
 
 class ClubMemberRenewAPIView(ClubAPIViewMixin, APIView):
-    """Renew a membership from an external system (a club's own website, a payment form, ...).
+    """Renew a membership from an external system.
 
-    POST the member's info; the member is looked up by email within the club and created if they
-    are new, then their membership is renewed exactly as the Renew button on the member list does
-    (same expiration math, club history, ledger entry, and confirmation email).  Responds with the
-    full member record, including the new ``membership_expiration_date``.
-
-    Any club member field the key is allowed to write may be sent along and is applied before the
-    renewal, so a renewal doubles as a details refresh.  Blank values are ignored rather than
-    wiping details already on file.
+    The member is found by email in the club (or created), then renewed exactly as the Renew button
+    does. Writable member fields sent along are applied first; blanks are ignored.
     """
 
     def _actor(self):
@@ -295,7 +287,6 @@ class ClubMemberRenewAPIView(ClubAPIViewMixin, APIView):
         email = (data.get("email") or "").strip().lower()
         if not email:
             return Response({"email": ["An email address is required to look up or create the member."]}, status=400)
-        # Blanks would otherwise overwrite details already on file (the CSV import's merge rule).
         data = {key: value for key, value in data.items() if value not in ("", None)}
         member = ClubMember.objects.filter(club=club, email__iexact=email, is_deleted=False).order_by("pk").first()
         created = member is None
@@ -303,7 +294,6 @@ class ClubMemberRenewAPIView(ClubAPIViewMixin, APIView):
         try:
             serializer.is_valid(raise_exception=True)
         except Exception:
-            # Same diagnostics as member create: an admin can see the rejected payload later.
             try:
                 field_dump = ", ".join(f"{k}={v!r}" for k, v in request.data.items())
                 ClubHistory.objects.create(
@@ -382,11 +372,8 @@ BAP_LOT_DEFAULT_DAYS = 30
 
 
 def parse_bap_lot_date_range(params):
-    """Resolve the ``start``/``end``/``days`` query params into an aware datetime range.
-
-    Bare dates are inclusive at both ends, so ``end=2026-08-08`` covers all of August 8th.
-    Explicit ``start``/``end`` win over ``days``; with nothing given the range is the last
-    ``BAP_LOT_DEFAULT_DAYS`` days.  Raises ValueError with a caller-facing message.
+    """Resolve ``start``/``end``/``days`` into an aware datetime range. Bare dates are inclusive; explicit
+    dates beat ``days``; default is ``BAP_LOT_DEFAULT_DAYS``. Raises ValueError with a caller message.
     """
     now = timezone.now()
 
@@ -394,8 +381,7 @@ def parse_bap_lot_date_range(params):
         raw = (params.get(name) or "").strip()
         if not raw:
             return None
-        # Bare dates are checked first: parse_datetime() also accepts "2026-03-31" and would silently
-        # turn an inclusive end date into midnight, dropping everything that happened that day.
+        # Dates first: parse_datetime accepts "2026-03-31" as midnight, dropping that day.
         parsed_date = parse_date(raw)
         if parsed_date is not None:
             parsed = datetime.combine(parsed_date, datetime.max.time() if end_of_day else datetime.min.time())
@@ -435,20 +421,12 @@ def parse_bap_lot_date_range(params):
 
 
 class ClubBapLotListAPIView(ClubAPIViewMixin, APIView):
-    """List the lots from this club's auctions that ended in a date range.
+    """Lots from this club's auctions that ended in a date range, for an external breeder award program.
 
-    Feeds an external breeder award program: it gets the lot, who sold it, who bought it, and
-    everything this site knows about whether the lot earns points, and does its own matching on the
-    email addresses.  Unsold lots are included with empty winner fields, so the caller can tell
-    "nobody bought it" from "not in this club's auctions".
+    Unsold lots are included with empty winner fields. ``lot_id`` never changes or gets reused, so
+    callers can dedupe on it across overlapping pulls.
 
-    ``lot_id`` is the site's permanent id for the lot and never changes or gets reused, so a caller
-    can key on it to avoid awarding points twice for the same lot across overlapping pulls.
-
-    GET /api/v1/clubs/<slug>/bap-lots/?days=30
-        ?days=N                   the last N days (default 30)
-        ?start=YYYY-MM-DD         from this date/timestamp (inclusive)
-        ?end=YYYY-MM-DD           through this date/timestamp (inclusive to end of day)
+    GET /api/v1/clubs/<slug>/bap-lots/?days=30  (or ?start=YYYY-MM-DD&end=YYYY-MM-DD, inclusive)
     """
 
     serializer_class = ClubBapLotSerializer
@@ -464,8 +442,7 @@ class ClubBapLotListAPIView(ClubAPIViewMixin, APIView):
         try:
             start, end = parse_bap_lot_date_range(request.query_params)
         except ValueError as error:
-            # Don't echo the exception back: it can carry internal detail from the datetime parsers,
-            # and the caller only needs to know the accepted shape of the params.
+            # Don't echo the parser's exception; say the accepted shape.
             logger.info("Rejected BAP lot date range for club %s: %s", club.pk, error)
             return Response(
                 {"error": "Invalid date range. Use ?days=N, or ?start=YYYY-MM-DD and ?end=YYYY-MM-DD."},
@@ -502,19 +479,14 @@ class ClubBapLotListAPIView(ClubAPIViewMixin, APIView):
         )
 
 
-#: How far back to look for the auction a club would call its "current" one.  An auction that
-#: started before this and still isn't wound down is not what anybody means by the question.
+#: Look-back for the "current" auction; older and still not wound down isn't what anyone means.
 CURRENT_AUCTION_WINDOW_DAYS = 90
 
-#: Default and ceiling for ``?limit=`` on the lot list.  A club auction of 400 lots is ordinary, so
-#: the default is big enough that most callers never page at all.
+#: Default and ceiling for ``?limit=`` on the lot list.
 LOT_PAGE_SIZE = 100
 MAX_LOT_PAGE_SIZE = 500
 
-#: What ``?ordering=`` accepts on the lot list, and the columns each name sorts on.  An allowlist
-#: rather than a pass-through to ``order_by``: a caller that can name any column can order by
-#: ``auctiontos_winner__email`` and read the auction's email list off the sort order, one binary
-#: search at a time, without ever holding the private permission.
+#: ``?ordering=`` names and their columns. An allowlist: sorting by winner email would leak it.
 LOT_ORDERING = {
     "lot_number": ("lot_number_int", "lot_number"),
     "lot_name": ("lot_name", "lot_number_int"),
@@ -526,34 +498,24 @@ LOT_ORDERING = {
 }
 DEFAULT_LOT_ORDERING = "lot_number"
 
-#: ``?lot_name=``, ``?description=`` and friends: one parameter, one column, substring match.  A
-#: parameter named after a column matches that column and nothing else; ``?filter=`` is the one
-#: that looks everywhere.
+#: One parameter, one column, substring match. ``?filter=`` is the one that looks everywhere.
 LOT_TEXT_FILTERS = {
     "lot_name": "lot_name__icontains",
     "description": "summernote_description__icontains",
     "custom_field_1": "custom_field_1__icontains",
-    # The whole value rather than part of one: a dropdown is a controlled vocabulary, and the
-    # auction publishes it as ``lot_fields.custom_dropdown_options``.
+    # A controlled vocabulary (``lot_fields.custom_dropdown_options``), so the whole value.
     "custom_dropdown": "custom_dropdown__iexact",
 }
 
-#: ``?donation=true``.  Every one of these is a plain column on Lot; ``sold`` is not, which is why
-#: it is handled on its own.
+#: Plain boolean columns. ``sold`` is a property, handled separately.
 LOT_BOOLEAN_FILTERS = {
     "donation": "donation",
     "i_bred_this_fish": "i_bred_this_fish",
     "custom_checkbox": "custom_checkbox",
 }
 
-#: Where ``?filter=`` looks.  **Public columns only, for every caller.**
-#:
-#: The admin's own lot filter (:class:`~auctions.filters.LotAdminFilter`) searches seller name,
-#: username and bidder number too, and copying that list here would hand a public key a way to
-#: confirm a name one character at a time without ever holding the private permission.  Seller and
-#: winner get their own parameters instead (:data:`LOT_PERSON_FILTERS`), which *refuse* a key that
-#: cannot read private information rather than quietly matching nothing -- so the same ``?filter=``
-#: means the same thing whoever sends it.
+#: Where ``?filter=`` looks: **public columns only, for every caller**. Unlike ``LotAdminFilter``,
+#: no seller names, or a public key could confirm a name letter by letter.
 LOT_GENERIC_FILTER_COLUMNS = (
     "lot_name__icontains",
     "summernote_description__icontains",
@@ -565,17 +527,12 @@ LOT_GENERIC_FILTER_COLUMNS = (
     "species_category__name__icontains",
 )
 
-#: ``?seller=`` / ``?winner=``: a name, a bidder number or an email address.  Behind the privacy
-#: flag, because each one is a way of asking "is this person in this auction".
+#: ``?seller=`` / ``?winner=``: name, bidder number or email. Refused without the privacy flag.
 LOT_PERSON_FILTERS = {"seller": "auctiontos_seller", "winner": "auctiontos_winner"}
 
 
 def _api_bool(value, name):
-    """``?sold=true``.  Returns ``(True/False/None, error)``; None means the caller didn't ask.
-
-    Spellings rather than Python truthiness, because ``bool("false")`` is True and a filter that
-    reads "false" as "yes" is a bug nobody reports -- they just quietly get the wrong lots.
-    """
+    """``?sold=true`` -> ``(True/False/None, error)``. Explicit spellings: ``bool("false")`` is True."""
     if value is None or str(value).strip() == "":
         return None, None
     text = str(value).strip().lower()
@@ -587,11 +544,7 @@ def _api_bool(value, name):
 
 
 def _lot_fields_param(value):
-    """``?fields=lot_number,lot_name,thumbnail``.  Returns ``(set or None, error)``.
-
-    None means every field.  A name we don't have is an error rather than an omission: a typo that
-    silently drops a column produces a page with a blank space in it and no clue why.
-    """
+    """``?fields=`` -> ``(set or None, error)``. An unknown name is an error, not a silent blank column."""
     if not value:
         return None, None
     wanted = [name.strip() for name in str(value).split(",") if name.strip()]
@@ -605,22 +558,13 @@ def _lot_fields_param(value):
 
 
 def _club_api_auctions(club):
-    """Every auction filed under this club, promoted or not.
-
-    Not filtered by ``promote_this_auction``: that flag says "this one is ready for strangers", and
-    a key issued by the club's own admins is not a stranger.
-    """
+    """Every auction filed under this club, promoted or not: the club's own key isn't a stranger."""
     return Auction.objects.filter(club=club, is_deleted=False)
 
 
 def club_api_current_auction(club):
-    """The auction this club is running or about to run, or ``None``.
-
-    The pinned ``current_auction`` first, because an admin chose it on purpose; otherwise the
-    soonest one that hasn't wound down.  Deliberately looser than
-    :func:`_club_current_auction`, which the public website embed uses and which will only ever
-    offer a *promoted* auction: this answers the club's own software, which has to be able to build
-    a page for an auction before it is announced.
+    """The auction this club is running or about to run, or ``None``: the pinned one if not wound down,
+    else the soonest. Looser than ``_club_current_auction`` (public embed, promoted only).
     """
     pinned = club.current_auction
     if pinned and pinned.club_id == club.pk and not pinned.is_deleted and not pinned.pretty_much_over:
@@ -636,11 +580,7 @@ def club_api_latest_auction(club):
 
 
 def _resolve_club_api_auction(club, identifier):
-    """An auction slug, or one of the two words ``current`` and ``latest``.
-
-    A real slug wins, so a club that manages to call an auction "Latest" can still reach it; the
-    two words are only ever a fallback.
-    """
+    """An auction slug, or ``current`` / ``latest``. A real slug wins."""
     identifier = (identifier or "").strip()
     auction = _club_api_auctions(club).filter(slug=identifier).first()
     if auction:
@@ -653,11 +593,7 @@ def _resolve_club_api_auction(club, identifier):
 
 
 def _lot_images_by_owner(lots):
-    """Every image belonging to a page of lots, in one query, keyed on the lot that owns it.
-
-    Keyed on the owner rather than the lot because of ``use_images_from``: a lot can borrow another
-    lot's pictures, and both then read the same list.
-    """
+    """A page of lots' images in one query, keyed on the owning lot (``use_images_from`` shares them)."""
     owners = {lot.use_images_from_id or lot.pk for lot in lots}
     images = {}
     if not owners:
@@ -668,20 +604,13 @@ def _lot_images_by_owner(lots):
 
 
 def _auto_images_by_lot_name(auction, lots, images_by_owner):
-    """The pictures this site would auto-add, for the lots on this page that have none of their own.
-
-    :attr:`~auctions.models.Lot.auto_image` does this one lot at a time and costs several queries
-    each; a lot list cannot afford that, so this is the same rule -- the newest primary image on a
-    lot of the same name in an auction run by this auction's admins, from a seller who shares -- run
-    once for the whole page.
-    """
+    """``Lot.auto_image`` for a whole page at once: the same rule without the per-lot queries."""
     if not auction or not auction.auto_add_images:
         return {}
     names = set()
     for lot in lots:
         if any(image.is_primary for image in images_by_owner.get(lot.use_images_from_id or lot.pk, [])):
             continue
-        # The seller's own "don't put other people's pictures on my lots" setting.
         if lot.user and not lot.user.userdata.auto_add_images:
             continue
         names.add(lot.lot_name)
@@ -706,12 +635,8 @@ def _auto_images_by_lot_name(auction, lots, images_by_owner):
 
 
 class ClubAuctionReadMixin(ClubAPIViewMixin):
-    """Shared permission and context plumbing for the read-only auction and lot endpoints.
-
-    Three separate permissions, because they are three different decisions: reading the auction's
-    dates and rules, reading the lots in it, and reading who bought and sold them.  The third is
-    the privacy flag -- without it the ``private`` object is not in the response at all, so a key
-    handed to a public web page has nothing to leak.
+    """Permission and context for the read-only auction and lot endpoints: auction info, public lots,
+    and the privacy flag, three separate decisions.
     """
 
     def auction_info_club(self):
@@ -737,9 +662,7 @@ class ClubAuctionReadMixin(ClubAPIViewMixin):
         return {
             "request": self.request,
             "private": self.may_read_private(),
-            # The name of the key doing the reading rides on every lot link as ?src=, which is the
-            # parameter this site's own page-view tracking reads: a club that publishes this feed
-            # then sees the traffic its website sent in its auction stats.
+            # ?src= is what page-view tracking reads, so the club sees its website's traffic.
             "src": self.request.api_key.name if self.is_api_key_request() else "",
             **extra,
         }
@@ -752,13 +675,8 @@ class ClubAuctionReadMixin(ClubAPIViewMixin):
 
 
 class ClubAuctionListAPIView(ClubAuctionReadMixin, APIView):
-    """This club's auctions, newest first.
-
-    ``GET /api/v1/clubs/<slug>/auctions/``
-        ``?limit=`` / ``?offset=``
-
-    ``current`` and ``latest`` name the two auctions worth asking for by name, and are the words
-    the detail and lot endpoints take in place of a slug.
+    """This club's auctions, newest first. ``GET …/auctions/?limit=&offset=``. Names ``current`` and
+    ``latest``.
     """
 
     def get(self, request, slug):
@@ -785,10 +703,7 @@ class ClubAuctionListAPIView(ClubAuctionReadMixin, APIView):
 
 
 class ClubAuctionDetailAPIView(ClubAuctionReadMixin, APIView):
-    """One auction: dates, rules, fees, pickup locations and which lot fields it uses.
-
-    ``GET /api/v1/clubs/<slug>/auctions/<auction slug, or current, or latest>/``
-    """
+    """One auction: dates, rules, fees, pickup locations and lot fields. ``GET …/auctions/<identifier>/``"""
 
     def get(self, request, slug, identifier):
         self.auction_info_club()
@@ -797,20 +712,14 @@ class ClubAuctionDetailAPIView(ClubAuctionReadMixin, APIView):
 
 
 class ClubAuctionLotListAPIView(ClubAuctionReadMixin, APIView):
-    """The lots in one auction, in lot number order.
+    """The lots in one auction, in lot number order. ``GET …/auctions/<identifier>/lots/``
 
-    ``GET /api/v1/clubs/<slug>/auctions/<auction slug, or current, or latest>/lots/``
-        ``?limit=`` / ``?offset=``
-        ``?filter=`` -- one box that searches every public column
-        ``?lot_name=`` / ``?description=`` / ``?custom_field_1=`` / ``?custom_dropdown=``
-        ``?lot_number=`` / ``?category=`` / ``?category_id=`` / ``?species_id=``
-        ``?sold=`` / ``?donation=`` / ``?i_bred_this_fish=`` / ``?custom_checkbox=``
-        ``?seller=`` / ``?winner=`` -- needs the privacy flag
-        ``?ordering=`` -- see :data:`LOT_ORDERING`, ``-`` for descending
-        ``?fields=`` -- only these keys on each lot
+    ``?limit=`` ``?offset=`` ``?filter=`` (all public columns) ``?lot_name=`` ``?description=``
+    ``?custom_field_1=`` ``?custom_dropdown=`` ``?lot_number=`` ``?category=`` ``?category_id=``
+    ``?species_id=`` ``?sold=`` ``?donation=`` ``?i_bred_this_fish=`` ``?custom_checkbox=``
+    ``?seller=`` / ``?winner=`` (privacy flag) ``?ordering=`` (:data:`LOT_ORDERING`) ``?fields=``
 
-    Removed lots are left out, unless the key can read private information -- a club republishing
-    this feed is publishing the lot list, and a lot an admin pulled is not on it.
+    Removed lots are left out unless the key can read private information.
     """
 
     def lot_queryset(self, auction):
@@ -829,11 +738,8 @@ class ClubAuctionLotListAPIView(ClubAuctionReadMixin, APIView):
         ).order_by(*LOT_ORDERING[DEFAULT_LOT_ORDERING])
 
     def filtered_lots(self, auction, params):
-        """The queryset with ``?filter=`` and friends applied.  Returns ``(lots, error)``.
-
-        A parameter we don't recognise the *value* of is an error rather than a shrug: a filter
-        that silently does nothing shows up as a page that quietly lists every lot in the auction,
-        which is exactly the mistake nobody notices until it is on the club's front page.
+        """Apply ``?filter=`` and friends. Returns ``(lots, error)``. An unparseable value is an error, or the
+        page silently lists every lot.
         """
         lots = self.lot_queryset(auction)
         for name, column in LOT_TEXT_FILTERS.items():
@@ -843,11 +749,8 @@ class ClubAuctionLotListAPIView(ClubAuctionReadMixin, APIView):
         generic = (params.get("filter") or "").strip()
         if generic:
             if generic.isdigit():
-                # A number typed into a search box is a lot number.  Running it through the text
-                # columns as well is what makes a generic search useless: "1" appears in "10
-                # gallon" and in half the descriptions in the auction, so the one lot the person
-                # was looking for arrives buried in sixty others.  ?description=1 is still there
-                # for somebody who really does want digits in the prose.
+                # All digits is a lot number only; "1" in the text columns buries the lot. Use
+                # ?description=1 for digits in prose.
                 match = Q(lot_number_int=int(generic)) | Q(custom_lot_number__iexact=generic)
             else:
                 match = Q()
@@ -856,8 +759,7 @@ class ClubAuctionLotListAPIView(ClubAuctionReadMixin, APIView):
             lots = lots.filter(match)
         lot_number = (params.get("lot_number") or "").strip()
         if lot_number:
-            # Both spellings, like the single-lot endpoint: lot_number_int is what almost every
-            # auction numbers with, custom_lot_number is what seller-dash numbering writes.
+            # Both spellings: lot_number_int, and custom_lot_number from seller-dash numbering.
             match = Q(custom_lot_number__iexact=lot_number)
             if lot_number.isdigit():
                 match |= Q(lot_number_int=int(lot_number))
@@ -882,8 +784,7 @@ class ClubAuctionLotListAPIView(ClubAuctionReadMixin, APIView):
         if error:
             return None, error
         if sold is not None:
-            # Lot.sold is a property (a winner *and* a price), so it is spelled out here rather
-            # than filtered on one column -- a lot with a winner and no price is not sold.
+            # Lot.sold is a property: a winner and a price.
             has_winner = Q(winning_price__isnull=False) & (Q(auctiontos_winner__isnull=False) | Q(winner__isnull=False))
             lots = lots.filter(has_winner) if sold else lots.exclude(has_winner)
         lots, error = self._filter_by_person(lots, params)
@@ -892,12 +793,7 @@ class ClubAuctionLotListAPIView(ClubAuctionReadMixin, APIView):
         return self._ordered(lots, params.get("ordering"))
 
     def _filter_by_person(self, lots, params):
-        """``?seller=`` / ``?winner=`` -- a name, a bidder number or an email address.
-
-        Refused outright without the privacy flag rather than quietly matching nothing: "no lots"
-        and "you may not ask" are different answers, and a caller that cannot tell them apart will
-        read the first as the second.
-        """
+        """``?seller=`` / ``?winner=``. Refused without the privacy flag, so "no lots" never means "not allowed"."""
         for name, relation in LOT_PERSON_FILTERS.items():
             value = (params.get(name) or "").strip()
             if not value:
@@ -963,10 +859,7 @@ class ClubAuctionLotListAPIView(ClubAuctionReadMixin, APIView):
 
 
 class ClubAuctionLotDetailAPIView(ClubAuctionLotListAPIView):
-    """One lot, by the number people read off its label.
-
-    ``GET /api/v1/clubs/<slug>/auctions/<auction slug, or current, or latest>/lots/<lot number>/``
-    """
+    """One lot, by its label number. ``GET …/auctions/<identifier>/lots/<lot number>/``"""
 
     def get(self, request, slug, identifier, lot_number):
         self.lot_info_club()
@@ -975,8 +868,7 @@ class ClubAuctionLotDetailAPIView(ClubAuctionLotListAPIView):
         if error:
             return Response({"error": error}, status=400)
         lots = self.lot_queryset(auction)
-        # Both spellings of the number: lot_number_int is the one almost every auction uses, and
-        # custom_lot_number is what seller-dash numbering ("101-1") writes instead.
+        # Both spellings of the number.
         lot = lots.filter(custom_lot_number=lot_number).first()
         if not lot and str(lot_number).isdigit():
             lot = lots.filter(lot_number_int=int(lot_number)).first()
@@ -986,26 +878,13 @@ class ClubAuctionLotDetailAPIView(ClubAuctionLotListAPIView):
         return Response(ClubApiLotSerializer(lot, context=context).data)
 
 
-#: Daily ceiling on species lookups from one club that are allowed to reach the language model.
-#:
-#: A club rather than a key: a club that issues three keys still gets one bill, and one busy
-#: integration must not be able to switch the model off for the club's other software.
-#:
-#: Large on purpose, because almost nothing spends it.  A lookup only reaches the model after the
-#: exact, cache and search steps have all failed, and every model answer -- including "this is not
-#: a species" -- is written to a cache every club reads, so a name costs one call ever, site-wide.
-#: A thousand a day is therefore a thousand *names nobody on this site has ever looked up*, which
-#: is not a number a club reaches twice.
+#: Daily species lookups per club that may reach the language model. Per club, not key, so one busy
+#: integration can't starve the club's others. Large because answers are cached site-wide.
 SPECIES_LOOKUP_LLM_CALLS_PER_CLUB_PER_DAY = 1000
 
 
 def _species_llm_budget_headers(budget):
-    """What is left of this club's daily model allowance, for a species-lookup response.
-
-    Headers rather than a field in the body, so a caller can back off without parsing the answer,
-    and on every response rather than only the ones that spent something: an integration that
-    first reads the number when it is already being refused has read it too late.
-    """
+    """Remaining model allowance as headers, on every response, so callers can back off early."""
     return {
         "X-Species-LLM-Limit": str(budget.limit),
         "X-Species-LLM-Remaining": str(budget.remaining),
@@ -1014,18 +893,10 @@ def _species_llm_budget_headers(budget):
 
 
 def _resolve_category(name, raw_id):
-    """``category=cichlids`` (by name, any case) or ``category_id=10``.  Returns ``(category, error)``.
-
-    Both may be None, which is what "the caller didn't mention a category" looks like.
-
-    Two parameters rather than one that works out which was meant: "2024" is a perfectly good name
-    for a category, and anything deciding by looking at the characters will one day decide wrong.
-    A category we cannot find is an error rather than a shrug -- it only ever re-orders candidates,
-    so ignoring a typo in it would go unnoticed for months.
+    """``category=cichlids`` (by name) or ``category_id=10``. Returns ``(category, error)``; both None if
+    not mentioned. Two parameters, since "2024" is a valid name. Unknown is an error.
     """
-    # Both are str()ed rather than trusted: a query parameter is always a string, but a JSON body
-    # can perfectly well send {"category": 12}, and that must be a 400 about a category rather
-    # than a 500 about .strip().
+    # str() both: a JSON body can send a number, which must be a 400, not a 500.
     name = str(name if name is not None else "").strip()
     raw_id = str(raw_id if raw_id is not None else "").strip()
     if name and raw_id:
@@ -1042,64 +913,22 @@ def _resolve_category(name, raw_id):
 
 
 class ClubSpeciesLookupAPIView(ClubAPIViewMixin, APIView):
-    """Turn free text into a species from this site's list, and add the ones it is missing.
+    """Turn free text into a species from this site's list, and add missing ones.
 
-    ``GET  /api/v1/clubs/<slug>/species-lookup/?q=yellow%20lab``
-    ``POST /api/v1/clubs/<slug>/species-lookup/`` -- add a species
+    ``GET  …/species-lookup/?q=yellow%20lab`` and ``POST …/species-lookup/`` (add a species), both
+    behind ``can_look_up_species``. The POST only creates, and what it creates is the club's until
+    approved.
 
-    One permission, ``can_look_up_species``, covers both, and the write is safe to hand out with
-    the read because of what it cannot do: it only ever creates, and what it creates is this
-    club's until a site admin approves it.
+    Runs ``suggest_species`` exactly as the lot form does. ``results`` is a shortlist;
+    ``unambiguous`` means exactly one, the only case the site acts on. ``source`` is ``exact``,
+    ``cache``, ``search``, ``llm`` or ``none``. The club sees the shared list plus its own unapproved
+    rows (a signed-in admin also sees their own). No match is a normal 200.
 
-    The same matcher the add-lot form runs -- :func:`auctions.species_matching.suggest_species`,
-    called exactly as ``SpeciesSuggestions`` calls it -- so a club's own website, membership system
-    or breeder-award program files a name the way this site would file it, and the two agree about
-    what a lot is.  Nothing the matcher returns is invented: every answer is a row in the species
-    table, and the way to add a row is the POST rather than a cleverer matcher.
+    Params: ``q`` (required; blank is the one 400), ``category`` or ``category_id`` (tie-break only;
+    unknown is a 400). At most ``MAX_SUGGESTIONS`` results; ``total_matches`` says if there were more.
 
-    Be as conservative reading the answer as the matcher is producing it.  ``results`` is a
-    shortlist, not a decision.  ``unambiguous`` is true only when the matcher came back with
-    exactly one species, which is the same signal the site itself trusts: the lot form fills the
-    field in for the user only on one answer, and ``backfill_lot_species`` writes to old lots only
-    on one answer.  ``source`` says how it was found, most trustworthy first -- ``exact`` (the text
-    *is* a scientific or common name), ``cache`` (a remembered answer), ``search`` (token/phrase
-    matching), ``llm`` (a language model picked from a shortlist we built), ``none``.
-
-    **What this club can see** is everything on the shared list plus its own unapproved rows --
-    the ones its admins added at a check-in table and the ones its keys POSTed here, which stay
-    the club's until a site admin approves them for everybody.  That is
-    :func:`~auctions.species_matching.visible_species` with this club passed in, and ``approved``
-    on each result says which kind a row is.  A *signed-in* admin browsing the same URL is also a
-    person, so they additionally see anything they added themselves or that belongs to another
-    club of theirs -- the site-wide rule, and the one thing that can make a browser's answer
-    slightly wider than the key's.
-
-    **No match is a normal answer**, not an error: 200 with an empty ``results``.  Most lots are
-    not a species -- "sponge filter", "assorted plants", "10 gallon tank" -- and a matcher that
-    always finds something would be putting wrong species on labels and wrong points in a breeder
-    award program.
-
-    Params:
-        ``q``            the text to match.  Required; blank is the one 400.
-        ``category``     a category *name*, matched case-insensitively.
-        ``category_id``  a category id, as the lot form has one to hand.  Either form only breaks
-                         a tie between candidates that already matched -- neither can filter --
-                         and a name or id this site doesn't have is a 400 rather than a shrug.
-
-    At most :data:`~auctions.species_matching.MAX_SUGGESTIONS` candidates come back; a bare genus
-    can match more than that and ``total_matches`` says so, which is the number to look at before
-    trusting a picklist.
-
-    The language model runs on every lookup the database could not answer, which is the whole
-    point of asking a matcher rather than querying the species table yourself.  It is bounded by
-    what it costs rather than by asking permission per request: the request has to get past the
-    exact, cache and search steps to reach it, and the club then spends one of
-    :data:`SPECIES_LOOKUP_LLM_CALLS_PER_CLUB_PER_DAY` **per round** -- a name the model can place
-    on sight costs one, and one that has to be shown our own shortlist costs two.  Every answer,
-    "this is not a species" included, goes to ``SpeciesSearchCache``, so a name is paid for once
-    for the whole site however many rounds it took.  ``X-Species-LLM-Remaining`` on every response is the number to back off on; a lookup
-    that needed the model with nothing left is the one 429, because answering it "no species"
-    would be a lie that then gets cached.
+    The model costs one :data:`SPECIES_LOOKUP_LLM_CALLS_PER_CLUB_PER_DAY` unit per round. Out of budget
+    with nothing to show is a 429, since "no species" would be a lie that gets cached.
     """
 
     serializer_class = SpeciesMatchSerializer
@@ -1110,8 +939,7 @@ class ClubSpeciesLookupAPIView(ClubAPIViewMixin, APIView):
             "can_look_up_species",
             "You do not have permission to look up species for this club.",
         )
-        # Built before anything can fail, so the allowance is on the 400s too: a caller reading
-        # the header on every response should not have to make a *valid* request to see it.
+        # Before anything can fail, so 400s carry the budget headers too.
         budget = LLMBudget.for_club(club, SPECIES_LOOKUP_LLM_CALLS_PER_CLUB_PER_DAY)
         headers = _species_llm_budget_headers(budget)
         query = (request.query_params.get("q") or "").strip()
@@ -1126,11 +954,9 @@ class ClubSpeciesLookupAPIView(ClubAPIViewMixin, APIView):
             return Response({"error": error}, status=400, headers=headers)
         matches, source = suggest_species(
             query,
-            # An API key authenticates a script, not a person: request.user is anonymous, and
-            # LLMUsage rows and the matcher's own per-user budget both want a real user or none.
+            # An API key has no person: no user for LLMUsage or the per-user budget.
             user=None if self.is_api_key_request() else request.user,
-            # The club whose key or admin is asking, so a species one of its admins added but
-            # nobody has approved is visible to its own software.
+            # So the club's own unapproved species are visible to its software.
             club=club,
             use_llm=True,
             category=category,
@@ -1139,9 +965,7 @@ class ClubSpeciesLookupAPIView(ClubAPIViewMixin, APIView):
         # Rebuilt: the lookup may just have spent one of these.
         headers = _species_llm_budget_headers(budget)
         if not matches and budget.blocked:
-            # Out of budget *and* nothing to show.  Not 200-with-no-results: this lookup was never
-            # actually answered, and a caller that wrote down "no species" would be writing down
-            # something the site never said.  Lookups the database can answer keep working.
+            # Out of budget with nothing to show: never answered, so not a 200.
             retry_after = max(1, int((budget.resets_at - timezone.now()).total_seconds()))
             return Response(
                 {
@@ -1163,12 +987,10 @@ class ClubSpeciesLookupAPIView(ClubAPIViewMixin, APIView):
             {
                 "query": query,
                 "source": source,
-                # Exactly one answer is the only case the site itself acts on unprompted.
                 "unambiguous": len(matches) == 1,
                 "total_matches": len(matches),
                 "count": len(serializer.data),
-                # Whether this request cost a model call, not whether the model found something:
-                # "not a species" is an answer the model was paid for too.
+                # Whether a model call was spent, not whether it found something.
                 "llm": bool(budget.spent),
                 "results": serializer.data,
             },
@@ -1176,25 +998,17 @@ class ClubSpeciesLookupAPIView(ClubAPIViewMixin, APIView):
         )
 
     def post(self, request, slug):
-        """Add a species that isn't on the list yet.  Create only -- see :class:`SpeciesCreateSerializer`.
+        """Add a species not on the list yet. Create only (:class:`SpeciesCreateSerializer`).
 
-        The club API's half of ``/species/new/``, which is the same job for a person: somebody is
-        selling a fish this site has never heard of, and "email the site owner" ends in a lot with
-        no scientific name on its label.  What a key adds is ``approved=False`` and stamped with
-        this club, so it is offered to this club and to nobody else until a site admin approves it.
-
-        A name that is already on the list is a 409 carrying the row that already has it, because
-        the answer to "add *Poecilia reticulata*" is always "use the one that exists", never a
-        second copy of it -- two rows for one fish is how breeder points end up split in half.
+        Stamped ``approved=False`` with this club until an admin approves it. An existing name is a 409
+        with the existing row: two rows for one fish split breeder points.
         """
         club = self.require_club_permission(
             "permission_add_edit",
             "can_look_up_species",
             "You do not have permission to add species for this club.",
         )
-        # A body that isn't an object at all -- a bare list, a string -- has no fields to read, so
-        # it goes to the serializer as nothing and comes back as "scientific_name is required"
-        # rather than as a 500 about .get().
+        # A non-object body becomes "scientific_name is required", not a 500.
         data = request.data if hasattr(request.data, "get") else {}
         category, error = _resolve_category(data.get("category"), data.get("category_id"))
         if error:
@@ -1219,8 +1033,7 @@ class ClubSpeciesLookupAPIView(ClubAPIViewMixin, APIView):
             )
         species = serializer.save(
             club=club,
-            # A key is a script; there is no person to credit.  The club is what the row is stamped
-            # with, and what a superuser sees when approving it.
+            # A key has no person to credit; the club stamp identifies it.
             added_by=None if self.is_api_key_request() else request.user,
             category=category,
         )
@@ -1228,34 +1041,19 @@ class ClubSpeciesLookupAPIView(ClubAPIViewMixin, APIView):
 
 
 class ClubSpeciesCommonNameAPIView(ClubAPIViewMixin, APIView):
-    """Add a common name to a species that is already on the list.
+    """Add a common name to a species already on the list.
 
-    ``POST /api/v1/clubs/<slug>/species-lookup/<id or scientific name>/common-names/``
+    ``POST …/species-lookup/<id or scientific name>/common-names/``
 
-    This is the table the hobby's own vocabulary lives in.  FishBase is an ichthyology database:
-    it is authoritative about which species exist and has no reason to know that *Labidochromis
-    caeruleus* is a "yellow lab", so that name has to be ours.  It is stamped ``source="admin"``,
-    which is what makes it survive the next FishBase re-import -- every importer deletes only the
-    names it wrote itself -- and scoped to this club until a site admin approves it, exactly like
-    a species.
-
-    Named by **id or by scientific name**, because a caller matching free text has a name and not
-    an id, and making them look the id up first would be two calls to do one thing.  A strain
-    needs its full name ("Neocaridina davidi 'Blue Dream'") or its id: the plain species and all
-    thirteen of its colour strains carry the same ``scientific_name``.
-
-    Create only.  It never edits or removes a name that is already there, never touches
-    ``Species.common_name``, and never claims another source's ``is_preferred``.  Sending a name
-    the species already has is not an error -- 200 with the row that exists, so a club can re-run
-    its import without thinking about it.  A name that already names a *different* species is a
-    409: one name on two species turns an unambiguous lookup into a picklist, so it is the loss of
-    a name rather than the gain of one.
+    Stamped ``source="admin"`` so FishBase re-imports keep it, and scoped to this club until approved.
+    A strain needs its full name or id, since strains share ``scientific_name``. Create only: never
+    edits names, ``Species.common_name`` or ``is_preferred``. An existing name on this species is a
+    200; on a different species, a 409.
     """
 
     serializer_class = SpeciesMatchSerializer
 
-    #: "Neocaridina davidi 'Blue Dream'" -- a strain as ``full_scientific_name`` writes it, which
-    #: is the string every response shows and therefore the one a caller has to hand.
+    #: A strain as ``full_scientific_name`` writes it: "Neocaridina davidi 'Blue Dream'".
     _STRAIN_NAME = re.compile(r"""^(?P<species>.*?)\s*['"\u2018\u2019](?P<variety>.+?)['"\u2018\u2019]$""")
 
     def _find_species(self, identifier, club):
@@ -1266,9 +1064,7 @@ class ClubSpeciesCommonNameAPIView(ClubAPIViewMixin, APIView):
             return visible.filter(pk=int(identifier)).first()
         strain = self._STRAIN_NAME.match(identifier)
         if strain:
-            # "Hybrid 'Tibee'" is what full_scientific_name prints for a cross, so it is what a
-            # caller has to hand -- but "Hybrid" is not a genus and there is no such scientific
-            # name to match on.  See Species.is_hybrid.
+            # "Hybrid 'Tibee'" is printed for crosses, but "Hybrid" isn't a genus. See Species.is_hybrid.
             if strain.group("species").strip().lower() == "hybrid":
                 return visible.filter(is_hybrid=True, variety__iexact=strain.group("variety")).first()
             return visible.filter(
@@ -1276,8 +1072,7 @@ class ClubSpeciesCommonNameAPIView(ClubAPIViewMixin, APIView):
             ).first()
         matches = list(visible.filter(scientific_name__iexact=identifier)[:25])
         if len(matches) > 1:
-            # A strain carries its parent's name, so a bare "Neocaridina davidi" is the plain
-            # species and its strains all at once.  The plain species is what was meant.
+            # A bare binomial means the plain species, not its strains.
             matches = [species for species in matches if not species.variety]
         return matches[0] if len(matches) == 1 else None
 
@@ -1306,9 +1101,7 @@ class ClubSpeciesCommonNameAPIView(ClubAPIViewMixin, APIView):
                 },
                 status=409,
             )
-        # Matched on the normalised column, because that is what every lookup matches on:
-        # "Adolf's catfish" and "adolfs catfish" are the same name here.  Scoped to the names this
-        # club can see, so another club's private name for the same fish is not mistaken for ours.
+        # Normalised, and scoped to names this club can see, so another club's private name isn't ours.
         existing = (
             visible_common_names(None, club)
             .filter(species=species, name_normalized=normalize_species_name(name))
@@ -1321,12 +1114,10 @@ class ClubSpeciesCommonNameAPIView(ClubAPIViewMixin, APIView):
                 species=species,
                 name=name[:255],
                 language="English",
-                # Never preferred: that would demote the name the source designates, which is an
-                # edit to somebody else's row rather than a name of our own.
+                # Never preferred: that would demote the source's designated name.
                 is_preferred=False,
                 source="admin",
-                # A superuser is adding to everybody's vocabulary and knows it.  Anyone else --
-                # and every key -- is adding this club's word for it.  Same rule as a species.
+                # Superusers add for everyone; anyone else, and every key, for this club.
                 approved=bool(user and user.is_superuser),
                 added_by=user,
                 club=club,

@@ -67,9 +67,8 @@ class AdminTraffic(AdminOnlyViewMixin, TemplateView):
         context["days"] = days
         timeframe = timezone.now() - timedelta(days=days)
 
-        # this next section is the user last activity
-        # this is very old code, and it would probably be far better to use PageViews
-        # for logged in and not logged in users instead to show overall traffic over time
+        # User last activity. Old code: PageViews for signed-in and signed-out users would show
+        # overall traffic better.
         qs = UserData.objects.filter(user__is_active=True)
         activity = (
             qs.filter(last_activity__gte=timezone.now() - timedelta(days=60))
@@ -91,14 +90,13 @@ class AdminTraffic(AdminOnlyViewMixin, TemplateView):
         context["page_views"] = (
             page_view_qs.values("url", "title")
             .annotate(
-                # there's no way this code is right,
-                # it dates back to when view counter was being used, and that field is no longer filled out
-                # total_view_count=Sum("counter") + F("unique_view_count"),
+                # This is probably wrong: it dates from when the view counter was used, and that
+                # field is no longer filled in.
                 view_count=Count("url"),
             )
             .order_by("-view_count")[:number_of_popular_pages_to_show]
         )
-        # Top user agents over the last 24 hours, to help spot and filter out bots
+        # Top user agents over the last 24 hours, to spot bots.
         last_24_hours = timezone.now() - timedelta(hours=24)
         context["top_user_agents"] = list(
             PageView.objects.filter(date_start__gte=last_24_hours)
@@ -136,7 +134,6 @@ class AdminTrafficJSON(AdminOnlyViewMixin, BaseLineChartView):
         timeframe = timezone.now() - timedelta(days=self.bins)
         views = PageView.objects.filter(date_start__gte=timeframe).order_by("-date_start")
 
-        # what follows is a delightful reminder of how important a consistent naming scheme is
         return [
             bin_data(views, "date_start", self.bins, timeframe, timezone.now())[::-1],
         ]
@@ -320,22 +317,10 @@ class AdminDashboard(AdminOnlyViewMixin, TemplateView):
         timeframe = timezone.now() - timezone.timedelta(minutes=minutes)
         base_qs = PageView.objects.filter(date_start__gte=timeframe)
         if view_type == "logged_in":
-            # return base_qs.filter(user__isnull=False).aggregate(unique_views=Count("user", distinct=True))[
-            #    "unique_views"
-            # ]
             return base_qs.filter(user__isnull=False).values("user").distinct().count()
         if view_type == "anon":
-            # return base_qs.filter(user__isnull=True, session_id__isnull=False).aggregate(
-            #    unique_views=Count("session_id", distinct=True)
-            # )["unique_views"]
-            # this one is the same as above.  Both use session which is somehow getting clobbered.  Maybe cloudflare.
-            # return (
-            #     base_qs.filter(user__isnull=True, session_id__isnull=False)
-            #     .exclude(session_id="")
-            #     .values("session_id")
-            #     .distinct()
-            #     .count()
-            # )
+            # Session ids get clobbered somehow, perhaps by Cloudflare, so count rows rather than
+            # distinct sessions.
             return (
                 base_qs.filter(user__isnull=True)
                 .exclude(ip_address="")
@@ -379,38 +364,6 @@ class AdminDashboard(AdminOnlyViewMixin, TemplateView):
             .order_by("-count")
         )
 
-        # context["unsubscribes"] = qs.filter(has_unsubscribed=True).count()
-        # context["anonymous"] = (
-        #     qs.filter(username_visible=False).exclude(user__username__icontains="@").count()
-        # )  # inactive users with an email as their username were set to anonymous Nov 2023
-        # context["light_theme"] = qs.filter(use_dark_theme=False).count()
-        # context["hide_ads"] = qs.filter(show_ads=False).count()
-        # context["no_club_auction"] = qs.filter(user__auctiontos__isnull=True).distinct().count()
-        # context["no_participate"] = (
-        #     qs.exclude(Q(user__winner__isnull=False) | Q(user__lot__isnull=False)).distinct().count()
-        # )
-        # context["using_watch"] = qs.exclude(user__watch__isnull=True).distinct().count()
-        # context["using_buy_now"] = qs.filter(user__winner__buy_now_used=True).count()
-        # context["using_proxy_bidding"] = qs.filter(has_used_proxy_bidding=True).count()
-        # context["buyers"] = qs.filter(user__winner__isnull=False).distinct().count()
-        # context["sellers"] = qs.filter(user__lot__isnull=False).distinct().count()
-        # context["has_location"] = qs.exclude(latitude=0).count()
-        # context["new_lots_last_7_days"] = (
-        #     Lot.objects.exclude(is_deleted=True).filter(date_posted__gte=timezone.now() - timedelta(days=7)).count()
-        # )
-        # context["new_lots_last_30_days"] = (
-        #     Lot.objects.exclude(is_deleted=True).filter(date_posted__gte=timezone.now() - timedelta(days=30)).count()
-        # )
-        # context["bidders_last_30_days"] = (
-        #     qs.filter(user__bid__last_bid_time__gte=timezone.now() - timedelta(days=30))
-        #     .values("user")
-        #     .distinct()
-        #     .count()
-        # )
-        # context["feedback_last_30_days"] = (
-        #     Lot.objects.exclude(feedback_rating=0).filter(date_posted__gte=timezone.now() - timedelta(days=30)).count()
-        # )
-        # context["users_with_search_history"] = User.objects.filter(searchhistory__isnull=False).distinct().count()
         logged_in_5m = self.unique_page_views(5, "logged_in")
         anon_5m = self.unique_page_views(5, "anon")
         logged_in_30m = self.unique_page_views(30, "logged_in")
@@ -424,7 +377,7 @@ class AdminDashboard(AdminOnlyViewMixin, TemplateView):
             anon_1d = 1  # so it's a hack to avoid /0, whatever
         context["day_views_count_percent_with_account"] = int(logged_in_1d / (logged_in_1d + anon_1d) * 100)
         timeframe = timezone.now() - timezone.timedelta(minutes=30)
-        # check to make sure no auctions are happening before applying server updates
+        # Check no auctions are happening before applying server updates.
         context["in_person_lots_ended"] = Lot.objects.filter(
             is_deleted=False, auction__is_online=False, date_end__gte=timeframe, date_end__lte=timezone.now()
         ).count()
@@ -432,14 +385,6 @@ class AdminDashboard(AdminOnlyViewMixin, TemplateView):
         context["online_auction_lots_ending"] = Lot.objects.filter(
             is_deleted=False, date_end__lte=timeframe, date_end__gte=timezone.now()
         ).count()
-        # users_with_printed_labels = User.objects.filter(lot__label_printed=True).distinct()
-        # context["users_with_printed_labels"] = users_with_printed_labels.count()
-        # context["preset_counts"] = (
-        #     UserLabelPrefs.objects.filter(user__in=users_with_printed_labels)
-        #     .values("preset")
-        #     .annotate(count=Count("user"))
-        #     .order_by("-count")
-        # )
         return context
 
 
@@ -479,7 +424,6 @@ class UserMap(TemplateView):
             # users by top volume_percentile
             qs = qs.filter(userdata__volume_percentile__lte=numeric_filter)
         elif view == "recent" and numeric_filter is not None:
-            # view_qs = view_qs.filter(date_start__gte=timezone.now() - timedelta(hours=int(filter1)))
             qs = qs.filter(userdata__last_activity__gte=timezone.now() - timedelta(hours=numeric_filter))
         context["users"] = qs
         # context["pageviews"] = view_qs
@@ -502,9 +446,8 @@ class UserAgreement(TemplateView):
 
 
 def site_webmanifest(request):
-    """Web app manifest so Android/Chrome use the real icons when adding to the home screen.
-
-    Served from a view rather than a static file so the name follows NAVBAR_BRAND.
+    """Web app manifest, so Android and Chrome use the real icons on the home screen. A view rather than a
+    static file, so the name follows NAVBAR_BRAND.
     """
     return JsonResponse(
         {

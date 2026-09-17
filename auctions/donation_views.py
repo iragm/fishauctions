@@ -1,12 +1,8 @@
-"""Views for donation tracking: the vendor table, the vendor panel, and the contact dialog.
+"""Donation tracking views: the vendor table, the vendor panel, and the contact dialog.
 
-Kept out of ``views.py`` (which is already ~25k lines) but wired into the same URL conf and using
-the same building blocks: :class:`~auctions.views.ClubViewMixin` for permissions,
-:class:`~auctions.views.HTMxTableView` for the table, and the ``#modals-here`` HTMX modal machinery
-for everything that opens over the top of it.
-
-The public unsubscribe view and the inbound mail webhook also live here -- they belong to this
-feature even though neither is a club admin page.
+Uses the same building blocks as ``views.py``: :class:`~auctions.views.ClubViewMixin`,
+:class:`~auctions.views.HTMxTableView` and the ``#modals-here`` modal machinery. The public
+unsubscribe view and the inbound mail webhook are here too.
 """
 
 from __future__ import annotations
@@ -54,11 +50,8 @@ logger = logging.getLogger(__name__)
 class DonationPermissionMixin(ClubViewMixin):
     """Gate every donation page behind the donation permission and the feature flag.
 
-    Donation tracking holds third-party contact details and can send mail in the club's name, so it
-    has a permission of its own rather than riding on member management: the people a club trusts
-    with its member list are not necessarily the ones it wants writing to businesses in its name.
-    ``check_club_permission`` grants everything to ``permission_admin``, so club admins are covered
-    without naming them here.
+    Donation tracking holds third-party contacts and sends mail in the club's name, so it has its own
+    permission rather than riding on member management. ``check_club_permission`` covers club admins.
     """
 
     def check_donation_permission(self):
@@ -86,18 +79,14 @@ class ClubDonationVendorsView(LoginRequiredMixin, DonationPermissionMixin, HTMxT
         return super().dispatch(request, *args, **kwargs)
 
     def get_queryset(self):
-        # Most overdue first: this is a work queue, and the vendor who has been waiting longest is
-        # the one to write to next. Vendors with no date at all go to the bottom -- a blank date
-        # means nobody is waiting on anything, because they unsubscribed or an admin cleared it.
-        # Name breaks the ties.
+        # Most overdue first: a work queue. Vendors with no date go last (they unsubscribed or an
+        # admin cleared it); name breaks ties.
         return (
             DonationVendor.objects.filter(club=self.club)
             .annotate(
-                # What they last said, in one line, without opening anything. A subquery rather
-                # than a prefetch because the table wants one string per vendor, not a page of
-                # conversations. Blank when the newest reply has no summary of its own (the
-                # daily budget ran out, or no model is configured) -- deliberately not the
-                # summary of an older one, which would read as their latest word.
+                # What they last said, in one line. A subquery, not a prefetch, since the table
+                # wants one string per vendor. Blank when the newest reply has no summary, rather
+                # than an older one, which would read as their latest word.
                 latest_reply_summary=Subquery(
                     DonationEmail.objects.filter(vendor=OuterRef("pk"), direction=DonationEmail.DIRECTION_INCOMING)
                     .order_by("-date")
@@ -108,8 +97,7 @@ class ClubDonationVendorsView(LoginRequiredMixin, DonationPermissionMixin, HTMxT
         )
 
     def get_table_kwargs(self, **kwargs):
-        # Counted once for the page rather than once per row: every Contact button needs the same
-        # answer to "has this club got any sends left today?".
+        # Counted once for the page: every Contact button asks the same question.
         kwargs = super().get_table_kwargs(**kwargs)
         kwargs["quota"] = donations.donation_email_quota(self.club)
         return kwargs
@@ -120,18 +108,17 @@ class ClubDonationVendorsView(LoginRequiredMixin, DonationPermissionMixin, HTMxT
         context["can_send"] = self.club.sends_donation_email
         context["assist_enabled"] = assist_enabled()
         context["quota"] = donations.donation_email_quota(self.club)
-        # Not self.get_queryset(): counting through the annotation above would run the latest-reply
-        # subquery once per vendor to answer a question that never looks at it.
+        # Not self.get_queryset(): counting through the annotation would run the latest-reply
+        # subquery per vendor.
         context["followup_due_count"] = DonationVendor.objects.filter(
             club=self.club, is_deleted=False, followup_due__lte=timezone.now()
         ).count()
-        # Sending from this site is blocked without a postal address (see donations.send_request);
-        # say so here rather than letting an admin find out at the end of the contact dialog.
+        # Sending is blocked without a postal address (donations.send_request); say so here rather
+        # than at the end of the dialog.
         context["needs_mailing_address"] = self.club.sends_donation_email and not (
             self.club.donation_mailing_address.strip()
         )
-        # The status menu is written by the header template rather than by crispy, so it needs the
-        # choices and the current selection handed to it.
+        # The status menu is written by the header template, not crispy.
         selected_status = (self.request.GET.get("status") or "").strip()
         context["status_choices"] = DonationVendor.STATUS_CHOICES
         context["selected_status"] = selected_status
@@ -195,10 +182,9 @@ class ClubDonationSettingsView(LoginRequiredMixin, ClubViewMixin, UpdateView):
 
 
 class DonationVendorPanelView(LoginRequiredMixin, DonationPermissionMixin, View):
-    """The panel behind a vendor's name: their email history, and a form to edit their details.
+    """The panel behind a vendor's name: their email history and a form to edit them.
 
-    One view serves both the create and edit cases, the way ``AuctionTOSAdmin`` does -- a URL with
-    a club slug creates, a URL with a vendor pk edits.
+    One view serves create and edit, like ``AuctionTOSAdmin``: a club slug creates, a vendor pk edits.
     """
 
     def _load(self, request, slug=None, pk=None):
@@ -227,7 +213,7 @@ class DonationVendorPanelView(LoginRequiredMixin, DonationPermissionMixin, View)
 
     def get(self, request, slug=None, pk=None):
         self._load(request, slug=slug, pk=pk)
-        # ?edit=1 opens straight into the form; without it an existing vendor shows their history.
+        # ?edit=1 opens the form; otherwise an existing vendor shows their history.
         editing = bool(request.GET.get("edit")) or self.vendor is None
         form = DonationVendorForm(
             instance=self.vendor,
@@ -259,8 +245,7 @@ class DonationVendorPanelView(LoginRequiredMixin, DonationPermissionMixin, View)
                 action=f"{verb} donation vendor {vendor.name}",
                 applies_to="DONATIONS",
             )
-            # A Django message rather than close_modal_response's toast: "reload-page" reloads
-            # immediately, which would wipe a toast off the screen before it could be read.
+            # A Django message, not a toast: "reload-page" would wipe a toast off the screen.
             messages.success(request, f"{vendor.name} {'added' if creating else 'saved'}.")
             return close_modal_response("reload-page")
         return render(request, "auctions/donation_vendor_panel.html", self._context(request, form, editing=True))
@@ -288,12 +273,8 @@ class DonationVendorDeleteView(LoginRequiredMixin, DonationPermissionMixin, View
 class DonationContactView(LoginRequiredMixin, DonationPermissionMixin, View):
     """The write-an-email dialog, in three steps within one modal.
 
-    ``GET``                    -> step 1: context and last email.
-    ``POST step=generate``     -> step 2: the drafted email, editable.
-    ``POST step=send``         -> commit: send it or mark it copied, then close.
-
-    Step 2 is reachable again from step 2 (the Regenerate button) so an admin who doesn't like the
-    draft isn't stuck retyping their context.
+    ``GET`` is step 1 (context and last email), ``POST step=generate`` step 2 (the editable draft), and
+    ``POST step=send`` commits. Step 2 is reachable from itself (Regenerate).
     """
 
     def _load(self, request, pk):
@@ -305,11 +286,8 @@ class DonationContactView(LoginRequiredMixin, DonationPermissionMixin, View):
         self.quota = donations.donation_email_quota(self.club)
 
     def _previous_email(self):
-        """The last message in this conversation, whoever wrote it.
-
-        Either direction, because both are context for what comes next: their reply is something to
-        answer, and our own unanswered request is something to nudge about. Only looking at incoming
-        mail left the box empty in the commonest case of all -- a vendor who hasn't written back.
+        """The last message in this conversation, in either direction: their reply is something to answer, and
+        our own unanswered request is something to nudge about.
         """
         return self.vendor.emails.first()
 
@@ -323,7 +301,7 @@ class DonationContactView(LoginRequiredMixin, DonationPermissionMixin, View):
         }
 
     def _blocked_context(self):
-        """The whole dialog replaced by "not today". Used when the daily allowance is gone."""
+        """The dialog replaced by "not today", when the daily allowance is gone."""
         return {
             "club": self.club,
             "vendor": self.vendor,
@@ -373,33 +351,31 @@ class DonationContactView(LoginRequiredMixin, DonationPermissionMixin, View):
         self._load(request, pk)
         step = request.POST.get("step")
         if self.quota.exhausted:
-            # Nothing may be written or recorded past the limit, so there is no point offering a
-            # screen that ends in a refusal.
+            # Nothing may be written past the limit, so don't offer a screen that ends in a refusal.
             return render(request, "auctions/donation_contact_modal.html", self._blocked_context())
         if step == "generate":
             return self._generate(request)
         if step == "send":
             return self._send(request)
-        # No recognised step. Whatever went wrong, the safe landing is the review screen with the
-        # draft intact -- never a send the admin didn't ask for, and never a 404 that eats it.
+        # No recognised step: land on the review screen with the draft intact, never a send nobody
+        # asked for.
         form = DonationEmailEditForm(request.POST)
         form.is_valid()
         if form.is_bound and form.data.get("body"):
             return render(request, "auctions/donation_contact_modal.html", self._step_two_context(form))
-        # Step 1 again, but bound, so whatever they had typed is still on the screen.
+        # Step 1 again, bound, so their typing is still on screen.
         return render(
             request, "auctions/donation_contact_modal.html", self._step_one_context(DonationContactForm(request.POST))
         )
 
     def _remember_context(self, context):
-        """Keep what the admin told us about this vendor so the next email doesn't start blank."""
+        """Keep what the admin said about this vendor, so the next email doesn't start blank."""
         if context.strip() and context.strip() != self.vendor.context.strip():
             self.vendor.context = context.strip()
             self.vendor.save(update_fields=["context"])
 
     def _generate(self, request):
-        # Only ever reached from step 1: there is no way back here from the drafted email, so a
-        # failure below lands the admin on step 1 with their typing intact rather than anywhere else.
+        # Only reached from step 1, so a failure lands them there with their typing.
         form = DonationContactForm(request.POST)
         if not form.is_valid():
             return render(request, "auctions/donation_contact_modal.html", self._step_one_context(form))
@@ -420,8 +396,7 @@ class DonationContactView(LoginRequiredMixin, DonationPermissionMixin, View):
             return render(request, "auctions/donation_contact_modal.html", step_one)
         previous = self._previous_email()
         if previous:
-            # Anything after the first email belongs to the thread that is already running, so it
-            # goes out as a reply to it rather than as another cold subject line.
+            # Anything after the first email belongs to the running thread, so it goes out as a reply.
             subject = donations.followup_subject(previous.subject, subject) or subject
         return render(
             request,
@@ -449,7 +424,7 @@ class DonationContactView(LoginRequiredMixin, DonationPermissionMixin, View):
 
 
 class DonationEmailPreviewView(LoginRequiredMixin, DonationPermissionMixin, View):
-    """Show one stored message in full. Opened from the history list in the vendor panel."""
+    """Show one stored message in full, from the history list in the vendor panel."""
 
     def get(self, request, pk):
         email_row = get_object_or_404(DonationEmail.objects.select_related("vendor__club"), pk=pk)
@@ -471,9 +446,7 @@ class DonationEmailPreviewView(LoginRequiredMixin, DonationPermissionMixin, View
 class DonationUnsubscribeView(TemplateView):
     """The vendor-facing opt-out page. No login, and no way back.
 
-    A GET only *offers* the unsubscribe; the POST performs it. Mail clients and security scanners
-    routinely fetch every link in a message, and a GET that acted would unsubscribe vendors who
-    never clicked anything.
+    GET only offers the unsubscribe; POST performs it. Mail clients fetch every link in a message.
     """
 
     template_name = "auctions/donation_unsubscribe.html"
@@ -502,19 +475,11 @@ class DonationUnsubscribeView(TemplateView):
 class InboundDonationEmailView(DRFAPIView):
     """Webhook: record an inbound donation reply, then summarize it.
 
-    Called by the SES inbound Lambda for any address that
-    :func:`~auctions.email_routing.resolve_routing_info` reported as ``kind == "donation"``. The
-    Lambda still forwards the message to the club's donation contact (when there is one); this
-    endpoint is what makes the reply show up against the vendor.
+    Called by the SES Lambda for addresses :func:`~auctions.email_routing.resolve_routing_info` reports
+    as ``kind == "donation"``. Authenticated with the same ``X-Routing-Secret`` as the resolve endpoint.
 
-    Authenticated with the same ``X-Routing-Secret`` shared secret as the resolve endpoint.
-
-    POST /api/v1/email-routing/donation/
-        {"address": "<to address or local part>", "from": "...", "subject": "...",
-         "body": "...", "message_id": "...", "recipients": "..."}
-
-    Anything that doesn't resolve to a live vendor is dropped with a 200 -- a 4xx would make SES
-    retry a message that will never match.
+    POST /api/v1/email-routing/donation/ with address, from, subject, body, message_id and recipients.
+    Anything that doesn't resolve to a live vendor is dropped with a 200, since a 4xx makes SES retry.
     """
 
     authentication_classes = []
@@ -533,7 +498,7 @@ class InboundDonationEmailView(DRFAPIView):
         local_part = address.split("@")[0]
         match = resolve_donation_alias(local_part)
         if not match:
-            # Not a donation address, or the vendor/club is gone. Silently accepted and dropped.
+            # Not a donation address, or the vendor is gone.
             return Response({"status": "dropped"}, status=200)
 
         vendor = match["vendor"]
@@ -549,7 +514,7 @@ class InboundDonationEmailView(DRFAPIView):
         if not created:
             return Response({"status": "duplicate", "email_id": email_row.pk}, status=200)
 
-        # Summarizing is best-effort: the message is already safely stored either way.
+        # Summarizing is best-effort; the message is stored either way.
         summary = donations.summarize_incoming(email_row)
         return Response(
             {

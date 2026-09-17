@@ -1,4 +1,4 @@
-"""Tests for Part 3 — AR lot scanning & location mapping, plus the two Part 1/2 follow-up fixes."""
+"""Tests for AR lot scanning and location mapping."""
 
 import json
 import math
@@ -54,13 +54,11 @@ def _gen_observations(
     heading=False,
     declination=0.0,
 ):
-    """Exact synthetic sightings of ``lots`` (id -> (x, y)) from camera poses ``cams``
-    ((x, y, theta_rad)). ``h`` is the phone height above the label plane. ``gps`` is an optional
-    ``(lat, lon)`` fix stamped on every frame of the session (for island-anchoring tests). When
-    ``heading`` is truthy each frame is stamped with the ground-truth *magnetic* compass heading that
-    matches its camera θ — the inverse of the solver's conversion, ``H = (90 − deg(θ) − declination)
-    % 360`` — so a compass-fed solve should recover the scene's absolute ENU orientation. Default off,
-    so every existing call is byte-for-byte unchanged."""
+    """Exact synthetic sightings of ``lots`` (id -> (x, y)) from camera poses ``cams`` ((x, y, theta)).
+
+    ``h`` is phone height, ``gps`` an optional fix on every frame, and ``heading`` stamps each frame
+    with the true magnetic compass heading for its θ.
+    """
     now = now or timezone.now()
     captured = now - timedelta(hours=age_hours)
     obs = []
@@ -105,7 +103,6 @@ def _mean_pairwise(pts):
     return float(np.mean([np.linalg.norm(pts[a] - pts[b]) for a, b in combinations(range(len(pts)), 2)]))
 
 
-# Square of 4 lots + 4 camera poses looking in at it (a well-conditioned scene).
 SQUARE = {10: (0.0, 0.0), 11: (2.0, 0.0), 12: (2.0, 2.0), 13: (0.0, 2.0)}
 CAMS = [
     (1.0, -2.0, math.radians(80)),
@@ -145,7 +142,7 @@ class ArSolverTests(TestCase):
         stale = _gen_observations(moved_old, CAMS, session, now=self.now, age_hours=8.0)  # weight ~0.07
         fresh = _gen_observations(moved_new, CAMS, session, now=self.now, age_hours=0.0)  # weight 1.0
         sol = solve_positions(stale + fresh, {}, now=self.now)
-        # Align est → new truth, then lot 12 should sit nearer its NEW spot than its OLD one.
+        # Lot 12 should sit nearer its new spot than its old one.
         true_new = [moved_new[k] for k in sorted(moved_new)]
         est = [(sol[k].x, sol[k].y) for k in sorted(moved_new)]
         A = np.asarray(true_new, float)
@@ -186,7 +183,7 @@ class ArSolverTests(TestCase):
         self.assertEqual(solve_positions(obs, {}, now=self.now), {})
 
 
-# Two clusters ~6 m apart in +x; a single session walks A -> B seeing one lot per frame.
+# Two clusters 6 m apart; one session walks A -> B seeing one lot per frame.
 CLUSTER_A = {10: (0.0, 0.0), 11: (1.0, 0.0), 12: (0.5, 0.8)}
 CLUSTER_B = {20: (6.0, 0.0), 21: (7.0, 0.0), 22: (6.5, 0.8)}
 _ALL_CLUSTER_LOTS = {**CLUSTER_A, **CLUSTER_B}
@@ -199,15 +196,11 @@ def _face(cam, lot):
 def _walk_observations(
     session, *, with_yaw=True, with_odo=False, drift_deg_per_min=0.0, odo_noise_m=0.0, now=None, h=0.65
 ):
-    """One-detection-per-frame walk across CLUSTER_A then CLUSTER_B: each lot is seen from two camera
-    stations (a baseline), and the camera turns to face each label, so the reported cumulative yaw
-    tracks the true heading (plus optional gyro drift). ``with_yaw=False`` reproduces the old app.
+    """One-detection-per-frame walk across CLUSTER_A then CLUSTER_B, each lot seen from two stations.
 
-    ``with_odo`` additionally stamps each frame with the ground-truth cumulative dead-reckoning
-    displacement in the session odo frame: ``p_f = R(−φ_s)·(C_f − C_0)`` with ``φ_s = θ_0 −
-    radians(yaw_0)`` derived from the FIRST frame's true θ and reported yaw (so odo and yaw share one
-    frame, any drift included). Optional ``odo_noise_m`` adds isotropic gaussian jitter. Odo is
-    meaningless without yaw, so ``with_odo`` implies yaw is also sent."""
+    ``with_yaw=False`` sends no yaw. ``with_odo`` adds true cumulative displacement in the session odo
+    frame (implies yaw); ``odo_noise_m`` adds gaussian jitter.
+    """
     now = now or timezone.now()
     stations = [
         ((0.0, -2.0), [10, 11, 12]),
@@ -231,7 +224,6 @@ def _walk_observations(
             phi_s = theta0 - math.radians(yaw if yaw is not None else 0.0)
         odo_x = odo_y = None
         if with_odo:
-            # Rotate the world displacement (C_f − C_0) into the session odo frame by R(−φ_s).
             rx, ry = cam[0] - c0[0], cam[1] - c0[1]
             cs, sn = math.cos(-phi_s), math.sin(-phi_s)
             odo_x = cs * rx - sn * ry + (random.gauss(0, odo_noise_m) if odo_noise_m else 0.0)
@@ -257,19 +249,14 @@ def _walk_observations(
 
 
 def _ab_distance(sol):
-    """Recovered metric distance between the CLUSTER_A and CLUSTER_B centroids (no alignment — odo
-    makes the map absolute-scale, so we compare the raw distance to the true 6.0 m separation)."""
+    """Raw distance between the cluster centroids (odo makes the map metric; truth is 6.0 m)."""
     ca = np.array([(sol[k].x, sol[k].y) for k in CLUSTER_A]).mean(0)
     cb = np.array([(sol[k].x, sol[k].y) for k in CLUSTER_B]).mean(0)
     return float(np.hypot(*(cb - ca)))
 
 
 def _ab_direction_error_deg(sol):
-    """Angle error of the recovered A->B direction after removing the free global rotation.
-
-    Best-fit-rotate the estimate onto truth (whole map, no per-cluster freedom), then compare the
-    A-centroid -> B-centroid bearing. With a session-rigid frame (yaw) the two islands share one
-    rotation so this is small; without yaw each island floats and it is large."""
+    """Error of the A->B centroid direction after the best global rotation."""
     ids = sorted(_ALL_CLUSTER_LOTS)
     true = np.array([_ALL_CLUSTER_LOTS[k] for k in ids], float)
     est = np.array([(sol[k].x, sol[k].y) for k in ids], float)
@@ -288,15 +275,11 @@ def _ab_direction_error_deg(sol):
 
 
 class ArHeadingOdometryTests(TestCase):
-    """Gyro yaw as heading odometry: a one-label-per-frame walk between two tables now recovers the
-    relative direction between them — the exact case that is unconstrained without yaw."""
+    """Gyro yaw fixes the direction between two tables in a one-label-per-frame walk."""
 
     def setUp(self):
         self.now = timezone.now()
-        # Put the stream back afterwards. ``random`` is one generator per process, so seeding it
-        # here pins it for every test that runs after this one in the same --parallel worker --
-        # including AuctionTOS.save()'s bidder numbers, which then depend on the order the suite
-        # happened to be split in rather than on chance.
+        # Restore the global random state, or bidder numbers in later tests depend on this seed.
         self.addCleanup(random.setstate, random.getstate())
         random.seed(1234)
 
@@ -325,9 +308,7 @@ class ArHeadingOdometryTests(TestCase):
 
 
 class ArOdometryTests(TestCase):
-    """Translation dead-reckoning (``odo_x_m``/``odo_y_m``): a measured walk displacement between
-    consecutive frames. Yaw fixes the *direction* between two tables; odo additionally fixes the
-    metric *distance* — the thing that was only pace-cap-bounded before."""
+    """Translation odometry fixes the metric distance between tables."""
 
     def setUp(self):
         self.now = timezone.now()
@@ -335,8 +316,7 @@ class ArOdometryTests(TestCase):
         random.seed(4321)
 
     def _one_pair_data(self, *, yaw_a=0.0, yaw_b=0.0, dodo=(2.0, 0.0)):
-        """Two same-session frames of one lot, both carrying yaw + odo (frame b's odo = frame a's +
-        dodo). Returns the prepared solver data dict."""
+        """Two same-session frames of one lot with yaw and odo (b = a + dodo); returns solver data."""
         session = "odo-geom"
         obs = [
             Observation(
@@ -377,18 +357,17 @@ class ArOdometryTests(TestCase):
         self.assertAlmostEqual(dpy, 0.0)
         self.assertAlmostEqual(yaw_a_rad, math.radians(90.0))  # yaw of frame a, in radians
         self.assertAlmostEqual(sigma, 0.3 + 0.05 * 2.0 + 0.01 * 4.0)  # base + per_m·‖Δp‖ + per_s·Δt
-        # A pair that got a measured odo displacement must NOT also get a pace-cap motion pair.
+        # A pair with odo doesn't also get a pace-cap motion pair.
         self.assertEqual(len(motion), 0)
 
     def test_no_odo_pair_without_yaw(self):
-        # Odo needs yaw (it recovers the odo frame's world rotation); drop yaw and there is no odo pair.
+        # Odo needs yaw.
         _session, data = self._one_pair_data(yaw_a=None, yaw_b=None, dodo=(2.0, 0.0))
         _motion, _heading, odo = _session_chains(data)
         self.assertEqual(len(odo), 0)
 
     def test_odometry_residual_zero_at_ground_truth(self):
-        # φ = θ_a − yaw_a. With θ_a = π/2, yaw_a = 0 and Δodo = (2, 0), the predicted world displacement
-        # is R(π/2)·(2, 0) = (0, 2); place frame b there and the odometry residual vanishes.
+        # θ_a = π/2, yaw_a = 0, Δodo = (2, 0) predicts (0, 2); place frame b there.
         session, data = self._one_pair_data(yaw_a=0.0, yaw_b=0.0, dodo=(2.0, 0.0))
         motion, heading, odo = _session_chains(data)
         components, _lm_component = _components(data, motion, heading, odo)
@@ -411,8 +390,6 @@ class ArOdometryTests(TestCase):
         self.assertLess(abs(r[od0 + 1]), 1e-9)
 
     def test_walk_recovers_cross_table_distance_with_odo(self):
-        # The headline: a one-label-per-frame walk between two tables 6 m apart (lots never co-visible).
-        # Yaw alone gives the direction; odo makes the distance metric.
         sol = solve_positions(_walk_observations(uuid.uuid4(), with_odo=True, now=self.now), {}, now=self.now)
         self.assertGreaterEqual(set(sol), set(_ALL_CLUSTER_LOTS))
         self.assertAlmostEqual(_ab_distance(sol), 6.0, delta=0.9)  # within ~15 % of the true 6.0 m
@@ -425,15 +402,12 @@ class ArOdometryTests(TestCase):
         self.assertAlmostEqual(_ab_distance(sol), 6.0, delta=1.2)
 
     def test_without_odo_distance_is_not_metric(self):
-        # Same scan, yaw only (no odo): the direction is fixed but the inter-table distance is only
-        # cap-bounded, so it collapses well short of the true 6 m — the gap odo closes.
+        # Yaw only: distance collapses short of 6 m.
         sol = solve_positions(_walk_observations(uuid.uuid4(), with_odo=False, now=self.now), {}, now=self.now)
         self.assertLess(_ab_distance(sol), 4.0)
 
 
 class ArComponentTests(TestCase):
-    """Disconnected scans become distinct islands (non-overlapping); a linking walk merges them."""
-
     def setUp(self):
         self.now = timezone.now()
 
@@ -451,7 +425,6 @@ class ArComponentTests(TestCase):
         self.assertNotEqual(comp_a, comp_b)
         ax = [sol[k].x for k in a]
         bx = [sol[k].x for k in b]
-        # Bounding boxes are disjoint in x (islands laid out side by side, never interleaved).
         self.assertTrue(max(ax) < min(bx) or max(bx) < min(ax))
         self.assertGreater(abs(min(bx) - max(ax)) if max(ax) < min(bx) else abs(min(ax) - max(bx)), ISLAND_GAP_M - 5)
 
@@ -468,9 +441,7 @@ class ArComponentTests(TestCase):
         self.assertEqual(len({sol[k].component for k in list(a) + list(b)}), 1)
 
     def test_gps_is_ignored_for_island_layout(self):
-        # A ≤10 m venue is finer than any consumer GPS fix, so GPS must NOT translate islands: two
-        # disjoint scans stamped with wildly separated fixes still land in the marched layout (side by
-        # side ~ISLAND_GAP_M apart in x), exactly as they would with no GPS at all.
+        # GPS must not translate islands: wildly separated fixes still march side by side.
         a = {10: (0.0, 0.0), 11: (2.0, 0.0), 12: (1.0, 1.5)}
         b = {20: (0.0, 0.0), 21: (2.0, 0.0), 22: (1.0, 1.5)}
         lat0, lon0 = 40.0, -75.0
@@ -484,11 +455,9 @@ class ArComponentTests(TestCase):
         sol = solve_positions(obs, {}, now=self.now)
         ca = np.array([(sol[k].x, sol[k].y) for k in a]).mean(0)
         cb = np.array([(sol[k].x, sol[k].y) for k in b]).mean(0)
-        # Islands stay hall-scale apart (marched), never flung ~140 km by the GPS fix.
         self.assertLess(float(np.hypot(*(cb - ca))), 3 * ISLAND_GAP_M)
 
     def test_no_gps_keeps_marched_layout(self):
-        # Without GPS the disconnected islands still march side by side (unchanged behaviour).
         a = {10: (0.0, 0.0), 11: (2.0, 0.0), 12: (1.0, 1.5)}
         b = {20: (0.0, 0.0), 21: (2.0, 0.0), 22: (1.0, 1.5)}
         obs = _gen_observations(a, CAMS, uuid.uuid4(), now=self.now) + _gen_observations(
@@ -516,17 +485,13 @@ def _rot_cams(cams, ang):
 
 
 class ArCompassHeadingTests(TestCase):
-    """Absolute compass heading as a soft island-orientation prior. GPS anchors *where* an island
-    sits; the compass anchors *which way it faces* — the one thing bearings + GPS cannot fix on a
-    disconnected island. Magnetic→true is corrected via WMM declination (patched here for
-    determinism)."""
+    """Compass heading as a soft prior on each island's orientation (declination patched)."""
 
     def setUp(self):
         self.now = timezone.now()
 
     def _targets(self, headings, *, gps=None):
-        """Run the frame-heading → camera-θ conversion (:func:`_compass_targets`) on a minimal data
-        stub: one frame per heading, cam indices 0..n-1."""
+        """Run :func:`_compass_targets` on one frame per heading."""
         keys = [("s", f"f{i}") for i in range(len(headings))]
         data = {
             "frame_heading": dict(zip(keys, headings)),
@@ -536,23 +501,18 @@ class ArCompassHeadingTests(TestCase):
         return _compass_targets(data, self.now)
 
     def test_heading_to_theta_conversion(self):
-        # ENU world (east=+x, north=+y): a compass heading H points along (sin H, cos H), whose
-        # ccw-from-+x angle is 90°−H. No GPS ⇒ declination 0.
+        # ENU: heading H points along (sin H, cos H), so θ = 90° − H.
         targets = self._targets([0.0, 90.0])
         self.assertAlmostEqual(targets[0], math.pi / 2)  # north ⇒ θ = +π/2
         self.assertAlmostEqual(targets[1], 0.0)  # east ⇒ θ = 0
 
     def test_declination_applied_before_conversion(self):
-        # With +10° east declination, a magnetic heading of 80° is true 90° (east) ⇒ θ = 0.
         with patch("auctions.ar_mapping._declination_deg", return_value=10.0):
             targets = self._targets([80.0], gps=(40.0, -75.0))
         self.assertAlmostEqual(targets[0], 0.0)
 
     def test_disconnected_islands_recover_absolute_orientation(self):
-        # Two disjoint sessions (no shared lots) scanned in the same ≤10 m venue. Island A's internal
-        # axis runs due east in ENU; island B's identical scene is rotated 90° so its axis runs due
-        # north. The marched layout leaves each island's rotation free; the compass pins it (islands
-        # end up side by side but each individually oriented). Declination patched to 0.
+        # Two disjoint sessions, B's scene rotated 90°; the compass orients each island.
         lat0, lon0 = 40.0, -75.0
         a = {10: (0.0, 0.0), 11: (2.0, 0.0), 12: (2.0, 2.0), 13: (0.0, 2.0)}
         b_base = {20: (0.0, 0.0), 21: (2.0, 0.0), 22: (2.0, 2.0), 23: (0.0, 2.0)}
@@ -573,16 +533,13 @@ class ArCompassHeadingTests(TestCase):
         self.assertGreaterEqual(set(sol), set(a) | set(b))
         # Two separate islands.
         self.assertNotEqual({sol[k].component for k in a}, {sol[k].component for k in b})
-        # A's 10→11 axis is due east (0°); B's 20→21 axis is due north (+90°) — absolutely, no
-        # per-island rotation freedom removed.
         dir_a = math.degrees(math.atan2(sol[11].y - sol[10].y, sol[11].x - sol[10].x))
         dir_b = math.degrees(math.atan2(sol[21].y - sol[20].y, sol[21].x - sol[20].x))
         self.assertLess(abs(_wrap_deg(dir_a - 0.0)), 5.0, f"island A axis off ({dir_a:.1f}°)")
         self.assertLess(abs(_wrap_deg(dir_b - 90.0)), 5.0, f"island B axis off ({dir_b:.1f}°)")
 
     def test_declination_rotates_recovered_island(self):
-        # Same scene, declination 0 vs +10°. θ_target = wrap(π/2 − rad(H + D)) = θ_true − rad(D), so a
-        # +10° declination rotates the recovered island −10°.
+        # θ_target = θ_true − rad(D), so +10° declination rotates the island −10°.
         lat0, lon0 = 40.0, -75.0
         a = {10: (0.0, 0.0), 11: (2.0, 0.0), 12: (2.0, 2.0), 13: (0.0, 2.0)}
 
@@ -598,19 +555,16 @@ class ArCompassHeadingTests(TestCase):
         self.assertAlmostEqual(_wrap_deg(dir10 - dir0), -10.0, delta=3.0)
 
     def test_declination_smoke_pittsburgh_and_garbage(self):
-        # Real WMM2025 lookup: Pittsburgh sits at roughly −9° (west) declination in 2026.
+        # Real WMM2025: Pittsburgh is about −9° in 2026.
         when = self.now.replace(year=2026, month=7, day=1)
         d = _declination_deg(40.44, -79.99, when)
         self.assertGreater(d, -13.0)
         self.assertLess(d, -5.0)
-        # Garbage coordinates must never raise a solve to death — they yield 0.0 (no correction).
         self.assertEqual(_declination_deg(999.0, -79.99, when), 0.0)
 
 
 @isolated_cache("ar-api")
 class ArApiBaseTestCase(StandardTestCase):
-    """Shared fixtures: three unsold lots in the online auction + a JWT-authing client helper."""
-
     def setUp(self):
         super().setUp()
         cache.clear()  # dirty registry / recommended cache / throttles must not bleed across tests
@@ -644,8 +598,7 @@ class ArApiBaseTestCase(StandardTestCase):
             auctiontos_seller=self.online_tos,
             quantity=1,
         )
-        # A lot in a different auction (self.lot from StandardTestCase is in online_auction; make one
-        # in the in-person auction for the cross-auction case).
+        # A lot in the in-person auction, for the cross-auction case.
         self.other_auction_lot = Lot.objects.create(
             lot_name="Stray lot",
             auction=self.in_person_auction,
@@ -726,8 +679,7 @@ class ArLotsEndpointTests(ArApiBaseTestCase):
         self.assertFalse(rows[self.lot_b.pk]["has_position"])
 
     def test_image_url_full_size_when_image_present(self):
-        # The preview card renders the picture fit-to-width, so it needs the full display image, not
-        # just the 250x150 thumbnail. A lot with no image reports image_url: None.
+        # The card needs the full image, not the thumbnail.
         from auctions.models import LotImage
 
         LotImage.objects.create(
@@ -739,8 +691,6 @@ class ArLotsEndpointTests(ArApiBaseTestCase):
 
 
 class MobileLotWatchEndpointTests(ArApiBaseTestCase):
-    """POST /api/mobile/lots/<pk>/watch/ — watch/unwatch from the AR preview card (JWT auth)."""
-
     def _post(self, user, lot, watch):
         return self.client.post(
             reverse("mobile-lot-watch", kwargs={"pk": lot.pk}),
@@ -796,8 +746,7 @@ class MobileLotWatchEndpointTests(ArApiBaseTestCase):
 
 
 class LotPageBackToArBannerTests(ArApiBaseTestCase):
-    """The web lot page shows a sticky "Back to scanning" bar only when opened from lot scanning
-    inside the app (``?src=ar`` + FishAuctionsApp UA)."""
+    """The lot page's "Back to scanning" bar, only with ``?src=ar`` in the app."""
 
     APP_UA = "FishAuctionsApp/1.0 (iOS)"
 
@@ -821,19 +770,11 @@ class LotPageBackToArBannerTests(ArApiBaseTestCase):
         self.assertNotIn("Back to scanning", html)
 
     def test_bar_is_drawn_before_the_page_content(self):
-        """AR-1 — it has to be first in the body, or `position: sticky` has nothing to stick over.
-
-        It used to live in ``undiv_content``, which base.html renders *after* ``content``, near the
-        end of the document: sticky only works over the scroll range left after an element's own
-        place in flow, so at the bottom of the page it drew once with all of the lot page's
-        background above it. That is the "bunch of empty black space over the Back to scanning
-        button" reported from the app.
-        """
+        """The bar is first in the body, or `position: sticky` has nothing to stick over."""
         self.client.force_login(self.user)
         html = self.client.get(f"{self._url(self.lot_a)}?src=ar", HTTP_USER_AGENT=self.APP_UA).content.decode()
         body = html.split("<body", 1)[1]
-        # "mt-5 mb-5" is base.html's wrapper around {% block content %}; undiv_content is emitted
-        # after it closes, which is exactly where the bar used to land.
+        # base.html's content wrapper; undiv_content comes after it.
         self.assertLess(body.index("Back to scanning"), body.index("mt-5 mb-5"))
 
 
@@ -873,9 +814,7 @@ class ArObservationsEndpointTests(ArApiBaseTestCase):
         self.assertIn(self.auction.pk, cache.get(ar_service.AR_DIRTY_REGISTRY_KEY))
 
     def test_non_rfc_variant_session_id_accepted(self):
-        # Regression: MariaDB's native `uuid` type rejects any UUID whose variant nibble (17th hex
-        # digit) is 0-7 with OperationalError 1292, which silently 500'd ~half of the app's randomly
-        # generated session ids. session_id is now a plain varchar, so any opaque token is stored as-is.
+        # MariaDB's uuid type rejected variant nibbles 0-7; session_id is a varchar now.
         bad_session = "f61b0b5b-78a5-cced-758a-38fc30f3c5a8"  # variant nibble '7' — was rejected
         det = [{"lot": self.lot_a.pk, "bearing_deg": 0.0, "depression_deg": 20.0}]
         resp = self._post(self.user, self._batch(det, session=bad_session))
@@ -1085,7 +1024,7 @@ class ArObservationsEndpointTests(ArApiBaseTestCase):
         self.assertIsNone(obs.odo_y_m)
 
     def test_odo_zero_zero_preserved(self):
-        # The deliberate difference from GPS: (0, 0) is the session origin, a VALID reading — keep it.
+        # Unlike GPS, (0, 0) odo is valid.
         det = [{"lot": self.lot_a.pk, "bearing_deg": 0.0, "depression_deg": 20.0}]
         payload = self._batch(det)
         payload["frames"][0]["odo_x_m"] = 0.0
@@ -1118,10 +1057,7 @@ class ArObservationsEndpointTests(ArApiBaseTestCase):
         self.assertIsNone(obs.odo_y_m)
 
     def test_odo_non_finite_dropped_by_validate(self):
-        # A bare NaN/Infinity literal in the JSON *body* is rejected upstream by DRF's strict JSON
-        # parser (400) before our code runs, so it can't be expressed via a posted payload. We instead
-        # assert the server-side isfinite guard directly at the serializer: a non-finite odo value that
-        # does reach validate() (e.g. inf produced numerically) nulls BOTH, never raising.
+        # Bare NaN in a JSON body is a parser 400, so test the serializer directly.
         from auctions.mobile.serializers import ArFrameSerializer
 
         ser = ArFrameSerializer(
@@ -1137,13 +1073,22 @@ class ArObservationsEndpointTests(ArApiBaseTestCase):
         self.assertIsNone(ser.validated_data["odo_x_m"])
         self.assertIsNone(ser.validated_data["odo_y_m"])
 
+    def test_non_finite_strings_dropped_not_400(self):
+        # "Infinity"/"NaN" strings pass the parser and must not reject the batch.
+        det = [{"lot": self.lot_a.pk, "bearing_deg": 0.0, "depression_deg": 20.0}]
+        payload = self._batch(det)
+        frame = payload["frames"][0]
+        frame.update(odo_x_m="Infinity", odo_y_m=1.0, yaw_deg="NaN", heading_deg="-Infinity", latitude="NaN")
+        frame["longitude"] = 10.0
+        resp = self._post(self.user, payload)
+        self.assertEqual(resp.status_code, 202)
+        obs = LotObservation.objects.get(auction=self.auction)
+        for field in ("odo_x_m", "odo_y_m", "yaw_deg", "heading_deg", "latitude", "longitude"):
+            self.assertIsNone(getattr(obs, field), field)
+
 
 class ArEventsEndpointTests(ArApiBaseTestCase):
-    """AR interaction events (scanned / zoomed / zoomed all the way in) → per-lot PageViews.
-
-    They count toward the lot's page views but are broken out on the lot page, and are de-duped to one
-    row per (user, lot, event) so a user re-scanning a label can never inflate the numbers.
-    """
+    """AR events become per-lot PageViews, one row per (user, lot, event)."""
 
     def _post(self, user, events, auction=None):
         return self.client.post(
@@ -1194,7 +1139,6 @@ class ArEventsEndpointTests(ArApiBaseTestCase):
         self.assertEqual(counts["total"], 3)
 
     def test_repeat_events_are_deduped_per_user(self):
-        # The same user re-scanning the same lot must not inflate the count (or the page views).
         for _ in range(4):
             self._post(self.user, [{"lot": self.lot_a.pk, "event": "scanned"}])
         self.assertEqual(PageView.objects.filter(lot_number=self.lot_a, source="ar_scan").count(), 1)
@@ -1206,8 +1150,7 @@ class ArEventsEndpointTests(ArApiBaseTestCase):
         self.assertEqual(Lot.objects.get(pk=self.lot_a.pk).page_views, before + 1)
 
     def test_the_row_names_the_auction_as_well_as_the_lot(self):
-        """Same as the browser beacon: a reader matches the auction on one indexed column, not on
-        ``auction_id OR lot_number__auction_id``. See base_page_view.html."""
+        """The row names the auction as well as the lot. See base_page_view.html."""
         self._post(self.user, [{"lot": self.lot_a.pk, "event": "scanned"}])
         row = PageView.objects.get(lot_number=self.lot_a, source="ar_scan")
         self.assertEqual(row.auction, self.auction)
@@ -1237,15 +1180,10 @@ class ArEventsEndpointTests(ArApiBaseTestCase):
 
 
 class LotPageViewSourceBreakdownTests(ArApiBaseTestCase):
-    """Lot.page_view_source_breakdown + the collapsed table on the lot page.
-
-    The seller of a lot in an in-person auction sees where its views came from; the AR sources are
-    the reason this exists (they're per-person events, not visits).
-    """
+    """Lot.page_view_source_breakdown and its table on the lot page."""
 
     def setUp(self):
         super().setUp()
-        # other_auction_lot is in the in-person auction, sold by in_person_tos (self.user).
         self.in_person_lot = self.other_auction_lot
 
     def _view(self, lot, source, user=None, session_id=None):
@@ -1353,8 +1291,7 @@ class ArPositionsEndpointTests(ArApiBaseTestCase):
         self.assertEqual(data["island_count"], 0)
 
     def test_island_count_counts_distinct_components(self):
-        # Two lots in component 1, one in component 2 → two islands. Sold/removed lots are excluded
-        # from positions, so they never inflate the count.
+        # Two components, two islands; sold and removed lots aren't counted.
         LotPosition.objects.create(lot=self.lot_a, auction=self.auction, x=1, y=1, confidence=0.6, component=1)
         LotPosition.objects.create(lot=self.lot_b, auction=self.auction, x=2, y=2, confidence=0.6, component=1)
         LotPosition.objects.create(lot=self.lot_c, auction=self.auction, x=9, y=9, confidence=0.6, component=2)
@@ -1417,8 +1354,7 @@ class ArUpdatePositionsCommandTests(ArApiBaseTestCase):
 
 
 class ArPersistenceTests(ArApiBaseTestCase):
-    """The map must not dissolve overnight: stale positions are kept (they still serve as merge
-    anchors), only sold/removed lots are dropped, and persistent island ids survive + merge."""
+    """Stale positions are kept, only sold/removed lots dropped, and island ids persist and merge."""
 
     def _extra_lots(self):
         return [
@@ -1452,7 +1388,7 @@ class ArPersistenceTests(ArApiBaseTestCase):
         self._store(_gen_observations(lots, CAMS, uuid.uuid4(), now=timezone.now()))
         self.assertEqual(update_positions_for_auction(self.auction), 3)
         self.assertEqual(LotPosition.objects.filter(auction=self.auction).count(), 3)
-        # All observations expire and get pruned; the next solve sees nothing new but KEEPS positions.
+        # Observations pruned; positions kept.
         LotObservation.objects.filter(auction=self.auction).delete()
         update_positions_for_auction(self.auction)
         self.assertEqual(LotPosition.objects.filter(auction=self.auction).count(), 3)
@@ -1495,7 +1431,7 @@ class ArPersistenceTests(ArApiBaseTestCase):
         self.assertEqual(len(comp_a), 1)
         self.assertEqual(len(comp_b), 1)
         self.assertNotEqual(comp_a, comp_b)
-        # A later linking walk sees one lot from each cluster together -> islands merge to one id.
+        # A linking walk merges the islands.
         link = {self.lot_a.pk: (0.0, 0.0), d.pk: (2.0, 0.0)}
         self._store(_gen_observations(link, cams, uuid.uuid4(), now=timezone.now()))
         update_positions_for_auction(self.auction)
@@ -1550,7 +1486,6 @@ class ArWebMapTests(ArApiBaseTestCase):
         self.assertFalse(LotPosition.objects.filter(auction=self.auction).exists())
 
     def test_qr_scan_counter_counts_ar(self):
-        # A QR-sourced view and an AR-sourced view both count toward the scanned tally.
         PageView.objects.create(lot_number=self.lot_a, source="qr")
         PageView.objects.create(lot_number=self.lot_b, source="ar")
         PageView.objects.create(lot_number=self.lot_c, source="")  # not a scan
@@ -1558,10 +1493,8 @@ class ArWebMapTests(ArApiBaseTestCase):
 
 
 class ArLocatableAuctionsTests(ArApiBaseTestCase):
-    """``locatable_auction_pks``: in-person auctions from 2 h before the start until pretty_much_over."""
-
     def _set_start(self, auction, delta):
-        # date_end has to move with date_start: the pre_save signal swaps the two if end < start.
+        # The pre_save signal swaps start and end if end < start.
         auction.date_start = timezone.now() + delta
         auction.date_end = auction.date_start + timedelta(hours=6)
         auction.save()
@@ -1580,12 +1513,10 @@ class ArLocatableAuctionsTests(ArApiBaseTestCase):
         self.assertNotIn(self.in_person_auction.pk, ar_service.locatable_auction_pks())
 
     def test_pretty_much_over_is_not_locatable(self):
-        # The fixture starts 3 days ago, so it's well past the 24 h wind-down grace period.
         self.assertTrue(self.in_person_auction.pretty_much_over)
         self.assertNotIn(self.in_person_auction.pk, ar_service.locatable_auction_pks())
 
     def test_late_submission_window_keeps_it_locatable(self):
-        # Agrees with pretty_much_over, which takes the latest of start / bidding end / submission end.
         self.in_person_auction.lot_submission_end_date = timezone.now()
         self.in_person_auction.save()
         self.assertFalse(self.in_person_auction.pretty_much_over)
@@ -1605,8 +1536,7 @@ class ArLocatableAuctionsTests(ArApiBaseTestCase):
 
 
 class ArLocateOnLotListTests(ArApiBaseTestCase):
-    """The lot list offers "Find this lot" only in the app, and only for a located lot in an
-    in-person auction that's happening now (LotFilter.qs annotation + the two page templates)."""
+    """ "Find this lot" on the lot list: app only, located lot, in-person auction happening now."""
 
     APP_UA = "FishAuctionsApp/1.0 (iOS)"
 
@@ -1615,8 +1545,7 @@ class ArLocateOnLotListTests(ArApiBaseTestCase):
         self.in_person_auction.date_start = timezone.now() + timedelta(minutes=30)
         self.in_person_auction.date_end = timezone.now() + timedelta(hours=6)
         self.in_person_auction.save()
-        # LotFilter drops lots with no category for signed-in users (ignored-category filter), and
-        # hides lots posted in the last 20 minutes in online auctions.
+        # LotFilter hides uncategorised and very new lots.
         Lot.objects.filter(pk__in=[self.other_auction_lot.pk, self.lot_a.pk]).update(
             species_category=Category.objects.first(),
             date_posted=timezone.now() - timedelta(hours=1),
@@ -1669,21 +1598,14 @@ class ArLocateOnLotListTests(ArApiBaseTestCase):
         self.assertNotIn(f"fishauctions://ar/{self.auction.slug}?locate={self.lot_a.pk}", html)
 
     def test_web_lot_list_does_not_query_for_locatable_auctions(self):
-        # The app-UA gate comes first, so an ordinary web lot list pays nothing for this feature.
+        # The app-UA check comes first, so the web pays nothing.
         with patch.object(ar_service, "locatable_auction_pks") as mocked:
             self._lot_list(self.in_person_auction, "Mozilla/5.0")
         mocked.assert_not_called()
 
 
 class ArLocateOnLotPageTests(StandardTestCase):
-    """The lot page's "Find this lot" button is app-only *and* in-person only.
-
-    It used to render for any lot with an auction, so every online lot in the app offered to walk
-    the user to a fish that is in somebody else's fish room -- the deep link opens lot scanning on
-    an auction that has no room, no labels and no positions.  Same rule the lot lists use
-    (``locatable_auction_pks``) and the command palette's "Lot scanning" row uses
-    (``_app_ar_auction``): there is nothing to walk to at an online auction.
-    """
+    """The lot page's "Find this lot" button is app-only and in-person only."""
 
     APP_UA = "FishAuctionsApp/1.0 (Flutter; iOS)"
     WEB_UA = "Mozilla/5.0"
@@ -1716,21 +1638,14 @@ class ArLocateOnLotPageTests(StandardTestCase):
         self.assertNotIn(self._deep_link(self.in_person_lot), html)
 
     def test_the_back_to_scanning_bar_is_deliberately_not_gated_the_same_way(self):
-        """The rule is on the *entry points* into lot scanning, not on the way back out of one.
-
-        The sticky bar only renders with ``?src=ar``, which is a URL you can only arrive at from
-        the scanner -- so an online lot cannot reach it in the first place, and gating it as well
-        buys nothing while giving somebody who did reach it no way back.  See
-        :class:`LotPageBackToArBannerTests`, which is what that bar is really specified by.
-        """
+        """The "Back to scanning" bar isn't gated the same way: ``?src=ar`` only comes from the scanner."""
         url = reverse("lot_by_pk", kwargs={"pk": self.in_person_lot.pk})
         html = self.client.get(f"{url}?src=ar", HTTP_USER_AGENT=self.APP_UA).content.decode()
         self.assertIn("Back to scanning", html)
 
 
 class ArScanLotsButtonOnAuctionPageTests(StandardTestCase):
-    """The auction page's "Scan lots" button is the other app entry point into lot scanning, and
-    carries the same in-person rule -- it was offering the camera on online auctions too."""
+    """The auction page's "Scan lots" button is in-person only too."""
 
     APP_UA = "FishAuctionsApp/1.0 (Flutter; iOS)"
 
@@ -1758,7 +1673,7 @@ class ArScanLotsButtonOnAuctionPageTests(StandardTestCase):
 
 class FollowUpFixTests(StandardTestCase):
     def test_escpos_raster_seed_width_is_384(self):
-        # The seed constant and (via the migrations) the DB row are the full 58 mm head, not 96.
+        # The full 58 mm head, not 96.
         seed = next(
             p
             for p in __import__("auctions.printer_programs", fromlist=["SEED_PROFILES"]).SEED_PROFILES

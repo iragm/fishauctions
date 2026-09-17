@@ -235,15 +235,6 @@ class StandardTestCase(CsvImportTestMixin, TestCase):
             auctiontos_winner=cls.tosB,
             active=False,
         )
-        # no permission to save images by default, so this is a no-go
-        # png_bytes = base64.b64decode(
-        #     b"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNgYGD4DwABBAEAH0KzMgAAAABJRU5ErkJggg=="
-        # )
-        # cls.lot_image = LotImage.objects.create(
-        #     lot_number=cls.lot,
-        #     image=SimpleUploadedFile("test.png", png_bytes, content_type="image/png"),
-        #     is_primary=True,
-        # )
         cls.lotB = Lot.objects.create(
             lot_name="B test lot",
             auction=cls.online_auction,

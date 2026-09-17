@@ -1,0 +1,16 @@
+{% comment %}
+Google's dynamic library import bootstrap loader for the Maps JavaScript API, verbatim from
+https://developers.google.com/maps/documentation/javascript/load-maps-js-api -- the loading method
+Google recommends. It defines google.maps.importLibrary and nothing else: the API itself is only
+fetched the first time a library is imported, which is why a page that never shows its map never
+downloads it. Google's page is explicit that the loader must only be included once per page.
+
+Include it only when a key is configured (`key` is the loader's one required parameter) and before
+any script that calls importLibrary. Expects google_maps_api_key.
+{% endcomment %}
+<script>
+  (g=>{var h,a,k,p="The Google Maps JavaScript API",c="google",l="importLibrary",q="__ib__",m=document,b=window;b=b[c]||(b[c]={});var d=b.maps||(b.maps={}),r=new Set,e=new URLSearchParams,u=()=>h||(h=new Promise(async(f,n)=>{await (a=m.createElement("script"));e.set("libraries",[...r]+"");for(k in g)e.set(k.replace(/[A-Z]/g,t=>"_"+t[0].toLowerCase()),g[k]);e.set("callback",c+".maps."+q);a.src=`https://maps.${c}apis.com/maps/api/js?`+e;d[q]=f;a.onerror=()=>h=n(Error(p+" could not load."));a.nonce=m.querySelector("script[nonce]")?.nonce||"";m.head.append(a)}));d[l]?console.warn(p+" only loads once. Ignoring:",g):d[l]=(f,...n)=>r.add(f)&&u().then(()=>d[l](f,...n))})({
+    key: "{{ google_maps_api_key|escapejs }}",
+    v: "weekly",
+  });
+</script>

@@ -1,9 +1,5 @@
-"""What PayPal, Square and the email provider send us, unprompted.
-
-Every view here is an unauthenticated POST from somebody else's server, verified by signature
-rather than by session. They are the reason ``_process_invoice_membership_renewal`` lives in
-:mod:`auctions.views.base`: a renewal can arrive here as easily as it can be typed into an
-invoice.
+"""Webhooks from PayPal, Square and the email provider: unauthenticated POSTs verified by signature.
+A renewal can arrive here, which is why the renewal helpers live in :mod:`auctions.views.base`.
 """
 
 import json
@@ -57,15 +53,9 @@ logger = logging.getLogger(__name__)
 
 @method_decorator(csrf_exempt, name="dispatch")
 class PayPalWebhookView(PayPalAPIMixin, View):
-    """
-    Minimal PayPal webhook handler that:
-      - validates the webhook signature with PayPal (verify-webhook-signature)
-      - processes a few important event types (onboarding, consent revoke, capture/refund, disputes)
-    Requirements:
-      - settings.PAYPAL_API_BASE (e.g. https://api-m.sandbox.paypal.com)
-      - settings.PAYPAL_CLIENT_ID, settings.PAYPAL_CLIENT_SECRET
-      - settings.PAYPAL_WEBHOOK_ID (the webhook id you registered in PayPal dashboard)
-      - (optional) settings.PAYPAL_PARTNER_ATTRIBUTION_ID (BN code) if you want to include it in calls
+    """PayPal webhooks: verify the signature with PayPal, then handle onboarding, consent revocation,
+    captures, refunds and disputes. Needs PAYPAL_API_BASE, PAYPAL_CLIENT_ID, PAYPAL_CLIENT_SECRET,
+    PAYPAL_WEBHOOK_ID.
     """
 
     def post(self, request, *args, **kwargs):
@@ -77,8 +67,7 @@ class PayPalWebhookView(PayPalAPIMixin, View):
             logger.exception("Invalid JSON in PayPal webhook: %s", exc)
             return HttpResponseBadRequest("invalid json")
 
-        # Extract PayPal transmission headers (case-insensitive)
-        # Django exposes headers as HTTP_<HEADER_NAME> in request.META
+        # Transmission headers, case-insensitive (Django's HTTP_<NAME>).
         def hdr(name):
             return request.META.get(f"HTTP_{name.upper().replace('-', '_')}", request.headers.get(name))
 
@@ -122,7 +111,6 @@ class PayPalWebhookView(PayPalAPIMixin, View):
             "webhook_event": event,
         }
 
-        # Get access token using client credentials (for webhook verification)
         try:
             access_token = self._get_access_token()
         except Exception as exc:
@@ -177,8 +165,7 @@ class PayPalWebhookView(PayPalAPIMixin, View):
         logger.info("Verified PayPal webhook: %s", event_type)
 
         if event_type == "MERCHANT.ONBOARDING.COMPLETED":
-            # Example: merchant onboarding completed
-            # resource may contain merchantId / merchantIdInPayPal / tracking_id
+            # Merchant onboarding completed.
             merchant_id_in_paypal = resource.get("merchant_id")
             tracking_id = resource.get("tracking_id")
             # try find user via tracking_id first
@@ -223,8 +210,7 @@ class PayPalWebhookView(PayPalAPIMixin, View):
                 logger.info("Partner-consent revoked for unknown merchant %s", merchant_id_in_paypal)
 
         elif event_type == "CHECKOUT.ORDER.COMPLETED":
-            # Order is already captured - process the order data from the webhook resource
-            # without making a redundant capture API call
+            # Already captured: process the resource, no capture call.
             if resource.get("status") == "COMPLETED":
                 error, _ = self._process_captured_order(resource)
                 if error:
@@ -236,7 +222,7 @@ class PayPalWebhookView(PayPalAPIMixin, View):
             """This one doesn't save the invoice"""
             try:
                 order_id = resource.get("supplementary_data", {}).get("related_ids", {}).get("order_id")
-                # Fetch the order details to get purchase_units[0].reference_id (our invoice pk)
+                # The order's reference_id is our invoice pk.
                 order_data = self.get_from_paypal(f"v2/checkout/orders/{order_id}")
                 purchase_unit = (order_data.get("purchase_units") or [{}])[0]
                 reference_id = purchase_unit.get("reference_id")
@@ -255,7 +241,6 @@ class PayPalWebhookView(PayPalAPIMixin, View):
                 )
             return JsonResponse({"status": "ok"})
         elif event_type == "CHECKOUT.ORDER.APPROVED":
-            # Extract the reference_id (our invoice reference) from the approved order and print/log it.
             try:
                 purchase_unit = resource.get("purchase_units", [{}])[0]
                 reference_id = purchase_unit.get("reference_id")
@@ -294,11 +279,7 @@ def _parse_paypal_datetime_date(value):
 
 
 def _mask_subscription_id(subscription_id):
-    """Redact a PayPal subscription id for logging.
-
-    The full id (e.g. ``I-BW452GLLEP1G``) is a sensitive account identifier and must never reach the
-    logs. Keep only the last 4 characters so log lines can still be correlated with each other (and
-    with PayPal support) without exposing the whole id."""
+    """Redact a PayPal subscription id for logs, keeping the last 4 characters for correlation."""
     subscription_id = subscription_id or ""
     if len(subscription_id) <= 4:
         return "****"
@@ -306,10 +287,7 @@ def _mask_subscription_id(subscription_id):
 
 
 def _find_or_create_subscription_member(club, subscription_id, email):
-    """Resolve the ClubMember for a subscription: by subscription id, then email, then create.
-
-    Creation needs an email (we can't make a usable member without one). Returns None when no
-    member exists and none can be created."""
+    """Find a subscription's ClubMember by subscription id, then email, else create one (needs an email)."""
     member = ClubMember.objects.filter(club=club, paypal_subscription_id=subscription_id, is_deleted=False).first()
     if member:
         return member
@@ -318,7 +296,7 @@ def _find_or_create_subscription_member(club, subscription_id, email):
         if member:
             return member
         member = ClubMember.objects.create(club=club, email=email)
-        # user stays null: a webhook has no acting user, same as the ledger entry below
+        # No acting user in a webhook.
         ClubHistory.objects.create(
             club=club,
             action=f"Added member {member} from PayPal subscription {_mask_subscription_id(subscription_id)}",
@@ -331,21 +309,9 @@ def _find_or_create_subscription_member(club, subscription_id, email):
 def _book_paypal_subscription_payment(club, member, subscription):
     """Book a PayPal subscription charge into the club ledger. Idempotent; returns the row or None.
 
-    A subscription renewal is real money into the club, exactly like the manual renewal button
-    (ClubMembershipRenewView) and a paid dues invoice (Invoice.sync_club_money) -- without this the
-    treasurer's ledger and the "Membership dues" total silently miss every auto-renewal.
-
-    We book what PayPal actually charged (``billing_info.last_payment.amount.value``) rather than the
-    club's ``membership_annual_fee``: the two drift whenever a club changes its fee after members have
-    already subscribed, and the ledger must reflect the cash that really moved.
-
-    Idempotency matters more here than anywhere else in this flow: PayPal retries webhooks, sends
-    several BILLING.SUBSCRIPTION events per cycle, and a BILLING.SUBSCRIPTION.UPDATED can advance the
-    billing date with no new payment at all. So the booking is keyed on (club, membership category,
-    payment date, subscription id) -- the same charge can arrive any number of times and books once.
-    That key is also why this runs *outside* the membership-date guard in the caller: a payment whose
-    cycle dates didn't move (e.g. the first PAYMENT.SALE.COMPLETED after ACTIVATED already set the
-    dates) still has to reach the ledger.
+    Books what PayPal charged, not the club's current fee. Keyed on (club, category, payment date,
+    subscription id), since PayPal retries and sends several events per cycle; that's also why it runs
+    outside the caller's date guard.
     """
     subscription_id = subscription.get("id") or ""
     if not subscription_id:
@@ -353,7 +319,7 @@ def _book_paypal_subscription_payment(club, member, subscription):
     last_payment = (subscription.get("billing_info") or {}).get("last_payment") or {}
     raw_amount = (last_payment.get("amount") or {}).get("value")
     if raw_amount is None:
-        # ACTIVATED can arrive before the first charge posts; the next event carries the payment.
+        # ACTIVATED can precede the first charge.
         return None
     try:
         amount = Decimal(str(raw_amount))
@@ -376,7 +342,7 @@ def _book_paypal_subscription_payment(club, member, subscription):
         return None
     entry = ClubMoney.objects.create(
         club=club,
-        # created_by stays null: a webhook has no acting user (the field is nullable for this case).
+        # No acting user in a webhook.
         date=payment_date,
         amount=amount,
         description=f"PayPal subscription renewal for {member} ({subscription_id})",
@@ -393,20 +359,12 @@ def _book_paypal_subscription_payment(club, member, subscription):
 
 
 def _apply_paypal_subscription_event(club, subscription):
-    """Apply an authoritative PayPal subscription resource (re-fetched from PayPal) to its member.
+    """Apply a re-fetched PayPal subscription to its member, by its real status.
 
-    Acts on the subscription's real status, not on which webhook triggered us:
-      - CANCELLED/SUSPENDED/EXPIRED -> clear paypal_subscription_id (they no longer auto-renew).
-        The paid-through date is left intact, so they keep the time already paid for and expiry
-        reminders resume on their own once the subscription id is gone.
-      - ACTIVE -> book the charge into the club ledger (see
-        :func:`_book_paypal_subscription_payment`), record the subscription, and extend membership to
-        next_billing_time. A renewal confirmation email goes out only when the membership is newly
-        linked or actually advances, so PayPal's webhook retries (and its several
-        BILLING.SUBSCRIPTION events per cycle) don't spam the member.
-      - anything else (APPROVAL_PENDING / APPROVED -- created but not yet paid) -> do nothing, so
-        an abandoned, never-paid subscription can't grant membership.
-    ClubMember.save() reschedules expiry reminders."""
+    CANCELLED/SUSPENDED/EXPIRED clears ``paypal_subscription_id`` and keeps the paid-through date.
+    ACTIVE books the charge, records the subscription and extends to next_billing_time, emailing only
+    when membership actually advances. Anything else (not yet paid) does nothing.
+    """
     subscription_id = subscription.get("id") or ""
     if not subscription_id:
         return
@@ -452,9 +410,7 @@ def _apply_paypal_subscription_event(club, subscription):
             club.pk,
         )
         return
-    # Book the cash first, and outside the change guard below: the ledger entry is keyed on the
-    # payment itself (idempotent), so it must not be skipped just because this delivery didn't move
-    # the membership dates.
+    # Cash first, outside the date guard: the booking is idempotent on the payment.
     _book_paypal_subscription_payment(club, member, subscription)
     next_date = _parse_paypal_datetime_date((subscription.get("billing_info") or {}).get("next_billing_time"))
     newly_linked = not member.paypal_subscription_id
@@ -462,7 +418,7 @@ def _apply_paypal_subscription_event(club, subscription):
         next_date and (not member.membership_expiration_date or next_date > member.membership_expiration_date)
     )
     if not newly_linked and not advanced:
-        # Duplicate / out-of-order delivery for a cycle we already recorded -- nothing changed.
+        # Duplicate or out-of-order delivery.
         logger.info(
             "PayPal subscription %s: already current for member %s", _mask_subscription_id(subscription_id), member.pk
         )
@@ -497,24 +453,14 @@ def _apply_paypal_subscription_event(club, subscription):
 
 @method_decorator(csrf_exempt, name="dispatch")
 class PayPalSubscriptionWebhookView(PayPalAPIMixin, View):
-    """Club membership subscription webhooks at /clubs/paypal/webhook.
+    """Membership subscription webhooks at /clubs/paypal/webhook, one URL for every club.
 
-    One shared URL serves every club. Because the incoming request doesn't say which club it's
-    for, the club is identified by whichever configured club webhook ID verifies the PayPal
-    signature: existing members carry the subscription id (a one-club fast path), and a brand-new
-    subscription is verified against each candidate club's webhook id until one succeeds. Only after
-    the signature verifies do we act.
-
-    We don't trust the webhook body's state: each recurring charge arrives as PAYMENT.SALE.COMPLETED
-    (which carries no subscriber email or next_billing_time), and PayPal sends several
-    BILLING.SUBSCRIPTION events per subscription. So once verified, we re-fetch the authoritative
-    subscription from PayPal and apply *that* (see ``_apply_paypal_subscription_event``).
+    The club is whichever club's webhook id verifies the signature (existing subscription ids are a
+    fast path). Once verified, the subscription is re-fetched from PayPal and that is applied, since
+    sale events lack the details.
     """
 
-    # Subscription lifecycle events whose ``resource.id`` is the subscription id. CREATED
-    # (approval-pending, unpaid) and PAYMENT.FAILED are deliberately excluded: re-fetching on those
-    # would find a not-yet-active / unchanged subscription, and repeated failures end as
-    # SUSPENDED/CANCELLED, which we do handle.
+    # CREATED (unpaid) and PAYMENT.FAILED are excluded; failures end as SUSPENDED/CANCELLED.
     _HANDLED_SUBSCRIPTION_EVENTS = (
         "BILLING.SUBSCRIPTION.ACTIVATED",
         "BILLING.SUBSCRIPTION.UPDATED",
@@ -532,8 +478,7 @@ class PayPalSubscriptionWebhookView(PayPalAPIMixin, View):
     }
 
     def _get_access_token(self):
-        """Cache the token per credential-set for this request so the multi-club verify loop
-        doesn't re-authenticate once per club (all site-PayPal clubs share one token)."""
+        """Cache the token per credential set, so the multi-club verify loop authenticates once."""
         creds = getattr(self, "club_paypal_credentials", None)
         key = creds or "__site__"
         cache = getattr(self, "_sub_token_cache", None)
@@ -544,11 +489,8 @@ class PayPalSubscriptionWebhookView(PayPalAPIMixin, View):
         return cache[key]
 
     def _subscription_id_for_event(self, event_type, resource):
-        """The subscription id this event concerns, or "" when we don't handle the event.
-
-        Recurring subscription *payments* arrive as PAYMENT.SALE.COMPLETED carrying
-        ``billing_agreement_id`` (the subscription id); a PAYMENT.SALE.COMPLETED without one is a
-        non-subscription sale and is ignored. Subscription lifecycle changes carry the id directly.
+        """The subscription id an event concerns, or "" if unhandled. Payments carry it as
+        ``billing_agreement_id``; without one it's a non-subscription sale.
         """
         if event_type == "PAYMENT.SALE.COMPLETED":
             return resource.get("billing_agreement_id") or ""
@@ -563,9 +505,8 @@ class PayPalSubscriptionWebhookView(PayPalAPIMixin, View):
         return {key: hdr(name) for key, name in self._WEBHOOK_HEADER_NAMES.items()}
 
     def _verify_for_club(self, club, headers, event):
-        """Ask PayPal to verify this transmission against ``club``'s webhook id + credentials."""
-        # club.paypal_credentials is None for site-PayPal clubs, which _get_access_token reads as
-        # "use the site keys" -- the same account that owns those clubs' webhooks.
+        """Ask PayPal to verify this transmission with ``club``'s webhook id and credentials."""
+        # None means the site keys, which own site-PayPal clubs' webhooks.
         self.club_paypal_credentials = club.paypal_credentials
         try:
             access_token = self._get_access_token()
@@ -595,11 +536,7 @@ class PayPalSubscriptionWebhookView(PayPalAPIMixin, View):
             return False
 
     def _candidate_clubs(self):
-        """Active clubs that both have a webhook id and could actually verify one.
-
-        Mirrors ``Club.supports_paypal_subscriptions`` at the DB level: only site-PayPal clubs and
-        own-credential (non-OAuth) clubs can produce a token that owns their webhook, so OAuth-only
-        clubs are skipped (they'd always fail verification and just cost a round-trip)."""
+        """Active clubs with a webhook id whose credentials could verify it (site-PayPal or own credentials)."""
         return (
             Club.objects.filter(active=True)
             .exclude(paypal_webhook_id="")
@@ -635,8 +572,7 @@ class PayPalSubscriptionWebhookView(PayPalAPIMixin, View):
         if not isinstance(resource, dict):
             resource = {}
         subscription_id = self._subscription_id_for_event(event_type, resource)
-        # Ack events we don't handle (other event types, one-off sales, missing id) so PayPal stops
-        # retrying them.
+        # Ack unhandled events so PayPal stops retrying.
         if not subscription_id:
             return JsonResponse({"status": "ignored"})
 
@@ -653,8 +589,7 @@ class PayPalSubscriptionWebhookView(PayPalAPIMixin, View):
             )
             return HttpResponseBadRequest("webhook verification failed")
 
-        # Re-fetch authoritative subscription state (the triggering event body may be a bare sale
-        # with no subscriber/next_billing_time, or a stale/out-of-order lifecycle event).
+        # Re-fetch authoritative state; the event body may be a bare sale or stale.
         self.club_paypal_credentials = club.paypal_credentials
         try:
             subscription = self.get_from_paypal(f"v1/billing/subscriptions/{subscription_id}", include_bn_code=False)
@@ -662,7 +597,7 @@ class PayPalSubscriptionWebhookView(PayPalAPIMixin, View):
             logger.exception(
                 "PayPal subscription webhook: failed to fetch subscription %s", _mask_subscription_id(subscription_id)
             )
-            # 500 -> PayPal retries later, so a transient fetch failure doesn't drop the renewal.
+            # 500 so PayPal retries.
             return HttpResponse(status=500)
 
         _apply_paypal_subscription_event(club, subscription)
@@ -670,33 +605,28 @@ class PayPalSubscriptionWebhookView(PayPalAPIMixin, View):
 
 
 class SquareWebhookView(SquareAPIMixin, View):
-    """Handle Square webhook events for payment notifications
-    Implements webhook signature verification using HMAC-SHA256
-    """
+    """Square payment webhooks, verified with HMAC-SHA256."""
 
     @method_decorator(csrf_exempt)
     def dispatch(self, *args, **kwargs):
         return super().dispatch(*args, **kwargs)
 
     def verify_signature(self, request, raw_body, signature):
-        """Verify Square webhook signature using Square SDK
-        Square signs webhooks with: base64(HMAC-SHA256(signature_key, notification_url + request_body))
-        Returns True if signature is valid, False otherwise
-        """
+        """Verify Square's signature: base64(HMAC-SHA256(key, notification_url + body))."""
         if not settings.SQUARE_WEBHOOK_SIGNATURE_KEY:
             logger.warning("SQUARE_WEBHOOK_SIGNATURE_KEY not configured - skipping signature verification")
             if settings.DEBUG:
                 return True  # Allow webhook if signature key not configured
             else:
-                return False  # Reject webhook if signature key not configured in production
+                return False
 
         try:
             from square.utils.webhooks_helper import verify_signature as square_verify_signature
 
-            # Prefer an explicit configured URL if provided (useful behind proxies)
+            # An explicit URL, useful behind proxies.
             notification_url = getattr(settings, "SQUARE_WEBHOOK_PUBLIC_URL", "").strip()
             if not notification_url:
-                # Fallback: absolute URL of this request (no query string per Square docs)
+                # Else this request's absolute URL, no query string.
                 notification_url = request.build_absolute_uri(request.path)
 
             # Ensure raw_body is a string as expected by Square SDK
@@ -714,7 +644,6 @@ class SquareWebhookView(SquareAPIMixin, View):
             return False
 
     def post(self, request, *args, **kwargs):
-        # In production, require SQUARE_WEBHOOK_SIGNATURE_KEY if Square is configured
         if not settings.DEBUG and not settings.SQUARE_WEBHOOK_SIGNATURE_KEY:
             if settings.SQUARE_APPLICATION_ID or settings.SQUARE_CLIENT_SECRET:
                 msg = "SQUARE_WEBHOOK_SIGNATURE_KEY must be set in production when Square is configured"
@@ -752,7 +681,6 @@ class SquareWebhookView(SquareAPIMixin, View):
             payment_id = payment.get("id")
             order_id = payment.get("order_id")
             reference_id = None
-            # Handle COMPLETED status - create payment record and mark invoice paid
             if payment_status == "COMPLETED":
                 merchant_id = event.get("merchant_id", "")
                 seller = SquareSeller.objects.filter(square_merchant_id=merchant_id).first()
@@ -774,9 +702,7 @@ class SquareWebhookView(SquareAPIMixin, View):
                     else:
                         logger.error("Could not get Square client for user %s", seller.user.pk)
 
-                # Only proceed if we have a reference_id to look up the invoice. reference_id is our
-                # invoice pk as a string; guard against any non-numeric value so a stray payment
-                # can't raise (Invoice.pk is an int) and 500 the webhook.
+                # reference_id is our invoice pk as a string; guard non-numeric values.
                 if reference_id:
                     try:
                         invoice = Invoice.objects.filter(pk=int(reference_id)).first()
@@ -800,15 +726,10 @@ class SquareWebhookView(SquareAPIMixin, View):
                                 "receipt_number": receipt_number,
                             },
                         )
-                        # If the payment already existed, never restore refundability that refunds
-                        # have consumed. Square fires payment.updated for many lifecycle changes, so a
-                        # fully-refunded payment (amount_available_to_refund == 0) must not become
-                        # refundable again -- otherwise a second full refund could be issued.
-                        # amount_available_to_refund is initialized once, when the record is created
-                        # (in the get_or_create defaults above).
+                        # Never restore refundability consumed by refunds: payment.updated fires often,
+                        # and a refunded payment must not become refundable again.
                         if not created:
-                            # If the payment amount itself legitimately changed, move the refundable
-                            # balance by the delta so accounting stays correct without resetting it.
+                            # A changed amount moves the refundable balance by the delta.
                             if amount_value != payment_record.amount:
                                 payment_record.amount_available_to_refund += amount_value - payment_record.amount
                                 payment_record.amount = amount_value
@@ -822,8 +743,7 @@ class SquareWebhookView(SquareAPIMixin, View):
                                 invoice.auction.create_history(applies_to="INVOICES", action=action, user=None)
                             except Exception:
                                 logger.exception("create_history failed for Square payment on invoice %s", invoice.pk)
-                        # Use the rounded balance so a rounded-down charge (the amount we billed)
-                        # still settles the invoice.
+                        # Rounded balance, matching what was billed.
                         if invoice.rounded_net_after_payments >= 0:
                             if not invoice.renewal_needed:
                                 try:
@@ -885,10 +805,7 @@ class SquareWebhookView(SquareAPIMixin, View):
                 if payment_record and refund_id:
                     refund_amount = Decimal(refund.get("amount_money", {}).get("amount", 0)) / 100
 
-                    # Square redelivers/re-fires events for the same refund. Capture the prior refund
-                    # amount for this refund id before update_or_create overwrites it, then move the
-                    # refundable balance only by the delta so a duplicate delivery is a no-op and an
-                    # amount change adjusts correctly.
+                    # Square re-fires refunds: adjust by the delta so duplicates no-op.
                     existing_refund = InvoicePayment.objects.filter(external_id=refund_id).first()
                     previous_refund_abs = abs(existing_refund.amount) if existing_refund else Decimal("0.00")
 
@@ -925,19 +842,14 @@ class SquareWebhookView(SquareAPIMixin, View):
 
 
 class QuickCheckout(AuctionViewMixin, TemplateView):
-    """Enter a bidder number or name and mark their invoice as paid
-    For https://github.com/iragm/fishauctions/issues/292"""
+    """Enter a bidder number or name and mark their invoice paid (issue #292)."""
 
     template_name = "auctions/quick_checkout.html"
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         context["auction"] = self.auction
-        # The camera scanner (scan a bidder number or member card to pull up the invoice) is meant
-        # for small-screen devices and the native app -- not desktop. The server can't see the
-        # browser viewport, so we always ship the script and let a Bootstrap responsive class hide
-        # the camera on larger screens (see the d-md-none wrapper in the template). The app's WebView
-        # reports a phone-sized viewport, so it's covered by the same small-screen rule.
+        # Always shipped; the template hides the camera on larger screens.
         context["show_camera_scanner"] = True
         return context
 
@@ -948,18 +860,16 @@ class QuickCheckoutHTMX(AuctionViewMixin, PayPalAPIMixin, SquareAPIMixin, Templa
     template_name = "auctions/quick_checkout_htmx.html"
 
     def _normalize_scanned_term(self, term):
-        """Translate a scanned barcode into something the checkout search can match.
-
-        The checkout search matches a bidder number directly but knows nothing about paddle
-        barcodes (11111 + bidder number) or membership card numbers, so map those to the
-        bidder number here. Returns the term unchanged if it isn't a recognizable barcode."""
+        """Map a scanned paddle barcode (11111 + number) or membership card number to a bidder number.
+        Anything else is returned unchanged.
+        """
         term = (term or "").strip()
         if not term:
             return term
         # Paddle barcode: 11111 followed by the bidder number
         if term.startswith("11111") and len(term) > 5 and term[5:].isdigit():
             return term[5:]
-        # Membership card: a bare number matching a ClubMember in this auction's club
+        # A bare number matching a member of this auction's club.
         if term.isdigit() and self.auction.club_id:
             member = ClubMember.objects.filter(
                 club=self.auction.club, membership_number=int(term), is_deleted=False
@@ -973,8 +883,7 @@ class QuickCheckoutHTMX(AuctionViewMixin, PayPalAPIMixin, SquareAPIMixin, Templa
         context["auction"] = self.auction
         qs = AuctionTOS.objects.filter(auction=self.auction)
         search_term = kwargs.get("filter")
-        # The camera scanner posts ?barcode=1 so paddle/membership-card barcodes get translated to a
-        # bidder number; typed searches are left alone so a numeric name search still behaves normally.
+        # Only scans are translated, so a numeric typed search still works.
         if self.request.GET.get("barcode"):
             search_term = self._normalize_scanned_term(search_term)
         filtered_qs = AuctionTOSFilter.generic(self, qs, search_term)
@@ -989,11 +898,7 @@ class QuickCheckoutHTMX(AuctionViewMixin, PayPalAPIMixin, SquareAPIMixin, Templa
                 context["invoice"] = invoice
                 _ensure_invoice_renewal_state(invoice)
             if invoice:
-                # Generate PayPal QR code if available.
-                # The in-person QR flow relies on PayPal webhooks (CHECKOUT.ORDER.APPROVED /
-                # CHECKOUT.CAPTURE.COMPLETED) to update the cashier screen once the payer approves
-                # on their phone. Clubs using their own (non-OAuth) credentials have no webhook
-                # wired up, so skip the QR for them -- they can still take Square/cash here.
+                # The PayPal QR relies on webhooks to update this screen; own-credential clubs have none.
                 if (
                     invoice.show_paypal_button
                     and not invoice.reason_for_payment_not_available

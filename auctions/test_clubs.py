@@ -214,8 +214,7 @@ class ClubViewTests(TestCase):
                 lot_entry_fee=0,
                 unsold_lot_fee=0,
                 tax=0,
-                # The club page's "recent auctions" list is the promoted ones; the model default is
-                # False, so an auction that is meant to appear there has to say so.
+                # The club page lists promoted auctions, and the model default is False.
                 promote_this_auction=True,
             )
         self.client.login(username="club_owner2", password="testpass")
@@ -237,12 +236,12 @@ class ClubViewTests(TestCase):
         self.client.login(username="club_owner2", password="testpass")
         url = reverse("club_detail", kwargs={"slug": self.club.slug})
 
-        # Events, BAP, My Points: three fit, and a More menu holding one item is worse than a tab.
+        # Events, BAP, My Points: three fit, and a More menu with one item is worse than a tab.
         response = self.client.get(url)
         self.assertFalse(response.context["club_tabs_overflow"])
         self.assertRegex(response.content.decode(), r'class="nav-link[^"]*" id="my-points-tab-btn"')
 
-        # Turning on the other two award tracks makes five, so everything past BAP moves into More.
+        # The other two award tracks make five, so everything past BAP moves into More.
         self.club.separate_hap = True
         self.club.separate_cap = True
         self.club.save()
@@ -289,8 +288,7 @@ class ClubViewTests(TestCase):
         self.assertIn(response.status_code, [403, 302])
 
     def test_club_admin_membership_filters_hidden_without_fee(self):
-        """Paid/Unpaid membership chips are hidden when the club charges no dues, but the
-        source/other chips (modeled on the auction users page) are still offered."""
+        """Paid and unpaid chips are hidden without dues, but the source and other chips remain."""
         self.club.membership_annual_fee = None
         self.club.save()
         self.client.login(username="club_owner2", password="testpass")
@@ -321,7 +319,7 @@ class ClubViewTests(TestCase):
         self.assertIn("Paid club member", content)
 
     def test_club_edit_owner_can_access(self):
-        """Club admin member can access edit page (permission_admin grants permission_edit_club)"""
+        """permission_admin grants permission_edit_club, so a club admin can open the edit page."""
         self.client.login(username="club_owner2", password="testpass")
         url = reverse("club_edit", kwargs={"slug": self.club.slug})
         response = self.client.get(url)
@@ -332,8 +330,7 @@ class ClubViewTests(TestCase):
         url = reverse("club_membership_settings", kwargs={"slug": self.club.slug})
         response = self.client.get(url)
         self.assertEqual(response.status_code, 200)
-        # contact_email moved to the email settings page; membership settings only
-        # carries pure membership / payment configuration.
+        # contact_email moved to the email settings page; this one is payment configuration.
         self.assertNotContains(response, "id_contact_email")
         self.assertNotContains(response, "id_send_membership_expiration_reminders")
 
@@ -416,7 +413,7 @@ class ClubViewTests(TestCase):
             quantity=1,
             winning_price=15,
         )
-        # Club stats charts read from cached auction stats, so populate caches for these test auctions.
+        # Club stats charts read cached auction stats.
         normal_auction.recalculate_stats()
         checkin_auction.recalculate_stats()
 
@@ -463,7 +460,7 @@ class ClubViewTests(TestCase):
         self.assertEqual(response.status_code, 404)
 
     def test_club_admin_anonymous_redirects_to_login(self):
-        """Anonymous user accessing club_admin should be redirected to login, not get 403"""
+        """An anonymous visitor to club_admin is redirected to login, not 403'd."""
         url = reverse("club_admin", kwargs={"slug": self.club.slug})
         response = self.client.get(url)
         self.assertEqual(response.status_code, 302)
@@ -538,12 +535,9 @@ class ClubViewTests(TestCase):
 
 
 class ClubPermissionTests(CsvImportTestMixin, TestCase):
-    """Verify that each club permission level grants exactly the right access.
+    """Each club permission grants exactly the right access.
 
-    Three user categories are tested for each view:
-    - non_member: authenticated but has no ClubMember record
-    - Various specific-permission members (view_user, add_edit_user, etc.)
-    - admin_user: ClubMember with permission_admin=True (wildcard)
+    Tested for a non-member, members with each specific permission, and a permission_admin wildcard.
     """
 
     def setUp(self):
@@ -588,8 +582,7 @@ class ClubPermissionTests(CsvImportTestMixin, TestCase):
         self.client.login(username=user.username, password="testpass")
 
     def test_bap_csv_import_creates_awards_after_confirm(self):
-        """The BAP importer also routes through the preview: an award is only created after confirm,
-        matched to the member by email."""
+        """The BAP importer routes through the preview too: awards are created on confirm, matched by email."""
         self._login(self.bap_user)
         url = reverse("club_bap_import", kwargs={"slug": self.club.slug})
         csv_file = SimpleUploadedFile(
@@ -599,7 +592,7 @@ class ClubPermissionTests(CsvImportTestMixin, TestCase):
         # Upload alone must not create the award.
         self.client.post(url, {"csv_file": csv_file})
         self.assertEqual(BapAward.objects.filter(club_member=self.target_member).count(), before)
-        # Confirm via the helper (re-uploads + confirms) and check the award lands.
+        # Re-upload and confirm through the helper.
         csv_file = SimpleUploadedFile(
             "bap.csv", b"email,bap,hap,cap\ntarget@example.com,3,0,0\n", content_type="text/csv"
         )
@@ -846,7 +839,7 @@ class ClubPermissionTests(CsvImportTestMixin, TestCase):
         self.assertEqual(response.status_code, 403)
 
     def test_edit_club_blocked_from_member_permissions_view(self):
-        """permission_edit_club does not grant permission_admin (needed for permissions view)"""
+        """permission_edit_club doesn't grant permission_admin, which the permissions view needs."""
         self._login(self.edit_club_user)
         response = self.client.get(reverse("clubmember_permissions", kwargs={"pk": self.target_member.pk}))
         self.assertEqual(response.status_code, 403)
@@ -986,7 +979,7 @@ class ClubPermissionTests(CsvImportTestMixin, TestCase):
         self.assertEqual(str(self.target_member.membership_expiration_date), "2026-01-15")
 
     def test_renew_page_records_old_and_new_date_in_history(self):
-        """ClubMemberRenewPageView history entry shows both old and new expiration dates."""
+        """The renew page's history entry shows the old and new expiration dates."""
         self.club.membership_annual_fee = Decimal("20.00")
         self.club.save(update_fields=["membership_annual_fee"])
         self.target_member.membership_expiration_date = datetime.date(2025, 6, 1)
@@ -1000,7 +993,7 @@ class ClubPermissionTests(CsvImportTestMixin, TestCase):
         self.assertIn("6/1/2026", history.action)
 
     def test_renew_page_does_not_create_clubmoney(self):
-        """ClubMemberRenewPageView is a record correction — it must not book a ClubMoney entry."""
+        """The renew page is a record correction, so it books no ClubMoney."""
         self.club.membership_annual_fee = Decimal("20.00")
         self.club.save(update_fields=["membership_annual_fee"])
         self._login(self.admin_user)
@@ -1016,7 +1009,7 @@ class ClubPermissionTests(CsvImportTestMixin, TestCase):
         self.assertEqual(response.status_code, 403)
 
     def test_cross_club_renew_page_returns_404(self):
-        """A member from another club cannot renew a member that doesn't belong to their club"""
+        """A member of another club can't renew this club's member."""
         other_club = Club.objects.create(name="Other Club")
         ClubMember.objects.create(club=other_club, user=self.admin_user, name="Admin", permission_admin=True)
         url = reverse("club_member_renew_page", kwargs={"slug": other_club.slug, "pk": self.target_member.pk})
@@ -1078,7 +1071,7 @@ class ClubMemberUpdateTests(CsvImportTestMixin, TestCase):
         self.assertTrue(imported.welcome_email_sent)
 
     def test_csv_import_skips_rows_without_name_or_email(self):
-        """CSV import skips rows that have neither a name nor an email (no way to identify the person)"""
+        """Rows with neither a name nor an email are skipped: there's no way to identify the person."""
         owner_member, _ = ClubMember.objects.get_or_create(club=self.club, user=self.owner)
         owner_member.permission_export = True
         owner_member.save()
@@ -1092,8 +1085,9 @@ class ClubMemberUpdateTests(CsvImportTestMixin, TestCase):
         self.assertEqual(ClubMember.objects.filter(club=self.club, is_deleted=False).count(), initial_count)
 
     def test_csv_import_rhyming_name_is_flagged_not_duplicated(self):
-        """A no-email import row whose name rhymes with an existing member (Bob -> Robert) is surfaced as a
-        possible duplicate and, on the default merge, does not create a second member."""
+        """A no-email row whose name rhymes with a member (Bob, Robert) is a possible duplicate, and merging
+        creates no second member.
+        """
         owner_member, _ = ClubMember.objects.get_or_create(club=self.club, user=self.owner)
         owner_member.permission_export = True
         owner_member.save()
@@ -1106,7 +1100,7 @@ class ClubMemberUpdateTests(CsvImportTestMixin, TestCase):
         self.assertEqual(ClubMember.objects.filter(club=self.club, is_deleted=False).count(), before)
 
     def test_csv_import_duplicate_email_rows_collapse_to_one_member(self):
-        """Two import rows sharing a normalized email become a single member instead of two records."""
+        """Two rows sharing a normalized email become one member."""
         owner_member, _ = ClubMember.objects.get_or_create(club=self.club, user=self.owner)
         owner_member.permission_export = True
         owner_member.save()
@@ -1125,7 +1119,7 @@ class ClubMemberUpdateTests(CsvImportTestMixin, TestCase):
         self.assertEqual(matches.first().phone_number, "555-9000")
 
     def test_csv_import_ragged_row_does_not_500(self):
-        """A member row with more columns than the header is imported rather than crashing the upload."""
+        """A row with more columns than the header imports rather than crashing."""
         owner_member, _ = ClubMember.objects.get_or_create(club=self.club, user=self.owner)
         owner_member.permission_export = True
         owner_member.save()
@@ -1223,7 +1217,7 @@ class ClubMemberUpdateTests(CsvImportTestMixin, TestCase):
         self.assertTrue(self.member.is_deleted)
 
     def test_club_member_duplicate_name_validation_returns_warning_message(self):
-        """Duplicate-name validation should warn when the member is already in this club"""
+        """Duplicate-name validation warns when the member is already in this club."""
         owner_member, _ = ClubMember.objects.get_or_create(club=self.club, user=self.owner)
         owner_member.permission_add_edit = True
         owner_member.save()
@@ -1234,7 +1228,7 @@ class ClubMemberUpdateTests(CsvImportTestMixin, TestCase):
         self.assertEqual(response.json()["name_tooltip"], f"{self.member} is already in this club")
 
     def test_club_member_autofill_searches_clubs_with_manage_auctions_permission(self):
-        """Club member autofill should search auctions from clubs the user can manage auctions for"""
+        """Autofill searches auctions from clubs the user can manage auctions for."""
         owner_member, _ = ClubMember.objects.get_or_create(club=self.club, user=self.owner)
         owner_member.permission_add_edit = True
         owner_member.save()
@@ -1275,7 +1269,7 @@ class ClubMemberUpdateTests(CsvImportTestMixin, TestCase):
         self.assertEqual(response.json()["id_address"], "123 Fish St")
 
     def test_club_member_autofill_uses_managed_club_members_without_auction_history(self):
-        """Club member autofill should use manageable club members even without auction history"""
+        """Autofill uses manageable club members even without auction history."""
         owner_member, _ = ClubMember.objects.get_or_create(club=self.club, user=self.owner)
         owner_member.permission_add_edit = True
         owner_member.save()
@@ -1297,7 +1291,7 @@ class ClubMemberUpdateTests(CsvImportTestMixin, TestCase):
         self.assertEqual(response.json()["id_address"], "456 Club Rd")
 
     def test_club_member_create_modal_uses_inline_name_note_for_duplicates(self):
-        """The club-member modal should render JS that shows duplicate-name warnings inline"""
+        """The club member modal renders the JS that shows duplicate-name warnings inline."""
         owner_member, _ = ClubMember.objects.get_or_create(club=self.club, user=self.owner)
         owner_member.permission_add_edit = True
         owner_member.save()

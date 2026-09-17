@@ -1,21 +1,19 @@
 """The two forms behind the report button and the copyright notice page.
 
-They are here rather than in ``forms.py`` for the same reason
-:mod:`auctions.moderation_models` is not in ``models.py``: that file is at the ceiling
-``auctions/module_map.py`` holds it to, and the ratchet only comes down.
+Here rather than in ``forms.py`` for the same reason :mod:`auctions.moderation_models` is not in
+``models.py``: that file is at the ceiling ``auctions/module_map.py`` holds it to.
 
-:class:`CopyrightNoticeForm` is deliberately not the contact form with a different subject line.
-A notice under 17 U.S.C. 512(c)(3)(A) has six required parts, two of which are statements the
-sender has to actually make -- a good-faith belief, and an accuracy statement under penalty of
-perjury -- and a free-text box collects none of them. It matters in both directions: a notice
-missing pieces does not start our removal clock (512(c)(3)(B)), and a sender who ticks the perjury
-box has been shown, in the same breath, that 512(f) makes a knowingly false notice actionable.
-That warning is the cheapest defence there is against the bogus notice used to take down a rival's
-listing.
+:class:`CopyrightNoticeForm` is deliberately not the contact form with a different subject. A notice
+under 17 U.S.C. 512(c)(3)(A) has six required parts, two of which are statements the sender has to
+make -- a good-faith belief, and an accuracy statement under penalty of perjury -- and a free-text
+box collects neither. It matters both ways: an incomplete notice does not start our removal clock
+(512(c)(3)(B)), and a sender who ticks the perjury box has been shown that 512(f) makes a knowingly
+false notice actionable, which is the cheapest defence there is against a bogus takedown of a
+rival's listing.
 
-Neither form is the only way in. The address published in the Copyright Office directory is the
-address that legally counts, and a notice emailed there is valid whether or not it came through
-here -- see :mod:`auctions.dmca`.
+Neither form is the only way in: the address in the Copyright Office directory is what legally
+counts, and a notice emailed there is valid whether or not it came through here -- see
+:mod:`auctions.dmca`.
 """
 
 from crispy_forms.helper import FormHelper

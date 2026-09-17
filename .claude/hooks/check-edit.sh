@@ -1,15 +1,13 @@
 #!/usr/bin/env bash
 # PostToolUse hook: lint the one file that was just edited, and say so straight away.
 #
-# All three checks below already run in `docker compose run --rm test --ci` and in pre-commit. The
-# point of running them here is *when*: at the edit, while the reasoning that produced the file is
-# still in context, instead of at the commit after a dozen more edits have landed on top. Exit
-# code 2 is the one that feeds stderr back to Claude, so a failure is a correction rather than a
-# message nobody reads.
+# Everything below also runs in `docker compose run --rm test --ci` and in pre-commit. The point of
+# running it here is *when*: at the edit, while the reasoning that produced the file is still in
+# context, rather than at the commit with a dozen more edits on top. Exit code 2 feeds stderr back
+# to Claude, so a failure is a correction rather than a message nobody reads.
 #
-# Fast on purpose -- ruff on a single file is milliseconds and needs no container. Nothing here
-# runs Django, touches the database or starts docker; if it ever needs to, it belongs in `--ci`
-# instead.
+# Fast on purpose: ruff on one file is milliseconds and needs no container. Nothing here runs
+# Django, touches the database or starts docker; anything that needs to belongs in `--ci`.
 
 set -uo pipefail
 cd "${CLAUDE_PROJECT_DIR:-/workspace}" || exit 0

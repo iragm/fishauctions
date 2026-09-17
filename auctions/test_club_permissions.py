@@ -191,7 +191,7 @@ class ClubPermissionsDialogTests(TestCase):
 
 
 class ClubMemberDiscordAdminViewTests(TestCase):
-    """Tests for ClubMemberDiscordAdminView — permission gating and basic functionality."""
+    """ClubMemberDiscordAdminView: permission gating and basic functionality."""
 
     def setUp(self):
         self.club = Club.objects.create(name="Discord Test Club", discord_server_id="111222333")
@@ -470,7 +470,7 @@ class ClubMemberManagementViewTests(TestCase):
         self.assertEqual(self.source_member.membership_expiration_date, expected_expiration)
 
     def test_renew_january_first_extends_from_current_if_future(self):
-        """January_first: if current expiration is in future, extend from that date to next Jan 1."""
+        """january_first: an expiration in the future extends from that date to the next Jan 1."""
         # Club defaults to january_first
         future_expiration = timezone.now().date() + datetime.timedelta(days=100)
         self.source_member.membership_expiration_date = future_expiration
@@ -483,7 +483,7 @@ class ClubMemberManagementViewTests(TestCase):
         self.assertEqual(self.source_member.membership_expiration_date, expected_expiration)
 
     def test_renew_january_first_extends_from_today_if_expiration_past(self):
-        """January_first: if current expiration is in past, extend from today to next Jan 1."""
+        """january_first: an expiration in the past extends from today to the next Jan 1."""
         # Club defaults to january_first
         past_expiration = timezone.now().date() - datetime.timedelta(days=100)
         self.source_member.membership_expiration_date = past_expiration
@@ -547,7 +547,7 @@ class ClubMemberManagementViewTests(TestCase):
 
 
 class ClubViewOnlyAccessTests(TestCase):
-    """Tests verifying view-only members can see the member list but not mutate anything."""
+    """View-only members can see the member list but not mutate anything."""
 
     def setUp(self):
         self.club = Club.objects.create(name="View Only Club")
@@ -595,10 +595,10 @@ class ClubViewOnlyAccessTests(TestCase):
 
 @override_settings(PAYPAL_CLIENT_ID="test_client_id", PAYPAL_SECRET="test_secret")
 class ClubMembershipInvoiceTests(TestCase):
-    """Tests for club-only membership invoices (no auction, no auctiontos_user).
+    """Club-only membership invoices (no auction, no auctiontos_user).
 
-    Covers Invoice model properties, _process_invoice_membership_renewal,
-    ClubMembershipPaymentView, and error-redirect behaviour in the PayPal/Square views.
+    Covers the Invoice properties, _process_invoice_membership_renewal, ClubMembershipPaymentView, and
+    the error redirects in the PayPal and Square views.
     """
 
     def setUp(self):
@@ -768,7 +768,7 @@ class ClubMembershipInvoiceTests(TestCase):
     # -- ClubMembershipPaymentView ---------------------------------------------
 
     def test_payment_view_404_when_not_configured(self):
-        # No PayPalSeller, no SquareSeller, no use_site_paypal_account => not configured.
+        # No PayPalSeller, no SquareSeller and no use_site_paypal_account means not configured.
         self.client.login(username="club_member_u", password="testpass")
         response = self.client.get(reverse("club_membership_pay", kwargs={"slug": self.club.slug}))
         self.assertEqual(response.status_code, 404)
@@ -812,7 +812,7 @@ class ClubMembershipInvoiceTests(TestCase):
     # -- CreatePayPalOrderView redirects for club invoices ---------------------
 
     def test_paypal_order_view_redirects_to_club_pay_on_error(self):
-        """When PayPal is not configured, the view should redirect to club_membership_pay, not invoice_no_login."""
+        """With PayPal unconfigured the view redirects to club_membership_pay, not invoice_no_login."""
         invoice = self._make_club_invoice()
         self.client.login(username="club_member_u", password="testpass")
         url = reverse("create_paypal_order", kwargs={"uuid": invoice.no_login_link})
@@ -825,7 +825,7 @@ class ClubMembershipInvoiceTests(TestCase):
 
     @override_settings(PAYPAL_CLIENT_ID="x", PAYPAL_SECRET="y", SQUARE_APPLICATION_ID="sq", SQUARE_CLIENT_SECRET="sc")
     def test_paypal_order_view_blocked_when_only_square_configured(self):
-        """show_payment_button=True (Square) but show_paypal_button=False should still block the PayPal endpoint."""
+        """show_payment_button=True (Square) with show_paypal_button=False still blocks the PayPal endpoint."""
         # Give the club a Square seller but no PayPal seller.
         self.payment_user.userdata.square_enabled = True
         self.payment_user.userdata.save()
@@ -833,7 +833,7 @@ class ClubMembershipInvoiceTests(TestCase):
         invoice = self._make_club_invoice()
         # show_payment_button is True because Square is available.
         self.assertTrue(invoice.show_payment_button)
-        # show_paypal_button must be False (no PayPal seller, not using site PayPal).
+        # No PayPal seller and not using site PayPal, so show_paypal_button is False.
         self.assertFalse(invoice.show_paypal_button)
 
         self.client.login(username="club_member_u", password="testpass")
@@ -847,7 +847,7 @@ class ClubMembershipInvoiceTests(TestCase):
         )
 
     def test_invoice_no_login_view_accessible_for_club_invoice(self):
-        """Visiting a club invoice via no-login link should not crash (no auctiontos_user, no auction)."""
+        """A club invoice via the no-login link doesn't crash: it has no auctiontos_user and no auction."""
         invoice = self._make_club_invoice()
         self.client.login(username="club_member_u", password="testpass")
         url = reverse("invoice_no_login", kwargs={"uuid": invoice.no_login_link})
@@ -856,9 +856,8 @@ class ClubMembershipInvoiceTests(TestCase):
 
 
 class ClubMembershipSettingsFormFieldsTests(TestCase):
-    """The form no longer exposes payment_user or allow_integrated_payments —
-    those are managed via the per-provider seller links (PayPalSeller.club /
-    SquareSeller.club) and Club.use_site_paypal_account in the Django admin.
+    """The form no longer exposes payment_user or allow_integrated_payments: those are the per-provider
+    seller links and Club.use_site_paypal_account in the Django admin.
     """
 
     def setUp(self):
@@ -906,7 +905,7 @@ class PaymentSellerClubLinkTests(TestCase):
 
     @override_settings(PAYPAL_CLIENT_ID="x", PAYPAL_SECRET="y")
     def test_use_site_paypal_account_returns_admin(self):
-        """When the club is flagged for site PayPal, paypal_information is the 'admin' sentinel."""
+        """With the club flagged for site PayPal, paypal_information is the 'admin' sentinel."""
         self.club.use_site_paypal_account = True
         self.club.save()
         auction = Auction.objects.create(

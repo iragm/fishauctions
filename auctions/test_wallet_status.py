@@ -41,9 +41,7 @@ def _raising_context_processor(request):
 
 
 class ErrorPageLoggingTests(TestCase):
-    """Custom 404/500 handlers (auctions/error_views.py) must log the traceback that Django's
-    get_exception_response() otherwise swallows -- prod was emailing traceback-less
-    "Report at /byp8.php" 500s with no way to see the real cause."""
+    """The custom 404/500 handlers must log the traceback Django's get_exception_response() swallows."""
 
     def _broken_templates(self):
         import copy
@@ -61,8 +59,8 @@ class ErrorPageLoggingTests(TestCase):
         self.assertContains(response, "Page not found", status_code=404)
 
     def test_404_render_failure_logs_the_real_traceback(self):
-        # The 404 page extends base.html, so a broken context processor makes its render raise.
-        # Django then falls back to the 500 handler; the handler must have logged the cause first.
+        # The 404 page extends base.html, so a broken context processor makes its render raise and
+        # Django falls back to the 500 handler.
         client = Client(raise_request_exception=False)
         with override_settings(DEBUG=False, TEMPLATES=self._broken_templates()):
             with self.assertLogs("auctions.errorpages", level="ERROR") as logs:
@@ -87,8 +85,7 @@ class ErrorPageLoggingTests(TestCase):
 
 
 class WalletHeaderTextTests(TestCase):
-    """wallet_header_text drives the pass-type line on wallet passes: live paid/unpaid
-    status for dues-charging clubs, static "Membership" everywhere else."""
+    """wallet_header_text: live paid/unpaid status for dues-charging clubs, "Membership" elsewhere."""
 
     def _member(self, membership_system="january_first", fee=25, paid=True):
         from decimal import Decimal
@@ -128,8 +125,7 @@ class WalletHeaderTextTests(TestCase):
 
 
 class WalletStatusTextTests(TestCase):
-    """wallet_status_text prints the expiration date on the card instead of letting
-    the wallet apps expire the pass programmatically (which auto-archives it)."""
+    """wallet_status_text prints the expiration date rather than letting the wallets expire the pass."""
 
     def _member(self, membership_system="january_first", paid=True, expiration=None, last_paid=None):
         from decimal import Decimal
@@ -153,7 +149,7 @@ class WalletStatusTextTests(TestCase):
         self.assertEqual(member.wallet_status_text, f"Valid through {expiration.strftime('%-d %b %Y')}")
 
     def test_lapsed_member_shows_printed_expiration_date(self):
-        """A lapsed membership prints its (past) expiration date, not just 'Unpaid/expired'."""
+        """A lapsed membership prints its past expiration date."""
         expiration = timezone.now().date() - datetime.timedelta(days=5)
         member = self._member(expiration=expiration)
         self.assertEqual(member.wallet_status_text, f"Expired {expiration.strftime('%-d %b %Y')}")
@@ -173,7 +169,7 @@ class WalletStatusTextTests(TestCase):
         self.assertIsNone(self._member(membership_system="none").wallet_status_text)
 
     def test_google_object_patch_omits_valid_time_interval(self):
-        """No validTimeInterval in the PATCH body — that field auto-archives lapsed passes."""
+        """No validTimeInterval in the Google PATCH: it auto-archives lapsed passes."""
         from auctions.google_wallet import update_generic_object_for_member
 
         member = self._member(expiration=timezone.now().date() - datetime.timedelta(days=5))
@@ -196,7 +192,7 @@ class WalletStatusTextTests(TestCase):
         APPLE_WALLET_ORGANIZATION_NAME="",
     )
     def test_apple_pass_json_omits_expiration_date(self):
-        """No expirationDate in pass.json — that field greys out/archives lapsed passes."""
+        """No expirationDate in pass.json: it greys out and archives lapsed passes."""
         from auctions.apple_wallet import _build_pass_json
 
         member = self._member(expiration=timezone.now().date() - datetime.timedelta(days=5))
@@ -213,10 +209,9 @@ class WalletStatusTextTests(TestCase):
     GOOGLE_WALLET_SERVICE_ACCOUNT_KEY="fake-key",
 )
 class GoogleWalletStatusDisplayTests(TestCase):
-    """The class template must show the membership_status module on the card front
-    (cardTemplateOverride replaces the default layout, so an unlisted module is
-    invisible there — this is why expiration dates were "not present"), and object
-    PATCHes must keep the header (pass-type line) current."""
+    """The Google class template must list the membership_status module (cardTemplateOverride hides
+    unlisted modules), and object PATCHes must keep the header current.
+    """
 
     def setUp(self):
         from decimal import Decimal
@@ -277,9 +272,9 @@ class GoogleWalletStatusDisplayTests(TestCase):
 
 
 class AppleWalletCertValidationTests(TestCase):
-    """_load_signing_certs must accept Apple's DER .cer WWDR format and reject a WWDR
-    that did not issue the Pass Type ID cert — a mismatched chain surfaces on devices
-    as 'WWDR certificate missing' with no server-side trace otherwise."""
+    """_load_signing_certs accepts Apple's DER .cer WWDR and rejects a WWDR that didn't issue the Pass
+    Type ID cert, which devices report only as 'WWDR certificate missing'.
+    """
 
     def _settings(self, tmp_path, p12_path, wwdr_path):
         return self.settings(
@@ -366,40 +361,34 @@ class AppleWalletCertValidationTests(TestCase):
 
 
 class UniqueViewsCountTest(StandardTestCase):
-    """Auction.unique_views counts distinct logged-in users plus anonymous sessions that never
-    also appear on a logged-in row. The rewrite computes the anonymous set difference in Python
-    instead of a NOT IN (subquery) anti-join (which made MariaDB full-scan auctions_pageview for
-    hours); this pins the counting semantics so that optimization can't drift them."""
+    """Auction.unique_views counts distinct users plus anonymous sessions that never appear on a
+    logged-in row, computed in Python rather than as a NOT IN anti-join.
+    """
 
     def test_unique_views_dedupes_anonymous_login_transition(self):
         auction = self.online_auction
-        # Anonymous session viewing the auction rules page, recorded twice -- distinct collapses it.
+        # One anonymous session recorded twice collapses to one.
         PageView.objects.create(auction=auction, user=None, session_id="s1")
         PageView.objects.create(auction=auction, user=None, session_id="s1")
-        # Anonymous session viewing a lot page (reaches the auction via lot_number__auction).
+        # An anonymous view of a lot page reaches the auction via lot_number__auction.
         PageView.objects.create(lot_number=self.lot, user=None, session_id="s2")
         # Logged-in view (stores the user, NULL session).
         PageView.objects.create(lot_number=self.lot, user=self.userB, session_id=None)
-        # "Browsed anonymously then logged in": the same session_id appears both anonymously and on
-        # a logged-in row, so it must NOT also be counted as an anonymous session.
+        # A session that also appears on a logged-in row isn't counted as anonymous.
         PageView.objects.create(auction=auction, user=None, session_id="s3")
         PageView.objects.create(auction=auction, user=self.user, session_id="s3")
         # Noise: a different auction's view must not leak in.
         PageView.objects.create(auction=self.in_person_auction, user=None, session_id="other")
 
-        # logged_in = distinct users {userB, user}; anonymous = {s1, s2, s3} - {s3} = {s1, s2}.
+        # logged_in {userB, user}; anonymous {s1, s2, s3} - {s3}.
         self.assertEqual(auction.unique_views, {"total": 4, "logged_in": 2, "anonymous": 2})
 
 
 class MobileAppLabelPrintingVisibilityTests(StandardTestCase):
-    """Label/barcode printing must be reachable inside the native app exactly as it is on the web.
+    """Label printing must be reachable in the app exactly as on the web.
 
-    Regression (reported 2026-07-25): every batch/bulk print entry point was wrapped in
-    ``{% if not request.is_mobile_app %}`` on the assumption that the app always prints natively
-    over Bluetooth. That only ever held for the per-lot button on the lot page, and only for one of
-    three print methods -- users on the PDF or System-printer method (the default) lost label
-    printing entirely inside the app. The app intercepts these downloads itself, so the links must
-    render for every user agent.
+    Every bulk entry point was wrapped in ``{% if not request.is_mobile_app %}``, which only ever held
+    for the per-lot Bluetooth button; the app intercepts these downloads itself.
     """
 
     APP_UA = "FishAuctionsApp/1.0 (iOS)"
@@ -507,12 +496,9 @@ class MobileAppLabelPrintingVisibilityTests(StandardTestCase):
         )
 
     def test_users_table_print_links_are_reachable_at_every_width(self):
-        """The users table's 'Print labels' / 'Print only N unprinted labels' are not UA-gated, and
-        the desktop column and the phone Actions dropdown cover complementary widths.
-
-        The ``Lot labels`` column is ``d-md-table-cell d-none`` (md and up only), so on a phone the
-        links have to come from the row's Actions dropdown -- whose items carry ``d-md-none`` (below
-        md only). Neither width may lose a link.
+        """The users table's print links aren't UA-gated, and the desktop column
+        (``d-md-table-cell d-none``) and the phone Actions dropdown (``d-md-none``) cover complementary
+        widths.
         """
         tos = self.in_person_tos
         for i in range(3):
@@ -538,8 +524,7 @@ class MobileAppLabelPrintingVisibilityTests(StandardTestCase):
         self.assertIn(print_all_url, column)
         self.assertIn(unprinted_url, column)
 
-        # Below md: the column is hidden, so the Actions dropdown must carry both, marked d-md-none
-        # so they appear exactly where the column does not.
+        # Below md the column is hidden, so the dropdown carries both.
         dropdown = tos.actions_dropdown_html
         for url in (print_all_url, unprinted_url):
             self.assertIn(url, dropdown)
@@ -547,9 +532,9 @@ class MobileAppLabelPrintingVisibilityTests(StandardTestCase):
             self.assertTrue(item.startswith(" d-md-none"), f"{url} is not shown at phone widths: {item[:80]}")
 
     def test_no_printing_template_still_gates_on_the_app_user_agent(self):
-        """Guard against the gate creeping back in. The only legitimate request.is_mobile_app uses
-        left in printing templates are app-only *additions* (the native Bluetooth per-lot button and
-        the Bluetooth connect card), never a wrapper that hides a web print link."""
+        """No printing template gates on the app User-Agent, except app-only additions (the native Bluetooth
+        button and the connect card).
+        """
         template_dir = Path(__file__).resolve().parent / "templates"
         allowed = {"view_lot_images.html", "printing_extras.html"}
         offenders = []
@@ -567,7 +552,7 @@ class MobileAppLabelPrintingVisibilityTests(StandardTestCase):
 
 
 class ClubBarcodeLabelsPDFTests(StandardTestCase):
-    """ "Download PDF" with nothing filled in used to 404, which reads as a broken feature."""
+    """ "Download PDF" with nothing filled in used to 404."""
 
     def setUp(self):
         super().setUp()
@@ -593,12 +578,8 @@ class ClubBarcodeLabelsPDFTests(StandardTestCase):
 
 
 class ClubMemberMembershipStatusFilterTests(TestCase):
-    """The membership chips on the member list ("Paid club member", "Expiring soon", "Unpaid",
-    "Never paid") must agree with ClubMember.is_paid_member.
-
-    They used to read membership_expiration_date and nothing else, so every member whose dues
-    were recorded only as a last-paid date (CSV imports, older rosters, auction-invoice
-    renewals) came back as unpaid *and* never-paid, and never as paid or expiring.
+    """The membership chips on the member list must agree with ClubMember.is_paid_member, including
+    members whose dues were recorded only as a last-paid date.
     """
 
     def setUp(self):
@@ -669,10 +650,10 @@ class ClubMemberMembershipStatusFilterTests(TestCase):
             club=club, name="Paid This Year", membership_last_paid=datetime.date(2026, 3, 1)
         )
         ClubMember.objects.create(club=club, name="Paid Last Year", membership_last_paid=datetime.date(2025, 3, 1))
-        # Three weeks out from the January 1st those memberships roll over on.
+        # Three weeks before the January 1st these memberships roll over on.
         december = ClubMember.objects.filter(club=club).filter(membership_expiring_soon_q(datetime.date(2026, 12, 20)))
         self.assertEqual(list(december), [paid_this_year])
-        # Mid-year there is no January 1st in the next 30 days, so nothing is expiring.
+        # Mid-year nothing is expiring.
         midyear = ClubMember.objects.filter(club=club).filter(membership_expiring_soon_q(datetime.date(2026, 6, 1)))
         self.assertEqual(list(midyear), [])
 
@@ -743,7 +724,7 @@ class ClubMemberResendCardTests(TestCase):
         )
 
     def test_sending_always_emails_even_for_a_push_subscriber(self):
-        """The admin confirmed an email, so this must not turn into a push notification."""
+        """Resending a card always emails, even for a push subscriber."""
         self.client.login(username="resend_admin", password="testpass")
         with patch("auctions.notifications.user_prefers_push", return_value=True):
             with patch("auctions.tasks.mail.send") as send:
@@ -792,8 +773,7 @@ class ClubMemberResendCardTests(TestCase):
     APPLE_WALLET_TEAM_IDENTIFIER="TEAM123",
 )
 class MembershipEmailWalletButtonTests(TestCase):
-    """Membership emails carry the barcode, so they also carry the wallet buttons — but only for
-    the wallets this site is actually configured for."""
+    """Membership emails carry wallet buttons, but only for the wallets this site is configured for."""
 
     GOOGLE_URL = "https://pay.google.com/gp/v/save/tok"
 
@@ -866,8 +846,7 @@ class MembershipEmailWalletButtonTests(TestCase):
 
 
 class ClubMemberRenewAPITests(TestCase):
-    """The API-key renew action: find the member by email or create them, renew, and hand back the
-    complete member record with the new expiration."""
+    """The API-key renew action: find or create the member, renew, and return the record."""
 
     def setUp(self):
         self.owner = User.objects.create_user(username="renew_api_owner", password="testpass", email="ra@example.com")
@@ -1019,11 +998,9 @@ class ClubMemberRenewAPITests(TestCase):
 
 
 class ClubManagedMergeKeepsMembershipDatesTests(TestCase):
-    """Merging duplicate participants in a club-managed auction must not throw away the
-    membership the surviving record is entitled to.
-
-    The duplicate is frequently the row that was renewed, and dropping its dates left the member
-    reading as unpaid everywhere (the member list, the wallet pass, the membership filters)."""
+    """Merging duplicate participants in a club-managed auction keeps the membership dates, which are
+    often on the duplicate.
+    """
 
     def setUp(self):
         self.club = Club.objects.create(
@@ -1092,10 +1069,8 @@ class ClubManagedMergeKeepsMembershipDatesTests(TestCase):
 
 
 class CloseModalResponseEscapingTests(TestCase):
-    """close_modal_response writes an inline <script>, so anything it interpolates must be inert.
-
-    json.dumps alone is not enough: it leaves "<" untouched, so a member name containing
-    "</script>" would end the tag early and run whatever followed as markup.
+    """close_modal_response writes an inline <script>, so interpolated values must be inert: json.dumps
+    leaves "<" alone, so a name containing "</script>" would end the tag.
     """
 
     def test_a_toast_cannot_break_out_of_the_script_tag(self):
@@ -1117,11 +1092,7 @@ class CloseModalResponseEscapingTests(TestCase):
         self.assertIn("\\u003C", body)
 
     def test_a_toast_is_html_escaped_for_the_toast_plugin(self):
-        """The plugin concatenates the title into markup, so tags must arrive already escaped.
-
-        The title is escaped twice over: HTML-escaped for the plugin, then JSON-escaped for the
-        script tag, so assert on the title the browser hands the plugin rather than on the wire.
-        """
+        """A toast title is HTML-escaped for the plugin and then JSON-escaped for the script tag."""
         from auctions.views import close_modal_response
 
         response = close_modal_response(toast="<b>Bob</b> & Sons has no email address on file.")
@@ -1138,7 +1109,7 @@ class CloseModalResponseEscapingTests(TestCase):
 
 
 class ClubMemberToastEscapingTests(TestCase):
-    """The resend-card view puts a member-supplied name in a toast — the real path to the sink."""
+    """The resend-card view puts a member-supplied name in a toast."""
 
     def setUp(self):
         self.club = Club.objects.create(name="Toast Escaping Club", show_member_barcode=True)
@@ -1156,13 +1127,10 @@ class ClubMemberToastEscapingTests(TestCase):
 
 
 class LotOwnershipWithUnlinkedTosTests(StandardTestCase):
-    """A seller whose lot has user=None must still be able to manage that lot.
+    """A seller whose lot has user=None must still be able to manage it.
 
-    Lots added through an auction copy their owner from AuctionTOS.user, which is null whenever
-    the TOS wasn't attached to an account when the lot was saved (an admin-imported bidder list,
-    or a record orphaned by the email-change guard in AuctionTOS.save()). Those lots showed up on
-    the seller's invoice and selling dashboard but every edit was refused with "Only the lot
-    creator can edit a lot".
+    Lots copy their owner from AuctionTOS.user, which is null for imported bidders, and every edit was
+    refused with "Only the lot creator can edit a lot".
     """
 
     def setUp(self):
@@ -1183,7 +1151,7 @@ class LotOwnershipWithUnlinkedTosTests(StandardTestCase):
         self.open_location = PickupLocation.objects.create(
             name="open location", auction=self.open_auction, pickup_time=the_future
         )
-        # An admin-imported bidder: the email is the seller's, but nothing links it to their account
+        # An imported bidder: the seller's email, but nothing links it to their account.
         self.unlinked_tos = AuctionTOS.objects.create(
             auction=self.open_auction,
             pickup_location=self.open_location,
@@ -1220,7 +1188,7 @@ class LotOwnershipWithUnlinkedTosTests(StandardTestCase):
         assert lot.is_owned_by(self.seller) is False
 
     def test_seller_can_open_the_edit_page(self):
-        # LotValidation redirects anyone without contact info, ownership aside
+        # LotValidation redirects anyone without contact info.
         self.seller.first_name = "Un"
         self.seller.last_name = "Linked"
         self.seller.save()
@@ -1291,11 +1259,8 @@ class LotOwnershipWithUnlinkedTosTests(StandardTestCase):
 
 
 class ParticipantDropdownMirrorsTheClubPageTests(StandardTestCase):
-    """Managing a member from the auction is supposed to be the same job as from /clubs/x/admin/.
-
-    It was not: the participant row's Actions menu offered Renew, Set expiration date and
-    Membership number, and stopped there -- so an admin working the users page for a club-managed
-    auction could not resend somebody's card or deactivate them without going to find the club.
+    """The participant Actions menu offers the same membership actions as the club page, including
+    resending a card and deactivating.
     """
 
     def setUp(self):
@@ -1330,7 +1295,7 @@ class ParticipantDropdownMirrorsTheClubPageTests(StandardTestCase):
         html = self.tos.actions_dropdown_html
         self.assertIn(reverse("club_member_reactivate", kwargs={"pk": self.member.pk}), html)
         self.assertNotIn("Deactivate club member", html)
-        # No card to resend for somebody who is not a member; the confirm view 404s on it too.
+        # No card to resend for a non-member; the confirm view 404s too.
         self.assertNotIn("Resend membership card", html)
 
     def test_a_club_with_no_cards_is_offered_neither_card_action(self):

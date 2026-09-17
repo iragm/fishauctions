@@ -3,26 +3,22 @@
     manage.py split_speaker_talks --dry-run --limit 20    # look at it first
     manage.py split_speaker_talks                          # write it back
 
-The NEC WordPress export flattened each speaker's bulleted talk list into one unbroken
-string, and there is nothing left to split on -- no delimiter, no markup, no line breaks:
+The NEC WordPress export flattened each speaker's bulleted talk list into one unbroken string with
+nothing left to split on -- no delimiter, no markup, no line breaks:
 
     Killifish of Madagascar Filtration: Making a Debruyn Filter and a Working
     Mattenfilter Demo (Workshop) Seahorses, Pipefish, and Seadragons This Is the Golden
     Age of Aquarium Fish Tetras ...
 
-The live site, its WordPress REST API and the 2023 Wayback snapshot all serve exactly this
-same flattened text, so re-fetching recovers nothing -- the markup was lost upstream, before
-this data ever reached northeastcouncil.org.  Splitting on capital letters doesn't work
-either: titles contain internal capitals ("This Is the Golden Age of Aquarium Fish") and
-some start lowercase.
+The live site, the WordPress REST API and the 2023 Wayback snapshot all serve that same flattened
+text, so re-fetching recovers nothing. Capital letters don't split it either: titles contain
+internal capitals ("This Is the Golden Age of Aquarium Fish") and some start lowercase.
 
-So this asks the model where the boundaries are, and writes the titles back into the same
-`programs` field one per line.  No schema change, and the speaker panel already renders that
-field with `white-space: pre-line`, so the result shows up as a list.
+So this asks the model where the boundaries are and writes the titles back into `programs`, one per
+line; the speaker panel renders that field with `white-space: pre-line`.
 
-Safety: the prompt forbids inventing, reordering or rewording, and every reply is checked --
-if the split doesn't put the original characters back together, it's rejected and the
-speaker is left exactly as they were.  Run `--dry-run` first.
+The prompt forbids inventing, reordering or rewording, and every reply is checked: a split that
+doesn't rejoin into the original is rejected and the speaker left alone. Run `--dry-run` first.
 """
 
 import json

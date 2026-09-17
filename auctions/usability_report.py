@@ -1,31 +1,11 @@
-"""The usability measurements, in one place a dashboard can read.
+"""The usability measurements for the dashboard.
 
-USABILITY.md sets out three questions and says which source answers each.  This module is that
-mapping in code:
+* Reach: ``PageView`` grouped by route, via :func:`route_name` and Django's resolver.
+* Failure: ``FormFailure`` (:mod:`auctions.friction_models`), grouped by form.
+* Adoption: :mod:`auctions.field_adoption`.
+* :func:`buyer_funnel`: where buyers stop, from existing rows.
 
-**Reach** -- did anybody open this page?  ``PageView``, grouped by *route* rather than by URL.  The
-raw column holds ``/auctions/springfield-2026/edit/``; a hundred auctions make a hundred rows of one
-view each, and the question "does anybody open the auction settings page" cannot be asked of it at
-all.  :func:`route_name` folds a path back onto the URL pattern that served it, using Django's own
-resolver -- so the classifier cannot drift from ``urls.py``, which is the failure mode a
-hand-written one has.
-
-**Failure** -- did they submit it and get bounced?  ``FormFailure``
-(:mod:`auctions.friction_models`), grouped by form.
-
-**Adoption** -- did anybody change this setting, ever?  :mod:`auctions.field_adoption`.
-
-:func:`buyer_funnel` is the fourth thing here and the only one about buyers rather than organizers.
-It needs no model of its own: every stage of "arrived, looked at a lot, joined, bid, won, opened the
-invoice, paid" already has a row, and the beacon now records the arrivals of people who never signed
-in at all.
-
-The reach numbers used to carry two caveats, both of them about the beacon rather than about this
-module: it was called by 38 templates out of 247, so a page that never opted in read as *absent*
-rather than *unvisited*, and it fired behind a two-second timer, so anything abandoned faster
-recorded nothing.  Both biases ran toward pages people did **not** struggle with, which is the
-opposite of what a usability pass wants.  ``base_page_view.html`` now records one view on every page
-that extends ``base.html``, with no timer, so neither is true and neither is shown.
+``base_page_view.html`` records a view on every page extending ``base.html``, with no timer.
 """
 
 from __future__ import annotations
@@ -42,24 +22,16 @@ from django.utils import timezone
 
 logger = logging.getLogger(__name__)
 
-# A path nobody's URLconf claims. Kept as one bucket rather than dropped: a lot of these means the
-# beacon is posting something the resolver does not recognise, which is a bug in the beacon.
+# Paths no URLconf claims; many of these means a beacon bug.
 UNROUTED = "(no matching url)"
-# Distinct paths to classify in one report. Every lot page is its own path, so the tail is
-# unbounded; the head is what a reach question is about.
+# Distinct paths to classify per report.
 MAX_PATHS = 5000
 
 
 @functools.lru_cache(maxsize=4096)
 def route_name(path: str) -> str:
-    """The URL pattern name that serves ``path``, or :data:`UNROUTED`.
-
-    Django's resolver rather than a pattern list of our own: the point of this is that a route
-    renamed in ``urls.py`` cannot leave a stale classifier behind, and the only way to have that
-    property is to ask the URLconf.
-
-    Cached because a report classifies thousands of paths that fall into a few dozen routes, and
-    ``resolve()`` walks the URLconf every time.
+    """The URL pattern name serving ``path``, or :data:`UNROUTED`. Uses Django's resolver so it can't
+    drift from ``urls.py``; cached.
     """
     if not path or not path.startswith("/"):
         return UNROUTED
@@ -71,12 +43,7 @@ def route_name(path: str) -> str:
 
 
 def reach_by_route(days=30, limit=60):
-    """``[{route, views, pages}]`` -- how much traffic each URL pattern saw, biggest first.
-
-    ``pages`` is how many distinct paths folded into that route: one for a singleton page like
-    ``/account/``, and one per auction for the settings page, which is the number that says whether
-    a route is reached by many organizers or by one enthusiastic one.
-    """
+    """``[{route, views, pages}]``, biggest first. ``pages`` counts distinct paths per route."""
     from auctions.models import PageView
 
     since = timezone.now() - timedelta(days=days)
@@ -100,16 +67,8 @@ def reach_by_route(days=30, limit=60):
 def friction_by_form(days=30, limit=40):
     """``[{form_name, bounces, abandoned, people, unresolved, fields, ...}]``, worst first.
 
-    Ordered by **abandoned plus unresolved** rather than by volume: a form that bounces a thousand
-    times and is finished a thousand times is a strict validator and patient users, and a form
-    fifty people edited and walked away from is what this campaign is looking for.
-
-    Abandonments are counted separately from rejections because on this site they are the bigger
-    number by construction -- nearly every field is optional and most of the rest are filled in on
-    save, so the server refusing a submission is the unusual case. A form with rejections and no
-    abandonments is one people can see how to fill in and keep getting wrong; one with abandonments
-    and no rejections is one they cannot see how to fill in at all, and no validator will ever say
-    so.
+    Ordered by abandoned plus unresolved, not volume. Abandonments are counted separately because most
+    fields are optional, so walking away is more common than rejection.
     """
     from auctions.models import FormFailure
 
@@ -143,13 +102,7 @@ def friction_by_form(days=30, limit=40):
 
 
 def abandoned_durations(since):
-    """``{form_name: median seconds spent before leaving}``.
-
-    Median rather than the ``Avg`` this used to be. The distribution has a tail made entirely of
-    tabs somebody left open over lunch, and one of those moves a mean by minutes -- so a form
-    people bailed out of in fifteen seconds reads as one they wrestled with for ten minutes, which
-    is the opposite diagnosis.
-    """
+    """``{form_name: median seconds before leaving}``. Median, since tabs left open skew a mean."""
     from auctions.models import FormFailure
 
     seconds: dict[str, list[int]] = {}
@@ -162,16 +115,10 @@ def abandoned_durations(since):
 
 
 def worst_fields(since, limit=4, kind="rejected"):
-    """``{form_name: [{field, code, count}, ...]}`` -- which field, and why, per form.
+    """``{form_name: [{field, code, count}, ...]}``: which fields fail, and why.
 
-    For ``kind="abandoned"`` the "why" is always ``edited``: those rows carry the fields somebody
-    changed and did not save, which is the closest thing there is to "the field they gave up on".
-    It is not proof -- the field they could not work out may be one they never touched -- but a
-    field that is edited and unsaved far more often than the others on the same form is the first
-    place to look.
-
-    One pass over the window in Python. ``field_errors`` is JSON and the counting is per key inside
-    it, which is not a GROUP BY any database here can do without an expression index.
+    For ``kind="abandoned"`` the code is ``edited``: fields changed and not saved. Counted in Python
+    because ``field_errors`` is JSON.
     """
     from auctions.models import FormFailure
 
@@ -194,31 +141,18 @@ def worst_fields(since, limit=4, kind="rejected"):
     }
 
 
-# One funnel per auction, over that auction's whole life. The window picks which auctions are worth
-# looking at; it deliberately does not cut the stages, because people arrive weeks before they pay
-# and a funnel sliced by date reports that as a drop-off.
+# Auctions shown. Stages aren't date-cut, since people arrive weeks before paying.
 FUNNEL_AUCTIONS = 8
-# Referrers to keep per auction. The tail of this is one visit each from a hundred link shorteners.
+# Referrers kept per auction.
 FUNNEL_REFERRERS = 4
-# How far before an auction opens its page views can start. Lots are listed and links are shared
-# ahead of the start date, so the floor is the earliest auction on the page minus this. It exists to
-# bound the scan, not to describe behaviour -- see the comment on the arrived query.
+# How far before an auction's start its page views are scanned; bounds the query.
 FUNNEL_LOOKBACK_DAYS = 90
 
 
 def _actor():
-    """One person, whether or not they have an account.
+    """One person, with or without an account: ``u<user_id>`` or the session key.
 
-    ``PageView`` stores a signed-in view as ``user=<id>, session_id=NULL`` and an anonymous one as
-    ``user=NULL, session_id=<key>`` (``views/ajax.py``), so neither column alone counts people. The
-    ``u`` prefix keeps a user id from colliding with a session key that happens to be digits.
-
-    Somebody who browsed anonymously and then signed in is two actors here. That is the honest
-    answer for a funnel: the site cannot tell that those two were the same person either.
-
-    ``Case`` rather than ``Coalesce(Concat(...), session_id)``: Django's ``Concat`` folds a NULL
-    argument to an empty string, so every anonymous row came out as the same ``"u"`` and a whole
-    auction's anonymous visitors counted as one person.
+    Browsing anonymously then signing in counts as two. ``Case`` because ``Concat`` turns NULL into "".
     """
     return Case(
         When(user_id__isnull=False, then=Concat(Value("u"), Cast("user_id", CharField()))),
@@ -232,31 +166,14 @@ def _by_auction(rows, key):
 
 
 def buyer_funnel(days=180, limit=FUNNEL_AUCTIONS):
-    """``[{auction, stages: [{stage, people}], referrers: [...]}]`` -- where buyers stop.
+    """``[{auction, stages: [{stage, people}], referrers: [...]}]``: where buyers stop.
 
-    Seven queries for every auction on the page rather than seven per auction: each stage is one
-    ``GROUP BY`` over the whole set.
+    One GROUP BY per stage across all shown auctions. Bid is ``None`` for in-person auctions. Opened an
+    invoice can be lower than paid. Joined includes organizer-added rows.
 
-    **Bid** is ``None`` rather than zero for an in-person auction, which is about 95% of them: the
-    bidding happens in a room, and the first row it leaves is the winner on the lot. A zero there
-    would read as nobody bidding.
-
-    **Opened an invoice** is a flag the invoice page sets, so it is low by construction for an
-    auction whose invoices were printed and handed over at the door. It is the one stage on this
-    list that can be smaller than the one after it.
-
-    ``joined`` counts ``AuctionTOS`` rows, which includes the ones an organizer typed in at the
-    door. That is a real join -- somebody turned up -- but it is not a self-service one, which is
-    why the arrival stages above it can legitimately be smaller than it.
-
-    The two ``PageView`` queries carry a date floor and it is not cosmetic. They match an auction as
-    ``pageview.auction_id OR lot.auction_id`` -- an OR across a join, which MariaDB cannot serve
-    from one index -- so unbounded, each is a full scan of the largest and least-purged table on the
-    site. A full scan of ``PageView`` is the exact shape behind a past production incident, and this
-    page is one an admin opens casually. ``date_start`` is indexed, and no view of an auction can
-    predate the auction by more than :data:`FUNNEL_LOOKBACK_DAYS`. The OR itself is only there for
-    rows written before 2026-09-09, which ``tasks.backfill_page_view_auctions`` is working through
-    -- see ``Auction.page_views``.
+    The PageView queries need the date floor: the ``auction_id OR lot.auction_id`` match can't use one
+    index, so unbounded it full-scans PageView. The OR is only for rows before 2026-09-09 (see
+    ``tasks.backfill_page_view_auctions``).
     """
     from auctions.models import Auction, AuctionTOS, Bid, Invoice, Lot, PageView
 
@@ -333,15 +250,8 @@ def buyer_funnel(days=180, limit=FUNNEL_AUCTIONS):
 
 
 def funnel_referrers(auction_ids, since, limit=FUNNEL_REFERRERS):
-    """``{auction_pk: [{referrer, views}]}`` -- how the people who arrived got there.
-
-    ``referrer`` is stored already cleaned (``views/ajax.py:clean_referrer`` folds every Facebook
-    and Google host onto one name), so this is a plain ``GROUP BY``. Our own domain is excluded:
-    a link from one page of this site to another is navigation, not arrival.
-
-    ``since`` has no default on purpose: this is the same OR-across-a-join as the arrival query, and
-    the only thing standing between it and a full scan of ``PageView`` is that bound. A caller that
-    does not know its floor has not thought about the size of this table.
+    """``{auction_pk: [{referrer, views}]}``, excluding our own domain. ``since`` is required: the same
+    OR query would otherwise full-scan PageView.
     """
     from django.contrib.sites.models import Site
 

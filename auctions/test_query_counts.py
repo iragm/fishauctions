@@ -1,14 +1,10 @@
-"""Query-count guards: the N+1s that were fixed, and stay fixed.
+"""Query-count guards for the N+1s that were fixed.
 
-Every change that removed a per-row query has a test here, because a ``select_related`` or a
-``@cached_property`` is invisible: delete it and every test still passes, the page just costs ten
-times as much. That is the same failure mode as ``SuiteStaysFastTests`` in
-``auctions/tests.py``, and this file is the same answer to it.
+A ``select_related`` or ``@cached_property`` is invisible: delete it and every test still passes.
 
-**These assert growth, not totals.** A page's fixed cost (session, userdata, the nav, feature
-flags) moves whenever anything else changes and is nobody's bug; what must not move is the cost of
-*one more row*. So each test renders the same page against two different row counts and asserts the
-difference. A test that fails here names a real N+1 -- find what the new row touched.
+These assert growth, not totals: a page's fixed cost moves whenever anything else changes, but the
+cost of one more row must not. Each test renders the same page at two row counts and asserts the
+difference, so a failure here names a real N+1.
 """
 
 import datetime
@@ -30,12 +26,9 @@ class QueryGrowthMixin:
     def queries_per_extra_row(self, url, params, make_rows, extra=4):
         """Return (queries added, rows added) for `extra` more rows on `url`.
 
-        `extra` rows are created *before* the first measurement as well, so that anything the page
-        pays once for having any rows at all -- every prefetch_related is one query whether the page
-        holds one row or fifty -- is already paid in the baseline and does not read as growth.
-
-        The page is also fetched once before either measurement, so anything cached per process
-        (the template loader, the site row, a form's choices) is warm for both.
+        `extra` rows exist before the first measurement too, so anything paid once for having any rows
+        (every prefetch_related) is already in the baseline. The page is fetched once beforehand so
+        per-process caches are warm for both.
         """
         client = self.client
         make_rows(extra)
@@ -59,11 +52,10 @@ class QueryGrowthMixin:
 
 
 class AuctionUsersTableQueryCountTests(QueryGrowthMixin, StandardTestCase):
-    """The users table is what an auction organiser runs the auction from, at 100 rows a page.
+    """The users table an organiser runs an auction from, at 100 rows a page.
 
-    Every row shows "N lots sold", "N lots won", an invoice link and a labels menu, and each of
-    those was its own query -- 292 for 25 people. The counts are subquery annotations now and the
-    invoices are prefetched, so a row costs nothing.
+    Every row shows lots sold, lots won, an invoice link and a labels menu, once 292 queries for 25
+    people; the counts are annotations now and the invoices are prefetched.
     """
 
     def setUp(self):
@@ -82,7 +74,7 @@ class AuctionUsersTableQueryCountTests(QueryGrowthMixin, StandardTestCase):
                 pickup_location=self.location,
                 bidder_number=str(self._next_bidder),
             )
-            # something in every column of the row: a lot to sell, a lot won, an invoice
+            # Something in every column: a lot to sell, a lot won, an invoice.
             Lot.objects.create(
                 lot_name=f"lot for {tos.bidder_number}",
                 auction=self.online_auction,
@@ -106,11 +98,10 @@ class AuctionUsersTableQueryCountTests(QueryGrowthMixin, StandardTestCase):
 
 
 class AuctionLotAdminTableQueryCountTests(QueryGrowthMixin, StandardTestCase):
-    """The lot table an auction is run from -- hundreds of rows, each with two people on it.
+    """The lot table an auction is run from, with two people on every row.
 
-    Every row prints the seller and the winner (each of which reads the auction and the person's
-    userdata to build a display name), links to both of their invoices, and asks whether the lot
-    has an image.
+    Each row prints the seller and winner (both reading the auction and their userdata), links to both
+    invoices, and asks whether the lot has an image.
     """
 
     def setUp(self):
@@ -140,10 +131,9 @@ class AuctionLotAdminTableQueryCountTests(QueryGrowthMixin, StandardTestCase):
 
 
 class LotDetailQueryCountTests(StandardTestCase):
-    """The lot page fetched the lot three times, and each copy re-derived every cached property.
+    """The lot page fetched the lot three times, re-deriving every cached property.
 
-    ``get_object`` is memoized now and the queryset select_relates what the template renders, so
-    the page cost stops depending on how much has happened to the lot.
+    ``get_object`` is memoized and the queryset select_relates what the template renders.
     """
 
     def setUp(self):
@@ -184,12 +174,8 @@ class LotDetailQueryCountTests(StandardTestCase):
 
 
 class InvoiceQueryCountTests(StandardTestCase):
-    """The invoice page derived its whole number tree once per top-level read.
-
-    ``net`` reads ``subtotal`` reads ``total_sold`` and ``total_bought``; ``manual_adjustment_amount``
-    reads ``subtotal`` again; ``tax`` re-aggregates the bought lots. Nothing was cached and the view
-    fetched the invoice five separate times, so one invoice cost 189 queries -- 54 of them the same
-    ``SUM`` over four adjustment rows.
+    """The invoice page derived its whole number tree once per read: 189 queries for one invoice, 54 of
+    them the same ``SUM`` over four adjustment rows.
     """
 
     def setUp(self):
@@ -241,7 +227,7 @@ class InvoiceQueryCountTests(StandardTestCase):
         self.assertNotEqual(invoice.flat_value_adjustments, before)
 
     def test_refresh_from_db_drops_cached_values(self):
-        """Otherwise refresh_from_db returns a mix of reloaded columns and stale derived numbers."""
+        """refresh_from_db drops cached values, or it would mix reloaded columns with stale derived numbers."""
         lot = Lot.objects.get(pk=self.unsoldLot.pk)
         self.assertEqual(lot.winner_as_str, "")
         Lot.objects.filter(pk=lot.pk).update(auctiontos_winner=self.tosB, winning_price=5)
@@ -272,7 +258,7 @@ class SellerAndFeedbackQueryCountTests(QueryGrowthMixin, StandardTestCase):
             )
 
     def test_selling_does_not_query_per_lot(self):
-        """The Views column here is a COUNT on the biggest table on the site -- annotated, not per row."""
+        """The Views column is a COUNT on the biggest table on the site, annotated rather than per row."""
         added, rows = self.queries_per_extra_row(reverse("selling"), {}, self._make_lots)
         self.assertEqual(added, 0, f"{added} queries for {rows} more lots on /selling/")
 
@@ -293,12 +279,10 @@ class SellerAndFeedbackQueryCountTests(QueryGrowthMixin, StandardTestCase):
 
 
 class LongLivedInstanceTests(StandardTestCase):
-    """The one place on the site that holds a model instance for longer than a request.
+    """The one place that holds a model instance longer than a request.
 
-    A view is built per request, so its caches die with it. ``LotConsumer`` is not: it fetches its
-    ``Lot`` in ``connect()`` and keeps that instance for as long as the page is open, on a lot that
-    may be bid on the whole time. Everything derived from the lot is cached now, so the connection
-    has to drop that cache before it reads any of it.
+    ``LotConsumer`` fetches its ``Lot`` in ``connect()`` and keeps it while the page is open, so it has
+    to drop the cache before reading anything derived.
     """
 
     def test_a_chat_message_is_filed_at_the_current_price(self):
@@ -323,12 +307,12 @@ class LongLivedInstanceTests(StandardTestCase):
         consumer.user = self.user_with_no_lots
         consumer.room_group_name = f"lot_{lot.pk}"
         consumer.user_room_name = f"private_user_{self.user_with_no_lots.pk}_lot_{lot.pk}"
-        # one bidder, so the price is still the reserve -- and connect() plus an earlier chat
-        # message would have left exactly this cached on the instance
+        # One bidder, so the price is the reserve, and connect() plus a chat message would have
+        # cached exactly this.
         Bid.objects.create(user=self.userB, lot_number=Lot.objects.get(pk=lot.pk), amount=10)
         self.assertEqual(lot.high_bid, 2)
 
-        # a second bidder moves the price: a dollar over the second-highest bid (whole-dollar auction)
+        # A second bidder moves the price a dollar over the second-highest bid.
         Bid.objects.create(user=self.user_who_does_not_join, lot_number=Lot.objects.get(pk=lot.pk), amount=40)
         consumer.receive(json.dumps({"message": "still here?"}))
 
@@ -345,9 +329,8 @@ class LongLivedInstanceTests(StandardTestCase):
 class CachedPropertyWiringTests(StandardTestCase):
     """A model with a ``cached_property`` must be able to drop it.
 
-    Adding ``@cached_property`` to a model that is not a ``CachedPropertiesMixin`` compiles, passes
-    every test, and serves a value from before the row's own save for as long as the instance
-    lives. Nothing else notices, so this does.
+    Adding one to a model that isn't a ``CachedPropertiesMixin`` compiles, passes, and serves a stale
+    value for as long as the instance lives.
     """
 
     def test_invalidates_cache_on_names_real_foreign_keys(self):
@@ -402,17 +385,14 @@ class CachedPropertyWiringTests(StandardTestCase):
 
 
 class LotListQueryCountTests(QueryGrowthMixin, StandardTestCase):
-    """The lot list is the most-viewed page on the site and renders ~50 lots at a time.
+    """The lot list is the most-viewed page and renders ~50 lots at a time.
 
-    Before this was measured, one more lot on the page cost about ten more queries: the auction,
-    the category, the seller, the winner and that winner's userdata, the shipping locations, the
-    thumbnail (twice), and three or four passes over the lot's bids. All but the bids are now paid
-    once for the whole page.
+    One more lot used to cost about ten queries: the auction, category, seller, winner and their
+    userdata, shipping locations, the thumbnail twice, and passes over the bids.
     """
 
-    # One per row is what is left, and it is `Lot.auto_image`: a lot with no picture of its own
-    # borrows one from another lot with the same name, and "the same name" is per row -- there is
-    # nothing to prefetch. A lot that has its own image costs nothing here.
+    # The one left is `Lot.auto_image`: a lot with no picture borrows one from another lot with the
+    # same name, which is per row and can't be prefetched.
     MAX_QUERIES_PER_LOT = 1
 
     def setUp(self):
@@ -435,8 +415,7 @@ class LotListQueryCountTests(QueryGrowthMixin, StandardTestCase):
                 date_end=the_future,
                 active=True,
             )
-            # A bid, a winner and a userdata behind the winner: the row has something to render in
-            # every column, so a missing select_related shows up as growth rather than as nothing.
+            # A bid, a winner and their userdata, so every column has something to render.
             Bid.objects.create(user=self.user_with_no_lots, lot_number=lot, amount=5, was_high_bid=True)
 
     def test_tile_view_does_not_query_per_lot(self):
@@ -467,16 +446,14 @@ class LotListQueryCountTests(QueryGrowthMixin, StandardTestCase):
 class LotCachedPropertyTests(StandardTestCase):
     """``Lot``'s read properties are cached on the instance, and a write drops the cache.
 
-    The caching is the optimization; the invalidation is what keeps it correct, and it is the half
-    that breaks silently -- a stale ``high_bidder`` after a bid is a wrong page, not an error.
+    The invalidation is the half that breaks silently: a stale ``high_bidder`` is a wrong page.
     """
 
     def _open_lot(self, name, reserve_price=2):
         """A lot that is still running.
 
-        Lot.save() takes date_end from the auction for an online auction, and this fixture's online
-        auction ended two days ago -- so the end time has to be forced past the save, or every bid
-        below is filtered out for arriving after the lot ended.
+        Lot.save() takes date_end from the auction, whose fixture ended two days ago, so the end time is
+        forced past the save or every bid is filtered out.
         """
         lot = Lot.objects.create(
             lot_name=name,
@@ -512,7 +489,7 @@ class LotCachedPropertyTests(StandardTestCase):
         self.assertEqual(len(image_queries), 1, "lot.images should be one query however many times it is read")
 
     def test_thumbnail_is_the_primary_image(self):
-        """The one behaviour the images rewrite had to keep: primary first, whatever the pk order."""
+        """The thumbnail is the primary image, whatever the pk order."""
         LotImage.objects.create(lot_number=self.unsoldLot, url="https://example.com/other.png")
         primary = LotImage.objects.create(
             lot_number=self.unsoldLot, url="https://example.com/primary.png", is_primary=True
@@ -531,10 +508,8 @@ class LotCachedPropertyTests(StandardTestCase):
         self.assertEqual(lot.winner_as_str, str(self.tosB))
 
     def test_an_unsaved_lot_answers_rather_than_raising(self):
-        """bulk-add and the offline sync both build Lots before saving them.
-
-        Both bids and images read a reverse relation now, and a reverse relation on a pk-less
-        instance raises ValueError -- which a template re-raises rather than swallowing.
+        """An unsaved lot answers rather than raising: bulk-add and offline sync build Lots before saving, and
+        a reverse relation on a pk-less instance raises ValueError.
         """
         lot = Lot(lot_name="not saved yet", reserve_price=3)
         self.assertEqual(lot.bids, [])
@@ -553,23 +528,19 @@ class LotCachedPropertyTests(StandardTestCase):
         self.assertIn("images", lot.__dict__)
 
     def test_saving_a_bid_drops_the_lots_cache(self):
-        """What ``bid_on_lot`` relies on: it reads high_bidder, writes a Bid, and reads it again.
-
-        No ``Lot.save()`` happens in between, so ``Bid.save()`` is what has to drop the cache.
-        Without this, a proxy bid is judged against the bid before it and every bidder after the
-        first is told they placed the opening bid.
+        """Saving a Bid drops the lot's cache, which ``bid_on_lot`` relies on: without it a proxy bid is
+        judged against the bid before it.
         """
         lot = self._open_lot("open lot")
         self.assertFalse(lot.high_bidder)
         Bid.objects.create(user=self.user_with_no_lots, lot_number=lot, amount=50, was_high_bid=True)
         self.assertEqual(lot.high_bidder, self.user_with_no_lots)
 
-    # The end-to-end version of the above is test_bidding.DecimalBidValidationTests, which places
-    # two bids on one Lot instance: without Bid.save() invalidating, the second bidder is told they
-    # placed the opening bid and the increment is checked against nothing.
+    # The end-to-end version is test_bidding.DecimalBidValidationTests, which places two bids on one
+    # Lot instance.
 
     def test_bids_keeps_only_each_users_latest_bid(self):
-        """The dedupe rule Lot.bids used to express as a correlated subquery, now applied in Python."""
+        """Lot.bids keeps only each user's latest bid, applied in Python rather than as a subquery."""
         lot = self._open_lot("dedupe lot", reserve_price=5)
         early = Bid.objects.create(user=self.user_with_no_lots, lot_number=lot, amount=9)
         Bid.objects.filter(pk=early.pk).update(

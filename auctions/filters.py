@@ -1,11 +1,8 @@
-"""The search and filter boxes above every table: what a query in one of them means.
+"""The search and filter boxes above every table.
 
-One ``django_filters`` class per table, paired with the ``django_tables2`` class of the same subject
-in :mod:`auctions.tables`. They are the *admin's* filters and deliberately search more than the
-public API does -- :class:`LotAdminFilter` looks at seller name, username and bidder number, which
-is exactly why the club API has its own narrower list (``views.LOT_GENERIC_FILTER_COLUMNS``) rather
-than reusing this one. Copying this list out to a public caller would let it confirm a member's name
-one character at a time.
+One ``django_filters`` class per table, paired with :mod:`auctions.tables`. These are admin filters
+and search more than the public API: :class:`LotAdminFilter` searches seller names, which is why
+the club API has its own narrower list.
 """
 
 import datetime
@@ -92,8 +89,7 @@ class AuctionFilter(django_filters.FilterSet):
             )
 
 
-# Nicknames / short-form equivalents used by both AuctionTOSFilter and ClubMemberFilter to surface
-# rhyming-name matches (e.g. "Bob Smith" also returns "Robert Smith").
+# Nickname groups, so "Bob Smith" also finds "Robert Smith".
 RHYMING_NAMES = [
     ["andy", "andrew", "drew"],
     ["alex", "alexander", "lex", "lexi"],
@@ -191,14 +187,8 @@ RHYMING_NAMES = [
 
 
 def rhyming_name_q(value, name_field="name"):
-    """Return a Q object that matches any rhyming/nickname variant for the first word in *value*.
-
-    Given a search string such as "Bob Smith", returns a Q that matches any AuctionTOS/ClubMember
-    whose *name_field* starts with a nickname equivalent (e.g. "Robert Smith", "Bobby Smith") so
-    that searching for a nickname surfaces records stored under the formal name and vice-versa.
-
-    If *value* contains a second word it is treated as a last-name prefix and appended to every
-    candidate first name so the match stays specific (e.g. "Rob Smith" won't match "Bobby Jones").
+    """A Q matching nickname variants of the first word of *value* on *name_field*. A second word narrows
+    by last-name prefix.
     """
     parts = value.lower().split()
     first_name = parts[0] if parts else ""
@@ -212,7 +202,7 @@ def rhyming_name_q(value, name_field="name"):
 
 
 class AuctionTOSFilter(django_filters.FilterSet):
-    """This filter is used on any admin views that allow adding users to an auction and on lot creation/winner screens"""
+    """For admin views that add users to an auction, and lot creation and winner screens."""
 
     query = django_filters.CharFilter(
         method="auctiontos_search",
@@ -239,9 +229,8 @@ class AuctionTOSFilter(django_filters.FilterSet):
         return result
 
     def generic(self, qs, value, match_names_only=False):
-        """Pass this a queryset and a value (string) to filter, and it'll return a suitable queryset
-        pass match_names_only=True to filter only name information.  This will give an exact name match (Bob Smith) OR a rhyming name match (Robert Smith)
-        This is getting reused in a couple places now, just import it with `from .filters import AuctionTOSFilter` and then use `AuctionTOSFilter.generic(qs, filter)`
+        """Filter *qs* by *value*. ``match_names_only=True`` matches names only, exactly or by nickname.
+        Reused as ``AuctionTOSFilter.generic(qs, value)``.
         """
 
         # sketchy users
@@ -270,8 +259,7 @@ class AuctionTOSFilter(django_filters.FilterSet):
             "duplicate": {"possible_duplicate__isnull": False},
             "not checked in": {"checked_in__isnull": True},
             "checked in": {"checked_in__isnull": False},
-            # is_club_member marks users who get the club's alternate (paid-member) split; on a
-            # club-managed auction with a membership system this is the "paid club member" flag.
+            # Members who get the club's alternate (paid-member) split.
             "club member": {"is_club_member": True},
             "unpaid": {"is_club_member": False},
         }
@@ -309,10 +297,7 @@ class AuctionTOSFilter(django_filters.FilterSet):
         normal_filter = Q(
             Q(name__icontains=value)
             | Q(email=value)
-            |
-            # Q(phone_number__icontains=value) |
-            #   Q(address__icontains=value) |
-            Q(bidder_number=value)
+            | Q(bidder_number=value)
             | Q(user__username=value)
             | Q(auctiontos__payments__receipt_number__iexact=value)
         )
@@ -324,7 +309,7 @@ class AuctionTOSFilter(django_filters.FilterSet):
 
 
 class LotAdminFilter(django_filters.FilterSet):
-    """This filter is used on any admin views that manage lots (really just the one...)"""
+    """For the lot admin view."""
 
     query = django_filters.CharFilter(
         method="lot_search",
@@ -381,7 +366,7 @@ class LotAdminFilter(django_filters.FilterSet):
                     return Q(auctiontos_winner__bidder_number=val)
                 return Q()
 
-            # this was a one-off for a bug found during an ACM auction.  It's probably safe to remove.
+            # A one-off for an old bug; probably safe to remove.
             if value == "broken":
                 return queryset.filter(auctiontos_winner__isnull=True, winner__isnull=False)
 
@@ -473,13 +458,7 @@ class AuctionHistoryFilter(django_filters.FilterSet):
 
 
 class InvoiceFilter(django_filters.FilterSet):
-    """Filter the current user's own invoices -- one text box, no dropdowns.
-
-    The box searches the auction (and its club) by name.  It also understands the status
-    words, typed as they're displayed, because "paid" is the thing people actually come to
-    this page looking for and it isn't a word that appears in any auction title we'd want
-    to match instead.
-    """
+    """The user's own invoices: one box searching auction and club names, plus status words as displayed."""
 
     #: what someone would type -> status stored on the invoice
     STATUS_TOKENS = {
@@ -521,10 +500,7 @@ class InvoiceFilter(django_filters.FilterSet):
 
 
 class LotFilter(django_filters.FilterSet):
-    """This is the core of both the lot view and the recommendation engine
-    A single queryset is annotated with information like distance, and sorted based on the user's (or page's) selection
-
-    """
+    """The lot list and recommendations: one queryset annotated with distance and sorted."""
 
     def __init__(self, *args, **kwargs):
         self.canShowAuction = True
@@ -549,9 +525,9 @@ class LotFilter(django_filters.FilterSet):
             self.latitude = self.user.userdata.latitude
             self.longitude = self.user.userdata.longitude
 
-        # annotate lots with the distance to the request user, requires self.latitude and self.longitude
+        # Distance annotation needs latitude and longitude.
         self.showLocal = bool(self.latitude and self.longitude)
-        self.showOwnLots = True  # show lots from the request user. I don't think this is used anywhere
+        self.showOwnLots = True  # # unused?
         self.maxRange = 70  # only applies if self.showLocal = True
         self.showDeactivated = False  # show lots that users have deliberately deactivated
         if self.user.is_superuser:
@@ -559,14 +535,14 @@ class LotFilter(django_filters.FilterSet):
         else:
             # this is really only set to true if you are viewing your own lots
             self.showBanned = False
-        # could be "yes" or "no", only matters for authenticated users, set to no to only see unseen things
+        # "yes" or "no" for signed-in users; "no" shows only unseen lots.
         self.showViewed = "all"
         if kwargs.pop("onlyUnviewed", False):
             self.showViewed = "no"
-        # "all", "open", "unsold", or "ended".  If regarding an auction, should default to all
+        # "all", "open", "unsold" or "ended". Auction views default to all.
         self.status = "open"
         self.showShipping = True
-        self.shippingLocation = 52  # USA, later we might set this with a cookie like we do with lat and lng
+        self.shippingLocation = 52  # # USA
         if self.user.is_authenticated:
             # lots for local pickup
             if self.user.userdata.local_distance:
@@ -578,7 +554,7 @@ class LotFilter(django_filters.FilterSet):
         self.regardingAuction = kwargs.pop(
             "regardingAuction", None
         )  # force only displaying lots from a particular auction
-        # force only displaying lots for a particular user (not necessarily the request user)
+        # Only lots for this user (not necessarily the request user).
         self.regardingUser = kwargs.pop("regardingUser", None)
         self.order = kwargs.pop("order", "-lot_number")  # default ordering is just the most recent on top
         forceAuction = kwargs.pop("auction", None)
@@ -630,8 +606,6 @@ class LotFilter(django_filters.FilterSet):
             {"no_auction": "noAuction", "No auction": "title"}
         ] + auction_choices
         self.filters["ships"].extra["choices"] = self.ships_choices()
-        # if self.regardingAuction:
-        #     self.filters['auction'].initial=self.regardingAuction.slug
         self.helper = FormHelper()
         self.helper.form_method = "post"
         self.helper.form_class = "form"
@@ -742,18 +716,9 @@ class LotFilter(django_filters.FilterSet):
     def qs(self):
         primary_queryset = super().qs
         primary_queryset = primary_queryset.filter(is_deleted=False)
-        # Everything both lot templates render for a row, fetched for the whole page instead of
-        # per row. An earlier attempt at this was reverted as "slower" -- it also prefetched
-        # `pageview` and `lothistory`, the two biggest tables on the site, which costs far more
-        # than the per-row queries it saved. Those two stay out; the templates read them through
-        # the `all_chats`/`owner_chats` annotations below.
-        #
-        # prefetch_related rather than select_related for the relations that repeat down the page
-        # (the auction, the seller, the categories). A join would copy the same auction row into
-        # all 50 result rows and, worse, hand every Lot its *own* Auction instance -- so every
-        # cached_property on Auction would be recomputed once per row. prefetch_related fetches
-        # each related row once and assigns the same instance to every lot that points at it,
-        # which is what makes those caches worth having.
+        # Prefetched for the page, not per row. Not pageview/lothistory: too big; the templates use
+        # the chat annotations. prefetch_related, not select_related, so rows share one Auction
+        # instance and its cached properties.
         primary_queryset = primary_queryset.prefetch_related(
             "auction",
             "auction__created_by__userdata",  # Lot.currency_symbol
@@ -783,9 +748,6 @@ class LotFilter(django_filters.FilterSet):
             primary_queryset = primary_queryset.filter(active=True)
         if self.status == "unsold":
             primary_queryset = primary_queryset.filter(active=True, winning_price__isnull=True)
-        # if not self.regardingAuction and not self.regardingUser:
-        #     # no auction or user selected in the filter
-        #     primary_queryset = primary_queryset.exclude(auction__promote_this_auction=False)
         if not self.showBanned:
             primary_queryset = primary_queryset.filter(banned=False)
         if not self.showDeactivated:
@@ -816,16 +778,13 @@ class LotFilter(django_filters.FilterSet):
                 distinct=True,
             )
         )
-        # App-only "Locate with AR" button on lot lists (lot_tile_page.html / lot_list_page.html).
-        # An EXISTS annotation rather than touching lot.ar_position per row, which would be an N+1
-        # across the page. Gated first on the app UA — the fishauctions:// deep link is dead in a
-        # browser — and then on there being a locatable in-person auction at all, so a web lot list
-        # costs exactly nothing, not even the auction lookup.
+        # App-only "Locate with AR": an EXISTS annotation, gated on the app UA and on there being a
+        # locatable auction, so the web pays nothing.
         request = getattr(self, "request", None)
         if getattr(request, "is_mobile_app", False):
             from auctions.mobile.services.ar import locatable_auction_pks
 
-            # qs is a property and gets rebuilt on every access, so remember the answer per instance.
+            # qs is rebuilt on every access; cache per instance.
             if self._locatable_auctions is None:
                 self._locatable_auctions = locatable_auction_pks()
             locatable_auctions = self._locatable_auctions
@@ -836,9 +795,7 @@ class LotFilter(django_filters.FilterSet):
                     )
                 )
         if self.regardingUser:
-            # lot_list_page.html prints a view count for each of your own lots, which was a COUNT
-            # on the biggest table on the site per row. A subquery rather than Count("pageview"),
-            # which would multiply the rows of every other annotation on this queryset.
+            # Per-row view counts as a subquery; Count("pageview") would multiply other annotations.
             primary_queryset = primary_queryset.annotate(
                 annotated_page_views=Coalesce(
                     Subquery(
@@ -891,20 +848,13 @@ class LotFilter(django_filters.FilterSet):
                     recommended=(((F("promotion_weight") + 1) / 10) * interest / 5) + F("recommended")
                 )
             else:
-                # if not signed in, recommended = most viewed
-                # this sucks because you always see the same damned lots.
-                # We could show most viewed here, but that just means that popularity breeds popularity
-                # primary_queryset = primary_queryset.annotate(
-                #    recommended = Count('pageview', distinct=True)
-                # )
-                # instead, let's just show newest (unless we have keywords...)
+                # Signed out: newest first rather than most viewed, which only feeds popularity.
                 if not self.keywords:
                     self.order = "-lot_number"
         show_very_new_lots = False
         if self.user.is_superuser:
             show_very_new_lots = True
         if self.regardingAuction:
-            # might want to change this to be `and self.regardingAuction.online_bidding == 'disable'`
             if not self.regardingAuction.is_online:
                 show_very_new_lots = True
         if not show_very_new_lots:
@@ -919,10 +869,7 @@ class LotFilter(django_filters.FilterSet):
                     date_posted__gte=timezone.now() - datetime.timedelta(minutes=20)
                 )
 
-        # filter by 3 things:
-        # local_qs = local lots, within the max range
-        # shipping_qs = lots that ship to your location
-        # auction_qs = either a single auction or private auctions you've joined + promoted auctions
+        # Local lots in range, lots that ship to you, and auction lots (one auction, or joined + promoted).
 
         auction_qs = Q(pk__isnull=True)
         local_qs = Q(pk__isnull=True)
@@ -953,17 +900,12 @@ class LotFilter(django_filters.FilterSet):
             if self.regardingAuction:
                 auction_qs = Q(auction=self.regardingAuction)
             else:
-                # auction_qs = Q(pk__isnull=True)
-                # auction_qs = Q(auction__promote_this_auction=True)
                 if self.user.is_authenticated:
-                    # this shows any auction you've joined + any public auction.  Perhaps this should be a preference?
-                    # auction_qs = Q(auction__pk__in=self.possibleAuctions)|Q(auction__promote_this_auction=True)
-                    # this shows any auction you've joined.  See https://github.com/iragm/fishauctions/issues/66
+                    # Auctions you've joined, plus lots with no auction. See issue #66.
                     auction_qs = Q(auction__pk__in=self.possibleAuctions) | Q(auction__isnull=True)
                 else:
                     # anonymous users can see lots from all promoted auctions
                     auction_qs = Q(auction__promote_this_auction=True) | Q(auction__isnull=True)
-                # auction_qs = Q(auction__auctiontos__user=self.user, auction__promote_this_auction=False)|Q(auction__promote_this_auction=True)
         # putting them all together:
         primary_queryset = primary_queryset.filter(Q(local_qs) | Q(shipping_qs) | Q(auction_qs))
         return primary_queryset.order_by(self.order)
@@ -986,7 +928,6 @@ class LotFilter(django_filters.FilterSet):
         return queryset
 
     def filter_by_user(self, queryset, name, value):
-        # probably should only show banned if request user matches the user filter
         if self.user.username == value:
             self.showBanned = True
             self.showDeactivated = True
@@ -1041,9 +982,7 @@ class LotFilter(django_filters.FilterSet):
                 qList |= (
                     Q(summernote_description__icontains=fragment)
                     | Q(lot_name__icontains=fragment)
-                    # The scientific name the seller picked, so "Tropheus" finds the lots tagged
-                    # with one whatever their sellers happened to call them.  icontains on
-                    # scientific_name covers a bare genus, since that is its first word.
+                    # The seller's chosen species; icontains on scientific_name covers a genus.
                     | Q(species__scientific_name__icontains=fragment)
                     | Q(species__common_name__icontains=fragment)
                     | Q(species__variety__icontains=fragment)
@@ -1060,7 +999,7 @@ class LotFilter(django_filters.FilterSet):
             self.showShipping = True
         auction_param = self.request.GET.get("auction")
         if auction_param and auction_param != "no_auction":
-            # if both this and auction are specified, auction wins and this does nothing
+            # An auction filter overrides this.
             self.showShipping = False
             return queryset
         if value == "local_only":
@@ -1136,10 +1075,7 @@ def get_recommended_lots(
     keywords=[],
     exclude_pk=None,  # lot pk to leave out (e.g. the lot the user is currently viewing)
 ):
-    """
-    This is the core of the recommendation system
-    Returns a queryset of lot objects ready for use in a template
-    """
+    """The recommendation system: a queryset of lots ready for a template."""
     if auction:
         listType = "auction"
     qs = LotFilter(
@@ -1159,14 +1095,9 @@ def get_recommended_lots(
 
 
 def membership_paid_q(today):
-    """Q matching members whose dues are current.
-
-    Mirrors ``ClubMember.is_paid_member`` (and the treasurer report's ``_paid_member_filter``)
-    in SQL: an explicit ``membership_expiration_date`` wins, and when there isn't one the club's
-    membership system derives the expiration from ``membership_last_paid``.  Members imported
-    from CSV, renewed through an auction invoice, or migrated from an older roster routinely
-    have only a last-paid date, and filtering on the expiration column alone called every one of
-    them expired.
+    """Members whose dues are current, as SQL for ``ClubMember.is_paid_member``: an explicit expiration
+    wins, else it is derived from ``membership_last_paid`` (imported and invoice-renewed members often
+    have only that).
     """
     january_cutoff = datetime.date(today.year, 1, 1)
     rolling_cutoff = today - datetime.timedelta(days=365)
@@ -1178,10 +1109,8 @@ def membership_paid_q(today):
 
 
 def membership_expiring_soon_q(today, days=30):
-    """Q matching members whose (possibly derived) expiration lands in the next ``days`` days.
-
-    The derived half is the SQL form of ``ClubMember.effective_expiration_date``: rolling clubs
-    expire a year after the last payment, January-1st clubs on the January 1st following it.
+    """Members whose (possibly derived) expiration falls in the next ``days`` days. Rolling clubs expire a
+    year after payment; January-1st clubs on the next January 1st.
     """
     soon = today + datetime.timedelta(days=days)
     explicit = Q(membership_expiration_date__gte=today, membership_expiration_date__lte=soon)
@@ -1189,8 +1118,7 @@ def membership_expiring_soon_q(today, days=30):
         membership_last_paid__gte=today - datetime.timedelta(days=365),
         membership_last_paid__lte=soon - datetime.timedelta(days=365),
     )
-    # A January-1st membership derived from a payment in year Y expires on Jan 1 of Y+1, so the
-    # window only ever contains such a member when a January 1st itself falls inside it.
+    # A derived January-1st expiry is only in the window if a January 1st is.
     january_years = {year for year in (today.year, soon.year) if today <= datetime.date(year, 1, 1) <= soon}
     derived = rolling
     if january_years:
@@ -1224,21 +1152,14 @@ class ClubMemberFilter(django_filters.FilterSet):
         fields = []
 
     def __init__(self, data=None, *args, **kwargs):
-        # FilterView passes `request.GET or None`, so an empty GET dict becomes None and the
-        # filterset is treated as unbound — filter_queryset is never called and all members
-        # (including deactivated) leak through.  Seed an empty query so the filterset is always
-        # bound and our filter_queryset override can apply the is_deleted=False default.
+        # FilterView passes `request.GET or None`; an unbound filterset never runs filter_queryset,
+        # leaking deactivated members. Seed an empty query.
         if not data:
             data = {"query": ""}
         super().__init__(data, *args, **kwargs)
 
     def filter_queryset(self, queryset):
-        """Hide deactivated members unless the user explicitly types 'deactivated'.
-
-        The view layer surfaces a "Show deactivated" link in the no-results UI when a
-        strict search returns nothing but deactivated members would match — that keeps the
-        toggle visible to users instead of silently mixing in deactivated rows.
-        """
+        """Hide deactivated members unless the query says "deactivated"."""
         query_value = (self.data.get("query") or "").lower()
         show_deactivated = "deactivated" in query_value.split()
         filtered = super().filter_queryset(queryset)
@@ -1247,10 +1168,8 @@ class ClubMemberFilter(django_filters.FilterSet):
         return filtered.filter(is_deleted=False)
 
     def clubmember_search(self, queryset, name, value):
-        """Support text search including special tokens: discord, current, expired, expiring, never paid, deactivated, duplicate.
-
-        Any remaining text after keywords are stripped is searched against name (with rhyming-name
-        expansion), email, discord username, and membership number.
+        """Text search with tokens: discord, current, expired, expiring, never paid, deactivated, duplicate.
+        The rest searches name (with nicknames), email, discord username and membership number.
         """
         tokens = value.lower().split()
         source_filter = None
@@ -1298,7 +1217,7 @@ class ClubMemberFilter(django_filters.FilterSet):
             if status_filter == "current":
                 queryset = queryset.filter(membership_paid_q(today))
             elif status_filter == "expired":
-                # "Unpaid" is the complement of paid, so it keeps covering members who never paid.
+                # Unpaid includes never paid.
                 queryset = queryset.exclude(membership_paid_q(today))
             elif status_filter == "expiring":
                 queryset = queryset.filter(membership_expiring_soon_q(today))
@@ -1397,10 +1316,8 @@ class BapAwardFilter(django_filters.FilterSet):
 
 
 class ClubBapLotFilter(django_filters.FilterSet):
-    """Filter for the BAP lot review table (club admin, permission_manage_bap only).
-
-    Single query input; keywords "pending" / "approved" control status; remaining text
-    searches lot name and seller. No keyword = all sold lots. Default: "pending".
+    """The BAP lot review table (``permission_manage_bap``). "pending"/"approved" keywords set status; the
+    rest searches lot name and seller. Default "pending".
     """
 
     query = django_filters.CharFilter(
@@ -1422,8 +1339,7 @@ class ClubBapLotFilter(django_filters.FilterSet):
         fields = []
 
     def __init__(self, data=None, *args, **kwargs):
-        # Seed "pending" when the page loads with no params so django-filter treats the
-        # filterset as bound and actually calls filter_queryset (unbound = no filtering).
+        # Seed "pending" so the filterset is bound and actually filters.
         if not data:
             data = {"query": "pending"}
         super().__init__(data, *args, **kwargs)
@@ -1469,7 +1385,7 @@ class ClubBapLotFilter(django_filters.FilterSet):
         search = " ".join(search_tokens)
 
         if status == "pending":
-            # Not yet reviewed: breeder checkbox checked, no BapAward, not manually dismissed
+            # Breeder box checked, no award, not dismissed.
             queryset = queryset.filter(i_bred_this_fish=True, bap_award__isnull=True, manually_approved=False)
         elif status == "approved":
             queryset = queryset.filter(bap_award__isnull=False)
@@ -1477,10 +1393,10 @@ class ClubBapLotFilter(django_filters.FilterSet):
             # Manually dismissed with no BapAward
             queryset = queryset.filter(bap_award__isnull=True, manually_approved=True)
         elif status == "non_bap":
-            # Breeder checkbox NOT checked — seller may have forgotten; can be manually approved
+            # Breeder box unchecked: may have been forgotten; can be approved manually.
             queryset = queryset.filter(i_bred_this_fish=False, bap_award__isnull=True, manually_approved=False)
         else:
-            # no status keyword = show all BAP-eligible lots (exclude non-BAP unless explicitly requested)
+            # No status keyword: all BAP-eligible lots.
             queryset = queryset.filter(i_bred_this_fish=True)
 
         for user_filter in user_filters:
@@ -1506,7 +1422,7 @@ class ClubBapLotFilter(django_filters.FilterSet):
             queryset = queryset.filter(user_query)
 
         for category_filter in category_filters:
-            # Support slug-style filters like category:foo-bar for categories named "Foo Bar".
+            # category:foo-bar matches "Foo Bar".
             category_search = category_filter.replace("-", " ")
             queryset = queryset.filter(
                 Q(species_category__name__icontains=category_filter)
@@ -1525,30 +1441,18 @@ class ClubBapLotFilter(django_filters.FilterSet):
         return queryset
 
 
-#: The speaker filter controls are not inside one <form> -- the search box sits above the
-#: topic menu, and the topic radios sit inside a dropdown -- so an explicit hx-include is what
-#: keeps every value on every request.  Relying on htmx's implicit "include the enclosing
-#: form" would make picking a topic drop the search text.
+#: Marks the speaker filter controls, which aren't in one <form>, so an explicit hx-include keeps
+#: all values on every request.
 SPEAKER_FILTER_CONTROL_CLASS = "speaker-filter-control"
 
-#: "within 50 miles", "50 miles", "50mi" typed into the search box.  There is no distance
-#: control on the form: a radius is a rare, one-off thing to want, and a permanent dropdown
-#: for it costs every user space on every visit.  Anchored on the number, so the word "miles"
-#: on its own stays an ordinary text search (plenty of bios mention miles).
+#: "within 50 miles" in the search box; no dropdown for a rare need. Anchored on the number, so
+#: "miles" alone stays text.
 DISTANCE_PHRASE_RE = re.compile(r"\b(?:within\s+)?(\d{1,4})\s*(?:mi|mile|miles)\b")
 
 
 def htmx_filter_attrs(control_class, trigger, css_class, **extra):
-    """Shared htmx wiring for a page whose filter controls are not inside one <form>.
-
-    Module level, not a classmethod: these build the widgets inside the class body, so the
-    class object does not exist yet when they run.  `css_class` is spelled out per widget
-    because the templates render these fields directly rather than through crispy, so nothing
-    else adds the Bootstrap classes.
-
-    `control_class` is what ties the set together: every control on the page carries it, and the
-    explicit `hx-include` is what keeps every value on every request.  Relying on htmx's implicit
-    "include the enclosing form" would make picking a topic or an interest drop the search text.
+    """htmx wiring for filter controls not inside one <form>. Module level because it runs inside class
+    bodies. ``control_class`` ties the set together through ``hx-include``.
     """
     attrs = {
         "class": f"{css_class} {control_class}",
@@ -1569,16 +1473,10 @@ def speaker_filter_attrs(trigger, css_class, **extra):
 
 
 class SpeakerFilter(django_filters.FilterSet):
-    """Filter for the speaker directory.
+    """The speaker directory filter: one text box with keyword tokens, plus a topic menu.
 
-    Follows the site's htmx table convention -- one text box that also understands keyword
-    tokens, driven by the Filters dropdown chips -- plus a topic menu of the same shape.
-
-    Everything else the box understands has no control of its own: the keyword tokens the
-    Filters menu doesn't list (photo, mapped, myclub, needsreview) and a distance phrase like
-    "within 50 miles".  Distance needs an origin, so the view hands one in (a club's
-    coordinates, or the user's own); with no origin the radius and the distance column quietly
-    do nothing rather than filtering everything away.
+    The box also takes unlisted tokens (photo, mapped, myclub, needsreview) and a distance phrase.
+    Distance needs an origin from the view; without one it does nothing.
     """
 
     #: query token -> tag value.  These read as plain words in the search box.
@@ -1600,10 +1498,7 @@ class SpeakerFilter(django_filters.FilterSet):
             )
         ),
     )
-    # Both of these are driven by markup the templates write themselves -- the topic menu's
-    # radios (speaker_table_header.html) and, for distance, a phrase typed into the search
-    # box -- so neither widget is ever rendered.  They stay declared because they are still
-    # real query parameters: ?topic=cichlids&distance=50 is a link somebody can be sent.
+    # Never rendered (templates write the controls), but still real query parameters for links.
     topic = django_filters.CharFilter(method="filter_by_topic", label="Topic", widget=HiddenInput())
     distance = django_filters.NumberFilter(method="filter_by_distance", label="Distance", widget=HiddenInput())
 
@@ -1616,14 +1511,13 @@ class SpeakerFilter(django_filters.FilterSet):
         self.longitude = kwargs.pop("longitude", None)
         self.nec_club_ids = kwargs.pop("nec_club_ids", ())
         self.user = kwargs.pop("user", None)
-        # Same reason as ClubMemberFilter: FilterView passes `request.GET or None`, and an
-        # unbound filterset never runs filter_queryset, which would leak deleted speakers.
+        # As ClubMemberFilter: keep it bound, or deleted speakers leak.
         if not data:
             data = {"query": ""}
         super().__init__(data, *args, **kwargs)
 
     def topic_choices(self):
-        """(slug, name) for the topic menu, only topics somebody is actually filed under."""
+        """(slug, name) for topics that have speakers."""
         topics = SpeakerTopic.objects.filter(speakers__is_deleted=False).distinct().order_by("name")
         return [("", "Any topic"), *[(topic.slug, topic.name) for topic in topics]]
 
@@ -1640,11 +1534,7 @@ class SpeakerFilter(django_filters.FilterSet):
         return queryset.filter(topics__slug=value)
 
     def _take_distance_phrase(self, value):
-        """Pull a radius out of the search text, and hand back the text without it.
-
-        Removing it matters as much as reading it: left in, "within 50 miles" would also be
-        run as a text search for that phrase, and nobody's bio says it.
-        """
+        """Pull a radius out of the search text and return the text without it."""
         match = DISTANCE_PHRASE_RE.search(value.lower())
         if not match:
             return value, None
@@ -1652,11 +1542,7 @@ class SpeakerFilter(django_filters.FilterSet):
         return remaining, int(match.group(1))
 
     def filter_by_distance(self, queryset, name, value):
-        """Limit to speakers within `value` miles of the origin.
-
-        Speakers with no coordinates are dropped by this filter -- an unknown location can't
-        be claimed to be nearby -- which is why the list surfaces how many were excluded.
-        """
+        """Speakers within `value` miles of the origin; those with no coordinates drop out."""
         if value in (None, "") or not self.has_origin:
             return queryset
         return queryset.filter(latitude__isnull=False, longitude__isnull=False, distance__lte=int(value))
@@ -1695,15 +1581,12 @@ class SpeakerFilter(django_filters.FilterSet):
         if require_mapped:
             queryset = queryset.filter(latitude__isnull=False, longitude__isnull=False)
         if require_my_club:
-            # "My club's speakers" means someone from one of my NEC clubs added them, which is
-            # the only club link a speaker has.
+            # A speaker's only club link is the NEC club that added them.
             queryset = queryset.filter(club_id__in=list(self.nec_club_ids))
         if require_untagged:
             queryset = queryset.filter(tags__isnull=True)
         if require_review:
-            # The worklist for a retired topic (see auctions/speaker_topics.py). Not a chip in
-            # the Filters menu: it means something to whoever is clearing the flags and nothing
-            # to everyone else, and the admin is where they'd actually be edited.
+            # The retired-topic worklist (auctions/speaker_topics.py); deliberately not a chip.
             queryset = queryset.filter(topics_need_review=True)
         for tag_value in wanted_tags:
             queryset = queryset.filter(tags__tag=tag_value)
@@ -1722,28 +1605,16 @@ class SpeakerFilter(django_filters.FilterSet):
         return queryset
 
 
-#: Marks every club finder control so one hx-include picks up the whole set -- the search box, the
-#: interest radios inside their dropdown, and the filter chips are not in one <form>.
+#: Marks every club finder control for one hx-include.
 CLUB_FILTER_CONTROL_CLASS = "club-filter-control"
 
 
 class ClubFilter(django_filters.FilterSet):
-    """Filter for the public club finder.
+    """The public club finder filter, shaped like :class:`SpeakerFilter`.
 
-    The same shape as :class:`SpeakerFilter` -- one text box that also understands keyword tokens,
-    plus a menu of the same kind -- with one rule of its own that the shape does not imply.
-
-    **Everything this can filter on is something the club's own public page already shows.** That
-    is the constraint, and a filter is exactly where it would be lost, because a filter is a way of
-    reading a field one yes/no answer at a time: given ``?members=10-50`` a stranger can bracket a
-    club's membership in four requests without the number ever being printed. So there is nothing
-    here about how many members a club has, when we last emailed it, whether it replied, or how
-    ``club_health`` rates it. Interests, what is on the calendar, whether it takes new members and
-    whether it has a website are the four things a visitor could already read off the club page.
-
-    ``events`` filters on the ``has_upcoming_event`` annotation and a radius needs ``distance``;
-    both are added by :class:`~auctions.views.club_finder.ClubFinderView`, which is the only thing
-    that uses this. Without them those two quietly do nothing rather than filtering everything away.
+    **Only what the club's public page already shows can be filtered on**: interests, events, open to
+    new members, website. A filter reads a field one yes/no at a time, so member counts or health data
+    here would leak. ``events`` and distance need annotations from ``ClubFinderView``.
     """
 
     query = django_filters.CharFilter(
@@ -1758,8 +1629,7 @@ class ClubFilter(django_filters.FilterSet):
             )
         ),
     )
-    # Never rendered -- club_table_header.html writes the radios itself -- but still real query
-    # parameters, because ?interest=3&distance=50 is a link somebody can be sent.
+    # Never rendered, but real query parameters for links.
     interest = django_filters.CharFilter(method="filter_by_interest", label="Interest", widget=HiddenInput())
     distance = django_filters.NumberFilter(method="filter_by_distance", label="Distance", widget=HiddenInput())
 
@@ -1770,18 +1640,13 @@ class ClubFilter(django_filters.FilterSet):
     def __init__(self, data=None, *args, **kwargs):
         self.latitude = kwargs.pop("latitude", None)
         self.longitude = kwargs.pop("longitude", None)
-        # Same reason as SpeakerFilter: FilterView passes `request.GET or None`, and an unbound
-        # filterset never runs filter_queryset, so `qs` would skip the filtering entirely.
+        # Keep it bound, as SpeakerFilter.
         if not data:
             data = {"query": ""}
         super().__init__(data, *args, **kwargs)
 
     def interest_choices(self):
-        """(value, name) for the interest menu, only interests a listed club actually has.
-
-        Scoped to listed clubs so the menu can't be read as a directory of what unlisted ones are
-        into, and so it never offers a filter that finds nothing.
-        """
+        """(value, name) for interests listed clubs have, so the menu reveals nothing about unlisted ones."""
         interests = (
             GeneralInterest.objects.filter(club__active=True, club__outreach_stage=Club.LISTED)
             .distinct()
@@ -1799,11 +1664,7 @@ class ClubFilter(django_filters.FilterSet):
         return queryset.filter(interests__pk=value)
 
     def filter_by_distance(self, queryset, name, value):
-        """Limit to clubs within `value` miles of the visitor.
-
-        A club with no coordinates drops out -- an unknown location can't be claimed to be nearby --
-        which is why the map footer says how many matching clubs aren't on it.
-        """
+        """Clubs within `value` miles; those with no coordinates drop out (the map footer counts them)."""
         if value in (None, "") or not self.has_origin:
             return queryset
         return queryset.filter(latitude__isnull=False, longitude__isnull=False, distance__lte=int(value))
@@ -1851,11 +1712,7 @@ class ClubFilter(django_filters.FilterSet):
         return queryset
 
     def _take_distance_phrase(self, value):
-        """Pull a radius out of the search text, and hand back the text without it.
-
-        Removing it matters as much as reading it: left in, "within 50 miles" would also be run as
-        a text search for that phrase, and no club's description says it.
-        """
+        """Pull a radius out of the search text and return the text without it."""
         match = DISTANCE_PHRASE_RE.search(value.lower())
         if not match:
             return value, None
@@ -1863,12 +1720,12 @@ class ClubFilter(django_filters.FilterSet):
         return remaining, int(match.group(1))
 
 
-#: Marks every donation filter control so one hx-include picks up the whole set.
+#: Marks every donation filter control for one hx-include.
 DONATION_FILTER_CONTROL_CLASS = "donation-filter-control"
 
 
 def donation_filter_attrs(trigger, css_class, **extra):
-    """Shared htmx wiring for the donation filter controls, mirroring speaker_filter_attrs."""
+    """htmx wiring for the donation filter controls."""
     attrs = {
         "class": f"{css_class} {DONATION_FILTER_CONTROL_CLASS}",
         "hx-get": "",
@@ -1883,12 +1740,8 @@ def donation_filter_attrs(trigger, css_class, **extra):
 
 
 class DonationVendorFilter(django_filters.FilterSet):
-    """Text search plus a status menu for the donation tracking table.
-
-    Laid out the way style_reference.md prescribes: the search box gets a full-width line and the
-    status filter is a dropdown button below it, so the controls are the same size on a phone as
-    on a desktop.  The status widget is never rendered -- donation_table_header.html writes the
-    radios itself -- but stays declared because ``?status=promised`` is a link somebody can be sent.
+    """Text search and a status menu for donation tracking, laid out per style_reference.md. The status
+    widget isn't rendered but ``?status=`` still works in links.
     """
 
     query = django_filters.CharFilter(
@@ -1914,8 +1767,7 @@ class DonationVendorFilter(django_filters.FilterSet):
         fields = []
 
     def __init__(self, data=None, *args, **kwargs):
-        # Same reasoning as ClubMemberFilter: FilterView hands us `request.GET or None`, and an
-        # unbound filterset never calls filter_queryset, which would leak deleted vendors.
+        # Keep it bound, as ClubMemberFilter.
         if not data:
             data = {"query": ""}
         super().__init__(data, *args, **kwargs)
@@ -1935,8 +1787,7 @@ class DonationVendorFilter(django_filters.FilterSet):
         value = (value or "").strip()
         if not value:
             return queryset
-        # No control of its own: chasing overdue vendors is the one thing worth a keyword, and a
-        # permanent dropdown row for it would be read past by everyone who isn't doing it today.
+        # "due" as a keyword: not worth a permanent control.
         if value.lower() in ("due", "overdue", "followup", "follow up"):
             return queryset.filter(followup_due__lte=timezone.now())
         return queryset.filter(Q(name__icontains=value) | Q(contact_name__icontains=value) | Q(email__icontains=value))

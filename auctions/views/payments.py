@@ -1,8 +1,7 @@
-"""Connecting a club's PayPal and Square accounts, and taking a payment through them.
+"""Connecting PayPal and Square accounts and taking payments through them.
 
-:class:`PayPalAPIMixin` is the whole PayPal client -- tokens, orders, subscriptions, refunds -- and
-is by far the largest thing in this module. The OAuth connect/callback pairs for both providers sit
-below it. What the providers send back afterwards is in :mod:`auctions.views.webhooks`.
+:class:`PayPalAPIMixin` is the PayPal client (tokens, orders, subscriptions, refunds). OAuth
+connect/callback pairs for both follow. Provider webhooks are in :mod:`auctions.views.webhooks`.
 """
 
 import base64
@@ -52,23 +51,12 @@ class PayPalRequestError(Exception):
 
 
 class PayPalAPIMixin:
-    """PayPal API methods for platform partner integration.
-
-    Required settings:
-      - PAYPAL_API_BASE: API base URL (sandbox or live)
-      - PAYPAL_CLIENT_ID, PAYPAL_SECRET: OAuth credentials
-      - PARTNER_MERCHANT_ID: Platform's PayPal merchant ID
-      - PAYPAL_BN_CODE: Partner attribution code (for revenue tracking)
-      - PAYPAL_WEBHOOK_ID: Registered webhook ID (for webhook verification)
+    """PayPal platform partner API. Settings: PAYPAL_API_BASE, PAYPAL_CLIENT_ID, PAYPAL_SECRET,
+    PARTNER_MERCHANT_ID, PAYPAL_BN_CODE, PAYPAL_WEBHOOK_ID.
     """
 
     def _paypal_auth(self):
-        """Return ``(client_id, secret)`` for the current PayPal request.
-
-        A club in non-OAuth mode supplies its own app credentials via
-        ``self.club_paypal_credentials`` (set by callers from the invoice); every other
-        caller falls back to the site's platform app from settings.
-        """
+        """``(client_id, secret)``: a non-OAuth club's own app credentials if set, else the site's."""
         creds = getattr(self, "club_paypal_credentials", None)
         if creds and creds[0] and creds[1]:
             return creds[0], creds[1]
@@ -76,9 +64,7 @@ class PayPalAPIMixin:
 
     def _get_access_token(self):
         client_id, secret = self._paypal_auth()
-        # Log auth failures here rather than relying on callers: several of them
-        # (e.g. the order-creation view) catch RequestException and show the user a
-        # generic message, so an unlogged failure at this step is invisible.
+        # Logged here: several callers show a generic message and would hide the failure.
         try:
             token_resp = requests.post(
                 f"{settings.PAYPAL_API_BASE}/v1/oauth2/token",
@@ -107,8 +93,7 @@ class PayPalAPIMixin:
             "Authorization": f"Bearer {token or self._get_access_token()}",
             "Content-Type": "application/json",
         }
-        # The BN code is our platform partner-attribution id; it's meaningless (and
-        # potentially rejected) when calling with a club's own standalone app credentials.
+        # The BN code is ours; don't send it with a club's own credentials.
         using_club_creds = bool(getattr(self, "club_paypal_credentials", None))
         if include_bn_code and not using_club_creds and getattr(settings, "PAYPAL_BN_CODE", None):
             headers["PayPal-Partner-Attribution-Id"] = settings.PAYPAL_BN_CODE
@@ -160,9 +145,7 @@ class PayPalAPIMixin:
             msg = f"PayPal API call failed: {method} {url} status={resp.status_code} debug_id={debug_id}"
             raise PayPalRequestError(msg)
         except requests.RequestException as exc:
-            # No HTTP response at all (connection error / timeout). Callers catch
-            # RequestException and show a generic message, so without this branch a
-            # network failure to PayPal left no trace anywhere.
+            # No response at all; log it, since callers show a generic message.
             logger.error(
                 "PayPal API call failed (no response): %s %s error=%s req_params=%s req_json=%s",
                 method,
@@ -183,25 +166,17 @@ class PayPalAPIMixin:
         return self._paypal_request("GET", endpoint, params=params, include_bn_code=include_bn_code)
 
     def create_order(self, invoice, member_pk=""):
-        """Pass an invoice object and create an order for it.
-        Returns an approval URL or None if the request failed"""
-        # A club using its own (non-OAuth) PayPal app pays through its own credentials,
-        # exactly as the site keys are used for the platform account. None => site app.
+        """Create a PayPal order for an invoice. Returns an approval URL or None."""
+        # A non-OAuth club pays through its own app. None means the site app.
         self.club_paypal_credentials = invoice.paypal_credentials
         currency = invoice.currency
 
         items = []
-        # Build item_total / tax_total from the exact per-item values sent below rather than from
-        # invoice.total_bought / invoice.tax. PayPal validates that the item unit_amounts sum to
-        # item_total (and the item taxes sum to tax_total); a partially refunded lot has a
-        # refund-adjusted final_price that is lower than its winning_price, so using winning_price
-        # for the line item while item_total came from the (refund-adjusted) total made the sums
-        # disagree and PayPal rejected the order. Summing the quantized per-item values here keeps
-        # the breakdown internally consistent no matter how the DB rounds the aggregate totals.
+        # Totals summed from the exact per-item values: PayPal requires them to match, and refunds
+        # make final_price differ from winning_price.
         item_total = Decimal("0.00")
         tax_total = Decimal("0.00")
         for lot in invoice.bought_lots_queryset:
-            # final_price = winning_price reduced by partial_refund_percent (see Invoice.bought_lots_queryset).
             unit_amount = Decimal(str(lot.final_price)).quantize(Decimal("0.01"))
             item_tax = Decimal(str(lot.tax)).quantize(Decimal("0.01"))
             item_total += unit_amount
@@ -217,18 +192,13 @@ class PayPalAPIMixin:
                 }
             )
 
-        # Charge the rounded balance so the amount matches the invoice total the buyer sees; the
-        # breakdown below absorbs the rounding delta as an adjustment/discount line. Falls back to
-        # the exact amount when invoice rounding is off (rounded_net_after_payments handles that).
+        # Charge the rounded balance; the rounding delta becomes an adjustment line below.
         target_total = (Decimal("0.00") - Decimal(invoice.rounded_net_after_payments)).quantize(Decimal("0.01"))
         item_total = item_total.quantize(Decimal("0.01"))
         tax_total = tax_total.quantize(Decimal("0.01"))
 
-        # Adjustment needed to make breakdown sum to target_total
-        # target_total = item_total + tax_total + handling/shipping/insurance - discount
-        # We’ll use:
-        #  - discount for negative adjustments
-        #  - an explicit “Adjustments” line item for positive adjustments (and include it in item_total)
+        # target_total = item_total + tax_total - discount: a negative adjustment is a discount, a
+        # positive one an "Adjustments" line item.
         adjustment = (target_total - (item_total + tax_total)).quantize(Decimal("0.01"))
 
         discount_value = Decimal("0.00")
@@ -266,7 +236,6 @@ class PayPalAPIMixin:
             "reference_id": str(invoice.pk),
             "amount": {
                 "currency_code": currency,
-                # Must equal the breakdown sum (which is built to total target_total), or PayPal rejects it.
                 "value": f"{target_total:.2f}",
                 "breakdown": breakdown,
             },
@@ -276,8 +245,7 @@ class PayPalAPIMixin:
             purchase_unit["soft_descriptor"] = invoice.soft_descriptor[:22]
         if invoice.club:
             if invoice.club.uses_own_paypal_credentials:
-                # The club's own app receives the payment directly -- no payee override and
-                # no platform fee, exactly as the site keys behave for the site account.
+                # A club's own app is paid directly: no payee override, no platform fee.
                 paypal_merchant_id = None
             elif invoice.club.uses_site_paypal:
                 paypal_merchant_id = "admin"
@@ -291,7 +259,7 @@ class PayPalAPIMixin:
         else:
             paypal_merchant_id = None
         if paypal_merchant_id and paypal_merchant_id != "admin":
-            # if this is not set, payment will go to the platform account whose keys are in the .env
+            # Without a payee, payment goes to the platform account in .env.
             purchase_unit["payee"] = {"merchant_id": paypal_merchant_id}
             if settings.PAYPAL_PLATFORM_FEE and settings.PAYPAL_PLATFORM_FEE > 0:
                 amt_value = Decimal(purchase_unit["amount"]["value"])
@@ -312,18 +280,11 @@ class PayPalAPIMixin:
         payload = {
             "intent": "CAPTURE",
             "purchase_units": [purchase_unit],
-            # This code forces payment from the auctiontos.email and will fail if the user
-            # doesn't have that email address as their primary PayPal address
-            # "payment_source": {
-            #     "paypal": {
-            #         "email_address": invoice.auctiontos_user.email,
-            #     },
-            # },
+            # Forcing payment_source to the TOS email fails unless it's the buyer's primary PayPal
+            # address, so it isn't set.
             "application_context": {
                 "brand_name": settings.NAVBAR_BRAND,
-                # Include the invoice uuid so PayPalSuccessView can resolve the club's own
-                # credentials (if any) before capturing -- the capture must use the same app
-                # that created the order.
+                # The invoice uuid lets PayPalSuccessView capture with the same app that created the order.
                 "return_url": self.request.build_absolute_uri(
                     reverse("paypal_success")
                     + "?"
@@ -361,11 +322,8 @@ class PayPalAPIMixin:
         return self._process_captured_order(order_data)
 
     def _process_captured_order(self, order_data):
-        """Process an already-captured PayPal order. Returns (error_str, invoice).
-
-        Accepts both PayPal API response data and webhook event resource data so
-        that CHECKOUT.ORDER.COMPLETED webhook events can be handled without making
-        a redundant capture API call.
+        """Process a captured PayPal order, from an API response or a webhook resource. Returns
+        ``(error, invoice)``.
         """
         purchase_unit = order_data.get("purchase_units", [{}])[0]
         invoice_id = purchase_unit.get("reference_id")
@@ -378,7 +336,6 @@ class PayPalAPIMixin:
                 None,
             )
 
-        # Safely extract capture info (amount, currency, external id, payer info)
         capture = None
         try:
             capture = purchase_unit.get("payments", {}).get("captures", [None])[0]
@@ -483,8 +440,7 @@ class PayPalAPIMixin:
                 invoice.auction.create_history(applies_to="INVOICES", action=action, user=None)
             except Exception:
                 logger.exception("create_history failed for PayPal payment on invoice %s", invoice.pk)
-        # If the total owed is zero or less and invoice is DRAFT/UNPAID, mark PAID. Use the rounded
-        # balance so a rounded-down charge (the amount we actually billed) still settles the invoice.
+        # Nothing owed on a DRAFT/UNPAID invoice: mark it PAID (rounded balance).
         if invoice.rounded_net_after_payments >= 0 and invoice.status in ("DRAFT", "UNPAID"):
             if not invoice.renewal_needed:
                 try:
@@ -505,8 +461,7 @@ class PayPalAPIMixin:
                     )
                 except Exception:
                     logger.exception("create_history failed after PayPal payment on invoice %s", invoice.pk)
-            # I have given some thought to putting this in a model property instead
-            # Putting it here only sends the message when an invoice is paid via PayPal
+            # Only sent when paid through PayPal.
             if invoice.auction:
                 try:
                     channel_layer = channels.layers.get_channel_layer()
@@ -527,20 +482,16 @@ class PayPalAPIMixin:
             .order_by("-amount_available_to_refund")
             .first()
         )
-        # if multiple payments have been made, we will only refund the largest one
-        # I am too lazy to implement partial refunds across multiple payments right now
+        # Refunds only the largest payment; partial refunds across payments aren't implemented.
         total_available = payment.amount_available_to_refund if payment else Decimal("0.00")
         if total_available >= amount:
             return True
         return False
 
     def refund_invoice(self, invoice, amount):
-        """Refund the given amount on this invoice via PayPal.
-        Returns error or none on success"""
-        # Clubs using their own (non-OAuth) credentials have no webhook wired up, so an
-        # automated refund here would never be recorded as a negative InvoicePayment
-        # (handle_refund only runs from the PayPal webhook). Force these to be done manually
-        # in the club's own PayPal account so our records never silently drift.
+        """Refund an amount on this invoice through PayPal. Returns an error or None."""
+        # Clubs on their own credentials have no webhook, so the refund would never be recorded.
+        # They refund by hand in PayPal.
         if invoice.paypal_credentials:
             return (
                 "Automatic refunds aren't available for this club's PayPal account. "
@@ -559,16 +510,12 @@ class PayPalAPIMixin:
         if result.get("status") != "COMPLETED":
             logger.error("PayPal refund failed: %s, debug_id: %s", result, self.paypal_debug)
             return "PayPal refund failed"
-        # no database recording happens here, that goes through the webhook, see handle_refund()
+        # Recorded by the webhook (handle_refund).
         return None
 
     def handle_refund(self, refund_resource):
-        """
-        Process a refund webhook resource:
-          - find the capture id (payment reference) from resource.links where rel == 'up'
-          - find the InvoicePayment with external_id == capture_id
-          - create a new InvoicePayment with negative amount and external_id == refund_id
-        Returns: (invoice, refund_payment) or (None, None) on failure
+        """Record a refund webhook: find the payment via the ``up`` link's capture id and add a negative
+        InvoicePayment keyed on the refund id. Returns ``(invoice, refund_payment)`` or ``(None, None)``.
         """
         refund_id = refund_resource.get("id")
         note_to_payer = refund_resource.get("note_to_payer") or refund_resource.get("note") or ""
@@ -610,9 +557,7 @@ class PayPalAPIMixin:
 
         refund_amt_signed = -abs(refund_amt)  # ensure negative
 
-        # PayPal redelivers webhooks until it gets a 2xx. Capture the prior refund amount for this
-        # refund id before update_or_create overwrites it, then move the refundable balance only by
-        # the delta so a duplicate delivery is a no-op and an amount change adjusts correctly.
+        # PayPal redelivers until 2xx: adjust the refundable balance only by the change, so repeats no-op.
         existing_refund = InvoicePayment.objects.filter(external_id=refund_id).first()
         previous_refund_abs = abs(existing_refund.amount) if existing_refund else Decimal("0.00")
         # Create a new InvoicePayment record for the refund.
@@ -646,8 +591,7 @@ class PayPalConnectView(LoginRequiredMixin, PayPalAPIMixin, View):
     """Start the PayPal onboarding process for a seller"""
 
     def get(self, request):
-        # PayPal must be enabled for this user before they can onboard a seller account.
-        # The connect button is hidden in the UI when it isn't, but guard the endpoint too.
+        # The button is hidden when PayPal isn't enabled; guard the endpoint too.
         if not request.user.userdata.paypal_enabled:
             messages.error(request, "PayPal isn't enabled for your account.")
             return redirect(reverse("home"))
@@ -691,8 +635,7 @@ class PayPalCallbackView(LoginRequiredMixin, PayPalAPIMixin, View):
     """After onboarding, PayPal redirects here"""
 
     def get_success_url(self):
-        # If the user started the connect flow from a club's membership settings page,
-        # we already attached the seller to the club in self.get() — send them back there.
+        # Started from a club's settings page: go back there.
         if getattr(self, "linked_club", None):
             if self.error:
                 messages.error(self.request, self.error)
@@ -734,8 +677,7 @@ class PayPalCallbackView(LoginRequiredMixin, PayPalAPIMixin, View):
         else:
             user = data.user
 
-        # Validate that the tracking_id belongs to the currently authenticated user to
-        # prevent cross-account linking (an attacker supplying another user's tracking_id).
+        # tracking_id must belong to this user, or someone could link another user's account.
         if user != request.user:
             logger.warning(
                 "PayPal callback tracking_id mismatch: tracking_id belongs to user %s but request.user is %s",
@@ -749,7 +691,7 @@ class PayPalCallbackView(LoginRequiredMixin, PayPalAPIMixin, View):
         merchant_info = self.get_from_paypal(
             f"v1/customer/partners/{partner_merchant_id}/merchant-integrations/{merchant_id}"
         )
-        # Integration checklist: ensure payments_receivable, email confirmed and oauth_third_party present
+        # Checklist: payments_receivable, confirmed email, oauth_third_party.
         currency = merchant_info.get("primary_currency", "USD")
         if not merchant_info.get("payments_receivable"):
             self.error = "Attention: You currently cannot receive payments due to restriction on your PayPal account. Please resolve any issues with PayPal and re-link your account here."
@@ -771,11 +713,10 @@ class PayPalCallbackView(LoginRequiredMixin, PayPalAPIMixin, View):
         seller.paypal_merchant_id = merchant_id
         seller.payer_email = merchant_info.get("primary_email") or seller.payer_email
         seller.currency = currency
-        # If the connect flow originated from a club's settings page, link the seller to that club.
+        # Started from a club's settings page: link the seller to that club.
         club = _pop_club_for_payment_oauth(request)
         if club:
-            # If another seller is already linked to this club, detach it first to honor the
-            # OneToOneField uniqueness constraint.
+            # One seller per club (OneToOneField): detach the previous one.
             existing = PayPalSeller.objects.filter(club=club).exclude(pk=seller.pk).first()
             if existing:
                 existing.club = None
@@ -800,12 +741,7 @@ class PayPalCallbackView(LoginRequiredMixin, PayPalAPIMixin, View):
 
 
 def _club_membership_success_url(club, member_pk):
-    """Pick the best post-payment URL for a club membership invoice.
-
-    Prefers the member-number page (the canonical landing per product spec),
-    falls back to the UUID page (works without a membership number), and
-    finally to the club detail page.
-    """
+    """Post-payment URL for a membership invoice: member-number page, else UUID page, else club page."""
     if club and member_pk:
         member = ClubMember.objects.filter(pk=member_pk, club=club, is_deleted=False).first()
         if member and member.membership_number:
@@ -854,10 +790,8 @@ class PayPalSuccessView(PayPalAPIMixin, View):
 
     def get(self, request, *args, **kwargs):
         order_id = request.GET.get("token")
-        # Resolve the club's own (non-OAuth) credentials before capturing -- only the app
-        # that created the order can capture it. The invoice uuid is carried in the return URL
-        # set by create_order(); the captured order's reference_id remains authoritative for
-        # which invoice is actually credited.
+        # Only the app that created the order can capture it; the return URL carries the invoice uuid.
+        # The captured order's reference_id still decides which invoice is credited.
         invoice_uuid = request.GET.get("invoice")
         if invoice_uuid:
             invoice_for_creds = Invoice.objects.filter(no_login_link=invoice_uuid).first()
@@ -902,20 +836,15 @@ class PayPalSellerDeleteView(LoginRequiredMixin, DeleteView):
 
 
 class SquareAPIMixin:
-    """Mixin for Square payment link creation
-    Delegates to SquareSeller model methods for Square API operations
-    All operations require OAuth - no platform credentials"""
+    """Square payment links, through SquareSeller methods. OAuth only."""
 
     def create_payment_link(self, invoice, member_pk=""):
-        """Create a Square payment link using SquareSeller model methods
-        Returns tuple: (payment_url, error_message)
-        """
+        """Create a Square payment link. Returns ``(payment_url, error_message)``."""
         if invoice.club:
             seller = invoice.club.effective_square_seller
         elif invoice.auction:
-            # Auction invoices always have club=None, so the club routing for a club auction has
-            # to come from the auction itself -- otherwise a club auction charges the creator's
-            # personal Square account while show_square_button advertises the club's.
+            # Auction invoices have club=None; route through the auction or a club auction charges
+            # the creator's personal account.
             seller = invoice.auction.effective_square_seller
         else:
             seller = None
@@ -929,12 +858,8 @@ class SquareConnectView(LoginRequiredMixin, View):
     """Start the Square OAuth process for a seller"""
 
     def get(self, request):
-        # Square must be enabled for this user before they can onboard a seller account: an open
-        # OAuth flow that collects money from strangers is a real fraud control, and this is the one
-        # place that enforces it. Land them on square_seller rather than the home page, because
-        # that page is where the gate is explained and where the request-access button lives --
-        # bouncing somebody home with a terse error is the dead end Part TTP-9 is about, and the
-        # entry points that used to render nothing now send people here on purpose.
+        # Square access must be granted before onboarding (a fraud control). Land on square_seller,
+        # where the gate is explained and access can be requested.
         if not request.user.userdata.square_enabled:
             messages.error(
                 request,
@@ -942,26 +867,21 @@ class SquareConnectView(LoginRequiredMixin, View):
                 "usually have you set up the same day.",
             )
             return redirect(reverse("square_seller"))
-        # Remember, for the callback, that this round trip started inside the app, so it can end by
-        # redirecting to the auth session's callback scheme (and telling them to tap Done if that
-        # doesn't land) rather than leaving the merchant on a web page with nothing to do next.
-        # ``?return_to_app=1`` is the app's explicit way to say so when it opens this URL in a
-        # browser view that carries no session of ours.
+        # Remember the flow started in the app, so the callback can return to it. ?return_to_app=1
+        # is the app's explicit signal from a browser view with no session.
         if session_opened_by_app(request) or request.GET.get("return_to_app"):
             mark_session_opened_by_app(request.session)
         _stash_club_for_payment_oauth(request)
-        # Build Square OAuth URL
-        # Use the user's unsubscribe_link as state parameter for security
+        # The user's unsubscribe_link is the OAuth state.
         state = request.user.userdata.unsubscribe_link
 
-        # Square OAuth authorization endpoint - use SQUARE_ENVIRONMENT setting
         square_auth_url = (
             "https://connect.squareupsandbox.com/oauth2/authorize"
             if settings.SQUARE_ENVIRONMENT == "sandbox"
             else "https://connect.squareup.com/oauth2/authorize"
         )
 
-        # Build redirect URI - must match what's configured in Square app and what we send in token exchange
+        # Must match the Square app config and the token exchange.
         redirect_uri = request.build_absolute_uri(reverse("square_callback"))
         # Build OAuth parameters
         params = {
@@ -978,8 +898,7 @@ class SquareConnectView(LoginRequiredMixin, View):
 
 
 class SquareCallbackView(LoginRequiredMixin, View):
-    """After OAuth, Square redirects here
-    Uses new Square SDK v42+ API"""
+    """Square's OAuth redirect."""
 
     def get(self, request):
         # Get authorization code and state from Square
@@ -1009,11 +928,10 @@ class SquareCallbackView(LoginRequiredMixin, View):
             env = (
                 SquareEnvironment.SANDBOX if settings.SQUARE_ENVIRONMENT == "sandbox" else SquareEnvironment.PRODUCTION
             )
-            # For OAuth token exchange, we don't need a token
-            # Don't pass empty string as it causes "Illegal header value" error
+            # No token for the exchange; an empty string causes "Illegal header value".
             client = Square(environment=env)
 
-            # Build redirect URI - must match what was sent in authorization request
+            # Must match the authorization request.
             redirect_uri = request.build_absolute_uri(reverse("square_callback"))
 
             result = client.o_auth.obtain_token(
@@ -1023,9 +941,7 @@ class SquareCallbackView(LoginRequiredMixin, View):
                 grant_type="authorization_code",
                 redirect_uri=redirect_uri,
             )
-            # Successful response
-            # New API returns response object directly (no is_error check needed, raises on error)
-            # Extract token info from response
+            # Raises on error.
             access_token = result.access_token
             refresh_token = result.refresh_token if hasattr(result, "refresh_token") else None
             expires_at = result.expires_at if hasattr(result, "expires_at") else None
@@ -1050,9 +966,7 @@ class SquareCallbackView(LoginRequiredMixin, View):
             seller.square_merchant_id = merchant_id
             seller.access_token = access_token
             seller.refresh_token = refresh_token
-            # Record what this token was granted. Square OAuth is all-or-nothing for the requested
-            # set, so the scopes we asked for are the scopes the merchant approved. This is what
-            # supports_tap_to_pay reads, and reconnecting an old account refreshes it here.
+            # Square OAuth grants the full requested set; supports_tap_to_pay reads this.
             seller.scopes = " ".join(SQUARE_OAUTH_SCOPES)
             if expires_at:
                 from datetime import datetime
@@ -1125,20 +1039,11 @@ class SquareCallbackView(LoginRequiredMixin, View):
     def _done(request, web_url, seller):
         """End a successful connect: a confirmation page if the app started it, else ``web_url``.
 
-        Apple's Tap to Pay review guide wants onboarding completed inside the app (requirement 2.2),
-        and Square OAuth is a server-side flow -- the code is exchanged here, with our secret -- so
-        the merchant necessarily ends up looking at a web page in a browser view the app opened.
-        That view has no idea they are finished. Recording the onboarding video for the entitlement
-        review is what showed how bad that is: on camera it reads as the app handing you off to a
-        website and abandoning you, in the middle of the step 2.2 is about.
-
-        The page ends the step instead. It redirects to ``fishauctions-oauth://square-connected``,
-        which the app's ASWebAuthenticationSession (Chrome Auth Tab on Android) is watching for and
-        closes itself on, and it says "tap Done" underneath for anyone whose session doesn't
-        complete -- an older build, or a plain browser view. That scheme is deliberately NOT the
-        app's own ``fishauctions://``: nothing registers that one with the OS, the shell only ever
-        sees it inside its own WebView, and only a pending auth session can act on the OAuth one.
-        See ``auctions/templates/auctions/square_connected_app.html``.
+        Apple's Tap to Pay review wants onboarding finished in the app (2.2), but the OAuth exchange is
+        server-side, so the merchant lands on a web page. It redirects to
+        ``fishauctions-oauth://square-connected``, which the app's auth session closes on, and says "tap
+        Done" for anything else. Deliberately not ``fishauctions://``, which only the app's WebView sees.
+        See ``square_connected_app.html``.
         """
         if not session_opened_by_app(request):
             return redirect(web_url)

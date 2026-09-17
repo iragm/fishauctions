@@ -1,7 +1,6 @@
-"""Bidding: what a bid is worth, who is allowed to place one, and the refund dialog.
+"""Tests for bid values, bidding permissions, and the bid dialog.
 
-``BiddingPermissionsHardeningTests`` is the one to read first -- it is the boundary that stops a bid
-arriving through a path the page would have refused.
+``BiddingPermissionsHardeningTests`` covers paths the page would have refused.
 """
 
 import datetime
@@ -133,14 +132,9 @@ class LotPricesTests(TestCase):
         assert lot.pre_register_discount == 10
         self.tos.is_club_member = False
         self.tos.save()
-        # failing in tests, I believe due to sqlite, manual testing works in mariadb.
-        # fixme by uncommenting below once tests have been moved to mariadb
-        # assert lot.your_cut == 6
         self.tos.is_club_member = True
         self.tos.save()
         lot = lots.filter(pk=self.lot.pk).first()
-        # fixme, same deal as the assert before this, see https://github.com/iragm/fishauctions/issues/165
-        # assert lot.your_cut == 6
         self.lot.user = None
         self.lot.added_by = None
         self.lot.save()
@@ -178,7 +172,6 @@ class LotPricesTests(TestCase):
         self.assertAlmostEqual(Decimal(invoice.rounded_net), Decimal(-3.2))
 
     def test_decimal_price_your_cut(self):
-        """Decimal winning prices should flow correctly through add_price_info your_cut calculation"""
         self.auction.only_whole_dollar_bids = False
         self.auction.save()
         self.lot.winning_price = Decimal("10.50")
@@ -191,22 +184,18 @@ class LotPricesTests(TestCase):
         self.assertAlmostEqual(lot.club_cut, Decimal("4.625"), places=3)
 
     def test_decimal_price_invoice_totals(self):
-        """Invoice totals (subtotal, tax, net) should be correct with decimal winning prices"""
         self.auction.only_whole_dollar_bids = False
         self.auction.save()
         self.lot.winning_price = Decimal("10.50")
         self.lot.save()
         # Seller invoice
         invoice, _ = Invoice.objects.get_or_create(auctiontos_user=self.tos)
-        # total_sold = your_cut = 5.875 (from sold lot)
-        # unsold lot contributes -10 (unsold fee)
-        # net = 5.875 - 10 = -4.125
+        # total_sold 5.875, unsold fee -10, net -4.125
         self.assertAlmostEqual(invoice.total_sold, Decimal("5.875") - 10, places=3)
         self.assertEqual(invoice.tax, 0)
         self.assertAlmostEqual(invoice.net, Decimal("5.875") - 10, places=3)
 
     def test_decimal_price_buyer_invoice_with_tax(self):
-        """Buyer invoice tax should be calculated correctly with decimal winning prices"""
         self.auction.only_whole_dollar_bids = False
         self.auction.save()
         self.lot.winning_price = Decimal("10.50")
@@ -225,29 +214,24 @@ class LotPricesTests(TestCase):
         self.auction.only_whole_dollar_bids = False
         self.auction.invoice_rounding = True
         self.auction.save()
-        # Use a price that yields a fractional net for the seller
-        # your_cut = 10.50 * 0.75 - 2 = 5.875; unsold fee = -10; net = -4.125
+        # your_cut 10.50 * 0.75 - 2 = 5.875; unsold fee -10; net -4.125
         self.lot.winning_price = Decimal("10.50")
         self.lot.save()
         invoice, _ = Invoice.objects.get_or_create(auctiontos_user=self.tos)
-        # net = -4.125; user_should_be_paid=False (negative net)
-        # round(-4.125) = -4; -4.125 <= -4 → True → return -4
+        # Rounds in the buyer's favour: -4.125 -> -4.
         self.assertEqual(invoice.rounded_net, Decimal(-4))
 
     def test_decimal_price_invoice_rounding_buyer(self):
-        """rounded_net rounds in buyer's favor (less owed) when invoice_rounding is enabled"""
         self.auction.only_whole_dollar_bids = False
         self.auction.invoice_rounding = True
         self.auction.save()
         self.lot.winning_price = Decimal("10.50")
         self.lot.save()
         invoice, _ = Invoice.objects.get_or_create(auctiontos_user=self.tosB)
-        # net = -13.13; user_should_be_paid=False
-        # round(-13.13) = -13; -13.13 <= -13 → True → return -13
+        # -13.13 -> -13.
         self.assertEqual(invoice.rounded_net, Decimal(-13))
 
     def test_decimal_price_no_invoice_rounding(self):
-        """When invoice_rounding is False, rounded_net equals net exactly (preserves decimal cents)"""
         self.auction.only_whole_dollar_bids = False
         self.auction.invoice_rounding = False
         self.auction.save()
@@ -258,11 +242,7 @@ class LotPricesTests(TestCase):
         self.assertAlmostEqual(invoice_buyer.net, Decimal("-13.13"), places=2)
 
     def test_recalculate_stores_exact_decimal_net(self):
-        """recalculate() must persist the exact cents of the net.
-
-        Regression for calculated_total being an IntegerField: with invoice_rounding off, a net of
-        Decimal('-10.50') was truncated to -10 on write, losing $0.50 on every fractional invoice.
-        """
+        """recalculate() stores exact cents (calculated_total used to be an IntegerField)."""
         self.auction.only_whole_dollar_bids = False
         self.auction.invoice_rounding = False
         self.auction.tax = 0
@@ -292,12 +272,12 @@ class LotPricesTests(TestCase):
 
 
 class DecimalBidValidationTests(TestCase):
-    """Tests for bid_on_lot with the only_whole_dollar_bids toggle and decimal price validation"""
+    """bid_on_lot with only_whole_dollar_bids and decimal validation."""
 
     def setUp(self):
         time = timezone.now() + datetime.timedelta(days=30)
         pastTime = timezone.now() - datetime.timedelta(hours=1)
-        # Give users valid emails so outbid notification emails don't error out
+        # Valid emails so outbid notifications don't error.
         self.lotuser = User.objects.create_user(username="decimal_lotowner", password="x", email="lotowner@example.com")
         self.userA = User.objects.create_user(username="decimal_userA", password="x", email="userA@example.com")
         self.userB = User.objects.create_user(username="decimal_userB", password="x", email="userB@example.com")
@@ -381,11 +361,7 @@ class DecimalBidValidationTests(TestCase):
         self.assertIn("2 decimal", result["message"].lower())
 
     def test_decimal_bid_increment_minimum(self):
-        """Decimal auction: min increment is 5% rounded down to cents, minimum $0.01.
-
-        With one bidder present, lot.high_bid equals the reserve_price.
-        The 5% increment applies to that reserve_price.
-        """
+        """Decimal auction: the minimum increment is 5% of the reserve, rounded down to cents, at least $0.01."""
         from auctions.bidding import bid_on_lot
 
         # Use a lot with reserve=$10.00 so the math is clean
@@ -401,14 +377,11 @@ class DecimalBidValidationTests(TestCase):
         )
         lot.date_posted = pastTime
         lot.save()
-        # userA places proxy bid of $20.00; lot.high_bid = reserve = $10.00 (only one bidder)
         bid_on_lot(lot, self.userA, Decimal("20.00"))
-        # 5% of $10.00 = $0.50 → quantize(0.01, ROUND_DOWN) = $0.50; next_allowed = $10.50
-        # bid of $10.49 should fail
+        # 5% of $10.00 is $0.50, so $10.49 fails.
         result = bid_on_lot(lot, self.userB, Decimal("10.49"))
         self.assertEqual(result["type"], "ERROR")
         self.assertIn("10.50", result["message"])
-        # bid of $10.50 should succeed (bumps against proxy, type is NEW_HIGH_BID)
         result = bid_on_lot(lot, self.userB, Decimal("10.50"))
         self.assertIn(result["type"], ["NEW_HIGH_BIDDER", "NEW_HIGH_BID", "INFO"])
 
@@ -416,7 +389,7 @@ class DecimalBidValidationTests(TestCase):
         """Whole-dollar auction: minimum increment is $1 even when 5% < $1"""
         from auctions.bidding import bid_on_lot
 
-        # Use a lot with reserve=$5 (5% = $0.25, rounded down = $0, min=1 → increment is $1)
+        # Reserve $5: 5% rounds down to $0, so the increment is the $1 minimum.
         time = timezone.now() + datetime.timedelta(days=30)
         pastTime = timezone.now() - datetime.timedelta(hours=1)
         lot = Lot.objects.create(
@@ -429,10 +402,8 @@ class DecimalBidValidationTests(TestCase):
         )
         lot.date_posted = pastTime
         lot.save()
-        # userA places proxy bid; lot.high_bid = reserve = $5 (only one bidder)
         bid_on_lot(lot, self.userA, 10)
-        # 5% of $5 = $0.25 → to_integral_value(ROUND_DOWN) = $0 → max($0, $1) = $1
-        # next_allowed = $5 + $1 = $6; bid of $5 should fail
+        # Next allowed is $6.
         result = bid_on_lot(lot, self.userB, 5)
         self.assertEqual(result["type"], "ERROR")
         # bid of $6 should succeed
@@ -441,9 +412,9 @@ class DecimalBidValidationTests(TestCase):
 
 
 class BiddingPermissionsHardeningTests(TestCase):
-    """Regression tests for the bid-path hardening: admin-team ban enforcement, own-lot and
-    seller-ban checks via auctiontos_seller, the invoice gate for email-matched TOS records,
-    under-reserve bid rejection, and CreateUserBan cleanup robustness."""
+    """Bid-path hardening: admin-team bans, own-lot and seller-ban checks via auctiontos_seller, invoice
+    gate for email-matched TOS, under-reserve bids, and CreateUserBan cleanup.
+    """
 
     def setUp(self):
         self.future = timezone.now() + datetime.timedelta(days=30)
@@ -472,8 +443,7 @@ class BiddingPermissionsHardeningTests(TestCase):
         self.outbidder_tos = AuctionTOS.objects.create(
             user=self.outbidder, auction=self.auction, pickup_location=self.location
         )
-        # A TOS matched by email only: created BEFORE the matching user account exists, so
-        # AuctionTOS.save()'s create-time auto-link can't fire (the imported-member case)
+        # Created before the user exists, so save() can't auto-link it.
         self.unlinked_tos = AuctionTOS.objects.create(
             auction=self.auction, pickup_location=self.location, email="hardunlinked@example.com", name="Unlinked"
         )
@@ -501,15 +471,13 @@ class BiddingPermissionsHardeningTests(TestCase):
         lot = self._make_lot(self.coadmin_tos, user=self.coadmin)
         UserBan.objects.create(user=self.coadmin, banned_user=self.bidder)
         self.assertEqual(check_all_permissions(lot, self.bidder), "This user has banned you from bidding on their lots")
-        # a lot the co-admin doesn't own is still blocked, via the admin-team check
         other_lot = self._make_lot(self.outbidder_tos, user=self.outbidder, name="other lot")
         self.assertEqual(
             check_all_permissions(other_lot, self.bidder), "You don't have permission to bid in this auction"
         )
 
     def test_creator_ban_blocks_even_without_creator_tos(self):
-        """auction_admins_pks only contains users with a TOS row; the creator must be
-        covered even when they never made one for themselves"""
+        """The creator's ban applies even without a creator TOS."""
         from auctions.consumers import check_all_permissions
 
         lot = self._make_lot(self.outbidder_tos, user=self.outbidder)
@@ -524,8 +492,7 @@ class BiddingPermissionsHardeningTests(TestCase):
         self.assertFalse(check_all_permissions(lot, self.bidder))
 
     def test_own_lot_blocked_via_auctiontos_seller(self):
-        """Admin-added lots often have no lot.user; the seller must still be blocked from
-        bidding on their own lot when their TOS is matched by email"""
+        """Sellers can't bid on their own lot when matched via auctiontos_seller by email."""
         from auctions.bidding import check_bidding_permissions
 
         self.unlinked_tos.refresh_from_db()
@@ -541,7 +508,7 @@ class BiddingPermissionsHardeningTests(TestCase):
         self.assertEqual(check_all_permissions(lot, self.bidder), "This user has banned you from bidding on their lots")
 
     def test_invoice_gate_applies_to_email_matched_tos(self):
-        """A closed invoice must block bidding even when the TOS has no linked user account"""
+        """A closed invoice blocks bidding for a TOS with no linked user."""
         from auctions.bidding import bid_on_lot
 
         invoice = Invoice.objects.create(auctiontos_user=self.unlinked_tos, auction=self.auction)
@@ -564,8 +531,7 @@ class BiddingPermissionsHardeningTests(TestCase):
         self.assertEqual(result["type"], "NEW_HIGH_BIDDER")
 
     def test_raising_reserve_above_existing_bids_does_not_break_rebidding(self):
-        """lot.high_bidder returns False when all bids are under the reserve; re-bidding used
-        to crash on False.pk and report a generic error"""
+        """Re-bidding works after the reserve is raised above existing bids (high_bidder is False)."""
         from auctions.bidding import bid_on_lot
 
         lot = self._make_lot(self.coadmin_tos, user=self.coadmin, reserve=5)
@@ -602,9 +568,7 @@ class BiddingPermissionsHardeningTests(TestCase):
         self.assertEqual(result["message"], "This lot has been removed")
 
     def test_tos_for_user_newest_record_wins(self):
-        """Enforcement and UI both resolve TOS through tos_for_user; newest record wins.
-        AuctionTOS.save() auto-merges same-email duplicates on create nowadays, so simulate a
-        legacy duplicate with a queryset update that bypasses save()"""
+        """tos_for_user returns the newest record; the duplicate is made with update() to bypass auto-merge."""
         AuctionTOS.objects.filter(pk=self.bidder_tos.pk).update(createdon=timezone.now() - datetime.timedelta(days=2))
         newer = AuctionTOS.objects.create(
             auction=self.auction, pickup_location=self.location, email="tempdupe@example.com", name="dupe"
@@ -613,7 +577,7 @@ class BiddingPermissionsHardeningTests(TestCase):
         self.assertEqual(self.auction.tos_for_user(self.bidder).pk, newer.pk)
 
     def test_create_user_ban_survives_soft_deleted_lots(self):
-        """Banning a user whose bid history touches a soft-deleted lot used to 500 mid-sweep"""
+        """Banning a user whose bids touch a soft-deleted lot doesn't 500."""
         lot = self._make_lot(self.coadmin_tos, user=self.coadmin)
         Bid.objects.create(user=self.bidder, lot_number=lot, amount=10)
         lot.is_deleted = True
@@ -627,8 +591,7 @@ class BiddingPermissionsHardeningTests(TestCase):
         self.assertTrue(live_bid.is_deleted)
 
     def test_coadmin_ban_sweeps_administered_auction(self):
-        """A co-admin's ban must clean up the auctions they administer, not just ones they created"""
-        # the banned user has an active bid, and a lot linked only through auctiontos_seller
+        """A co-admin's ban sweeps auctions they administer."""
         target_lot = self._make_lot(self.outbidder_tos, user=self.outbidder, name="bid target")
         bid = Bid.objects.create(user=self.bidder, lot_number=target_lot, amount=10)
         seller_lot = self._make_lot(self.bidder_tos, user=None, name="seller linked lot")
@@ -641,8 +604,7 @@ class BiddingPermissionsHardeningTests(TestCase):
         self.assertTrue(seller_lot.banned)
 
     def test_banned_user_cannot_submit_lot(self):
-        """CreateUserBan sweeps existing lots; without a gate at submission the banned user
-        could simply resubmit them"""
+        """A banned user can't submit lots."""
         UserBan.objects.create(user=self.creator, banned_user=self.bidder)
         userdata = self.bidder.userdata
         userdata.address = "123 Test St"
@@ -673,7 +635,7 @@ class AuctionEditFormMinimumBidTests(TestCase):
     """Tests for AuctionEditForm minimum_bid validation with only_whole_dollar_bids"""
 
     def _get_form_data(self, auction, overrides=None):
-        """Build a minimal valid form data dict for AuctionEditForm from an existing auction"""
+        """Minimal valid AuctionEditForm data from an auction."""
 
         data = {
             "title": auction.title,
@@ -747,7 +709,6 @@ class AuctionEditFormMinimumBidTests(TestCase):
         self.assertNotIn("minimum_bid", form.errors)
 
     def test_toggle_to_whole_dollar_rounds_existing_prices(self):
-        """Switching to whole-dollar mode rounds auction minimum bid and existing lot prices"""
         self.auction.only_whole_dollar_bids = False
         self.auction.minimum_bid = Decimal("5.75")
         self.auction.save()
@@ -801,15 +762,10 @@ class AuctionEditFormMinimumBidTests(TestCase):
 
 
 class IntegerMoneyColumnRepairTests(TransactionTestCase):
-    """A money column that is still an integer, on a database Django believes is migrated.
+    """Repairing a money column that's still an integer while Django believes it migrated.
 
-    Migration 0227 converted the money columns to ``DECIMAL(10, 2)``; where one of those
-    ``AlterField``s did not take, the field still says DecimalField and the migration is still
-    recorded as applied, so nothing in Django ever looks again.  mysqlclient hands back the type
-    the column actually is, so every price read out of it is an ``int``: turning on whole-dollar
-    bids reached ``.to_integral_value()`` on one and 500'd the auction edit page.  Migration 0437
-    converts the column, and does it for any DecimalField whose column is an integer type rather
-    than for a list of names.
+    Migration 0437 converts any DecimalField whose column is an integer type; unconverted, every price
+    read is an ``int`` and whole-dollar bids 500'd the edit page.
     """
 
     TABLE = "auctions_lot"
@@ -905,11 +861,11 @@ class IntegerMoneyColumnRepairTests(TransactionTestCase):
             drifted_lot = Lot.objects.get(pk=self.lot.pk)
             self.assertIsInstance(drifted_lot.winning_price, int)
             self.assertIsInstance(drifted_lot.reserve_price, int)
-            # Writing is the quiet half: the column rounds 8.50 to 9 and says nothing.
+            # The integer column silently rounds 8.50 to 9.
             drifted_lot.winning_price = Decimal("8.50")
             drifted_lot.save()
             self.assertEqual(Lot.objects.get(pk=self.lot.pk).winning_price, 9)
-            # The 500: every price out of this column is an int, whatever the field says.
+            # This 500'd before the repair.
             self._toggle_whole_dollar_bids()
             self._repair()
             self.assertEqual(self._column_types(), dict.fromkeys(self.DRIFTED, "decimal"))
@@ -923,8 +879,7 @@ class IntegerMoneyColumnRepairTests(TransactionTestCase):
         self.assertEqual(Lot.objects.get(pk=self.lot.pk).winning_price, Decimal("8.50"))
 
     def test_the_repaired_column_keeps_its_nullability(self):
-        """``reserve_price`` is NOT NULL and ``winning_price`` is not; the conversion is not the
-        place to lose that."""
+        """The conversion preserves each column's nullability."""
         from django.db import connection
 
         self._set_column_types(self.DRIFTED)
@@ -1072,14 +1027,7 @@ class LotRefundDialogTests(TestCase):
 
 
 class BidDialogTests(StandardTestCase):
-    """The box a visitor gets when the Bid button cannot do what it says.
-
-    The button is on the page whether or not you are signed in -- deliberately, it is what a buyer
-    wants to click -- so this dialog is the answer to "why can't I bid?". Four of the five reasons
-    it carries are refusals and look like refusals. "You are not signed in yet" is not a refusal,
-    and it used to arrive titled "Bid failed!" in red under an exclamation icon, for somebody who
-    had never bid.
-    """
+    """The dialog when the Bid button can't bid. Not being signed in isn't presented as a failure."""
 
     def setUp(self):
         super().setUp()
@@ -1121,8 +1069,7 @@ class BidDialogTests(StandardTestCase):
         self.assertNotIn("bi-exclamation-circle-fill", page)
 
     def test_the_sign_in_dialog_offers_one_button_and_one_sentence(self):
-        """The body is already a sentence with a sign-in link; a second primary button beside the
-        first said the same thing a third time."""
+        """The sign-in dialog has one sentence with a link and no extra button."""
         page = self._lot_page()
         self.assertIn("You have to <a href='/login/?next=", page)
         self.assertNotIn("Create an account</a>", page)
@@ -1130,7 +1077,7 @@ class BidDialogTests(StandardTestCase):
         self.assertEqual(footer.count('class="btn btn-primary"'), 1)
 
     def test_a_real_refusal_still_reads_as_one(self):
-        """Somebody signed in who has not joined the auction is being refused, and should see it."""
+        """A signed-in user who hasn't joined sees a refusal."""
         self.client.login(username="no_joins", password="testpassword")
         page = self._lot_page()
         self.assertIn("Bid failed", page)
@@ -1139,14 +1086,7 @@ class BidDialogTests(StandardTestCase):
 
 
 class WholeDollarBidBoxTests(StandardTestCase):
-    """What goes *in* the bid box when the auction takes whole dollars only.
-
-    The box steps by 1 and carries a hard-coded ".00" beside it, so an amount with cents in it reads
-    "5.00" next to ".00".  Every default this view offers is built out of a DecimalField and renders
-    as "5.00" -- but production only started showing it the day 0437 turned the money columns into
-    real decimals: an integer column handed mysqlclient an int, and an int renders as "5".  Dev and
-    staging had been decimal all along, which is why the deploy was the first sight of it.
-    """
+    """Whole-dollar auctions show whole numbers in the bid box, next to its ".00"."""
 
     def setUp(self):
         super().setUp()
@@ -1183,13 +1123,11 @@ class WholeDollarBidBoxTests(StandardTestCase):
             reserve_price=5,
             active=True,
         )
-        # Bidding is held off a lot for its first 20 minutes (Lot.bidding_allowed_on), and a lot
-        # created inside a test is always brand new -- which puts "this lot is very new" where the
-        # bid box goes.  date_posted is auto_now_add, so a queryset update is the only way past it.
+        # Past the 20-minute new-lot hold; date_posted is auto_now_add.
         Lot.objects.filter(pk=self.dollar_lot.pk).update(date_posted=timezone.now() - datetime.timedelta(hours=1))
 
     def _bid_box(self):
-        """The bid input's own tag, so an amount elsewhere on the page cannot satisfy the assert."""
+        """The bid input tag itself."""
         self.client.login(username="no_lots", password="testpassword")
         page = self.client.get(self.dollar_lot.lot_link).content.decode()
         self.assertIn("id='bid_amount'", page)

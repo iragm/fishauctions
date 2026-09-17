@@ -5,13 +5,7 @@ register = template.Library()
 
 @register.filter
 def currency_symbol(currency_code):
-    """
-    Get the currency symbol for a given currency code.
-    Args:
-        currency_code: Currency code (USD, CAD, GBP, EUR, JPY, AUD, CHF, CNY)
-    Returns:
-        Currency symbol string ($, £, €, ¥, CHF)
-    """
+    """The symbol for a currency code -- ``$``, ``£``, ``€``, ``¥`` or ``CHF``."""
     symbol_map = {
         "GBP": "£",
         "EUR": "€",
@@ -27,14 +21,7 @@ def currency_symbol(currency_code):
 
 @register.filter
 def format_price(price, currency_code):
-    """
-    Format a price with the appropriate currency symbol.
-    Args:
-        price: The price value
-        currency_code: Currency code (USD, CAD, GBP, EUR, JPY, AUD, CHF, CNY)
-    Returns:
-        Formatted price string like "$10.00", "£10.00", "€10.00", "¥10", or "CHF 10.00"
-    """
+    """A price with its currency symbol: '$10.00', '£10.00', '¥10', 'CHF 10.00'."""
     if price is None:
         return ""
     symbol = currency_symbol(currency_code)

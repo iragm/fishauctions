@@ -1,6 +1,6 @@
 """The speaker directory: who will come and talk to a club, and what about.
 
-Behind ``NECSpeakerAccessMixin``, which is any club permission in a club flagged ``is_nec_club``.
+Behind ``NECSpeakerAccessMixin``: any club permission in a club flagged ``is_nec_club``.
 """
 
 import logging
@@ -50,9 +50,8 @@ logger = logging.getLogger(__name__)
 class NECSpeakerAccessMixin(LoginRequiredMixin):
     """Gate the speaker directory to people involved with an NEC member club.
 
-    "Involved with" is any permission in a club an admin has flagged `is_nec_club`.  Rather
-    than a bare 403 this renders a page explaining what the directory is and who can see it,
-    because most people hitting it will be members of clubs that simply aren't NEC members.
+    Renders an explanation rather than a bare 403, since most people reaching it are in clubs that
+    simply aren't NEC members.
     """
 
     def dispatch(self, request, *args, **kwargs):
@@ -60,8 +59,7 @@ class NECSpeakerAccessMixin(LoginRequiredMixin):
         self._origin = None
         if request.user.is_authenticated:
             self.nec_clubs = list(clubs_with_any_permission(request.user))
-            # A superuser gets in even before any club has been flagged as an NEC member --
-            # otherwise the person who has to tick that box can't reach the page to see why.
+            # A superuser gets in before any club is flagged, or nobody could tick the box.
             if not self.nec_clubs and not request.user.is_superuser:
                 return render(request, "auctions/speaker_no_access.html", status=403)
         return super().dispatch(request, *args, **kwargs)
@@ -71,11 +69,9 @@ class NECSpeakerAccessMixin(LoginRequiredMixin):
         return [club.pk for club in self.nec_clubs]
 
     def visible_speakers(self):
-        """Speakers this user is allowed to see.
+        """Speakers this user may see: currently all of them, since everyone here is in an NEC club.
 
-        Today everyone who gets this far is in an NEC club, so this is every speaker.  When
-        the directory opens up to other clubs, only this method changes: `nec_only` rows drop
-        out for everyone else, and the NEC roster stays where it is.
+        When the directory opens up, only this method changes: ``nec_only`` rows drop out for others.
         """
         queryset = Speaker.objects.filter(is_deleted=False)
         if self.nec_clubs or self.request.user.is_superuser:
@@ -83,15 +79,11 @@ class NECSpeakerAccessMixin(LoginRequiredMixin):
         return queryset.filter(nec_only=False)
 
     def resolve_origin(self):
-        """Work out what distances on this page are measured from.
+        """What distances on this page are measured from.
 
-        `?club=<slug>` wins when the user has a permission in that club, which is what makes
-        the list shareable between officers of the same club.  Without it we fall back to the
-        user's own coordinates, so the page is still useful before anyone sets a club address.
-        Returns (latitude, longitude, club_or_None, label, change_url_or_None).
-
-        Cached per request: four different hooks on the list view need the same answer, and
-        recomputing it would re-run the club lookup each time.
+        ``?club=<slug>`` wins when the user has a permission in that club, so the page is shareable between
+        officers; otherwise the user's own coordinates. Returns (latitude, longitude, club, label,
+        change_url). Cached per request, since four hooks need the same answer.
         """
         if self._origin is not None:
             return self._origin
@@ -110,10 +102,10 @@ class NECSpeakerAccessMixin(LoginRequiredMixin):
                 )
                 if club.latitude and club.longitude:
                     return club.latitude, club.longitude, club, club.name, change_url
-                # A club with no address still scopes the page to that club, it just can't
-                # measure anything -- say so rather than silently using the user's location.
+                # A club with no address still scopes the page; say so rather than using the user's
+                # location.
                 return None, None, club, club.name, change_url
-        # contact_info is the page with the location map on it, not preferences.
+        # contact_info is the page with the location map, not preferences.
         userdata = getattr(self.request.user, "userdata", None)
         if userdata and userdata.latitude and userdata.longitude:
             return (
@@ -129,11 +121,8 @@ class NECSpeakerAccessMixin(LoginRequiredMixin):
 class SpeakerListView(NECSpeakerAccessMixin, HTMxTableView):
     """The speaker directory, as a sortable table or a map of the same filtered set.
 
-    The map is why this subclasses HTMxTableView rather than just using it: an htmx filter
-    normally swaps the table and nothing else, so the htmx response here also carries an
-    out-of-band payload of every matching speaker's coordinates and the map redraws its
-    markers from that.  Both views therefore always agree, and filtering doesn't reload the
-    page or lose the map's pan/zoom.
+    Subclasses HTMxTableView because the htmx response also carries an out-of-band payload of every
+    matching speaker's coordinates, so the map redraws without losing its pan and zoom.
     """
 
     model = Speaker
@@ -146,21 +135,16 @@ class SpeakerListView(NECSpeakerAccessMixin, HTMxTableView):
     def get_queryset(self):
         """Newest first.
 
-        The model's own ordering is by `name`, which is the NEC export's "Last, First" -- but
-        the list renders `display_name`, so a page sorted that way reads as though it isn't
-        sorted at all.  Recency is the one order that means something on a directory people
-        keep adding to: it puts what changed since your last visit at the top, and the "New"
-        badge marks the same speakers once you sort or filter your way out of this order.
-        Distance is still a click on the Location column (see SpeakerHTMxTable.order_location),
-        which is why the annotation stays whether or not it is being sorted on.
+        The model orders by `name` ("Last, First"), but the list renders `display_name`, so that reads as
+        unsorted. Recency puts what changed since the last visit at the top, and the "New" badge marks the
+        same speakers in other orders. Distance is a click on the Location column
+        (SpeakerHTMxTable.order_location), so the annotation stays either way.
         """
         queryset = self.visible_speakers().prefetch_related("topics")
         latitude, longitude, *_ = self.resolve_origin()
         if latitude is not None and longitude is not None:
             queryset = queryset.annotate(distance=distance_to(latitude, longitude))
-        # -pk, not just -createdon: the 405 imported speakers were written in one batch and
-        # share a timestamp to the second, so without it their order is whatever MariaDB feels
-        # like today and pagination can show the same speaker twice.
+        # -pk too: the 405 imported speakers share a timestamp, so pagination could repeat one.
         return queryset.order_by("-createdon", "-pk")
 
     def get_filterset_kwargs(self, filterset_class):
@@ -179,14 +163,12 @@ class SpeakerListView(NECSpeakerAccessMixin, HTMxTableView):
         return kwargs
 
     def get_filter_placeholder_text(self):
-        # Doubles as the only hint that a radius can be searched for, now that there is no
-        # distance control.  Short, because this box is the width of a phone.
+        # Also the only hint that a radius can be searched for. Short: this box is a phone wide.
         return 'Search speakers, or "within 50 miles"'
 
     def get_possible_filters(self):
-        # photo / mapped / myclub are deliberately absent: they still work as keywords in the
-        # search box, but they aren't how anyone looks for a speaker, and every row in this
-        # menu is a row somebody has to read past to reach the ones that are.
+        # photo / mapped / myclub work as search keywords but aren't how anyone looks for a
+        # speaker, and every menu row is one more to read past.
         return [
             ("<small class='text-muted'>Tagged as:</small>", ""),
             ("<i class='bi bi-hand-thumbs-up'></i> Would book again", "recommended"),
@@ -197,10 +179,8 @@ class SpeakerListView(NECSpeakerAccessMixin, HTMxTableView):
         ]
 
     def speakers_for_map(self, filterset):
-        """Coordinates for every speaker matching the current filters, not just this page.
-
-        A map that only plots the current page of results would be actively misleading, so
-        this deliberately ignores pagination.
+        """Coordinates for every speaker matching the filters, ignoring pagination: a map of one page would
+        mislead.
         """
         queryset = filterset.qs.filter(latitude__isnull=False, longitude__isnull=False)
         return [
@@ -225,16 +205,16 @@ class SpeakerListView(NECSpeakerAccessMixin, HTMxTableView):
         context["has_origin"] = latitude is not None and longitude is not None
         context["origin_latitude"] = latitude
         context["origin_longitude"] = longitude
-        # The topic menu is markup the template writes itself (radios in a dropdown), so the
-        # choices come through the context rather than off a rendered widget.
+        # The topic menu is markup the template writes, so the choices come through the context.
         context["topic_choices"] = filterset.topic_choices() if filterset else []
         selected_topic = self.request.GET.get("topic", "")
         context["selected_topic"] = selected_topic
-        # Empty unless a topic is set, so the button falls back to reading "Topics".
+        # Empty unless a topic is set, so the button reads "Topics".
         context["selected_topic_label"] = (
             dict(context["topic_choices"]).get(selected_topic, "") if selected_topic else ""
         )
         context["google_maps_api_key"] = settings.LOCATION_FIELD["provider.google.api_key"]
+        context["google_maps_map_id"] = settings.GOOGLE_MAPS_MAP_ID
         context["is_htmx"] = bool(self.request.htmx)
         context["speakers_json"] = self.speakers_for_map(filterset) if filterset else []
         if filterset:
@@ -243,24 +223,20 @@ class SpeakerListView(NECSpeakerAccessMixin, HTMxTableView):
             context["result_count"] = total
         context["default_view"] = "map" if self.request.GET.get("view") == "map" else "list"
         context["club_query"] = self.request.GET.get("club", "")
-        # Only the full page renders the suggestion banner, and working it out reads every
-        # speaker name in the directory -- doing that again on each keystroke would be waste.
+        # Only the full page renders the banner, and working it out reads every speaker's name.
         context["has_unlisted_members"] = False if self.request.htmx else self.has_unlisted_club_members()
         if filterset and context.get("result_count") == 0:
             context["no_results"] = self._build_no_results_html()
         return context
 
     def _build_no_results_html(self):
-        """Empty state that offers to add the person who was just searched for.
-
-        A search that finds nobody is the most likely moment someone realises a speaker is
-        missing, so this is where the Add button belongs.
+        """Empty state offering to add the person just searched for, which is when people notice a speaker is
+        missing.
         """
         query = (self.request.GET.get("query") or "").strip()
         create_url = reverse("speaker_add")
         params = {}
-        # Only offer to prefill a name when the search looks like one, not when it's a keyword
-        # token like "photo" or a scrap of a bio.
+        # Only prefill a name when the search looks like one, not a keyword or a scrap of a bio.
         keywords = set(SpeakerFilter.TAG_TOKENS) | {
             "photo",
             "photos",
@@ -292,13 +268,11 @@ class SpeakerListView(NECSpeakerAccessMixin, HTMxTableView):
     def has_unlisted_club_members(self):
         """Whether any member of the user's NEC clubs is missing from the directory.
 
-        Only ever asked as a yes/no -- the banner names nobody. Matching on name is deliberately
-        loose; a false "already listed" is much better than nagging a club to re-add a speaker.
+        Only ever a yes/no, and matched loosely: a false "already listed" beats nagging a club.
         """
         if not self.nec_clubs:
             return False
-        # The NEC import stores names as "Last, First" while club members are "First Last", so
-        # index both readings or every imported speaker looks like a new person.
+        # The NEC import stores "Last, First" and club members are "First Last", so index both.
         existing_names = set()
         for speaker in Speaker.objects.filter(is_deleted=False).only("name"):
             existing_names.add(speaker.name.casefold())
@@ -312,10 +286,8 @@ class SpeakerListView(NECSpeakerAccessMixin, HTMxTableView):
 
 
 class SpeakerPanelView(NECSpeakerAccessMixin, DetailView):
-    """The speaker card that slides in beside the list (or fills the screen on mobile).
-
-    Served as a fragment for htmx and, at the same URL family, as a whole page for anyone
-    who follows a shared link -- see SpeakerDetailView.
+    """The speaker card beside the list: an htmx fragment, and a whole page for a shared link (see
+    SpeakerDetailView).
     """
 
     model = Speaker
@@ -375,12 +347,10 @@ class SpeakerCreateView(NECSpeakerAccessMixin, CreateView):
         return initial
 
     def club_being_represented(self):
-        """The club to record as the source of this entry, without asking for it.
+        """The club to record as the source of this entry, without asking.
 
-        `?club=` is whichever club's page they came in from, which is the one answer worth
-        having.  Failing that, someone in exactly one NEC club can only be representing that
-        one; someone in several is genuinely ambiguous, and no club is recorded rather than a
-        guessed one.  Same rule as SpeakerCommentView.
+        ``?club=`` is the club they came in from; failing that, somebody in exactly one NEC club can only
+        be representing that one. Somebody in several records no club. Same rule as SpeakerCommentView.
         """
         club_slug = (self.request.GET.get("club") or "").strip()
         if club_slug:
@@ -406,7 +376,7 @@ class SpeakerCreateView(NECSpeakerAccessMixin, CreateView):
 
 
 class SpeakerUpdateView(NECSpeakerAccessMixin, UpdateView):
-    """Edit a speaker.  Restricted to whoever added them (imported rows: superusers only)."""
+    """Edit a speaker; restricted to whoever added them (imported rows: superusers only)."""
 
     model = Speaker
     form_class = SpeakerForm
@@ -431,11 +401,7 @@ class SpeakerUpdateView(NECSpeakerAccessMixin, UpdateView):
 
 
 class SpeakerDeleteView(NECSpeakerAccessMixin, View):
-    """Soft delete a speaker you added.
-
-    Soft, not hard, because tags and comments other clubs left are worth keeping if this
-    turns out to be a mistake.
-    """
+    """Soft-delete a speaker you added, keeping other clubs' tags and comments in case it's a mistake."""
 
     def post(self, request, slug):
         speaker = get_object_or_404(self.visible_speakers(), slug=slug)
@@ -447,7 +413,7 @@ class SpeakerDeleteView(NECSpeakerAccessMixin, View):
 
 
 class SpeakerTagView(NECSpeakerAccessMixin, View):
-    """Toggle one of the current user's tags on a speaker, and re-render the tag block."""
+    """Toggle one of the current user's tags on a speaker and re-render the tag block."""
 
     def post(self, request, slug):
         speaker = get_object_or_404(self.visible_speakers(), slug=slug)
@@ -481,8 +447,7 @@ class SpeakerCommentView(NECSpeakerAccessMixin, View):
             comment = form.save(commit=False)
             comment.speaker = speaker
             comment.user = request.user
-            # Recorded for the admin only -- comments are shown under the person's name, so
-            # there is nothing to pick from: a club is attached only when there's one to attach.
+            # Recorded for the admin only, and only when there's one club to attach.
             comment.club = self.nec_clubs[0] if len(self.nec_clubs) == 1 else None
             comment.save()
             form = SpeakerCommentForm()

@@ -1,5 +1,4 @@
-"""Got sick of these being scattered all over the codebase,
-will move more functions here as they get edited"""
+"""Small helpers with no home of their own: email scrubbing, currency symbols, histogram bins."""
 
 import re
 from collections import Counter
@@ -21,13 +20,7 @@ def scrub_emails(text):
 
 
 def get_currency_symbol(currency_code):
-    """
-    Get the currency symbol for a given currency code.
-    Args:
-        currency_code: Currency code (USD, CAD, GBP, EUR, JPY, AUD, CHF, CNY)
-    Returns:
-        Currency symbol string ($, £, €, ¥, CHF)
-    """
+    """The symbol for a currency code -- ``$``, ``£``, ``€``, ``¥`` or ``CHF``."""
     symbol_map = {
         "GBP": "£",
         "EUR": "€",
@@ -51,12 +44,12 @@ def bin_data(
     add_column_for_high_overflow=False,
     generate_labels=False,
 ):
-    """Pass a queryset and this will spit out a count of how many `field_name`s there are in each `number_of_bins`
-    Pass a datetime or an int for start_bin and end_bin, the default is the min/max value in the queryset.
-    Specify `add_column_for_low_overflow` and/or `add_column_for_high_overflow`, otherwise data that falls
-    outside the start and end bins will be discarded.
+    """Count how many ``field_name`` fall into each of ``number_of_bins``.
 
-    If `generate_labels=True`, a tuple of [labels, data] will be returned
+    ``start_bin`` and ``end_bin`` take a datetime or an int, defaulting to the queryset's min and max;
+    anything outside them is discarded unless ``add_column_for_low_overflow`` or
+    ``add_column_for_high_overflow`` is set. With ``generate_labels=True`` the return is
+    ``[labels, data]``.
     """
     # some cleanup and validation first
     try:

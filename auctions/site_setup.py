@@ -7,10 +7,10 @@ from django.core.cache import cache
 
 logger = logging.getLogger(__name__)
 
-# Single-club auctions always manage participants through the club (it can't be turned off), so new
-# ones start in a club-managed mode. We default to "all" (auto-add every member with bidding enabled):
-# it's the only mode valid for online auctions, and check-in mode -- while still available as an
-# opt-in -- is an extra step that tends to confuse new admins, so it isn't the default.
+# Single-club auctions always manage participants through the club, so new ones start in a
+# club-managed mode. "all" (auto-add every member, bidding enabled) is the default: it is the only
+# mode valid for online auctions, and check-in mode -- still available as an opt-in -- is an extra
+# step that tends to confuse new admins.
 SINGLE_CLUB_DEFAULT_MANAGE_MODE = "all"
 
 _SERVER_IP_CACHE_KEY = "site_setup_server_public_ip"
@@ -79,8 +79,8 @@ def get_single_club(*, create: bool = False):
         "use_site_paypal_account": site_paypal_configured(),
         # On a single-club site this club *is* the site, so it is approved by definition.
         # Club.outreach_stage defaults to "prospect" (it exists for the clubs phase 8 goes looking
-        # for), and an unlisted club is off the map and out of every dropdown -- which for this one
-        # would mean the deployment hiding itself.
+        # for), and an unlisted club is off the map and out of every dropdown -- which here would
+        # mean the deployment hiding itself.
         "outreach_stage": Club.LISTED,
     }
     for field_name, desired_value in desired_values.items():
@@ -96,8 +96,8 @@ def ensure_single_club_membership_for_user(user):
     if not user or not single_club_mode_enabled():
         return None
     # A deleted account has had its memberships unlinked on the way out, and the last thing
-    # auctions.account_deletion does is save the User — which lands here. Without this guard that
-    # save creates a brand new membership and links it straight back to the account it just left.
+    # auctions.account_deletion does is save the User -- which lands here. Without this guard that
+    # save creates a new membership and links it straight back.
     if not user.is_active:
         return None
 
@@ -115,10 +115,10 @@ def ensure_single_club_membership_for_user(user):
             name=(user.get_full_name() or user.username or user.email or "").strip(),
             email=user.email or "",
             source="single_club_mode",
-            # Nobody at the club asked for this row: it is created for the person the moment they
-            # sign up, out of what they typed into the signup form. So it is theirs, and it goes
-            # when they delete their account rather than keeping their name and address in the
-            # club's roster forever (see auctions.account_deletion).
+            # Nobody at the club asked for this row: it is created for the person at signup, out of
+            # what they typed into the form. So it is theirs, and it goes when they delete their
+            # account rather than keeping their name and address in the club's roster for ever
+            # (see auctions.account_deletion).
             admin_edited=False,
         )
     else:

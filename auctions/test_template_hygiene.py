@@ -1,14 +1,13 @@
 """Guards against the template mistakes that produce a wrong page without an error.
 
-The bug this exists to prevent: ``{# … #}`` (and ``{% … %}``, and ``{{ … }}``) must open and
-close on the same line, because Django's lexer has no ``re.DOTALL``. Spread one over two lines
-and Django doesn't recognise it — it copies the whole thing, delimiters included, onto the page.
-Nothing raises, nothing logs, and it reaches production looking like a developer note left in
-the middle of the club page. It has happened several times; this makes it fail the build instead.
+The bug this exists to prevent: ``{# … #}`` (and ``{% … %}``, and ``{{ … }}``) must open and close
+on the same line, because Django's lexer has no ``re.DOTALL``. Spread one over two lines and Django
+copies the whole thing, delimiters included, onto the page. Nothing raises, nothing logs, and it
+reaches production looking like a developer note in the middle of the club page. It has happened
+several times; this makes it fail the build instead.
 
-The rule is checked against the template source rather than rendered output on purpose: rendering
-every template with the context it expects isn't practical, and the mistake is visible in the
-file either way.
+Checked against the source rather than rendered output: rendering every template with the context
+it expects isn't practical, and the mistake is visible in the file either way.
 """
 
 import contextlib

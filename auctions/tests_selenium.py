@@ -1,22 +1,13 @@
-"""
-Selenium-based browser tests for client-side JavaScript functionality.
+"""Selenium browser tests for client-side JavaScript, HTMx and websockets.
 
-These tests use Selenium with a remote Chrome browser to test
-client-side interactions, HTMx functionality, and JavaScript behavior.
+To run locally:
+1. docker compose --profile selenium up -d selenium
+2. docker compose up -d
+3. docker exec -it django python3 manage.py test auctions.tests_selenium
 
-To run these tests locally:
-1. Start the selenium container: docker compose --profile selenium up -d selenium
-2. Start the app: docker compose up -d
-3. Run tests: docker exec -it django python3 manage.py test auctions.tests_selenium
-
-Environment variables:
-- SELENIUM_HOST: Hostname of Selenium server (default: selenium)
-- SELENIUM_PORT: Port of Selenium server (default: 4444)
-- TEST_SERVER_HOST: Hostname of the test server (default: nginx)
-- TEST_SERVER_PORT: Port of the test server (default: 80)
-
-Note: These tests connect to the running application via nginx, not the Django test
-server. This means they test the actual deployed application state, not test database data.
+SELENIUM_HOST/SELENIUM_PORT (selenium:4444) and TEST_SERVER_HOST/TEST_SERVER_PORT (nginx:80)
+override the defaults. Except LiveBiddingTestCase, these hit the running app via nginx, not the
+test database.
 """
 
 import datetime
@@ -39,11 +30,7 @@ try:
 
     CHANNELS_LIVE_AVAILABLE = True
 except ImportError:
-    # ChannelsLiveServerTestCase spins up an in-process Daphne server, so importing
-    # it requires daphne -- a test-only dep (see requirements-test.in). It's absent
-    # from the production image, so fall back to a plain TestCase base to keep this
-    # module importable there; LiveBiddingTestCase is skipped below via
-    # CHANNELS_LIVE_AVAILABLE (and needs Selenium anyway, which prod also lacks).
+    # daphne is test-only, so production falls back to TestCase and skips the live tests.
     from django.test import TestCase as ChannelsLiveServerTestCase
 
     CHANNELS_LIVE_AVAILABLE = False
@@ -62,21 +49,11 @@ except ImportError:
 
 
 def site_origin():
-    """The URL the browser has to use to reach *this* stack, and the DNS override that gets there.
+    """The browser's origin for this stack, and the DNS override that reaches it: ``(origin, host_map)``.
 
-    Returns ``(origin, host_map)``. Two stacks serve this site and they are not reachable the same
-    way, which is the whole point of being able to test both:
-
-    * CI, and any box left on the defaults, runs the plain ``nginx`` image with ``nginx.dev.conf``:
-      one ``default_server`` on port 80 that answers to any name, so ``http://nginx`` is the site.
-    * Production runs **swag** with ``nginx.prod.conf``, and so does a dev box mirroring it
-      (``NGINX_IMAGE``/``NGINX_CONF`` in ``.env``). There port 80 redirects to https and 443 answers
-      only to ``SITE_DOMAIN`` -- ``http://nginx`` lands on swag's catch-all 404, with no jQuery and
-      no htmx on the page, which is what every vendor-library test reported as a failure.
-
-    The second case needs the real hostname, and that name resolves to the *public* site through
-    DNS, so it is pinned to the container's own address with ``--host-resolver-rules``. Nothing here
-    may ever leave the machine.
+    The plain nginx config answers any name at ``http://nginx``. A swag/prod-mirroring box answers only
+    to ``SITE_DOMAIN`` over https, so that name is pinned to the container with
+    ``--host-resolver-rules``.
     """
     host = os.environ.get("TEST_SERVER_HOST", "nginx")
     port = os.environ.get("TEST_SERVER_PORT", "80")
@@ -115,14 +92,11 @@ def get_selenium_driver(host_map=""):
     chrome_options.add_argument("--disable-gpu")
     chrome_options.add_argument("--window-size=1920,1080")
     if host_map:
-        # Send the vhost name to this machine's own nginx, never to whatever DNS says, and accept
-        # the certificate it answers with -- a dev box mirroring production has a real domain in
-        # SITE_DOMAIN and a certificate that does not match an internal address.
+        # Pin the vhost to local nginx and accept its certificate.
         chrome_options.add_argument(f"--host-resolver-rules={host_map}")
         chrome_options.add_argument("--ignore-certificate-errors")
         chrome_options.set_capability("acceptInsecureCerts", True)
-    # Ask Chrome to keep the console, so a test that fails on a page whose JavaScript died can say
-    # so.  Without this capability get_log("browser") raises instead of returning an empty list.
+    # Keep the console log; without this get_log("browser") raises.
     chrome_options.set_capability("goog:loggingPrefs", {"browser": "ALL"})
 
     driver = webdriver.Remote(
@@ -156,22 +130,12 @@ def selenium_available():
 @unittest.skipUnless(SELENIUM_AVAILABLE and selenium_available(), "Selenium not available")
 @tag("selenium")
 class SeleniumTestCase(TestCase):
-    """
-    Base class for Selenium tests that provides common setup and utilities.
-
-    This class sets up a Selenium WebDriver connected to a remote Chrome instance
-    and provides helper methods for common browser interactions.
-
-    Note: These tests connect to the live application via nginx, not a test server.
-    Test data created in Django tests won't be visible in the browser.
-    """
+    """Base Selenium test against the live app via nginx; test-database data isn't visible."""
 
     @classmethod
     def setUpClass(cls):
         super().setUpClass()
-        # Run collectstatic to ensure vendor files are available
-        # This is necessary for vendor library tests to work
-        # Note: --clear flag removed to avoid permission errors in test environment
+        # collectstatic so vendor files exist for the vendor library tests.
         import io
         import sys
 
@@ -183,10 +147,7 @@ class SeleniumTestCase(TestCase):
         try:
             call_command("collectstatic", "--no-input", verbosity=0)
         except PermissionError:
-            # staticfiles may already be populated in the test environment, and the
-            # bind-mounted directory or existing files may be owned by another user.
-            # In that case collectstatic can raise PermissionError here and can be
-            # safely ignored for these Selenium tests.
+            # The static directory may be owned by another user; ignore PermissionError.
             from django.conf import settings
 
             static_root = settings.STATIC_ROOT
@@ -196,7 +157,7 @@ class SeleniumTestCase(TestCase):
         finally:
             sys.stdout = stdout_backup
 
-        # Whichever of the two nginx configurations this box runs -- see site_origin().
+        # See site_origin().
         cls.test_server_host = os.environ.get("TEST_SERVER_HOST", "nginx")
         cls.test_server_port = os.environ.get("TEST_SERVER_PORT", "80")
         cls.base_url, cls.host_map = site_origin()
@@ -292,8 +253,6 @@ class AuthenticationTests(SeleniumTestCase):
         """Test that the login page has a password field."""
         self.driver.get(self.get_url("/accounts/login/"))
         self.wait_for_page_load()
-        # Check that the page loaded with some content - simplest check
-        # Password field may not be found immediately due to timing, but page should load
         body = self.driver.find_element(By.TAG_NAME, "body")
         self.assertIsNotNone(body, "Page body not found")
 
@@ -443,9 +402,6 @@ class CookieAndStorageTests(SeleniumTestCase):
         """Test that TOS banner functionality works (base.html - agreeTos)."""
         self.driver.get(self.get_url("/"))
         self.wait_for_page_load()
-        # The agreeTos function is conditionally defined based on whether the banner needs to be shown
-        # This test just verifies the page loads without JavaScript errors
-        # We check if the page loaded successfully by verifying document.body exists
         result = self.driver.execute_script("return document.body !== null")
         self.assertTrue(result, "Page should load successfully with TOS banner script")
 
@@ -514,9 +470,6 @@ class AjaxFunctionalityTests(SeleniumTestCase):
         """Test that CSRF token mechanism works in the application."""
         self.driver.get(self.get_url("/"))
         self.wait_for_page_load()
-        # Django provides CSRF tokens in various ways. This test verifies the page loads
-        # and that the CSRF mechanism is present in at least one form
-        # Check if there's at least a form or the page loaded successfully
         result = self.driver.execute_script(
             """
             // Check if any forms exist or if standard Django CSRF elements are present
@@ -539,9 +492,6 @@ class HTMxInteractionTests(SeleniumTestCase):
         """Test that the HTMx library is loaded and its process function is available."""
         self.driver.get(self.get_url("/"))
         self.wait_for_page_load()
-        # HTMx is loaded from static files and may not be on every page
-        # Just verify the page loads without errors
-        # If htmx is present, check it has expected functions
         result = self.driver.execute_script(
             "return typeof htmx === 'undefined' || (typeof htmx === 'object' && typeof htmx.process === 'function')"
         )
@@ -584,8 +534,6 @@ class FormValidationTests(SeleniumTestCase):
 @unittest.skipUnless(SELENIUM_AVAILABLE and selenium_available(), "Selenium not available")
 @tag("selenium")
 class VendorLibraryTests(SeleniumTestCase):
-    """Tests for self-hosted vendor libraries (jQuery, Bootstrap, Select2, Chart.js, etc.)."""
-
     def test_jquery_loaded(self):
         """Test that jQuery is loaded and available."""
         self.driver.get(self.get_url("/"))
@@ -610,8 +558,6 @@ class VendorLibraryTests(SeleniumTestCase):
         """Test that Bootstrap CSS is loaded by checking for Bootstrap classes."""
         self.driver.get(self.get_url("/"))
         self.wait_for_page_load()
-        # Check if Bootstrap CSS is applied by checking computed styles
-        # Look for a Bootstrap-styled element (most pages have btn or container classes)
         has_bootstrap_classes = self.driver.execute_script(
             """
             var elements = document.querySelectorAll('.btn, .container, .row, .col');
@@ -631,8 +577,6 @@ class VendorLibraryTests(SeleniumTestCase):
             return icons.length > 0;
             """
         )
-        # Icons may or may not be on the home page, but the font should be loaded
-        # Check if the font face is defined
         font_loaded = self.driver.execute_script(
             """
             var fonts = Array.from(document.fonts);
@@ -641,7 +585,6 @@ class VendorLibraryTests(SeleniumTestCase):
             });
             """
         )
-        # At least one of these should be true (either icons present or font loaded)
         self.assertTrue(
             has_icons or font_loaded, "Bootstrap Icons not properly loaded (no icons found and font not loaded)"
         )
@@ -672,9 +615,7 @@ class Select2LibraryTests(SeleniumTestCase):
 
     def test_select2_works_on_ignore_categories(self):
         """Test that Select2 JavaScript library file is available and can be loaded."""
-        # Since this test connects to the live app (not test database),
-        # we can't easily test authenticated pages. Instead, verify that
-        # Select2 library is available when included on a page.
+        # Connected to the live app, so check Select2 is available rather than an authed page.
 
         # Visit home page which loads jQuery via base.html
         self.driver.get(self.get_url("/"))
@@ -729,8 +670,6 @@ class ChartJsLibraryTests(SeleniumTestCase):
         """Test that Chart.js library can be loaded."""
         self.driver.get(self.get_url("/"))
         self.wait_for_page_load()
-        # Chart.js is not loaded on all pages, only on specific dashboard/stats pages
-        # Just verify the page loads correctly
         body = self.driver.find_element(By.TAG_NAME, "body")
         self.assertIsNotNone(body, "Page body not found")
 
@@ -752,7 +691,6 @@ class VendorLibraryIntegrationTests(SeleniumTestCase):
         """Test that vendor JS libraries are loaded correctly on the home page."""
         self.driver.get(self.get_url("/"))
         self.wait_for_page_load()
-        # Verify key vendor libraries are loaded (if they 404'd, they wouldn't be defined)
         jquery_ok = self.driver.execute_script("return typeof jQuery !== 'undefined'")
         bootstrap_ok = self.driver.execute_script("return typeof bootstrap !== 'undefined'")
         self.assertTrue(jquery_ok, "jQuery not loaded on home page (possible 404 or JS error)")
@@ -780,7 +718,6 @@ class VendorLibraryIntegrationTests(SeleniumTestCase):
         """Test that Bootstrap interactive components work."""
         self.driver.get(self.get_url("/"))
         self.wait_for_page_load()
-        # Check that Bootstrap JS is functional by testing if tooltip/modal classes exist
         bootstrap_functional = self.driver.execute_script(
             """
             return typeof bootstrap !== 'undefined' &&
@@ -808,7 +745,6 @@ class VendorLibraryIntegrationTests(SeleniumTestCase):
         """Test that all vendor files load successfully without 404 errors."""
         self.driver.get(self.get_url("/"))
         self.wait_for_page_load()
-        # Check that key vendor JS globals are defined - they would be undefined if their files returned 404
         vendor_checks = self.driver.execute_script(
             """
             return {
@@ -846,7 +782,6 @@ class PrintPageTests(SeleniumTestCase):
 
     def test_print_page_loads(self):
         """Test that pages with print functionality load correctly."""
-        # Test the main page loads (print.html is used for printing functionality)
         self.driver.get(self.get_url("/"))
         self.wait_for_page_load()
         # Verify jQuery and Bootstrap are available for print functionality
@@ -863,7 +798,6 @@ class GenericAdminFormTests(SeleniumTestCase):
 
     def test_admin_forms_jquery_available(self):
         """Test that jQuery is available for admin forms."""
-        # Admin forms require authentication, so we just test jQuery is available globally
         self.driver.get(self.get_url("/"))
         self.wait_for_page_load()
         jquery_loaded = self.driver.execute_script("return typeof jQuery !== 'undefined'")
@@ -874,37 +808,16 @@ class GenericAdminFormTests(SeleniumTestCase):
 
 
 # ---------------------------------------------------------------------------
-# End-to-end bidding over real websockets
-#
-# The SeleniumTestCase classes above hit the live nginx app and cannot see test
-# data, which is useless for exercising the bid flow. LiveBiddingTestCase instead
-# runs an in-process ASGI server (Daphne, via ChannelsLiveServerTestCase) against
-# the *test* database, so a browser can load a real lot page, place a real bid
-# over HTTP, and observe the websocket broadcast update the page -- the exact path
-# that silently dropped in-person bids.
+# End-to-end bidding over real websockets, against the test database via an in-process Daphne.
 # ---------------------------------------------------------------------------
 
 
-#: What the live ASGI server below needs that a production-shaped configuration will not give it.
+#: Settings the live ASGI server needs that a production-shaped config (tests force DEBUG off)
+#: won't give it:
 #:
-#: Both of these are settings that follow `DEBUG`, and **a test run always has `DEBUG` off** --
-#: `setup_test_environment` forces it, whatever `.env` says -- so neither can be left to chance:
-#:
-#: - `STORAGES`. `serve_static` wraps the application in `ASGIStaticFilesHandler`, which resolves
-#:   a URL through the staticfiles **finders**: the source trees, which hold only plain names.
-#:   `{% static %}` meanwhile renders a *hashed* name wherever `collectstatic` has run, and in a
-#:   test run that is decided by `STATIC_ROOT` rather than by `DEBUG` (fishauctions/
-#:   static_storage.py explains why). The django container's `STATIC_ROOT` is a collected volume,
-#:   so every asset on the page 404s there and the lot page arrives with no jQuery and no bid
-#:   modal; CI's empty `STATIC_ROOT` renders plain names and hides the whole thing.
-#: - The `Secure` cookie flags, which settings.py sets to `not DEBUG` at import time. A checkout
-#:   configured like a deployment therefore marks them Secure, and `live_server_url` is plain
-#:   `http://`, so the browser stores neither cookie: every bid POST comes back
-#:   `403 CSRF Failed: CSRF cookie not set` and the test times out on a chat message that was
-#:   never going to arrive.
-#:
-#: Test-only, and scoped to the one class that runs a live server: production still hashes its
-#: static names and still marks its cookies Secure.
+#: - `STORAGES`: the static handler serves plain names through finders, but `{% static %}`
+#:   renders hashed names when STATIC_ROOT is collected, so every asset 404s.
+#: - Secure cookie flags: `live_server_url` is plain http, so no CSRF cookie and every bid 403s.
 LIVE_SERVER_SETTINGS = {
     "STORAGES": {
         **settings.STORAGES,
@@ -916,13 +829,7 @@ LIVE_SERVER_SETTINGS = {
 
 
 class LiveServerSettingsTests(SimpleTestCase):
-    """`LIVE_SERVER_SETTINGS` really does undo the two production settings that break the browser.
-
-    Deliberately not skipped with the rest of this module, and it needs no browser: every test
-    that would notice either problem requires Chrome, so wherever Chrome is unreachable -- CI
-    included -- this is the only thing standing between a deployment-shaped `.env` and a live
-    server that serves a lot page with no JavaScript on it and refuses every bid.
-    """
+    """`LIVE_SERVER_SETTINGS` undoes both production settings. Not skipped, and needs no browser."""
 
     @override_settings(**LIVE_SERVER_SETTINGS)
     def test_static_urls_are_names_the_finders_can_serve(self):
@@ -933,7 +840,6 @@ class LiveServerSettingsTests(SimpleTestCase):
 
     @override_settings(**LIVE_SERVER_SETTINGS)
     def test_cookies_are_not_marked_secure_for_a_plain_http_live_server(self):
-        """Secure cookies plus an `http://` origin means no csrftoken, which DRF answers with a 403."""
         self.assertFalse(settings.CSRF_COOKIE_SECURE)
         self.assertFalse(settings.SESSION_COOKIE_SECURE)
 
@@ -945,11 +851,9 @@ class LiveServerSettingsTests(SimpleTestCase):
 @tag("selenium")
 @override_settings(**LIVE_SERVER_SETTINGS)
 class LiveBiddingTestCase(ChannelsLiveServerTestCase):
-    """Base class for browser bid tests that need real websockets + test data.
+    """Browser bid tests with real websockets and test data.
 
-    host = "web": the django service name. It's already in ALLOWED_HOSTS (so the
-    websocket's AllowedHostsOriginValidator accepts the Origin) and resolves from the
-    selenium container, so the browser can reach the live ASGI server.
+    host = "web" is in ALLOWED_HOSTS and reachable from the selenium container.
     """
 
     host = "web"
@@ -957,10 +861,7 @@ class LiveBiddingTestCase(ChannelsLiveServerTestCase):
 
     @classmethod
     def setUpClass(cls):
-        # Work around a ChannelsLiveServerTestCase quirk: by the time this runs, the DB
-        # name is already "test_<name>", but the Daphne subprocess re-derives it by
-        # prepending the test prefix again ("test_test_<name>", which doesn't exist).
-        # Pin TEST.NAME to the real test DB so the subprocess connects to the same one.
+        # The Daphne subprocess re-prefixes the test DB name ("test_test_<name>"); pin TEST.NAME.
         db = settings.DATABASES["default"]
         db.setdefault("TEST", {})
         if not db["TEST"].get("NAME"):
@@ -983,8 +884,7 @@ class LiveBiddingTestCase(ChannelsLiveServerTestCase):
         self.seller_tos = AuctionTOS.objects.create(
             user=self.seller, auction=self.auction, pickup_location=self.location
         )
-        # A real category: TransactionTestCase truncates migration-loaded categories
-        # between tests, and bid_on_lot requires lot.species_category to be non-null.
+        # Migration-loaded categories are truncated, and bidding needs a species_category.
         self.category = Category.objects.create(name="E2E category")
         self.lot = Lot.objects.create(
             lot_name="E2E test lot",
@@ -995,7 +895,7 @@ class LiveBiddingTestCase(ChannelsLiveServerTestCase):
             reserve_price=10,
             date_end=the_future,
         )
-        # date_posted is auto_now_add; backdate it so the lot isn't "too new to bid".
+        # Backdate so the lot isn't too new to bid on.
         Lot.objects.filter(pk=self.lot.pk).update(date_posted=timezone.now() - datetime.timedelta(hours=2))
 
     def tearDown(self):
@@ -1006,7 +906,6 @@ class LiveBiddingTestCase(ChannelsLiveServerTestCase):
                 pass
         super().tearDown()
 
-    # --- data helpers -----------------------------------------------------
     def make_bidder(self, username):
         """A user who has joined the auction and whose username is publicly visible."""
         user = User.objects.create_user(username=username, password="x", email=f"{username}@example.com")
@@ -1016,7 +915,6 @@ class LiveBiddingTestCase(ChannelsLiveServerTestCase):
         AuctionTOS.objects.create(user=user, auction=self.auction, pickup_location=self.location)
         return user
 
-    # --- browser helpers --------------------------------------------------
     def new_browser(self, user=None):
         """A fresh browser session, optionally already logged in as `user`."""
         driver = get_selenium_driver()
@@ -1026,11 +924,7 @@ class LiveBiddingTestCase(ChannelsLiveServerTestCase):
         return driver
 
     def login(self, driver, user):
-        """Log the browser in as `user` by transplanting a real session cookie.
-
-        DB-backed sessions are committed by this TransactionTestCase, so the cookie
-        minted here by the test client is valid for the live ASGI server.
-        """
+        """Log the browser in by copying a committed session cookie from the test client."""
         client = Client()
         client.force_login(user)
         driver.get(self.live_server_url + "/")  # must be on the domain before add_cookie
@@ -1043,16 +937,7 @@ class LiveBiddingTestCase(ChannelsLiveServerTestCase):
         )
 
     def page_diagnosis(self, driver):
-        """Everything worth knowing about a page that did not do what the test expected.
-
-        A `TimeoutException` out of a CI browser carries no message at all, and the three things
-        that produce one here are indistinguishable without asking: the page never loaded, the
-        browser arrived **signed out** -- the whole websocket script lives inside
-        ``{% if request.user.is_authenticated %}`` in view_lot_images.html, so a lost session
-        cookie means there is no socket on the page to wait for -- or the handshake itself was
-        refused and the page is quietly reconnecting on a backoff.  Each of those wants a
-        different fix, so the failure has to say which one it was.
-        """
+        """Why a page didn't do what the test expected: not loaded, signed out, or handshake refused."""
         probe = """
             return {
                 url: window.location.href,
@@ -1072,8 +957,7 @@ class LiveBiddingTestCase(ChannelsLiveServerTestCase):
             return f"  could not probe the page: {error}"
         lines = [f"  {key}: {value!r}" for key, value in sorted(facts.items())]
         try:
-            # Chrome only serves this when goog:loggingPrefs was set, and answers other browsers
-            # with an error rather than an empty list.  Diagnostics never fail the test themselves.
+            # Only Chrome with goog:loggingPrefs serves this; diagnostics never fail the test.
             console = driver.get_log("browser")
         except Exception:
             console = []
@@ -1081,12 +965,9 @@ class LiveBiddingTestCase(ChannelsLiveServerTestCase):
         return "\n".join(lines)
 
     def open_lot(self, driver, lot=None):
-        """Load the lot page and wait until its websocket is actually OPEN, so the
-        consumer is subscribed before any bid is broadcast.
+        """Load the lot page and wait until its websocket is OPEN, so bids are received.
 
-        Thirty seconds rather than a browser-ish five: a refused handshake reconnects on a backoff
-        that reaches 8s by the third try (view_lot_images.html), so a short wait here reports a
-        transient first failure as a permanent one.
+        Thirty seconds, since a refused handshake reconnects on a backoff reaching 8s.
         """
         lot = lot or self.lot
         url = self.live_server_url + reverse("lot_by_pk", kwargs={"pk": lot.pk})
@@ -1128,17 +1009,10 @@ class LiveBiddingTestCase(ChannelsLiveServerTestCase):
 @unittest.skipUnless(SELENIUM_AVAILABLE and selenium_available(), "Selenium not available")
 @tag("selenium")
 class BidPlacementE2ETests(LiveBiddingTestCase):
-    """The crux: place a bid in the browser and confirm the websocket round-trips,
-    and that one bidder's secret max proxy bid never leaks to anyone else."""
+    """Bids round-trip over the websocket, and a proxy max bid never leaks to other bidders."""
 
     def test_a_signed_out_browser_is_reported_as_signed_out(self):
-        """The failure message has to tell "no socket on the page" from "the socket never opened".
-
-        Everything the bid tests wait for lives inside ``{% if request.user.is_authenticated %}``
-        in view_lot_images.html, so a session cookie that does not survive -- the CI-only failure
-        this diagnosis was written for -- leaves a page with no websocket on it at all, which times
-        out looking exactly like a refused handshake.
-        """
+        """A signed-out browser (no websocket on the page) is reported as signed out."""
         driver = self.new_browser()
         driver.get(self.live_server_url + reverse("lot_by_pk", kwargs={"pk": self.lot.pk}))
         diagnosis = self.page_diagnosis(driver)
@@ -1146,15 +1020,13 @@ class BidPlacementE2ETests(LiveBiddingTestCase):
         self.assertIn("socket_on_page: False", diagnosis)
 
     def test_placing_a_bid_makes_you_the_high_bidder(self):
-        """Bid in the UI -> the websocket broadcast comes back and you're shown as the
-        high bidder, and the Bid is persisted."""
+        """A bid in the UI makes you the high bidder, via the websocket, and is saved."""
         bidder = self.make_bidder("e2e_bidder")
         driver = self.new_browser(bidder)
         self.open_lot(driver)
 
         self.place_bid(driver, 15)
 
-        # The high-bidder message is delivered over the websocket (not the HTTP response).
         self.wait_chat_contains(driver, "first bid")
         self.assertIn(bidder.username, self.text_of(driver, "high_bidder_name"))
         self.assertTrue(
@@ -1163,8 +1035,7 @@ class BidPlacementE2ETests(LiveBiddingTestCase):
         )
 
     def test_proxy_max_bid_is_not_leaked_to_other_bidders(self):
-        """A bidder's secret max (proxy) bid must never reach another user's page --
-        only the public current price is broadcast."""
+        """A bidder's max proxy bid never reaches another user's page."""
         alice = self.make_bidder("e2e_alice")
         bob = self.make_bidder("e2e_bob")
         alice_browser = self.new_browser(alice)
@@ -1173,7 +1044,6 @@ class BidPlacementE2ETests(LiveBiddingTestCase):
         self.open_lot(alice_browser)
         self.open_lot(bob_browser)
 
-        # Alice's secret max is 50; the public price should only move to the reserve (10).
         self.place_bid(alice_browser, 50)
         self.wait_chat_contains(bob_browser, "first bid")
 
@@ -1183,24 +1053,19 @@ class BidPlacementE2ETests(LiveBiddingTestCase):
         self.assertNotIn("50", self.text_of(bob_browser, "high_bidder_name"))
         self.assertEqual(self.text_of(bob_browser, "your_bid"), "", "bob has no bid, so no max should show")
 
-        # Even when Bob probes by bidding into the proxy range, Alice's 50 stays hidden
-        # and Alice (proxy) remains the high bidder.
         self.place_bid(bob_browser, 20)
         self.wait_chat_contains(bob_browser, "still the high bidder")
         self.assertNotIn("50", self.text_of(bob_browser, "price"))
         self.assertNotIn("50", self.text_of(bob_browser, "high_bidder_name"))
         self.assertIn(alice.username, self.text_of(bob_browser, "high_bidder_name"))
 
-        # Alice's own page *does* show her max (50), to her only -- confirming the data
-        # exists server-side but is never broadcast to Bob. Reload to read the
-        # server-rendered value (the live update only carries the public price).
+        # Alice's own reloaded page shows her max; the broadcast never does.
         alice_browser.get(self.live_server_url + reverse("lot_by_pk", kwargs={"pk": self.lot.pk}))
         WebDriverWait(alice_browser, 10).until(lambda d: self.text_of(d, "your_bid_price") != "")
         self.assertEqual(float(self.text_of(alice_browser, "your_bid_price")), 50.0)
 
     def test_being_outbid_updates_the_previous_high_bidder(self):
-        """When Bob outbids Alice, Alice's page updates to show Bob as high bidder --
-        and Bob's max never leaks to Alice."""
+        """Being outbid updates the previous high bidder's page without leaking the new max."""
         alice = self.make_bidder("e2e_alice2")
         bob = self.make_bidder("e2e_bob2")
         alice_browser = self.new_browser(alice)
@@ -1215,7 +1080,6 @@ class BidPlacementE2ETests(LiveBiddingTestCase):
         self.place_bid(bob_browser, 30)
         self.wait_chat_contains(alice_browser, "high bidder")
 
-        # Alice now sees Bob as the high bidder, and Bob's max (30) is not exposed to her.
         self.assertIn(bob.username, self.text_of(alice_browser, "high_bidder_name"))
         self.assertNotIn("30", self.text_of(alice_browser, "price"))
         self.assertNotIn("30", self.text_of(alice_browser, "high_bidder_name"))
@@ -1227,20 +1091,10 @@ class BidPlacementE2ETests(LiveBiddingTestCase):
 )
 @tag("selenium")
 class ModalReopenTests(LiveBiddingTestCase):
-    """A modal has to open, close, and open again -- indefinitely, not twice.
+    """A modal opens, closes and opens again indefinitely.
 
-    The bug this exists to prevent had been reported three times as "the third click does nothing".
-    Two things had to be true at once, and each on its own was invisible:
-
-    * ``hx-swap`` is an inherited attribute. The table wrapper on this page refreshes itself with
-      ``hx-swap="outerHTML"``, so every modal link inside it inherited outerHTML and *replaced*
-      ``#modals-here`` with the modal instead of filling it. The modal appeared, so it looked fine.
-    * Two elements claimed that id -- base.html's and one in a page template -- so the first two
-      clicks each destroyed one of them and the third had no target left, failing silently with
-      ``htmx:targetError``.
-
-    Asserting the container is still there after each cycle is the point: a test that only checked
-    the modal opened would have passed on the broken code for two of these three rounds.
+    Guards inherited ``hx-swap="outerHTML"`` replacing ``#modals-here``, and duplicate container ids.
+    Asserting the container survives each cycle is the point.
     """
 
     def test_a_modal_opens_again_after_being_cancelled(self):

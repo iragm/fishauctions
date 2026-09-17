@@ -145,7 +145,7 @@ class LotAdminFilterTests(StandardTestCase):
         self.assertNotIn(self.lot_no_bids, filtered_qs)
 
     def test_qrnotviewed_filter(self):
-        """Test that 'qrnotviewed' filter returns lots where winner has not viewed via QR code"""
+        """The 'qrnotviewed' filter returns lots whose winner hasn't viewed them via QR."""
         from auctions.filters import LotAdminFilter
 
         # Create a queryset of all lots in the auction
@@ -276,7 +276,7 @@ class AuctionHistoryTestCase(StandardTestCase):
             winning_bid_percent_to_club=25,
         )
 
-        # This should not raise an error even though create_history is called in fix_year
+        # create_history is called in fix_year, and this must not raise.
         auction.save()
 
         # Verify the auction was saved successfully
@@ -312,8 +312,7 @@ class MergeAuctionTOSTests(StandardTestCase):
         # Give online_tos a real email so duplicate checks work
         AuctionTOS.objects.filter(pk=self.online_tos.pk).update(email="canonical@example.com")
         self.online_tos.refresh_from_db()
-        # Use a DIFFERENT email so save() doesn't auto-merge this duplicate on creation
-        # (these tests exercise the explicit merge_duplicate() method, not the auto-merge)
+        # A different email, so save() doesn't auto-merge before merge_duplicate() is tested.
         self.duplicate_tos = AuctionTOS.objects.create(
             auction=self.online_auction,
             pickup_location=self.location,
@@ -351,7 +350,7 @@ class MergeAuctionTOSTests(StandardTestCase):
         self.assertEqual(lot.auctiontos_seller, self.online_tos)
 
     def test_merge_duplicate_moves_invoice_adjustments(self):
-        """Merging should move InvoiceAdjustments from duplicate's invoice to canonical invoice"""
+        """Merging moves InvoiceAdjustments from the duplicate's invoice to the canonical one."""
         duplicate_invoice = Invoice.objects.create(
             auctiontos_user=self.duplicate_tos,
             auction=self.online_auction,
@@ -382,11 +381,10 @@ class MergeAuctionTOSTests(StandardTestCase):
         self.assertFalse(AuctionTOS.objects.filter(pk=duplicate_pk).exists())
 
     def test_merge_duplicate_clears_possible_duplicate_link(self):
-        """The kept record must not be left pointing at the deleted duplicate, in the database or in memory.
+        """The kept record must not keep pointing at the deleted duplicate in memory.
 
-        possible_duplicate is a self-FK, so a stale value here becomes a dangling id: the database
-        gets it right via SET_NULL, but this instance keeps the old id and the caller's next save()
-        writes it back, which MariaDB rejects with a foreign key error.
+        possible_duplicate is a self-FK: the database SET_NULLs it, but the instance would write the stale
+        id back and MariaDB rejects it.
         """
         duplicate_pk = self.duplicate_tos.pk
         AuctionTOS.objects.filter(pk=self.online_tos.pk).update(possible_duplicate=duplicate_pk)
@@ -396,8 +394,7 @@ class MergeAuctionTOSTests(StandardTestCase):
         self.assertIsNone(self.online_tos.possible_duplicate_id)
         self.online_tos.save()  # raises IntegrityError if the deleted id gets written back
         self.online_tos.refresh_from_db()
-        # save() may re-flag this record against some other live record; it must never point at the
-        # row the merge just deleted.
+        # It may be re-flagged against another live record, but never the deleted one.
         self.assertNotEqual(self.online_tos.possible_duplicate_id, duplicate_pk)
 
     def test_merge_duplicate_creates_auction_history(self):
@@ -412,7 +409,7 @@ class MergeAuctionTOSTests(StandardTestCase):
         self.assertIn(self.duplicate_tos.bidder_number, history.action)
 
     def test_admin_add_rejects_duplicate_email(self):
-        """Adding a user via admin form with an existing email should make the form invalid"""
+        """Adding a user with an existing email makes the admin form invalid."""
         self.client.login(username="admin_user", password="testpassword")
         initial_count = AuctionTOS.objects.filter(auction=self.online_auction).count()
         url = reverse("auctiontosadmin", kwargs={"pk": self.online_auction.slug})
@@ -439,7 +436,7 @@ class MergeAuctionTOSTests(StandardTestCase):
         self.assertNotEqual(response.status_code, 302)
 
     def test_duplicate_name_validation_returns_warning_message(self):
-        """Duplicate-name validation should warn when the name is already in this auction"""
+        """Duplicate-name validation warns when the name is already in the auction."""
         self.client.login(username="admin_user", password="testpassword")
         self.online_tos.name = "Duplicate Test User"
         self.online_tos.bidder_number = "123"
@@ -454,7 +451,7 @@ class MergeAuctionTOSTests(StandardTestCase):
         )
 
     def test_duplicate_name_autofill_searches_clubs_with_manage_membership_permission(self):
-        """AuctionTOS autofill should search auctions from clubs where the user can manage members"""
+        """Autofill searches auctions from clubs where the user can manage members."""
         self.client.login(username="admin_user", password="testpassword")
         club = Club.objects.create(name="Autofill Club")
         ClubMember.objects.create(club=club, user=self.admin_user, permission_add_edit=True)
@@ -490,7 +487,7 @@ class MergeAuctionTOSTests(StandardTestCase):
         self.assertEqual(response.json()["id_bidder_number"], "")
 
     def test_add_user_modal_uses_inline_name_note_for_duplicates(self):
-        """The add-user modal should render JS that shows duplicate-name warnings inline"""
+        """The add-user modal renders the JS that shows duplicate-name warnings inline."""
         self.client.login(username="admin_user", password="testpassword")
         url = reverse("auctiontosadmin", kwargs={"pk": self.online_auction.slug})
         response = self.client.get(url)
@@ -529,7 +526,7 @@ class AuctionTOSMergeViewTests(StandardTestCase):
     def setUp(self):
         super().setUp()
         self.client.login(username="admin_user", password="testpassword")
-        # Use update() here so the kept record starts linked to a user before the merge flow edits its email.
+        # update() so the kept record is linked to a user before the merge flow edits its email.
         AuctionTOS.objects.filter(pk=self.online_tos.pk).update(
             name="Kept User",
             email="kept@example.com",
@@ -585,13 +582,7 @@ class AuctionTOSMergeViewTests(StandardTestCase):
         self.assertFalse(AuctionTOS.objects.filter(pk=self.source_tos.pk).exists())
 
     def test_merge_review_keeping_target_when_reviewed_email_matches_source(self):
-        """Reviewing with the source's email must not 500 via save()'s auto-merge deleting the target.
-
-        Regression: submitting the review with the target's email set to the source's email used to
-        trip AuctionTOS.save()'s exact-email auto-merge, which kept the older source and deleted the
-        target — the next merge_duplicate() call then raised "Unsaved model instance ... in an ORM
-        query". The target must survive and keep the email; the source must be gone.
-        """
+        """Reviewing with the source's email must not trip save()'s auto-merge and delete the target."""
         won_lot = Lot.objects.create(
             lot_name="Won by source",
             auction=self.online_auction,
@@ -617,17 +608,13 @@ class AuctionTOSMergeViewTests(StandardTestCase):
         self.online_tos.refresh_from_db()
         self.assertEqual(self.online_tos.email, "source@example.com")
         self.assertFalse(AuctionTOS.objects.filter(pk=self.source_tos.pk).exists())
-        # The source's won lot moved to the kept target (not lost to a backwards auto-merge).
+        # The source's won lot moved to the kept target.
         won_lot.refresh_from_db()
         self.assertEqual(won_lot.auctiontos_winner, self.online_tos)
 
     def test_merge_review_when_the_two_records_are_flagged_as_duplicates(self):
-        """Merging two records that point at each other via possible_duplicate must not 500.
-
-        Regression: this is the normal path in from the duplicate review list, so both rows have
-        possible_duplicate set to the other. Deleting the source SET_NULLs the kept row in the
-        database but not the in-memory instance the review form saves, so saving the reviewed
-        fields wrote the deleted id back and raised IntegrityError (1452).
+        """Merging two records that point at each other via possible_duplicate must not 500: the deleted id
+        would be written back from the in-memory instance.
         """
         AuctionTOS.objects.filter(pk=self.online_tos.pk).update(possible_duplicate=self.source_tos.pk)
         AuctionTOS.objects.filter(pk=self.source_tos.pk).update(possible_duplicate=self.online_tos.pk)

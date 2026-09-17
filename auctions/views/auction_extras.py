@@ -1,8 +1,7 @@
 """The rest of an auction's admin surface: label config, bulk printing, no-shows, chat.
 
-Smaller pages that did not belong with the check-in screens or the stats: the label field picker,
-the bulk print sheets, pickup-location manifests, the add-to-calendar link, and the no-show
-actions.
+The smaller pages that didn't belong with check-in or stats: the label field picker, the bulk print
+sheets, pickup-location manifests, the add-to-calendar link and the no-show actions.
 """
 
 import ast
@@ -58,6 +57,7 @@ from auctions.models import (
     add_price_info,
     guess_category,
 )
+from auctions.services import attachment_filename
 
 from .base import AuctionViewMixin, close_modal_response
 from .printing import LotLabelView
@@ -158,8 +158,8 @@ class AuctionBulkPrintingPDF(LotLabelView):
         if not self.selected_tos:
             self.queryset = self.auction.unprinted_labels_qs
         else:
-            # selected_tos is a client-supplied string like "[1, 2, 3]" (AuctionTOS pks). Parse it
-            # defensively: malformed input, a non-list literal, or non-integer elements must not 500.
+            # selected_tos is a client-supplied string like "[1, 2, 3]"; malformed input, a non-list
+            # literal or non-integer elements must not 500.
             try:
                 parsed = ast.literal_eval(self.selected_tos)
             except (ValueError, SyntaxError, TypeError, MemoryError, RecursionError):
@@ -192,11 +192,10 @@ class AuctionBulkPrintingPDF(LotLabelView):
 
 
 def _lots_with_people(lots):
-    """A lot queryset that already knows its seller and winner, and where each of them collects.
+    """A lot queryset that knows its seller and winner and where each collects.
 
-    Both location CSVs print those for every row, and reading them one lot at a time was four
-    queries a row: the AuctionTOS, its pickup location, and the auction that
-    ``AuctionTOS.display_name`` consults to decide between a name and a bidder number.
+    Both location CSVs print those for every row, which was four queries a row: the AuctionTOS, its
+    pickup location, and the auction ``AuctionTOS.display_name`` consults.
     """
     return lots.select_related(
         "auction",
@@ -220,10 +219,10 @@ class PickupLocationsIncoming(View, AuctionViewMixin):
             return super().dispatch(request, *args, **kwargs)
 
     def get(self, request):
-        # each row prints the winner, the seller and where the lot is coming from
+        # Each row prints the winner, the seller and where the lot is coming from.
         queryset = _lots_with_people(self.location.incoming_lots).order_by("-auctiontos_seller__name")
         response = HttpResponse(content_type="text/csv")
-        name = self.location.name.lower().replace(" ", "_")
+        name = attachment_filename(self.location.name.lower().replace(" ", "_"))
         response["Content-Disposition"] = f'attachment; filename="incoming_lots_destined_for_{name}.csv"'
         csv_writer = csv.writer(response)
         csv_writer.writerow(
@@ -263,7 +262,7 @@ class PickupLocationsOutgoing(View, AuctionViewMixin):
         # each row prints the winner, the seller and where the lot is going
         queryset = _lots_with_people(self.location.outgoing_lots).order_by("-auctiontos_winner__pickup_location__name")
         response = HttpResponse(content_type="text/csv")
-        name = self.location.name.lower().replace(" ", "_")
+        name = attachment_filename(self.location.name.lower().replace(" ", "_"))
         response["Content-Disposition"] = f'attachment; filename="outgoing_lots_coming_from_{name}.csv"'
         csv_writer = csv.writer(response)
         csv_writer.writerow(["Lot number", "Seller name", "Lot name", "Destination", "Winner name"])
@@ -286,8 +285,7 @@ class AddToCalendarView(LoginRequiredMixin, View):
 
     def dispatch(self, request, *args, **kwargs):
         # LoginRequiredMixin only checks inside super().dispatch(), and everything below runs first:
-        # without this an anonymous visitor reached the AuctionTOS query with an AnonymousUser and
-        # got a 500 instead of the login page.
+        # an anonymous visitor reached the AuctionTOS query and got a 500 instead of the login page.
         if not request.user.is_authenticated:
             return self.handle_no_permission()
         # Extract query params
@@ -326,15 +324,9 @@ class AddToCalendarView(LoginRequiredMixin, View):
             )
             return redirect(self.auction.get_absolute_url())
 
-        # if self.tos.pickup_location.pk is not self.location.pk:
-        #     messages.error(
-        #         request,
-        #         "You can't add a location to your calendar unless you've selected it",
-        #     )
-        #     return redirect(self.auction.get_absolute_url())
+        # "native" returns the event as JSON for the app's add-to-calendar bridge.
 
-        # "native" returns the event as JSON for the mobile app's native "add to device calendar"
-        # bridge; "google"/"outlook" redirect to web calendars; "ics" downloads an .ics file.
+        # "google" and "outlook" redirect to web calendars; "ics" downloads a file.
         if self.calendar_type not in ("google", "outlook", "ics", "native"):
             messages.error(
                 request,
@@ -348,7 +340,7 @@ class AddToCalendarView(LoginRequiredMixin, View):
         return super().dispatch(request, *args, **kwargs)
 
     def _build_event(self):
-        """Return the shared event fields (title, details, start, end, location) for this pickup."""
+        """The shared event fields (title, details, start, end, location) for this pickup."""
         start = self.location.second_pickup_time if self.second else self.location.pickup_time
         if not start:
             msg = "Pickup time not available"
@@ -367,13 +359,12 @@ class AddToCalendarView(LoginRequiredMixin, View):
         return title, details, start, end, loc
 
     def get(self, request, *args, **kwargs):
-        """Handle GET: redirect user, return ICS, or return event JSON for the native app."""
+        """Redirect the user, return an ICS file, or return event JSON for the native app."""
 
         title, details, start, end, loc = self._build_event()
 
         if self.calendar_type == "native":
-            # Consumed by the mobile app's addToCalendar JS bridge (see location_fragment_short.html),
-            # which hands these fields to a native "add to device calendar" plugin.
+            # Consumed by the app's addToCalendar bridge (see location_fragment_short.html).
             return JsonResponse(
                 {
                     "title": title,
@@ -409,7 +400,7 @@ class AddToCalendarView(LoginRequiredMixin, View):
 
         else:
             ics_content = self._generate_ics(title, details, start, end, loc)
-            filename = f"{self.location.auction.slug}.ics"
+            filename = f"{attachment_filename(self.location.auction.slug)}.ics"
             response = HttpResponse(ics_content, content_type="text/calendar")
             response["Content-Disposition"] = f'attachment; filename="{filename}"'
             return response
@@ -455,7 +446,7 @@ class CategoryFinder(APIView):
 
 
 class AuctionFinder(APIView):
-    """API view which will return information about an auction based on POST keyword auction.  Expects a pk."""
+    """Information about an auction from a POST'd pk."""
 
     authentication_classes = [SessionAuthentication, TokenAuthentication]
     permission_classes = [IsAuthenticated]
@@ -499,7 +490,7 @@ class AuctionFinder(APIView):
 
 
 class LotChatSubscribe(APIView):
-    """Called when a user sends a chat message about a lot to create a ChatSubscription model"""
+    """Create a ChatSubscription when a user sends a chat message about a lot."""
 
     authentication_classes = [SessionAuthentication, TokenAuthentication]
     permission_classes = [IsAuthenticated]
@@ -571,7 +562,7 @@ class AddTosMemo(APIView, AuctionViewMixin):
         if memo or memo == "":
             self.auctiontos.memo = memo
             self.auctiontos.save()
-            # Sync memo back to the linked ClubMember when the auction manages users through the club
+            # Sync the memo back to the ClubMember when the auction manages users through the club.
             if self.auction.is_club_managed and self.auctiontos.clubmember_id:
                 ClubMember.objects.filter(pk=self.auctiontos.clubmember_id).update(memo=memo)
             return JsonResponse({"result": "ok"})
@@ -579,7 +570,7 @@ class AddTosMemo(APIView, AuctionViewMixin):
 
 
 class AuctionNoShow(TemplateView, LoginRequiredMixin, AuctionViewMixin):
-    """When someone doesn't show up for an auction, offer some tools to clean up the situation"""
+    """Tools for cleaning up after somebody doesn't show up for an auction."""
 
     template_name = "auctions/noshow.html"
 
@@ -653,9 +644,8 @@ class AuctionNoShowAction(AuctionNoShow, FormMixin):
                     lot.save()
             if ban_this_user:
                 actions += "banned user from future auctions, "
-                # we will ban the user whether or not the tos was manually added
-                # do not return any evidence to the caller of this request that the ban worked or didn't
-                # as that could be used to determine if someone has an account on the site
+                # The user is banned whether or not the tos was manually added, and the response
+                # says nothing either way -- it would tell a caller whether an account exists.
                 user = User.objects.filter(email=self.tos.email).first()
                 if self.tos.email and user:
                     obj, created = UserBan.objects.update_or_create(

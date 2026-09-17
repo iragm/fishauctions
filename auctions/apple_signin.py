@@ -1,22 +1,18 @@
 """Sign in with Apple: redeeming the authorization code, and revoking the grant on deletion.
 
-Apple requires that an app offering Sign in with Apple also *revokes* the Apple token when the user
-deletes their account — deletion that leaves the grant standing is incomplete by Apple's rules and
-is an App Review item. Revoking needs a refresh token, and Apple only issues one in exchange for the
-one-shot ``authorization_code`` the app receives at sign-in. So this module has two halves:
+Apple requires an app offering Sign in with Apple to revoke the token when the user deletes their
+account, and revoking needs a refresh token, which Apple only issues in exchange for the one-shot
+``authorization_code`` from sign-in. So:
 
-1. :func:`redeem_authorization_code` runs at sign-in, once, and stores what comes back on the
-   ``SocialToken`` allauth keeps for the account (``token`` = access token, ``token_secret`` =
-   refresh token — allauth's own layout for Apple, see ``AppleOAuth2Adapter.parse_token``).
-2. :func:`revoke_account` runs from the account-deletion flow and calls Apple's ``/auth/revoke``.
+1. :func:`redeem_authorization_code` runs once at sign-in and stores what comes back on allauth's
+   ``SocialToken`` (``token`` = access, ``token_secret`` = refresh, allauth's own Apple layout).
+2. :func:`revoke_account` runs from account deletion and calls Apple's ``/auth/revoke``.
 
-Both need the team key (``APPLE_SIGN_IN_TEAM_ID`` / ``KEY_ID`` / ``KEY_FILE``). A deployment that
-hasn't configured it can still *offer* native Apple sign-in — verifying an identity token needs only
-Apple's public JWKS — but cannot revoke, so :func:`revocation_configured` exists to say so out loud
-rather than have deletions quietly skip a step Apple checks for.
+Both need the team key. A deployment without it can still offer native Apple sign-in -- verifying an
+identity token needs only Apple's JWKS -- but cannot revoke, so :func:`revocation_configured` says
+so rather than letting deletions skip a step Apple checks for.
 
-Everything here is best-effort at the call site: Apple being unreachable must never be what stops
-someone's account from being deleted. Failures are logged loudly; the local deletion proceeds.
+Everything is best-effort at the call site: Apple being unreachable must never stop a deletion.
 """
 
 import logging
@@ -49,9 +45,8 @@ def revocation_configured() -> bool:
 def _client_id() -> str:
     """The identifier Apple issued the grant to.
 
-    Native sign-in is issued to the app's bundle id, so that's what the token endpoints expect —
-    *not* the web Services ID, even though that's what allauth sends for the web flow. When only one
-    is configured, it's the one to use.
+    Native sign-in is issued to the app's bundle id, which is what the token endpoints expect -- not the
+    web Services ID allauth sends for the web flow.
     """
     return getattr(settings, "APPLE_SIGN_IN_BUNDLE_ID", "") or getattr(settings, "APPLE_SIGN_IN_SERVICES_ID", "")
 
@@ -76,11 +71,10 @@ def _client_secret() -> str:
 
 
 def redeem_authorization_code(authorization_code: str) -> dict | None:
-    """Exchange Apple's one-shot ``authorization_code`` for tokens. ``None`` on any failure.
+    """Exchange Apple's one-shot ``authorization_code`` for tokens; ``None`` on any failure.
 
-    Called at sign-in for the sole purpose of obtaining the refresh token that makes deletion-time
-    revocation possible. Nothing about signing in depends on it: identity has already been proved by
-    the identity token, so a failure here is logged and ignored rather than blocking the login.
+    Called only to obtain the refresh token that makes deletion-time revocation possible: identity is
+    already proved by the identity token, so a failure is logged and ignored.
     """
     import requests
 
@@ -107,11 +101,9 @@ def redeem_authorization_code(authorization_code: str) -> dict | None:
 def store_tokens(social_account, token_data: dict) -> None:
     """Persist Apple's tokens on ``social_account`` the way allauth's web flow does.
 
-    ``SocialToken.token_secret`` is where allauth's Apple adapter puts the refresh token, so a
-    natively signed-in account ends up indistinguishable from a web one and
-    :func:`revoke_account` needs no special case. Only overwrites the refresh token when Apple
-    actually sent one — it isn't resent on every exchange, and clobbering it with an empty string
-    would silently disarm revocation.
+    ``SocialToken.token_secret`` is where allauth's Apple adapter puts the refresh token, so a natively
+    signed-in account is indistinguishable from a web one. Only overwrites the refresh token when Apple
+    sent one: it isn't resent on every exchange, and clobbering it would disarm revocation.
     """
     from allauth.socialaccount.models import SocialToken
 
@@ -138,12 +130,11 @@ def store_tokens(social_account, token_data: dict) -> None:
 
 
 def revoke_account(social_account) -> bool:
-    """Revoke the Apple grant behind ``social_account``. True if Apple accepted the revocation.
+    """Revoke the Apple grant behind ``social_account``; True if Apple accepted it.
 
-    Prefers the refresh token, which is what Apple's docs call for and what actually ends the grant;
-    falls back to the access token so an account stored before revocation was wired up still gets a
-    best attempt. Returns False (with a log line) when there is nothing to revoke or Apple refuses —
-    the caller carries on deleting either way.
+    Prefers the refresh token, which is what actually ends the grant, and falls back to the access token
+    for accounts stored before revocation was wired up. False (with a log line) when there is nothing to
+    revoke or Apple refuses; the caller carries on deleting.
     """
     import requests
     from allauth.socialaccount.models import SocialToken
@@ -187,10 +178,10 @@ def revoke_account(social_account) -> bool:
 
 
 def revoke_all_for_user(user) -> int:
-    """Revoke every Apple grant this user holds. Returns how many Apple accepted.
+    """Revoke every Apple grant this user holds; returns how many Apple accepted.
 
-    Called from account deletion, before the ``SocialAccount``/``SocialToken`` rows are dropped —
-    the tokens are the only way to reach Apple, so once they're gone the grant can never be revoked.
+    Called before the ``SocialAccount`` and ``SocialToken`` rows are dropped: they are the only way to
+    reach Apple.
     """
     from allauth.socialaccount.models import SocialAccount
 

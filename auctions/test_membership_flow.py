@@ -1,4 +1,4 @@
-"""Club membership as money: invoices, discounts, renewals and the confirmation emails."""
+"""Tests for club membership money: invoices, discounts, renewals and confirmation emails."""
 
 import datetime
 import json
@@ -70,12 +70,10 @@ class InvoiceStatusButtonTests(StandardTestCase):
         """Anonymous users cannot change invoice status via the pk-based endpoint"""
         url = f"/api/payinvoice/{self.invoice.pk}/PAID"
         response = self.client.post(url)
-        # DRF returns 401 for unauthenticated requests (TokenAuthentication is first)
         assert response.status_code == 401
 
     def test_invoice_status_button_non_admin_denied(self):
-        """Non-admin users cannot change invoice status for an auction they don't administer"""
-        # self.user_with_no_lots has a TOS for online_auction but is not an admin
+        """Non-admins can't change invoice status."""
         self.client.login(username=self.user_with_no_lots.username, password="testpassword")
         url = f"/api/payinvoice/{self.invoice.pk}/PAID"
         response = self.client.post(url)
@@ -95,17 +93,11 @@ class InvoiceStatusButtonTests(StandardTestCase):
         assert self.invoice.status == "PAID"
 
     def test_invoice_status_button_uuid_denied(self):
-        """The invoice no-login UUID (emailed to the bidder) must NOT allow a status change.
-
-        Regression test for the self-payment vulnerability: a bidder holding their invoice's
-        no-login link could otherwise POST /api/payinvoice/<uuid>/PAID to mark their own
-        invoice paid, which books club-ledger (ClubMoney) entries as if cash was received.
-        """
+        """The emailed no-login UUID can't change an invoice's status."""
         clubmoney_before = ClubMoney.objects.filter(invoice=self.invoice).count()
         url = f"/api/payinvoice/{self.invoice.no_login_link}/PAID"
         response = self.client.post(url)
-        # No no-login/status-change route exists any more -> the UUID cannot resolve to the pk
-        # endpoint, so this is rejected (404). It must never succeed.
+        # No UUID status route exists.
         assert response.status_code in (401, 403, 404)
         self.invoice.refresh_from_db()
         assert self.invoice.status != "PAID"
@@ -121,7 +113,7 @@ class InvoiceStatusButtonTests(StandardTestCase):
         assert response.status_code == 404
 
     def test_invoice_status_button_invalid_status_rejected(self):
-        """An out-of-choices status string is rejected (404) and never written to the invoice."""
+        """An invalid status is rejected (404) and not written."""
         self.client.login(username=self.admin_user.username, password="testpassword")
         original_status = self.invoice.status
         url = f"/api/payinvoice/{self.invoice.pk}/BANANA"
@@ -132,12 +124,7 @@ class InvoiceStatusButtonTests(StandardTestCase):
         assert self.invoice.status in ("DRAFT", "UNPAID", "PAID")
 
     def test_invoice_status_button_non_admin_owner_denied(self):
-        """A non-admin who OWNS the invoice cannot change its status via pk or the emailed UUID.
-
-        self.invoiceB belongs to self.tosB (user=self.userB), who is a bidder in the auction
-        but not an admin. Neither the pk endpoint nor the no-login UUID may let them self-pay,
-        and no ClubMoney ledger entry may be booked.
-        """
+        """A non-admin owner can't change status by pk or UUID, and no ClubMoney is booked."""
         self.client.login(username=self.userB.username, password="testpassword")
         clubmoney_before = ClubMoney.objects.filter(invoice=self.invoiceB).count()
         # Authenticated non-admin owner via the pk endpoint -> forbidden.
@@ -151,7 +138,7 @@ class InvoiceStatusButtonTests(StandardTestCase):
         assert ClubMoney.objects.filter(invoice=self.invoiceB).count() == clubmoney_before
 
     def test_invoice_status_button_admin_can_mark_paid_and_unpaid(self):
-        """An auction admin can still mark an invoice paid and back to unpaid via the pk path."""
+        """An auction admin can mark paid and unpaid by pk."""
         self.client.login(username=self.admin_user.username, password="testpassword")
         response = self.client.post(f"/api/payinvoice/{self.invoice.pk}/PAID")
         assert response.status_code == 200
@@ -163,7 +150,7 @@ class InvoiceStatusButtonTests(StandardTestCase):
         assert self.invoice.status == "UNPAID"
 
     def test_invoice_no_login_uuid_view_still_works(self):
-        """The emailed UUID link must still let the recipient VIEW their invoice (view-only route)."""
+        """The no-login UUID still shows the invoice."""
         url = reverse("invoice_no_login", kwargs={"uuid": self.invoice.no_login_link})
         response = self.client.get(url)
         assert response.status_code == 200
@@ -270,12 +257,11 @@ class ClubMembershipRenewalFlowTests(StandardTestCase):
 
 
 class PayPalSubscriptionWebhookTests(StandardTestCase):
-    """The club membership subscription webhook (PayPalSubscriptionWebhookView) and its apply logic."""
+    """PayPalSubscriptionWebhookView and its apply logic."""
 
     def setUp(self):
         super().setUp()
-        # Own-credentials (non-OAuth) club, so supports_paypal_subscriptions is True and its webhook
-        # can be identified/verified.
+        # Own credentials, so subscriptions are supported.
         self.club = Club.objects.create(
             name="Subscription Club",
             membership_system="rolling",
@@ -341,7 +327,7 @@ class PayPalSubscriptionWebhookTests(StandardTestCase):
         self.assertIn("paypal_webhook_id", form.fields)
 
     def test_hidden_field_does_not_blank_saved_webhook_id(self):
-        # A club that loses PayPal eligibility must not have its saved webhook id wiped on save.
+        # Losing PayPal eligibility doesn't wipe the webhook id.
         form = ClubMembershipSettingsForm(
             instance=self.club,
             data={"membership_system": "rolling", "membership_annual_fee": "25.00"},
@@ -362,7 +348,6 @@ class PayPalSubscriptionWebhookTests(StandardTestCase):
         self.assertEqual(
             view._subscription_id_for_event("PAYMENT.SALE.COMPLETED", {"billing_agreement_id": "I-2"}), "I-2"
         )
-        # A one-off sale carries no billing_agreement_id, and CREATED (approval-pending) is unhandled.
         self.assertEqual(view._subscription_id_for_event("PAYMENT.SALE.COMPLETED", {"id": "PAY-9"}), "")
         self.assertEqual(view._subscription_id_for_event("BILLING.SUBSCRIPTION.CREATED", {"id": "I-3"}), "")
 
@@ -388,7 +373,7 @@ class PayPalSubscriptionWebhookTests(StandardTestCase):
         self.assertEqual(member.email, "new@example.com")
 
     def test_active_subscription_books_club_money(self):
-        # A subscription renewal is cash into the club, exactly like the manual renewal button.
+        # A renewal is cash into the club, like the manual button.
         from auctions.views.webhooks import _apply_paypal_subscription_event
 
         member = ClubMember.objects.create(club=self.club, name="Sub Member", email="subscriber@example.com")
@@ -402,7 +387,7 @@ class PayPalSubscriptionWebhookTests(StandardTestCase):
         self.assertIsNone(entry.created_by)  # a webhook has no acting user
 
     def test_books_amount_paypal_actually_charged_not_club_fee(self):
-        # The club's list price is 25.00, but this subscriber is grandfathered at 18.50.
+        # List price is 25.00, but this subscriber pays 18.50.
         from auctions.views.webhooks import _apply_paypal_subscription_event
 
         ClubMember.objects.create(club=self.club, name="Sub Member", email="subscriber@example.com")
@@ -411,7 +396,7 @@ class PayPalSubscriptionWebhookTests(StandardTestCase):
         self.assertEqual(self._membership_money().get().amount, Decimal("18.50"))
 
     def test_duplicate_delivery_books_club_money_once(self):
-        # PayPal retries and sends several events per cycle; the ledger must not double-count.
+        # PayPal retries; no double-counting.
         from auctions.views.webhooks import _apply_paypal_subscription_event
 
         ClubMember.objects.create(club=self.club, name="Sub Member", email="subscriber@example.com")
@@ -434,8 +419,7 @@ class PayPalSubscriptionWebhookTests(StandardTestCase):
         self.assertEqual(sum(e.amount for e in self._membership_money()), Decimal("50.00"))
 
     def test_billing_date_advance_without_new_payment_books_nothing_extra(self):
-        # BILLING.SUBSCRIPTION.UPDATED can push next_billing_time with no new charge -- booking is
-        # keyed on the payment, not on the membership advancing, so this must not invent revenue.
+        # UPDATED can move next_billing_time without a charge; booking is keyed on the payment.
         from auctions.views.webhooks import _apply_paypal_subscription_event
 
         ClubMember.objects.create(club=self.club, name="Sub Member", email="subscriber@example.com")
@@ -446,8 +430,7 @@ class PayPalSubscriptionWebhookTests(StandardTestCase):
         self.assertEqual(self._membership_money().count(), 1)
 
     def test_payment_booked_even_when_dates_did_not_move(self):
-        # ACTIVATED can land before the first charge posts; the follow-up PAYMENT.SALE.COMPLETED
-        # doesn't advance any date, but its money still has to reach the ledger.
+        # ACTIVATED can precede the first charge, whose money must still be booked.
         from auctions.views.webhooks import _apply_paypal_subscription_event
 
         ClubMember.objects.create(club=self.club, name="Sub Member", email="subscriber@example.com")
@@ -499,8 +482,6 @@ class PayPalSubscriptionWebhookTests(StandardTestCase):
         self.assertEqual(mock_email.call_count, 2)
         member.refresh_from_db()
         self.assertEqual(member.membership_expiration_date, (timezone.now() + datetime.timedelta(days=730)).date())
-
-    # --- ClubHistory: a subscription renewal has to leave the same trail a manual one does ---
 
     def test_subscription_renewal_writes_club_history(self):
         from auctions.views.webhooks import _apply_paypal_subscription_event
@@ -611,8 +592,7 @@ class PayPalSubscriptionWebhookTests(StandardTestCase):
         mock_verify.assert_not_called()
 
     def test_handled_event_without_subscription_id_ignored(self):
-        # A handled lifecycle event whose resource has no id must be ignored outright -- never
-        # verified, never applied.
+        # A lifecycle event without a resource id is ignored.
         from auctions.views import PayPalSubscriptionWebhookView
 
         with patch.object(PayPalSubscriptionWebhookView, "_identify_and_verify_club") as mock_verify:
@@ -625,8 +605,7 @@ class PayPalSubscriptionWebhookTests(StandardTestCase):
         mock_verify.assert_not_called()
 
     def test_sale_without_billing_agreement_id_ignored(self):
-        # A one-off (non-subscription) PAYMENT.SALE.COMPLETED carries no billing_agreement_id and
-        # must be ignored, not verified.
+        # A one-off sale has no billing_agreement_id and is ignored.
         from auctions.views import PayPalSubscriptionWebhookView
 
         with patch.object(PayPalSubscriptionWebhookView, "_identify_and_verify_club") as mock_verify:
@@ -657,7 +636,7 @@ class PayPalSubscriptionWebhookTests(StandardTestCase):
     def test_event_only_matches_verifying_club(self):
         from auctions.views import PayPalSubscriptionWebhookView
 
-        # A second webhook-configured club must not receive another club's subscriber.
+        # Another club mustn't receive this subscriber.
         other = Club.objects.create(
             name="Other Sub Club",
             membership_system="rolling",
@@ -718,11 +697,10 @@ class PayPalSubscriptionWebhookTests(StandardTestCase):
 
 
 class ClubMemberDiscountTests(StandardTestCase):
-    """Tests for Auction.club_member_discount and Auction.alternate_split_mode.
+    """Auction.club_member_discount and alternate_split_mode.
 
-    In this class, self.invoiceB belongs to tosB/userB who bought 3 lots at $10 each
-    (its four adjustments cancel each other out), and self.invoice belongs to
-    online_tos/self.user who sold those 3 lots plus one unsold lot.
+    self.invoiceB is tosB's 3 bought $10 lots (adjustments cancel out); self.invoice is online_tos's
+    3 sold lots plus one unsold.
     """
 
     def setUp(self):
@@ -771,7 +749,7 @@ class ClubMemberDiscountTests(StandardTestCase):
         self.assertEqual(self.invoice.club_member_discount, 0)
 
     def test_checking_renewal_applies_discount_for_expired_member(self):
-        """An unpaid member's invoice shows club member pricing when the renewal box is checked"""
+        """Checking renewal gives an unpaid member club member pricing."""
         self._make_member(self.userB, paid=False)
         self.invoiceB.renewal_needed = True
         self.invoiceB.save(update_fields=["renewal_needed"])
@@ -781,7 +759,7 @@ class ClubMemberDiscountTests(StandardTestCase):
         self.assertEqual(self.invoiceB.net, Decimal("-50.00"))
 
     def test_renewal_toggle_only_adds_fee_for_active_member(self):
-        """An active member gets the discount either way; checking the box only adds the fee"""
+        """An active member already has the discount; checking the box only adds the fee."""
         self._make_member(self.userB)
         self.assertEqual(self.invoiceB.net, Decimal("-25.00"))
         self.invoiceB.renewal_needed = True
@@ -795,15 +773,11 @@ class ClubMemberDiscountTests(StandardTestCase):
         self.online_auction.save()
         self.online_tos.is_club_member = True
         self.online_tos.save()
-        # custom (the default for existing auctions) applies the alternate fees:
-        # 3 sold lots at 10 * 90% = 27, less the 10 unsold lot fee
+        # custom: 3 * 10 * 90% = 27, less the 10 unsold fee.
         self.assertEqual(self.invoice.total_sold, Decimal("17.00"))
         self.online_auction.alternate_split_mode = "off"
         self.online_auction.save()
-        # standard fees: 3 sold lots at (10 * 75% - 2) = 16.50, less the 10 unsold lot fee.
-        # Re-read: an invoice's totals are cached on the instance, and this one was worked out
-        # before the auction's split mode changed. A request never holds an invoice across an
-        # auction edit, so nothing invalidates it for us.
+        # standard: 3 * (10 * 75% - 2) = 16.50, less 10. Invoice totals are cached on the instance.
         self.invoice.refresh_from_db()
         self.assertEqual(self.invoice.total_sold, Decimal("6.50"))
 
@@ -833,7 +807,7 @@ class ClubMemberDiscountTests(StandardTestCase):
         self.assertFalse(self.online_tos.is_club_member)
 
     def test_renewal_toggle_updates_alternate_split_flag(self):
-        """Checking/unchecking renew membership updates the seller's alternate fees in club member mode"""
+        """Toggling renewal updates the seller's alternate split in club_member mode."""
         self.online_auction.alternate_split_mode = "club_member"
         self.online_auction.save()
         self._make_member(self.userB, paid=False)
@@ -863,7 +837,6 @@ class ClubMemberDiscountTests(StandardTestCase):
         entry = ClubMoney.objects.filter(invoice=self.invoiceB, category="club_member_discount").first()
         self.assertIsNotNone(entry)
         self.assertEqual(entry.amount, Decimal("-5.00"))
-        # all ledger entries for this invoice must reconcile to the cash that moved
         total = ClubMoney.objects.filter(invoice=self.invoiceB).aggregate(total=Sum("amount"))["total"]
         self.assertEqual(total, -self.invoiceB.rounded_net)
 
@@ -924,7 +897,6 @@ class ClubMemberDiscountTests(StandardTestCase):
         self.assertTrue(form.is_valid(), form.errors)
         auction = form.save()
         self.assertEqual(auction.alternative_split_label, "Club member")
-        # everyone already in the auction gets the flag synced from their membership
         self.tosB.refresh_from_db()
         self.online_tos.refresh_from_db()
         self.assertTrue(self.tosB.is_club_member)
@@ -944,15 +916,8 @@ class ClubMemberDiscountTests(StandardTestCase):
 
 
 class ClubMoneyRenewalConsistencyTests(StandardTestCase):
-    """Guard the ClubMoney bookkeeping around membership renewals and invoices.
-
-    These cover paths that previously lacked assertions on the ClubMoney that gets
-    created, where the brittle behavior lives:
-    - a membership renewal must book exactly ONE membership ClubMoney entry, never two
-      (auction invoices book it via Invoice.sync_club_money; club-only
-      invoices book it via _process_invoice_membership_renewal -- never both).
-    - flipping an auction invoice PAID -> UNPAID -> PAID must not drift the club balance.
-    - the self-service renewal invoice lookup must be idempotent (no invoice proliferation).
+    """ClubMoney bookkeeping around renewals: one membership entry per renewal, no drift on PAID/UNPAID
+    toggles, and idempotent renewal invoice lookup.
     """
 
     def setUp(self):
@@ -993,12 +958,7 @@ class ClubMoneyRenewalConsistencyTests(StandardTestCase):
         return self._membership_entries().aggregate(t=Sum("amount"))["t"] or Decimal("0.00")
 
     def test_auction_invoice_paid_books_single_membership_clubmoney(self):
-        """Marking an auction renewal invoice PAID books exactly one membership ClubMoney.
-
-        Regression test: a stray commit re-added the membership entry to
-        _add_paid_entries without restoring the guard in
-        _process_invoice_membership_renewal, so the fee was counted twice.
-        """
+        """Marking an auction renewal invoice PAID books one membership ClubMoney."""
         self.client.login(username=self.admin_user.username, password="testpassword")
         self.invoice.renewal_needed = True
         self.invoice.status = "UNPAID"
@@ -1012,7 +972,7 @@ class ClubMoneyRenewalConsistencyTests(StandardTestCase):
         self.assertEqual(entries.first().amount, Decimal("25.00"))
 
     def test_auction_invoice_paid_unpaid_paid_is_balance_neutral(self):
-        """Toggling an auction renewal invoice PAID -> UNPAID -> PAID must not drift the balance."""
+        """PAID -> UNPAID -> PAID doesn't change the balance."""
         self.client.login(username=self.admin_user.username, password="testpassword")
         self.invoice.renewal_needed = True
         self.invoice.status = "UNPAID"
@@ -1026,11 +986,10 @@ class ClubMoneyRenewalConsistencyTests(StandardTestCase):
         balance_after_second_paid = self._balance()
 
         self.assertEqual(balance_after_first_paid, balance_after_second_paid)
-        # The membership grant is permanent, so the net membership revenue is one fee.
         self.assertEqual(self._membership_total(), Decimal("25.00"))
 
     def test_club_only_membership_invoice_books_single_membership_clubmoney(self):
-        """A club-only (no auction) membership invoice books exactly one membership ClubMoney."""
+        """A club-only membership invoice books one membership ClubMoney."""
         admin_member = ClubMember.objects.create(
             club=self.club, user=self.admin_user, name="Club Admin", permission_add_edit=True
         )
@@ -1050,7 +1009,7 @@ class ClubMoneyRenewalConsistencyTests(StandardTestCase):
         self.assertEqual(entries.first().amount, Decimal("25.00"))
 
     def test_get_or_create_membership_invoice_idempotent_for_email_only_member(self):
-        """Repeated lookups for an email-only member reuse one invoice (no proliferation)."""
+        """Repeated lookups for an email-only member reuse one invoice."""
         from auctions.views.club_pages import _get_or_create_membership_invoice
 
         email_member = ClubMember.objects.create(
@@ -1069,7 +1028,7 @@ class ClubMoneyRenewalConsistencyTests(StandardTestCase):
         self.assertEqual(Invoice.objects.filter(club=self.club, auction=None, club_member=email_member).count(), 1)
 
     def test_manual_renew_books_membership_clubmoney(self):
-        """The manual 'renew' admin action books a membership ClubMoney for paid clubs."""
+        """The manual renew action books membership ClubMoney."""
         ClubMember.objects.create(club=self.club, user=self.admin_user, name="Club Admin", permission_add_edit=True)
         self.client.login(username=self.admin_user.username, password="testpassword")
         response = self.client.post(reverse("club_member_renew", kwargs={"pk": self.member.pk}))
@@ -1105,8 +1064,7 @@ class ClubMembershipEmailTaskTests(TestCase):
 
     @patch("auctions.tasks.mail.send")
     def test_daily_membership_task_sends_welcome_email(self, mock_send):
-        # Its own beat task since the nightly membership work was split up: it used to sit below a
-        # few thousand Discord API calls in one task body, under a 300-second soft time limit.
+        # Its own beat task, split from the long nightly membership task.
         from auctions.tasks import send_club_member_welcome_emails
 
         ClubMember.objects.filter(pk=self.member.pk).update(createdon=timezone.now() - datetime.timedelta(days=2))
@@ -1252,10 +1210,7 @@ class QuickCheckoutHTMXTests(StandardTestCase):
         self.assertIn(invoice.unsold_lot_warning, content)
 
     def test_quick_checkout_app_shows_deep_link_and_hides_qr(self):
-        # Inside the native app (FishAuctionsApp UA) the cashier taps the card on-device, so the
-        # scan-a-QR flow is replaced by a fishauctions://pay/<pk> deep link and the QR is hidden.
-        # Web visitors keep the existing QR/card checkout and never see the deep link. The gate reuses
-        # the same request.is_mobile_app UA check that hides the web navbar in base.html.
+        # In the app, a fishauctions://pay/<pk> deep link replaces the QR.
         from unittest.mock import PropertyMock
 
         from auctions.views import QuickCheckoutHTMX
@@ -1270,7 +1225,7 @@ class QuickCheckoutHTMXTests(StandardTestCase):
         )
         deep_link = f"fishauctions://pay/{invoice.pk}"
 
-        # Force a Square QR into the context so the "hidden in-app" assertion is meaningful.
+        # Force a Square QR so "hidden in-app" means something.
         with (
             patch.object(Invoice, "show_square_button", new_callable=PropertyMock, return_value=True),
             patch.object(Invoice, "reason_for_payment_not_available", new_callable=PropertyMock, return_value=""),
@@ -1291,9 +1246,7 @@ class QuickCheckoutHTMXTests(StandardTestCase):
         self.assertIn("Scan this code to pay with Square", web_html)
 
     def test_quick_checkout_app_hides_deep_link_without_square(self):
-        # Tap to Pay charges on the seller's Square account, so the in-app deep link must only appear
-        # when Square is actually linked/authorized (show_square_button). With no Square account or
-        # permission the button must not show, matching the Square QR gate and create_mobile_payment.
+        # Only when Square is linked (show_square_button).
         from unittest.mock import PropertyMock
 
         self.in_person_tos.bidder_number = "APP2"
@@ -1313,22 +1266,16 @@ class QuickCheckoutHTMXTests(StandardTestCase):
         self.assertNotIn("Tap to Pay with card", app_html)
 
     def test_quick_checkout_camera_hidden_on_large_screens(self):
-        """The self-scan camera ships on every checkout page but is hidden on large screens with a
-        Bootstrap responsive class, so it only shows on small screens (phones + the app WebView).
-        The server can't see the viewport, so gating is done client-side, not by User-Agent."""
+        """The self-scan camera is hidden on large screens with a responsive class, not by User-Agent."""
         self.client.force_login(self.admin_user)
         url = reverse("auction_quick_checkout", kwargs={"slug": self.in_person_auction.slug})
         html = self.client.get(url).content.decode("utf-8")
-        # The camera module is always shipped...
-        # Through the storage: whether this name is hashed depends on whether collectstatic has
-        # run, which differs between CI and a dev container -- see fishauctions/static_storage.py.
+        # Hashed where collectstatic has run; see fishauctions/static_storage.py.
         self.assertIn(staticfiles_storage.url("js/camera_scanner.js"), html)
-        # ...and the live-preview wrapper carries d-md-none so desktop never shows (or grabs) it.
         self.assertIn("d-md-none", html)
 
     def test_quick_checkout_scan_translates_paddle_barcode(self):
-        """A scanned paddle barcode (11111 + bidder number) posted with ?barcode=1 resolves to the
-        bidder holding that number, just as if the number had been typed in."""
+        """A scanned paddle barcode (11111 + bidder number) resolves to that bidder."""
         invoice, _ = Invoice.objects.get_or_create(auctiontos_user=self.in_person_buyer)
         self.client.force_login(self.admin_user)
         url = reverse(

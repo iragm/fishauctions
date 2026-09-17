@@ -1,12 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Provisions the throwaway CI .env (deterministic test credentials, DEBUG=True, no
-# prod nginx settings). Non-destructive by default: a .env only exists when this is
-# run locally (CI always does a clean checkout), so an existing one is KEPT as-is --
-# never clobbering a real .env full of live secrets. Pass --force to overwrite; that
-# path backs the old one up first to a timestamped .env.bak.* (gitignored), so it is
-# always recoverable. CI passes --force to stay deterministic even on reused runners.
+# Provisions the throwaway CI .env: deterministic test credentials, DEBUG=True, no prod nginx
+# settings. Non-destructive by default, since a .env only exists when this is run locally and
+# clobbering one would take live secrets with it. --force overwrites, backing the old one up to a
+# timestamped .env.bak.* first; CI passes it to stay deterministic on a reused runner.
 force=0
 case "${1-}" in
     "") ;;
@@ -48,10 +46,9 @@ fi
 mkdir -p logs
 chmod -R 777 logs
 
-# Same treatment for mediafiles/. It is gitignored and untracked, so a clean checkout
-# doesn't have it and Docker creates the bind-mount source root-owned -- the in-container
-# `app` user (PUID, 1000) then can't write uploads and any test that saves a real file
-# dies with PermissionError(13). Tests that write media also point MEDIA_ROOT at a temp
-# dir (auctions/tests.WritableMediaRoot); this keeps the directory itself sane besides.
+# Same treatment for mediafiles/: it is untracked, so a clean checkout has none and Docker creates
+# the bind-mount source root-owned -- the in-container `app` user then can't write uploads, and any
+# test that saves a real file dies with PermissionError(13). Tests that write media also point
+# MEDIA_ROOT at a temp dir (auctions/tests.WritableMediaRoot).
 mkdir -p mediafiles/images
 chmod -R 777 mediafiles

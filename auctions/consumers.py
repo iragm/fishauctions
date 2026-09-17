@@ -1,12 +1,9 @@
 """The websocket half of the site: live bidding, chat, and "somebody else just bid".
 
-Three consumers, one per thing a browser can watch. :class:`LotConsumer` is the important one -- it
-carries bids on an open lot, and the permission checks at the top of this module are what stop a
-socket doing something the equivalent POST would refuse.
-
-A dropped socket is invisible to the person using it, which is how a bid can appear to be placed
-and never arrive. Anything changed here wants testing with the connection actually interrupted, not
-just with a happy-path client.
+One consumer per thing a browser can watch. :class:`LotConsumer` carries bids on an open lot, and
+the permission checks at the top of this module are what stop a socket doing what the equivalent
+POST would refuse. A dropped socket is invisible to the person using it, so test changes here with
+the connection actually interrupted.
 """
 
 # chat/consumers.py
@@ -40,10 +37,7 @@ logger = logging.getLogger(__name__)
 
 
 def check_chat_permissions(lot, user):
-    """
-    Returns false if everything is OK, or a string error message
-    call check_all_permissions first
-    """
+    """False when everything is OK, or a string error message. Call check_all_permissions first."""
     try:
         ban = user.userdata.banned_from_chat_until
         if ban:
@@ -63,7 +57,7 @@ def check_chat_permissions(lot, user):
 
 def check_all_permissions(lot, user):
     """Returns false if everything is OK, or a string error message"""
-    # admin-added lots often have no lot.user; fall back to the seller's linked account
+    # Admin-added lots often have no lot.user; fall back to the seller's linked account.
     seller_pk = lot.user_id or (lot.auctiontos_seller.user_id if lot.auctiontos_seller_id else None)
     if seller_pk and UserBan.objects.filter(banned_user=user.pk, user=seller_pk).first():
         return "This user has banned you from bidding on their lots"
@@ -75,16 +69,14 @@ def check_all_permissions(lot, user):
 
 
 def post_chat_message(lot, user, message):
-    """Say something on a lot's chat: persist it, then push it to everyone watching the page.
+    """Post a chat message on a lot: persist it, then push it to everyone watching.
 
-    Extracted from :meth:`LotConsumer.receive` so the websocket and the assistant's
-    ``answer_question`` action post the same row and broadcast the same event. Both permission
-    checks are the caller's job (:func:`check_all_permissions` then
-    :func:`check_chat_permissions`), because the websocket has to answer a failure by pushing a
-    toast down one user's private channel and the action has to answer it as a tool error.
+    Shared by the websocket and the assistant's ``answer_question``, so both write the same row and
+    broadcast the same event. Permission checks are the caller's job
+    (:func:`check_all_permissions`, then :func:`check_chat_permissions`), because the websocket answers
+    a failure with a toast and the action with a tool error.
 
-    The broadcast is best-effort in the same way ``place_bid_and_broadcast`` is: the row is written
-    first, so a channel-layer outage loses the live update and never the message.
+    The broadcast is best-effort like ``place_bid_and_broadcast``: the row is written first.
     """
     history = LotHistory.objects.create(
         lot=lot,
@@ -113,10 +105,8 @@ def post_chat_message(lot, user, message):
 def broadcast_bid_result(lot, user, result):
     """Push the outcome of a bid to the connected lot-page websockets.
 
-    This is the *broadcast* half of placing a bid, kept separate from persistence
-    on purpose: callers must treat it as best-effort (see place_bid_and_broadcast)
-    so a channel-layer outage can never lose a bid that was already saved. The
-    message shapes here match what LotConsumer.receive() historically sent.
+    The broadcast half of placing a bid, kept separate from persistence: callers treat it as
+    best-effort (see place_bid_and_broadcast) so an outage never loses a saved bid.
     """
     channel_layer = get_channel_layer()
     room_group_name = f"lot_{lot.pk}"
@@ -242,9 +232,9 @@ class LotConsumer(WebsocketConsumer):
                     existing_subscription.last_notification_sent = timezone.now()
                     existing_subscription.save()
         except ClientDisconnected:
-            # The user closed the tab or lost signal before the handshake finished. Routine, not a
-            # bug: log below ERROR so it doesn't reach mail_admins. ClientDisconnected subclasses
-            # OSError, so this must stay above the `except Exception` below.
+            # The tab closed or lost signal mid-handshake. Routine, so log below ERROR to keep it
+            # out of mail_admins. ClientDisconnected subclasses OSError, so this stays above the
+            # `except Exception`.
             logger.info("client went away before the lot websocket finished connecting")
         except Exception as e:
             logger.exception(e)
@@ -252,7 +242,7 @@ class LotConsumer(WebsocketConsumer):
     def disconnect(self, close_code):
         # Leave room group
         async_to_sync(self.channel_layer.group_discard)(self.room_group_name, self.channel_name)
-        # bit redundant, but 'seen' is used for lot notifications for the owner of a given lot
+        # 'seen' drives lot notifications for the lot's owner.
         user_pk = None
         if self.lot.user:
             user_pk = self.lot.user.pk
@@ -273,15 +263,13 @@ class LotConsumer(WebsocketConsumer):
     # Receive message from WebSocket
     def receive(self, text_data):
         text_data_json = json.loads(text_data)
-        # This websocket handles chat only. Bids go through the HTTP endpoint
-        # (views.PlaceBid -> bidding.place_bid_and_broadcast) so a down/stalled
-        # socket can never silently lose a bid.
+        # This websocket is chat only: bids go through views.PlaceBid, so a stalled socket can't
+        # lose one.
         if self.user.is_authenticated:
             try:
-                # self.lot was fetched in connect() and this connection holds it for as long as the
-                # page is open -- minutes, on a lot that is being bid on the whole time. Everything
-                # derived from it (high_bid, high_bidder, ended, sold) is cached on the instance, so
-                # without this a message sent after a bid is filed at the price from before it.
+                # self.lot was fetched in connect() and held for as long as the page is open, so
+                # everything cached on it (high_bid, high_bidder, ended, sold) must be dropped or a
+                # message is filed at the price from before the last bid.
                 self.lot.invalidate_cached_properties()
                 error = check_all_permissions(self.lot, self.user)
                 if error:
@@ -322,15 +310,10 @@ class LotConsumer(WebsocketConsumer):
 
 
 class UserConsumer(WebsocketConsumer):
-    """This is ready to use and corresponding code to connect added (commented out) to base.html
-    You can use userdata.send_websocket_message to message the user, like this:
-        result = {
-            "type": "toast",
-            "message": "Hello world!",
-        }
-        user.userdata.send_websocket_message(result)
-    It would make a good messaging system for some stuff like chat messages,
-    but at this time it does not seem like a good idea
+    """Ready to use, with the client code commented out in base.html.
+
+    ``userdata.send_websocket_message`` messages one user, which would make a reasonable messaging
+    system, but it doesn't seem worth it at the moment.
     """
 
     def connect(self):
@@ -347,11 +330,6 @@ class UserConsumer(WebsocketConsumer):
                 # Add to the group after accepting the connection
                 async_to_sync(self.channel_layer.group_add)(self.user_notification_channel, self.channel_name)
 
-                # Send a message after accepting the connection
-                # async_to_sync(self.channel_layer.group_send)(
-                #     self.user_notification_channel,
-                #     {"type": "toast", "message": 'Welcome!', 'bg': 'success'},
-                # )
         except ClientDisconnected:
             logger.info("client went away before the user websocket finished connecting")
             return
@@ -409,8 +387,7 @@ class AuctionConsumer(WebsocketConsumer):
         self.send(text_data=json.dumps({"type": "invoice_approved", "pk": event["pk"]}))
 
     def capture_complete(self, event):
-        """This is good enough to send to the front end and hide payment QR
-        but don't mark invoice paid just yet"""
+        """Good enough to hide the payment QR in the front end, but don't mark the invoice paid yet."""
         self.send(text_data=json.dumps({"type": "capture_complete", "pk": event["pk"]}))
 
     def invoice_paid(self, event):
@@ -422,8 +399,9 @@ class AuctionConsumer(WebsocketConsumer):
         self.send(text_data=json.dumps({"type": "stats_updated"}))
 
     def queue_updated(self, event):
-        """When the in-person lot queue changed (add/remove/reorder/lot sold): the Lot queue and
-        projector/kiosk screens re-fetch so the current lot tracks winners set on another device."""
+        """The in-person lot queue changed, so the queue and kiosk screens re-fetch and track winners set on
+        another device.
+        """
         self.send(text_data=json.dumps({"type": "queue_updated"}))
 
     def disconnect(self, close_code):

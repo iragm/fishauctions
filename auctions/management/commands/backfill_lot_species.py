@@ -1,33 +1,19 @@
-"""Attach a species to lots that existed before there was a species list to pick from.
+"""Attach a species to lots that predate the species list.
 
-Three passes, in order:
+Three passes: ``--status`` reports what the list covers and how many lots have no species; no flags
+runs the automatic pass, using ``suggest_species(..., use_llm=False)`` and applying an answer only
+when exactly one candidate matches; ``--review`` works through the names the matcher can't settle,
+commonest first, applying each decision to every spelling and remembering it.
 
-``--status``
-    What the species list covers and how many lots are missing a species.
-
-no flags
-    Automatic pass. Uses ``suggest_species(..., use_llm=False)`` -- the same matcher the add-lot
-    form uses, minus the paid LLM call -- and only applies an answer when exactly one candidate
-    matches; a wrong species here ends up on a printed label and in breeder points.
-
-``--review``
-    Works through the lot names the matcher could not settle alone, commonest first. A decision
-    is applied to every spelling of that name and remembered for next time.
-
-Category is deliberately not derived by default: a lot's category comes from its species, and
-moving categories can flip a lot between BAP/HAP/Culture tracks while an existing ``BapAward``
-still reflects the old one. Writes use ``update()`` rather than ``save()`` to avoid re-deriving
-the category. ``--set-category`` opts back in, but only for lots that are Uncategorized and have
-no BAP award recorded.
-
-``--dry-run`` prints what would be set and writes nothing; works with ``--review`` too.
+Category is not derived by default: it comes from the species, and moving categories can flip a lot
+between BAP tracks while an existing ``BapAward`` reflects the old one. Writes use ``update()``
+rather than ``save()`` to avoid re-deriving it. ``--set-category`` opts back in for Uncategorized
+lots with no award. ``--dry-run`` writes nothing.
 
     manage.py backfill_lot_species --status
-    manage.py backfill_lot_species --dry-run
     manage.py backfill_lot_species --dry-run --auction my-club-fall-auction
     manage.py backfill_lot_species --limit 200
     manage.py backfill_lot_species --set-category
-    manage.py backfill_lot_species --review --dry-run --limit 500
     manage.py backfill_lot_species --review --limit 500
 """
 
@@ -58,8 +44,8 @@ MAX_REMEMBERED = 20
 def group_key(lot_name):
     """Words in a lot name that could name a species, singular, in order.
 
-    Groups "6 male guppies", "Guppies (pair)" and "young guppy" to ``guppy``. Checked before and
-    after singularizing since the stop-word list only covers one form ("bag", not "bags").
+    Groups "6 male guppies", "Guppies (pair)" and "young guppy" under ``guppy``. Checked before and
+    after singularizing, since the stop-word list only covers one form.
     """
     words = []
     for word in base_words(lot_name):
@@ -70,10 +56,10 @@ def group_key(lot_name):
 
 
 class NameGroup:
-    """One review question: every spelling of a lot name that means the same thing, and its candidates.
+    """One review question: every spelling of a name that means the same thing, and its candidates.
 
-    Grouped by :func:`group_key` *and* by candidate species, since the key strips colours ("blue
-    dream shrimp" and "green dream shrimp" share a key but name different cultivars).
+    Grouped by :func:`group_key` and by candidate species, since the key strips colours ("blue dream"
+    and "green dream shrimp" share a key but name different cultivars).
     """
 
     def __init__(self, key, candidates, source):
@@ -189,7 +175,7 @@ class Command(BaseCommand):
         return lots
 
     def _names(self, limit=None):
-        """``[{lot_name, count, bred}, ...]``, commonest first so ``--limit`` spends on the big names."""
+        """``[{lot_name, count, bred}, ...]``, commonest first, so ``--limit`` spends on the big names."""
         rows = list(
             self.lots.values("lot_name")
             .annotate(count=Count("pk"), bred=Count("pk", filter=Q(i_bred_this_fish=True)))
@@ -198,11 +184,10 @@ class Command(BaseCommand):
         return rows[:limit] if limit else rows
 
     def _apply(self, species, names, *, teach=False):
-        """Set *species* on every lot named any of *names*. Returns ``(lots, refiled)``.
+        """Set *species* on every lot named any of *names*; returns ``(lots, refiled)``.
 
-        Uses ``update()``, not ``save()`` (see module docstring). *teach* writes the decision to
-        the shared search cache; only the review pass sets it, since the automatic pass's answers
-        already come from the list itself.
+        Uses ``update()`` (see the module docstring). *teach* writes the decision to the shared cache, which
+        only the review pass does.
         """
         pks = list(self.lots.filter(lot_name__in=names).values_list("pk", flat=True))
         if not pks:
@@ -248,7 +233,7 @@ class Command(BaseCommand):
                 )
             )
         else:
-            # Grouped by category, not the CSV's own "kind" column, to match the site's own list.
+            # Grouped by category rather than the CSV's "kind" column, to match the site's list.
             rows = curated.values("category__name").annotate(n=Count("pk")).order_by("-n")
             self.stdout.write(
                 "  curated by category: "
@@ -387,14 +372,14 @@ class Command(BaseCommand):
         return f"{group.display!r} — {group.lots} lot(s){bred}" + (f", also called {others}" if others else "")
 
     def _ask(self, prompt):
-        """One line from the operator.  A method so a test can answer without a terminal."""
+        """One line from the operator. A method so a test can answer without a terminal."""
         try:
             return input(prompt).strip()
         except EOFError:
             return "q"
 
     def _ask_about(self, group):
-        """One question.  Returns lots written, 0 for skipped, or None to stop the whole run."""
+        """One question. Returns lots written, 0 for skipped, or None to stop the run."""
         candidates = list(group.candidates)
         while True:
             for number, species in enumerate(candidates[:MAX_CHOICES], start=1):
@@ -427,7 +412,7 @@ class Command(BaseCommand):
             self.stdout.write("    ?")
 
     def _search(self, query):
-        """Species matching *query*, wider than the matcher since a person here is deciding."""
+        """Species matching *query*, wider than the matcher since a person is deciding."""
         found = {species.pk: species for species in suggest_species(query, use_llm=False)[0]}
         typed = query.strip()
         wide = visible_species().filter(
@@ -461,10 +446,9 @@ class Command(BaseCommand):
         return 0
 
     def _add_species(self, group):
-        """Add a species (or a strain/cross of one) without leaving the review.
+        """Add a species, or a strain or cross of one, without leaving the review.
 
-        Leaving the scientific name blank adds a cross (a tibee, a flowerhorn) -- see
-        :attr:`~auctions.models.Species.is_hybrid`.
+        A blank scientific name adds a cross (see :attr:`~auctions.models.Species.is_hybrid`).
         """
         typed = self._ask("    scientific name (Genus species), or blank for a cross: ")
         genus, epithet = split_scientific_name(typed)

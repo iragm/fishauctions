@@ -1,21 +1,14 @@
-"""Helpers for Apple Wallet (PassKit): .pkpass generation and pass-update pushes.
+"""Apple Wallet (PassKit): .pkpass generation and pass-update pushes.
 
-Unlike Google Wallet, Apple does not expose a REST API — passes are signed
-zip archives generated server-side and served directly to the user. We sign
-the manifest with PKCS#7 (detached, DER-encoded) using the project's existing
-``cryptography`` dep, and draw fallback icon/logo PNGs on the fly with Pillow.
+Apple has no REST API: passes are signed zip archives served directly. The manifest is signed with
+detached DER PKCS#7 via ``cryptography``, and fallback icons are drawn with Pillow.
 
-Installed passes update live via the PassKit web service (auctions/passkit_views.py):
-each pass embeds webServiceURL + a per-member authenticationToken, devices register
-here with an APNs push token, and send_pass_update_notification() pokes APNs (empty
-push, topic = pass type ID, authenticated with the same Pass Type ID cert) so the
-device re-fetches the latest .pkpass.
+Installed passes update through the PassKit web service (auctions/passkit_views.py): each pass
+embeds webServiceURL and a per-member authenticationToken, devices register an APNs push token, and
+send_pass_update_notification() pokes APNs so the device re-fetches.
 
-Public entry points:
-    is_configured()                          -> bool
-    generate_pkpass_for_member(member)       -> bytes  (raw .pkpass zip data)
-    ensure_apple_pass_auth_token(member)     -> str    (per-pass web service secret)
-    send_pass_update_notification(registration) -> bool (True = registration still valid)
+Entry points: is_configured(), generate_pkpass_for_member(member), ensure_apple_pass_auth_token(member),
+send_pass_update_notification(registration).
 """
 
 from __future__ import annotations
@@ -42,13 +35,10 @@ logger = logging.getLogger(__name__)
 
 APNS_URL = "https://api.push.apple.com"  # Pass Type ID certs are production-only; no sandbox.
 
-# Card background — same dark slate we use for the Google Wallet class so the
-# two cards feel consistent.
+# The same dark slate as the Google Wallet class.
 DEFAULT_BACKGROUND_RGB = (31, 41, 55)
 DEFAULT_FOREGROUND_RGB = (255, 255, 255)
-# Card background for a lapsed/expired membership — a dark red that stays readable
-# with white text. Apple passes can't color one field red, so the whole card is
-# tinted to signal the "Unpaid/expired" state.
+# A lapsed membership tints the whole card red; Apple can't colour one field.
 EXPIRED_BACKGROUND_RGB = (153, 27, 27)
 
 
@@ -62,9 +52,9 @@ def is_configured() -> bool:
 
 
 def _read_cert_file(path):
-    """Read a cert file, converting the two operator-error cases into clear messages:
-    a missing file and an unreadable one (host-copied files land root-owned in the
-    bind-mounted repo root — see check_apple_wallet)."""
+    """Read a cert file, with clear messages for a missing or unreadable one (host-copied files land
+    root-owned; see check_apple_wallet).
+    """
     try:
         with path.open("rb") as f:
             return f.read()
@@ -80,11 +70,7 @@ def _read_cert_file(path):
 
 
 def _load_wwdr_cert(data: bytes):
-    """Parse the WWDR intermediate from PEM or DER.
-
-    Apple distributes WWDR certs as DER (.cer); operators often convert to PEM.
-    Accept both so the download can be dropped in place unmodified.
-    """
+    """Parse the WWDR intermediate from PEM or DER, since Apple ships .cer and operators convert."""
     try:
         return x509.load_pem_x509_certificate(data)
     except ValueError:
@@ -93,16 +79,11 @@ def _load_wwdr_cert(data: bytes):
 
 @lru_cache(maxsize=1)
 def _load_signing_certs():
-    """Load and cache the Pass Type ID cert/key plus the WWDR intermediate.
+    """Load and cache the Pass Type ID cert and key plus the WWDR intermediate, for the process's life.
 
-    Cached for the life of the process. If the operator rotates certs they need
-    to bounce the worker (true of every dep we cache in-memory).
-
-    Raises ValueError with an operator-actionable message when a file is
-    missing/unreadable, the .p12 is incomplete, or the WWDR intermediate is not
-    the one that issued the Pass Type ID cert — iPhones silently refuse to add a
-    pass whose embedded chain doesn't verify, and validators report it as
-    "WWDR certificate missing", so fail loudly at signing time instead.
+    Raises ValueError with an actionable message when a file is missing, the .p12 is incomplete, or the
+    WWDR cert didn't issue the Pass Type ID cert -- iPhones silently refuse a pass whose chain doesn't
+    verify.
     """
     cert_path = settings.BASE_DIR / settings.APPLE_WALLET_CERT_FILE
     wwdr_path = settings.BASE_DIR / settings.APPLE_WALLET_WWDR_FILE
@@ -127,11 +108,9 @@ def _load_signing_certs():
 
 
 def _placeholder_png(text: str, size: tuple[int, int]) -> bytes:
-    """Generate a simple solid-color PNG with centered text as a fallback asset.
+    """A solid-colour PNG with centred text, for a club with no icon.
 
-    Apple Wallet requires at minimum icon.png (29x29) and icon@2x.png (58x58),
-    plus a logo.png (max 160x50). When the club has no uploaded icon we draw
-    something minimal and consistent.
+    Apple requires icon.png (29x29), icon@2x.png (58x58) and a logo.png (max 160x50).
     """
     img = Image.new("RGB", size, DEFAULT_BACKGROUND_RGB)
     draw = ImageDraw.Draw(img)
@@ -150,11 +129,8 @@ def _placeholder_png(text: str, size: tuple[int, int]) -> bytes:
 
 
 def _icon_png(club, size: tuple[int, int]) -> bytes:
-    """Return PNG bytes sized to `size`, using the club icon if set.
-
-    Falls back to the text placeholder if the club has no icon or the file can't
-    be opened. Always returns RGB (no alpha) since some Wallet clients have been
-    finicky about transparency on the icon slot.
+    """PNG bytes at `size` from the club icon, falling back to the placeholder. Always RGB: some Wallet
+    clients dislike transparency on the icon.
     """
     if getattr(club, "icon", None):
         try:
@@ -162,9 +138,7 @@ def _icon_png(club, size: tuple[int, int]) -> bytes:
                 with Image.open(f) as src:
                     img = src.convert("RGB").copy()
             img.thumbnail(size, Image.LANCZOS)
-            # Pad to exact target size with the brand background — Apple displays
-            # icon.png at a fixed square in the lock-screen UI, so consistency
-            # beats letting iOS rescale.
+            # Pad to the exact size rather than letting iOS rescale.
             canvas = Image.new("RGB", size, DEFAULT_BACKGROUND_RGB)
             offset = ((size[0] - img.width) // 2, (size[1] - img.height) // 2)
             canvas.paste(img, offset)
@@ -178,10 +152,9 @@ def _icon_png(club, size: tuple[int, int]) -> bytes:
 
 
 def ensure_apple_pass_auth_token(member) -> str:
-    """Return the member's PassKit web service auth token, generating it on first use.
+    """The member's PassKit auth token, generated on first use.
 
-    Persisted with a queryset update so lazily minting a token doesn't re-fire the
-    ClubMember save signals (which would queue a pointless wallet-update push).
+    Written with a queryset update so it doesn't re-fire the ClubMember save signals.
     """
     if not member.apple_pass_auth_token:
         member.apple_pass_auth_token = secrets.token_hex(16)
@@ -201,17 +174,11 @@ def _web_service_url() -> str:
 
 
 def _build_pass_json(member) -> dict:
-    """Build the pass.json content for a member.
+    """Build the pass.json for a member.
 
-    Every pass carries webServiceURL + authenticationToken so installed passes stay
-    live: devices register with the PassKit web service and get an APNs poke (see
-    send_pass_update_notification) whenever pass-visible content changes, then
-    re-fetch the newest .pkpass from here.
-
-    A pass for a club that has turned off member barcodes — or for a member who has
-    been deactivated — is marked voided; that is the only way to remotely kill an
-    installed Apple pass (there is no delete API), so the web service keeps serving
-    those passes voided instead of 404ing.
+    Every pass carries webServiceURL and authenticationToken so devices can be poked to re-fetch. A
+    pass for a club with barcodes off, or a deactivated member, is voided -- the only way to kill an
+    installed pass, so the web service serves them voided rather than 404ing.
     """
     club = member.club
     member_name = member.name or (member.user.get_full_name() or member.user.username if member.user else "Member")
@@ -239,7 +206,7 @@ def _build_pass_json(member) -> dict:
             ],
             "auxiliaryFields": [],
         },
-        # Both barcode (legacy iOS 6-8) and barcodes (iOS 9+) for broadest compatibility.
+        # Both barcode (iOS 6-8) and barcodes (iOS 9+).
         "barcode": {
             "format": "PKBarcodeFormatCode128",
             "message": str(member.membership_number),
@@ -255,16 +222,12 @@ def _build_pass_json(member) -> dict:
             }
         ],
     }
-    # Membership status line: "Expired 1 Jan 2025" / "Valid through 1 Jan 2025".
-    # None only when the club doesn't run memberships, leaving the pass unchanged.
+    # "Expired 1 Jan 2025" / "Valid through 1 Jan 2025"; None when the club has no memberships.
     status_text = member.wallet_status_text
     if status_text:
         pass_json["generic"]["auxiliaryFields"].append({"key": "status", "label": "Status", "value": status_text})
-    # Deliberately no expirationDate: Apple greys out and archives an expired pass
-    # once that date passes, removing it from the user's device. A lapsed membership
-    # instead keeps a live pass tinted red with an "Expired <date>" status line — we
-    # never programmatically expire the card. Genuine revocation (barcodes turned
-    # off, member deactivated) still voids the pass below.
+    # No expirationDate: Apple would grey out and archive the pass. A lapsed membership keeps a
+    # live red pass instead. Real revocation still voids it below.
     if not club.show_member_barcode or member.is_deleted:
         pass_json["voided"] = True
     return pass_json
@@ -288,11 +251,8 @@ def generate_pkpass_for_member(member) -> bytes:
         msg = "Apple Wallet is not configured (missing cert / pass type / team ID)."
         raise RuntimeError(msg)
 
-    # Build the files that go inside the pkpass. icon.png / icon@2x.png are
-    # square (Apple displays them at the lock-screen notification thumbnail
-    # size); logo.png appears in the top-left of the pass. When the club has
-    # uploaded an icon we use it for both — otherwise we fall back to a text
-    # placeholder rendered from the club name initials.
+    # icon.png / icon@2x.png are square (lock-screen thumbnail); logo.png is the pass's top-left.
+    # The club's icon is used for both when it has one.
     club = member.club
     files: dict[str, bytes] = {
         "pass.json": json.dumps(_build_pass_json(member), separators=(",", ":")).encode("utf-8"),
@@ -301,15 +261,13 @@ def generate_pkpass_for_member(member) -> bytes:
         "logo.png": _icon_png(club, (50, 50)),
     }
 
-    # Apple requires SHA-1 hashes for each file in manifest.json. The signature
-    # itself is SHA-256; mixing is allowed and standard practice on modern iOS.
+    # Apple requires SHA-1 file hashes in manifest.json; the signature itself is SHA-256.
     manifest = {name: hashlib.sha1(data, usedforsecurity=False).hexdigest() for name, data in files.items()}
     manifest_bytes = json.dumps(manifest, separators=(",", ":")).encode("utf-8")
     files["manifest.json"] = manifest_bytes
     files["signature"] = _sign_manifest(manifest_bytes)
 
-    # Zip with deterministic ordering so the same pass produces identical bytes
-    # — helpful for debugging and for clients that cache by content.
+    # Deterministic ordering, so the same pass produces identical bytes.
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
         for name in sorted(files):
@@ -319,12 +277,10 @@ def generate_pkpass_for_member(member) -> bytes:
 
 @lru_cache(maxsize=1)
 def _apns_cert_path() -> str:
-    """Write the Pass Type ID cert + key as one PEM file for APNs client TLS auth.
+    """Write the Pass Type ID cert and key as one PEM file for APNs client TLS.
 
-    APNs pass-update pushes authenticate with the same certificate that signs the
-    pass, but the TLS layer only loads certs from disk — so the .p12 contents are
-    re-serialized to a mode-0600 temp file once per process (mkstemp is 0600 by
-    default; the key already sits on the same disk inside the .p12).
+    APNs pushes authenticate with the pass's own certificate, and TLS only loads certs from disk, so
+    the .p12 is re-serialized to a mode-0600 temp file once per process.
     """
     private_key, signer_cert, _wwdr = _load_signing_certs()
     pem = signer_cert.public_bytes(Encoding.PEM) + private_key.private_bytes(
@@ -343,12 +299,10 @@ def _apns_client() -> httpx.Client:
 
 
 def send_pass_update_notification(registration) -> bool:
-    """Tell one registered device its pass changed; the device then re-fetches it.
+    """Tell one registered device its pass changed, so it re-fetches.
 
-    The push is an empty payload with the pass type identifier as the topic — that
-    is the entire PassKit update protocol. Returns False (and deletes the
-    registration) when APNs says the token is dead, e.g. the user removed the pass
-    while offline. Raises httpx.HTTPError on transient failures so Celery retries.
+    An empty push with the pass type identifier as the topic is the whole protocol. Returns False (and
+    deletes the registration) when the token is dead; raises httpx.HTTPError so Celery retries.
     """
     response = _apns_client().post(
         f"{APNS_URL}/3/device/{registration.push_token}",
@@ -365,8 +319,7 @@ def send_pass_update_notification(registration) -> bool:
         reason = response.json().get("reason", "")
     except ValueError:
         reason = ""
-    # 410 = token permanently gone; the 400-reasons below mean this token can never
-    # work for this topic. Drop the registration instead of retrying forever.
+    # 410 and these 400 reasons mean the token can never work for this topic.
     if response.status_code == 410 or reason in ("BadDeviceToken", "DeviceTokenNotForTopic", "Unregistered"):
         logger.info(
             "Dropping dead APNs registration pk=%s (status=%s reason=%s)",

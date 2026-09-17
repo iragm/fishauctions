@@ -1,18 +1,12 @@
-"""Shared logic for the command palette.
+"""Shared logic for the command palette, behind the JSON views.
 
-Single source of truth for the palette's behaviour, imported by the thin JSON views
-in ``views.py`` and reused for both the empty-state default items and the phrase->page
-shortcut resolution:
+  * ``default_items(request)``     -> groups shown with no query
+  * ``search(request, q)``         -> grouped results for a query
+  * ``resolve_page(page, user)``   -> a ``CommandPalettePage`` row as item(s)
+  * ``log_search(...)``            -> upsert a ``CommandPaletteSearch`` row and bump page hits
 
-  * ``default_items(request)``     -> groups shown when the palette opens with no query
-  * ``search(request, q)``         -> grouped search results for a query
-  * ``resolve_page(page, user)``   -> expand a ``CommandPalettePage`` row into item(s)
-  * ``log_search(...)``            -> upsert a ``CommandPaletteSearch`` row + bump page hits
-
-A dynamic ``target`` resolver may return several items, so resolvers return *lists*. Club shortcuts
-resolve against a single "palette club" (the member's last-used club) to keep results focused.
-Permission/destination helpers are reused from the models, from ``views.check_club_permission`` and
-from ``filters.rhyming_name_q`` so the palette stays consistent with the rest of the site.
+Resolvers return lists, since a target may fan out. Club shortcuts resolve against one "palette
+club" (the last used). Permissions reuse ``check_club_permission`` and the model helpers.
 """
 
 import re
@@ -64,11 +58,7 @@ def _last_auction(user):
 
 
 def _last_auction_active(user):
-    """The user's most recent auction, but only while it's still worth acting on.
-
-    Once an auction is ``pretty_much_over`` (wound down for 24h+), its palette shortcuts stop
-    being useful, so most ``last_auction:*`` resolvers route through this and return nothing.
-    The invoice shortcut deliberately does *not* use this — an invoice stays relevant afterwards."""
+    """The user's most recent auction, unless ``pretty_much_over``. The invoice shortcut doesn't use this."""
     auction = _last_auction(user)
     if auction and auction.pretty_much_over:
         return None
@@ -83,12 +73,8 @@ def _last_club(user):
 
 
 def _palette_club(user):
-    """The single club the palette's club shortcuts and club defaults target.
-
-    Prefers the explicitly recorded last club used (set when the member views a club page);
-    falls back to the most recent auction's club so someone who has only run an auction still
-    gets club shortcuts. Scoping to one club keeps the palette from listing the same shortcut
-    once per club the user belongs to.
+    """The one club the palette's club shortcuts target: the last club viewed, else the latest auction's
+    club. One club, so shortcuts aren't repeated per membership.
     """
     club = _last_club(user)
     if club:
@@ -100,7 +86,7 @@ def _palette_club(user):
 
 
 def _can_manage_members(user, club):
-    """Permission to see/manage the club's member list (the "Members" shortcut destination)."""
+    """Permission to see or manage the club's members."""
     return _perm(user, club, "permission_view") or _perm(user, club, "permission_add_edit")
 
 
@@ -130,16 +116,8 @@ def _visible_auctions(user):
 
 
 def _joined_auctions(user):
-    """Auctions the user has a real relationship with — *not* publicly promoted ones.
-
-    Three ways in, and the third is the one people forget: they created it, they were added to it,
-    or **a club they help run is running it**. That last clause matters most to the person who
-    needs it least often on the web — a club officer who never joined the auction as a bidder had
-    no relationship with it at all here, so "which auctions am I in?" answered "none" for exactly
-    the people who run them.
-
-    Lot search is scoped to these so the palette never surfaces lots from auctions the user has no
-    relationship with, even when those auctions are promoted/public.
+    """Auctions the user has a real relationship with, never merely promoted ones: created, joined, or run
+    by a club they help run (club officers who never joined as bidders). Lot search is scoped to these.
     """
     qs = Auction.objects.exclude(is_deleted=True)
     if user.is_superuser:
@@ -159,7 +137,7 @@ def _use_bulk_add_lots(auction):
 
 
 def _admin_clubs(user):
-    """Clubs the user can administer (view members). Includes the last auction's club for creators/superusers."""
+    """Clubs the user can administer, plus the last auction's club for creators and superusers."""
     clubs = list(
         Club.objects.filter(members__user=user, members__is_deleted=False)
         .filter(Q(members__permission_admin=True) | Q(members__permission_view=True))
@@ -173,7 +151,7 @@ def _admin_clubs(user):
 
 
 def _admin_auction_ids(user):
-    """Auctions the user administers: created by them, admin TOS, or club-managed by a club they administer."""
+    """Auctions the user administers: created, admin TOS, or club-managed by a club they administer."""
     ids = set(
         Auction.objects.filter(
             Q(created_by=user) | Q(auctiontos__user=user, auctiontos__is_admin=True),
@@ -203,7 +181,7 @@ def _bap_url(club, auction):
 
 
 def _with_query(url, term):
-    """Append ?query=<term> so the destination's filter pre-selects the record the user searched for."""
+    """Append ?query=<term> so the destination's filter preselects the record."""
     return url + "?" + urlencode({"query": term}) if term else url
 
 
@@ -212,16 +190,13 @@ def _invoice_status_label(invoice):
 
 
 # --- Dynamic target resolvers ------------------------------------------------
-# Each builder takes the user and returns a list of {url, title, description, icon} dicts
-# (empty when nothing applies). Returning lists lets a target fan out (e.g. several recent invoices).
+# Each takes the user and returns a list of {url, title, description, icon} dicts.
 
 
 def _last_auction_admin(user, *, include_over=False):
-    """The user's most recent auction if they can administer it.
-
-    By default this hides once the auction is ``pretty_much_over`` (so "set winners", "checkout",
-    etc. stop appearing). Pass ``include_over=True`` for shortcuts that stay useful after the
-    auction is over, such as auction stats."""
+    """The user's most recent auction if they can administer it; hidden once ``pretty_much_over`` unless
+    ``include_over=True`` (e.g. stats).
+    """
     auction = _last_auction(user) if include_over else _last_auction_active(user)
     if auction and auction.permission_check(user):
         return auction
@@ -272,7 +247,7 @@ def _t_view_users(user):
 
 def _t_set_winners(user):
     auction = _last_auction_admin(user)
-    # Online auctions pick winners automatically from bids; only in-person, still-open auctions apply.
+    # Online auctions pick winners from bids; only open in-person auctions apply.
     if not auction or auction.is_online or _auction_ended(auction):
         return []
     return [
@@ -384,7 +359,7 @@ def _t_label_setup(user):
 
 
 def _t_auction_printing(user):
-    """Admin bulk label printing hub for the user's most recent admin auction (the /print/ page)."""
+    """The label printing hub for the user's most recent admin auction."""
     auction = _last_auction_admin(user)
     if not auction:
         return []
@@ -399,7 +374,7 @@ def _t_auction_printing(user):
 
 
 def _t_print_unprinted_labels(user):
-    """Print just the not-yet-printed labels for the user's own lots in their most recent auction."""
+    """Print the user's own unprinted labels in their most recent auction."""
     auction = _last_auction_active(user)
     if not auction:
         return []
@@ -443,7 +418,7 @@ def _t_bap(user):
 
 
 def _t_auction_help(user):
-    """In-auction help for the user's most recent admin auction (only when help is enabled)."""
+    """In-auction help for the most recent admin auction, when help is enabled."""
     from django.conf import settings
 
     if not settings.ENABLE_HELP:
@@ -462,7 +437,7 @@ def _t_auction_help(user):
 
 
 def _t_auction_stats(user):
-    """Stats for the user's most recent admin auction. Stays available after the auction is over."""
+    """Stats for the most recent admin auction, including after it's over."""
     auction = _last_auction_admin(user, include_over=True)
     if not auction:
         return []
@@ -483,10 +458,9 @@ def _t_club_stats(user):
 
 
 def _t_auction_set_location(user):
-    """Set/adjust the location of the user's most recent admin auction on a map.
-
-    Links to editing the first physical pickup location (whose form carries the map for setting
-    coordinates), or to creating one when the auction has none yet."""
+    """Set the most recent admin auction's location: edit its first physical pickup location (which has
+    the map), or create one.
+    """
     auction = _last_auction_admin(user, include_over=True)
     if not auction:
         return []
@@ -529,7 +503,7 @@ def _t_invoice(user):
                     "icon": "bi-bag",
                 }
             )
-    # Otherwise (or in addition) surface the user's most recently created invoices.
+    # Also the user's most recent invoices.
     for invoice in _recent_invoices(user):
         if invoice.pk in seen:
             continue
@@ -548,11 +522,7 @@ def _t_invoice(user):
 
 
 def _clubs_items(user, url_name, title_prefix, icon, perm="permission_view", description=""):
-    """Resolve a club shortcut against the single palette club (the last club used).
-
-    Returning at most one item keeps the palette focused on the club the user is currently
-    working with instead of fanning the same shortcut out across every club they belong to.
-    """
+    """A club shortcut resolved against the palette club only, so it isn't repeated per club."""
     club = _palette_club(user)
     if not club:
         return []
@@ -697,13 +667,8 @@ ROUTE_TARGET_PREFIX = "route:"
 
 
 def _resolve_route_target(user, key):
-    """Resolve a ``route:<key>`` target through the palette route catalog.
-
-    Lets a shortcut point at any page the assistant knows about without needing a hand-written
-    builder in :data:`DYNAMIC_TARGETS` -- which is what makes the mined shortcuts from
-    ``manage.py mine_palette_shortcuts`` storable as data. The route is resolved per user and
-    re-runs its own permission checks, so a shortcut can never open a page its owner may not see;
-    one that resolves to a refusal simply produces no item.
+    """Resolve a ``route:<key>`` target through the route catalog, so mined shortcuts can be stored as
+    data. Permission checks re-run; a refusal yields no item.
     """
     from . import palette_routes
 
@@ -769,22 +734,14 @@ def _page_items(user, ql):
 
 
 def _editable_auction_fields():
-    """Names of Auction fields that can actually be changed, split by which form owns them.
-
-    Restricting matches to these prevents advertising settings the user can't edit here, such as
-    ``paypal_email_address`` (a model field that lives on no form -> "configure paypal email address").
-    """
+    """Auction field names on the settings or custom fields forms, so settings on no form aren't offered."""
     from .forms import AuctionCustomFieldsForm, AuctionEditForm
 
     return set(AuctionEditForm.Meta.fields), set(AuctionCustomFieldsForm.Meta.fields)
 
 
 def _auction_field_items(user, q):
-    """Match the query against the verbose name or help text of editable Auction fields.
-
-    Only fields shown on the auction settings or custom fields forms are considered, and a
-    verbose-name match wins over a help-text-only match when choosing the field to name.
-    """
+    """Match the query against verbose names or help text of editable Auction fields; verbose name wins."""
     auction = _last_auction_admin(user)
     if not auction or len(q) < 3:
         return []
@@ -795,7 +752,7 @@ def _auction_field_items(user, q):
         False: (reverse("edit_auction", kwargs={"slug": auction.slug}), "Auction settings"),
         True: (reverse("edit_auction_custom_fields", kwargs={"slug": auction.slug}), "Custom fields"),
     }
-    # url -> (item, matched_on_verbose_name) so a precise verbose-name hit can replace a help-text one.
+    # url -> (item, matched_on_verbose_name), so a verbose-name hit replaces a help-text one.
     by_url = {}
     for field in auction._meta.get_fields():
         if field.name not in editable:
@@ -819,12 +776,8 @@ def _auction_field_items(user, q):
 
 
 def _form_field_match(model, field_names, ql):
-    """Return (field, matched_verbose) for the best field on ``model`` whose verbose name or
-    help text contains ``ql``, preferring a verbose-name hit. ``None`` when nothing matches.
-
-    Shared by the user-preferences and club-settings matchers so a query like "username" or
-    "annual fee" resolves to the page that actually edits that setting, the same way auction
-    field names resolve to the auction settings page.
+    """``(field, matched_verbose)`` for the best field on ``model`` matching ``ql``, preferring verbose
+    names. ``None`` if nothing matches. Shared by the preference and club-settings matchers.
     """
     best = None
     for field in model._meta.get_fields():
@@ -840,19 +793,13 @@ def _form_field_match(model, field_names, ql):
         if best is None or (verbose_match and not best[1]):
             best = (display, verbose_match)
         if verbose_match:
-            # A verbose-name hit is as precise as it gets; keep the first one we see.
+            # A verbose-name hit is as precise as it gets.
             return best
     return best
 
 
 def _user_pref_field_items(user, q):
-    """Match the query against the two settings forms and link to the page the field is on.
-
-    Mirrors ``_auction_field_items``: searching "username" surfaces "Change username visible"
-    on the user preferences page (the standalone "change username" page is a separate shortcut).
-    Notifications are a separate page and a separate form now, so the answer has to name the right
-    one -- linking "stop emailing me" at /preferences/ would be a page the setting isn't on.
-    """
+    """Match the query against the preferences and notifications forms and link to the page the field is on."""
     if not user.is_authenticated or len(q) < 3:
         return []
     from .forms import ChangeUserNotificationsForm, ChangeUserPreferencesForm
@@ -870,7 +817,7 @@ def _user_pref_field_items(user, q):
 
 
 def _club_settings_field_items(user, q):
-    """Match the query against the palette club's settings forms and link to the right page."""
+    """Match the query against the palette club's settings forms."""
     if len(q) < 3:
         return []
     club = _palette_club(user)
@@ -913,7 +860,7 @@ def _is_email(q):
 
 
 def _member_search_items(user, q):
-    """Club members, scoped to clubs the user administers. Email match is exact; names use rhyming match."""
+    """Club members in clubs the user administers. Exact email match; names match nicknames too."""
     if user.is_superuser:
         member_qs = ClubMember.objects.filter(is_deleted=False)
     else:
@@ -942,7 +889,7 @@ def _member_search_items(user, q):
 
 
 def _auctiontos_search_items(user, q):
-    """Auction participants the user administers, excluding those tied 1:1 to a club member (shown above)."""
+    """Auction participants the user administers, excluding those shown as club members above."""
     auction_ids = _admin_auction_ids(user)
     if not auction_ids:
         return []
@@ -971,11 +918,7 @@ _CARD_PHRASES = ("card", "membership card", "membership", "member", "my card", "
 
 
 def _membership_card_search_items(user, q):
-    """The user's own UUID membership card(s).
-
-    Surfaced when they search for card/membership/member, or for one of their clubs by name.
-    The palette club (last used) is listed first so the most relevant card leads.
-    """
+    """The user's own membership cards, for "card"/"membership" or a club name. The palette club leads."""
     if not user.is_authenticated:
         return []
     ql = q.lower().strip()
@@ -1031,10 +974,8 @@ def _invoice_item(invoice, auction, icon, description):
 
 
 def _member_can_add_lots(auction, tos):
-    """A non-admin may add lots when they've joined, are allowed to sell, and submission is open.
-
-    ``can_submit_lots`` closes once lot submission ends, which is exactly when the spec says to
-    drop the add-lots default. It can raise if the auction has no submission start date, so guard.
+    """A non-admin may add lots when joined, allowed to sell, and submission is open (``can_submit_lots``
+    can raise without a start date).
     """
     if not tos or not tos.selling_allowed:
         return False
@@ -1045,7 +986,7 @@ def _member_can_add_lots(auction, tos):
 
 
 def _member_should_print_labels(auction, tos):
-    """Print-labels default: online auctions only after they end, in-person only before they start."""
+    """Print-labels default: online auctions after they end, in-person before they start."""
     if not tos:
         return False
     if auction.is_online:
@@ -1071,60 +1012,39 @@ def _membership_card_item(user, club):
 
 # --- destinations that only exist inside the app -----------------------------
 #
-# Lot scanning (the camera) and Tap to Pay (the card reader) are native screens rather than pages on
-# this site, so the palette can't reach them the way it reaches everything else. Both are already
-# deep links the app intercepts, so they're emitted as ordinary items whose URL happens to use the
-# app's own scheme. Gated on the app's User-Agent: the link is dead in a browser, and an app build
-# that doesn't recognise a ``fishauctions://`` URL ignores it rather than navigating, so a row this
-# server emits before the app can handle it is inert rather than broken.
-#
-# The native palette (the app's fallback when this modal isn't on the page) injects its own copies
-# of both rows, which is why ``search`` can be asked to leave them out -- see
-# ``MobileCommandPaletteView``.
+# Lot scanning and Tap to Pay are native screens, offered as items with fishauctions:// URLs. Gated on
+# the app UA; an older app ignores an unknown URL. The native palette adds its own copies, so search
+# can omit them (MobileCommandPaletteView).
 
 AR_DEEP_LINK = "fishauctions://ar/{slug}"
 TAP_TO_PAY_DEEP_LINK = "fishauctions://tap-to-pay"
 
-# Word-boundary matches, unlike the substring matching the page shortcuts use: "ar" is a substring
-# of car, start and search, and lot scanning has no business under a third of the queries on the
-# site. "find lot" is singular for the same reason -- "find my lots" is a real page on the web.
+# Word boundaries, not substrings: "ar" is in car, start and search. "find lot" is singular because
+# "find my lots" is a web page.
 _AR_QUERY = re.compile(r"\b(scan\w*|ar|augmented reality|find (?:a |the )?lot)\b")
 _TAP_TO_PAY_QUERY = re.compile(r"\b(tap|cards?|payments?)\b")
 
-# The screens' own names, tighter again, for a navigation request that must *beat* the page catalog
-# rather than sit alongside it -- see ``app_deep_link_by_name``.
+# The screens' own names, tight enough to beat the page catalog (app_deep_link_by_name).
 _AR_NAME = re.compile(r"^(lot )?scan(ner|ning)?$|^ar$|^augmented reality$")
 _TAP_TO_PAY_NAME = re.compile(r"^(tap|tap to pay|tap to pay on iphone|card reader)$")
 
 
 def _app_ar_auction(user):
-    """The auction "Lot scanning" would open, or None.
-
-    The user's most recent auction, in person and not yet over: there is nothing to walk to at an
-    online auction, and once one is ``pretty_much_over`` the room has been packed up. The same
-    window the "Find this lot" buttons on the lot lists use.
-    """
+    """The auction "Lot scanning" would open: the most recent, in person, not over. Else None."""
     auction = _last_auction_active(user)
     return auction if auction and not auction.is_online else None
 
 
 def _can_take_payments(user):
-    """Whether this user administers any auction or club that could take a card payment.
-
-    Deliberately the same check the app's Tap to Pay warm-up endpoint makes, so the palette can't
-    offer a row that the screen behind it turns around and refuses.
-    """
+    """Whether this user can take card payments: the same check as the app's Tap to Pay warm-up."""
     from auctions.mobile.services.payments import PaymentService
 
     return PaymentService.user_can_take_payments(user)
 
 
 def _app_deep_link_items(request, ql=""):
-    """The native destinations worth offering this user, as ordinary palette items.
-
-    ``ql`` is the lower-cased query, or ``""`` for the palette's empty state. A row appears either
-    because the query named it or -- with no query -- because the user is in the situation it exists
-    for: an in-person auction happening now, or an iPhone-carrying merchant who can take a card.
+    """Native destinations for this user as palette items. ``ql`` is the lower-cased query, or "" for the
+    empty state, where a row shows if the user's situation calls for it.
     """
     if not getattr(request, "is_mobile_app", False):
         return []
@@ -1143,25 +1063,12 @@ def _app_deep_link_items(request, ql=""):
                     auction.pk,
                 )
             )
-    # iPhones only, and not merely for the wording: the screen behind this link is Apple's flow end
-    # to end -- Apple's terms sheet, Apple's education sheet, "Tap to Pay on iPhone" throughout --
-    # so the app gates both of its own entry points on the platform. This row was the one that
-    # didn't, and on Android it opened the iPhone setup screen, which asked an uninitialized Square
-    # SDK for its authorization state and killed the process. Android merchants lose nothing: they
-    # take cards from the button on the invoice page, which is a different code path, and there is
-    # no Android setup screen because there is nothing to set up.
-    #
-    # Cheap test first: _can_take_payments is a few exists() queries, and this runs on every
-    # keystroke in the app.
+    # iPhone only: the screen is Apple's flow, and on Android it crashed the Square SDK. Android
+    # merchants take cards from the invoice page. Cheap test first; this runs per keystroke.
     asked_for_it = not ql or _TAP_TO_PAY_QUERY.search(ql)
     if asked_for_it and getattr(request, "is_ios_app", False) and _can_take_payments(user):
-        # Both the label and the missing icon come from Apple's Tap to Pay on iPhone review guide,
-        # not from taste (see the same rules spelled out in quick_checkout_htmx.html): 5.4 fixes the
-        # label, so the usual " — {auction}" suffix would break it and the context goes in the
-        # subtitle instead; 5.5 requires SF Symbols' wave.3.right.circle if the control carries an
-        # icon at all, and imitating it with a credit-card glyph is separately forbidden. Every
-        # palette row draws a glyph, so this one gets the palette's neutral "go here" arrow rather
-        # than anything that reads as a payment mark of ours.
+        # Apple's review guide: the label is fixed (5.4), so context goes in the subtitle, and the only
+        # allowed icon is SF Symbols' wave.3.right.circle (5.5), so a neutral arrow is used.
         items.append(
             _item(
                 "app",
@@ -1175,16 +1082,8 @@ def _app_deep_link_items(request, ql=""):
 
 
 def app_destinations_for_prompt(request):
-    """``(name, description)`` for each native screen this user could be sent to right now.
-
-    Written into the assistant's system prompt beside the page catalog, because the catalog is a
-    list of *named URLs* and these two aren't URLs at all. Without them the model can only answer
-    "take me to tap to pay" with the nearest real page — the Square payout settings — which is not
-    where the user asked to go. Empty on the web, and empty for anyone the screens aren't available
-    to, so the model is never told about a destination that would then refuse to open.
-
-    The names are the ones :func:`app_deep_link_by_name` accepts, so what the prompt offers and what
-    ``go_to_page`` takes can't drift apart.
+    """``(name, description)`` for native screens this user could open now, for the assistant's prompt.
+    Names match :func:`app_deep_link_by_name`. Empty on the web.
     """
     destinations = []
     for item in _app_deep_link_items(request):
@@ -1196,19 +1095,15 @@ def app_destinations_for_prompt(request):
 
 
 def app_deep_link_by_name(request, query):
-    """The native destination a navigation request names outright, or None.
-
-    For ``go_to_page``: on a phone, "take me to tap to pay" means the card reader, not the Square
-    payout settings page that carries "tap to pay" as one of its keywords. Only the screen's own
-    name counts here, so this can't swallow the queries the page catalog answers better.
+    """The native destination a navigation request names outright, or None. Only the screen's own name
+    counts, so the page catalog still answers everything else.
     """
     ql = (query or "").strip().lower()
     wants_ar = bool(_AR_NAME.match(ql))
     wants_tap_to_pay = bool(_TAP_TO_PAY_NAME.match(ql))
     if not (wants_ar or wants_tap_to_pay):
         return None
-    # Through the same builder, so a named destination is still subject to the permission and
-    # in-person-auction checks that decide whether the row exists for this user at all.
+    # Same builder, so permission and auction checks still apply.
     for item in _app_deep_link_items(request, ql):
         is_tap_to_pay = item["url"] == TAP_TO_PAY_DEEP_LINK
         if is_tap_to_pay == wants_tap_to_pay:
@@ -1277,7 +1172,7 @@ def _auction_member_items(user, auction, tos):
                     "Sell a lot in your most recent auction",
                 )
             )
-    # Check-in auctions: if the user hasn't been checked in yet, hand them their membership card.
+    # Check-in auctions: not yet checked in gets their membership card.
     if not auction.is_online and auction.use_check_in_mode and (tos is None or tos.checked_in is None):
         card = _membership_card_item(user, auction.club)
         if card:
@@ -1296,9 +1191,8 @@ def _auction_member_items(user, auction, tos):
 
 
 def _auction_default_items(request, user, auction):
-    """Defaults for the user's most recent auction, ordered by the role/state they're in."""
-    # Once the auction is pretty much over (wound down for 24h+), nothing about it is worth acting
-    # on anymore except the invoice, so surface only that and drop the rest.
+    """Defaults for the user's most recent auction, ordered by role and state."""
+    # Pretty much over: only the invoice is worth offering.
     if auction.pretty_much_over:
         invoice = (
             _ready_invoice(user, auction)
@@ -1315,7 +1209,7 @@ def _auction_default_items(request, user, auction):
     ended = _auction_ended(auction)
     tos = _user_tos(user, auction)
 
-    # An invoice for the most recent auction is the single most useful thing to surface first.
+    # An invoice for this auction comes first.
     ready_invoice = _ready_invoice(user, auction)
     if ready_invoice:
         items.append(_invoice_item(ready_invoice, auction, "bi-bag-check", _invoice_status_label(ready_invoice)))
@@ -1329,7 +1223,7 @@ def _auction_default_items(request, user, auction):
         items += _auction_admin_items(request, auction, ended)
     else:
         items += _auction_member_items(user, auction, tos)
-        # Once ended, a non-admin with no ready invoice still gets a link to whatever invoice exists.
+        # Ended, no ready invoice: link whatever invoice exists.
         if ended and not ready_invoice:
             invoice = (
                 Invoice.objects.filter(auctiontos_user__user=user, auctiontos_user__auction=auction)
@@ -1342,8 +1236,7 @@ def _auction_default_items(request, user, auction):
 
 
 def _club_default_items(user):
-    """Club defaults for the palette club: membership management and BAP gated on permissions,
-    falling back to the club home page when the user manages neither."""
+    """Club defaults for the palette club: membership and BAP by permission, else the club home page."""
     club = _palette_club(user)
     if not club:
         return []
@@ -1366,7 +1259,7 @@ def _club_default_items(user):
             bap_url = reverse("club_bap", kwargs={"slug": club.slug})
         items.append(_item("club", f"BAP — {club.name}", bap_url, "bi-award", "Breeder Award Program"))
     if not items:
-        # No management role here — the club's home page is the relevant thing to offer.
+        # No management role: offer the club's home page.
         items.append(
             _item(
                 "club",
@@ -1387,8 +1280,7 @@ def default_items(request, *, app_deep_links=True):
     auction = _last_auction(user)
     if auction:
         primary += _auction_default_items(request, user, auction)
-    # Directly after that auction's own rows: lot scanning is about the auction the user is standing
-    # in, and Tap to Pay is what the admin next to them is holding a phone for.
+    # Right after that auction's rows.
     if app_deep_links:
         primary += _app_deep_link_items(request)
     primary += _club_default_items(user)
@@ -1445,10 +1337,8 @@ def default_items(request, *, app_deep_links=True):
 
 
 def search(request, q, *, app_deep_links=True):
-    """Grouped search results for a query, or the default items when the query is empty.
-
-    ``app_deep_links=False`` drops the two native app destinations (lot scanning, Tap to Pay) for
-    callers whose client adds its own — see :class:`~auctions.mobile.views.MobileCommandPaletteView`.
+    """Grouped results for a query, or defaults when empty. ``app_deep_links=False`` omits the native
+    destinations for clients that add their own.
     """
     user = request.user
     q = (q or "").strip()
@@ -1465,7 +1355,7 @@ def search(request, q, *, app_deep_links=True):
         + _club_settings_field_items(user, q)
     )
     if page_items:
-        # De-dupe by URL so a phrase shortcut and a field match don't both surface the same page.
+        # De-dupe by URL.
         seen_urls = set()
         deduped = []
         for item in page_items:
@@ -1527,11 +1417,8 @@ def search(request, q, *, app_deep_links=True):
 
 
 def log_search(user, *, search_id=None, search="", result=None, result_type="", result_url="", result_object_id=None):
-    """Upsert the user's current CommandPaletteSearch row and return its id.
-
-    Keeps a single row per search session (updated as the query is refined) rather than
-    one row per keystroke. ``result`` records the outcome: clicked, abandoned, or bounce
-    (no results). When a page shortcut is clicked, also bumps that page's hit counter.
+    """Upsert the user's CommandPaletteSearch row (one per search session) and return its id. ``result``
+    is clicked, abandoned or bounce; a clicked page shortcut also bumps its hit counter.
     """
     valid_results = dict(CommandPaletteSearch.RESULT_CHOICES)
     if result not in valid_results:

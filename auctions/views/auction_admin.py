@@ -1,8 +1,7 @@
-"""Setting an auction up, and running the room: pickup locations, users, check-in.
+"""Setting an auction up and running the room: pickup locations, users, check-in.
 
-The auction admin's own pages -- editing the auction, its custom fields and dropdowns, the list of
-people in it, the barcode scanner and the check-in screens. ``AuctionStats`` is the dashboard those
-pages hang off; the JSON behind its charts is in :mod:`auctions.views.auction_stats`.
+The auction admin's pages, plus ``AuctionStats``; the JSON behind its charts is in
+:mod:`auctions.views.auction_stats`.
 """
 
 import logging
@@ -96,13 +95,6 @@ class PickupLocations(LoginRequiredMixin, AuctionViewMixin, ListView):
     model = PickupLocation
     template_name = "all_pickup_locations.html"
     ordering = ["name"]
-
-    # def dispatch(self, request, *args, **kwargs):
-    #     self.auction = Auction.objects.exclude(is_deleted=True).filter(slug=kwargs.pop("slug")).first()
-    #     if not self.auction:
-    #         raise Http404
-    #     self.is_auction_admin
-    #     return super().dispatch(request, *args, **kwargs)
 
     def get_queryset(self):
         qs = PickupLocation.objects.filter(
@@ -248,8 +240,8 @@ class PickupLocationsCreate(FormFrictionMixin, LoginRequiredMixin, AuctionViewMi
             action=f"Added {self.object}",
             user=self.request.user,
         )
-        # If this auction is associated with a club, ensure club admin members have AuctionTOS records.
-        # This handles new auctions (first location created) and copied auctions with an inherited club.
+        # New auctions (first location) and copied ones with an inherited club need their club
+        # admins to have AuctionTOS records.
         _add_club_admins_as_auction_tos(self.auction, self.request.user)
         return form
 
@@ -284,14 +276,13 @@ class AuctionUpdate(FormFrictionMixin, LoginRequiredMixin, AuctionViewMixin, Upd
         return context
 
     def form_valid(self, form, **kwargs):
-        # Server-side club permission check: only allow associating with clubs the user
-        # has admin/edit/manage_auctions permission in (or the club already saved).
+        # Only clubs the user administers, or the club already saved.
         new_club = form.cleaned_data.get("club")
         if new_club:
             auction = self.get_object()
             current_club_id = auction.club_id
             if new_club.pk != current_club_id:
-                # User is changing the club — verify they have permission in the new club
+                # Changing the club needs permission in the new one.
                 has_permission = (
                     self.request.user.is_superuser
                     or check_club_permission(self.request.user, new_club, "permission_manage_auctions")
@@ -367,7 +358,7 @@ class AuctionUpdate(FormFrictionMixin, LoginRequiredMixin, AuctionViewMixin, Upd
                 "until they've been checked in.",
             )
 
-        # some checks to warn if an important time is set for midnight (00:00)
+        # Warn when an important time is set to midnight.
         user_tz = self.request.COOKIES.get("user_timezone", settings.TIME_ZONE)
         try:
             user_tz = pytz_timezone(user_tz)
@@ -384,7 +375,7 @@ class AuctionUpdate(FormFrictionMixin, LoginRequiredMixin, AuctionViewMixin, Upd
                 f"Don't set your {'end' if self.get_object().is_online else 'start'} time to midnight, users will find it confusing.  Use 23:59 instead.",
             )
 
-        # If club was just set (or changed), auto-add club admins as auction TOS admins
+        # A newly set club gets its admins added as auction admins.
         new_club = self.get_object().club
         if new_club:
             _add_club_admins_as_auction_tos(self.get_object(), self.request.user)
@@ -423,8 +414,7 @@ class AuctionDropdownOptionsAPI(APIView, AuctionViewMixin):
     permission_classes = [IsAuthenticated]
 
     def dispatch(self, request, *args, **kwargs):
-        # APIView.dispatch doesn't call AuctionViewMixin.dispatch, so set self.auction here
-        # so self.is_auction_admin is available in the handlers below.
+        # APIView.dispatch skips AuctionViewMixin.dispatch, so set self.auction here.
         self.auction = get_object_or_404(Auction, slug=kwargs.pop("slug", ""), is_deleted=False)
         return super().dispatch(request, *args, **kwargs)
 
@@ -503,12 +493,7 @@ class AuctionHistoryView(LoginRequiredMixin, AuctionViewMixin, HTMxTableView):
 
 
 class AuctionLotMap(LoginRequiredMixin, AuctionViewMixin, TemplateView):
-    """Admin 2D map of located, unsold lots (works on desktop too).
-
-    Admin-only via AuctionViewMixin (``allow_non_admins`` defaults False → PermissionDenied for a
-    buyer). The SVG map + locate search are rendered client-side from the JSON data endpoint, which
-    the page polls; this view only frames it.
-    """
+    """Admin 2D map of located, unsold lots. The SVG map and search render client-side from the JSON feed."""
 
     template_name = "auction_lot_map.html"
 
@@ -519,8 +504,7 @@ class AuctionLotMap(LoginRequiredMixin, AuctionViewMixin, TemplateView):
 
 
 class AuctionLotMapData(LoginRequiredMixin, AuctionViewMixin, View):
-    """Admin-only JSON feed for the lot map: positions (+ lot number/name) and the full unsold-lot
-    list for the locate search, polled every ~10 s."""
+    """Admin-only JSON for the lot map: positions and the unsold-lot list, polled every ~10s."""
 
     def get(self, request, *args, **kwargs):
         from auctions.mobile.services import ar as ar_service
@@ -529,7 +513,7 @@ class AuctionLotMapData(LoginRequiredMixin, AuctionViewMixin, View):
 
 
 class AuctionLotMapClear(LoginRequiredMixin, AuctionViewMixin, View):
-    """Admin-only "clear all locations": wipe this auction's AR observations + positions (POST)."""
+    """Admin-only "clear all locations": wipe this auction's AR observations and positions."""
 
     def post(self, request, *args, **kwargs):
         from auctions.mobile.services import ar as ar_service
@@ -540,10 +524,7 @@ class AuctionLotMapClear(LoginRequiredMixin, AuctionViewMixin, View):
 
 
 class AuctionLots(LoginRequiredMixin, AuctionViewMixin, HTMxTableView):
-    """List of lots associated with an auction.  This is for admins; don't confuse this with the thumbnail-enhanced lot view `AllLots` for users.
-
-    At some point, it may make sense to subclass AllLots here, but I think the needs of the two views are so different that it doesn't make sense
-    """
+    """Lots in an auction, for admins. The buyer-facing view is ``AllLots``."""
 
     model = Lot
     table_class = LotHTMxTable
@@ -553,9 +534,7 @@ class AuctionLots(LoginRequiredMixin, AuctionViewMixin, HTMxTableView):
     # paginate_by = 50
 
     def get_queryset(self):
-        # Every row of this table prints the seller and the winner (each of which reads the
-        # auction and the person's userdata to work out a display name), links to both of their
-        # invoices, and asks whether the lot has an image.
+        # Every row prints the seller and winner, their invoices, and whether the lot has an image.
         return (
             Lot.objects.exclude(is_deleted=True)
             .filter(auction=self.auction)
@@ -621,16 +600,13 @@ class AuctionUsers(LoginRequiredMixin, AuctionViewMixin, HTMxTableView):
 
     def get_queryset(self):
         _ = self.can_add_edit_people  # raises PermissionDenied if not allowed
-        # Every row renders the Admin badge, which reads the auction's creator and (in a
-        # club-managed auction) the member row behind it, so without this each of the 100-odd
-        # rows on a page costs its own handful of queries.
+        # Every row renders the Admin badge, which reads the creator and the member row.
         return AuctionTOS.annotate_lot_counts(
             AuctionTOS.objects.filter(auction=self.auction)
             .select_related("clubmember__club", "user__userdata")
             .prefetch_related(Prefetch("auctiontos", queryset=Invoice.objects.order_by("-date")))
-            # prefetch, not select_related, for the auction: a join hands every row its own Auction
-            # instance, so `self.auction.club` in actions_dropdown_html was a query per row and no
-            # cached_property on Auction survived from one row to the next.
+            # prefetch, not select_related: a join gives every row its own Auction instance, so
+            # `self.auction.club` was a query per row.
             .prefetch_related("auction__club", "auction__created_by")
             .order_by("name"),
             auction=self.auction,
@@ -648,9 +624,8 @@ class AuctionUsers(LoginRequiredMixin, AuctionViewMixin, HTMxTableView):
 
     def get_possible_filters(self):
         filters = []
-        # Membership status only makes sense when this auction is managed through a club that
-        # charges dues (a 0 fee means no membership system) AND uses the club-member split, since
-        # that is the only mode where is_club_member is kept in sync with paid-membership status.
+        # Membership status only applies to a club-managed auction that charges dues and uses the
+        # club-member split, the only mode where is_club_member tracks paid membership.
         if (
             self.auction.is_club_managed
             and self.auction.alternate_split_mode == "club_member"
@@ -708,9 +683,8 @@ class AuctionUsers(LoginRequiredMixin, AuctionViewMixin, HTMxTableView):
         context["active_tab"] = "users"
         context["can_manage_check_in"] = bool(self.can_add_edit_people) and self.auction.use_check_in_mode
         context["can_scan_club_barcodes"] = bool(self.can_add_edit_people) and bool(self.auction.club_id)
-        # When the table has no rows, replace the bare column headers with a helpful message:
-        # a "Create user" button pre-populated from the search when a query was typed, or a
-        # first-run empty state explaining how users get added on a brand-new auction.
+        # With no rows, show a "Create user" button prefilled from the search, or a first-run
+        # empty state.
         query = (self.request.GET.get("query") or "").strip()
         filterset = context.get("filter")
         table_empty = filterset is not None and not filterset.qs.exists()
@@ -734,7 +708,7 @@ class AuctionUsers(LoginRequiredMixin, AuctionViewMixin, HTMxTableView):
         )
 
     def _build_no_results_html(self, query):
-        """Return an HTML snippet with a 'Create user' button pre-populated from the search query."""
+        """An HTML snippet with a 'Create user' button prefilled from the search query."""
         import re as _re
         from urllib.parse import urlencode
 
@@ -749,9 +723,8 @@ class AuctionUsers(LoginRequiredMixin, AuctionViewMixin, HTMxTableView):
             params["name"] = q
         param_str = f"?{urlencode(params)}" if params else ""
         auction = self.auction
-        # In club-managed auctions, AuctionTOSAdmin redirects new-user creates to clubmember_create
-        # — but the redirect drops query-string prefill. Route directly to clubmember_create instead,
-        # appending ?auction= only when the auction uses the check-in flow.
+        # Club-managed auctions redirect new-user creates to clubmember_create, which drops the
+        # prefill, so link there directly; ?auction= only in check-in mode.
         if auction.is_club_managed:
             extra = {}
             if auction.manage_users_through_club == "checkin":
@@ -785,9 +758,8 @@ class AuctionUsers(LoginRequiredMixin, AuctionViewMixin, HTMxTableView):
 
 
 class AuctionDisableBidding(LoginRequiredMixin, AuctionViewMixin, View):
-    # TODO: This feature is incomplete and broken — the UI button has been removed from auction_users.html.
-    # The core bulk-update works, but re-enabling bidding per-user after this action is not wired up correctly
-    # and the overall UX flow is confusing. Do not re-expose this without a full end-to-end implementation.
+    # TODO: incomplete and broken -- the UI button was removed from auction_users.html. Re-enabling
+    # bidding per user after this action isn't wired up. Don't re-expose without finishing it.
     allow_non_admins = True
 
     def dispatch(self, request, *args, **kwargs):
@@ -903,8 +875,7 @@ class AuctionDoorPrizes(LoginRequiredMixin, AuctionViewMixin, TemplateView):
 
     def post(self, request, *args, **kwargs):
         redirect_url = reverse("auction_door_prizes", kwargs={"slug": self.auction.slug})
-        # The draw itself lives in services.draw_door_prize so the palette's draw_door_prize action
-        # picks from the same pool, by the same rule, with the same RNG.
+        # services.draw_door_prize, so the palette draws from the same pool by the same rule.
         winner = draw_door_prize(self.auction, acting_user=request.user)
         if not winner:
             messages.warning(request, "No checked-in users are left for door prizes.")
@@ -934,11 +905,11 @@ class QuickCheckInUsers(LoginRequiredMixin, AuctionViewMixin, TemplateView):
 
 
 class AuctionSelfCheckIn(LoginRequiredMixin, AuctionViewMixin, TemplateView):
-    """Kiosk page: members scan their own membership card to check themselves in.
+    """Kiosk page: members scan their own membership card to check in.
 
-    This page runs under the signed-in admin's session, so scans are posted with
-    check_in_only -- the scan endpoint will only check people in, never assign bidder
-    numbers or touch invoices."""
+    Scans run under the admin's session and post check_in_only, so they never assign bidder numbers or
+    touch invoices.
+    """
 
     template_name = "auctions/self_check_in.html"
     allow_non_admins = True
@@ -961,11 +932,11 @@ class AuctionSelfCheckIn(LoginRequiredMixin, AuctionViewMixin, TemplateView):
 
 
 class AuctionBarcodeScan(LoginRequiredMixin, AuctionViewMixin, View):
-    """POST-only API for barcode scans from auction admin pages (camera or USB HID scanner).
+    """POST-only API for barcode scans from admin pages (camera or USB scanner).
 
-    Pass check_in_only=1 (used by the self check-in kiosk) to accept only membership card
-    barcodes and ignore bidder number / invoice adjustment side effects, no matter what the
-    client sends."""
+    check_in_only=1 (the kiosk) accepts only membership cards and ignores bidder number and adjustment
+    side effects.
+    """
 
     allow_non_admins = True
 
@@ -977,11 +948,10 @@ class AuctionBarcodeScan(LoginRequiredMixin, AuctionViewMixin, View):
         return super().dispatch(request, *args, **kwargs)
 
     def _apply_adjustment(self, tos, adjustment_type, adjustment_amount, adjustment_label, acting_user):
-        """Apply a pending invoice adjustment to tos's (draft) invoice.
+        """Apply a pending invoice adjustment to tos's draft invoice.
 
-        Returns (adjustment_desc, error_response). error_response is a JsonResponse when the
-        invoice can't be adjusted (already closed); otherwise None and adjustment_desc describes
-        what was applied (empty string if nothing was)."""
+        Returns (adjustment_desc, error_response); error_response is set when the invoice is closed.
+        """
         try:
             amount_val = round(float(adjustment_amount))
         except (ValueError, TypeError):
@@ -1022,8 +992,7 @@ class AuctionBarcodeScan(LoginRequiredMixin, AuctionViewMixin, View):
             adjustment_label = ""
         has_adjustment = adjustment_type in ("ADD", "DISCOUNT") and bool(adjustment_amount)
 
-        # Paddle-barcode lookup: a bidder number scanned to receive a pending invoice adjustment.
-        # Resolves an existing AuctionTOS directly (no membership card, no check-in change).
+        # A bidder number scanned to receive an adjustment: no card, no check-in change.
         if apply_to_bidder_number:
             if not has_adjustment:
                 return JsonResponse(
@@ -1082,11 +1051,8 @@ class AuctionBarcodeScan(LoginRequiredMixin, AuctionViewMixin, View):
             return JsonResponse({"ok": False, "message": message}, status=404)
         adjustment_desc = ""
         with transaction.atomic():
-            # Decide the check-in timestamp before upserting. In check-in mode a bare card scan
-            # (re)checks the member in, but when the scan is really about applying a pending invoice
-            # adjustment or bidder number to a member who is *already* checked in, we leave their
-            # original check-in time alone rather than clobbering it — the intent was the adjustment,
-            # not a fresh check-in.
+            # In check-in mode a bare card scan re-checks the member in, but a scan applying an
+            # adjustment or bidder number to an already checked-in member keeps their original time.
             checked_in_at = _UNSET
             if self.auction.use_check_in_mode:
                 existing_tos = (
@@ -1108,8 +1074,7 @@ class AuctionBarcodeScan(LoginRequiredMixin, AuctionViewMixin, View):
                 )
             if assign_bidder_number and assign_bidder_number != tos.bidder_number:
                 tos.force_set_bidder_number(assign_bidder_number, via_barcode=True, acting_user=request.user)
-                # Propagate the assigned number back to the ClubMember so it sticks for next time.
-                # Use .update() to skip the ClubMember post_save signal — the TOS is already correct.
+                # .update() to skip the ClubMember post_save signal; the TOS is already correct.
                 ClubMember.objects.filter(pk=member.pk).update(bidder_number=assign_bidder_number)
             if has_adjustment:
                 adjustment_desc, error_response = self._apply_adjustment(
@@ -1163,12 +1128,11 @@ class AuctionStats(LoginRequiredMixin, AuctionViewMixin, DetailView):
             compare_slug = self.request.GET.get("compare")
             if compare_slug:
                 compare_auction = Auction.objects.filter(slug=compare_slug, is_deleted=False).first()
-                # Verify user has access to this auction. .first() returns None for a bad/stale
-                # slug, so guard before permission_check to avoid a 500 on an invalid ?compare=.
+                # .first() returns None for a stale ?compare= slug, so guard before permission_check.
                 if compare_auction and compare_auction.permission_check(self.request.user):
                     context["compare_auction"] = compare_auction
 
-        # Check if stats need recalculation (older than 20 minutes or missing)
+        # Recalculate stats older than 20 minutes.
         now = timezone.now()
         twenty_minutes_ago = now - timezone.timedelta(minutes=20)
 
@@ -1179,7 +1143,7 @@ class AuctionStats(LoginRequiredMixin, AuctionViewMixin, DetailView):
             if days_since_start > 90:
                 auction_too_old = True
 
-        # Check if recalculation is already scheduled (next_update_due is recent/in near future)
+        # Is a recalculation already scheduled?
         recalculation_pending = (
             auction.next_update_due
             and auction.next_update_due >= now - timezone.timedelta(minutes=10)
@@ -1188,11 +1152,10 @@ class AuctionStats(LoginRequiredMixin, AuctionViewMixin, DetailView):
 
         if not auction_too_old and (not auction.last_stats_update or auction.last_stats_update < twenty_minutes_ago):
             if not recalculation_pending:
-                # Schedule immediate recalculation by setting next_update_due to slightly in the past
-                # This ensures the task will pick it up immediately (avoids timing issues with next_update_due__lte=now)
+                # Slightly in the past so the task picks it up immediately.
                 auction.next_update_due = now - timezone.timedelta(seconds=30)
                 auction.save(update_fields=["next_update_due"])
-                # Trigger the self-scheduling Celery task to process this auction immediately
+                # Trigger the self-scheduling Celery task.
                 from auctions.tasks import schedule_auction_stats_update
 
                 schedule_auction_stats_update()

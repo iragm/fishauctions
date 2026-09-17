@@ -238,7 +238,7 @@ class ClubBarcodeLabelsView(LoginRequiredMixin, ClubViewMixin, TemplateView):
 
 
 class ClubBarcodeLabelsViewPDF(LoginRequiredMixin, ClubViewMixin, TemplateView, WeasyTemplateResponseMixin):
-    """WeasyPrint PDF of barcode labels — exact same physical dimensions as lot labels."""
+    """WeasyPrint PDF of barcode labels, at the same physical size as lot labels."""
 
     template_name = "auctions/club_barcode_labels_print.html"
     pdf_attachment = True
@@ -253,11 +253,9 @@ class ClubBarcodeLabelsViewPDF(LoginRequiredMixin, ClubViewMixin, TemplateView, 
         return f"{self.club.slug}-barcodes.pdf"
 
     def get(self, request, *args, **kwargs):
-        """A form with nothing complete in it used to 404, which is what "Download PDF" did on a
-        row where the label type was still on "- select -" or the amount was blank. A 404 reads as
-        "this feature is broken"; the truth is that there is nothing to print yet, so say that on
-        the page the person is already looking at. The form guards this in the browser too -- this
-        is the backstop for a submit that gets past it."""
+        """A form with nothing filled in used to 404, which reads as a broken feature; the truth is that there
+        is nothing to print yet. The form guards this in the browser too; this is the backstop.
+        """
         members = ClubMember.objects.filter(club=self.club, is_deleted=False, membership_number__isnull=False)
         self.labels = ClubBarcodeLabelsView._build_labels(self, request.GET, members)
         if not self.labels:
@@ -331,8 +329,8 @@ class ClubMemberReactivateView(APIView):
             action=f"Reactivated member {member}",
             applies_to="MEMBERS",
         )
-        # Return 200 with HX-Trigger so the event fires on the link element (which stays in the DOM)
-        # and bubbles to body where the table container is listening.
+        # 200 with HX-Trigger so the event fires on the link (which stays in the DOM) and bubbles to
+        # body, where the table container is listening.
         return HttpResponse("", headers={"HX-Trigger": "clubMemberListChanged"})
 
 
@@ -364,7 +362,7 @@ class ClubMemberPermanentDeleteView(APIView):
 
 
 class ClubMemberConfirmView(APIView):
-    """Show a Bootstrap modal asking the user to confirm a destructive action (e.g. delete)."""
+    """Show a modal asking the user to confirm a destructive action."""
 
     authentication_classes = [TokenAuthentication, SessionAuthentication]
     permission_classes = [IsAuthenticated]
@@ -475,9 +473,8 @@ class ClubMemberRenewPageView(LoginRequiredMixin, ClubViewMixin, View):
 
 
 class ClubMembershipPaymentView(LoginRequiredMixin, ClubViewMixin, TemplateView):
-    """Self-service membership payment page for club members.
-
-    Creates a pending club membership Invoice and shows PayPal/Square payment buttons.
+    """Self-service membership payment: creates a pending club membership Invoice and shows the PayPal and
+    Square buttons.
     """
 
     template_name = "auctions/club_membership_payment.html"
@@ -486,8 +483,7 @@ class ClubMembershipPaymentView(LoginRequiredMixin, ClubViewMixin, TemplateView)
         self.get_club(kwargs.get("slug", ""))
         if not (self.club.membership_annual_fee and (self.club.can_accept_paypal or self.club.can_accept_square)):
             raise Http404
-        # Members whose dues are current have nothing to pay — send them back to their
-        # membership card rather than showing an empty/confusing payment page.
+        # Members whose dues are current have nothing to pay.
         if request.user.is_authenticated:
             member = ClubMember.objects.filter(club=self.club, user=request.user, is_deleted=False).first()
             if member:
@@ -523,7 +519,7 @@ class ClubMembershipPaymentView(LoginRequiredMixin, ClubViewMixin, TemplateView)
 
 
 class ClubMemberMergeView(LoginRequiredMixin, ClubViewMixin, View):
-    """Merge two club members: keep target, soft-delete (deactivate) source, copy non-empty fields."""
+    """Merge two club members: keep the target, deactivate the source, copy non-empty fields."""
 
     def dispatch(self, request, *args, **kwargs):
         self.get_club(kwargs.get("slug", ""))
@@ -673,7 +669,7 @@ class ClubMemberMergeView(LoginRequiredMixin, ClubViewMixin, View):
                     if update_fields:
                         target.save(update_fields=list(update_fields))
                     source_name = str(source)
-                    # Re-point all related records from source to target before deactivating.
+                    # Re-point related records before deactivating.
                     AuctionTOS.objects.filter(clubmember=source).update(clubmember=target)
                     BapAward.objects.filter(club_member=source).update(club_member=target)
                     InvoicePayment.objects.filter(club_member=source).update(club_member=target)
@@ -759,7 +755,7 @@ class ClubEditView(FormFrictionMixin, LoginRequiredMixin, ClubViewMixin, UpdateV
 
     def get_success_url(self):
         messages.success(self.request, "Club settings saved.")
-        # Honour ?next= if present in POST or GET — validate to prevent open redirects
+        # Honour ?next= from POST or GET, validated against open redirects.
         next_url = self.request.POST.get("next") or self.request.GET.get("next")
         if next_url and url_has_allowed_host_and_scheme(next_url, allowed_hosts={self.request.get_host()}):
             return next_url
@@ -829,8 +825,7 @@ class ClubMembershipSettingsView(FormFrictionMixin, LoginRequiredMixin, ClubView
         context["square_configured"] = bool(
             getattr(settings, "SQUARE_APPLICATION_ID", None) and getattr(settings, "SQUARE_CLIENT_SECRET", None)
         )
-        # Non-OAuth PayPal (admin-only opt-in): the club enters its own REST credentials here
-        # instead of connecting via OAuth.
+        # Non-OAuth PayPal (admin-only opt-in): the club enters its own REST credentials.
         if club.allow_non_oauth_paypal:
             context["paypal_credentials_form"] = ClubPayPalCredentialsForm(instance=club)
         return context
@@ -848,13 +843,9 @@ class ClubMembershipSettingsView(FormFrictionMixin, LoginRequiredMixin, ClubView
 
 
 class ClubLinkPaymentAccountView(LoginRequiredMixin, ClubViewMixin, View):
-    """POST-only endpoint used from the club membership settings page to link or
-    unlink the requesting user's PayPal/Square seller to this club.
+    """POST-only: link or unlink the requesting user's PayPal or Square seller to this club.
 
-    Query / form parameters:
-      provider: ``paypal`` or ``square``
-      action:   ``attach`` (default) — set seller.club to this club
-                ``detach``            — clear the club's linked seller
+    ``provider`` is ``paypal`` or ``square``; ``action`` is ``attach`` (default) or ``detach``.
     """
 
     http_method_names = ["post"]
@@ -890,8 +881,8 @@ class ClubLinkPaymentAccountView(LoginRequiredMixin, ClubViewMixin, View):
                 messages.success(request, f"{provider_label} account disconnected.")
             return redirect(reverse("club_membership_settings", kwargs={"slug": self.club.slug}))
 
-        # attach: use the requesting user's existing seller if they have one, otherwise
-        # send them through OAuth with the club context set.
+        # attach: use the requesting user's seller if they have one, otherwise send them through
+        # OAuth with the club context set.
         seller = model.objects.filter(user=request.user).first()
         if not seller:
             connect_url = reverse("paypal_connect" if provider == "paypal" else "square_connect")
@@ -920,10 +911,9 @@ class ClubLinkPaymentAccountView(LoginRequiredMixin, ClubViewMixin, View):
 
 
 class ClubPayPalCredentialsView(LoginRequiredMixin, ClubViewMixin, View):
-    """POST-only endpoint to save a club's own (non-OAuth) PayPal REST credentials.
+    """POST-only: save a club's own (non-OAuth) PayPal REST credentials.
 
-    Shown on the membership settings page only when the club has ``allow_non_oauth_paypal``
-    set (an admin-only flag). Editable by the same people who manage the club's money/settings.
+    Shown only when the club has ``allow_non_oauth_paypal``, and editable by whoever manages its money.
     """
 
     http_method_names = ["post"]
@@ -934,7 +924,7 @@ class ClubPayPalCredentialsView(LoginRequiredMixin, ClubViewMixin, View):
             self.user_has_club_permission("permission_edit_club") or self.user_has_club_permission("permission_money")
         ):
             raise PermissionDenied()
-        # Credentials can only be entered when an admin has opted this club into non-OAuth PayPal.
+        # Only when an admin has opted this club into non-OAuth PayPal.
         if not self.club.allow_non_oauth_paypal:
             raise PermissionDenied()
         return super().dispatch(request, *args, **kwargs)
@@ -1010,16 +1000,14 @@ class ClubEmailSettingsView(FormFrictionMixin, LoginRequiredMixin, ClubViewMixin
         context["preview_member_link"] = preview_member_link
         context["preview_barcode_url"] = preview_barcode_url
         context["membership_numbers_enabled"] = self.club.show_member_barcode
-        # Wallet buttons ride along under the barcode in the real emails, but only for the
-        # wallets this site is actually set up for.
+        # Wallet buttons ride under the barcode in the real emails, for configured wallets only.
         from auctions import apple_wallet, google_wallet
 
         context["google_wallet_enabled"] = google_wallet.is_configured()
         context["apple_wallet_enabled"] = apple_wallet.is_configured()
 
-        # Build the next-event HTML fragment exactly once on the server so the JS preview just
-        # toggles visibility (no client-side templating). Uses the same builder as the real
-        # emails, with as_links=False so a preview never contains working links.
+        # Built once on the server so the JS preview only toggles visibility, using the same builder
+        # as the real emails with as_links=False so a preview has no working links.
         from auctions.tasks import next_event_fragment
 
         context["next_event"] = club_events.next_member_facing_event(self.club)

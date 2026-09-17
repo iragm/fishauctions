@@ -1,5 +1,6 @@
-"""Tests for the speaker directory: the NEC WordPress import, NEC-only scoping, the
-list/map view, tagging, and comments."""
+"""Tests for the speaker directory: the NEC WordPress import, NEC-only scoping, the list and map view,
+tagging, and comments.
+"""
 
 import datetime
 import io
@@ -34,10 +35,9 @@ from auctions.speaker_topics import (
 )
 from auctions.tests import WritableMediaRoot
 
-# A trimmed WXR export with the shapes that actually matter: an entity inside CDATA, the two
-# spellings of cichlids the real file has, a topic that is deliberately thrown away ("General"),
-# a bio with a trailing "Programs:" run-on, a speaker whose photo is linked by _thumbnail_id,
-# one linked only by post_parent, and a draft to skip.
+# A trimmed WXR export with the shapes that matter: an entity inside CDATA, both spellings of
+# cichlids, a discarded topic ("General"), a bio with a "Programs:" run-on, photos linked by
+# _thumbnail_id and by post_parent, and a draft to skip.
 SAMPLE_WXR = """<?xml version="1.0" encoding="UTF-8" ?>
 <rss version="2.0"
     xmlns:content="http://purl.org/rss/1.0/modules/content/"
@@ -98,7 +98,7 @@ SAMPLE_WXR = """<?xml version="1.0" encoding="UTF-8" ?>
 
 
 def tiny_jpeg():
-    """Real JPEG bytes. The image field resizes on save, so fake bytes won't get through."""
+    """Real JPEG bytes: the image field resizes on save, so fake bytes won't do."""
     from PIL import Image
 
     buffer = io.BytesIO()
@@ -106,19 +106,14 @@ def tiny_jpeg():
     return buffer.getvalue()
 
 
-# The speaker importer catches a failed photo save on purpose (one bad image out of 405 must
-# not abort the import), so an unwritable MEDIA_ROOT doesn't raise in these tests.  It just
-# leaves `speaker.image` empty, and the test that notices reports
-# "<ThumbnailerImageFieldFile: None> is not true" without a word about permissions -- hence the
-# shared WritableMediaRoot mixin rather than a nicer error message.
+# The importer catches a failed photo save (one bad image out of 405 must not abort the import), so
+# an unwritable MEDIA_ROOT leaves `speaker.image` empty rather than raising -- hence WritableMediaRoot.
 
 
 def write_sample_export(bio_extra="", without=""):
-    """Drop SAMPLE_WXR in a temp file and return its path.
+    """Write SAMPLE_WXR to a temp file and return its path.
 
-    `bio_extra` is appended to the first speaker's bio, for the tests that need an email in it.
-    `without` is a line of the export to leave out, for the tests that need a speaker who
-    doesn't carry some category.
+    `bio_extra` is appended to the first speaker's bio; `without` drops one line of the export.
     """
     body = SAMPLE_WXR
     if bio_extra:
@@ -141,8 +136,7 @@ class ImportNecSpeakersTests(WritableMediaRoot, TestCase):
     def setUp(self):
         super().setUp()
         self.path = write_sample_export()
-        # Everything the importer decided not to raise about. Kept so a photo assertion can
-        # say *why* it failed -- the command reports a skipped photo here and nowhere else.
+        # Everything the importer didn't raise about, so a photo assertion can say why it failed.
         self.warnings = StringIO()
 
     def run_import(self, *args):
@@ -156,11 +150,7 @@ class ImportNecSpeakersTests(WritableMediaRoot, TestCase):
         self.assertFalse(Speaker.objects.filter(name__startswith="Draft").exists())
 
     def test_unescapes_entities_inside_cdata(self):
-        """WordPress double-escapes, and CDATA means the XML parser leaves `&amp;` alone.
-
-        Without the unescape "Reef &amp; Brackish" wouldn't match its alias and would land in
-        Other, so the topic mapping is the visible symptom of getting this wrong.
-        """
+        """WordPress double-escapes and CDATA leaves `&amp;` alone, so the topic mapping is the symptom."""
         self.run_import()
         speaker = Speaker.objects.get(wordpress_post_id=672)
         self.assertIn("Central & South American", speaker.bio)
@@ -173,22 +163,21 @@ class ImportNecSpeakersTests(WritableMediaRoot, TestCase):
         self.assertEqual(SpeakerTopic.objects.get(name=OTHER).speakers.count(), 2)
 
     def test_a_speaker_on_a_retired_topic_is_flagged_for_a_human(self):
-        """The import can't tell which cichlids Kevin means, so it says so instead of guessing."""
+        """A speaker on a retired topic is flagged for a human rather than guessed at."""
         self.run_import()
         speaker = Speaker.objects.get(wordpress_post_id=672)
         self.assertTrue(speaker.topics_need_review)
         self.assertEqual(speaker.topic_review_note, "Was on: CIchlids")
 
     def test_the_flag_keeps_the_exports_own_spelling(self):
-        """ "Cichids" is the typo the old site had; the fix is easier if the note says so."""
+        """The flag keeps the export's own spelling ("Cichids"), which makes the fix easier."""
         self.run_import()
         self.assertEqual(Speaker.objects.get(wordpress_post_id=673).topic_review_note, "Was on: Cichids")
 
     def test_a_speaker_on_no_retired_topic_is_not_flagged(self):
         self.run_import()
         Speaker.objects.update(topics_need_review=True, topic_review_note="stale")
-        # Kevin's other topics are all still real, so re-importing him with the cichlids
-        # category taken out has to clear the flag rather than leave it set forever.
+        # Re-importing without the cichlids category must clear the flag.
         self.path = write_sample_export(
             without='<category domain="speaker_topics" nicename="cichlids"><![CDATA[CIchlids]]></category>'
         )
@@ -208,17 +197,13 @@ class ImportNecSpeakersTests(WritableMediaRoot, TestCase):
         self.assertIn("Rift Lake Cichlids", speaker.topics.values_list("name", flat=True))
 
     def test_a_discarded_topic_is_dropped_rather_than_imported_as_other(self):
-        """Esther's "General" says nothing about her, so it adds nothing to her topics.
-
-        Her other category ("Cichids") is retired, so Other is all she is left with -- which is
-        the retirement's doing, not "General"'s: a discarded name contributes no topic at all.
-        """
+        """A discarded topic contributes no topic at all; Esther is left with Other from her retired one."""
         self.run_import()
         speaker = Speaker.objects.get(wordpress_post_id=673)
         self.assertEqual(list(speaker.topics.values_list("name", flat=True)), [OTHER])
 
     def test_topics_only_re_tags_and_touches_nothing_else(self):
-        """The path for re-applying the vocabulary after it changes, on an import already done."""
+        """--topics-only re-tags and touches nothing else, for re-applying the vocabulary."""
         self.run_import()
         Speaker.objects.filter(wordpress_post_id=672).update(bio="hand edited", programs="Talk one\nTalk two")
         speaker = Speaker.objects.get(wordpress_post_id=672)
@@ -227,7 +212,7 @@ class ImportNecSpeakersTests(WritableMediaRoot, TestCase):
         self.run_import("--topics-only")
 
         speaker.refresh_from_db()
-        # A full re-import would put the flattened run-on back, undoing split_speaker_talks.
+        # A full re-import would undo split_speaker_talks.
         self.assertEqual(speaker.bio, "hand edited")
         self.assertEqual(speaker.programs, "Talk one\nTalk two")
         names = list(speaker.topics.values_list("name", flat=True))
@@ -309,8 +294,7 @@ class ImportNecSpeakersTests(WritableMediaRoot, TestCase):
                 "https://northeastcouncil.org/wp-content/uploads/kevin.jpg",
             ],
         )
-        # The importer swallows a failed save, so without the warnings a broken MEDIA_ROOT
-        # shows up here as nothing more informative than "None is not true".
+        # The importer swallows a failed save, so without the warnings this reads as "None is not true".
         why = self.warnings.getvalue()
         self.assertTrue(Speaker.objects.get(wordpress_post_id=672).image, why)
         self.assertTrue(Speaker.objects.get(wordpress_post_id=673).image, why)
@@ -345,7 +329,7 @@ class ImportNecSpeakersTests(WritableMediaRoot, TestCase):
         self.assertIsNone(Speaker.objects.get(wordpress_post_id=672).user)
 
     def test_an_ambiguous_email_links_to_nobody(self):
-        """Two accounts on one address; guessing would hand a record to the wrong person."""
+        """Two accounts on one address link to nobody: guessing would hand a record to the wrong person."""
         User.objects.create_user("kevin1", "kevin@example.com", "pw")
         User.objects.create_user("kevin2", "kevin@example.com", "pw")
         path = write_sample_export(bio_extra=" Reach me at kevin@example.com")
@@ -361,7 +345,7 @@ class ImportNecSpeakersTests(WritableMediaRoot, TestCase):
         self.assertIsNone(canonical_topic_name("   "))
 
     def test_a_retired_topic_lands_on_other_and_asks_for_a_human(self):
-        """Both spellings of the old generic cichlids topic, and the invertebrates one."""
+        """Both spellings of the old cichlids topic, and the invertebrates one, land on Other and ask for review."""
         for name in ("CIchlids", "Cichids", "Invertebrates", "Freshwater Invertebrates"):
             self.assertEqual(canonical_topic_name(name), OTHER, name)
             self.assertTrue(topic_needs_review(name), name)
@@ -382,7 +366,7 @@ class ImportNecSpeakersTests(WritableMediaRoot, TestCase):
             self.assertEqual(canonical_topic_name(name), "Rift Lake Cichlids", name)
 
     def test_the_meaningless_old_topics_are_dropped_rather_than_becoming_other(self):
-        """112 of 405 speakers carried one; in Other they'd swamp the topic that means "unknown"."""
+        """The meaningless old topics are dropped rather than becoming Other: 112 of 405 speakers carried one."""
         self.assertIsNone(canonical_topic_name("Freshwater species"))
         self.assertIsNone(canonical_topic_name("General"))
 
@@ -396,14 +380,14 @@ class ImportNecSpeakersTests(WritableMediaRoot, TestCase):
         self.assertEqual(sorted(set(TOPIC_ALIASES.values()) - set(STARTER_TOPICS)), [])
 
     def test_no_name_is_both_discarded_and_mapped(self):
-        """Discarded wins in canonical_topic_name, so an overlap would be a silent dead alias."""
+        """No name is both discarded and mapped, which would be a silent dead alias."""
         from auctions.speaker_topics import DISCARDED_TOPICS, TOPIC_ALIASES
 
         self.assertEqual(sorted(DISCARDED_TOPICS & set(TOPIC_ALIASES)), [])
         self.assertEqual(sorted(DISCARDED_TOPICS & {name.casefold() for name in STARTER_TOPICS}), [])
 
     def test_a_review_name_is_not_also_an_alias_or_a_topic(self):
-        """Review beats both in canonical_topic_name, so an overlap would silence the flag."""
+        """A review name isn't also an alias or a topic, which would silence the flag."""
         from auctions.speaker_topics import DISCARDED_TOPICS, REVIEW_TOPICS, TOPIC_ALIASES
 
         self.assertEqual(sorted(REVIEW_TOPICS & set(TOPIC_ALIASES)), [])
@@ -528,8 +512,7 @@ class SpeakerListTests(TestCase):
         self.client = Client()
         self.client.force_login(self.user)
 
-        # get_or_create, not create: migration 0374 seeds the vocabulary, so these rows already
-        # exist -- but a --keepdb run after a full-suite flush starts without them.
+        # get_or_create: migration 0374 seeds these, but a --keepdb run after a flush starts without them.
         self.catfish, _ = SpeakerTopic.objects.get_or_create(name="Catfish")
         self.plants, _ = SpeakerTopic.objects.get_or_create(name="Plants")
         # ~40 miles from Providence
@@ -689,13 +672,13 @@ class SpeakerListTests(TestCase):
         self.assertNotContains(response, "name=untagged")
 
     def test_the_unlisted_member_check_is_skipped_on_htmx_requests(self):
-        """It reads every speaker name in the directory; not worth doing per keystroke."""
+        """The unlisted-member check is skipped on htmx requests: it reads every speaker name."""
         ClubMember.objects.create(club=self.club, name="Sally Speaker")
         response = self.client.get(self.list_url(), headers={"hx-request": "true"})
         self.assertFalse(response.context["has_unlisted_members"])
 
     def test_htmx_response_carries_the_map_payload_out_of_band(self):
-        """This is what keeps the map in sync when the filter box swaps only the table."""
+        """The htmx response carries the map payload out of band, keeping the map in sync with the table."""
         response = self.client.get(self.list_url(query="boston"), headers={"hx-request": "true"})
         self.assertContains(response, 'id="speaker-map-payload" hx-swap-oob="true"')
         self.assertNotContains(response, "<html")
@@ -723,7 +706,7 @@ class SpeakerListTests(TestCase):
         self.assertNotIn("Los Angeles", names)
 
     def test_the_radius_phrase_is_not_also_searched_for_as_text(self):
-        """Left in the text, "within 100 miles" would match nobody's bio and empty the page."""
+        """The radius phrase isn't also searched as text, which would match nobody's bio."""
         for phrase in ("within 100 miles", "100 miles", "100mi"):
             names = self.names_in(self.client.get(self.list_url(club=self.club.slug, query=phrase)))
             self.assertIn("Bob Boston", names, msg=f"{phrase} found nobody")
@@ -794,8 +777,9 @@ class SpeakerTaggingTests(TestCase):
         self.assertTrue(SpeakerTag.objects.filter(speaker=self.speaker, tag="no_longer_speaking").exists())
 
     def test_the_retired_tags_are_gone(self):
-        """donates_fee, then no_fee and responsive: what a speaker charges isn't a badge, and
-        "quick to respond" was a fact about one club's emails, not about the talk."""
+        """The retired tags are gone: what a speaker charges isn't a badge, and "responsive" was a fact about
+        one club's emails.
+        """
         for tag in ("donates_fee", "no_fee", "responsive"):
             with self.subTest(tag=tag):
                 self.assertNotIn(tag, SpeakerTag.TAG_LABELS)
@@ -909,7 +893,7 @@ class SpeakerCreateDeleteTests(TestCase):
         self.assertFalse(Speaker.objects.filter(name="Nobody, Ned").exists())
 
     def test_location_is_not_forced_when_editing_an_imported_speaker(self):
-        """405 imported speakers have no location; requiring one would block editing them."""
+        """Location isn't required when editing an imported speaker: 405 of them have none."""
         from auctions.forms import SpeakerForm
 
         speaker = Speaker.objects.create(name="Imported, Ivy", imported_from_nec=True)
@@ -963,7 +947,7 @@ class SpeakerCreateDeleteTests(TestCase):
         self.assertEqual(Speaker.objects.get(name="Nobody, Ned").club, second)
 
     def test_no_club_is_recorded_when_the_user_is_in_several(self):
-        """Two clubs and no hint which is a guess, and a wrong attribution is worse than none."""
+        """No club is recorded when the user is in several: a wrong attribution is worse than none."""
         second = Club.objects.create(name="Second Club", is_nec_club=True)
         ClubMember.objects.create(club=second, user=self.user, name="Ada Officer", permission_view=True)
         self.add()
@@ -1032,7 +1016,7 @@ class SpeakerCreateDeleteTests(TestCase):
         self.assertNotContains(response, "Sally Speaker")
 
     def test_a_member_already_in_the_directory_does_not_count_as_unlisted(self):
-        """The NEC stores "Speaker, Sally" and the club stores "Sally Speaker" -- same person."""
+        """A member already in the directory isn't unlisted: "Speaker, Sally" and "Sally Speaker" are one person."""
         ClubMember.objects.filter(club=self.club).delete()
         ClubMember.objects.create(club=self.club, user=self.user, name="Sally Speaker", permission_view=True)
         Speaker.objects.create(name="Speaker, Sally")
@@ -1113,7 +1097,7 @@ class SplitSpeakerTalksTests(TestCase):
         self.assertTrue(self.faithful([talk.replace(" ", "  ") for talk in self.GOOD_SPLIT]))
 
     def test_a_reworded_title_is_rejected(self):
-        """The failure that would matter: a club books a talk the speaker doesn't give."""
+        """A reworded talk title is rejected: a club could book a talk the speaker doesn't give."""
         reworded = list(self.GOOD_SPLIT)
         reworded[0] = "Killifishes of Madagascar"
         self.assertFalse(self.faithful(reworded))
@@ -1284,7 +1268,9 @@ class SpeakerPaletteRouteTests(TestCase):
         self.assertIn("error", self.resolve(self.officer, "Nobody At All"))
 
     def test_the_nec_rule_holds_in_the_palette_too(self):
-        """Otherwise the palette would confirm an NEC speaker exists to someone who can't open them."""
+        """The NEC rule holds in the palette too, or it would confirm a speaker exists to someone who can't
+        open them.
+        """
         result = self.resolve(self.outsider, "Rachel O'Leary")
         self.assertIn("error", result)
         self.assertNotIn("url", result)
@@ -1322,7 +1308,7 @@ class SpeakerNavigationTests(TestCase):
         self.assertNotContains(response, reverse("speaker_list"))
 
     def test_find_speakers_sits_above_only_setup_and_club_history(self):
-        """The agreed tail of the nav. Asserted by position, since that is the whole request."""
+        """ "Find speakers" sits above only Setup and Club history, asserted by position."""
         body = self.sidebar_for(is_nec_club=True).content.decode()
         find_speakers = body.index("Find speakers")
         self.assertLess(find_speakers, body.index("Setup"))

@@ -1,16 +1,9 @@
-"""Validation + seed data for :class:`ThermalPrinterProfile` command programs.
+"""Validation and seed data for :class:`ThermalPrinterProfile` command programs.
 
-A *program* is a small, declarative JSON list of steps the mobile app executes in order to
-drive a Bluetooth thermal label printer. Every byte a printer receives is defined in these
-programs (stored in the DB, editable in Django admin) — the app is a generic interpreter, so
-adding a printer is a data change, not an app release.
+A program is a JSON list of steps the mobile app runs to drive a Bluetooth thermal printer. Every
+byte comes from these DB-stored programs, so adding a printer is a data change, not an app release.
 
-This module owns the schema. It is imported by:
-
-* ``ThermalPrinterProfile.clean()`` — reject an admin typo before it can brick a print,
-* the profiles mobile API — serialise a profile for the app,
-* the seed data migration — port the hardcoded D11s driver verbatim,
-* tests — assert the checked-in seed data is valid.
+Used by ``ThermalPrinterProfile.clean()``, the profiles mobile API, the seed migration and tests.
 
 Schema v1 step types::
 
@@ -21,33 +14,29 @@ Schema v1 step types::
     {"await": {"any_hex_prefix": ["AA"], "timeout_ms": 60000, "on_timeout": "warn"}}
     {"repeat_per_copy": [ ...steps... ]}      # run nested steps once per requested copy
 
-Schema v2 adds (all additive — every v1 row keeps working, and v1 stays the right
-``schema_version`` for a profile that needs none of it)::
+Schema v2 additions (v1 rows keep working)::
 
     {"tx_text": "^GFA,{total_bytes},…"}       # width_bytes * height_px, incl. {u32le:total_bytes}
     {"tx_raster": {"encoding": "hex"}}        # ASCII-hex bitmap body (ZPL ^GFA, CPCL EG)
     "status_flags": {"values": {"07": ["no_ribbon", "cover_open"]}}   # exact codes, not bitmasks
 
-Validation is deliberately version-agnostic: a v2 construct in a row declaring
-``schema_version: 1`` is a mistake the *app* catches (it only runs schemas it was built
-with), and rejecting it here would make the admin unable to author the v2 row at all.
+Validation is version-agnostic: the app refuses schemas it doesn't know, and rejecting v2 here
+would stop admins authoring v2 rows.
 """
 
 import re
 
-# The newest schema this deployment can describe. Reported to the app as ``schema_version_max``;
-# the app runs a profile only when its ``schema_version`` is one it understands.
+# Reported to the app as ``schema_version_max``.
 PROGRAM_SCHEMA_VERSION = 2
 
-# Placeholders usable inside {tx}/{tx_text}. Scalar forms render as one byte (tx) / ASCII decimal
-# (tx_text); the u16le/u32le forms render as little-endian 16/32-bit values (2/4 bytes).
+# Placeholders for {tx}/{tx_text}. Scalars render as one byte (tx) or ASCII decimal (tx_text);
+# u16le/u32le render as 2 or 4 little-endian bytes.
 SCALAR_PLACEHOLDERS = frozenset(
     {
         "width_px",
         "height_px",
         "width_bytes",
-        # v2: width_bytes * height_px, i.e. the size of the raster body. ZPL's ^GF wants it twice,
-        # and the schema has no arithmetic, so no v1 profile could express it.
+        # v2: raster body size (width_bytes * height_px), which ZPL's ^GF needs.
         "total_bytes",
         "width_mm",
         "height_mm",
@@ -57,30 +46,23 @@ SCALAR_PLACEHOLDERS = frozenset(
     }
 )
 U16LE_PLACEHOLDERS = frozenset({"width_bytes", "height_px", "width_px"})
-# 16 bits overflows on a real raster (a 4x6" label at 203dpi is ~270kB), so every size-ish scalar
-# also has a 32-bit form.
+# 16 bits overflows on a 4x6" raster (~270kB), so size scalars have 32-bit forms.
 U32LE_PLACEHOLDERS = frozenset({"total_bytes", "width_bytes", "height_px", "width_px"})
 _WIDTH_FUNCTIONS = {"u16le": U16LE_PLACEHOLDERS, "u32le": U32LE_PLACEHOLDERS}
 
-# A bare {name} inside a `tx` hex template renders as exactly one byte, so only genuinely
-# byte-sized values may appear there. The size scalars are rejected unconditionally rather than
-# "when the value happens to exceed 255": a profile authored against a small test label would
-# otherwise validate and then silently truncate a length field on the first 4x6, printing half a
-# label for a reason nobody can see. Use {u16le:…} / {u32le:…} instead.
+# A bare {name} in a `tx` hex template is one byte, so size scalars are always rejected there:
+# a profile tested on a small label would silently truncate on a 4x6. Use {u16le:…}/{u32le:…}.
 BARE_BYTE_PLACEHOLDERS = frozenset({"density", "paper_type", "copies"})
 
-# Every recognised step key. A step is a dict carrying exactly one of these.
+# A step is a dict with exactly one of these keys.
 STEP_KEYS = frozenset({"tx", "tx_text", "tx_raster", "delay_ms", "await", "repeat_per_copy"})
 _ON_TIMEOUT = frozenset({"warn", "fail"})
 _AWAIT_KEYS = frozenset({"any_hex_prefix", "timeout_ms", "on_timeout"})
 _SIZE_PARSE_KINDS = frozenset({"ascii_regex", "bytes"})
-# v2 raster encodings. "binary" is the v1 behaviour (raw packed bytes); "hex" doubles the bytes on
-# the wire, so it stays opt-in per profile.
+# "binary" is v1's raw bytes; "hex" doubles the size, so it's opt-in.
 _RASTER_ENCODINGS = frozenset({"binary", "hex"})
 
-# Conditions the app has a user-facing message for. Used by status_flags.flags (bitmask) and
-# status_flags.values (exact code). Unknown names are rejected here so a typo doesn't become a
-# printer state nobody is ever told about.
+# Conditions the app has a message for, used by status_flags.flags and .values. Typos are rejected.
 STATUS_CONDITIONS = frozenset(
     {
         "cover_open",
@@ -99,11 +81,8 @@ _PLACEHOLDER_RE = re.compile(r"\{([^{}]*)\}")
 _HEX_RE = re.compile(r"\A[0-9a-fA-F]*\Z")
 
 
-# What a profile's print program actually speaks. Declared on the row rather than inferred from
-# its bytes, so the app can auto-select a profile when a command-language probe identifies a
-# language and exactly one profile speaks it — knowing a printer speaks TSPL doesn't tell you its
-# printhead width or GATT ids, so one candidate means there is nothing to get wrong, and more than
-# one is a genuine question worth putting to the user.
+# The language a profile's print program speaks, declared so the app can auto-select a profile
+# when a probe identifies a language exactly one profile speaks.
 COMMAND_LANGUAGE_CHOICES = [
     ("tspl", "TSPL / TSPL2 (TSC-compatible)"),
     ("escpos", "ESC/POS"),
@@ -115,11 +94,7 @@ COMMAND_LANGUAGE_CHOICES = [
 
 
 class ProgramValidationError(ValueError):
-    """A printer command program failed schema validation.
-
-    ``field`` names the offending JSONField (``print_program`` …) so a ModelForm can attach the
-    error to the right widget in the admin.
-    """
+    """A printer command program failed validation. ``field`` names the offending JSONField for the admin form."""
 
     def __init__(self, message, field=None):
         super().__init__(message)
@@ -127,11 +102,7 @@ class ProgramValidationError(ValueError):
 
 
 def _check_placeholders(text, field, *, bare_must_be_byte=False):
-    """Validate every ``{placeholder}`` in *text*.
-
-    ``bare_must_be_byte`` is set for ``tx`` hex templates, where a bare ``{name}`` renders as a
-    single byte — see :data:`BARE_BYTE_PLACEHOLDERS`.
-    """
+    """Validate every ``{placeholder}`` in *text*; ``bare_must_be_byte`` for ``tx`` hex templates."""
     for token in _PLACEHOLDER_RE.findall(text):
         if ":" in token:
             fn, _, name = token.partition(":")
@@ -151,10 +122,7 @@ def _check_placeholders(text, field, *, bare_must_be_byte=False):
 
 
 def _check_hex_literal(text, field, *, allow_placeholders=True):
-    """Validate a hex byte string. Whitespace is ignored; placeholders stand in for whole bytes.
-
-    Each literal run between placeholders must be an even number of hex digits (whole bytes).
-    """
+    """Validate a hex byte string: whitespace ignored, whole bytes between placeholders."""
     if allow_placeholders:
         _check_placeholders(text, field, bare_must_be_byte=True)
         literals = _PLACEHOLDER_RE.split(text)[::2]  # drop the captured placeholder bodies
@@ -219,11 +187,7 @@ def _validate_step(step, field, *, in_repeat=False):
 
 
 def _validate_tx_raster(value, field):
-    """``true`` (v1, raw bytes) or ``{"encoding": "binary"|"hex"}`` (v2).
-
-    ``false`` is rejected: a step that does nothing is a typo, not an instruction to omit the
-    label body — and omitting it prints a blank label with no error anywhere.
-    """
+    """``true`` (v1) or ``{"encoding": "binary"|"hex"}`` (v2). ``false`` is rejected: it would print a blank label."""
     if value is True:
         return
     if not isinstance(value, dict):
@@ -267,7 +231,7 @@ def _validate_await(value, field):
 
 
 def validate_program(program, field="print_program", *, required=False):
-    """Validate one program (list of steps). Raise :class:`ProgramValidationError` on any problem."""
+    """Validate one program (a list of steps), raising :class:`ProgramValidationError`."""
     if program in (None, ""):
         if required:
             msg = "A print program is required"
@@ -290,15 +254,10 @@ def _check_status_condition(name, where):
 
 
 def _validate_status_values(values):
-    """v2 ``status_flags.values``: exact status byte → the conditions it means.
+    """v2 ``status_flags.values``: exact status byte (hex, e.g. ``"0a"``) → conditions.
 
-    A bitmask can't express an *enumeration*, and TSPL's ``<ESC>!?`` answers one: a Y486BT with
-    nothing but its lid open answers ``07``, which a bitmask reading decodes as out-of-paper AND
-    jammed AND open — telling the user to load labels that are sitting right there.
-
-    Keys are one status byte written as hex — ``"0a"`` — which is how a printer's manual prints
-    them and what the app reads first. The app tries an exact ``values`` match, then falls back to
-    the ``flags`` bitmask, so a partial map is fine.
+    For printers whose status is an enumeration: TSPL's ``<ESC>!?`` answers ``07`` for lid open, which
+    a bitmask misreads. The app tries ``values`` first, then ``flags``.
     """
     if not isinstance(values, dict):
         msg = "status_flags.values must be an object mapping status codes to condition lists"
@@ -374,11 +333,7 @@ def _validate_label_size_parse(label_size_parse):
 
 
 def validate_match_patterns(patterns, field):
-    """Validate one of the match-pattern lists (ble_name / model / manufacturer).
-
-    These are case-insensitive regexes the *app* compiles, so a bad one there is invisible until
-    a printer fails to pair. Reject it in the admin instead.
-    """
+    """Validate a match-pattern list (ble_name / model / manufacturer): regexes the app compiles."""
     if not patterns:
         return
     if not isinstance(patterns, list):
@@ -403,7 +358,7 @@ def validate_profile_programs(
     status_flags=None,
     label_size_parse=None,
 ):
-    """Validate every program on a :class:`ThermalPrinterProfile`. Used by ``clean()`` and tests."""
+    """Validate every program on a :class:`ThermalPrinterProfile`."""
     validate_program(print_program, "print_program", required=True)
     validate_program(status_program, "status_program")
     validate_program(label_size_program, "label_size_program")
@@ -418,16 +373,11 @@ def serialize_profile(profile):
         "name": profile.name,
         "schema_version": profile.schema_version,
         "priority": profile.priority,
-        # Stated rather than inferred. The app can work a profile's language out from its print
-        # program (TSPL if it contains BITMAP, ESC/POS if 1d7630 …) and still falls back to that
-        # for older deployments — but it needs the language to auto-select a profile when a probe
-        # identifies one and exactly one profile speaks it, which is what removes the "pick your
-        # printer type" dialog.
+        # Declared, so the app can auto-select a profile from a language probe.
         "command_language": profile.command_language,
         "match": {
             "ble_name_patterns": profile.ble_name_patterns or [],
-            # Matched against the GATT Device Information Service when the BLE name (which the
-            # user can rename) matches nothing.
+            # Matched against the GATT Device Information Service when the BLE name matches nothing.
             "model_patterns": profile.model_patterns or [],
             "manufacturer_patterns": profile.manufacturer_patterns or [],
             "service_uuid": profile.service_uuid,
@@ -455,9 +405,7 @@ def serialize_profile(profile):
 
 
 # ---------------------------------------------------------------------------
-# Seed data — ports the hardcoded in-app D11s driver verbatim so day-one
-# behaviour is identical, plus a generic ESC/POS raster fallback. Imported by
-# the seed data migration and asserted valid in tests.
+# Seed data: the original in-app D11s driver, a TSPL profile, and a generic ESC/POS fallback.
 # ---------------------------------------------------------------------------
 
 _D11S_PRINT_PROGRAM_COMMON = [
@@ -493,9 +441,8 @@ _D11S_STATUS_FLAGS = {
     },
 }
 
-# TSPL's real-time status query <ESC>!? answers an *enumeration*, not independent bits, so the
-# exact-code map is the truth and the bitmask below is only the fallback for a code not listed.
-# Measured on a VEVOR Y486BT 2026-07-26: lid open + a full roll loaded answers 0x07.
+# TSPL's <ESC>!? answers an enumeration, so the exact-code map is primary. Measured on a VEVOR
+# Y486BT 2026-07-26: lid open with a full roll answers 0x07.
 _TSPL_STATUS_FLAGS = {
     "byte": 0,
     "values": {
@@ -513,8 +460,7 @@ _TSPL_STATUS_FLAGS = {
         "20": ["printing"],
         "80": ["error"],
     },
-    # Kept as the fallback for a code the map doesn't list. Lossy on its own — 0x07 decodes here as
-    # cover_open AND paper_jam AND out_of_paper at once — which is exactly why `values` exists.
+    # Fallback for unlisted codes; lossy on its own.
     "flags": {"cover_open": "01", "paper_jam": "02", "out_of_paper": "04", "printing": "20"},
 }
 
@@ -525,10 +471,8 @@ SEED_PROFILES = [
         "priority": 10,
         "command_language": "d11s",
         "ble_name_patterns": ["^d11", "^fichero", "^aiyin"],
-        # Device Information Service fallback for a renamed unit. Provisional until real units
-        # report in via ObservedPrinter — widen/correct these from that admin list rather than
-        # guessing again. Both D11s rows claim ^d11 (they are the same printer, different internal
-        # board), so a model match still falls through to priority, exactly as the name match does.
+        # Device Information Service fallback for a renamed unit; provisional until ObservedPrinter
+        # reports confirm it. Both D11s rows claim ^d11, so priority decides.
         "model_patterns": ["^d11"],
         "manufacturer_patterns": ["aiyin", "fichero"],
         "service_uuid": "000018f0-0000-1000-8000-00805f9b34fb",
@@ -586,51 +530,38 @@ SEED_PROFILES = [
     },
     {
         "slug": "tspl-raster",
-        # Profile names are user-facing — when the app has to ask which printer this is, it shows
-        # this string to an auction volunteer looking at a box on a table. Name the printer, not
-        # the protocol.
+        # User-facing: name the printer, not the protocol.
         "name": "TSPL label printer (VEVOR Y486BT, TSC-compatible)",
         # Ahead of escpos-raster (900), behind the D11s rows (10/20).
         "priority": 100,
-        # Uses status_flags.values, which only a v2 reader understands. An older app build will
-        # correctly ignore this row rather than mis-decode the status byte.
+        # status_flags.values needs a v2 reader; older apps skip this row.
         "schema_version": 2,
         "command_language": "tspl",
         "ble_name_patterns": ["^y486", "^y468"],
         "model_patterns": ["^y486"],
-        # Deliberately empty. The Y486BT's Device Information Service reports "Feasycom" /
-        # "FSC-BT986" — its *radio module*, which ships in dozens of unrelated products. Matching on
-        # it would claim other vendors' hardware.
+        # Empty: the Device Information Service reports the radio module ("Feasycom"), used in
+        # unrelated products.
         "manufacturer_patterns": [],
-        # VERIFIED GATT ids. The Y486BT is a Feasycom FSC-BT986 running Microchip's transparent-UART
-        # service. These MUST be pinned: the service's first *writable* characteristic is …6daa…,
-        # the module's CONTROL channel, so discovery-by-guessing writes label rasters into the
-        # radio's configuration instead of printing. The data pipe is …8841….
+        # Verified GATT ids, which must be pinned: the first writable characteristic (…6daa…) is
+        # the radio module's control channel. The data pipe is …8841….
         "service_uuid": "49535343-fe7d-4ae5-8fa9-9fafd205e455",
         "write_characteristic_uuid": "49535343-8841-43f4-a8d4-ecbe34729bb3",
         "notify_characteristic_uuid": "49535343-1e4d-4bd9-ba61-23c647249616",
-        # A 3x2 label at 203 dpi is ~31 KB; a 4x6 is ~124 KB. 200-byte chunks at 20 ms would spend
-        # ~12 s in pure pacing delay. The app still clamps every chunk to the live ATT MTU (185 on
-        # this unit), so this is a pacing hint.
+        # A pacing hint; the app still clamps chunks to the ATT MTU (185 on this unit).
         "chunk_size": 500,
         "chunk_delay_ms": 5,
         "prefer_write_with_response": True,
         "print_width_px": 832,  # 4.09" head at 203 dpi
         "dpi": 203,
-        # TSPL BITMAP prints on a *0* bit ("one = not painted, zero = painted"), the opposite of
-        # ESC/POS. Without this every label comes out solid black, which burns through a roll fast.
+        # TSPL BITMAP paints on a 0 bit, the opposite of ESC/POS; without this labels print solid black.
         "invert_raster": True,
         "max_label_width_mm": 104.0,
         "max_label_height_mm": None,
-        # No GAP command: the Y486BT calibrates its own gap on power-up, and a wrong GAP makes it
-        # feed blank labels hunting for a notch. If a user reports mis-feeds on die-cut stock, add
-        # "GAP 2 mm,0 mm\r\n" to the first tx_text. DIRECTION 0 is the TSPL default; flip to 1 if
-        # labels come out upside down on some unit. No `await` step: TSPL has no print-completion
-        # ack, and waiting for one is what produced "the printer didn't confirm the print finished".
+        # No GAP (the Y486BT self-calibrates; add "GAP 2 mm,0 mm\r\n" if die-cut stock mis-feeds).
+        # Flip DIRECTION to 1 if labels print upside down. No `await`: TSPL has no completion ack.
         "print_program": [
             {"tx_text": "SIZE {width_mm} mm,{height_mm} mm\r\nDIRECTION 0\r\nREFERENCE 0,0\r\nCLS\r\n"},
-            # BITMAP x,y,width_in_BYTES,height_in_DOTS,mode — the binary raster follows the comma
-            # immediately, then PRINT terminates the job.
+            # BITMAP x,y,width_in_bytes,height_in_dots,mode, then the raster, then PRINT.
             {"tx_text": "BITMAP 0,0,{width_bytes},{height_px},0,"},
             {"tx_raster": True},
             {"tx_text": "\r\nPRINT {copies},1\r\n"},
@@ -638,22 +569,17 @@ SEED_PROFILES = [
         # TSPL real-time status query <ESC>!? → one status byte.
         "status_program": [{"tx": "1b 21 3f"}],
         "status_flags": _TSPL_STATUS_FLAGS,
-        # Empty on purpose: TSPL has no standard "what media is loaded" query. The Y486BT was probed
-        # with ~!T and ~!I and returned no notify frame at all, while <ESC>!? on the same link
-        # answered immediately — its label recognition is internal and never reported over the wire.
-        # The label size keeps coming from the user's UserLabelPrefs.
+        # Empty: TSPL has no media query (~!T and ~!I got no reply), so size comes from UserLabelPrefs.
         "label_size_program": [],
         "label_size_parse": {},
         "notes": "TSPL/TSC-compatible direct thermal. Verified against a VEVOR Y486BT 2026-07-26.",
     },
     {
         "slug": "escpos-raster",
-        # Named for what the user is looking at, not the protocol they've never heard of.
         "name": "Other thermal printer (ESC/POS)",
         "priority": 900,
         "command_language": "escpos",
-        # No match patterns → never auto-matched; the app falls back to it for an unknown printer
-        # by writing to the first writable characteristic (blank GATT ids = discover).
+        # No patterns, so never auto-matched; used for unknown printers with discovered GATT ids.
         "ble_name_patterns": [],
         "model_patterns": [],
         "manufacturer_patterns": [],
@@ -662,11 +588,10 @@ SEED_PROFILES = [
         "notify_characteristic_uuid": "",
         "chunk_size": 200,
         "chunk_delay_ms": 20,
-        # 384 dots = a full 58 mm ESC/POS printhead (203 dpi). The D11s rows use 96 (their 12 mm
-        # head); this generic fallback must span a normal thermal head or it prints a ~12 mm strip.
+        # A full 58 mm head at 203 dpi; 96 (the D11s head) would print a 12 mm strip.
         "print_width_px": 384,
         "dpi": 203,
-        # Just the standard GS v 0 raster header + bitmap + feed — no vendor wrapper commands.
+        # Standard GS v 0 raster header, bitmap and feed.
         "print_program": [
             {
                 "repeat_per_copy": [
@@ -684,13 +609,8 @@ SEED_PROFILES = [
 
 
 # ---------------------------------------------------------------------------
-# Per-language starting points for a drafted profile
-#
-# Used by the "Draft a profile from this observation" admin action (see
-# ObservedPrinterAdmin): a characterized ObservedPrinter knows the printer's command language, its
-# GATT tree and what its status byte means, but not what bytes to send. These supply that — the
-# same programs as the seeded rows, so a drafted profile starts from something known to drive real
-# hardware. ``print_width_px`` and ``dpi`` still need a human with the printer's spec sheet.
+# Per-language starting programs for the "Draft a profile from this observation" admin action
+# (ObservedPrinterAdmin). print_width_px and dpi still need the printer's spec sheet.
 # ---------------------------------------------------------------------------
 
 _TSPL_SEED = next(p for p in SEED_PROFILES if p["slug"] == "tspl-raster")
@@ -718,8 +638,7 @@ LANGUAGE_TEMPLATES = {
         "print_width_px": 96,
         "schema_version": 1,
     },
-    # ZPL needs schema v2 twice over: ^GF wants total_bytes (no v1 arithmetic) and ^GFA carries the
-    # bitmap as ASCII hex rather than raw bytes.
+    # ZPL needs v2: ^GF wants total_bytes, and ^GFA sends the bitmap as ASCII hex.
     "zpl": {
         "print_program": [
             {
@@ -730,7 +649,7 @@ LANGUAGE_TEMPLATES = {
                 ]
             }
         ],
-        # ~HS host status: three ASCII lines of comma-separated settings, media size included.
+        # ~HS host status includes media size.
         "status_program": [{"tx_text": "~HS"}],
         "invert_raster": False,
         "print_width_px": 832,

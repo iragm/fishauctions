@@ -1,9 +1,6 @@
-"""The small endpoints the pages call, rather than the pages themselves.
+"""The small endpoints pages call: POST targets, HTMx fragments and moderation actions.
 
-POST targets, HTMx fragments, and the handful of moderation actions (ban, unban, deactivate a lot).
-If a view here renders anything it is a fragment, not a page. ``PageViewCreate`` is the one to know:
-it is the write behind every page-view record on the site, and so the busiest endpoint here by a
-wide margin.
+``PageViewCreate`` writes every page-view record and is the busiest endpoint here.
 """
 
 import logging
@@ -102,14 +99,13 @@ class CreateUserBan(APIView):
             user=user,
             defaults={},
         )
-        # bans apply to every auction this user administers (matching Auction.user_banned_by_admins),
-        # not just auctions they created
+        # Every auction this user administers, matching Auction.user_banned_by_admins.
         auctionsList = (
             Auction.objects.exclude(is_deleted=True)
             .filter(Q(created_by=user.pk) | Q(auctiontos__user=user, auctiontos__is_admin=True))
             .distinct()
         )
-        # delete all bids the banned user has made on active lots or in active auctions this user administers
+        # Delete the banned user's bids on active lots or active auctions.
         bids = (
             Bid.objects.exclude(is_deleted=True)
             .filter(user=bannedUser, lot_number__is_deleted=False)
@@ -120,15 +116,14 @@ class CreateUserBan(APIView):
             if not bid.lot_number.ended:
                 logger.info("Deleting bid %s", str(bid))
                 bid.delete()
-        # undo buy now purchases by the banned user in these auctions.  Clear auctiontos_winner
-        # along with winner so the sale isn't left half-undone
+        # Undo their buy-now purchases, clearing auctiontos_winner too.
         buy_now_lots = Lot.objects.exclude(is_deleted=True).filter(winner=bannedUser, auction__in=auctionsList)
         for lot in buy_now_lots:
             lot.winner = None
             lot.auctiontos_winner = None
             lot.winning_price = None
             lot.save()
-        # ban all lots added by the banned user.  These are not deleted, just removed from the auction
+        # Remove (not delete) their lots from these auctions.
         lots = Lot.objects.exclude(is_deleted=True).filter(
             Q(user=bannedUser) | Q(auctiontos_seller__user=bannedUser), auction__in=auctionsList
         )
@@ -150,8 +145,7 @@ class LotDeactivate(APIView):
     def post(self, request, pk):
         lot = Lot.objects.get(pk=pk, is_deleted=False)
 
-        # Check permissions: lot owner or superuser can deactivate
-        # Lots in auctions cannot be deactivated
+        # Owner or superuser, and not lots in auctions.
         if lot.auction:
             messages.error(request, "Your account doesn't have permission to view this page")
             return redirect(reverse("home"))
@@ -190,10 +184,7 @@ class UserUnban(APIView):
 
 
 class ImagesPrimary(APIView):
-    """Make the specified image the default image for the lot
-    Takes pk of image as post param
-    this does not check lot.can_add_images, which is deliberate (who cares if you rotate...)
-    """
+    """Make an image the lot's primary image. Doesn't check lot.can_add_images."""
 
     authentication_classes = [SessionAuthentication, TokenAuthentication]
     permission_classes = [IsAuthenticated]
@@ -213,9 +204,7 @@ class ImagesPrimary(APIView):
 
 
 class ImagesRotate(APIView):
-    """Rotate an image associated with a lot
-    Takes pk of image and angle as post params
-    """
+    """Rotate a lot image by the posted angle."""
 
     authentication_classes = [SessionAuthentication, TokenAuthentication]
     permission_classes = [IsAuthenticated]
@@ -252,11 +241,7 @@ class ImagesRotate(APIView):
 
 
 class Feedback(APIView):
-    """Leave feedback on a lot
-    This can be done as a buyer or a seller
-    api/feedback/lot_number/buyer
-    api/feedback/lot_number/seller
-    """
+    """Leave buyer or seller feedback on a lot: api/feedback/<lot_number>/<buyer|seller>."""
 
     authentication_classes = [SessionAuthentication, TokenAuthentication]
     permission_classes = [IsAuthenticated]
@@ -317,8 +302,6 @@ def clean_referrer(url):
         url = re.sub(r"\?.*", "", url)  # remove get params
     url = re.sub(r"^www\.", "", url)  # www
     url = re.sub(r"/+$", "", url)  # trailing /
-    # if someone has facebook.example.com, it would be recorded as FB...
-    # can update this if it becomes an issue
     if re.search(r"(facebook)\.", url):
         url = "Facebook"
     if re.search(r"(google)\.", url):
@@ -327,24 +310,10 @@ def clean_referrer(url):
 
 
 def page_view_path(url, host=""):
-    """The stored form of ``PageView.url``: a site-relative path, starting with ``/``.
+    """The stored form of ``PageView.url``: a site-relative path without query or fragment.
 
-    Every reader of that field wants a path. ``usability_report`` groups on it exactly, and
-    ``url__startswith="/account/"`` is what makes "how many people opened preferences" a query
-    rather than a full scan. The browser beacon posts ``window.location.href``, so normalizing here
-    -- not trusting the caller -- is what makes the invariant true: this endpoint is ``AllowAny``
-    and stores whatever it is handed.
-
-    The query string was always stripped (one page, one row); the fragment never was, and split
-    ``/lots/1`` from ``/lots/1#chat``. ``urlsplit`` drops both.
-
-    A URL on some *other* host is stored whole. It is not one of our pages, and filing it as a
-    path would make it indistinguishable from one.
-
-    Nothing but ``http``/``https`` survives at all. That is a page-view beacon's whole vocabulary,
-    and the admin traffic dashboard renders this column as ``<a href="...">`` -- so a
-    ``javascript:`` URL posted to this endpoint by anyone at all (again: ``AllowAny``) would be
-    waiting as a link on an admin's page.
+    This endpoint is ``AllowAny``, so it normalizes rather than trusts. Other hosts are stored whole.
+    Only http/https survive, since the admin dashboard renders this as a link.
     """
     if not url:
         return ""
@@ -357,26 +326,11 @@ def page_view_path(url, host=""):
 
 
 class FormAbandonedBeacon(APIView):
-    """Record a form somebody edited and left without saving.
+    """Record a form someone edited and left without saving, posted by ``unsaved_changes.js`` via sendBeacon.
 
-    The other half of the friction instrument, and on this site the bigger half: almost every field
-    is optional and most of the rest are filled in on save, so a validator refusing something is
-    the rare case. Somebody changing three settings, failing to work out the fourth and closing the
-    tab is the ordinary one, and the server never sees it. ``unsaved_changes.js`` already knows
-    which fields have changed -- it has to, to draw the unsaved-changes bar -- and posts that here
-    with ``navigator.sendBeacon`` as the page goes away.
-
-    Unauthenticated by necessity: a beacon fires during unload, when there may be no time for
-    anything but a fire-and-forget POST, and the person may never have signed in. Three things
-    keep that from being a hole:
-
-    * The form name comes from a **signed token** the server itself rendered
-      (``form_friction.abandon_token``), so this endpoint's vocabulary is exactly the set of forms
-      it handed out, not whatever a caller invents.
-    * **Field names only**, filtered against the form name's own token -- never values. The whole
-      point of the abandonment case is that the values were not saved, and a table of what people
-      typed into forms they thought better of submitting is the last thing this site should keep.
-    * One row per form per session, so a page reopened twenty times is one story.
+    Unauthenticated, so: the form name comes from a server-signed token
+    (``form_friction.abandon_token``); only field names are stored, never values; one row per form
+    per session.
     """
 
     authentication_classes = [SessionAuthentication]
@@ -385,7 +339,6 @@ class FormAbandonedBeacon(APIView):
     def post(self, request):
         form_name = read_abandon_token(request.POST.get("token", ""))
         if not form_name:
-            # A forged, stale or absent token. Nothing to record and nothing to say about it.
             return JsonResponse({"recorded": False}, status=200)
         session = request.session
         already = session.get(ABANDON_SESSION_KEY) or []
@@ -397,9 +350,7 @@ class FormAbandonedBeacon(APIView):
             if name.strip()
         ]
         try:
-            # Clamped at both ends: the column is a PositiveIntegerField, and a negative or absurd
-            # duration from an unauthenticated caller would otherwise be a DataError -- a 500 on a
-            # beacon, which is a page-load failure for the person who was just leaving.
+            # Clamped: out-of-range values would be a DataError 500.
             seconds = max(0, min(int(request.POST.get("seconds", 0) or 0), 60 * 60 * 24))
         except (TypeError, ValueError):
             seconds = None
@@ -420,14 +371,7 @@ class FormAbandonedBeacon(APIView):
 
 
 def beacon_subject(model, pk, **extra):
-    """The lot or auction a page view names, or None.
-
-    The beacon posts both keys on every page and most pages leave them empty (see
-    base_page_view.html), so "" has to mean "not given" rather than reach the FK -- assigning it
-    raises ValueError before the row is built. A junk pk has to mean the same thing: this endpoint
-    is AllowAny, and ``filter(pk="abc")`` raises too, which on a beacon is a 500 in the middle of
-    somebody's page load.
-    """
+    """The lot or auction a page view names, or None. Empty or junk pks mean not given, not a 500."""
     if not pk:
         return None
     try:
@@ -463,12 +407,6 @@ class PageViewCreate(APIView):
             # platform = 'UNKNOWN'
             os = "UNKNOWN"
             parsed_ua = parse(user_agent)
-            # if parsed_ua.is_mobile:
-            #     platform = 'MOBILE'
-            # if parsed_ua.is_tablet:
-            #     platform = 'TABLET'
-            # elif parsed_ua.is_pc:
-            #     platform = 'DESKTOP'
             user_agent = user_agent[:200]
             referrer = clean_referrer(data.get("referrer", None)[:600])
             source = data.get("src", None)
@@ -528,45 +466,25 @@ class PageViewCreate(APIView):
                 except ValidationError:
                     # campaign already exists
                     pass
-        # code below would run on subsequent pageviews.  Not worth the extra server effort for an update every 10 seconds.
-        # some corresponding js on base_page_view.html is also commented out
-        # else:
-        #     pageview = PageView.objects.filter(
-        #         url = url_without_params,
-        #         session_id = session_id,
-        #         user = user,
-        #     ).order_by('-date_start').first()
-        #     if pageview:
-        #         # this is the second (or more) time this user has viewed this page
-        #         pageview.total_time += 10
-        #         pageview.date_end = timezone.now()
-        #         pageview.save()
         return HttpResponse("Success")
 
 
 class InvoicePaid(APIView):
-    """Mark an invoice as paid/ready/open - POST only
+    """Mark an invoice paid, ready or open. POST, auction admins only (club admins for renewal-only invoices).
 
-    Restricted to authenticated auction admins (or club admins for renewal-only invoices).
-    The status change books/reverses club-ledger (ClubMoney) entries and can trigger a
-    membership renewal, so it must never be reachable via the invoice's no-login UUID:
-    that link is emailed to the bidder, who could otherwise mark their own invoice PAID.
-    UUID access to an invoice is view-only and handled separately by ``InvoiceNoLoginView``.
+    It books ClubMoney and can trigger renewals, so it's never reachable via the emailed no-login UUID.
     """
 
     authentication_classes = [TokenAuthentication, SessionAuthentication]
     permission_classes = [AllowAny]  # Auth is enforced manually in post()
 
     def post(self, request, *args, **kwargs):
-        # Only accept statuses that are real choices on the model. An unvalidated status
-        # (e.g. "BANANA") would be written straight to the DB and silently break every
-        # `status == "PAID"` / `status in ("DRAFT", "UNPAID")` check across the codebase.
+        # Only real model choices.
         new_status = kwargs["status"]
         valid_statuses = {value for value, _label in Invoice._meta.get_field("status").choices}
         if new_status not in valid_statuses:
             msg = "Invalid invoice status"
             raise Http404(msg)
-        # Changing invoice status is an admin-only action (see class docstring).
         if not request.user.is_authenticated:
             raise NotAuthenticated()
         invoice = get_object_or_404(Invoice, pk=kwargs["pk"])
@@ -582,8 +500,7 @@ class InvoicePaid(APIView):
             raise PermissionDenied()
         if new_status in ("PAID", "UNPAID") and not invoice.renewal_needed:
             _ensure_invoice_renewal_state(invoice)
-        # Core: persist the new invoice status. Everything else is "extra"
-        # and must not be allowed to block the status change.
+        # Save the status first; nothing after it may block the change.
         invoice.status = new_status
         run_at = None
         if new_status in ("UNPAID", "PAID"):
@@ -613,8 +530,7 @@ class InvoicePaid(APIView):
             except Exception:
                 logger.exception("last_club_activity update failed for invoice %s buyer", invoice.pk)
         user = request.user if request.user.is_authenticated else None
-        # Club-only renewal invoices have no auction (and no auctiontos_user); skip the
-        # auction history entry rather than raising/logging an AttributeError every time.
+        # Club-only renewal invoices have no auction.
         if auction and invoice.auctiontos_user:
             try:
                 auction.create_history(
@@ -628,9 +544,7 @@ class InvoicePaid(APIView):
         buttons_html = render_to_string("invoice_buttons.html", {"invoice": invoice})
         renewal_ctx = {"invoice": invoice, "is_admin": is_admin}
         renewal_html = render_to_string("auctions/partials/invoice_membership_renewal.html", renewal_ctx)
-        # Include the renewal section as an OOB swap so the locked/unlocked visual
-        # state and the "already processed" warning reflect the new invoice state
-        # immediately without requiring a page reload.
+        # OOB swap of the renewal section so its state updates without a reload.
         renewal_oob = ""
         if 'id="invoice-membership-renewal"' in renewal_html:
             renewal_oob = renewal_html.replace(
@@ -671,14 +585,12 @@ class InvoiceRenewalNeededToggleView(APIView):
         invoice.renewal_needed = renewal_needed
         invoice.renewal_manually_set = True
         invoice.save(update_fields=["renewal_needed", "renewal_manually_set"])
-        # Checking the box makes the user a club member for this invoice: apply the club
-        # member discount and (in club member discount split mode) the alternate split.
+        # A club member gets the club member discount and alternate split.
         _sync_tos_alternate_split(invoice.auctiontos_user, invoice)
         invoice.recalculate()
         ctx = {"invoice": invoice, "is_admin": True, "csrf_token": get_token(request)}
         body = render_to_string("auctions/partials/invoice_membership_renewal.html", ctx, request=request)
-        # OOB swaps so the invoice fee row, discount row, tax row, final total, and quick-checkout
-        # summary all update in real time when the box is toggled.
+        # OOB swaps for the fee, discount, tax, total and quick-checkout summary.
         fee_row = render_to_string("auctions/partials/invoice_membership_fee_row.html", ctx, request=request)
         discount_row = render_to_string("auctions/partials/invoice_club_member_discount_row.html", ctx, request=request)
         tax_row = render_to_string("auctions/partials/invoice_tax_row.html", ctx, request=request)
@@ -687,10 +599,7 @@ class InvoiceRenewalNeededToggleView(APIView):
         oob_discount = discount_row.replace("<tr id=", '<tr hx-swap-oob="outerHTML" id=', 1)
         oob_tax = tax_row.replace("<tr id=", '<tr hx-swap-oob="outerHTML" id=', 1)
         oob_total = total_row.replace("<tr id=", '<tr hx-swap-oob="outerHTML" id=', 1)
-        # Wrap <tr> OOB swaps in <table> so the browser's HTML parser does not discard
-        # them when they appear outside a table context, while still letting htmx find
-        # and process the hx-swap-oob attribute (unlike <template>, whose content is
-        # inert and not reachable by querySelectorAll).
+        # <tr> OOB swaps inside <table> so the parser keeps them (a <template> is inert to htmx).
         oob_fee = f"<table>{oob_fee}</table>"
         oob_discount = f"<table>{oob_discount}</table>"
         oob_tax = f"<table>{oob_tax}</table>"
@@ -698,12 +607,10 @@ class InvoiceRenewalNeededToggleView(APIView):
         oob_summary_checkout = (
             f'<span id="quick-checkout-invoice-summary" hx-swap-oob="outerHTML">{invoice.invoice_summary_short}</span>'
         )
-        # Also update the invoice-summary-short span on the full invoice page (invoice.html)
         oob_summary_invoice = (
             f'<span id="invoice-summary-short" hx-swap-oob="outerHTML">{invoice.invoice_summary_short}</span>'
         )
-        # Update the modal title (generic_admin_form.html) when the renewal checkbox is toggled
-        # while the auctiontos/clubmember admin modal is open.
+        # The auctiontos/clubmember admin modal's title.
         modal_name = invoice.invoice_summary
         oob_modal_title = f'<h5 class="modal-title" id="modal-invoice-title" hx-swap-oob="outerHTML">{modal_name}</h5>'
         response = HttpResponse(
@@ -716,7 +623,7 @@ class InvoiceRenewalNeededToggleView(APIView):
             + oob_summary_invoice
             + oob_modal_title
         )
-        # Signal the quick-checkout page to regenerate QR codes now that the total has changed.
+        # Quick checkout regenerates its QR codes.
         response["HX-Trigger"] = "renewalToggled"
         return response
 
@@ -734,8 +641,7 @@ class LotPushTestNotificationView(APIPostView):
         lot = get_object_or_404(Lot, pk=kwargs["pk"], is_deleted=False)
         if not Watch.objects.filter(lot_number=lot, user=request.user).exists():
             return JsonResponse({"result": "error", "message": "You must watch this lot first."}, status=403)
-        # Test the channel the real notification will actually use, otherwise an app user's test
-        # would go to a browser they aren't looking at (or fail) while the real one goes to the app.
+        # Use the channel the real notification will use.
         if user_has_app_push(request.user):
             send_push_to_user.delay(
                 request.user.pk,
@@ -763,9 +669,7 @@ class LotPushTestNotificationView(APIPostView):
 
 
 class CheckUsernameAvailability(APIView):
-    """GET /check-username/?username=foo — returns JSON for real-time signup validation.
-    No authentication required (used on the public signup form).
-    """
+    """GET /check-username/?username=foo for signup validation. No authentication."""
 
     authentication_classes = [SessionAuthentication]
     permission_classes = [AllowAny]
@@ -779,9 +683,7 @@ class CheckUsernameAvailability(APIView):
 
 
 class AuctionTOSValidation(AuctionViewMixin, APIPostView):
-    """For real time validation on the auctiontos admin create form
-    See views.AuctionTOSAdmin for the corresponding js and view
-    """
+    """Real-time validation for the auctiontos admin create form. See views.AuctionTOSAdmin."""
 
     def post(self, request, *args, **kwargs):
         pk = request.POST.get("pk", None)
@@ -792,8 +694,7 @@ class AuctionTOSValidation(AuctionViewMixin, APIPostView):
         name = request.POST.get("name", None)
         bidder_number = request.POST.get("bidder_number", None)
         email = request.POST.get("email", None)
-        # note: be careful what you dump in result
-        # javascript will fill out any id on the form with this info
+        # JavaScript fills every matching id on the form from this.
         result = {
             "id_bidder_number": "",
             "id_name": "",

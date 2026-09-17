@@ -1,38 +1,15 @@
-"""Sign in with Apple server-to-server notifications — Apple telling us an account changed.
+"""Sign in with Apple server-to-server notifications.
 
-Apple only tells you about a change to a Sign in with Apple account *once*, by POSTing a signed
-notification to a URL registered in the developer portal. There is no queue to re-read and no API to
-poll, so anything that isn't handled when it arrives is simply never learned. The four things Apple
-sends are all things that silently break an account if they're ignored:
+Apple POSTs each account change once (retrying until 2xx), with no API to poll:
 
-===============  ==========================================================================
-``consent-revoked``  The user disconnected this app in their Apple Account settings. Their
-                     Apple tokens are dead; Apple's guidance is to treat it as a sign-out.
-``account-delete``   The user deleted their Apple ID outright. That ``sub`` will never
-                     authenticate again — for an account that had no other way in, this is
-                     the person losing access permanently.
-``email-disabled``   The user turned off forwarding on their Hide My Email relay address.
-                     Mail to it is discarded from then on, with no bounce and no error.
-``email-enabled``    Forwarding was turned back on.
-===============  ==========================================================================
+``consent-revoked``  the user disconnected this app; treat as sign-out.
+``account-delete``   the Apple ID is gone; that ``sub`` never authenticates again.
+``email-disabled``   Hide My Email forwarding off; mail is silently discarded.
+``email-enabled``    forwarding back on.
 
-Registering the endpoint is also how Apple expects a site to keep a signed-in session alive without
-re-validating the refresh token against ``/auth/token`` on a schedule: the notification is the push
-version of that poll. Nothing here is optional for an app shipping Sign in with Apple.
-
-**django-allauth does not implement this.** Its Apple provider (65.x) covers the OAuth flow and
-nothing else — there is no notification view, URL or setting anywhere in the package. What it *does*
-have is the JWT machinery (:mod:`allauth.socialaccount.internal.jwtkit`) and the ``SocialAccount``
-rows that identify who a notification is about, and both are used here rather than reimplemented.
-
-One deliberate departure from allauth: :func:`allauth.socialaccount.internal.jwtkit.verify_and_decode`
-blacklists each ``jti`` as it verifies, which is right for a login credential and wrong for a
-webhook. Apple retries a notification until it gets a 2xx, so the *second* delivery of a payload we
-failed to process is the one that matters — and allauth's blacklist would reject it as a replay,
-permanently. So the signature check is assembled from jwtkit's parts and the ``jti`` is used the
-other way round: as an idempotency key that answers "already done, thanks" with a 200.
-
-Everything the handlers do is idempotent, because a retry after a partial failure is normal.
+django-allauth has no notification support; its JWT helpers and ``SocialAccount`` rows are reused.
+One departure: allauth blacklists each ``jti`` on verify, which would reject Apple's retries, so
+``jti`` is used here as an idempotency key instead. All handlers are idempotent.
 """
 
 from __future__ import annotations
@@ -52,25 +29,19 @@ logger = logging.getLogger(__name__)
 APPLE_ISSUER = "https://appleid.apple.com"
 APPLE_KEYS_URL = "https://appleid.apple.com/auth/keys"  # nosec - public JWKS, not a secret
 
-# Apple signs with RS256 today. Pinning the exact algorithm would break the day they rotate, so the
-# allowlist is "any asymmetric algorithm" instead — which is the only property that actually matters
-# here. Without it, `alg` comes from the attacker-supplied JWT header, and `alg: HS256` invites the
-# classic confusion attack where a public key is used as an HMAC secret.
+# Any asymmetric algorithm, so key rotation doesn't break us. Never HS256 (public-key-as-secret).
 ALLOWED_ALGORITHMS = frozenset({"RS256", "RS384", "RS512", "ES256", "ES384", "ES512", "PS256", "PS384", "PS512"})
 
 REQUEST_TIMEOUT_SECONDS = 10
 
-# Apple's public keys change rarely and this endpoint is unauthenticated by nature, so the JWKS is
-# cached rather than re-fetched per request — otherwise anyone can make us call Apple in a loop.
+# Cached so an unauthenticated endpoint can't make us call Apple in a loop.
 JWKS_CACHE_KEY = "apple_signin_jwks"
 JWKS_CACHE_SECONDS = 60 * 60
-# A payload naming an unknown `kid` forces a re-fetch (that is how key rotation is noticed), so the
-# re-fetch itself needs a floor or the cache above achieves nothing.
+# An unknown kid forces a re-fetch (key rotation), so the re-fetch needs its own floor.
 JWKS_REFETCH_LOCK_KEY = "apple_signin_jwks_refetch"
 JWKS_REFETCH_LOCK_SECONDS = 60
 
-# How long a processed notification is remembered, so Apple's retries of something already handled
-# are answered instead of re-run. Comfortably longer than Apple's retry window.
+# Processed notifications remembered past Apple's retry window.
 PROCESSED_CACHE_PREFIX = "apple_s2s_jti:"
 PROCESSED_CACHE_SECONDS = 60 * 60 * 48
 
@@ -79,8 +50,7 @@ EVENT_ACCOUNT_DELETE = "account-delete"
 EVENT_EMAIL_DISABLED = "email-disabled"
 EVENT_EMAIL_ENABLED = "email-enabled"
 
-# Addresses here are only ever reachable while Apple forwards them, which is exactly what
-# `email-disabled` and `account-delete` turn off.
+# Only reachable while Apple forwards, which email-disabled and account-delete stop.
 PRIVATE_RELAY_DOMAIN = "privaterelay.appleid.com"
 
 
@@ -89,13 +59,7 @@ class AppleNotificationError(Exception):
 
 
 def notifications_configured() -> bool:
-    """True when a notification can be verified at all.
-
-    Verification turns on the audience: Apple sets ``aud`` to the client id the notification was
-    configured against, and a deployment with no Apple identifiers has nothing to compare it to.
-    Accepting an unchecked audience would mean honouring "delete this account" from anybody's Apple
-    app, so the endpoint refuses rather than guesses.
-    """
+    """True when notifications can be verified, i.e. there are Apple audiences to check ``aud`` against."""
     return bool(getattr(settings, "APPLE_ALLOWED_AUDIENCES", []))
 
 
@@ -113,7 +77,7 @@ def _fetch_jwks(force: bool = False) -> dict:
         if cached:
             return cached
     elif not cache.add(JWKS_REFETCH_LOCK_KEY, True, JWKS_REFETCH_LOCK_SECONDS):
-        # Someone is already making us chase an unknown kid; serve what we have.
+        # Already re-fetching for an unknown kid; serve what we have.
         return cache.get(JWKS_CACHE_KEY) or {}
     response = requests.get(APPLE_KEYS_URL, timeout=REQUEST_TIMEOUT_SECONDS)
     response.raise_for_status()
@@ -133,16 +97,8 @@ def _find_jwk(keys_data: dict, kid: str) -> dict | None:
 def _signing_key(signed_payload: str):
     """(algorithm, public key) for ``signed_payload``, or raise :class:`AppleNotificationError`.
 
-    **The algorithm comes from Apple's published key, never from the token's header.** The header is
-    written by whoever sent the request, and letting it pick the algorithm is how JWT verification
-    is classically broken: ``alg: HS256`` against a known ``kid`` asks the library to use a public
-    key — a public value — as an HMAC secret, and ``alg: none`` asks it to skip the check entirely.
-    Taking the algorithm from the JWK closes that off structurally rather than by keeping an
-    allowlist in sync. PyJWT then rejects any token whose header disagrees, which is the behaviour
-    we want: Apple signs with RS256, so a payload claiming anything else isn't Apple's.
-
-    The header is still read for the ``kid`` (that is what it is for) and given a cheap sanity check
-    first, so obvious junk is refused without a network round trip.
+    **The algorithm comes from Apple's published key, never the token header**, which an attacker
+    writes (``alg: HS256`` or ``none``). The header is read only for ``kid``, after a cheap sanity check.
     """
     import jwt
     from allauth.socialaccount.internal import jwtkit
@@ -159,8 +115,7 @@ def _signing_key(signed_payload: str):
 
     jwk = None
     for force in (False, True):
-        # An unknown kid means either a forgery or a key rotation, and only one re-fetch tells them
-        # apart. _fetch_jwks throttles the retry so the first case can't turn into a stampede.
+        # Unknown kid: forgery or rotation; one throttled re-fetch tells them apart.
         jwk = _find_jwk(_fetch_jwks(force=force), kid)
         if jwk is not None:
             break
@@ -168,14 +123,14 @@ def _signing_key(signed_payload: str):
         msg = f"No Apple signing key matches kid {kid}."
         raise AppleNotificationError(msg)
 
-    # allauth's own default for a JWK that omits `alg`, and Apple's keys all carry RS256 anyway.
+    # allauth's default for a JWK without alg; Apple's all say RS256.
     algorithm = jwk.get("alg", "RS256")
     if algorithm not in ALLOWED_ALGORITHMS:
         msg = f"Apple's key {kid} names an algorithm we don't accept ({algorithm!r})."
         raise AppleNotificationError(msg)
     try:
         key = jwtkit.lookup_kid_jwk({"keys": [jwk]}, kid)
-    except Exception as exc:  # allauth raises OAuth2Error for a JWK it can't build
+    except Exception as exc:
         msg = f"Apple's key {kid} could not be used."
         raise AppleNotificationError(msg) from exc
     if key is None:
@@ -185,18 +140,8 @@ def _signing_key(signed_payload: str):
 
 
 def verify_notification(signed_payload: str) -> dict:
-    """Verify Apple's signed notification and return its claims.
-
-    Checks the signature against Apple's published keys, that Apple issued it, that it was meant for
-    *this* app (``aud`` is one of ours) and that it hasn't expired. Deliberately does **not** consume
-    the ``jti`` — see the module docstring.
-
-    Everything downstream reads the dict this returns, and nothing reads the request body, so a
-    payload that doesn't get past here cannot reach a single handler.
-
-    An empty ``APPLE_ALLOWED_AUDIENCES`` is safe rather than permissive: PyJWT treats "no audience
-    matched" as a failure, so a deployment with no Apple identifiers rejects everything. The view's
-    configuration check exists to give Apple a retryable 503 instead, not to keep this closed.
+    """Verify Apple's signed notification and return its claims: signature, issuer, audience, expiry.
+    Doesn't consume ``jti``. Empty ``APPLE_ALLOWED_AUDIENCES`` rejects everything.
     """
     import jwt
 
@@ -215,26 +160,20 @@ def verify_notification(signed_payload: str) -> dict:
                 "verify_signature": True,
                 "verify_iss": True,
                 "verify_aud": True,
-                # Apple's notification payloads carry no `exp`; PyJWT skips the check when the claim
-                # is absent, and `require` below makes sure the claims we *do* rely on are present.
+                # Apple's payloads have no exp; require the claims we rely on.
                 "verify_exp": True,
                 "require": ["iss", "aud", "iat"],
             },
         )
-    # TypeError/ValueError as well as PyJWTError: PyJWT raises a bare TypeError when a key and an
-    # algorithm don't belong together, which an attacker could otherwise provoke on demand. It fails
-    # closed either way, but as an unhandled 500 it would be a way to mail the admins on request.
+    # PyJWT raises bare TypeError for mismatched key/algorithm; catch it rather than 500 on demand.
     except (jwt.PyJWTError, TypeError, ValueError) as exc:
         msg = f"Notification failed verification: {type(exc).__name__}: {exc}"
         raise AppleNotificationError(msg) from exc
 
 
 def parse_events(claims: dict) -> list[dict]:
-    """The events inside a verified notification.
-
-    Apple puts the event in an ``events`` claim as a *JSON-encoded string*, not as a nested object —
-    an easy thing to get wrong, and the reason a plain ``claims["events"]["type"]`` silently sees
-    nothing. Both shapes (and a list, which Apple's docs leave room for) are accepted.
+    """The events in a verified notification. Apple sends ``events`` as a JSON-encoded string; objects and
+    lists are accepted too.
     """
     raw = claims.get("events")
     if isinstance(raw, str):
@@ -265,13 +204,8 @@ def _apple_accounts(sub: str):
 
 
 def _sign_out_everywhere(user) -> None:
-    """End the app's sessions for *user*.
-
-    Only the mobile refresh tokens, which are the long-lived ones — a phone signed in months ago
-    stays signed in until its token is retired, so this is the part that would otherwise outlive the
-    revocation by a year. Web sessions are left alone on purpose: with ``SESSION_COOKIE_AGE`` set to
-    effectively forever, the session table has no expiry to prune against and finding one user's
-    rows means decoding every row in it, on a public endpoint anyone can POST to.
+    """End *user*'s mobile refresh tokens. Web sessions are left alone: finding one user's sessions means
+    decoding the whole table, on a public endpoint.
     """
     from auctions.account_deletion import blacklist_refresh_tokens
 
@@ -279,17 +213,8 @@ def _sign_out_everywhere(user) -> None:
 
 
 def _can_still_sign_in(user) -> bool:
-    """Whether *user* has any way back into their account that doesn't go through Apple.
-
-    Written to answer "no" only when it is certain, because the caller's response to "no" is to
-    schedule the account for deletion. Any of these is enough:
-
-    * another linked social account,
-    * a usable password (this site accepts a username, so no working inbox is needed), or
-    * a verified address that isn't an Apple relay — enough to do a password reset.
-
-    A ``@privaterelay.appleid.com`` address doesn't count: it only ever worked because Apple was
-    forwarding it, and the events that ask this question are the ones that stop the forwarding.
+    """Whether *user* can sign in without Apple: another social account, a usable password, or a verified
+    non-relay address. "No" schedules deletion, so it answers "no" only when certain.
     """
     from allauth.account.models import EmailAddress
     from allauth.socialaccount.models import SocialAccount
@@ -306,13 +231,8 @@ def _can_still_sign_in(user) -> bool:
 
 
 def _handle_consent_revoked(sub: str) -> None:
-    """The user disconnected this app at Apple. Sign them out; leave the account alone.
-
-    Apple's own guidance for this event is "treat it as a sign-out request and delete the tokens" —
-    not as a deletion. The ``SocialAccount`` row stays for the same reason: ``sub`` is stable, so
-    re-authorizing later lands on the same row and therefore the same site account. Dropping the row
-    would make the next Sign in with Apple look like a brand-new person and strand the old account.
-    Only the tokens go, and they are dead at Apple's end anyway.
+    """The user disconnected this app at Apple: sign them out, keep the account and the ``SocialAccount``
+    (``sub`` is stable, so re-authorizing lands on the same account).
     """
     from allauth.socialaccount.models import SocialToken
 
@@ -323,20 +243,8 @@ def _handle_consent_revoked(sub: str) -> None:
 
 
 def _handle_account_delete(sub: str) -> None:
-    """The Apple ID itself is gone. Drop the dead link, and delete the site account if it's stranded.
-
-    Unlike a revocation, this ``sub`` can never come back, so the ``SocialAccount`` row is deleted:
-    keeping it would only give a future Apple ID a chance to collide with a link that no longer means
-    anything.
-
-    Whether the *site* account goes with it depends on whether the person can still reach it.
-    Apple's rule is that deleting the Apple ID should delete the account it made, but plenty of these
-    accounts also have a password or a Google login, and "they deleted their Apple ID" is not
-    "they left this site". So the site account is only scheduled for deletion when Apple was the only
-    door (:func:`_can_still_sign_in`), which is also the only case where nothing is lost by it: the
-    normal 30-day grace period is cancelled by signing in, and someone who can't sign in at all
-    hasn't got an account left to save. Anything else keeps its account and just loses the Apple
-    button, with a log line saying so.
+    """The Apple ID is gone: delete the ``SocialAccount``, and schedule the site account for deletion only
+    if Apple was its only way in (:func:`_can_still_sign_in`). Signing in cancels the grace period.
     """
     from allauth.socialaccount.models import SocialToken
 
@@ -354,7 +262,7 @@ def _handle_account_delete(sub: str) -> None:
             )
             continue
         if not user.is_active:
-            # Already deleted or disabled; request_deletion would only re-arm the timer.
+            # Already deleted or disabled; don't re-arm the timer.
             continue
         due = request_deletion(user)
         logger.warning(
@@ -365,17 +273,9 @@ def _handle_account_delete(sub: str) -> None:
 
 
 def _handle_email_forwarding(sub: str, email: str, *, enabled: bool) -> None:
-    """Record that a Hide My Email address did or didn't just stop working.
-
-    A disabled relay address swallows everything sent to it — no bounce, no error, no confirmation
-    email, no invoice — so it gets the same ``email_address_status`` treatment as an SES hard bounce
-    (``auctions.signals.bounce_handler``), which is what the rest of the site already reads to warn
-    an admin that a member is unreachable. Re-enabling puts it back to UNKNOWN rather than VALID:
-    forwarding being switched on is not evidence that anything was ever delivered.
-
-    The allauth ``EmailAddress`` row is deliberately untouched. Marking it unverified would lock the
-    person out of a site where email verification is mandatory, which is a far bigger punishment than
-    the problem — they can still sign in with Apple, and signing in is how they'd fix it.
+    """Mark a Hide My Email address unreachable (like an SES hard bounce) or back to UNKNOWN (not VALID:
+    forwarding isn't delivery). The allauth ``EmailAddress`` is untouched, or verification would lock
+    them out.
     """
     from auctions.models import AuctionTOS, ClubMember
 
@@ -385,12 +285,10 @@ def _handle_email_forwarding(sub: str, email: str, *, enabled: bool) -> None:
     tos_rows = AuctionTOS.objects.filter(email__iexact=email)
     member_rows = ClubMember.objects.filter(email__iexact=email, is_deleted=False)
     if enabled:
-        # Only undo what a disable did. A VALID address that someone actually confirmed keeps that.
+        # Only undo what a disable did.
         tos_rows = tos_rows.filter(email_address_status="BAD")
         member_rows = member_rows.filter(email_address_status="BAD")
-    # Bulk updates, matching bounce_handler: the actor here is Apple, not a club admin, so this
-    # writes no ClubHistory and fires none of the save() side effects (invoice recalculation,
-    # mailing-list sync) that have nothing to do with a forwarding switch.
+    # Bulk updates like bounce_handler: no ClubHistory, no save() side effects.
     updated = tos_rows.update(email_address_status=status) + member_rows.update(email_address_status=status)
     logger.info(
         "Apple relay forwarding %s for sub %s; %s record(s) marked %s.",
@@ -402,11 +300,7 @@ def _handle_email_forwarding(sub: str, email: str, *, enabled: bool) -> None:
 
 
 def handle_event(event: dict) -> str:
-    """Act on one verified event. Returns the event type, or ``"ignored"``.
-
-    Unknown types are ignored rather than treated as an error: Apple adds event types, and answering
-    a new one with a failure would make Apple retry it for a day.
-    """
+    """Act on one verified event. Returns its type, or ``"ignored"`` for unknown types (Apple adds them)."""
     event_type = (event.get("type") or "").strip()
     sub = (event.get("sub") or "").strip()
     if not sub:
@@ -434,8 +328,7 @@ def process_notification(signed_payload: str) -> list[str]:
         logger.info("Apple notification %s already processed; acknowledging the retry.", jti)
         return []
     handled = [handle_event(event) for event in parse_events(claims)]
-    # Set only once everything succeeded — a handler that raised leaves the key unset so Apple's
-    # retry runs it again rather than being told it was already done.
+    # Only after success, so a failed handler is retried.
     if cache_key:
         cache.set(cache_key, True, PROCESSED_CACHE_SECONDS)
     return handled
@@ -448,15 +341,10 @@ def process_notification(signed_payload: str) -> list[str]:
 
 @method_decorator(csrf_exempt, name="dispatch")
 class AppleServerNotificationView(View):
-    """``POST /apple/notifications`` — the URL registered in Apple's developer portal.
+    """``POST /apple/notifications``, as registered with Apple.
 
-    Registered without a trailing slash because that is the URL Apple was given, and ``APPEND_SLASH``
-    cannot rescue a POST (the redirect drops the body). CSRF is exempt for the usual webhook reason:
-    the caller is Apple, and the signature on the payload is what authenticates it — nothing here
-    trusts the session, the request body, or anything else the request claims about itself.
-
-    Status codes are chosen around Apple's retry behaviour: only a 2xx stops the retries, so a
-    payload we couldn't process must not return one.
+    No trailing slash (APPEND_SLASH can't redirect a POST). CSRF-exempt: the signature authenticates.
+    Only a 2xx stops Apple's retries, so an unprocessed payload never returns one.
     """
 
     def post(self, request, *args, **kwargs):
@@ -465,29 +353,22 @@ class AppleServerNotificationView(View):
                 "Apple sent a server-to-server notification but Sign in with Apple is not configured "
                 "here (APPLE_SIGN_IN_BUNDLE_ID / APPLE_SIGN_IN_SERVICES_ID); it cannot be verified."
             )
-            # 503, not 400: nothing is wrong with the notification. Apple retries, so fixing the
-            # configuration recovers whatever was sent in the meantime.
+            # 503: Apple retries, so fixing config recovers what was sent meanwhile.
             return JsonResponse({"error": "not configured"}, status=503)
 
         signed_payload = self._signed_payload(request)
         try:
             handled = process_notification(signed_payload)
         except AppleNotificationError as exc:
-            # Either not from Apple or not for us. Logged rather than raised: this endpoint is public
-            # and a stream of junk POSTs shouldn't be a stream of 500 emails to the admins.
+            # Logged, not raised: junk POSTs shouldn't email admins.
             logger.warning("Rejected an Apple server-to-server notification: %s", exc)
             return JsonResponse({"error": "invalid payload"}, status=400)
-        # Anything else is our bug or our database, and a 500 is what makes Apple send it again.
+        # Anything else is ours; a 500 makes Apple resend.
         return JsonResponse({"handled": handled}, status=200)
 
     @staticmethod
     def _signed_payload(request) -> str:
-        """The signed JWT out of the request body.
-
-        Apple posts ``{"payload": "<jwt>"}`` as JSON. Form encoding and the ``signedPayload`` spelling
-        (which Apple uses for App Store notifications) are accepted too — a wrong guess here would
-        look exactly like a signature failure and be needlessly hard to diagnose.
-        """
+        """The JWT from the body: JSON ``payload``, also form encoding and ``signedPayload``."""
         try:
             body = json.loads(request.body or b"{}")
         except ValueError:
@@ -502,11 +383,7 @@ class AppleServerNotificationView(View):
         return ""
 
     def get(self, request, *args, **kwargs):
-        """A liveness check for whoever is setting this up in the developer portal.
-
-        Apple never GETs this URL, but an admin pasting it into a browser will, and "405 Method Not
-        Allowed" reads like a broken endpoint. Says nothing an unauthenticated caller shouldn't know.
-        """
+        """A liveness page for an admin pasting the URL into a browser."""
         return HttpResponse(
             "ok" if notifications_configured() else "Sign in with Apple is not configured",
             content_type="text/plain",

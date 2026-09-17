@@ -59,7 +59,7 @@ class PayPalWebhookViewTests(TestCase):
         self.assertIn(b"webhook not configured", response.content)
 
     def test_missing_webhook_id_config_no_attr_returns_400(self):
-        """Webhook is rejected when PAYPAL_WEBHOOK_ID attribute is absent from settings"""
+        """The webhook is rejected when PAYPAL_WEBHOOK_ID is absent from settings."""
         with self.settings():
             # Remove attribute if present
             from django.conf import settings as djsettings
@@ -217,7 +217,7 @@ class PayPalWebhookViewTests(TestCase):
 
     @patch_views("requests.post")
     def test_successful_verification_returns_200(self, mock_post):
-        """Webhook returns 200 when PayPal verification succeeds for unhandled event type"""
+        """An unhandled event type returns 200 once verification succeeds."""
         from unittest.mock import MagicMock
 
         # First call: access token
@@ -268,7 +268,7 @@ class PayPalWebhookViewTests(TestCase):
         ):
             self._post_webhook()
 
-        # Check the second call (verify endpoint) was made with the right payload
+        # The verify call is the second one.
         verify_call = mock_post.call_args_list[1]
         self.assertIn("timeout", verify_call.kwargs)
         sent_payload = verify_call.kwargs.get("json") or verify_call[1].get("json")
@@ -276,7 +276,7 @@ class PayPalWebhookViewTests(TestCase):
 
 
 class PayPalWebhookEventHandlerTests(StandardTestCase):
-    """Tests for PayPalWebhookView event processing after successful signature verification"""
+    """PayPalWebhookView event processing after signature verification."""
 
     PAYPAL_SETTINGS = {
         "PAYPAL_WEBHOOK_ID": "WH-TESTID",
@@ -326,7 +326,7 @@ class PayPalWebhookEventHandlerTests(StandardTestCase):
                 )
 
     def test_onboarding_completed_creates_paypal_seller(self):
-        """MERCHANT.ONBOARDING.COMPLETED webhook creates/updates PayPalSeller via tracking_id"""
+        """MERCHANT.ONBOARDING.COMPLETED creates or updates a PayPalSeller via tracking_id."""
         tracking_id = str(self.admin_user.userdata.unsubscribe_link)
         new_merchant_id = "NEW-MERCHANT-456"
         event = {
@@ -371,7 +371,7 @@ class PayPalWebhookEventHandlerTests(StandardTestCase):
         self.assertFalse(PayPalSeller.objects.filter(paypal_merchant_id="MERCHANT-ID-123").exists())
 
     def test_consent_revoked_unknown_merchant_returns_200(self):
-        """MERCHANT.PARTNER-CONSENT.REVOKED with unknown merchant returns 200 without error"""
+        """MERCHANT.PARTNER-CONSENT.REVOKED for an unknown merchant returns 200."""
         event = {
             "id": "WH-REVOKED-UNKNOWN",
             "event_type": "MERCHANT.PARTNER-CONSENT.REVOKED",
@@ -425,12 +425,7 @@ class PayPalWebhookEventHandlerTests(StandardTestCase):
         self.assertEqual(payment.amount, Decimal("37.50"))
 
     def test_rounded_paypal_payment_marks_invoice_paid_and_zeroes_balance(self):
-        """With invoice rounding on, paying the rounded balance must settle to PAID / $0.00.
-
-        A fractional balance paid at the rounded amount leaves a sub-dollar residual on
-        net_after_payments; the PAID check must use the rounded balance so the invoice still settles.
-        This would fail under the old `net_after_payments >= 0` check (it would stay UNPAID).
-        """
+        """With rounding on, paying the rounded balance settles the invoice to PAID despite the residual."""
         from decimal import Decimal
 
         from auctions.models import InvoicePayment
@@ -442,7 +437,7 @@ class PayPalWebhookEventHandlerTests(StandardTestCase):
             pickup_location=self.location,
         )
         invoice, _ = Invoice.objects.get_or_create(auctiontos_user=tos)
-        # $20 owed, less a $0.40 partial payment, leaves a fractional $19.60 balance → rounds to $19.00.
+        # $20 owed less $0.40 leaves $19.60, rounding to $19.00.
         InvoiceAdjustment.objects.create(adjustment_type="ADD", amount=20, notes="t", invoice=invoice)
         InvoicePayment.objects.create(
             invoice=invoice, payment_method="Cash", amount=Decimal("0.40"), currency=invoice.currency
@@ -483,7 +478,7 @@ class PayPalWebhookEventHandlerTests(StandardTestCase):
         self.assertEqual(invoice.rounded_net_after_payments, Decimal("0.00"))  # balance due shows 0.00
 
     def test_checkout_order_completed_non_completed_status_is_ignored(self):
-        """CHECKOUT.ORDER.COMPLETED with non-COMPLETED status does not create a payment"""
+        """CHECKOUT.ORDER.COMPLETED with a non-COMPLETED status creates no payment."""
         from auctions.models import InvoicePayment
 
         invoice = self.invoiceB
@@ -512,11 +507,8 @@ class PayPalWebhookEventHandlerTests(StandardTestCase):
 
 
 class RefundWebhookIdempotencyTests(StandardTestCase):
-    """Refund webhooks are redelivered/re-fired by both PayPal and Square, so the refundable
-    balance must move only once per refund.
-
-    Regression: amount_available_to_refund was decremented on every webhook delivery, so a
-    duplicate delivery of the same refund permanently shrank the refundable amount.
+    """Refund webhooks are redelivered by both PayPal and Square, so the refundable balance must move once
+    per refund; it used to be decremented on every delivery.
     """
 
     PAYPAL_SETTINGS = {
@@ -537,7 +529,7 @@ class RefundWebhookIdempotencyTests(StandardTestCase):
         }
 
     def _post_verified_webhook(self, event_data):
-        """Post a PayPal webhook with mocked token fetch and signature verification (always passes)."""
+        """Post a PayPal webhook with the token fetch and signature verification mocked."""
         token_mock = MagicMock()
         token_mock.json.return_value = {"access_token": "test-token"}
         token_mock.raise_for_status.return_value = None
@@ -601,8 +593,7 @@ class RefundWebhookIdempotencyTests(StandardTestCase):
         }
 
     def _post_square(self, event):
-        # The env sets a real SQUARE_WEBHOOK_SIGNATURE_KEY; clear it (as the other Square webhook
-        # tests do) so signature verification is skipped for these posts.
+        # The env sets a real signature key; clear it so verification is skipped.
         with override_settings(SQUARE_WEBHOOK_SIGNATURE_KEY="", DEBUG=True):
             return self.client.post(reverse("square_webhook"), data=json.dumps(event), content_type="application/json")
 
@@ -612,7 +603,7 @@ class RefundWebhookIdempotencyTests(StandardTestCase):
         payment = self._make_payment(capture_id, "40.00", "PayPal")
         event = self._paypal_refund_event(refund_id, capture_id, "15.00")
 
-        # First delivery decrements the refundable balance by the refund amount.
+        # The first delivery decrements the refundable balance.
         self.assertEqual(self._post_verified_webhook(event).status_code, 200)
         payment.refresh_from_db()
         self.assertEqual(payment.amount_available_to_refund, Decimal("25.00"))
@@ -634,7 +625,7 @@ class RefundWebhookIdempotencyTests(StandardTestCase):
         payment.refresh_from_db()
         self.assertEqual(payment.amount_available_to_refund, Decimal("30.00"))
 
-        # A later delivery raises the refund from $10 to $18; the balance moves only by the $8 delta.
+        # A later delivery raises the refund to $18; the balance moves by the $8 delta.
         self.assertEqual(
             self._post_verified_webhook(self._paypal_refund_event(refund_id, capture_id, "18.00")).status_code, 200
         )
@@ -644,9 +635,8 @@ class RefundWebhookIdempotencyTests(StandardTestCase):
         self.assertEqual(InvoicePayment.objects.get(external_id=refund_id).amount, Decimal("-18.00"))
 
     def test_paypal_refund_on_paid_club_invoice_keeps_ledger_frozen(self):
-        # Item 9 freeze end-to-end: a refund webhook on a settled (PAID) club invoice still
-        # records the refund (negative InvoicePayment + reduced refundable balance) but must not
-        # re-derive the invoice's settled total or re-book the club ledger from current settings.
+        # A refund on a settled invoice records the refund but doesn't re-derive its total or
+        # re-book the ledger.
         club = Club.objects.create(name="Refund Freeze Club", enable_membership=True)
         self.online_auction.club = club
         self.online_auction.save(update_fields=["club"])
@@ -665,11 +655,11 @@ class RefundWebhookIdempotencyTests(StandardTestCase):
         self.assertEqual(
             self._post_verified_webhook(self._paypal_refund_event(refund_id, capture_id, "15.00")).status_code, 200
         )
-        # The refund itself flows through: refundable balance drops once, refund row exists.
+        # The refund flows through: the balance drops once and the row exists.
         payment.refresh_from_db()
         self.assertEqual(payment.amount_available_to_refund, Decimal("25.00"))
         self.assertTrue(InvoicePayment.objects.filter(external_id=refund_id, amount=Decimal("-15.00")).exists())
-        # The freeze: the settled total and every booked ledger row are unchanged.
+        # The freeze: the settled total and booked rows are unchanged.
         self.invoiceB.refresh_from_db()
         self.assertEqual(self.invoiceB.calculated_total, frozen_total)
         current_rows = sorted(ClubMoney.objects.filter(invoice=self.invoiceB).values_list("pk", "amount", "category"))
@@ -685,7 +675,7 @@ class RefundWebhookIdempotencyTests(StandardTestCase):
         payment.refresh_from_db()
         self.assertEqual(payment.amount_available_to_refund, Decimal("30.00"))
 
-        # Square re-fires the same refund (refund.updated retries / follow-up events); no double decrement.
+        # Square re-fires the same refund; no double decrement.
         self.assertEqual(self._post_square(event).status_code, 200)
         payment.refresh_from_db()
         self.assertEqual(payment.amount_available_to_refund, Decimal("30.00"))
@@ -700,7 +690,7 @@ class RefundWebhookIdempotencyTests(StandardTestCase):
         payment.refresh_from_db()
         self.assertEqual(payment.amount_available_to_refund, Decimal("40.00"))
 
-        # A later delivery raises the refund from $10 to $12; the balance moves only by the $2 delta.
+        # A later delivery raises it to $12; the balance moves by the $2 delta.
         self.assertEqual(self._post_square(self._square_refund_event(refund_id, payment_id, 1200)).status_code, 200)
         payment.refresh_from_db()
         self.assertEqual(payment.amount_available_to_refund, Decimal("38.00"))
@@ -708,12 +698,10 @@ class RefundWebhookIdempotencyTests(StandardTestCase):
 
 
 class SquarePaymentUpdatedRefundResurrectionTests(StandardTestCase):
-    """Square fires payment.updated for many lifecycle changes. A later payment.updated for an
-    already-recorded payment must never restore refundability that refunds have already consumed.
+    """A later payment.updated must not restore refundability that refunds have consumed.
 
-    Regression: the handler reset amount_available_to_refund to the full payment amount whenever it
-    was currently 0, so a fully-refunded payment became "refundable" again after any later
-    payment.updated event, allowing a second full refund (double refund).
+    The handler reset amount_available_to_refund whenever it was 0, so a fully refunded payment became
+    refundable again and could be refunded twice.
     """
 
     MERCHANT_ID = "MLF3WZS2N9WVG"
@@ -721,8 +709,7 @@ class SquarePaymentUpdatedRefundResurrectionTests(StandardTestCase):
     def setUp(self):
         super().setUp()
 
-        # The COMPLETED branch of payment.updated looks up a SquareSeller by merchant_id and
-        # resolves the invoice via the order's reference_id.
+        # The COMPLETED branch looks up a SquareSeller by merchant_id and the invoice by reference_id.
         self.square_seller = SquareSeller.objects.create(
             user=self.admin_user,
             square_merchant_id=self.MERCHANT_ID,
@@ -774,9 +761,7 @@ class SquarePaymentUpdatedRefundResurrectionTests(StandardTestCase):
         }
 
     def _post_payment_updated(self, payment_id, order_id, amount_cents, reference_id=None, status="COMPLETED"):
-        """Build and post a payment.updated webhook, mocking the Square order lookup to return
-        reference_id (our invoice pk, defaulting to invoiceB) and skipping signature verification.
-        """
+        """Build and post a payment.updated webhook, mocking the order lookup and skipping verification."""
 
         if reference_id is None:
             reference_id = self.invoiceB.pk
@@ -803,7 +788,7 @@ class SquarePaymentUpdatedRefundResurrectionTests(StandardTestCase):
         order_id = "SQ-ORDER-RESURRECT"
         refund_id = "SQ-REFUND-RESURRECT"
 
-        # A first payment.updated records the payment ($30 available to refund).
+        # A first payment.updated records the payment, with $30 refundable.
         self.assertEqual(self._post_payment_updated(payment_id, order_id, 3000).status_code, 200)
         payment = InvoicePayment.objects.get(external_id=payment_id)
         self.assertEqual(payment.amount, Decimal("30.00"))
@@ -814,11 +799,11 @@ class SquarePaymentUpdatedRefundResurrectionTests(StandardTestCase):
         payment.refresh_from_db()
         self.assertEqual(payment.amount_available_to_refund, Decimal("0.00"))
 
-        # A later/duplicate payment.updated for the same payment must NOT resurrect refundability.
+        # A duplicate must not resurrect refundability.
         self.assertEqual(self._post_payment_updated(payment_id, order_id, 3000).status_code, 200)
         payment.refresh_from_db()
         self.assertEqual(payment.amount_available_to_refund, Decimal("0.00"))
-        # The payment amount itself is unchanged, and no duplicate payment row was created.
+        # The amount is unchanged and no duplicate row was created.
         self.assertEqual(payment.amount, Decimal("30.00"))
         self.assertEqual(InvoicePayment.objects.filter(external_id=payment_id).count(), 1)
 
@@ -839,14 +824,13 @@ class SquarePaymentUpdatedRefundResurrectionTests(StandardTestCase):
         order_id = "SQ-ORDER-DELTA"
         refund_id = "SQ-REFUND-DELTA"
 
-        # Record a $30 payment, then partially refund $10 (leaving $20 available).
+        # Record $30, then refund $10, leaving $20.
         self.assertEqual(self._post_payment_updated(payment_id, order_id, 3000).status_code, 200)
         self.assertEqual(self._post_refund(self._square_refund_event(refund_id, payment_id, 1000)).status_code, 200)
         payment = InvoicePayment.objects.get(external_id=payment_id)
         self.assertEqual(payment.amount_available_to_refund, Decimal("20.00"))
 
-        # A later payment.updated raises the captured amount to $35; the refundable balance moves by
-        # the $5 delta (to $25), rather than being reset to the full amount.
+        # A later payment.updated raising the capture to $35 moves the balance by the $5 delta.
         self.assertEqual(self._post_payment_updated(payment_id, order_id, 3500).status_code, 200)
         payment.refresh_from_db()
         self.assertEqual(payment.amount, Decimal("35.00"))
@@ -903,7 +887,7 @@ class PayPalCSVExportTests(StandardTestCase):
         self.assertEqual(row[2], "Doe")
 
     def test_middle_name_dropped(self):
-        """Three-word name: first word → first name, last word → last name, middle dropped"""
+        """A three-word name: first and last words are the names, the middle is dropped."""
         self._create_tos_with_lot("John Middle Doe", "middle@example.com")
         rows = self._get_csv_rows()
         row = self._row_for_email(rows, "middle@example.com")

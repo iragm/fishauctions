@@ -1,26 +1,20 @@
 """Printing from a computer to the phone's Bluetooth label printer.
 
-The user is signed in on a desktop, the app is open on their phone, they press print on the website,
-and the labels come out of the phone's printer. If the phone can't be reached, the *computer* says
-so and offers to try again, print a PDF instead, or cancel.
+The user presses print on the website and the labels come out of the phone's printer; if the phone
+can't be reached, the computer says so and offers to try again, print a PDF, or cancel.
 
 Everything here is shaped by one fact: **there is no reliable way to make a phone print on demand
-from a server.** Android forbids starting an Activity from the background (API 29+), and a
-high-priority data message wakes a headless isolate that has none of the shell's BLE state; iOS
-silent pushes are rate-limited, best-effort, and dropped entirely once the app is force-quit, and
-CoreBluetooth in the background does not survive a terminated app either. So this does not fire a
-push into the void and wait out a timeout. It *measures* whether the phone is awake
-(``MobileDevice.print_ready`` + a heartbeat, see :func:`heartbeat`) and tells the user the truth
-either way -- including before the push, so a job with no phone to go to is ``unreachable`` on the
-page that opens rather than twenty seconds later. What it never does is quietly do something else
-instead: the preference decides the page, the heartbeat decides what the page says.
+from a server.** Android forbids starting an Activity from the background and a data message wakes a
+headless isolate with none of the shell's BLE state; iOS silent pushes are rate-limited,
+best-effort, and dropped once the app is force-quit. So this doesn't fire a push into the void and
+wait out a timeout: it measures whether the phone is awake (``MobileDevice.print_ready`` plus a
+heartbeat, see :func:`heartbeat`) and says so, including before the push. What it never does is
+quietly do something else instead -- the preference decides the page, the heartbeat decides what the
+page says.
 
-The division of labour, because it is not obvious from any one function:
-
-* the **app** owns the failure vocabulary — it posts the text it would have shown in its own
-  snackbar and the website shows that verbatim;
-* the **server** owns the presence rule and the job record;
-* the **waiting page** owns nothing but polling, so the same job can be watched from two tabs.
+The division of labour: the **app** owns the failure vocabulary (the website shows its text
+verbatim), the **server** owns the presence rule and the job record, and the **waiting page** owns
+nothing but polling, so one job can be watched from two tabs.
 """
 
 import logging
@@ -33,27 +27,22 @@ from auctions.notifications import SEND_OK, send_fcm_data_message
 
 logger = logging.getLogger(__name__)
 
-# One push carries the lot pks as a comma string (FCM data values are strings), so a very large batch
-# would make an oversized message. FCM's own limit is 4 KB of data; this keeps a comfortable margin
-# and matches the deep-link path's cap, which is the same batch coming out of the same printer.
+# One push carries the lot pks as a comma string, and FCM's limit is 4 KB of data. This keeps a
+# margin and matches the deep-link path's cap, which is the same batch out of the same printer.
 MAX_LOTS_PER_JOB = 300
 
 
 def heartbeat(user, device_uuid, *, print_ready=False, printer_name="", print_method=""):
-    """Record one "I'm awake" beat from the app. Returns the device, or None if it isn't registered.
+    """Record one "I'm awake" beat from the app; returns the device, or None if it isn't registered.
 
-    Scoped to the calling user: a heartbeat can only ever touch a device row that already belongs to
-    them, so one account cannot mark another's phone reachable.
+    Scoped to the calling user, so one account can't mark another's phone reachable.
 
-    ``ever_print_ready`` only ever goes True. It is what decides whether /printing/ offers the
-    checkbox at all, and that question is "does this account have a phone that could do this",
-    which does not become False again because the printer happens to be switched off this morning.
+    ``ever_print_ready`` only ever goes True: it decides whether /printing/ offers the checkbox at all,
+    and that question doesn't become False because the printer is switched off this morning.
 
-    ``print_method`` is accepted and deliberately not stored. The app sends what the phone is set to,
-    but ``print_ready`` is the app's own "a printer is paired and its profile resolves" and must not
-    be re-derived from a preference — a user can have Bluetooth selected on an account whose phone
-    has nothing paired, and believing the preference there would promise a print that fails. The
-    canonical copy of the preference is ``UserLabelPrefs``, which the app already syncs separately.
+    ``print_method`` is accepted and deliberately not stored: ``print_ready`` is the app's own "a
+    printer is paired and its profile resolves", and believing a preference instead would promise a
+    print that fails. ``UserLabelPrefs`` is the canonical copy.
     """
     device = MobileDevice.objects.filter(device_uuid=device_uuid, user=user).first()
     if device is None:
@@ -72,16 +61,12 @@ def heartbeat(user, device_uuid, *, print_ready=False, printer_name="", print_me
 def wants_print_from_computer(user):
     """Is this user's ``print_from_computer`` preference on? Says nothing about the phone.
 
-    This is what decides *which page* a print goes to, and it is deliberately only half the
-    question -- ``MobileDevice.reachable_printers_for`` is the other half, "will it work right now",
-    and that one is asked by :func:`create_job` when it looks for a phone to push to and answered on
-    the page rather than in this branch.
+    This decides which page a print goes to; ``MobileDevice.reachable_printers_for`` is the other half,
+    asked by :func:`create_job` and answered on the page.
 
-    Somebody who has asked for their labels to come out of the printer next to their phone has asked
-    for that whether or not the app happens to be open this second, and silently handing them a PDF
-    instead is the site doing something else without saying so — they find out when no labels
-    appear. They get the same page either way now, and it tells them the truth: open the app, then
-    Try again, with the PDF still one button away for whoever wants it.
+    Somebody who asked for labels from the printer next to their phone asked for that whether or not the
+    app is open this second, and silently handing them a PDF is the site doing something else without
+    saying so. They get the same page either way, with the PDF one button away.
     """
     from auctions.models import UserLabelPrefs
 
@@ -94,9 +79,8 @@ def wants_print_from_computer(user):
 def create_job(user, lot_pks, device=None):
     """Create a job for *lot_pks* (already in print order) and return it, unpushed.
 
-    Kept separate from :func:`dispatch` so a retry can reuse the lot list without re-deriving it from
-    a queryset that may have changed underneath (a lot sold in the meantime would silently shorten
-    the batch, and the person is standing at the printer expecting the same labels).
+    Separate from :func:`dispatch` so a retry reuses the lot list rather than re-deriving it from a
+    queryset that may have changed: a lot sold since would silently shorten the batch.
     """
     lot_pks = list(lot_pks)[:MAX_LOTS_PER_JOB]
     if device is None:
@@ -111,12 +95,10 @@ def create_job(user, lot_pks, device=None):
 
 
 def dispatch(job):
-    """Push *job* to its phone. Sets ``sent`` or, on a failure already known, ``unreachable``.
+    """Push *job* to its phone; sets ``sent``, or ``unreachable`` on a failure already known.
 
-    A missing device, a missing token or an FCM error is ``unreachable`` **immediately** rather than
-    something the page waits twenty seconds to discover: the answer is already known, and making the
-    user watch a spinner for a failure we could name at once is the thing this whole design exists to
-    avoid.
+    A missing device, token or FCM error is ``unreachable`` immediately rather than something the page
+    waits twenty seconds to discover.
     """
     token = (job.device.fcm_token or "") if job.device else ""
     if not token:
@@ -151,10 +133,8 @@ def start(user, lot_pks):
 def job_state(job):
     """The polled payload, applying the silence rule as it reads.
 
-    The 20-second rule is applied *here* rather than in the page's JavaScript so that two tabs
-    watching the same job agree, and so "unreachable" is a fact recorded on the row rather than a
-    thing one browser decided. A job that later reports anyway is allowed to move back out of it —
-    the phone demonstrably was reachable, and the truth is worth more than the earlier guess.
+    The 20-second rule is applied here rather than in the page's JavaScript, so two tabs agree and
+    "unreachable" is a fact on the row. A job that reports anyway moves back out of it.
     """
     if job.has_gone_quiet:
         job.status = RemotePrintJob.STATUS_UNREACHABLE

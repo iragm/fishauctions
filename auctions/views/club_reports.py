@@ -48,6 +48,7 @@ from auctions.models import (
     Invoice,
     normalize_email,
 )
+from auctions.services import attachment_filename
 from auctions.tables import (
     ClubHistoryHTMxTable,
 )
@@ -275,14 +276,9 @@ class ClubTreasurerReportView(LoginRequiredMixin, ClubViewMixin, TemplateView):
     def _outstanding_invoices(self, start_date, end_date):
         """Auction invoices from the period that still owe the club money.
 
-        An invoice is only outstanding when, after applying every recorded payment, the
-        member still owes the club (a negative balance). The previous implementation
-        looked at ``calculated_total`` alone — the invoice total *before* payments — so an
-        invoice that had been paid (in full or in part) but not yet flipped to ``PAID``
-        was reported as outstanding even though nothing was owed. Comparing the stored
-        total against recorded payments fixes that over-count.
-
-        Returns a dict with the number of such invoices and the total still owed.
+        Outstanding means the member still owes after every recorded payment, not that the invoice has
+        not been flipped to ``PAID``: comparing ``calculated_total`` alone counted a paid invoice as
+        outstanding. Returns how many there are and how much is owed.
         """
         from django.db.models import DecimalField
         from django.db.models.functions import Coalesce
@@ -313,9 +309,8 @@ class ClubTreasurerReportView(LoginRequiredMixin, ClubViewMixin, TemplateView):
         return {"count": count, "amount": amount_owed}
 
     def _report_summary(self, entries, start_date, end_date):
-        # money_in / money_out are the raw cash flow for the period; everything else is a
-        # breakdown of where it came from. Each figure below is a sum over ledger entries,
-        # so they always reconcile to the running balance.
+        # money_in / money_out are the period's raw cash flow; everything below breaks down where
+        # it came from. Each figure sums ledger entries, so they reconcile to the running balance.
         money_in = sum((entry.amount for entry in entries if entry.amount > 0), Decimal("0.00"))
         money_out = abs(sum((entry.amount for entry in entries if entry.amount < 0), Decimal("0.00")))
         auction_sales = self._money_sum(entries, category=ClubMoney.CATEGORY_AUCTION_SALE)
@@ -394,7 +389,8 @@ class ClubTreasurerReportExportView(LoginRequiredMixin, ClubViewMixin, View):
         start_date = form.cleaned_data["start_date"] or timezone.localdate().replace(day=1)
         end_date = form.cleaned_data["end_date"] or timezone.localdate()
         response = HttpResponse(content_type="text/csv")
-        response["Content-Disposition"] = f'attachment; filename="{self.club.slug}-treasurer-report.csv"'
+        filename = attachment_filename(f"{self.club.slug}-treasurer-report")
+        response["Content-Disposition"] = f'attachment; filename="{filename}.csv"'
         writer = csv.writer(response)
         writer.writerow(["date", "amount", "description", "category"])
         for entry in ClubMoney.objects.filter(club=self.club, date__range=(start_date, end_date)).order_by(
@@ -414,8 +410,7 @@ class ClubMoneyCreateView(LoginRequiredMixin, ClubViewMixin, View):
         return super().dispatch(request, *args, **kwargs)
 
     def post(self, request, *args, **kwargs):
-        # Reject the invoice-reconciled categories and the balance adjustment: a hand-entered
-        # auto category would be undone the next time the owning invoice is reconciled.
+        # A hand-entered auto category would be undone the next time its invoice is reconciled.
         blocked = set(ClubMoney.AUTO_CATEGORIES) | {ClubMoney.CATEGORY_ADJUSTMENT}
         category_choices = [choice for choice in ClubMoney.CATEGORY_CHOICES if choice[0] not in blocked]
         form = ClubMoneyForm(request.POST, category_choices=category_choices)
@@ -558,7 +553,7 @@ class ClubMemberCSVImportView(LoginRequiredMixin, CSVContactImportMixin, ClubVie
         return date_type.fromisoformat(value) if value else None
 
     def _parse_member_row(self, row):
-        """Extract + normalize one CSV row into the member fields dict (dates as ISO strings for caching)."""
+        """Extract and normalize one CSV row into the member fields dict; dates as ISO strings, for caching."""
         first_name = self.extract_csv_field(row, self.FIRST_NAME_FIELD_NAMES)
         last_name = self.extract_csv_field(row, self.LAST_NAME_FIELD_NAMES)
         if first_name or last_name:
@@ -648,8 +643,9 @@ class ClubMemberCSVImportView(LoginRequiredMixin, CSVContactImportMixin, ClubVie
         return member
 
     def _update_member(self, member, fields):
-        """Apply CSV fields onto an existing member. Only overwrites with non-empty values so a merge of a
-        sparse walk-in row never blanks existing contact details."""
+        """Apply CSV fields to an existing member. Only non-empty values overwrite, so merging a sparse
+        walk-in row never blanks contact details that are already there.
+        """
         # An admin importing their roster owns these rows now; the account-deletion rules follow.
         member.admin_edited = True
         if fields.get("name"):
@@ -737,10 +733,11 @@ class ClubMemberCSVExportView(LoginRequiredMixin, ClubViewMixin, View):
         from auctions.filters import ClubMemberFilter
 
         response = HttpResponse(content_type="text/csv")
-        response["Content-Disposition"] = f'attachment; filename="{self.club.slug}-members.csv"'
+        filename = attachment_filename(f"{self.club.slug}-members")
+        response["Content-Disposition"] = f'attachment; filename="{filename}.csv"'
         writer = csv.writer(response)
-        # Omit the Membership Number column entirely when the club has the
-        # feature disabled — user asked for "no UI" referencing those numbers.
+        # The column is omitted entirely when the club has membership numbers off: nothing in the
+        # UI may reference a number that isn't in use.
         include_membership_number = self.club.show_member_barcode
         header = [
             "Name",

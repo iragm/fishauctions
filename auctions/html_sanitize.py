@@ -1,34 +1,29 @@
 """Sanitizing the rich text people paste into Summernote.
 
-Auction rules, lot descriptions and blog posts are all edited in Summernote, which means the HTML
-reaching the database is whatever the browser -- or whatever the person pasted -- produced. This
-strips it down to the formatting the site actually renders.
+Auction rules, lot descriptions and blog posts are all edited in Summernote, so the HTML reaching the
+database is whatever the browser -- or whatever was pasted -- produced. This strips it to the
+formatting the site renders.
 
-The tag rule is an **allowlist**, not a blocklist, because a blocklist cannot be complete: `<svg>`
-and `<math>` open a foreign parsing context that browsers handle differently from HTML, which is the
-basis of mutation-XSS, and new elements keep arriving. A disallowed tag is unwrapped so its text
-survives; a disallowed tag on ``UNSAFE_SUMMERNOTE_TAGS`` is removed with everything inside it,
-because its contents are code, foreign content, or a raw-text context rather than words.
+The tag rule is an **allowlist**, because a blocklist cannot be complete: `<svg>` and `<math>` open a
+foreign parsing context browsers handle differently from HTML, which is the basis of mutation-XSS,
+and new elements keep arriving. A disallowed tag is unwrapped so its text survives; one on
+``UNSAFE_SUMMERNOTE_TAGS`` is removed with its contents, which are code or foreign content.
 
-Attribute rules: every ``on*`` handler goes; the URI-bearing attributes are checked for script and
-local-file schemes with the whitespace attackers use to split them stripped first; ``color`` and
-``background-color`` go because the site picks its own colours; anything with ``url()`` in it goes
-so stored content cannot fetch from elsewhere.
+Attributes: every ``on*`` handler goes; URI-bearing attributes are checked for script and local-file
+schemes with the whitespace attackers use to split them stripped first; ``color`` and
+``background-color`` go because the site picks its own colours; anything with ``url()`` goes so
+stored content cannot fetch from elsewhere.
 
-Lives here rather than in ``models.py`` because it has no model dependencies and both
-``models.py`` and ``forms.py`` import it -- one small module either of them can pull in, instead of
-a sanitiser buried among eighty models.
+Here rather than in ``models.py`` because it has no model dependencies and both ``models.py`` and
+``forms.py`` import it.
 """
 
 import re
 
 from bs4 import BeautifulSoup
 
-# Tags Summernote legitimately emits for rich-text formatting. Anything not on this
-# allowlist is stripped. An allowlist (unlike the previous fixed blocklist) can't be
-# bypassed by novel or foreign elements -- e.g. <svg>/<math>, which open a foreign
-# parsing context that browsers use for mutation-XSS and which no blocklist enumerates
-# completely.
+# Tags Summernote legitimately emits. Anything else is stripped; an allowlist can't be bypassed by
+# novel or foreign elements the way the old blocklist could.
 ALLOWED_SUMMERNOTE_TAGS = frozenset(
     {
         "a", "abbr", "b", "blockquote", "br", "caption", "cite", "code", "col",
@@ -40,10 +35,9 @@ ALLOWED_SUMMERNOTE_TAGS = frozenset(
     }
 )  # fmt: skip
 
-# Disallowed tags whose *contents* must also be dropped (not just the tag itself): these
-# carry executable code, foreign (SVG/MathML) or embedded/external content, or raw-text
-# parsing contexts that mutation-XSS relies on. Any other disallowed tag is unwrapped so
-# its plain text survives.
+# Disallowed tags whose *contents* go too: executable code, foreign (SVG/MathML) or embedded
+# content, and raw-text parsing contexts mutation-XSS relies on. Any other disallowed tag is
+# unwrapped so its text survives.
 UNSAFE_SUMMERNOTE_TAGS = frozenset(
     {
         "applet", "audio", "base", "canvas", "embed", "form", "frame", "frameset",
@@ -63,10 +57,8 @@ def sanitize_summernote_html(text):
 
     soup = BeautifulSoup(text, "html.parser")
 
-    # Enforce the tag allowlist. ``find_all(True)`` yields tags in document order (parents
-    # before children), so decomposing a parent marks its descendants ``decomposed`` and we
-    # skip them below. Executable/foreign tags are removed with their subtree; any other
-    # unexpected tag is unwrapped so its text content is preserved.
+    # Enforce the tag allowlist. ``find_all(True)`` yields tags in document order, so decomposing a
+    # parent marks its descendants ``decomposed`` and they are skipped below.
     for tag in soup.find_all(True):
         if getattr(tag, "decomposed", False):
             continue
@@ -84,14 +76,14 @@ def sanitize_summernote_html(text):
             if normalized_attr.startswith("on"):
                 del tag[attr_name]
                 continue
-            # These are the URI-bearing attributes we allow in Summernote content.
+            # The URI-bearing attributes allowed in Summernote content.
             if normalized_attr in {"href", "src", "xlink:href"}:
-                # Some parsers represent multi-valued attributes as lists, so normalize both cases.
+                # Some parsers represent multi-valued attributes as lists.
                 values = attr_value if isinstance(attr_value, list) else [attr_value]
                 if any(
                     isinstance(value, str)
-                    # Block URI schemes commonly used for script execution or local file access in user HTML,
-                    # even when attackers split the scheme name with ASCII whitespace/control characters.
+                    # Schemes used for script execution or local file access, even when the scheme
+                    # name is split with whitespace or control characters.
                     and re.match(
                         r"^(?:data|file|javascript|vbscript):",
                         re.sub(r"[\x00-\x20\x7f]+", "", value),
@@ -106,8 +98,7 @@ def sanitize_summernote_html(text):
         if tag.has_attr("color"):
             del tag["color"]
 
-    # Clean style attributes: remove color/background-color (unwanted formatting) and any
-    # property containing url() which could load external resources.
+    # Clean style attributes: remove color and background-color, and any property containing url().
     for tag in soup.find_all(style=True):
         styles = tag["style"].split(";")
         cleaned_styles = []
@@ -131,5 +122,5 @@ def sanitize_summernote_html(text):
 
 
 def remove_html_color_tags(text):
-    """Compatibility wrapper for legacy callers that now performs full Summernote sanitization."""
+    """Compatibility wrapper for legacy callers; performs full Summernote sanitization."""
     return sanitize_summernote_html(text)

@@ -1,19 +1,17 @@
 """Queryset builders that answer a question about many rows at once.
 
-Three functions that take a queryset and give back the same queryset with the answers already in
-it. They exist so that a page showing a hundred people or a hundred lots asks the database once
-rather than once per row -- which is the same reason ``AuctionTOS.annotate_lot_counts`` exists next
-to the model it annotates.
+Three functions that take a queryset and give it back with the answers already in it, so a page
+showing a hundred people or a hundred lots asks the database once rather than once per row -- the
+same reason ``AuctionTOS.annotate_lot_counts`` sits next to the model it annotates.
 
-* ``nearby_auctions`` -- auctions with a pickup location within *distance* of a point, ordered
-  nearest first, with the ignore/already-joined filtering a signed-in user expects.
-* ``add_tos_info`` -- everything the users table and the club API say about a person in an auction:
-  what they bought and sold, whether they have bid, whether an admin has banned them.
+* ``nearby_auctions`` -- auctions with a pickup location within *distance* of a point, nearest
+  first, with the ignore/already-joined filtering a signed-in user expects.
+* ``add_tos_info`` -- what the users table and the club API say about a person in an auction: what
+  they bought and sold, whether they have bid, whether an admin has banned them.
 * ``add_tos_distance_info`` -- how far each of those people travelled to their pickup location.
 
-They live outside ``models.py`` because none of them is reached from inside it, and that direction
-of dependency is the whole arrangement: this module imports models, models does not import this,
-and there is no cycle to manage.
+Outside ``models.py`` because nothing inside it reaches these, and that direction is the whole
+arrangement: this imports models, models does not import this, and there is no cycle.
 """
 
 from django.db.models import (
@@ -52,7 +50,7 @@ def nearby_auctions(
     user=None,
     return_slugs=False,
 ):
-    """Return a list of auctions or auction slugs that are within a specified distance of the given location"""
+    """Auctions or auction slugs within a given distance of a location."""
     auctions = []
     slugs = []
     distances = []
@@ -87,9 +85,8 @@ def add_tos_info(qs):
         msg = "must be passed a queryset of the AuctionTOS model"
         raise TypeError(msg)
 
-    # Add has_ever_granted_permission annotation if not already present
-    # This checks if the user has ever joined an auction (manually_added=False)
-    # for the same auction creator
+    # has_ever_granted_permission: whether this user has ever joined an auction of the same
+    # creator's (manually_added=False).
     qs = qs.annotate(
         has_ever_granted_permission=Case(
             When(

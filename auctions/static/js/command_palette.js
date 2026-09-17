@@ -111,12 +111,11 @@
       return postLog({ search: query, result: result || "pending" });
     }
 
-    // Finalize the session when the box is cleared, the palette closes, or the page is left. A
-    // query that ended with no results is recorded as a "bounce" (mined later for missing
-    // shortcuts); otherwise the user looked but didn't pick anything: "abandoned". The row is
-    // already recorded (logged as soon as the query was typed), so even if currentSearchId hasn't
-    // come back yet we still send the final state — without an id the server records a fresh row
-    // rather than dropping the search, which is what used to happen on a quick navigation away.
+    // Finalize when the box is cleared, the palette closes, or the page is left: a query that
+    // ended with no results is a "bounce", otherwise the user looked and didn't pick anything,
+    // which is "abandoned". Sent even if currentSearchId hasn't come back yet -- without an id the
+    // server records a fresh row rather than dropping the search, which is what used to happen on
+    // a quick navigation away.
     function logFinal(query) {
       if (finalized || !query) {
         return;
@@ -415,12 +414,11 @@
         thinkingEl.appendChild(thinkingSteps);
         thinkingEl.appendChild(current);
       }
-      // Re-attach every time, not just on the first call. A debounced search that lands while we
-      // are waiting calls render(), which empties the results container and takes the strip out of
-      // the DOM with it — but this variable still points at the now-detached node, so every later
-      // progress line would update something nobody can see and the palette would look frozen
-      // until the answer arrived. The voice path hits this every single time: the interim
-      // transcript arms a search, the final transcript submits the assist request.
+      // Re-attach every time, not just on the first call. A debounced search landing while we wait
+      // calls render(), which empties the results container and takes the strip out of the DOM with
+      // it -- but this variable still points at the detached node, so every later progress line
+      // would update something nobody can see and the palette would look frozen. The voice path
+      // hits this every time: the interim transcript arms a search, the final one submits.
       if (thinkingEl.parentNode !== results) {
         results.classList.add("cp-dimmed");
         results.insertBefore(thinkingEl, results.firstChild);
@@ -719,9 +717,8 @@
         navigatedByClick = true;
         finalized = true;
         // Say where we're going before going there. Navigating instantly gets the destination right
-        // and still feels like the palette ignored you — by the time the new page paints there has
-        // been nothing on screen that named it, so a wrong guess is indistinguishable from a right
-        // one. The pause is short enough not to be a wait and long enough to be read.
+        // and still feels like the palette ignored you: nothing on screen ever named it, so a wrong
+        // guess is indistinguishable from a right one.
         results.innerHTML = "";
         clearNav();
         results.appendChild(
@@ -781,13 +778,11 @@
       appendReportButton(response);
     }
 
-    // "That didn't work — tell the site owner", under every failure.
-    //
-    // The query that failed is already stored server-side; this only flags the row. It is worth a
-    // button because every other failure signal we have is inferred from behaviour, and this one is
-    // a person deciding it was worth saying so — which makes it the shortest and most useful queue
-    // on the analytics page. Says thank you and stays put rather than closing the box: the failure
-    // is still on screen, and reporting it shouldn't also take away what little we did find.
+    // "That didn't work — tell the site owner", under every failure. The query is already stored
+    // server-side, so this only flags the row. Worth a button because every other failure signal
+    // is inferred from behaviour and this one is a person deciding it was worth saying so, which
+    // makes it the most useful queue on the analytics page. It says thank you and stays put: the
+    // failure is still on screen, and reporting it shouldn't take away what little we did find.
     function appendReportButton(response) {
       if (!reportUrl || !response || !response.usage_id) {
         return;
@@ -868,10 +863,9 @@
     var SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
 
     // Neither of the app's WebViews has the Web Speech API -- iOS WKWebView has never shipped it,
-    // Android's System WebView doesn't carry the recognizer Chrome does, and the shell denies the
-    // WebView's own getUserMedia besides -- so in the app the phone's own recognizer arrives over
-    // the shell's JS bridge instead. Wrapped in the same shape as the browser API so everything
-    // below this line, buildRecognition() included, is unchanged.
+    // Android's System WebView doesn't carry the recognizer Chrome does -- so in the app the
+    // phone's own recognizer arrives over the shell's JS bridge, wrapped in the same shape as the
+    // browser API so everything below this line is unchanged.
     function appBridge() {
       var b = window.flutter_inappwebview;
       return b && b.callHandler ? b : null;
@@ -948,10 +942,9 @@
     var micHint = document.getElementById("command-palette-mic-hint");
     var micHintTimer = null;
 
-    // Whether the mic starts on its own next time the palette opens, remembered from the last time
-    // the user touched the button. localStorage rather than the account: which of your devices has
-    // a microphone you're willing to talk to is a property of the device, not of you -- dictating
-    // commands on a phone shouldn't switch the mic on at a desk in an office.
+    // Whether the mic starts on its own next time the palette opens. localStorage rather than the
+    // account: which of your devices has a microphone you're willing to talk to is a property of
+    // the device, so dictating on a phone shouldn't switch the mic on at a desk in an office.
     var MIC_AUTO_KEY = "cp_mic_auto";
     // How many times we've explained an auto-start. Capped, because the explanation is only news
     // the first couple of times; after that the mic coming on by itself is just how it works.
@@ -1052,10 +1045,9 @@
         "Speech recognition doesn't handle this page's language. You can still type your command.",
     };
 
-    // Two errors are never worth reporting, message or no message: "aborted" is us -- stopListening()
-    // calls stop(), and the ordinary way that happens is the user typing while the mic is on -- and
-    // "no-speech" is a microphone that heard nothing. Putting a red box in front of somebody for
-    // either one would fire on the most common path there is.
+    // Two errors are never worth reporting: "aborted" is us -- stopListening() calls stop(), and
+    // the ordinary way that happens is the user typing while the mic is on -- and "no-speech" is a
+    // microphone that heard nothing. A red box for either fires on the most common path there is.
     var MIC_ERRORS_NOT_WORTH_SAYING = { aborted: true, "no-speech": true };
 
     function micErrorMessage(event) {
@@ -1072,9 +1064,8 @@
     }
 
     // A refused microphone and a broken button look identical unless the reason is on screen, so it
-    // goes at the top of the results pane, where the answer it replaces would have been. Inserted
-    // rather than replacing: anything already listed stays there to be clicked, and the next
-    // keystroke's search empties the box anyway. Only ever one at a time.
+    // goes at the top of the results pane. Inserted rather than replacing: anything already listed
+    // stays there to be clicked, and the next keystroke's search empties the box anyway.
     function showMicError(message) {
       if (!message) {
         return;
@@ -1150,20 +1141,19 @@
     }
 
     // The bridge is asked first, ahead of any feature detection: inside the app the phone's own
-    // recognizer is the right answer whatever the WebView's engine claims to have. Android's System
-    // WebView *defines* webkitSpeechRecognition and cannot use it -- the Blink binding is exposed,
-    // but WebView never wires it to a recognition service, and the shell denies the page's own
-    // microphone request besides -- so taking that branch gives an immediate error from start() and
-    // a mic button that does nothing when tapped. Presence is not capability.
+    // recognizer is the right answer whatever the WebView claims to have. Android's System WebView
+    // *defines* webkitSpeechRecognition and cannot use it -- it never wires the binding to a
+    // recognition service, and the shell denies the page's microphone besides -- so that branch
+    // gives an immediate error from start() and a button that does nothing. Presence is not
+    // capability.
     if (assistEnabled && paletteMic && appBridge()) {
       // The app's answer is async (it asks the OS whether a recognition service exists), so the
-      // button is revealed on the reply rather than synchronously. A build without the handlers
-      // resolves nothing useful and the button stays hidden, exactly as it does in a browser
-      // without the API.
+      // button is revealed on the reply. A build without the handlers resolves nothing useful and
+      // the button stays hidden, as it does in a browser without the API.
       //
-      // Guarded rather than chained straight off the call: this runs before the palette's own event
-      // listeners are attached, so a bridge that answers with something other than a promise must
-      // cost the app a microphone, not a working palette.
+      // Guarded rather than chained straight off the call: this runs before the palette's own
+      // listeners are attached, so a bridge answering with something other than a promise must cost
+      // the app a microphone, not a working palette.
       var dictateState = appBridge().callHandler("dictateGetState");
       if (dictateState && dictateState.then) {
         dictateState

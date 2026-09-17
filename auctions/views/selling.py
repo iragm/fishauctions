@@ -1,8 +1,7 @@
-"""Auction night: setting winners, the lot queue, and the volunteers who help.
+"""Auction night: setting winners, the lot queue, and volunteers.
 
-``DynamicSetLotWinner`` is the page an auctioneer actually stands in front of, and the one the voice
-grammar in :mod:`auctions.voice` drives. The queue views below it decide which lot is up next and
-notify the people watching it.
+``DynamicSetLotWinner`` is the auctioneer's page, driven by :mod:`auctions.voice`. The queue views
+decide which lot is next and notify its watchers.
 """
 
 import logging
@@ -70,30 +69,19 @@ class DynamicSetLotWinner(LoginRequiredMixin, AuctionViewMixin, TemplateView):
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         context["auction"] = self.auction
-        # Don't want notifications to show up on the projector
-        # context['disable_websocket'] = True
-        # Prefill the lot field from the head of the in-person lot queue (if any), so scanning lots
-        # into the queue elsewhere flows straight into selling them here.
+        # Prefill the lot from the head of the in-person queue.
         head_lot = queue_head_lot(self.auction)
         context["queue_head_lot_number"] = head_lot.lot_number_display if head_lot else ""
-        # Voice input (mobile app only — the app listens, this page owns the form). The page gets
-        # the score cutoffs, so that "green" here and "confident" there mean the same thing after
-        # somebody tunes them in the admin; and it gets the grammar and this auction's vocabulary
-        # too, so it can match a transcript itself when the app sends one and no command follows.
-        # See voice.page_config for why that fallback exists.
-        #
-        # Only looked up for the app: the template renders every voice element behind the same
-        # is_mobile_app check, and this page is the busiest thing on the site while an auction is
-        # actually running, so queries nothing on screen can use don't belong in that path.
+        # Voice (app only): score cutoffs, grammar and vocabulary, so the page can match a transcript
+        # itself (voice.page_config). Skipped outside the app: this page is hot during an auction.
         if getattr(self.request, "is_mobile_app", False):
             context["voice_config"] = voice.page_config(self.auction)
         return context
 
     def pop_queue_and_set_next(self, lot, result):
-        """Drop the just-sold/ended lot from the in-person queue and report the new head lot number.
-
-        Sets result["next_queued_lot_number"] to the new top lot's display number, or None when the
-        queue is now empty. The set-winners JS uses this to auto-advance to the next lot."""
+        """Remove the sold lot from the queue and set ``result["next_queued_lot_number"]`` (None when empty)
+        so the page auto-advances.
+        """
         pop_lot_from_queue(self.auction, lot)
         next_lot = queue_head_lot(self.auction)
         result["next_queued_lot_number"] = next_lot.lot_number_display if next_lot else None
@@ -105,8 +93,7 @@ class DynamicSetLotWinner(LoginRequiredMixin, AuctionViewMixin, TemplateView):
         if not lot and action != "validate":
             error = "Enter a lot number"
         else:
-            # this next line makes it so you cannot search by custom_lot_number in a use_seller_dash_lot_numbering auction
-            # if custom lot numbers are ever reenabled, change this
+            # Can't search by custom_lot_number with seller-dash numbering; revisit if custom numbers return.
             result_lot_qs = Lot.objects.none()
             if self.auction.use_seller_dash_lot_numbering:
                 result_lot_qs = self.auction.lots_qs.filter(custom_lot_number=lot)
@@ -119,7 +106,7 @@ class DynamicSetLotWinner(LoginRequiredMixin, AuctionViewMixin, TemplateView):
                     result_lot_qs = self.auction.lots_qs.filter(lot_number_int=lot)
                 if error and not lot and action == "validate":
                     error = ""
-            # This can happen if two people are submitting lots at the exact same millisecond.  It seems very unlikely but an easy enough edge case to catch.
+            # Two lots submitted in the same instant; unlikely but cheap to catch.
             if result_lot_qs.count() > 1:
                 error = "Multiple lots with this lot number.  Go to the lot's page and set the winner there."
             else:
@@ -164,8 +151,7 @@ class DynamicSetLotWinner(LoginRequiredMixin, AuctionViewMixin, TemplateView):
         else:
             tos = AuctionTOS.objects.filter(auction=self.auction, bidder_number=winner).order_by("-createdon").first()
             if not tos and winner and self.auction.is_club_managed:
-                # In club-managed mode, the source of truth for bidder numbers is ClubMember.
-                # Look up the member by bidder number; if found, ensure a shadow AuctionTOS exists.
+                # Club-managed: the member owns the bidder number; ensure a shadow TOS.
                 cm = ClubMember.objects.filter(club=self.auction.club, bidder_number=winner, is_deleted=False).first()
                 if cm:
                     tos = _upsert_clubmember_shadow_tos(
@@ -238,8 +224,7 @@ class DynamicSetLotWinner(LoginRequiredMixin, AuctionViewMixin, TemplateView):
             lot.add_winner_message(self.request.user, winning_tos, winning_price)
         except Exception:
             logger.exception("add_winner_message failed for lot %s", lot.pk)
-        # Strictly after add_winner_message: that is what creates and recalculates the invoice this
-        # running total is read off, so the other order would notify a buyer of a stale figure.
+        # After add_winner_message, which creates the invoice this total reads.
         try:
             notify_running_total(lot)
         except Exception:
@@ -252,11 +237,8 @@ class DynamicSetLotWinner(LoginRequiredMixin, AuctionViewMixin, TemplateView):
         return f"Bidder {winning_tos.bidder_number} is now the winner of lot {lot.lot_number_display}"
 
     def cross_check_price_and_winner(self, lot, price, winner, action, lot_error, price_error, winner_error):
-        """The price/winner checks that need the lot, price and winner all resolved together.
-
-        Split out of ``post`` (unchanged behaviour) so the command palette's ``set_lot_winner``
-        action runs exactly these checks rather than a parallel copy of them.
-        Returns the possibly-updated ``(price_error, winner_error)``.
+        """Price and winner checks needing both resolved. Shared with the palette's ``set_lot_winner``.
+        Returns ``(price_error, winner_error)``.
         """
         if (
             not price_error
@@ -277,11 +259,7 @@ class DynamicSetLotWinner(LoginRequiredMixin, AuctionViewMixin, TemplateView):
         return price_error, winner_error
 
     def commit_winner(self, lot, winner, price, action, result):
-        """Record the sale: set the winner, check the buyer in on force_save, log history, advance the queue.
-
-        Split out of ``post`` (unchanged behaviour) so the command palette's ``set_lot_winner``
-        action commits through this exact code instead of reimplementing it.
-        """
+        """Record the sale: winner, check-in on force_save, history, queue advance. Shared with the palette."""
         result["success_message"] = self.set_winner(lot, winner, price)
         if action == "force_save" and lot.auction and lot.auction.use_check_in_mode and not winner.checked_in:
             winner.checked_in = timezone.now()
@@ -364,7 +342,7 @@ class DynamicSetLotWinner(LoginRequiredMixin, AuctionViewMixin, TemplateView):
                 result["last_sold_lot_number"] = lot.lot_number_display
             if action == "force_save" or action == "save":
                 self.commit_winner(lot, winner, price, action, result)
-        # if two people are recording bids, we can validate whether or not a lot was sold
+        # With two people recording, check whether the lot was already sold.
         if (
             lot
             and winner
@@ -382,7 +360,6 @@ class DynamicSetLotWinner(LoginRequiredMixin, AuctionViewMixin, TemplateView):
                 result["last_sold_lot_number"] = lot.lot_number_display
                 self.pop_queue_and_set_next(lot, result)
             else:
-                # Mismatch between what's been saved in the db and the current request
                 result = {
                     "banner": "error",
                     "last_sold_lot_number": lot.lot_number_display,
@@ -392,7 +369,7 @@ class DynamicSetLotWinner(LoginRequiredMixin, AuctionViewMixin, TemplateView):
             result["online_high_bidder_message"] = (
                 f"Sell to {lot.high_bidder_for_admins} for {lot.currency_symbol}{lot.high_bid}"
             )
-            # js code is not in place for this, also remove code from view_lot_simple
+            # JS not in place; also remove from view_lot_simple.
         if lot and not lot_error:
             lot = "valid"
         if price and not price_error:
@@ -410,11 +387,7 @@ class DynamicSetLotWinner(LoginRequiredMixin, AuctionViewMixin, TemplateView):
 
 class AuctionUnsellLot(LoginRequiredMixin, AuctionViewMixin, View):
     def find_lot(self, lot_number):
-        """Look a lot up the way this auction numbers its lots.
-
-        Split out of ``post`` (unchanged behaviour) so the command palette's ``undo_sale`` action
-        finds lots by exactly the same rule the Undo button does.
-        """
+        """Find a lot by this auction's numbering. Shared with the palette's ``undo_sale``."""
         if not lot_number:
             return None
         if self.auction.use_seller_dash_lot_numbering:
@@ -422,11 +395,7 @@ class AuctionUnsellLot(LoginRequiredMixin, AuctionViewMixin, View):
         return self.auction.lots_qs.filter(lot_number_int=lot_number).first()
 
     def unsell(self, undo_lot):
-        """Clear the winner on a lot and record why. Returns the view's own result dict.
-
-        Split out of ``post`` (unchanged behaviour) so the command palette's ``undo_sale`` action
-        produces the identical database change and history entry as the Undo button.
-        """
+        """Clear a lot's winner and record why. Returns the view's result dict. Shared with ``undo_sale``."""
         result = {
             "hide_undo_button": "true",
             "last_sold_lot_number": "",
@@ -437,8 +406,7 @@ class AuctionUnsellLot(LoginRequiredMixin, AuctionViewMixin, View):
         undo_lot.winning_price = None
         if not self.auction.is_online:
             undo_lot.date_end = None
-            # this might need changing for online auctions
-            # but as it is now, this view is only ever called for in-person auctions
+            # Only called for in-person auctions; may need changing for online.
         undo_lot.active = True
         undo_lot.admin_validated = False
         undo_lot.save()
@@ -462,25 +430,12 @@ class AuctionUnsellLot(LoginRequiredMixin, AuctionViewMixin, View):
 
 
 class VoiceCommandLogView(LoginRequiredMixin, AuctionViewMixin, View):
-    """Record what the app's voice recognition heard on the set-winners page, and any correction.
+    """Log what voice heard on the set-winners page, and any correction.
 
-    The page writes this, not the app, because the page is the only side that sees both halves: the
-    app tells it what it heard and what it matched, and the page is where the operator then fixes a
-    wrong bidder number before saving. Posting the returned ``id`` back with ``corrected_to`` lands
-    the correction on the same row.
-
-    This is the whole reason voice can be tuned at all. The first version's fatal flaw wasn't the
-    speech engine — it was having no record of *what* it misheard, which left grammar changes as
-    guesswork. Every row with a ``corrected_to`` names a word to fix in the Voice grammar admin.
-
-    A post with no ``slot`` is the utterance that matched nothing, which is the row we most needed
-    and never had: a log of accepted commands can only return words that already work. Those are
-    rate-limited per session in :func:`auctions.voice.log_unmatched`, because a continuous
-    recognizer hears the room and would otherwise file a transcript of the whole auction.
-
-    Admin-only via ``AuctionViewMixin`` (which raises PermissionDenied for non-admins), and
-    fire-and-forget from the page: form-encoded in, ``{"id": <pk>}`` out (``null`` when the row was
-    dropped), and never an error that could interrupt a sale.
+    The page writes it because only the page sees the match and the operator's fix; posting the
+    returned ``id`` with ``corrected_to`` updates the row. Corrections are how the grammar gets tuned.
+    No ``slot`` means an unmatched utterance, rate-limited in :func:`voice.log_unmatched`. Admin-only,
+    fire-and-forget: ``{"id": <pk or null>}``, never an error that interrupts a sale.
     """
 
     def post(self, request, *args, **kwargs):
@@ -518,17 +473,8 @@ class VoiceCommandLogView(LoginRequiredMixin, AuctionViewMixin, View):
 
 
 class VoiceVocabularyView(LoginRequiredMixin, AuctionViewMixin, View):
-    """The lot and bidder numbers voice may match against here, for the set-winners page itself.
-
-    The page never reloads -- it is one long-lived page that posts -- so the vocabulary it was
-    rendered with goes stale while the auction runs: a lot added at the table, a bidder who signs up
-    at the desk, a lot un-sold so it can be sold again. Every one of those is a value the page's own
-    matcher would then refuse, and refuse by saying "no lot like that in this auction", which is a
-    wrong answer rather than a slow one.
-
-    The app has the same data on the mobile API, and cannot share it: that endpoint is JWT-only on
-    purpose, so a web session can't reach mobile endpoints. So this is the same builder behind the
-    page's session auth, admin-only through ``AuctionViewMixin``.
+    """Current lot and bidder numbers for voice matching. The page never reloads, so its rendered
+    vocabulary goes stale mid-auction; the mobile endpoint is JWT-only, so this serves the session.
     """
 
     def get(self, request, *args, **kwargs):
@@ -540,28 +486,16 @@ class VoiceVocabularyView(LoginRequiredMixin, AuctionViewMixin, View):
 def notify_watchers_lot_selling_soon(lot, request_user=None, position=None):
     """Send a "coming up soon" or "about to be sold" web push to a lot's watchers.
 
-    Two phases, each deduped once per lot, sharing one notification tag so the second overwrites the
-    first on the device rather than stacking a duplicate alert:
-
-    - **Coming up soon** (``position`` given and > 1): fired while the lot sits at position 2-10 of
-      the in-person queue. Deduped via ``Lot.coming_up_push_sent``.
-    - **About to be sold** (``position`` is 1 or None): fired when the lot reaches the head of the
-      queue, or is pulled up on the set-winners screen (``position=None``). Deduped via
-      ``Lot.selling_push_notification_sent``. This fires even after the coming-up push and, sharing
-      the tag, overwrites it -- so a watcher who saw "coming up soon" now sees "about to be sold".
-
-    ``request_user`` (the admin viewing/projecting the lot) is excluded so their own screen doesn't
-    light up. Returns True when a push pass actually ran, False when skipped as a dedupe. The
-    transient websocket "about to be sold" chat message is handled by the caller, not here.
-
-    Delivery is per watcher: anyone who can receive an app notification gets it there *only*, and
-    their browser subscription is skipped -- we can't tell a phone's browser apart from the app
-    installed on that same phone, so sending both would buzz one person twice for one lot."""
+    Coming up (``position`` 2-10) dedupes on ``Lot.coming_up_push_sent``; about to be sold
+    (``position`` 1 or None) on ``Lot.selling_push_notification_sent``. Both share a tag, so the second
+    replaces the first. ``request_user`` is excluded. Returns True when a pass ran. App users get only
+    the app push, since a phone's browser and its app can't be told apart.
+    """
     if not lot or lot.sold or not lot.auction:
         return False
     coming_up = position is not None and position > 1
     if coming_up:
-        # Don't downgrade to "coming up" once the stronger "about to be sold" push already went out.
+        # Never downgrade after "about to be sold".
         if lot.coming_up_push_sent or lot.selling_push_notification_sent:
             return False
         lot.coming_up_push_sent = True
@@ -585,11 +519,10 @@ def notify_watchers_lot_selling_soon(lot, request_user=None, position=None):
         lot_number=lot.pk, user__userdata__push_notifications_when_lots_sell=True
     ).select_related("user__userdata")
     if request_user is not None:
-        # it would be awkward to have notifications pop up when you're projecting an image of the lot
+        # Not on the projector.
         watchers = watchers.exclude(user=request_user)
     lot_url = "https://" + lot.full_lot_link
-    # Shared by both delivery paths so the "about to be sold" alert replaces the earlier
-    # "coming up soon" one on the device instead of stacking a second alert.
+    # Shared tag, so the second alert replaces the first.
     tag = f"lot_sell_notification_{lot.pk}"
     for watch in watchers:
         if user_has_app_push(watch.user):
@@ -618,10 +551,8 @@ def notify_watchers_lot_selling_soon(lot, request_user=None, position=None):
         try:
             send_user_notification(user=watch.user, payload=payload, ttl=10000)
         except (requests.exceptions.RequestException, WebPushException):
-            # The push endpoint is invalid or unreachable; remove the stale subscription
-            # and record the failure in the auction history so admins can see it.
-            # Note: django-webpush only auto-deletes on HTTP 410, but FCM uses
-            # HTTP 404 for expired tokens, so we must also handle that here.
+            # Invalid endpoint: delete it and log to auction history. django-webpush only handles
+            # 410; FCM expires with 404.
             push_info.delete()
             AuctionHistory.objects.create(
                 auction=lot.auction,
@@ -633,11 +564,7 @@ def notify_watchers_lot_selling_soon(lot, request_user=None, position=None):
 
 
 def broadcast_queue_update(auction):
-    """Poke the admin auction websocket group so any open Lot queue / kiosk screen re-fetches.
-
-    Fires after every queue mutation (add/remove/reorder/pop-on-sale), so the projector/kiosk
-    view advances to the next lot in real time as winners are set on another device -- no waiting
-    on the slow htmx poll fallback. Best-effort: a channel-layer hiccup must not fail the mutation."""
+    """Tell open queue and kiosk screens to re-fetch after a queue change. Best-effort."""
     try:
         channel_layer = channels.layers.get_channel_layer()
         async_to_sync(channel_layer.group_send)(
@@ -649,18 +576,11 @@ def broadcast_queue_update(auction):
 
 
 def process_queue_notifications(auction):
-    """Notify watchers of any lot now in the top 10 of the queue, and poke any open queue/kiosk
-    screens to refresh over the websocket.
+    """Push to watchers of lots now in the queue's top 10, and refresh open queue screens.
 
-    Each lot at position 2-10 gets one "coming up soon" push; the head lot (position 1) gets the
-    "about to be sold" push, which overwrites the coming-up one. Both dedupe on the per-lot flags
-    (Lot.coming_up_push_sent / Lot.selling_push_notification_sent), so re-running this after every
-    queue mutation (add/remove/reorder/pop-on-sale) never double-notifies.
-
-    Watcher notifications honour the auction's message_users_when_lots_sell setting, the same gate
-    the set-lot-winners screen uses -- turning it off also hides the opt-in on the lot page, so an
-    auction that opted out must not notify from the queue either. The websocket poke is unrelated to
-    that setting and always fires, otherwise the kiosk would stop following the queue."""
+    Deduped per lot, so it's safe after every mutation. Pushes honour
+    ``message_users_when_lots_sell``; the websocket refresh always fires.
+    """
     if auction.message_users_when_lots_sell:
         entries = LotQueueEntry.objects.filter(auction=auction).select_related("lot").order_by("order")
         for index, entry in enumerate(entries, start=1):
@@ -679,9 +599,7 @@ def queue_head_lot(auction):
 
 
 def pop_lot_from_queue(auction, lot):
-    """Remove a lot's queue entry, wherever it sits, and re-run notifications for the new top.
-
-    Used when a lot is sold / ended on the set-winners page so it drops out of the queue."""
+    """Remove a lot's queue entry and re-run notifications. Used when a lot sells."""
     if lot is None:
         return
     deleted, _ = LotQueueEntry.objects.filter(auction=auction, lot=lot).delete()
@@ -690,19 +608,17 @@ def pop_lot_from_queue(auction, lot):
 
 
 class LotQueueMixin(LoginRequiredMixin, AuctionViewMixin):
-    """Shared helpers for the in-person "Lot queue" tool.
-
-    The queue is an ordered list of lots about to be sold (LotQueueEntry). Admins build it by
-    scanning lot QR codes / typing lot numbers on the queue page; the set-lot-winners page pulls
-    the head of the queue automatically. This is an in-person-only feature."""
+    """Helpers for the in-person lot queue (LotQueueEntry), built by scanning or typing lots; set winners
+    pulls its head.
+    """
 
     club_sidebar_can_view = False  # full-screen tool; sidebar would waste space
 
     def dispatch(self, request, *args, **kwargs):
-        # Let LoginRequiredMixin redirect anonymous users to login before we run any auction lookup.
+        # Let LoginRequiredMixin redirect anonymous users first.
         if not request.user.is_authenticated:
             return super().dispatch(request, *args, **kwargs)
-        # get_auction runs the admin permission check (raises PermissionDenied for non-admins).
+        # get_auction raises PermissionDenied for non-admins.
         self.get_auction(kwargs.get("slug", ""))
         if self.auction and self.auction.is_online:
             msg = "The lot queue is only available for in-person auctions"
@@ -713,20 +629,17 @@ class LotQueueMixin(LoginRequiredMixin, AuctionViewMixin):
         return list(LotQueueEntry.objects.filter(auction=self.auction).select_related("lot").order_by("order"))
 
     def resolve_lot_from_value(self, value):
-        """Turn a scanned value (a full/partial lot QR URL) or a typed lot number into a Lot.
-
-        Returns (Lot or None, error string or None)."""
+        """A scanned lot QR URL or typed lot number to ``(Lot or None, error or None)``."""
         value = (value or "").strip()
         if not value:
             return None, "Enter or scan a lot number"
-        # A lot QR code is https://{domain}/qr/{pk}/ -- a USB scanner types the whole URL.
+        # A lot QR is https://{domain}/qr/{pk}/; a USB scanner types the whole URL.
         qr_match = re.search(r"/qr/(\d+)", value)
         if qr_match:
             lot = self.auction.lots_qs.filter(pk=qr_match.group(1)).first()
             if not lot:
                 return None, "That lot is not part of this auction"
             return lot, None
-        # Otherwise treat it as a typed lot number, using this auction's numbering scheme.
         if self.auction.use_seller_dash_lot_numbering:
             result_lot_qs = self.auction.lots_qs.filter(custom_lot_number=value)
         else:
@@ -743,7 +656,7 @@ class LotQueueMixin(LoginRequiredMixin, AuctionViewMixin):
         return lot, None
 
     def add_lot(self, lot):
-        """Add a lot to the end of the queue. Returns an error string, or None on success."""
+        """Add a lot to the end of the queue. Returns an error string or None."""
         if not lot:
             return "No lot found"
         if lot.sold:
@@ -752,8 +665,7 @@ class LotQueueMixin(LoginRequiredMixin, AuctionViewMixin):
             return f"Lot {lot.lot_number_display} is already in the queue"
         max_order = LotQueueEntry.objects.filter(auction=self.auction).aggregate(m=Max("order"))["m"] or 0
         LotQueueEntry.objects.create(auction=self.auction, lot=lot, order=max_order + 1, added_by=self.request.user)
-        # Sticky flag for the "how much was the queue used" auction stat: never unset, even after the
-        # entry is removed or the lot sells.
+        # Sticky, for the queue-usage stat.
         if not lot.added_to_queue:
             lot.added_to_queue = True
             lot.save(update_fields=["added_to_queue"])
@@ -775,7 +687,7 @@ class LotQueueMixin(LoginRequiredMixin, AuctionViewMixin):
                     entry.order = order
                     entry.save(update_fields=["order"])
                 order += 1
-        # Any entries the client didn't mention keep going after, preserving their relative order.
+        # Unmentioned entries keep their relative order after.
         for entry in sorted(entries.values(), key=lambda e: e.order):
             entry.order = order
             entry.save(update_fields=["order"])
@@ -788,11 +700,9 @@ class LotQueueMixin(LoginRequiredMixin, AuctionViewMixin):
 
 
 class LotQueueView(LotQueueMixin, TemplateView):
-    """The Lot queue page: scan/type lots to build an ordered queue, drag to reorder, remove.
-
-    GET renders the full page (or just the list partial with ?partial=list). POST handles the
-    htmx-style mutations add/remove/reorder (returning the refreshed list partial) and the
-    scanner add path (lot_pk present -> JSON, for the USB HID / camera pipeline)."""
+    """The lot queue page. GET renders it (``?partial=list`` for the list); POST adds, removes, reorders,
+    or takes a scanner ``lot_pk`` (JSON).
+    """
 
     template_name = "auctions/lot_queue.html"
 
@@ -806,13 +716,11 @@ class LotQueueView(LotQueueMixin, TemplateView):
         context["auction"] = self.auction
         context["entries"] = self.queue_entries()
         context["show_camera_scanner"] = True
-        # Threaded into the (club-only) ribbon barcode_scanner.html include so lot QR scans on a club
-        # auction build the queue; the no-club path wires the same URL up itself in the template.
+        # For lot QR scans through the ribbon's barcode scanner.
         context["barcode_lot_scan_url"] = self.request.path
         return context
 
     def post(self, request, *args, **kwargs):
-        # Scanner (USB HID / camera) path: adds by lot pk and expects a JSON reply.
         if "lot_pk" in request.POST:
             pk = (request.POST.get("lot_pk") or "").strip()
             lot = self.auction.lots_qs.filter(pk=pk).first() if pk.isdigit() else None
@@ -840,11 +748,9 @@ class LotQueueView(LotQueueMixin, TemplateView):
 
 
 class LotQueueKioskView(LotQueueMixin, TemplateView):
-    """Kiosk (projector) partial: the current head lot rendered big plus the next few queued lots.
-
-    Re-fetched by the queue page over the admin auction websocket (queue_updated) as lots are sold
-    on another device, with a slow htmx poll as a fallback. Renders the head lot with
-    view_lot_simple.html WITHOUT ViewLotSimple's notification side effect."""
+    """Projector partial: the head lot large, plus the next few. Refreshed over websocket, with a slow poll
+    fallback. No ViewLotSimple notification side effect.
+    """
 
     template_name = "auctions/lot_queue_kiosk.html"
 
@@ -861,38 +767,26 @@ class LotQueueKioskView(LotQueueMixin, TemplateView):
 
 
 def volunteer_eligible_tos(auction):
-    """AuctionTOS rows we can ask for help: people we can reach in the app *right now*.
+    """AuctionTOS rows reachable by push right now (a live token).
 
-    A volunteer request is push-only -- an email asking someone to help carry tanks is useless by
-    the time it's read -- so the audience is exactly the people holding a device with a live push
-    token, not everyone who ever installed the app. Someone who installed it and denied
-    notifications, or signed out (which clears the token), is not reachable and is not counted.
-
-    In check-in-mode auctions this is further limited to people who have checked in, which is the
-    only proximity signal available: auto-check-in fires inside a ~500 ft geofence, so a checked-in
-    person is genuinely at the venue. Without check-in mode there is nothing to tell who is in the
-    room, so everyone who joined and has the app is asked -- the volunteers page warns admins about
-    exactly that."""
+    Push-only, since a late email is useless. In check-in auctions, only the checked in (the geofence
+    is the proximity signal); otherwise everyone joined with the app, which the page warns about.
+    """
     from auctions.notifications import push_configured
 
     if not push_configured():
-        # Nothing can be delivered, so nobody is reachable. Being honest here keeps the page's
-        # "N reachable" count from promising an audience that doesn't exist.
+        # Push not configured: nobody is reachable.
         return AuctionTOS.objects.none()
     qs = AuctionTOS.objects.filter(auction=auction, user__isnull=False)
     if auction.use_check_in_mode:
         qs = qs.filter(checked_in__isnull=False)
-    # Exists() rather than a join filter: `.filter(devices__push_enabled=True).exclude(devices__
-    # fcm_token="")` spans two joins and would drop anyone owning *any* tokenless device.
+    # Exists(), not a join: a join would drop anyone who owns any tokenless device.
     live_device = MobileDevice.objects.filter(user=OuterRef("user"), push_enabled=True).exclude(fcm_token="")
     return qs.filter(Exists(live_device))
 
 
 def volunteer_helper_count(auction):
-    """How many people will actually receive the push (the tooltip count).
-
-    Counted per user, not per TOS row, so a duplicate TOS record can't inflate it -- this has to
-    match what notify_volunteers_of_job really sends."""
+    """Recipients counted per user, matching what ``notify_volunteers_of_job`` sends."""
     return volunteer_eligible_tos(auction).values("user").distinct().count()
 
 
@@ -904,8 +798,7 @@ def _volunteer_job_url(job):
     return f"https://{domain}{path}"
 
 
-# Fixed and short so it survives the notification tray on both platforms: an auction title in the
-# title pushes "needs help" past the truncation point, which is the one word that has to be read.
+# Fixed and short so "help needed" survives notification truncation.
 VOLUNTEER_PUSH_TITLE = "Auction help needed"
 
 
@@ -917,12 +810,9 @@ def _volunteer_notification_text(job):
 
 
 def notify_volunteers_of_job(job):
-    """Fan out a job announcement to every helper we can reach in the app.
-
-    Push-only, with no email fallback: this is a "someone is needed in this room now" message, and
-    an email that lands after the auction is over is worse than nothing. volunteer_eligible_tos
-    already restricts the audience to people who can actually receive it. Uses a per-job collapse
-    tag so the later 'filled' retract can target it."""
+    """Push a job announcement to every reachable helper. No email fallback. A per-job collapse tag lets it
+    be retracted.
+    """
     from auctions.notifications import CATEGORY_VOLUNTEER
 
     title, body = _volunteer_notification_text(job)
@@ -946,17 +836,14 @@ def notify_volunteers_of_job(job):
 
 
 def withdraw_volunteer_notification(job):
-    """Retract a job's announcement once it fills or is canceled (per-job collapse tag).
-
-    The app-side data-only handler that cancels the displayed notification is future FCM work (see
-    PUSH.md); until then the accept page is the source of truth — a stale tap is told the job is full.
-    First-come-first-serve is enforced at signup time, never by the notification, so this is
-    best-effort by design."""
+    """Retract a job's announcement when filled or cancelled. Best-effort: the accept page is the source of
+    truth and signup enforces first come, first served.
+    """
     logger.info("Volunteer job %s filled/canceled; retracting its announcement (tag volunteer_job_%s)", job.pk, job.pk)
 
 
 class AuctionVolunteers(LoginRequiredMixin, AuctionViewMixin, TemplateView):
-    """Admin ribbon page: ask app users for help with a job, and review past jobs. In-person only."""
+    """Admin page: ask app users to help with a job, and review past jobs. In-person only."""
 
     template_name = "auctions/auction_volunteers.html"
     allow_non_admins = True
@@ -1007,7 +894,7 @@ class AuctionVolunteers(LoginRequiredMixin, AuctionViewMixin, TemplateView):
 
 
 class VolunteerJobAccept(LoginRequiredMixin, AuctionViewMixin, TemplateView):
-    """The accept page a job notification opens: any joined user can sign up while spots remain."""
+    """The page a job notification opens: joined users sign up while spots remain."""
 
     template_name = "auctions/volunteer_job_accept.html"
     allow_non_admins = True
@@ -1043,7 +930,7 @@ class VolunteerJobAccept(LoginRequiredMixin, AuctionViewMixin, TemplateView):
             return redirect(redirect_url)
         filled = False
         with transaction.atomic():
-            # Lock the job row so two people racing for the last spot can't both win.
+            # Locked so two people can't take the last spot.
             job = VolunteerJob.objects.select_for_update().get(pk=self.job.pk)
             if VolunteerSignup.objects.filter(job=job, auctiontos=tos).exists():
                 messages.info(request, "You're already signed up for this one.")

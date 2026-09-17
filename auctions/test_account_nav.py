@@ -1,14 +1,12 @@
 """The Account setup menu: `auctions/account_nav.py`, its sidebar, and /account/setup/.
 
-The menu replaced `preferences_ribbon.html`, a strip of four tabs plus a `More` dropdown holding
-the other ten pages. Two things about the replacement are easy to break without noticing, so they
-are what most of this file is about:
+It replaced `preferences_ribbon.html`, four tabs plus a `More` dropdown holding ten more pages. Two
+things are easy to break:
 
-* **A page's navigation is now the sidebar.** There is no ribbon left to fall back on, so a page
-  that drops out of `GROUPS` doesn't merely lose its highlight -- in the app, which draws no navbar
-  over these pages, it has no navigation at all. `SidebarReachTests` opens every page in the menu
-  and fails if the sidebar isn't on it.
-* **The navbar's one "Account" row is a redirect**, not a page, and it lands on where you were.
+* **A page's navigation is now the sidebar.** There is no ribbon to fall back on, so a page that
+  drops out of `GROUPS` has no navigation at all in the app, which draws no navbar over these pages.
+  `SidebarReachTests` opens every page in the menu and fails if the sidebar isn't on it.
+* **The navbar's "Account" row is a redirect** that lands on where you were.
 """
 
 import re
@@ -21,7 +19,7 @@ from auctions import account_nav
 from auctions.models import Club, ClubMember
 from auctions.test_support import isolated_cache
 
-#: What the sidebar button says. Present on a page means the menu rendered.
+#: What the sidebar button says; present on a page means the menu rendered.
 SIDEBAR_MARKER = 'data-bs-target="#accountSidebar"'
 
 
@@ -52,8 +50,9 @@ class SidebarReachTests(TestCase):
         return response.content.decode()
 
     def test_every_page_in_the_menu_draws_the_menu(self):
-        """The guarantee that replaced the ribbon. A page reachable only from the sidebar, that
-        doesn't itself draw the sidebar, is a page you can enter and not leave."""
+        """A page reachable only from the sidebar that doesn't draw the sidebar is one you can enter and not
+        leave.
+        """
         for name in sorted(account_nav.PAGE_NAMES):
             if name == "userpage":
                 url = reverse(name, kwargs={"slug": self.user.username})
@@ -72,8 +71,7 @@ class SidebarReachTests(TestCase):
                 self.assertNotIn(SIDEBAR_MARKER, self._html(reverse(name)))
 
     def test_somebody_elses_profile_is_not_your_account_page(self):
-        """`userpage` is one URL name for two very different pages, and the argument is the only
-        thing that tells them apart."""
+        """`userpage` is one URL name for two different pages, and the argument is what tells them apart."""
         self.assertIn(SIDEBAR_MARKER, self._html(reverse("userpage", kwargs={"slug": self.user.username})))
         self.assertNotIn(SIDEBAR_MARKER, self._html(reverse("userpage", kwargs={"slug": self.other.username})))
 
@@ -107,8 +105,9 @@ class LandingTests(TestCase):
         self.assertRedirects(self.client.get(reverse("account_setup")), reverse("printing"))
 
     def test_delete_account_is_never_where_you_were(self):
-        """Sending a returning visitor to "Delete account" because that is where they were last
-        reads as an accusation, and it is one keystroke from a real deletion."""
+        """Sending a returning visitor to "Delete account" because that is where they were last reads as an
+        accusation, and it is one keystroke from a real deletion.
+        """
         self.client.get(reverse("preferences"))
         self.client.get(reverse("account_delete"))
         self.assertRedirects(self.client.get(reverse("account_setup")), reverse("preferences"))
@@ -140,10 +139,8 @@ class LandingTests(TestCase):
 
 @isolated_cache("account-nav-payments")
 class PaymentRowTests(TestCase):
-    """The only two rows with a gate on them.
-
-    Both gates are the ones `preferences_ribbon.html` had, moved rather than rewritten -- the
-    Square one in particular took a fix (see `test_tap_to_pay`) that must not be lost in the move.
+    """The only two rows with a gate, both moved from `preferences_ribbon.html` rather than rewritten --
+    the Square one took a fix (see `test_tap_to_pay`) that must not be lost.
     """
 
     def test_a_bidder_is_offered_neither(self):
@@ -154,8 +151,9 @@ class PaymentRowTests(TestCase):
         self.assertNotIn(reverse("square_seller"), html)
 
     def test_somebody_who_runs_an_auction_is_offered_square(self):
-        """`can_take_card_payments`, not `square_enabled`: the flag is off by default, and gating
-        the entry on it left an organizer with no route to the page that explains how to ask."""
+        """`can_take_card_payments`, not `square_enabled`: the flag is off by default, and gating on it left an
+        organizer with no route to the page explaining how to ask.
+        """
         user = _user("clubrunner", square_enabled=False)
         club = Club.objects.create(name="Payments Club")
         ClubMember.objects.create(club=club, user=user, name="Organizer", permission_money=True)
@@ -192,8 +190,9 @@ class NavbarTests(TestCase):
             self.assertIn(f'href="{url}"', self.html)
 
     def test_the_settings_pages_left(self):
-        """They are behind Account now. A link left here would be a second route that doesn't mark
-        itself in the sidebar, and the reason the menu was eleven rows long to begin with."""
+        """They are behind Account now: a link here would be a second route that doesn't mark itself in the
+        sidebar, which is why the menu was eleven rows long.
+        """
         menu = self.html[self.html.index(f'aria-expanded="false">{self.user.username}</a>') :]
         menu = menu[: menu.index(reverse("account_logout"))]
         for url in (reverse("preferences"), reverse("contact_info"), reverse("printing"), reverse("messages")):
@@ -204,10 +203,9 @@ class NavbarTests(TestCase):
 class SettingsSplitTests(TestCase):
     """/preferences/ and /notifications/ were one page and one form.
 
-    The split is not cosmetic: it is what removed the last JavaScript from both pages. The unit
-    (`distance_unit`) stayed on /preferences/ and the three radii went to /notifications/, so
-    nothing on either page can change a value another field on the same page has to be converted
-    against.
+    The split is what removed the last JavaScript from both: `distance_unit` stayed on /preferences/ and
+    the radii went to /notifications/, so nothing on either page can change a value another field has to
+    be converted against.
     """
 
     @classmethod
@@ -218,8 +216,9 @@ class SettingsSplitTests(TestCase):
         self.client.force_login(self.user)
 
     def test_the_two_forms_partition_the_settings(self):
-        """No field on both: `palette_actions._preference_form_for` picks one form per field, and a
-        field on both would be saved through whichever it happened to find first."""
+        """No field on both: `palette_actions._preference_form_for` picks one form per field, and a field on
+        both would be saved through whichever it found first.
+        """
         from auctions.forms import ChangeUserNotificationsForm, ChangeUserPreferencesForm
 
         preferences = set(ChangeUserPreferencesForm.Meta.fields)
@@ -236,8 +235,9 @@ class SettingsSplitTests(TestCase):
             self.assertNotIn(field, ChangeUserPreferencesForm.Meta.fields)
 
     def test_neither_page_converts_distances_in_the_browser(self):
-        """The converter ran on `change` of a select that is no longer on the page with the radii.
-        Left behind, it would silently multiply a saved radius by 1.60934 on the wrong page."""
+        """The converter ran on `change` of a select that is no longer on the page with the radii; left behind,
+        it would multiply a saved radius by 1.60934 on the wrong page.
+        """
         for name in ("preferences", "notification_preferences"):
             html = self.client.get(reverse(name)).content.decode()
             with self.subTest(page=name):
@@ -245,9 +245,9 @@ class SettingsSplitTests(TestCase):
                 self.assertNotIn("id_distance_unit'", html)
 
     def test_changing_the_unit_leaves_the_radii_alone(self):
-        """Miles are what is stored. Switching to km used to re-save the three radii through a form
-        that read them as kilometres -- which shrank every one of them by a factor of 1.6 whenever
-        the switch was made anywhere but the page's own JavaScript."""
+        """Miles are what is stored. Switching to km used to re-save the three radii through a form that read
+        them as kilometres, shrinking each by a factor of 1.6.
+        """
         self.user.userdata.email_me_about_new_auctions_distance = 100
         self.user.userdata.local_distance = 60
         self.user.userdata.save()
@@ -262,9 +262,9 @@ class SettingsSplitTests(TestCase):
         self.assertEqual(self.user.userdata.local_distance, 60)
 
     def test_saving_stays_on_the_page_and_says_so(self):
-        """It used to redirect to the reader's public profile with a success message that never
-        rendered -- `SuccessMessageMixin` was listed after `UpdateView`, so its `form_valid` never
-        ran. The message is the only confirmation a page of checkboxes gives."""
+        """Saving stays on the page and says so: it used to redirect to the public profile with a success
+        message that never rendered, because `SuccessMessageMixin` was listed after `UpdateView`.
+        """
         response = self.client.post(
             reverse("preferences"), {"distance_unit": "mi", "preferred_currency": "USD"}, follow=True
         )
@@ -272,8 +272,9 @@ class SettingsSplitTests(TestCase):
         self.assertIn("Preferences saved", response.content.decode())
 
     def test_a_query_string_that_is_not_next_no_longer_500s_the_save(self):
-        """`get_success_url` indexed `next` after testing only whether the query string was empty,
-        so any other parameter -- a utm tag off an email link was enough -- raised on save."""
+        """`get_success_url` indexed `next` after testing only whether the query string was empty, so any other
+        parameter -- a utm tag off an email link -- raised on save.
+        """
         response = self.client.post(
             reverse("preferences") + "?utm_source=newsletter",
             {"distance_unit": "mi", "preferred_currency": "USD"},
@@ -289,9 +290,9 @@ class SettingsSplitTests(TestCase):
         self.assertRedirects(response, "/auctions/", fetch_redirect_response=False)
 
     def test_the_palette_still_reaches_a_setting_on_either_page(self):
-        """`update_preferences` was written against one form. Splitting it in two must not have
-        halved what the assistant can change -- "stop emailing me about new auctions" is the
-        request it exists for, and that field is on the second form now."""
+        """`update_preferences` was written against one form, and splitting it must not have halved what the
+        assistant can change: "stop emailing me about new auctions" is on the second form now.
+        """
         from auctions import palette_actions
 
         fields, _ = palette_actions._preference_fields()

@@ -1,25 +1,25 @@
 """Shared label-printing helpers.
 
-The mismatch-warning matrix lives here so ``/printing/`` and the mobile prefs API
-(``GET /api/mobile/labels/prefs/``) surface identical warnings from the same saved prefs; they are
-advisory and never block saving. ``plan_label`` measures text so ``label_template.html`` can lay
-out two fixed columns without ever clipping or overflowing (rules enforced by
-``test_label_layout.py``): left column is lot number, QR code, then short tags that fit whole;
-right column is lot name, then owner (winner+pickup location, or seller) pinned to the bottom, with
-species/custom-field/category/description filling whatever height is left, sold and unsold filling
-that middle band in different priority order since a sold label is read to collect a lot and an
-unsold one is read to sell it. A field with nothing to say takes no space.
+The mismatch-warning matrix is here so ``/printing/`` and ``GET /api/mobile/labels/prefs/`` show
+identical warnings from the same prefs; they are advisory and never block saving.
+
+``plan_label`` measures text so ``label_template.html`` can lay out two fixed columns without
+clipping (enforced by ``test_label_layout.py``): the left column is the lot number, QR code and the
+short tags that fit whole; the right is the lot name, then the owner pinned to the bottom, with
+species, custom fields, category and description filling what's left -- in a different priority
+order when sold, since a sold label is read to collect a lot and an unsold one to sell it. A field
+with nothing to say takes no space.
 """
 
 import html
 import math
 import re
 
-# Presets that describe a thermal label roll vs. a sheet of Avery-style labels.
+# Presets describing a thermal roll or a sheet of Avery-style labels.
 THERMAL_PRESETS = frozenset({"thermal_sm", "thermal_very_sm"})
 SHEET_PRESETS = frozenset({"sm", "lg"})
 
-# One-line facts a label can carry, in print order. See split_label_tags for left/right placement.
+# One-line facts a label can carry, in print order. See split_label_tags for placement.
 LABEL_TAG_FIELDS = (
     "quantity_label",
     "donation_label",
@@ -34,8 +34,8 @@ LABEL_TAG_FIELDS = (
 # label_template.html sets this line-height, and split_label_tags counts lines with it.
 LABEL_LINE_HEIGHT = 1.2
 
-# DejaVu Serif advance widths for ASCII 32..126, hundredths of an em (Pillow ImageFont.getlength).
-# Non-ASCII counts as a full em, erring toward moving a tag right rather than under-wrapping it.
+# DejaVu Serif advance widths for ASCII 32..126, in hundredths of an em. Non-ASCII counts as a full
+# em, erring toward moving a tag right.
 # fmt: off
 _SERIF_WIDTHS = (
     32, 40, 46, 84, 64, 95, 89, 27, 39, 39, 50, 84, 32, 34, 32, 34, 64, 64, 64, 64, 64, 64, 64, 64,
@@ -44,9 +44,9 @@ _SERIF_WIDTHS = (
     64, 32, 31, 61, 32, 95, 64, 60, 64, 64, 48, 51, 40, 64, 56, 86, 56, 56, 53, 64, 34, 64, 84,
 )
 # fmt: on
-# Kerning/rounding slack: a tag measured as exactly filling the column still goes right.
+# Kerning and rounding slack: a tag that exactly fills the column goes right.
 _FIT_SLACK = 0.97
-# DejaVu Serif Bold: for the winner's name, the one bold text plan_label fits.
+# DejaVu Serif Bold, for the winner's name -- the one bold text plan_label fits.
 # fmt: off
 _SERIF_BOLD_WIDTHS = (
     35, 44, 52, 84, 70, 95, 90, 31, 47, 47, 52, 84, 35, 42, 35, 37, 70, 70, 70, 70, 70, 70, 70, 70,
@@ -57,7 +57,7 @@ _SERIF_BOLD_WIDTHS = (
 # fmt: on
 
 
-# The tag separator plan_label inserts itself; not ASCII, so given its (wider, bold) width here.
+# The tag separator plan_label inserts; not ASCII, so its width is given here.
 _OTHER_WIDTHS = {"·": 35}
 
 
@@ -71,8 +71,8 @@ def text_width_pt(text, font_size_pt, bold=False):
 def split_label_tags(values, *, width_pt, height_pt, font_size_pt):
     """Split one label's non-empty tag *values* into ``(left, right)``.
 
-    A tag stays left if it fits on one line and a line is free; otherwise it goes right. Order is
-    kept on each side; a short tag after a long one can still take a free left line.
+    A tag stays left if it fits on one line and a line is free. Order is kept, so a short tag after a
+    long one can still take a free left line.
     """
     lines = int(height_pt // (font_size_pt * LABEL_LINE_HEIGHT))
     left, right = [], []
@@ -87,9 +87,8 @@ def split_label_tags(values, *, width_pt, height_pt, font_size_pt):
 def wrapped_lines(text, *, width_pt, font_size_pt, bold=False):
     """How many lines *text* takes in a column *width_pt* wide; a newline starts a new line.
 
-    Breaks where WeasyPrint does -- at spaces and after "/" or "-" -- and inside an
-    overlong word like ``overflow-wrap: anywhere``. Where the two could differ (kerning), this
-    counts more lines, never fewer.
+    Breaks where WeasyPrint does -- at spaces, after "/" or "-", and inside an overlong word -- and
+    where the two could differ, counts more lines rather than fewer.
     """
     lines = 0
     space = text_width_pt(" ", font_size_pt, bold)
@@ -113,13 +112,12 @@ def wrapped_lines(text, *, width_pt, font_size_pt, bold=False):
 
 
 def plan_label(label, *, print_fields, geometry):
-    """Decide what goes where on one lot label, so ``label_template.html`` only has to draw it.
+    """Decide what goes where on one lot label, so ``label_template.html`` only draws it.
 
-    *geometry* is the label view's context: label sizes in inches, font sizes in points. Sets on
-    *label*: ``tags_left``/``tags_right``; ``name_lines``, ``tags_lines`` and ``location_lines``
-    (lines the lot name, moved-over tags, and pickup location are clamped to); ``species_line`` and
-    ``species_is_scientific``; ``details``, the rest of the middle band that fits whole, in order;
-    and ``description_lines``. A count of 0 leaves the field off.
+    *geometry* is the label view's context. Sets ``tags_left``/``tags_right``; ``name_lines``,
+    ``tags_lines`` and ``location_lines``; ``species_line`` and ``species_is_scientific``; ``details``,
+    the rest of the middle band that fits whole; and ``description_lines``. A count of 0 leaves the
+    field off.
     """
     font = geometry["font_size"]
     small = geometry["description_font_size"]
@@ -132,7 +130,7 @@ def plan_label(label, *, print_fields, geometry):
     def block(text, size, bold=False):
         return wrapped_lines(text, width_pt=right_width, font_size_pt=size, bold=bold) * line(size)
 
-    # An empty tag value (e.g. no minimum bid on a sold lot) must not hold a line a real one needs.
+    # An empty tag value must not hold a line a real one needs.
     tag_height = geometry["label_height"] * 72 - line(font)  # under the lot number...
     if "qr_code" in print_fields:
         tag_height -= geometry["qr_size"] * 72  # ...and the QR code
@@ -141,10 +139,10 @@ def plan_label(label, *, print_fields, geometry):
         tags, width_pt=geometry["first_column_width"] * 72, height_pt=tag_height, font_size_pt=tag_font
     )
 
-    # The owner's name is measured first and never clipped. Half a point off for layout rounding.
+    # The owner's name is measured first and never clipped; half a point off for rounding.
     budget = geometry["label_height"] * 72 - 0.5
     if label.sold:
-        # "Winner:" is regular, but measuring all of it bold only errs toward a spare line.
+        # "Winner:" is regular, but measuring it bold only errs toward a spare line.
         budget -= block(f"Winner: {label.winner_name}", font, bold=True)
     else:
         seller = f"Seller: {label.seller_name}" if "seller_name" in print_fields else ""
@@ -169,14 +167,14 @@ def plan_label(label, *, print_fields, geometry):
     name_wanted = needs(label.lot_name if "lot_name" in print_fields else "", font, geometry["name_lines"])
     tags_wanted = needs(" · ".join(label.tags_right), tag_font)
     if label.sold:
-        # Sold: read to get the lot to its winner, so name and pickup location come before tags.
+        # Sold: read to get the lot to its winner, so name and location come before tags.
         priority = (
             ("name_lines", name_wanted, font),
             ("location_lines", needs(location, font), font),
             ("tags_lines", tags_wanted, tag_font),
         )
     else:
-        # Unsold: the tags (min bid, buy-now) are what sells it, so a long name can't push them off.
+        # Unsold: the tags are what sells it, so a long name can't push them off.
         priority = (
             ("name_lines", name_wanted, font),
             ("tags_lines", tags_wanted, tag_font),
@@ -188,7 +186,7 @@ def plan_label(label, *, print_fields, geometry):
         if wanted and budget >= line(size):
             given[key] = 1
             budget -= line(size)
-    # Then each grows back toward what it needs, in the same order; the third takes what is left.
+    # Then each grows back in the same order; the third takes what is left.
     for key, wanted, size in priority:
         while given[key] < wanted and budget >= line(size):
             given[key] += 1
@@ -196,7 +194,7 @@ def plan_label(label, *, print_fields, geometry):
     for key, value in given.items():
         setattr(label, key, value)
     if given["tags_lines"] < tags_wanted:
-        # Tags are the top of the middle band; if cut, nothing below prints either, or e.g. dropping
+        # Tags are the top of the middle band: if they're cut, nothing below prints, and dropping
         # "Min: $25" while keeping the category would make the category look more important.
         budget = 0
 
@@ -246,8 +244,9 @@ _MM_PER_UNIT = {"in": 25.4, "cm": 10.0}
 
 
 def inches_per_unit(unit):
-    """One *unit* in inches: custom label sizes are saved in ``UserLabelPrefs.unit``, and the label
-    templates write inches. Both label views convert through this, so they cannot disagree."""
+    """One *unit* in inches. Custom sizes are saved in ``UserLabelPrefs.unit`` and the templates write
+    inches; both label views convert through this.
+    """
     return _MM_PER_UNIT.get(unit, 25.4) / 25.4
 
 
@@ -260,10 +259,9 @@ def _label_size_mm(prefs):
 
 
 def _fits_any_enabled_profile(width_mm, height_mm):
-    """True if any enabled printer profile with declared max dimensions can take this label.
+    """True if any enabled printer profile with declared dimensions can take this label.
 
-    Returns True (don't warn) when no enabled profile declares limits, since we can't prove it
-    won't fit.
+    True (don't warn) when no enabled profile declares limits, since we can't prove it won't fit.
     """
     from auctions.models import ThermalPrinterProfile
 
@@ -279,12 +277,12 @@ def _fits_any_enabled_profile(width_mm, height_mm):
         saw_limit = True
         if (max_w is None or width_mm <= max_w) and (max_h is None or height_mm <= max_h):
             return True
-    # No profile declared a limit → we can't say it won't fit, so don't warn.
+    # No profile declared a limit, so we can't say it won't fit.
     return not saw_limit
 
 
 def deterministic_warnings(method, preset):
-    """Warnings that depend only on (method, preset) — the cells the live JS map can reproduce."""
+    """Warnings that depend only on (method, preset) -- the cells the live JS map can reproduce."""
     warnings = []
     if method in ("pdf", "system") and preset in THERMAL_PRESETS:
         warnings.append(WARNING_SHEET_METHOD_THERMAL_SIZE)
@@ -294,10 +292,10 @@ def deterministic_warnings(method, preset):
 
 
 def label_prefs_warnings(prefs):
-    """Return the list of mismatch warnings for a :class:`UserLabelPrefs` instance.
+    """The mismatch warnings for a :class:`UserLabelPrefs`.
 
-    Server-side so the copy and rules iterate without an app release; both the web page and the
-    mobile prefs API call this so the two always agree.
+    Server-side, so the copy and rules change without an app release and the web page and mobile API
+    agree.
     """
     warnings = deterministic_warnings(prefs.print_method, prefs.preset)
 
@@ -310,8 +308,9 @@ def label_prefs_warnings(prefs):
 
 
 def warning_matrix():
-    """A ``{"method|preset": [warnings]}`` map the ``/printing/`` page embeds so the dropdown can
-    re-render warnings live without a round-trip (the custom-too-large cell still needs the server)."""
+    """A ``{"method|preset": [warnings]}`` map ``/printing/`` embeds, so the dropdown re-renders warnings
+    without a round trip (the custom-too-large cell still needs the server).
+    """
     from auctions.models import UserLabelPrefs
 
     methods = [m[0] for m in UserLabelPrefs.PRINT_METHODS]

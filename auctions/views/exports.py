@@ -1,8 +1,7 @@
 """Taking data back out: the CSV exports, the reports, and the mailing list.
 
-Everything an auction admin downloads or emails rather than reads on a page -- the lot and invoice
-CSVs, the seller's report, the PayPal export -- plus the two views that push a set of participants
-into a club or a marketing list.
+Everything an auction admin downloads or emails, plus the two views that push participants into a
+club or a marketing list.
 """
 
 import csv
@@ -55,6 +54,7 @@ from auctions.models import (
     add_price_info,
     find_image,
 )
+from auctions.services import attachment_filename
 from auctions.species_matching import (
     suggest_species,
 )
@@ -71,15 +71,13 @@ class MyWonLotCSV(LoginRequiredMixin, View):
         lots = add_price_info(
             Lot.objects.filter(Q(winner=request.user) | Q(auctiontos_winner__email=request.user.email))
             .exclude(is_deleted=True)
-            # auction as well as species: lot.scientific_name reads the auction's setting, and a
-            # query per row is not worth paying for a column.
+            # auction as well as species: lot.scientific_name reads the auction's setting.
             .select_related("species", "auction")
         )
         current_site = Site.objects.get_current()
         response = HttpResponse(content_type="text/csv")
-        response["Content-Disposition"] = (
-            f'attachment; filename="my_won_lots_from_{current_site.domain.replace(".", "_")}.csv"'
-        )
+        domain = attachment_filename(current_site.domain.replace(".", "_"))
+        response["Content-Disposition"] = f'attachment; filename="my_won_lots_from_{domain}.csv"'
         writer = csv.writer(response)
         writer.writerow(["Lot number", "Name", "Scientific name", "Auction", "Winning price", "Link"])
         for lot in lots:
@@ -103,14 +101,13 @@ class MyLotReportView(LoginRequiredMixin, View):
         lots = add_price_info(
             Lot.objects.filter(Q(user=request.user) | Q(auctiontos_seller__email=request.user.email))
             .exclude(is_deleted=True)
-            # auction too: lot.scientific_name reads the auction's setting (see the property).
+            # auction too: lot.scientific_name reads the auction's setting.
             .select_related("bap_award__club_member__club", "species", "auction")
         )
         current_site = Site.objects.get_current()
         response = HttpResponse(content_type="text/csv")
-        response["Content-Disposition"] = (
-            f'attachment; filename="my_lots_from_{current_site.domain.replace(".", "_")}.csv"'
-        )
+        domain = attachment_filename(current_site.domain.replace(".", "_"))
+        response["Content-Disposition"] = f'attachment; filename="my_lots_from_{domain}.csv"'
         writer = csv.writer(response)
         writer.writerow(
             [
@@ -168,10 +165,9 @@ class MyLotReportView(LoginRequiredMixin, View):
 
 
 def _report_counts(auction, users):
-    """Every per-person number the auction report prints, as four GROUP BYs.
+    """Every per-person number the report prints, as four GROUP BYs.
 
-    Keyed by ``AuctionTOS`` pk (lots) or by user pk (views, bids, other auctions), so the loop that
-    writes the CSV can look each person up rather than asking the database about them.
+    Keyed by ``AuctionTOS`` pk (lots) or user pk (views, bids, other auctions).
     """
     tos_pks = [tos.pk for tos in users]
     user_pks = [tos.user_id for tos in users if tos.user_id]
@@ -233,7 +229,7 @@ class AuctionReportView(LoginRequiredMixin, AuctionViewMixin, View):
             filename = self.auction.slug + "-report-" + end
         else:
             filename = self.auction.slug + "-report-" + query + "-" + end
-        response["Content-Disposition"] = f'attachment; filename="{filename}.csv"'
+        response["Content-Disposition"] = f'attachment; filename="{attachment_filename(filename)}.csv"'
         writer = csv.writer(response)
         writer.writerow(
             [
@@ -271,14 +267,14 @@ class AuctionReportView(LoginRequiredMixin, AuctionViewMixin, View):
                 "Added auction to their calendar",
             ]
         )
-        # Use the auction's tos_qs property to get the has_ever_granted_permission annotation
+        # tos_qs carries the has_ever_granted_permission annotation.
         users = (
             self.auction.tos_qs.select_related("user__userdata")
             .select_related("pickup_location")
             .prefetch_related(
                 Prefetch(
                     "auctiontos",
-                    # the invoice's own numbers reach for its auction and that auction's club
+                    # The invoice's numbers reach for its auction and that auction's club.
                     queryset=Invoice.objects.select_related("auction__club", "club").order_by("-date"),
                 )
             )
@@ -287,22 +283,14 @@ class AuctionReportView(LoginRequiredMixin, AuctionViewMixin, View):
         if query:
             users = AuctionTOSFilter.generic(None, users, query)
         users = list(users)
-        # Everything below used to be worked out one person at a time -- six `len(queryset)` calls
-        # (each pulling every matching row into Python only to count it), an invoice lookup, and a
-        # count of the person's other auctions. That is nine queries per row of a report an auction
-        # of five hundred people runs. These are the same numbers, one GROUP BY each.
+        # These used to be worked out per person: six `len(queryset)` calls, an invoice lookup and a
+        # count of their other auctions -- nine queries a row. Now one GROUP BY each.
         counts = _report_counts(self.auction, users)
-        # .annotate(distance_traveled=distance_to(\
-        # '`auctions_userdata`.`latitude`', '`auctions_userdata`.`longitude`', \
-        # lat_field_name='`auctions_pickuplocation`.`latitude`',\
-        # lng_field_name="`auctions_pickuplocation`.`longitude`",\
-        # approximate_distance_to=1)\
-        # )
         for data in users:
             distance = ""
             club = ""
             if data.user and data.has_ever_granted_permission:
-                # these things will only be written out if the user wants you to have it
+                # Only written out if the user allows it.
                 lotsViewed = counts["views"].get(data.user_id, 0)
                 lotsBid = counts["bids"].get(data.user_id, 0)
                 lot_qs = Lot.objects.exclude(is_deleted=True).filter(
@@ -341,8 +329,7 @@ class AuctionReportView(LoginRequiredMixin, AuctionViewMixin, View):
             breederPoints = submitted.get("bred", 0)
             lotsWon = counts["won"].get(data.pk, 0)
             address = data.address or ""
-            # data.invoice is the prefetched one; gross_sold and total_club_cut below read it too,
-            # so fetching it separately here meant two invoice queries per row rather than none.
+            # The prefetched invoice; gross_sold and total_club_cut read it too.
             invoice = data.invoice
             if invoice:
                 invoiceStatus = invoice.get_status_display()
@@ -386,8 +373,8 @@ class AuctionReportView(LoginRequiredMixin, AuctionViewMixin, View):
                     account_age,
                     data.memo,
                     "Yes" if data.is_club_member else "",
-                    # Spelled out both ways on purpose: this file gets edited and fed back into the user
-                    # importer, where a blank permission cell is ambiguous (it used to mean "no").
+                    # Spelled out both ways: this file is edited and fed back into the importer,
+                    # where a blank cell used to mean "no".
                     "Yes" if data.bidding_allowed else "No",
                     add_to_calendar,
                 ]
@@ -401,10 +388,9 @@ class AuctionReportView(LoginRequiredMixin, AuctionViewMixin, View):
 
 
 class AddAuctionUsersToClub(LoginRequiredMixin, AuctionViewMixin, View):
-    """Add all auction participants (with email) to the auction's associated club.
+    """Add every auction participant with an email to the auction's club.
 
-    Only creates new ClubMember records — never updates existing ones.
-    Skips participants without an email address.
+    Only creates new ClubMember records; never updates existing ones.
     """
 
     def post(self, request, *args, **kwargs):
@@ -414,7 +400,7 @@ class AddAuctionUsersToClub(LoginRequiredMixin, AuctionViewMixin, View):
             messages.error(request, "This auction is not associated with a club.")
             return redirect(reverse("auction_tos_list", kwargs={"slug": auction.slug}))
 
-        # Permission check: must have add_edit permission on the club or be the auction creator
+        # Needs add_edit on the club, or to be the auction creator.
         if (
             not request.user.is_superuser
             and not check_club_permission(request.user, club, "permission_add_edit")
@@ -431,8 +417,7 @@ class AddAuctionUsersToClub(LoginRequiredMixin, AuctionViewMixin, View):
         )
         added_count = 0
         skipped_count = 0
-        # Who is already a member, in two queries rather than two per person in the auction.
-        # Emails are matched case-insensitively, as the per-row lookup did.
+        # Who is already a member, in two queries; emails matched case-insensitively.
         members_by_email = {}
         members_by_user = {}
         for member_email, member_user_id in ClubMember.objects.filter(club=club).values_list("email", "user_id"):
@@ -457,7 +442,7 @@ class AddAuctionUsersToClub(LoginRequiredMixin, AuctionViewMixin, View):
                 source=str(auction.title)[:200],
                 added_by=request.user,
             )
-            # keep the maps current so two TOS rows with the same email do not both get added
+            # Keep the maps current, so two rows with one email aren't both added.
             if tos.email:
                 members_by_email[tos.email.lower()] = True
             if tos.user_id:
@@ -624,7 +609,8 @@ class AuctionInvoicesPayPalCSV(LoginRequiredMixin, AuctionViewMixin, View):
         response = HttpResponse(content_type="text/csv")
         due_date = timezone.now().strftime("%m/%d/%Y")
         current_site = Site.objects.get_current()
-        response["Content-Disposition"] = f'attachment; filename="{self.auction.slug}-paypal-{chunk}.csv"'
+        filename = attachment_filename(f"{self.auction.slug}-paypal-{chunk}")
+        response["Content-Disposition"] = f'attachment; filename="{filename}.csv"'
         writer = csv.writer(response)
         writer.writerow(
             [
@@ -648,13 +634,11 @@ class AuctionInvoicesPayPalCSV(LoginRequiredMixin, AuctionViewMixin, View):
         count = 0
         chunkSize = 150  # attention: this is also set in models.auction.paypal_invoice_chunks
         no_email_count = 0
-        # Keep every unpaid invoice's stored total fresh before billing (side effect preserved).
+        # Keep every unpaid invoice's stored total fresh before billing.
         for invoice in self.auction.paypal_invoices:
             invoice.recalculate()
-        # Bill only the invoices that still owe the club after rounding, advancing the chunk
-        # counter over the exact same set that auction.paypal_invoice_chunks counts
-        # (auction.paypal_invoices_to_export), so every billed invoice lands in a chunk the UI
-        # offers -- see Item 21.
+        # Only invoices that still owe after rounding, over the same set
+        # auction.paypal_invoice_chunks counts, so every billed invoice lands in an offered chunk.
         for invoice in self.auction.paypal_invoices_to_export:
             count += 1
             if count <= chunkSize * chunk and count > chunkSize * (chunk - 1):
@@ -667,9 +651,8 @@ class AuctionInvoicesPayPalCSV(LoginRequiredMixin, AuctionViewMixin, View):
                 noteToCustomer = f"https://{current_site.domain}/invoices/{invoice.pk}/"
                 termsAndConditions = ""
                 memoToSelf = invoice.auctiontos_user.memo
-                # Bill the rounded balance so the PayPal invoice matches the invoice total the
-                # buyer sees. Every invoice here already owes the club (rounded_net_after_payments
-                # < 0); a missing email is reported via no_email_count but still consumes its slot.
+                # Bill the rounded balance, so the PayPal invoice matches what the buyer sees. A
+                # missing email is reported but still consumes its slot.
                 if invoice.auctiontos_user.email:
                     name_parts = (invoice.auctiontos_user.name or "").split()
                     if len(name_parts) >= 2:
@@ -708,7 +691,7 @@ class AuctionInvoicesPayPalCSV(LoginRequiredMixin, AuctionViewMixin, View):
 
 
 class AuctionLotsCSV(LoginRequiredMixin, AuctionViewMixin, View):
-    """Get a CSV file showing all sold lots, who bought/sold them, and the winner's location"""
+    """A CSV of all sold lots, who bought and sold them, and the winner's location."""
 
     def get(self, request):
         # Create the HttpResponse object with the appropriate CSV header.
@@ -719,7 +702,8 @@ class AuctionLotsCSV(LoginRequiredMixin, AuctionViewMixin, View):
         else:
             filename = "lot-list-" + query
             query = unquote(query)
-        response["Content-Disposition"] = f'attachment; filename="{self.auction.slug}-{filename}.csv"'
+        filename = attachment_filename(f"{self.auction.slug}-{filename}")
+        response["Content-Disposition"] = f'attachment; filename="{filename}.csv"'
         writer = csv.writer(response)
         custom_dropdown_enabled = (
             self.auction.use_custom_dropdown_field != "disable"
@@ -743,8 +727,7 @@ class AuctionLotsCSV(LoginRequiredMixin, AuctionViewMixin, View):
             "Club Cut",
             "Seller cut",
         ]
-        # Only when the auction actually collected one, so a club that turned the field off
-        # doesn't get an empty column in every report.
+        # Only when the auction collected one, so a club with the field off gets no empty column.
         if self.auction.use_scientific_name:
             first_row_fields.insert(2, "Scientific name")
         if self.auction.use_custom_checkbox_field and self.auction.custom_checkbox_name:
@@ -754,8 +737,8 @@ class AuctionLotsCSV(LoginRequiredMixin, AuctionViewMixin, View):
         if custom_dropdown_enabled:
             first_row_fields.append(self.auction.custom_dropdown_name)
         writer.writerow(first_row_fields)
-        # Every row names the seller and the winner and says where each of them collects, which
-        # reaches the AuctionTOS, its pickup location, and (through display_name) its auction.
+        # Every row names the seller and winner and where each collects, reaching the AuctionTOS,
+        # its pickup location and its auction.
         lots = self.auction.lots_qs.select_related(
             "species",
             "auction",
@@ -815,9 +798,8 @@ class LeaveFeedbackView(LoginRequiredMixin, ListView):
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         cutoffDate = timezone.now() - timedelta(days=90)
-        # Each row names the other party and links to the lot, so it reads the lot's auction, the
-        # AuctionTOS, that TOS's auction (for the online/in-person display rule) and the person's
-        # userdata. Without these it was six queries a row.
+        # Each row names the other party and links to the lot, reaching the lot's auction, the
+        # AuctionTOS, that TOS's auction and the person's userdata: six queries a row without these.
         related = (
             "auction",
             "auctiontos_seller__auction",
@@ -850,7 +832,7 @@ class LeaveFeedbackView(LoginRequiredMixin, ListView):
 
 
 class FindImageIcon(APIView):
-    """Return a handy little icon if the lot name will have an image associated with it"""
+    """An icon showing whether the lot name will have an image associated with it."""
 
     authentication_classes = [SessionAuthentication, TokenAuthentication]
     permission_classes = [IsAuthenticated]
@@ -870,10 +852,9 @@ class FindImageIcon(APIView):
 class SpeciesSuggestions(APIView):
     """Given a lot name, return the handful of species it might be.
 
-    Backs the scientific-name picker on every lot form.  The list is always short and always
-    comes out of the Species table, so the client can render it as a ``<select>`` and the server
-    can reject anything that isn't in it -- see ``configure_species_field`` and
-    ``clean_species_for_auction`` in forms.py.
+    Backs the scientific-name picker. The list always comes from the Species table, so the client
+    renders a ``<select>`` and the server rejects anything not in it -- see ``configure_species_field``
+    and ``clean_species_for_auction``.
     """
 
     authentication_classes = [SessionAuthentication, TokenAuthentication]
@@ -881,12 +862,10 @@ class SpeciesSuggestions(APIView):
 
     def post(self, request, *args, **kwargs):
         name = (request.POST.get("name") or "").strip()
-        # The last-typed name wins: on the bulk-add page several rows can be in flight at once and
-        # the client matches responses back up by this.
+        # The last-typed name wins: the bulk-add page has several rows in flight.
         if not name:
             return JsonResponse({"name": name, "choices": [], "source": "none"})
-        # Optional, and only ever a tie-break inside suggest_species.  Not validated beyond "is it
-        # a number" on purpose: a category that doesn't exist simply matches nothing.
+        # Only a tie-break inside suggest_species; a category that doesn't exist matches nothing.
         category = request.POST.get("category") or None
         matches, source = suggest_species(
             name,
@@ -902,9 +881,8 @@ class SpeciesSuggestions(APIView):
                         "id": species.pk,
                         "scientific_name": species.full_scientific_name,
                         "common_name": species.common_name,
-                        # The category the lot will get if this species is picked -- by name for
-                        # the line of text the forms show, and by pk so the category picker can be
-                        # set to it rather than left showing whatever the name guesser said.
+                        # The category this species would give the lot: by name for the text, and by
+                        # pk so the picker can be set to it.
                         "category": str(species.category) if species.category else "",
                         "category_id": species.category_id or "",
                         "label": species.label,
@@ -920,13 +898,6 @@ class AuctionChats(AuctionViewMixin, LoginRequiredMixin, ListView):
 
     model = LotHistory
     template_name = "chats.html"
-
-    # def dispatch(self, request, *args, **kwargs):
-    #     self.auction = Auction.objects.exclude(is_deleted=True).filter(slug=kwargs.pop("slug")).first()
-    #     if not self.auction:
-    #         raise Http404
-    #     self.is_auction_admin
-    #     return super().dispatch(request, *args, **kwargs)
 
     def get_queryset(self):
         # get related auctiontos if the user has joined the auction

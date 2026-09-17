@@ -1,34 +1,17 @@
-"""Every tool on ``/mcp/``, pointed at somebody else's club and somebody else's auction.
+"""Every tool on ``/mcp/``, run against somebody else's club and auction.
 
-The catalogue is one registry with one dispatcher, which is what makes an audit like this possible
-at all: there is no second code path where a permission could be checked differently. What there is
-no substitute for is *running* every tool as somebody who should not be allowed to, because the
-gates are per-resolver and a new one is a new chance to forget.
+A driver rather than hand-written cases: two complete tenants are built, and every registered action
+is run against tenant A's objects by an outsider and by a legitimate administrator of tenant B.
 
-So this is a driver rather than a list of hand-written cases. Two complete, separate tenants are
-built, and then **every registered action** is run against tenant A's objects by two people who have
-no business there: a plain member of nothing, and a legitimate administrator of tenant B — who is
-the interesting one, because they hold real club and auction permissions and the question is only
-whether those are correctly scoped to their own club and their own auction.
+Two invariants, checked for every action:
 
-Two invariants, and both are checked for every action rather than argued about per action:
+* **Nothing about tenant A comes back.** Its private strings contain ``Zorblatt``; the serialised
+  answer is searched for the whole stored strings, minus anything the caller supplied (the probe is
+  the bare word). The club's name carries nothing: clubs are public.
+* **Nothing about tenant A changes.** Every watched row is compared before and after, and a created
+  row may not reference tenant A.
 
-* **Nothing about tenant A comes back.** Everything private in tenant A carries the word
-  ``Zorblatt`` — a participant's name, their email, their memo, a lot's name, the auction's title.
-  The tool's whole answer is serialised and searched for those strings, and a string the *caller
-  supplied* is never counted: half these tools take a search term, and a tool that answers
-  "no page matching “Zorblatt”" has repeated the question, not answered it. So the probe typed into
-  every free-text parameter is the bare word and the things looked for are the whole stored
-  strings, which only the database knows. The club's *name* deliberately carries nothing: a club's
-  existence and name are on the public club finder, so a listing that names one is not a leak and
-  this audit should not pretend it is.
-* **Nothing about tenant A changes.** Every row of every model that matters is captured before and
-  after: a row that belongs to tenant A may not be altered or deleted, and a row created by the
-  call may not reference tenant A or carry its sentinel.
-
-An action that legitimately does something for the *caller* — ``set_my_auction`` writing their own
-pointer, ``request_a_skill`` filing their own note — passes both, which is the point of writing
-the invariants about tenant A rather than about "did anything happen".
+An action that acts on the *caller's* own data (``set_my_auction``, ``request_a_skill``) passes both.
 """
 
 from __future__ import annotations
@@ -55,19 +38,14 @@ from auctions.models import (
     VolunteerJob,
 )
 
-#: The word every private string in tenant A is built out of, and the probe typed into every
-#: free-text parameter. Not on the club's name -- see the module docstring.
+#: The word in every private string in tenant A, and the probe typed into free-text parameters.
 SENTINEL = "Zorblatt"
 
-#: Tenant A's bidder number. Deliberately **not** one of the secrets below: it is supplied as a
-#: parameter by half of these calls, so an answer containing it has repeated the question, and a
-#: four-digit string is the one thing here that could turn up in an unrelated answer by accident.
-#: What matters is whether the *name* behind it comes back, and that is checked.
+#: Tenant A's bidder number. Not a secret: it's supplied as a parameter by half these calls.
 THEIR_BIDDER = "9317"
 
 
-#: The strings only tenant A's database knows. A leak is one of these in an answer, minus anything
-#: the caller put in the question.
+#: The strings only tenant A's database knows.
 def secrets() -> tuple[str, ...]:
     return (
         f"{SENTINEL} Member",
@@ -81,12 +59,8 @@ def secrets() -> tuple[str, ...]:
     )
 
 
-#: The models an audit of "did anything of theirs change" has to watch. Everything an auction or a
-#: club is made of, plus the two rows a write could quietly create against somebody else's tenant.
-#: The three at the end were added when the auction setup tools were: a pickup location, a dropdown
-#: option and a request for volunteers are all rows an outsider could otherwise have created inside
-#: somebody else's auction without this driver noticing, because the "nothing of theirs changed"
-#: invariant can only watch tables it has been given.
+#: Models the "nothing of theirs changed" invariant watches: everything an auction or club is made
+#: of, plus rows a write could create inside somebody else's auction.
 WATCHED = (
     Auction,
     AuctionTOS,
@@ -103,12 +77,12 @@ WATCHED = (
 
 
 def _columns(model) -> list[str]:
-    """Every concrete column on a model, so a snapshot compares values and not just which rows exist."""
+    """Every concrete column on a model, so a snapshot compares values rather than just row ids."""
     return [field.attname for field in model._meta.concrete_fields]
 
 
 class CrossTenantTestCase(TestCase):
-    """Two tenants that share nothing, and two people with no business in the first one."""
+    """Two tenants that share nothing, and two people with no business in the first."""
 
     def setUp(self):
         soon = timezone.now() + datetime.timedelta(days=10)
@@ -156,9 +130,7 @@ class CrossTenantTestCase(TestCase):
             bidder_number=THEIR_BIDDER,
             memo=f"{SENTINEL}MEMO",
         )
-        # A custom lot number, because that is what ``_resolve_lot`` matches on: without one the
-        # probe below never reaches a lot at all, and half the audit would be asserting that a
-        # permission check refused a lot it had failed to find.
+        # A custom lot number, which is what ``_resolve_lot`` matches on.
         self.their_lot = Lot.objects.create(
             lot_name=f"{SENTINEL} Guppy Trio",
             auction=self.their_auction,
@@ -174,8 +146,7 @@ class CrossTenantTestCase(TestCase):
             date_end=soon + datetime.timedelta(hours=2),
         )
         self.their_invoice = Invoice.objects.get_or_create(auctiontos_user=self.their_tos)[0]
-        # One row each for the three setup tables, so the driver has something of theirs to try to
-        # change rather than only something to try to add to.
+        # One row each for the setup tables, so there's something of theirs to try to change.
         self.their_dropdown_option = AuctionDropdown.objects.create(
             auction=self.their_auction, user=self.their_owner, value=f"{SENTINEL}Fish"
         )
@@ -226,10 +197,9 @@ class CrossTenantTestCase(TestCase):
         # --- and somebody in nothing at all ----------------------------------------------
         self.outsider = User.objects.create_user(username="outsider", password="x", email="outsider@example.invalid")
 
-        # --- and an ordinary bidder *inside* tenant A -------------------------------------
-        # The persona the two above cannot cover. A participant is allowed in: they see the
-        # auction, they see the lots, they may add their own. What they may not do is read another
-        # participant's email, memo or invoice, or change anything that is not theirs.
+        # --- and an ordinary bidder inside tenant A --------------------------------------
+        # They may see the auction and its lots, but not another participant's email, memo or
+        # invoice, and may change nothing that isn't theirs.
         self.their_bidder_user = User.objects.create_user(
             username="their_bidder", password="x", email="bidder@example.invalid"
         )
@@ -250,13 +220,12 @@ class CrossTenantTestCase(TestCase):
     def _run(self, user, name, params):
         request = RequestFactory().post("/")
         request.user = user
-        # What ``mcp.tools.call_tool`` sets: an agent is not looking at a page, so nothing can be
-        # inferred from one. Passing a page here would be handing the caller context they never had.
+        # What ``mcp.tools.call_tool`` sets: an agent has no page context.
         request.palette_page = {}
         return palette_actions.run_action(request, name, params)
 
     def _their_values(self):
-        """A value for every parameter in the registry, pointing at tenant A wherever it names one."""
+        """A value for every registry parameter, pointing at tenant A wherever it names one."""
         return {
             # who and what, all of it theirs
             "auction": self.their_auction.slug,
@@ -311,14 +280,11 @@ class CrossTenantTestCase(TestCase):
             "pickup_location": "Northside hall",
             "quantity": 1,
             "lots": "one audit lot",
-            # The pricing and refund tools. ``item`` is the probe for price_history, so the leak
-            # audit really drives it; ``percent``/``paid_by`` take refund_lot past its own argument
-            # parsing and up to the permission check, which is the line being tested.
+            # ``item`` is price_history's probe; percent and paid_by take refund_lot past argument
+            # parsing to the permission check.
             "item": SENTINEL,
             "years": 3,
-            # The page-only writes (``mcp_only``). Each of these takes its action past argument
-            # parsing and up to the permission check, which is the line this audit tests -- an
-            # action that bails on a missing argument proves nothing about whether it leaks.
+            # The ``mcp_only`` writes, again to reach the permission check.
             "restore": False,
             "permanently": False,
             "active": False,
@@ -336,8 +302,7 @@ class CrossTenantTestCase(TestCase):
             "percent": 50,
             "paid_by": "club",
             "page": "auction_main",
-            # The auction and account setup tools. Each of these is what a real call would carry, so
-            # a missing gate shows up as a row that moved rather than as a question coming back.
+            # The auction and account setup tools, with what a real call would carry.
             "location_coordinates": "42.36,-71.06",
             "coordinates": "42.36,-71.06",
             "by_mail": False,
@@ -357,13 +322,12 @@ class CrossTenantTestCase(TestCase):
         }
 
     def _params_for(self, action):
-        """Only what this action documents, because ``run_action`` refuses anything else."""
+        """Only the parameters this action documents; ``run_action`` refuses anything else."""
         values = self._their_values()
         return {key: value for key, value in values.items() if key in action.params}
 
     def _snapshot(self):
-        # ``pk`` rather than "id": not every model here names its primary key that way, and a
-        # snapshot that raises is a snapshot that never catches anything.
+        # ``pk``, since not every model names its primary key ``id``.
         return {
             model.__name__: {row["pk"]: dict(row) for row in model.objects.all().values("pk", *_columns(model))}
             for model in WATCHED
@@ -388,9 +352,7 @@ class CrossTenantTestCase(TestCase):
     def _assert_nothing_of_theirs_moved(self, before, after, where, *, may_create_inside=False):
         """Nothing of tenant A's may change or vanish, and nothing new may land inside it.
 
-        ``may_create_inside`` is for the participant persona: somebody who has joined an auction is
-        *supposed* to be able to add a lot to it, so for them the invariant is only about rows that
-        already existed and were not theirs.
+        ``may_create_inside`` for the participant persona, who may legitimately add a lot.
         """
         theirs = self._their_pks()
         for model, rows in after.items():
@@ -427,7 +389,7 @@ class NobodyElsesDataTests(CrossTenantTestCase):
             answer = json.dumps(result, default=str)
             asked = json.dumps(params, default=str)
             for secret in secrets():
-                # Supplied, then echoed, is the question coming back -- not an answer to it.
+                # Supplied, then echoed, is the question coming back.
                 if secret in answer and secret not in asked:
                     leaked.append(f"{name} leaked “{secret}”: {answer[:300]}")
         self.assertEqual(leaked, [], f"{who} was told about somebody else's auction")
@@ -439,12 +401,7 @@ class NobodyElsesDataTests(CrossTenantTestCase):
         self._assert_no_leak(self.our_owner, "another club's admin")
 
     def test_a_bidder_is_not_told_about_the_other_bidders(self):
-        """A participant sees the auction and its lots. They do not see each other's contact details.
-
-        So this checks a narrower set than the two above: the auction's title and a lot's name are
-        things they are entitled to, and an address, a memo and somebody else's name on an invoice
-        are not.
-        """
+        """A participant sees the auction and its lots, but no one else's address, memo or invoice."""
         private = (
             f"{SENTINEL.lower()}-bidder@example.invalid",
             f"{SENTINEL.lower()}-member@example.invalid",
@@ -486,11 +443,8 @@ class NobodyElsesRowsTests(CrossTenantTestCase):
 
 
 class NothingCrashesInsteadOfRefusingTests(CrossTenantTestCase):
-    """A refusal has to be a refusal, not a traceback that happens to leave the data alone.
-
-    ``run_action`` turns any unhandled exception into "Something went wrong ... reference", which
-    looks like a refusal from the outside and is a bug on the inside -- and an audit that only
-    asserted "nothing changed" would pass on every one of them.
+    """A refusal must be a refusal, not an unhandled exception ``run_action`` turns into "Something went
+    wrong", which looks the same from outside.
     """
 
     def test_no_action_blows_up_on_somebody_elses_tenant(self):
@@ -509,15 +463,7 @@ class NothingCrashesInsteadOfRefusingTests(CrossTenantTestCase):
 
 
 class PrintLabelsByPrimaryKeyTests(CrossTenantTestCase):
-    """The one the driver above found, written out so it cannot come back quietly.
-
-    ``print_labels`` took a ``lot_id`` and looked it up by primary key with no check at all, then
-    answered "Opening the label for <lot name>". A primary key is a guessable number, so that was
-    an enumeration oracle over every lot on the site -- including lots in auctions nobody has
-    promoted -- and the link it handed back went to a page that would then turn the caller away.
-    ``SingleLotLabelView.dispatch`` was always right; the resolver had simply never been given the
-    same rule.
-    """
+    """``print_labels`` looked a lot up by primary key with no check, an enumeration oracle over every lot."""
 
     def _print(self, user):
         return self._run(user, "print_labels", {"lot_id": self.their_lot.pk})
@@ -552,12 +498,9 @@ class PrintLabelsByPrimaryKeyTests(CrossTenantTestCase):
 
 
 class AuctionSetupBelongsToTheAuctionTests(CrossTenantTestCase):
-    """The setup tools, named one at a time.
+    """The setup tools, named one at a time: the gate is what refuses, not a malformed call.
 
-    The driver above proves nothing of tenant A's moved. These prove the gate is what stopped it,
-    which is a different claim: an action that refuses everybody because it can't find the auction
-    passes the driver and is still broken. Each of these checks that the auction's own admin CAN do
-    the thing, so a refusal is about who is asking rather than about the call being malformed.
+    Each checks the auction's own admin can do the thing, so a refusal is about who is asking.
     """
 
     def _their(self, action, **params):
@@ -565,7 +508,7 @@ class AuctionSetupBelongsToTheAuctionTests(CrossTenantTestCase):
         return self._run(self.our_owner, action, {"auction": self.their_auction.slug, **params})
 
     def _theirs_own(self, action, **params):
-        """The auction's own admin, so a refusal above is about who asked and not about the call."""
+        """The auction's own admin, so a refusal is about who asked rather than the call."""
         return self._run(self.their_owner, action, {"auction": self.their_auction.slug, **params})
 
     def test_a_stranger_cannot_add_a_pickup_location(self):
@@ -656,11 +599,7 @@ class ClubSetupBelongsToTheClubTests(CrossTenantTestCase):
         self.assertNotIn("ok", result)
 
     def test_the_breeder_award_permission_is_not_the_edit_club_permission(self):
-        """The four settings pages have four different gates, and this is the one that differs most.
-
-        Somebody who may edit the club's details still may not change how its points are awarded,
-        because that is a different job held by a different officer.
-        """
+        """Editing the club's details doesn't grant control of its breeder award settings."""
         officer = ClubMember.objects.create(
             club=self.their_club,
             user=self.our_owner,
