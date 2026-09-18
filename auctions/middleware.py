@@ -10,16 +10,31 @@ class ContentSecurityPolicyMiddleware:
 
     See the setting for what it deliberately leaves out. A response that sets its own header keeps
     it, so a page needing something looser can say so.
+
+    ``frame-ancestors`` comes off a response Django has marked ``xframe_options_exempt`` -- the five
+    club-website embeds in ``auctions/views/embeds.py``, which exist to be iframed on somebody
+    else's site. CSP wins over ``X-Frame-Options`` in every browser that reads both, so a blanket
+    ``frame-ancestors 'self'`` would silently undo the decorator those views already carry.
     """
 
     def __init__(self, get_response):
         self.get_response = get_response
 
+    @staticmethod
+    def _without_frame_ancestors(policy):
+        directives = [directive.strip() for directive in policy.split(";")]
+        return "; ".join(
+            directive for directive in directives if directive and not directive.lower().startswith("frame-ancestors")
+        )
+
     def __call__(self, request):
         response = self.get_response(request)
         policy = getattr(settings, "CONTENT_SECURITY_POLICY", "")
         if policy and "Content-Security-Policy" not in response:
-            response["Content-Security-Policy"] = policy
+            if getattr(response, "xframe_options_exempt", False):
+                policy = self._without_frame_ancestors(policy)
+            if policy:
+                response["Content-Security-Policy"] = policy
         return response
 
 

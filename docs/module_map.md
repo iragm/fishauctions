@@ -154,7 +154,7 @@ this only quotes its opening sentence.
   Provider abstraction for everything on this site that talks to a language model.
 - **`mailchimp.py`** (654 lines)
   One-way Django -> Mailchimp sync for clubs.
-- **`middleware.py`** (109 lines)
+- **`middleware.py`** (124 lines)
   Custom middleware for the auctions application.
   `ContentSecurityPolicyMiddleware`, `ShortAnonymousSessionMiddleware`, `MobileAppMiddleware`
 - **`model_caching.py`** (79 lines)
@@ -205,7 +205,7 @@ this only quotes its opening sentence.
 - **`routing.py`** (9 lines)
 - **`serializers.py`** (855 lines)
   DRF serializers for the club API.
-- **`services.py`** (1281 lines)
+- **`services.py`** (1289 lines)
   Operations that are the same whoever asks: web page, API, app or assistant.
 - **`signals.py`** (965 lines)
   Signal handlers for the auctions app.
@@ -439,9 +439,9 @@ this only quotes its opening sentence.
   `QueryGrowthMixin`, `AuctionUsersTableQueryCountTests`, `AuctionLotAdminTableQueryCountTests`, `LotDetailQueryCountTests`, `InvoiceQueryCountTests`, `SellerAndFeedbackQueryCountTests`, `LongLivedInstanceTests`, `CachedPropertyWiringTests`, `LotListQueryCountTests`, `LotCachedPropertyTests`
 - **`test_remote_print.py`** (539 lines)
   Printing from a computer to the phone's Bluetooth label printer.
-- **`test_security.py`** (402 lines)
+- **`test_security.py`** (443 lines)
   Tests that AuctionTOS and user data are protected: unauthenticated and non-admin users can't reach
-  `AuctionTOSSecurityTestCase`, `LotOrderCookieTestCase`, `AttachmentFilenameTestCase`, `ExportFilenameTestCase`
+  `AuctionTOSSecurityTestCase`, `LotOrderCookieTestCase`, `AttachmentFilenameTestCase`, `ExportFilenameTestCase`, `CsvCellTestCase`, `ContentSecurityPolicyTestCase`
 - **`test_site_config.py`** (782 lines)
   Site-wide configuration: currency, email fields, locations, demo data and defaults.
   `CurrencyCustomizationTests`, `AuctionEmailFieldsTest`, `UserLocationUpdateTests`, `LoadDemoDataTests`, `EnsureSiteDefaultsCommandTests`, `AdminReadonlyFieldsTests`
