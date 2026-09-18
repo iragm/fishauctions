@@ -72,6 +72,22 @@ from .club_members import renew_club_member
 logger = logging.getLogger(__name__)
 
 
+def _safe_field_dump(data):
+    """Field names, with values only for the fields the ingest accepts.
+
+    Enough to diagnose a failed import without copying whatever a caller sent into a club's history.
+    """
+    from auctions.services import INGEST_ALLOWED_FIELDS
+
+    parts = []
+    for key in sorted(data):
+        if key in INGEST_ALLOWED_FIELDS:
+            parts.append(f"{key}={str(data[key])[:60]!r}")
+        else:
+            parts.append(f"{key}=(not a member field)")
+    return ", ".join(parts)[:400]
+
+
 class ClubAPIViewMixin:
     """Shared mixin for club REST API views"""
 
@@ -153,22 +169,31 @@ class ClubMemberListCreateAPIView(ClubAPIViewMixin, generics.ListCreateAPIView):
     def create(self, request, *args, **kwargs):
         if not self.is_api_key_request():
             return super().create(request, *args, **kwargs)
+        # Before validating: a key without this permission must not be able to write anything at
+        # all, not even a history line naming what it tried.
+        self.require_club_permission(
+            "permission_add_edit",
+            "can_add_club_members",
+            "You do not have permission to add members to this club.",
+        )
         serializer = self.get_serializer(data=self.get_mapped_request_data())
         try:
             serializer.is_valid(raise_exception=True)
         except Exception:
-            # Logged with the raw POST so admins can diagnose it.
+            # Logged with the field names, and values only for the fields we expect. The whole raw
+            # POST used to go in, which put arbitrary caller text in the club's audit log and
+            # silently overran action's 800 characters.
             try:
                 club = self.get_club()
                 actor = f"API key [{request.api_key.prefix}] ({request.api_key.name})"
-                field_dump = ", ".join(f"{k}={v!r}" for k, v in request.data.items())
+                field_dump = _safe_field_dump(request.data)
                 errors = serializer.errors
                 ClubHistory.objects.create(
                     club=club,
                     user=None,
                     action=(
                         f"Failed to create member via {actor} — validation errors: {errors} — POST data: {field_dump}"
-                    ),
+                    )[:800],
                     applies_to="MEMBERS",
                 )
             except Exception:
@@ -295,7 +320,7 @@ class ClubMemberRenewAPIView(ClubAPIViewMixin, APIView):
             serializer.is_valid(raise_exception=True)
         except Exception:
             try:
-                field_dump = ", ".join(f"{k}={v!r}" for k, v in request.data.items())
+                field_dump = _safe_field_dump(request.data)
                 ClubHistory.objects.create(
                     club=club,
                     user=None,

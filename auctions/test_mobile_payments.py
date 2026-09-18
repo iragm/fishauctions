@@ -640,14 +640,16 @@ class SquareTokenHandoutAuditTests(StandardTestCase):
         from auctions.mobile.services.payments import PaymentService
 
         request = MagicMock()
-        request.META = {"HTTP_X_FORWARDED_FOR": "203.0.113.7, 70.41.3.18"}
+        # X-Forwarded-For is the caller's to write, so the audit line must not use it.
+        request.META = {"HTTP_X_FORWARDED_FOR": "203.0.113.7, 70.41.3.18", "HTTP_X_REAL_IP": "198.51.100.9"}
         with patch.object(PaymentService, "_get_seller_for_invoice", return_value=self._mock_seller()):
             PaymentService.create_mobile_payment(invoice_pk=self.pay_invoice.pk, user=self.admin_user, request=request)
         history = AuctionHistory.objects.filter(auction=self.online_auction, user=self.admin_user).first()
         self.assertIsNotNone(history)
         self.assertIn("Square Tap to Pay access token issued", history.action)
         self.assertIn(str(self.pay_invoice.pk), history.action)
-        self.assertIn("203.0.113.7", history.action)  # first X-Forwarded-For hop, not the proxy
+        self.assertIn("198.51.100.9", history.action)  # X-Real-IP, set by nginx
+        self.assertNotIn("203.0.113.7", history.action)  # never the address the caller claimed
         self.assertEqual(history.applies_to, "INVOICES")
 
     def test_denied_create_records_nothing(self):

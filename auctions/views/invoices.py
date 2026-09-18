@@ -351,10 +351,12 @@ class InvoiceNoLoginView(InvoiceView):
         self.uuid = kwargs.get("uuid", None)
         invoice = self.get_object()
         invoice.opened = True
-        invoice.save()
+        # Only this column: a payment webhook marking the invoice PAID runs concurrently with this
+        # page load, and a full-row save would write our stale status back over it.
+        invoice.save(update_fields=["opened"])
         if invoice.auctiontos_user:
             invoice.auctiontos_user.email_address_status = "VALID"
-            invoice.auctiontos_user.save()
+            invoice.auctiontos_user.save(update_fields=["email_address_status"])
         if invoice.club and not invoice.auction:
             return render(
                 request,
@@ -372,9 +374,10 @@ class SquarePaymentSuccessView(InvoiceNoLoginView):
     def dispatch(self, request, *args, **kwargs):
         self.uuid = kwargs.get("uuid", None)
         invoice = self.get_object()
-        # Mark invoice as opened but don't verify email
+        # Mark invoice as opened but don't verify email. Only this column: Square's webhook marks the
+        # same invoice PAID at the same moment as this redirect, and a full-row save undoes it.
         invoice.opened = True
-        invoice.save()
+        invoice.save(update_fields=["opened"])
         # Skip the parent's dispatch, which marks the email VALID, and call InvoiceView's.
         return InvoiceView.dispatch(self, request, *args, **kwargs)
 

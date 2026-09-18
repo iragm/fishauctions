@@ -39,6 +39,7 @@ from user_agents import parse
 from webpush import send_user_notification
 from webpush.models import PushInformation
 
+from auctions.client_ip import client_ip
 from auctions.filters import (
     AuctionTOSFilter,
 )
@@ -408,16 +409,13 @@ class PageViewCreate(APIView):
             os = "UNKNOWN"
             parsed_ua = parse(user_agent)
             user_agent = user_agent[:200]
-            referrer = clean_referrer(data.get("referrer", None)[:600])
+            # .get() with no default: an absent referrer is an ordinary beacon, not a 500. This
+            # endpoint is AllowAny, so a missing field must never raise.
+            referrer = clean_referrer(data.get("referrer") or "")[:600]
             source = data.get("src", None)
             uid = data.get("uid", None)
             # mark auction campaign results if applicable present
-            ip = ""
-            x_forwarded_for = request.META.get("HTTP_X_FORWARDED_FOR")
-            if x_forwarded_for:
-                ip = x_forwarded_for.split(",")[0]
-            else:
-                ip = request.META.get("REMOTE_ADDR")
+            ip = client_ip(request)
             if uid:  # and not request.user.is_authenticated:
                 userdata = UserData.objects.filter(unsubscribe_link=uid).first()
                 if userdata:

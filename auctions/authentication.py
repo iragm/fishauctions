@@ -56,12 +56,23 @@ class OptionalAPIKeyAuthentication(APIKeyAuthentication):
 
 
 class ApiKeyThrottle(SimpleRateThrottle):
+    """Per key once authenticated, per address before that.
+
+    DRF runs throttles after authentication, and ``request.api_key`` only exists once a key
+    verified -- so returning None for a failed attempt left every *rejected* request unthrottled,
+    and each one costs a full PBKDF2 ``check_password``. Prefixes are shown in the UI, so anybody
+    who has seen one could spend the server's CPU freely. Unauthenticated attempts now share a
+    bucket keyed on the address.
+    """
+
     scope = "api_key_default"
 
     def get_cache_key(self, request, view):
         api_key = getattr(request, "api_key", None)
         if not api_key:
-            return None
+            from auctions.client_ip import client_ip
+
+            return f"throttle_api_key_anon_{client_ip(request) or 'unknown'}"
         if api_key.rate_limit:
             self.num_requests = api_key.rate_limit
             self.duration = 3600

@@ -84,7 +84,10 @@ class Command(BaseCommand):
                     title=subject,
                     body=f"Tap to manage {auction}.",
                     url=f"https://{current_site.domain}{auction.get_absolute_url()}",
-                    send_email=lambda: mail.send(
+                    # Bound by default argument: the lambda captures the *variable*, so if
+                    # notify_user ever defers the call every queued email would go out with the
+                    # last auction of the loop.
+                    send_email=lambda auction=auction, userData=userData, subject=subject: mail.send(
                         auction.created_by.email,
                         template="auction_welcome",
                         context={
@@ -109,7 +112,7 @@ class Command(BaseCommand):
                     title=f"Invoices are ready for {auction}",
                     body=f"Tap to review invoices for {auction}.",
                     url=f"https://{current_site.domain}{auction.get_absolute_url()}",
-                    send_email=lambda: mail.send(
+                    send_email=lambda auction=auction, userData=userData: mail.send(
                         auction.created_by.email,
                         template="auction_invoices",
                         context={
@@ -132,7 +135,7 @@ class Command(BaseCommand):
                     title=f"Thanks for running {auction}",
                     body=f"Tap to see how {auction} went.",
                     url=f"https://{current_site.domain}{auction.get_absolute_url()}",
-                    send_email=lambda: mail.send(
+                    send_email=lambda auction=auction, userData=userData: mail.send(
                         auction.created_by.email,
                         template="auction_thanks",
                         context={

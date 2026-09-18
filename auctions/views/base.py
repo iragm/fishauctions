@@ -119,7 +119,7 @@ class AuctionViewMixin:
     def get_auction(self, slug):
         if not self.auction and slug:
             self.auction = get_object_or_404(Auction, slug=slug, is_deleted=False)
-            self.is_auction_admin
+            self.require_auction_admin()
 
     def dispatch(self, request, *args, **kwargs):
         self.get_auction(kwargs.pop("slug", ""))
@@ -148,6 +148,16 @@ class AuctionViewMixin:
         else:
             pass
         return result
+
+    def require_auction_admin(self):
+        """Raise ``PermissionDenied`` unless the caller may change this auction; return whether they can.
+
+        The same check as :attr:`is_auction_admin`, spelled as a call. Every dispatch() used to say
+        ``self.is_auction_admin`` on a line of its own and rely on the property raising -- which
+        works, but reads as a mistake, and any tidy-up that deleted the "useless expression" would
+        have made the view public with no test failing.
+        """
+        return self.is_auction_admin
 
     @property
     def can_add_edit_people(self):
@@ -190,6 +200,11 @@ def check_club_permission(user, club, permission_name):
         return False
     if member.permission_admin:
         return True
+    # A name that isn't a permission is a caller bug, not "no". getattr() alone would answer True
+    # for any truthy attribute -- check_club_permission(user, club, "pk") granted everything.
+    if permission_name not in CLUB_PERMISSION_FIELDS:
+        msg = f"{permission_name!r} is not a club permission; expected one of {', '.join(CLUB_PERMISSION_FIELDS)}"
+        raise ValueError(msg)
     return bool(getattr(member, permission_name, False))
 
 

@@ -303,7 +303,7 @@ class DynamicSetLotWinner(LoginRequiredMixin, AuctionViewMixin, TemplateView):
         }
         lot, lot_error = self.validate_lot(lot, action)
         if lot and not lot_error and action == "to_online_high_bidder":
-            result["success_message"] = lot.sell_to_online_high_bidder
+            result["success_message"] = lot.sell_to_online_high_bidder()
             result["last_sold_lot_number"] = lot.lot_number_display
             try:
                 lot.add_winner_message(self.request.user, lot.auctiontos_winner, lot.winning_price)

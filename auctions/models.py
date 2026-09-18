@@ -53,6 +53,7 @@ from django.db.models.query import QuerySet
 from django.urls import NoReverseMatch, reverse
 from django.utils import html, timezone
 from django.utils.functional import cached_property
+from django.utils.html import format_html
 from django.utils.safestring import mark_safe
 from easy_thumbnails.fields import ThumbnailerImageField
 from easy_thumbnails.files import get_thumbnailer
@@ -278,7 +279,9 @@ def distance_to(
         * cos(radians({lng_field_name}) - radians({longitude})) + \
         sin(radians({latitude})) * sin(radians({lat_field_name})) \
         , -1), 1)) * {correction} / {approximate_distance_to}) * {approximate_distance_to}"
-    distance_raw_sql = RawSQL(gcd_formula, ())
+    # S611: every value in gcd_formula is float()-converted or matched against an identifier
+    # regex a few lines above, which is what those two checks are there for.
+    distance_raw_sql = RawSQL(gcd_formula, ())  # noqa: S611
     return distance_raw_sql
 
 
@@ -1310,6 +1313,13 @@ class ContactRecord(models.Model):
         abstract = True
 
 
+#: The most any single price on this site may be. Every money column is ``max_digits=10``
+#: (99,999,999.99), and ``Invoice.calculated_total`` is the *sum* of several at that same width --
+#: so a per-item ceiling well below the column's own keeps a few large lots from overflowing the
+#: invoice that adds them up. Enforced by the forms; the columns can still hold more.
+MAX_MONEY = Decimal("999999.99")
+
+
 def _generate_unique_bidder_number(*, is_taken, preferred=None, phone=None, address=None, last_used=None):
     """A bidder number, retrying on collision. ``is_taken(number)`` checks the caller's scope.
 
@@ -1984,13 +1994,14 @@ class ClubMember(CachedPropertiesMixin, ContactRecord):
 
     class Meta:
         ordering = ["name"]
-        constraints = [
-            models.UniqueConstraint(
-                fields=["club", "bidder_number"],
-                condition=~Q(bidder_number=""),
-                name="unique_bidder_number_per_club",
-            ),
-        ]
+        # No unique constraint on (club, bidder_number). A conditional one -- the only kind that
+        # works here, since "" means unassigned and many rows carry it -- creates no index at all on
+        # MariaDB; Django reports W036 and moves on, so declaring it only made the code believe in a
+        # guarantee the database never had. Uniqueness is enforced where it can be: the forms reject
+        # a clash (services.bidder_number_conflict), generation avoids one
+        # (services.free_bidder_number_for), and setting a number outright displaces the holder
+        # (services.set_member_bidder_number). A plain unique index would need NULL for unassigned,
+        # which is a data migration across both bidder_number columns, not a constraint change.
 
     def save(self, *args, **kwargs):
         if self.email:
@@ -2098,21 +2109,21 @@ class ClubMember(CachedPropertiesMixin, ContactRecord):
                 self.possible_duplicate = None
 
     def generate_bidder_number(self, save=True):
-        """Assign and return a unique club-scoped bidder_number. Doesn't write userdata.preferred_bidder_number."""
+        """Assign and return a bidder_number free in this club and every auction the member is in.
+
+        Doesn't write userdata.preferred_bidder_number. The club scope alone isn't enough: the number
+        is copied to a shadow row in every club-managed auction, where a row with no member may
+        already hold it, so ``services.free_bidder_number_for`` checks both.
+        """
+        from .services import free_bidder_number_for
+
         preferred = None
         if self.user_id:
             try:
                 preferred = self.user.userdata.preferred_bidder_number or None
             except Exception:
                 preferred = None
-        self.bidder_number = _generate_unique_bidder_number(
-            is_taken=lambda n: (
-                ClubMember.objects.filter(club_id=self.club_id, bidder_number=n).exclude(pk=self.pk or 0).exists()
-            ),
-            preferred=preferred,
-            phone=self.phone_number,
-            address=self.address,
-        )
+        self.bidder_number = free_bidder_number_for(self, preferred=preferred)
         if save:
             ClubMember.objects.filter(pk=self.pk).update(bidder_number=self.bidder_number)
         return self.bidder_number
@@ -4136,10 +4147,10 @@ class Auction(CachedPropertiesMixin, models.Model):
         if not self.extra_promo_text or self.closed or self.in_person_closed:
             return ""
         if self.extra_promo_link:
-            return mark_safe(
-                f"<br><a class='magic text-warning' href='{self.extra_promo_link}'>{self.extra_promo_text}</a>"
+            return format_html(
+                "<br><a class='magic text-warning' href='{}'>{}</a>", self.extra_promo_link, self.extra_promo_text
             )
-        return mark_safe(f"<br><span class='magic text-warning'>{self.extra_promo_text}</span>")
+        return format_html("<br><span class='magic text-warning'>{}</span>", self.extra_promo_text)
 
     @property
     def template_date_timestamp(self):
@@ -4819,20 +4830,18 @@ class Auction(CachedPropertiesMixin, models.Model):
     def template_lot_link(self):
         """Not used directly; see template_lot_link_first_column and template_lot_link_separate_column."""
         if timezone.now() > self.lot_submission_start_date:
-            result = f"<a href='{self.view_lot_link}'>View lots</a>"
-        else:
-            result = "<small class='text-muted'>Lots not yet open</small>"
-        return result
+            return format_html("<a href='{}'>View lots</a>", self.view_lot_link)
+        return format_html("<small class='text-muted'>Lots not yet open</small>")
 
     @property
     def template_lot_link_first_column(self):
         """Shown on small screens only"""
-        return mark_safe(f'<small><span class="d-md-none"><br>{self.template_lot_link}</span></small>')
+        return format_html('<small><span class="d-md-none"><br>{}</span></small>', self.template_lot_link)
 
     @property
     def template_lot_link_separate_column(self):
         """Shown on big screens only"""
-        return mark_safe(f'<span class="d-none d-md-inline">{self.template_lot_link}</span>')
+        return format_html('<span class="d-none d-md-inline">{}</span>', self.template_lot_link)
 
     @property
     def can_submit_lots(self):
@@ -5996,10 +6005,10 @@ class AuctionTOS(InvalidatesRelatedCache, CachedPropertiesMixin, models.Model):
             kwargs={"bidder_number": self.bidder_number, "slug": self.auction.slug},
         )
         if not self.selling_allowed:
-            icon = '<i class="text-danger me-1 bi bi-cash-coin" title="Selling not allowed"></i>'
+            icon = html.format_html('<i class="text-danger me-1 bi bi-cash-coin" title="Selling not allowed"></i>')
         else:
-            icon = "<i class='bi bi-calendar-plus me-1'></i>"
-        return html.format_html(f"<a href='{url}' hx-noget>{icon} Add lots</a>")
+            icon = html.format_html("<i class='bi bi-calendar-plus me-1'></i>")
+        return html.format_html("<a href='{}' hx-noget>{} Add lots</a>", url, icon)
 
     @property
     def bought_lots_qs(self):
@@ -6107,8 +6116,8 @@ class AuctionTOS(InvalidatesRelatedCache, CachedPropertiesMixin, models.Model):
                 "print_labels_by_bidder_number",
                 kwargs={"bidder_number": self.bidder_number, "slug": self.auction.slug},
             )
-            return f"<a href='{url}'><i class='bi bi-tags me-1'></i>Print labels</a>"
-        return ""
+            return html.format_html("<a href='{}'><i class='bi bi-tags me-1'></i>Print labels</a>", url)
+        return html.format_html("")
 
     @cached_property
     def print_labels_count(self):
@@ -6124,8 +6133,10 @@ class AuctionTOS(InvalidatesRelatedCache, CachedPropertiesMixin, models.Model):
                 "print_unprinted_labels_by_bidder_number",
                 kwargs={"bidder_number": self.bidder_number, "slug": self.auction.slug},
             )
-            return f"<a href='{unprinted_url}'>Print only {self.unprinted_label_count} unprinted labels</a>"
-        return ""
+            return html.format_html(
+                "<a href='{}'>Print only {} unprinted labels</a>", unprinted_url, self.unprinted_label_count
+            )
+        return html.format_html("")
 
     @cached_property
     def print_labels_html(self):
@@ -6133,55 +6144,75 @@ class AuctionTOS(InvalidatesRelatedCache, CachedPropertiesMixin, models.Model):
         if self.unbanned_lot_count:
             result = self.print_labels_link_html
             if self.print_unprinted_labels_link_html:
-                result += f"""
-                <button type="button" class="btn btn-sm btn-primary dropdown-toggle dropdown-toggle-split" data-bs-toggle="dropdown" aria-haspopup="true" aria-expanded="false">
-                </button>
-                <div class="dropdown-menu">
-                    <span class='dropdown-item'>{self.print_unprinted_labels_link_html}</span>
-                </div>"""
-            return html.format_html(result)
-        return ""
+                result += html.format_html(
+                    '<button type="button" class="btn btn-sm btn-primary dropdown-toggle dropdown-toggle-split"'
+                    ' data-bs-toggle="dropdown" aria-haspopup="true" aria-expanded="false"></button>'
+                    '<div class="dropdown-menu">'
+                    "<span class='dropdown-item'>{}</span></div>",
+                    self.print_unprinted_labels_link_html,
+                )
+            return result
+        return html.format_html("")
 
     @cached_property
     def actions_dropdown_html(self):
         show_on_mobile_string = "d-md-none"
-        result = f"""<button type='button' class='btn btn-sm btn-primary dropdown-toggle dropdown-toggle-split' data-bs-toggle='dropdown'
-        aria-haspopup='true' aria-expanded='false'>Actions </button>
-        <div class = "dropdown-menu" id='actions_dropdown'>
-        <span class='dropdown-item {show_on_mobile_string}'>{self.bulk_add_link_html}</span>"""
+        item = "<span class='dropdown-item {}'>{}</span>"
+        result = html.format_html(
+            "<button type='button' class='btn btn-sm btn-primary dropdown-toggle dropdown-toggle-split'"
+            " data-bs-toggle='dropdown' aria-haspopup='true' aria-expanded='false'>Actions </button>"
+            "<div class=\"dropdown-menu\" id='actions_dropdown'>" + item,
+            show_on_mobile_string,
+            self.bulk_add_link_html,
+        )
         if self.invoice_link_html:
-            result += f"<span class='dropdown-item {show_on_mobile_string}'>{self.invoice_link_html}</span>"
+            result += html.format_html(item, show_on_mobile_string, self.invoice_link_html)
         if self.print_labels_link_html:
-            result += f"<span class='dropdown-item {show_on_mobile_string}'>{self.print_labels_link_html}</span>"
+            result += html.format_html(item, show_on_mobile_string, self.print_labels_link_html)
         if self.print_unprinted_labels_link_html:
-            result += (
-                f"<span class='dropdown-item {show_on_mobile_string}'>{self.print_unprinted_labels_link_html}</span>"
-            )
+            result += html.format_html(item, show_on_mobile_string, self.print_unprinted_labels_link_html)
         if self.email:
-            email_url = f"mailto:{self.email}"
             icon_class = "bi bi-envelope"
             if self.email_address_status == "BAD":
                 icon_class = "bi bi-envelope-exclamation-fill text-danger"
             if self.email_address_status == "VALID":
                 icon_class = "bi bi-envelope-check-fill"
-            result += (
-                f"<span class='dropdown-item'><a href={email_url}><i class='{icon_class} me-1'></i>Email</a></span>"
+            # Quoted and escaped: an email address may legally contain a quoted local part with
+            # spaces and angle brackets, which walked straight out of an unquoted href.
+            result += html.format_html(
+                "<span class='dropdown-item'><a href=\"mailto:{}\"><i class='{} me-1'></i>Email</a></span>",
+                self.email,
+                icon_class,
             )
         won_lots_url = (
             reverse("auction_lot_list", kwargs={"slug": self.auction.slug}) + f"?query=winner%3A{self.bidder_number}"
         )
-        result += f"<span class='dropdown-item'><a href={won_lots_url}><i class='bi bi bi-calendar-check me-1'></i>View {self.bought_lots_count} lots won</a></span>"
+        result += html.format_html(
+            "<span class='dropdown-item'><a href=\"{}\"><i class='bi bi bi-calendar-check me-1'></i>"
+            "View {} lots won</a></span>",
+            won_lots_url,
+            self.bought_lots_count,
+        )
         sold_lots_url = (
             reverse("auction_lot_list", kwargs={"slug": self.auction.slug}) + f"?query=seller%3A{self.bidder_number}"
         )
 
-        result += f"<span class='dropdown-item'><a href={sold_lots_url}><i class='bi bi-calendar me-1'></i>View {self.lots_count} lots sold</a></span>"
+        result += html.format_html(
+            "<span class='dropdown-item'><a href=\"{}\"><i class='bi bi-calendar me-1'></i>"
+            "View {} lots sold</a></span>",
+            sold_lots_url,
+            self.lots_count,
+        )
         delete_url = reverse("auctiontosdelete", kwargs={"pk": self.pk})
         merge_url = f"{delete_url}?action=merge"
-        result += (
-            f"<span class='dropdown-item'><a href={merge_url}><i class='bi bi-people me-1'></i>Merge with...</a></span>"
+        result += html.format_html(
+            "<span class='dropdown-item'><a href=\"{}\"><i class='bi bi-people me-1'></i>Merge with...</a></span>",
+            merge_url,
         )
-        result += f"<span class='dropdown-item'><a href={delete_url}><i class='bi bi-person-fill-x me-1'></i>Delete</a></span>"
+        result += html.format_html(
+            "<span class='dropdown-item'><a href=\"{}\"><i class='bi bi-person-fill-x me-1'></i>Delete</a></span>",
+            delete_url,
+        )
         problems_url = reverse(
             "auction_no_show",
             kwargs={
@@ -6189,7 +6220,11 @@ class AuctionTOS(InvalidatesRelatedCache, CachedPropertiesMixin, models.Model):
                 "tos": self.bidder_number,
             },
         )
-        result += f"<span class='dropdown-item'><a href={problems_url}><i class='bi bi-exclamation-circle me-1'></i>Problems</a></span>"
+        result += html.format_html(
+            "<span class='dropdown-item'><a href=\"{}\"><i class='bi bi-exclamation-circle me-1'></i>"
+            "Problems</a></span>",
+            problems_url,
+        )
         bulk_add_images_url = reverse(
             "bulk_add_image",
             kwargs={
@@ -6197,48 +6232,60 @@ class AuctionTOS(InvalidatesRelatedCache, CachedPropertiesMixin, models.Model):
                 "bidder_number": self.bidder_number,
             },
         )
-        result += f"<span class='dropdown-item {show_on_mobile_string}'><a href={bulk_add_images_url}><i class='bi bi-file-image me-1'></i>Quick add images</a></span>"
+        result += html.format_html(
+            "<span class='dropdown-item {}'><a href=\"{}\"><i class='bi bi-file-image me-1'></i>"
+            "Quick add images</a></span>",
+            show_on_mobile_string,
+            bulk_add_images_url,
+        )
         # Club-managed: surface membership actions here, so the users list doubles as the member list.
         if self.auction.is_club_managed and self.clubmember_id:
             club = self.auction.club
             cm = self.clubmember
-            result += "<div class='dropdown-divider'></div>"
+            result += html.format_html("<div class='dropdown-divider'></div>")
             if club.membership_annual_fee:
                 renew_url = reverse("club_member_renew", kwargs={"pk": cm.pk})
                 set_expiry_url = reverse("club_member_renew_page", kwargs={"slug": club.slug, "pk": cm.pk})
-                result += (
-                    f"<span class='dropdown-item'><a href='javascript:void(0)' hx-get='{renew_url}' "
-                    f"hx-target='#modals-here'><i class='bi bi-calendar-check me-1'></i>Renew membership</a></span>"
-                    f"<span class='dropdown-item'><a href='{set_expiry_url}'>"
-                    f"<i class='bi bi-calendar-range me-1'></i>Set expiration date</a></span>"
+                result += html.format_html(
+                    "<span class='dropdown-item'><a href='javascript:void(0)' hx-get='{}' "
+                    "hx-target='#modals-here'><i class='bi bi-calendar-check me-1'></i>Renew membership</a></span>"
+                    "<span class='dropdown-item'><a href='{}'>"
+                    "<i class='bi bi-calendar-range me-1'></i>Set expiration date</a></span>",
+                    renew_url,
+                    set_expiry_url,
                 )
             if club.show_member_barcode:
                 membership_number_url = reverse("club_member_membership_number", kwargs={"pk": cm.pk})
-                result += (
-                    f"<span class='dropdown-item'><a href='javascript:void(0)' hx-get='{membership_number_url}' "
-                    f"hx-target='#modals-here'><i class='bi bi-credit-card-2-front me-1'></i>Membership number</a></span>"
+                result += html.format_html(
+                    "<span class='dropdown-item'><a href='javascript:void(0)' hx-get='{}' "
+                    "hx-target='#modals-here'><i class='bi bi-credit-card-2-front me-1'></i>"
+                    "Membership number</a></span>",
+                    membership_number_url,
                 )
                 if not cm.is_deleted:
                     resend_card_url = reverse("club_member_confirm", kwargs={"pk": cm.pk, "action": "resend_card"})
-                    result += (
-                        f"<span class='dropdown-item'><a href='javascript:void(0)' hx-get='{resend_card_url}' "
-                        f"hx-target='#modals-here'><i class='bi bi-send me-1'></i>Resend membership card</a></span>"
+                    result += html.format_html(
+                        "<span class='dropdown-item'><a href='javascript:void(0)' hx-get='{}' "
+                        "hx-target='#modals-here'><i class='bi bi-send me-1'></i>Resend membership card</a></span>",
+                        resend_card_url,
                     )
             # Deactivating the member differs from deleting them from this auction; offer both, as the
             # club page does.
             if cm.is_deleted:
                 reactivate_url = reverse("club_member_reactivate", kwargs={"pk": cm.pk})
-                result += (
-                    f"<span class='dropdown-item'><a href='javascript:void(0)' hx-post='{reactivate_url}' "
-                    f"hx-target='#modals-here' hx-swap='innerHTML'>"
-                    f"<i class='bi bi-person-check me-1'></i>Reactivate club member</a></span>"
+                result += html.format_html(
+                    "<span class='dropdown-item'><a href='javascript:void(0)' hx-post='{}' "
+                    "hx-target='#modals-here' hx-swap='innerHTML'>"
+                    "<i class='bi bi-person-check me-1'></i>Reactivate club member</a></span>",
+                    reactivate_url,
                 )
             else:
                 deactivate_url = reverse("club_member_confirm", kwargs={"pk": cm.pk, "action": "delete"})
-                result += (
-                    f"<span class='dropdown-item'><a href='javascript:void(0)' hx-get='{deactivate_url}' "
-                    f"hx-target='#modals-here'>"
-                    f"<i class='bi bi-person-dash me-1'></i>Deactivate club member</a></span>"
+                result += html.format_html(
+                    "<span class='dropdown-item'><a href='javascript:void(0)' hx-get='{}' "
+                    "hx-target='#modals-here'>"
+                    "<i class='bi bi-person-dash me-1'></i>Deactivate club member</a></span>",
+                    deactivate_url,
                 )
         if self.auction.club and not self.auction.is_club_managed:
             club = self.auction.club
@@ -6249,18 +6296,23 @@ class AuctionTOS(InvalidatesRelatedCache, CachedPropertiesMixin, models.Model):
                 ).exists()
             if not already_in_club and self.user_id:
                 already_in_club = ClubMember.objects.filter(club=club, user_id=self.user_id, is_deleted=False).exists()
-            club_name = html.escape(club.name)
             if already_in_club:
-                result += f"<span class='dropdown-item text-muted'><i class='bi bi-person-check me-1'></i>Already in {club_name}</span>"
+                result += html.format_html(
+                    "<span class='dropdown-item text-muted'><i class='bi bi-person-check me-1'></i>"
+                    "Already in {}</span>",
+                    club.name,
+                )
             else:
                 add_to_club_url = reverse("add_single_auctiontos_to_club", kwargs={"pk": self.pk})
-                result += (
-                    f"<span class='dropdown-item'>"
-                    f"<a href='javascript:void(0)' hx-post='{add_to_club_url}' hx-swap='none'>"
-                    f"<i class='bi bi-person-fill-add me-1'></i>Add to {club_name}</a></span>"
+                result += html.format_html(
+                    "<span class='dropdown-item'>"
+                    "<a href='javascript:void(0)' hx-post='{}' hx-swap='none'>"
+                    "<i class='bi bi-person-fill-add me-1'></i>Add to {}</a></span>",
+                    add_to_club_url,
+                    club.name,
                 )
-        result += "</div>"
-        return html.format_html(result)
+        result += html.format_html("</div>")
+        return result
 
     @cached_property
     def invoice(self):
@@ -6327,13 +6379,18 @@ class AuctionTOS(InvalidatesRelatedCache, CachedPropertiesMixin, models.Model):
             if self.invoice.status == "PAID":
                 status = "bag-heart text-success"
             return html.format_html(
-                f"<a href='{self.invoice.get_absolute_url()}' hx-noget><i class='bi bi-{status} me-1'></i>View<span class='d-sm-inline d-md-none'> invoice</span></a>"
+                "<a href='{}' hx-noget><i class='bi bi-{} me-1'></i>View"
+                "<span class='d-sm-inline d-md-none'> invoice</span></a>",
+                self.invoice.get_absolute_url(),
+                status,
             )
         else:
             # Show create link for admins
             create_url = reverse("create_invoice", kwargs={"pk": self.pk})
             return html.format_html(
-                f"<a href='{create_url}' hx-noget><i class='bi bi-plus me-1'></i>Create<span class='d-sm-inline d-md-none'> invoice</span></a>"
+                "<a href='{}' hx-noget><i class='bi bi-plus me-1'></i>Create"
+                "<span class='d-sm-inline d-md-none'> invoice</span></a>",
+                create_url,
             )
 
     @property
@@ -6403,10 +6460,26 @@ class AuctionTOS(InvalidatesRelatedCache, CachedPropertiesMixin, models.Model):
                 user_data = self.user.userdata
                 preferred = user_data.preferred_bidder_number or None
 
+            # In a club-managed auction the number belongs to the ClubMember and is copied to every
+            # such auction, so one free here alone would displace a member on the next sync.
+            club_for_numbers = self.auction.club if self.auction.is_club_managed else None
+
+            def _taken(candidate):
+                if (
+                    AuctionTOS.objects.filter(bidder_number=candidate, auction=self.auction)
+                    .exclude(pk=self.pk or 0)
+                    .exists()
+                ):
+                    return True
+                if club_for_numbers is None:
+                    return False
+                members = ClubMember.objects.filter(club=club_for_numbers, bidder_number=candidate)
+                if self.clubmember_id:
+                    members = members.exclude(pk=self.clubmember_id)
+                return members.exists()
+
             self.bidder_number = _generate_unique_bidder_number(
-                is_taken=lambda n: (
-                    AuctionTOS.objects.filter(bidder_number=n, auction=self.auction).exclude(pk=self.pk or 0).exists()
-                ),
+                is_taken=_taken,
                 preferred=preferred,
                 phone=self.phone_number,
                 address=self.address,
@@ -7000,7 +7073,17 @@ class Lot(CachedPropertiesMixin, models.Model):
         verbose_name="Winner",
     )
     active = models.BooleanField(default=True, db_index=True)
-    winning_price = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True, db_index=True)
+    # Ceiling well under the column's own: an invoice sums several of these into calculated_total at
+    # the same width, and two maxed-out lots would overflow it for good. reserve_price and
+    # buy_now_price already have one; this is the price an admin types at the podium.
+    winning_price = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        db_index=True,
+        validators=[MaxValueValidator(MAX_MONEY)],
+    )
     refunded = models.BooleanField(default=False)
     refunded.help_text = "Don't charge the winner or pay the seller for this lot."
     banned = models.BooleanField(default=False, verbose_name="Removed", blank=True)
@@ -7398,7 +7481,7 @@ class Lot(CachedPropertiesMixin, models.Model):
         bidder = None
 
         if self.high_bidder:
-            self.sell_to_online_high_bidder
+            self.sell_to_online_high_bidder()
             info = "LOT_END_WINNER"
             bidder = self.high_bidder
             high_bidder_pk = self.high_bidder.pk
@@ -7863,13 +7946,10 @@ class Lot(CachedPropertiesMixin, models.Model):
             and not self.ended
             and self.auction.online_bidding == "allow"
         ):
-            return mark_safe(f"""<a href='javascript:void(0);'
-                hx-get="{reverse("auction_show_high_bidder", kwargs={"pk": self.pk})}"
-                hx-swap="outerHTML"
-                hx-trigger="click"
-            >
-                Reveal max bid
-            </a>""")
+            return format_html(
+                '<a href=\'javascript:void(0);\' hx-get="{}" hx-swap="outerHTML" hx-trigger="click">Reveal max bid</a>',
+                reverse("auction_show_high_bidder", kwargs={"pk": self.pk}),
+            )
         else:
             return ""
 
@@ -7886,8 +7966,12 @@ class Lot(CachedPropertiesMixin, models.Model):
                 return "Anonymous"
         return ""
 
-    @property
     def sell_to_online_high_bidder(self):
+        """Sell this lot to its high bidder and save it; returns a message saying what happened.
+
+        A method, not a property: it writes. As a property, every call site was a bare
+        ``lot.sell_to_online_high_bidder`` statement that read like a typo and sold a lot.
+        """
         if self.high_bidder:
             self.winner = self.high_bidder
             self.winning_price = self.high_bid
@@ -8925,8 +9009,13 @@ class Lot(CachedPropertiesMixin, models.Model):
 
     @property
     def description_label(self):
-        """Strip all html except <br> from summernote description"""
-        return re.sub(r"(?!<br\s*/?>)<.*?>", "", self.summernote_description)
+        """The description with everything but ``<br>`` stripped, for a printed label.
+
+        Through the sanitizer rather than a regex: ``<.*?>`` never matched a tag split across lines
+        (no ``re.DOTALL``) and mangled one holding a ``>`` in an attribute, and the result is written
+        to the label template with ``|safe``.
+        """
+        return sanitize_summernote_html(self.summernote_description or "", allowed_tags={"br"})
 
 
 class BapAward(models.Model):
@@ -9375,7 +9464,10 @@ class Invoice(CachedPropertiesMixin, models.Model):
         # Everything is cached on the instance, and the caller is here because something changed.
         self.invalidate_cached_properties()
         self.calculated_total = self.rounded_net
-        self.save()
+        # Only this column. The PAID check above is a separate query, so a payment landing in
+        # between used to be undone here: a full-row save writes this instance's stale status and
+        # date_paid back over it, and the invoice silently reads as unpaid again.
+        self.save(update_fields=["calculated_total"] if self.pk else None)
 
     @cached_property
     def total_adjustment_amount(self):
@@ -9818,7 +9910,11 @@ class Invoice(CachedPropertiesMixin, models.Model):
         # One invoice per AuctionTOS: keep the oldest, move payments and adjustments in, delete this
         # one. Club-only invoices skip this but still reach the ledger sync below.
         if self.auctiontos_user:
-            oldest = Invoice.objects.filter(auctiontos_user=self.auctiontos_user).order_by("date").first()
+            # Scoped to this auction. An AuctionTOS belongs to one auction, so this is the same set in
+            # normal use -- but if a bad winner ever lands on a lot, an unscoped merge would move the
+            # charge onto that person's real invoice in their own auction.
+            siblings = Invoice.objects.filter(auctiontos_user=self.auctiontos_user, auction=self.auction)
+            oldest = siblings.order_by("date").first()
             if oldest and oldest.pk != self.pk:
                 # Newer duplicate: migrate into the older invoice.
                 duplicate_pk = self.pk
@@ -9835,7 +9931,7 @@ class Invoice(CachedPropertiesMixin, models.Model):
                 oldest.recalculate()
                 return
             # self is the oldest — clean up any newer duplicates that may exist
-            newer = Invoice.objects.filter(auctiontos_user=self.auctiontos_user).exclude(pk=self.pk)
+            newer = siblings.exclude(pk=self.pk)
             if newer.exists():
                 for dup in newer:
                     InvoiceAdjustment.objects.filter(invoice=dup).update(invoice=self)
@@ -10193,7 +10289,11 @@ class Bid(InvalidatesRelatedCache, models.Model):
     lot_number = models.ForeignKey(Lot, on_delete=models.CASCADE)
     bid_time = models.DateTimeField(auto_now_add=True, blank=True)
     last_bid_time = models.DateTimeField(auto_now_add=True, blank=True)
-    amount = models.DecimalField(max_digits=10, decimal_places=2, validators=[MinValueValidator(Decimal("0.01"))])
+    amount = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        validators=[MinValueValidator(Decimal("0.01")), MaxValueValidator(MAX_MONEY)],
+    )
     was_high_bid = models.BooleanField(default=False)
     is_deleted = models.BooleanField(default=False)
     # Bids come from Users only; AuctionTOS can win without bidding.

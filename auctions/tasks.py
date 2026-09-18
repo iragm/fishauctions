@@ -559,6 +559,12 @@ def delete_marketing_contact(self, club_pk, email):
 
 
 @shared_task(bind=True, ignore_result=True)
+def clearsessions(self):
+    """Delete expired sessions; ``django_session`` has no other reaper."""
+    call_command("clearsessions")
+
+
+@shared_task(bind=True, ignore_result=True)
 def cleanup_mail(self):
     """Delete sent mail older than MAIL_RETENTION_DAYS, attachments included. Otherwise a deleted user's
     address survives in post_office.

@@ -64,8 +64,8 @@ def site_origin():
         import socket
         import urllib.request
 
-        request = urllib.request.Request(plain + "/", method="HEAD")
-        with urllib.request.urlopen(request, timeout=5) as response:  # noqa: S310 -- fixed internal URL
+        request = urllib.request.Request(plain + "/", method="HEAD")  # noqa: S310 - fixed internal URL
+        with urllib.request.urlopen(request, timeout=5) as response:  # noqa: S310 - fixed internal URL
             if response.status < 400 and response.geturl().startswith(plain):
                 return plain, ""
     except Exception:

@@ -5,7 +5,6 @@ because they are a reporting job, and they share the column matching in
 :mod:`auctions.views.bulk_add`.
 """
 
-import csv
 import logging
 from datetime import date as date_type
 from datetime import datetime, timedelta
@@ -49,6 +48,7 @@ from auctions.models import (
     normalize_email,
 )
 from auctions.services import attachment_filename
+from auctions.services import csv_writer as safe_csv_writer
 from auctions.tables import (
     ClubHistoryHTMxTable,
 )
@@ -391,7 +391,7 @@ class ClubTreasurerReportExportView(LoginRequiredMixin, ClubViewMixin, View):
         response = HttpResponse(content_type="text/csv")
         filename = attachment_filename(f"{self.club.slug}-treasurer-report")
         response["Content-Disposition"] = f'attachment; filename="{filename}.csv"'
-        writer = csv.writer(response)
+        writer = safe_csv_writer(response)
         writer.writerow(["date", "amount", "description", "category"])
         for entry in ClubMoney.objects.filter(club=self.club, date__range=(start_date, end_date)).order_by(
             "date", "pk"
@@ -735,7 +735,7 @@ class ClubMemberCSVExportView(LoginRequiredMixin, ClubViewMixin, View):
         response = HttpResponse(content_type="text/csv")
         filename = attachment_filename(f"{self.club.slug}-members")
         response["Content-Disposition"] = f'attachment; filename="{filename}.csv"'
-        writer = csv.writer(response)
+        writer = safe_csv_writer(response)
         # The column is omitted entirely when the club has membership numbers off: nothing in the
         # UI may reference a number that isn't in use.
         include_membership_number = self.club.show_member_barcode

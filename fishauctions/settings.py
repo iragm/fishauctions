@@ -39,7 +39,7 @@ ALLOWED_HOSTS = [
     "web",
     "nginx",  # Allow Selenium tests to connect via nginx service name
     "127.0.0.1",
-    "0.0.0.0",
+    "0.0.0.0",  # noqa: S104 - an ALLOWED_HOSTS entry, not a bind address
     os.environ.get("SITE_DOMAIN", ""),
     os.environ.get("ALLOWED_HOST_1", ""),
     os.environ.get("ALLOWED_HOST_2", ""),
@@ -255,6 +255,7 @@ ASGI_APPLICATION = "fishauctions.asgi.application"
 MIDDLEWARE = [
     # "debug_toolbar.middleware.DebugToolbarMiddleware",
     "django.middleware.security.SecurityMiddleware",
+    "auctions.middleware.ContentSecurityPolicyMiddleware",  # Sets Content-Security-Policy
     "auctions.middleware.MobileAppMiddleware",  # Sets request.is_mobile_app from the User-Agent
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
@@ -264,6 +265,8 @@ MIDDLEWARE = [
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
     "django_htmx.middleware.HtmxMiddleware",
     "allauth.account.middleware.AccountMiddleware",
+    # After AuthenticationMiddleware: it needs request.user to tell a visitor from a member.
+    "auctions.middleware.ShortAnonymousSessionMiddleware",
 ]
 
 ROOT_URLCONF = "fishauctions.urls"
@@ -396,6 +399,10 @@ ACCOUNT_USERNAME_VALIDATORS = "auctions.validators.USERNAME_VALIDATORS"
 ACCOUNT_LOGIN_METHODS = {"username", "email"}
 ACCOUNT_CONFIRM_EMAIL_ON_GET = True
 ACCOUNT_SIGNUP_FIELDS = ["email*", "first_name*", "last_name*", "username*", "password1*", "password2*"]
+# Load-bearing, not a preference. On sign-in, auctions/signals.py claims every unlinked AuctionTOS
+# and ClubMember row matching user.email -- and a ClubMember carries permission_admin. That is only
+# safe because nobody can sign in until they have proved the address. Relaxing this to "optional"
+# would turn that hook into club-admin takeover by signing up as an admin's address.
 ACCOUNT_EMAIL_VERIFICATION = "mandatory"
 ACCOUNT_LOGIN_ON_EMAIL_CONFIRMATION = True
 ACCOUNT_LOGIN_ON_PASSWORD_RESET = True
@@ -404,7 +411,12 @@ ACCOUNT_EMAIL_SUBJECT_PREFIX = ""
 ACCOUNT_DEFAULT_HTTP_PROTOCOL = "https"
 ACCOUNT_CHANGE_EMAIL = True
 
-SESSION_COOKIE_AGE = 1209600 * 100
+# Two weeks for a visitor who never signs in, a year for one who does (see
+# auctions/signals.py: user_logged_in_callback). Was 1209600 * 100 -- 3.8 years -- for everybody,
+# which meant a row per anonymous visitor that clearsessions could not reclaim until 2029, and
+# /api/pageview/ writes one on every unauthenticated beacon.
+SESSION_COOKIE_AGE = 60 * 60 * 24 * 365
+ANONYMOUS_SESSION_COOKIE_AGE = 60 * 60 * 24 * 14
 
 # Redis-cached sessions with the database behind them: no session query per request, and a Redis
 # restart loses nobody.
@@ -519,6 +531,10 @@ CLOUDFLARE_IMAGES_ENABLED = bool(
 
 # Edge cache purge: a zone-scoped token, separate from the Images one. /media/ is cached thirty days,
 # so without it a deleted file (e.g. a DMCA takedown) stays served. Unset is safe and logged.
+# Orange-clouded, so auctions.client_ip should read CF-Connecting-IP rather than X-Real-IP (which
+# behind Cloudflare is only the edge). Off in dev and staging, which nginx serves directly.
+BEHIND_CLOUDFLARE = parse_bool_env(os.environ.get("BEHIND_CLOUDFLARE"), default=False)
+
 CLOUDFLARE_ZONE_ID = os.environ.get("CLOUDFLARE_ZONE_ID", "")
 CLOUDFLARE_CACHE_PURGE_API_TOKEN = os.environ.get("CLOUDFLARE_CACHE_PURGE_API_TOKEN", "")
 
@@ -530,7 +546,7 @@ SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 # HSTS. Env-driven and off by default because the header is sticky: ramp max-age per environment
 # (3600, 86400, 604800, 31536000). Not tied to DEBUG, since local prod-mirror boxes run DEBUG=False
 # on 127.0.0.1. Leave INCLUDE_SUBDOMAINS and PRELOAD off unless certain.
-SECURE_HSTS_SECONDS = int(os.environ.get("SECURE_HSTS_SECONDS", "0"))
+SECURE_HSTS_SECONDS = int(os.environ.get("SECURE_HSTS_SECONDS", "0" if DEBUG else "3600"))
 SECURE_HSTS_INCLUDE_SUBDOMAINS = parse_bool_env(os.environ.get("SECURE_HSTS_INCLUDE_SUBDOMAINS"), default=False)
 SECURE_HSTS_PRELOAD = parse_bool_env(os.environ.get("SECURE_HSTS_PRELOAD"), default=False)
 
@@ -872,6 +888,16 @@ SUMMERNOTE_CONFIG = {
 }
 
 X_FRAME_OPTIONS = "SAMEORIGIN"
+
+# A deliberately partial Content-Security-Policy, set in auctions/middleware.py.
+#
+# No script-src: the templates are full of inline <script> blocks and hyperscript _="on ..."
+# attributes, so 'unsafe-inline' would be the only workable value and a policy that permits inline
+# script buys nothing. What is here costs nothing and closes what it names: object-src stops plugin
+# content, base-uri stops a <base> tag rewriting every relative URL on the page, form-action stops a
+# form posting somewhere else, and frame-ancestors is X_FRAME_OPTIONS in the modern spelling.
+# Narrowing script-src properly means nonces on every inline block: worth doing, not a one-liner.
+CONTENT_SECURITY_POLICY = "object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'self'"
 
 PAYPAL_API_BASE = os.environ.get("PAYPAL_API_BASE", "")
 if not PAYPAL_API_BASE:

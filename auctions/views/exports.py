@@ -4,7 +4,6 @@ Everything an auction admin downloads or emails, plus the two views that push pa
 club or a marketing list.
 """
 
-import csv
 import logging
 from datetime import timedelta
 from urllib.parse import quote_plus, unquote
@@ -55,6 +54,7 @@ from auctions.models import (
     find_image,
 )
 from auctions.services import attachment_filename
+from auctions.services import csv_writer as safe_csv_writer
 from auctions.species_matching import (
     suggest_species,
 )
@@ -78,7 +78,7 @@ class MyWonLotCSV(LoginRequiredMixin, View):
         response = HttpResponse(content_type="text/csv")
         domain = attachment_filename(current_site.domain.replace(".", "_"))
         response["Content-Disposition"] = f'attachment; filename="my_won_lots_from_{domain}.csv"'
-        writer = csv.writer(response)
+        writer = safe_csv_writer(response)
         writer.writerow(["Lot number", "Name", "Scientific name", "Auction", "Winning price", "Link"])
         for lot in lots:
             writer.writerow(
@@ -108,7 +108,7 @@ class MyLotReportView(LoginRequiredMixin, View):
         response = HttpResponse(content_type="text/csv")
         domain = attachment_filename(current_site.domain.replace(".", "_"))
         response["Content-Disposition"] = f'attachment; filename="my_lots_from_{domain}.csv"'
-        writer = csv.writer(response)
+        writer = safe_csv_writer(response)
         writer.writerow(
             [
                 "Lot number",
@@ -230,7 +230,7 @@ class AuctionReportView(LoginRequiredMixin, AuctionViewMixin, View):
         else:
             filename = self.auction.slug + "-report-" + query + "-" + end
         response["Content-Disposition"] = f'attachment; filename="{attachment_filename(filename)}.csv"'
-        writer = csv.writer(response)
+        writer = safe_csv_writer(response)
         writer.writerow(
             [
                 "Join date",
@@ -581,7 +581,7 @@ class MarketingList(LoginRequiredMixin, View):
     def get(self, request):
         response = HttpResponse(content_type="text/csv")
         response["Content-Disposition"] = "attachment; filename=all_auction_contacts.csv"
-        writer = csv.writer(response)
+        writer = safe_csv_writer(response)
         found = []
         writer.writerow(["Name", "Email", "Phone"])
         auctions = Auction.objects.filter(
@@ -611,7 +611,7 @@ class AuctionInvoicesPayPalCSV(LoginRequiredMixin, AuctionViewMixin, View):
         current_site = Site.objects.get_current()
         filename = attachment_filename(f"{self.auction.slug}-paypal-{chunk}")
         response["Content-Disposition"] = f'attachment; filename="{filename}.csv"'
-        writer = csv.writer(response)
+        writer = safe_csv_writer(response)
         writer.writerow(
             [
                 "Recipient Email",
@@ -704,7 +704,7 @@ class AuctionLotsCSV(LoginRequiredMixin, AuctionViewMixin, View):
             query = unquote(query)
         filename = attachment_filename(f"{self.auction.slug}-{filename}")
         response["Content-Disposition"] = f'attachment; filename="{filename}.csv"'
-        writer = csv.writer(response)
+        writer = safe_csv_writer(response)
         custom_dropdown_enabled = (
             self.auction.use_custom_dropdown_field != "disable"
             and bool(self.auction.custom_dropdown_name)
@@ -930,7 +930,7 @@ class AuctionChatDeleteUndelete(APIView, AuctionViewMixin):
         self.auction = self.history.lot.auction
         if not self.auction:
             raise Http404
-        self.is_auction_admin
+        self.require_auction_admin()
         return super().dispatch(request, *args, **kwargs)
 
     def post(self, request, *args, **kwargs):
@@ -959,7 +959,7 @@ class AuctionShowHighBidder(APIView, AuctionViewMixin):
         pk = kwargs.get("pk")
         self.lot = get_object_or_404(Lot, pk=pk, is_deleted=False, auction__isnull=False)
         self.auction = self.lot.auction
-        self.is_auction_admin
+        self.require_auction_admin()
         return super().dispatch(request, *args, **kwargs)
 
     def get(self, request, *args, **kwargs):

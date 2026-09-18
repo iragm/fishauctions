@@ -1166,8 +1166,8 @@ class ContextProcessorsTestCase(TestCase):
         user.userdata.refresh_from_db()
         self.assertEqual(user.userdata.last_ip_address, "192.168.1.1")
 
-    def test_add_location_handles_x_forwarded_for(self):
-        """Test add_location handles X-Forwarded-For header"""
+    def test_add_location_ignores_a_client_supplied_forwarded_for(self):
+        """add_location records the proxy's address, not the one the caller put in a header."""
         from django.contrib.sessions.middleware import SessionMiddleware
         from django.test import RequestFactory
 
@@ -1179,7 +1179,10 @@ class ContextProcessorsTestCase(TestCase):
         request.user = user
         request.COOKIES = {}
         request.META = {
+            # The caller's own header. nginx appends the real address to whatever arrived, so the
+            # left-most entry is written by the client and must not be believed.
             "HTTP_X_FORWARDED_FOR": "10.0.0.1, 192.168.1.1",
+            "HTTP_X_REAL_IP": "198.51.100.4",
             "REMOTE_ADDR": "192.168.1.1",
         }
 
@@ -1190,9 +1193,9 @@ class ContextProcessorsTestCase(TestCase):
 
         add_location(request)
 
-        # Should use first IP from X-Forwarded-For
+        # X-Real-IP, which nginx sets from $remote_addr; never the client-supplied XFF entry.
         user.userdata.refresh_from_db()
-        self.assertEqual(user.userdata.last_ip_address, "10.0.0.1")
+        self.assertEqual(user.userdata.last_ip_address, "198.51.100.4")
 
     def test_dismissed_cookies_tos_with_cookie(self):
         """Test dismissed_cookies_tos with cookie present"""

@@ -496,7 +496,8 @@ class AuctionTOSAdmin(LoginRequiredMixin, TemplateView, FormMixin, AuctionViewMi
 
     $("#id_bidder_number, #id_name, #id_email").on("blur", validateField);
         </script>"""
-        context["extra_script"] = mark_safe(extra_script)
+        # S308: a literal script above; the only interpolation is the csrf token.
+        context["extra_script"] = mark_safe(extra_script)  # noqa: S308
         return context
 
     def post(self, request, *args, **kwargs):
@@ -603,7 +604,7 @@ def _add_club_admins_as_auction_tos(auction, requesting_user):
             )
 
 
-class AuctionCreateView(FormFrictionMixin, CreateView, LoginRequiredMixin):
+class AuctionCreateView(LoginRequiredMixin, FormFrictionMixin, CreateView):
     """Creating a new auction."""
 
     model = Auction

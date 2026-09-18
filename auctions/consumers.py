@@ -149,13 +149,29 @@ def broadcast_bid_result(lot, user, result):
 
 
 class LotConsumer(WebsocketConsumer):
+    #: Set in connect() once the lot resolves; disconnect() runs even when it didn't.
+    lot = None
+    room_group_name = None
+    user_room_name = None
+
     def connect(self):
         try:
             self.lot_number = self.scope["url_route"]["kwargs"]["lot_number"]
             self.user = self.scope["user"]
-            self.room_group_name = f"lot_{self.lot_number}"
-            self.user_room_name = f"private_user_{self.user.pk}_lot_{self.lot_number}"
-            self.lot = Lot.objects.get(pk=self.lot_number)
+            # The route is \d+, so this is a number -- but an unknown one still closes rather than
+            # raising, which used to leave disconnect() reaching for a self.lot that was never set.
+            self.lot = Lot.objects.filter(pk=self.lot_number, is_deleted=False).first()
+            if self.lot is None:
+                self.close()
+                return
+            # Before accept(): this streams the lot's chat history, and a banned user or one banned
+            # by the seller must not read it or stay joined for the live bid broadcasts.
+            error = check_all_permissions(self.lot, self.user)
+            if error:
+                self.close()
+                return
+            self.room_group_name = f"lot_{self.lot.pk}"
+            self.user_room_name = f"private_user_{self.user.pk}_lot_{self.lot.pk}"
 
             # Join room group
             async_to_sync(self.channel_layer.group_add)(self.room_group_name, self.channel_name)
@@ -164,19 +180,22 @@ class LotConsumer(WebsocketConsumer):
             async_to_sync(self.channel_layer.group_add)(self.user_room_name, self.channel_name)
             self.accept()
             # send the most recent history
-            allHistory = LotHistory.objects.filter(lot=self.lot, removed=False).order_by("-timestamp")[:200]
-            # send oldest first
-            for history in reversed(allHistory):
+            allHistory = (
+                LotHistory.objects.filter(lot=self.lot, removed=False)
+                .select_related("user")
+                .order_by("-timestamp")[:200]
+            )
+            # Sent straight down this socket, oldest first. Not 200 group_send calls: that was one
+            # channel-layer round trip per row, every time anybody opened a busy lot.
+            for history in reversed(list(allHistory)):
                 try:
-                    if history.changed_price:
+                    if history.changed_price or not history.user:
                         pk = -1
                         username = "System"
                     else:
                         pk = history.user.pk
                         username = str(history.user)
-
-                    async_to_sync(self.channel_layer.group_send)(
-                        self.user_room_name,
+                    self.chat_message(
                         {
                             "type": "chat_message",
                             "pk": pk,
@@ -184,7 +203,7 @@ class LotConsumer(WebsocketConsumer):
                             "message": history.message,
                             "username": username,
                             "timestamp": history.timestamp.isoformat(),
-                        },
+                        }
                     )
                 except Exception as e:
                     logger.exception(e)
@@ -240,8 +259,13 @@ class LotConsumer(WebsocketConsumer):
             logger.exception(e)
 
     def disconnect(self, close_code):
-        # Leave room group
-        async_to_sync(self.channel_layer.group_discard)(self.room_group_name, self.channel_name)
+        # connect() may have closed before any of this was set (unknown lot, no permission), and
+        # Channels still calls disconnect(): an AttributeError here escapes to the ASGI app, which
+        # emails admins (see fishauctions/asgi.py).
+        if self.room_group_name:
+            async_to_sync(self.channel_layer.group_discard)(self.room_group_name, self.channel_name)
+        if self.lot is None:
+            return
         # 'seen' drives lot notifications for the lot's owner.
         user_pk = None
         if self.lot.user:
@@ -339,8 +363,9 @@ class UserConsumer(WebsocketConsumer):
             return
 
     def disconnect(self, close_code):
-        # Leave room group
-        async_to_sync(self.channel_layer.group_discard)(self.user_notification_channel, self.channel_name)
+        # Only if connect() got far enough to set it; see LotConsumer.disconnect.
+        if getattr(self, "user_notification_channel", None):
+            async_to_sync(self.channel_layer.group_discard)(self.user_notification_channel, self.channel_name)
         logger.debug("disconnected")
 
     # Receive message from WebSocket

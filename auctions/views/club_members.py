@@ -244,7 +244,9 @@ class ClubMemberAdminView(APIView):
             "club_member": member,
             "modal_title": title,
             "form": form,
-            "extra_script": mark_safe(extra_script),
+            # S308: _get_validation_script is a literal; it interpolates a pk, a reversed url
+            # and the csrf token.
+            "extra_script": mark_safe(extra_script),  # noqa: S308
             "read_only": read_only,
         }
         # Opened from an auction's user list (?tos=): show the invoice summary and status controls
@@ -660,7 +662,9 @@ class ClubMemberCreateView(APIView):
             "club": club,
             "modal_title": title,
             "form": form,
-            "extra_script": mark_safe(extra_script),
+            # S308: _get_validation_script is a literal; it interpolates a pk, a reversed url
+            # and the csrf token.
+            "extra_script": mark_safe(extra_script),  # noqa: S308
         }
         return render(request, "auctions/generic_admin_form.html", context)
 
@@ -738,7 +742,9 @@ class ClubMemberCreateView(APIView):
                 "club": club,
                 "modal_title": title,
                 "form": form,
-                "extra_script": mark_safe(extra_script),
+                # S308: _get_validation_script is a literal; it interpolates a pk, a reversed url
+                # and the csrf token.
+                "extra_script": mark_safe(extra_script),  # noqa: S308
             }
             return render(request, "auctions/generic_admin_form.html", context)
 
@@ -786,7 +792,9 @@ class ClubMemberCreateView(APIView):
             "club": club,
             "modal_title": title,
             "form": form,
-            "extra_script": mark_safe(extra_script),
+            # S308: _get_validation_script is a literal; it interpolates a pk, a reversed url
+            # and the csrf token.
+            "extra_script": mark_safe(extra_script),  # noqa: S308
         }
         return render(request, "auctions/generic_admin_form.html", context)
 

@@ -36,7 +36,7 @@ class MailchimpHelperTests(TestCase):
         self.member = ClubMember.objects.create(club=self.club, name="Jane Q Public", email="jane@example.com")
 
     def test_subscriber_hash_lowercases_and_trims(self):
-        self.assertEqual(mc.subscriber_hash(" Jane@Example.COM "), hashlib.md5(b"jane@example.com").hexdigest())
+        self.assertEqual(mc.subscriber_hash(" Jane@Example.COM "), hashlib.md5(b"jane@example.com").hexdigest())  # noqa: S324 - Mailchimp keys members by md5
 
     def test_name_split(self):
         self.assertEqual(self.member.first_name, "Jane")

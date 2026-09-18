@@ -87,7 +87,8 @@ class Command(BaseCommand):
             raise CommandError(msg)
 
         try:
-            root = ET.parse(path).getroot()
+            # S314: a WordPress export an admin hands us on disk, not a request body.
+            root = ET.parse(path).getroot()  # noqa: S314
         except ET.ParseError as error:
             msg = f"{path} is not valid XML: {error}"
             raise CommandError(msg) from error

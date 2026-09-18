@@ -88,7 +88,7 @@ class BulkSetLotsWon(LoginRequiredMixin, TemplateView, FormMixin, AuctionViewMix
 
     def dispatch(self, request, *args, **kwargs):
         self.auction = get_object_or_404(Auction, slug=kwargs.pop("slug"), is_deleted=False)
-        self.is_auction_admin
+        self.require_auction_admin()
         self.original_query = request.GET.get("query", "")
         if not self.original_query:
             self.original_query = request.POST.get("query", "")
@@ -104,7 +104,7 @@ class BulkSetLotsWon(LoginRequiredMixin, TemplateView, FormMixin, AuctionViewMix
         if form.is_valid():
             for lot in self.queryset:
                 try:
-                    lot.sell_to_online_high_bidder
+                    lot.sell_to_online_high_bidder()
                 except Exception:
                     logger.exception("sell_to_online_high_bidder failed for lot %s", lot.pk)
                     continue
@@ -155,7 +155,7 @@ class InvoiceBulkUpdateStatus(LoginRequiredMixin, TemplateView, FormMixin, Aucti
 
     def dispatch(self, request, *args, **kwargs):
         self.auction = get_object_or_404(Auction, slug=kwargs.pop("slug"), is_deleted=False)
-        self.is_auction_admin
+        self.require_auction_admin()
         self.invoice_count = self.get_queryset().count()
         return super().dispatch(request, *args, **kwargs)
 
@@ -313,7 +313,7 @@ class EnableBiddingForAllUsers(LoginRequiredMixin, TemplateView, FormMixin, Auct
 
     def dispatch(self, request, *args, **kwargs):
         self.auction = get_object_or_404(Auction, slug=kwargs.pop("slug"), is_deleted=False)
-        self.is_auction_admin
+        self.require_auction_admin()
         if self.auction.use_check_in_mode:
             # Bidding is meant to be off until each person checks in; enabling everyone would skip it.
             raise Http404
@@ -404,7 +404,7 @@ class LotRefundDialog(LoginRequiredMixin, DetailView, FormMixin, AuctionViewMixi
         )
         self.object = self.lot
         self.auction = self.lot.auction
-        self.is_auction_admin
+        self.require_auction_admin()
         self.seller_invoice = Invoice.objects.filter(auctiontos_user=self.lot.auctiontos_seller).first()
         if self.lot.auctiontos_winner:
             self.winner_invoice = Invoice.objects.filter(auctiontos_user=self.lot.auctiontos_winner).first()
@@ -471,7 +471,9 @@ class LotRefundDialog(LoginRequiredMixin, DetailView, FormMixin, AuctionViewMixi
             $(document).ready( function(){recalculate()});
             </script>
             """
-            context["extra_script"] = mark_safe(extra_script)
-            context["tooltip"] = mark_safe(tooltip)
+            # S308: both are built from literals in this method; the only interpolations are
+            # numbers (the tax rate and the two refund totals).
+            context["extra_script"] = mark_safe(extra_script)  # noqa: S308
+            context["tooltip"] = mark_safe(tooltip)  # noqa: S308
         context["modal_title"] = f"Remove or refund lot {self.lot.lot_number_display}"
         return context

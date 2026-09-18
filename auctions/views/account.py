@@ -25,6 +25,7 @@ from django.http import (
 from django.shortcuts import redirect
 from django.urls import reverse
 from django.utils import timezone
+from django.utils.http import url_has_allowed_host_and_scheme
 from django.views.generic import DetailView, TemplateView
 from django.views.generic.edit import (
     UpdateView,
@@ -290,8 +291,12 @@ class OwnUserDataUpdate(FormFrictionMixin, SuccessMessageMixin, LoginRequiredMix
 
     def get_success_url(self):
         # Back to the page just saved, honouring ``?next=`` for pages that link here for one
-        # setting. ``.get()``: indexing it turned any other query parameter into a 500.
-        return self.request.GET.get("next") or self.request.path
+        # setting. ``.get()``: indexing it turned any other query parameter into a 500. Checked
+        # against this host, like every other ``next`` on the site, so it can't send anyone away.
+        next_url = self.request.GET.get("next")
+        if next_url and url_has_allowed_host_and_scheme(next_url, allowed_hosts={self.request.get_host()}):
+            return next_url
+        return self.request.path
 
     def get_form_kwargs(self):
         kwargs = super().get_form_kwargs()

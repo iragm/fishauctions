@@ -124,45 +124,56 @@ class AuctionTOSHTMxTable(tables.Table):
         return bool(club_member.permission_admin or club_member.permission_manage_auctions)
 
     def render_name(self, value, record):
-        result = (
-            f"<a href='' hx-noget hx-get='/api/auctiontos/{record.pk}' hx-target='#modals-here' hx-trigger='click'>"
+        # django_tables2 hands render_*() the raw accessor value, and mark_safe() below turns the
+        # whole cell into markup -- so everything a person typed goes through format_html().
+        icon = (
+            format_html("<i class='text-warning bi bi-people-fill me-1' title='This user may be a duplicate'></i>")
+            if record.possible_duplicate
+            else format_html("<i class='bi bi-person-fill-gear me-1'></i>")
         )
-        if record.possible_duplicate:
-            result += "<i class='text-warning bi bi-people-fill me-1' title='This user may be a duplicate'></i>"
-        else:
-            result += "<i class='bi bi-person-fill-gear me-1'></i>"
-        result += f"{value}</a>"
+        result = format_html(
+            "<a href='' hx-noget hx-get='/api/auctiontos/{}' hx-target='#modals-here' hx-trigger='click'>{}{}</a>",
+            record.pk,
+            icon,
+            value,
+        )
         # created_by is nullable; compare ids to avoid fetching users per row.
         if (
             record.is_admin
             or (record.user_id and record.auction.created_by_id == record.user_id)
             or self.is_club_auction_admin(record)
         ):
-            result += '<span class="badge bg-danger ms-1 me-1" title="Can add users and lot">Admin</span>'
+            result += format_html('<span class="badge bg-danger ms-1 me-1" title="Can add users and lot">Admin</span>')
         # Different colours for the badge (a fact) and the Check in button (an action).
         if record.is_club_member:
-            label = record.auction.alternative_split_label.capitalize()
-            result += (
-                f'<span class="badge bg-info ms-1 me-1" title="Alternate selling fees will be applied">{label}</span>'
+            result += format_html(
+                '<span class="badge bg-info ms-1 me-1" title="Alternate selling fees will be applied">{}</span>',
+                record.auction.alternative_split_label.capitalize(),
             )
         if not record.can_bid_in_auction and not (record.auction.use_check_in_mode and not record.checked_in):
-            result += '<i class="text-danger bi bi-exclamation-octagon-fill" title="Bidding not allowed"></i>'
+            result += format_html(
+                '<i class="text-danger bi bi-exclamation-octagon-fill" title="Bidding not allowed"></i>'
+            )
         if record.checked_in:
-            result += '<i class="bi bi-check-circle-fill text-success ms-1" title="Checked in"></i>'
+            result += format_html('<i class="bi bi-check-circle-fill text-success ms-1" title="Checked in"></i>')
         elif record.auction.use_check_in_mode:
             if self.can_manage_check_in:
                 check_in_url = reverse("auction_check_in", kwargs={"pk": record.pk})
-                result += (
-                    f'<button class="btn btn-sm btn-primary ms-1" hx-get="{check_in_url}" '
+                result += format_html(
+                    '<button class="btn btn-sm btn-primary ms-1" hx-get="{}" '
                     'hx-target="#modals-here" hx-swap="innerHTML" '
                     '_="on htmx:afterOnLoad wait 10ms then add .show to #modal then add .show to #modal-backdrop">'
-                    "Check in</button>"
+                    "Check in</button>",
+                    check_in_url,
                 )
         if record.email_address_status == "BAD":
-            result += "<i class='bi bi-envelope-exclamation-fill text-danger ms-1' title='Unable to send email to this address'></i>"
+            result += format_html(
+                "<i class='bi bi-envelope-exclamation-fill text-danger ms-1'"
+                " title='Unable to send email to this address'></i>"
+            )
         if record.email_address_status == "VALID":
-            result += "<i class='bi bi-envelope-check-fill ms-1' title='Verified email'></i>"
-        return mark_safe(result)
+            result += format_html("<i class='bi bi-envelope-check-fill ms-1' title='Verified email'></i>")
+        return result
 
     class Meta:
         model = AuctionTOS
@@ -219,13 +230,14 @@ class AuctionHistoryHTMxTable(tables.Table):
             result = "<i class='bi bi-graph-up'></i>"
         else:
             result = ""
-        result += f" {value}"
-        return mark_safe(result)
+        return format_html("{} {}", mark_safe(result), value)  # noqa: S308 - result is one of the literals above
 
     def render_name(self, value, record):
-        if record.user:
-            result = record.user.get_full_name()
-        return mark_safe(result)
+        # A person's own first/last name. django_tables2 skips this for an empty accessor, so
+        # record.user was never None here -- but returning the escaped name says so outright.
+        if not record.user:
+            return "System"
+        return record.user.get_full_name()
 
     class Meta:
         model = AuctionHistory
@@ -258,36 +270,49 @@ class LotHTMxTable(tables.Table):
     lot_number = tables.Column(accessor="lot_number_int", verbose_name="Lot number", orderable=True)
 
     def render_lot_name(self, value, record):
-        result = f"""
-        <a href='' hx-noget hx-get='/api/lot/{record.pk}' hx-target='#modals-here' hx-trigger='click'><i class='bi bi-calendar-fill me-1'></i>{value}</a>
-        <button type="button" class="btn btn-sm btn-primary dropdown-toggle dropdown-toggle-split" data-bs-toggle="dropdown" aria-haspopup="true" aria-expanded="false">
-				</button>
-				<div class="dropdown-menu">
-					<div><a href='{record.lot_link}?src=admin'><i class="bi bi-calendar ms-1 me-1"></i>Lot page</a></div>
-		"""
+        # Lot names and people's names are public input: every one goes through format_html.
+        result = format_html(
+            "<a href='' hx-noget hx-get='/api/lot/{}' hx-target='#modals-here' hx-trigger='click'>"
+            "<i class='bi bi-calendar-fill me-1'></i>{}</a>"
+            '<button type="button" class="btn btn-sm btn-primary dropdown-toggle dropdown-toggle-split"'
+            ' data-bs-toggle="dropdown" aria-haspopup="true" aria-expanded="false"></button>'
+            '<div class="dropdown-menu">'
+            "<div><a href='{}?src=admin'><i class=\"bi bi-calendar ms-1 me-1\"></i>Lot page</a></div>",
+            record.pk,
+            value,
+            record.lot_link,
+        )
         if not record.image_count:
-            result += f"""<a href="{reverse("add_image", kwargs={"lot": record.pk})}?next={reverse("auction_lot_list", kwargs={"slug": record.auction.slug})}"<i class="bi bi-file-image ms-1 me-1"></i>Add image</a>"""
-        result += f"""<div><a href='#' hx-get="{reverse("lot_refund", kwargs={"pk": record.pk})}",
-                hx-target="#modals-here",
-                hx-trigger="click",
-                _="on htmx:afterOnLoad wait 10ms then add .show to #modal then add .show to #modal-backdrop"><i class="bi bi-calendar-x ms-1 me-1"></i>Remove or refund</a></div>
-                <div><a class="" href="{reverse("single_lot_label", kwargs={"pk": record.pk})}"><i class="bi bi-tag ms-1 me-1"></i>{"Reprint label" if record.label_printed else "Print label"}</a></div>
-                <div><a href="{record.seller_invoice_link}"><i class="bi bi-bag-fill ms-1 me-1"></i>Seller's invoice</a></div>
-
-        """
+            result += format_html(
+                '<a href="{}?next={}"><i class="bi bi-file-image ms-1 me-1"></i>Add image</a>',
+                reverse("add_image", kwargs={"lot": record.pk}),
+                reverse("auction_lot_list", kwargs={"slug": record.auction.slug}),
+            )
+        result += format_html(
+            '<div><a href=\'#\' hx-get="{}" hx-target="#modals-here" hx-trigger="click"'
+            ' _="on htmx:afterOnLoad wait 10ms then add .show to #modal then add .show to #modal-backdrop">'
+            '<i class="bi bi-calendar-x ms-1 me-1"></i>Remove or refund</a></div>'
+            '<div><a href="{}"><i class="bi bi-tag ms-1 me-1"></i>{}</a></div>'
+            '<div><a href="{}"><i class="bi bi-bag-fill ms-1 me-1"></i>Seller\'s invoice</a></div>',
+            reverse("lot_refund", kwargs={"pk": record.pk}),
+            reverse("single_lot_label", kwargs={"pk": record.pk}),
+            "Reprint label" if record.label_printed else "Print label",
+            record.seller_invoice_link,
+        )
         if record.winner_invoice_link:
-            result += f"""
-            <div><a href="{record.winner_invoice_link}"><i class="bi bi-bag ms-1 me-1"></i>Winner's invoice</a></div>
-			"""
-        result += "</div>"
+            result += format_html(
+                '<div><a href="{}"><i class="bi bi-bag ms-1 me-1"></i>Winner\'s invoice</a></div>',
+                record.winner_invoice_link,
+            )
+        result += format_html("</div>")
         if record.banned:
-            result += '<span class="badge bg-danger">Removed</span>'
+            result += format_html('<span class="badge bg-danger">Removed</span>')
         # On mobile, show info below the lot name.
-        result += f'<span class="d-block d-md-none"><b>Seller:</b> {record.auctiontos_seller} '
+        result += format_html('<span class="d-block d-md-none"><b>Seller:</b> {} ', record.auctiontos_seller)
         if record.auctiontos_winner:
-            result += f"<b>Winner:</b> {record.auctiontos_winner} (${record.winning_price})"
-        result += "</span>"
-        return mark_safe(result)
+            result += format_html("<b>Winner:</b> {} (${})", record.auctiontos_winner, record.winning_price)
+        result += format_html("</span>")
+        return result
 
     def render_winning_price(self, value, record):
         return f"${value}"
@@ -330,28 +355,31 @@ class AuctionHTMxTable(tables.Table):
         from auctions.templatetags.distance_filters import convert_distance
 
         auction = record
-        result = f"<a href='{auction.get_absolute_url()}'>{auction.title}</a><br class='d-md-none'>"
+        # auction.title is public input.
+        result = format_html("<a href='{}'>{}</a><br class='d-md-none'>", auction.get_absolute_url(), auction.title)
         if auction.is_last_used:
-            result += " <span class='ms-1 badge bg-success text-dark'>Your last auction</span>"
+            result += format_html(" <span class='ms-1 badge bg-success text-dark'>Your last auction</span>")
         if auction.is_online and not auction.in_progress:
-            result += " <span class='badge bg-primary'>Online</span>"
+            result += format_html(" <span class='badge bg-primary'>Online</span>")
         if auction.in_progress or auction.in_person_in_progress:
-            result += " <span class='badge bg-info'>Online bidding now!</span>"
+            result += format_html(" <span class='badge bg-info'>Online bidding now!</span>")
         if auction.is_deleted:
-            result += " <span class='badge bg-danger'>Deleted</span>"
+            result += format_html(" <span class='badge bg-danger'>Deleted</span>")
         if not auction.promote_this_auction:
-            result += " <span class='badge bg-dark'>Not promoted</span>"
+            result += format_html(" <span class='badge bg-dark'>Not promoted</span>")
         if auction.distance:
             # Use distance conversion filter
             user = self.request.user if self.request else None
             distance_result = convert_distance(auction.distance, user)
             if distance_result:
                 distance_value, distance_unit = distance_result
-                result += f" <span class='badge bg-primary'>{distance_value} {distance_unit} from you</span>"
+                result += format_html(
+                    " <span class='badge bg-primary'>{} {} from you</span>", distance_value, distance_unit
+                )
         if auction.joined and not auction.is_last_used:
-            result += " <span class='badge bg-success text-dark'>Joined</span>"
+            result += format_html(" <span class='badge bg-success text-dark'>Joined</span>")
         result += auction.template_lot_link_first_column + auction.template_promo_info
-        return mark_safe(result)
+        return result
 
     class Meta:
         model = Auction
@@ -452,21 +480,37 @@ class LotHTMxTableForUsers(tables.Table):
         return f"${value}"
 
     def render_actions(self, value, record):
-        result = ""
+        result = format_html("")
         if not record.image_count:
-            result += f' <a href="{reverse("add_image", kwargs={"lot": record.pk})}" class="badge bg-primary"><i class="bi bi-file-image"></i> Add image</a>'
+            result += format_html(
+                ' <a href="{}" class="badge bg-primary"><i class="bi bi-file-image"></i> Add image</a>',
+                reverse("add_image", kwargs={"lot": record.pk}),
+            )
         if record.can_be_edited:
-            result += f' <a href="{reverse("edit_lot", kwargs={"pk": record.pk})}" class="badge text-dark bg-warning"><i class="bi bi-calendar"></i> Edit</a>'
-        result += f' <a href="{reverse("new_lot")}?copy={record.pk}" class="badge bg-info"><i class="bi bi-calendar-plus"></i> Copy to new lot</a>'
+            result += format_html(
+                ' <a href="{}" class="badge text-dark bg-warning"><i class="bi bi-calendar"></i> Edit</a>',
+                reverse("edit_lot", kwargs={"pk": record.pk}),
+            )
+        result += format_html(
+            ' <a href="{}?copy={}" class="badge bg-info"><i class="bi bi-calendar-plus"></i> Copy to new lot</a>',
+            reverse("new_lot"),
+            record.pk,
+        )
         if record.can_be_deleted:
-            result += f' <a href="{reverse("delete_lot", kwargs={"pk": record.pk})}?next={reverse("selling")}" class="badge bg-danger"><i class="bi bi-trash"></i> Delete</a>'
-        return mark_safe(result)
+            result += format_html(
+                ' <a href="{}?next={}" class="badge bg-danger"><i class="bi bi-trash"></i> Delete</a>',
+                reverse("delete_lot", kwargs={"pk": record.pk}),
+                reverse("selling"),
+            )
+        return result
 
     def render_lot_name(self, value, record):
-        result = f"<a href='{record.lot_link}?src=my_lots'>{value}"
+        result = format_html("<a href='{}?src=my_lots'>{}", record.lot_link, value)
         if record.owner_chats:
-            result += f" <span style='color:black;font-weight:900' class='badge bg-warning'>{record.owner_chats}</span>"
-        result += "</a>"
+            result += format_html(
+                " <span style='color:black;font-weight:900' class='badge bg-warning'>{}</span>", record.owner_chats
+            )
+        result += format_html("</a>")
         if getattr(record, "show_bap_badge", False):
             try:
                 award = record.bap_award
@@ -485,13 +529,13 @@ class LotHTMxTableForUsers(tables.Table):
                     badge_parts.append(club_name)
                 if notes:
                     badge_parts.append(notes)
-                result += f' <span class="badge bg-success text-dark">{" · ".join(badge_parts)}</span>'
+                result += format_html(' <span class="badge bg-success text-dark">{}</span>', " · ".join(badge_parts))
             except Exception:
                 pass
-        return mark_safe(result)
+        return result
 
     def render_auction(self, value, record):
-        return mark_safe(f"<small>{value}</small>")
+        return format_html("<small>{}</small>", value)
 
     class Meta:
         model = Lot
@@ -883,9 +927,9 @@ class ClubHistoryHTMxTable(tables.Table):
 
     def render_applies_to(self, value, record):
         icon = self.APPLIES_TO_ICONS.get(record.applies_to)
-        result = f"<i class='bi {icon}'></i>" if icon else ""
-        result += f" {value}"
-        return mark_safe(result)
+        # icon comes from APPLIES_TO_ICONS, never from the row.
+        prefix = format_html("<i class='bi {}'></i>", icon) if icon else format_html("")
+        return format_html("{} {}", prefix, value)
 
     def render_name(self, value, record):
         if record.user:
@@ -939,7 +983,7 @@ class BapAwardHTMxTable(tables.Table):
         return format_html(
             '<a hx-get="{}" {} class="text-info" style="cursor:pointer;text-decoration:underline">{}</a>',
             url,
-            mark_safe(self._MODAL_ATTRS),
+            mark_safe(self._MODAL_ATTRS),  # noqa: S308 - a module constant, no row data in it
             content,
         )
 
@@ -1047,7 +1091,7 @@ class ClubBapLotHTMxTable(tables.Table):
             default_points = record.species_category.bap_points if record.species_category_id else 5
         if self.club and self.club.points_for_custom_checkbox > 0 and record.custom_checkbox:
             default_points += self.club.points_for_custom_checkbox
-        return mark_safe(
+        return mark_safe(  # noqa: S308 - render_to_string output; the template autoescapes
             render_to_string(
                 "auctions/bap_lot_buttons.html",
                 {"lot": record, "club": self.club, "default_points": default_points},

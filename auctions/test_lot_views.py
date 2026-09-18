@@ -610,7 +610,7 @@ class DynamicSetLotWinnerViewTestCase(StandardTestCase):
         assert lot.auctiontos_winner is not None
 
         Bid.objects.create(user=self.admin_user, lot_number=self.in_person_lot, amount=100)
-        self.in_person_auction.online_bidding == "allow"
+        self.in_person_auction.online_bidding = "allow"
         self.in_person_auction.save()
         invoice.status = "OPEN"
         invoice.save()

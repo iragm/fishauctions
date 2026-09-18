@@ -215,6 +215,8 @@ class Command(BaseCommand):
                     title="Don't miss this auction",
                     body=f"You looked at lots in {campaign.auction.title} but haven't joined yet.",
                     url=f"https://{campaign.link}",
-                    send_email=lambda: mail.send(email, **campaign_kwargs),
+                    # Bound by default argument: both names are loop variables, and a deferred
+                    # call would otherwise mail the last campaign of the loop to everybody.
+                    send_email=lambda email=email, campaign_kwargs=campaign_kwargs: mail.send(email, **campaign_kwargs),
                     auction_pk=campaign.auction.pk,
                 )

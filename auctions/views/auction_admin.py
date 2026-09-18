@@ -4,6 +4,7 @@ The auction admin's pages, plus ``AuctionStats``; the JSON behind its charts is 
 :mod:`auctions.views.auction_stats`.
 """
 
+import json
 import logging
 from datetime import datetime
 from datetime import timezone as date_tz
@@ -30,6 +31,7 @@ from django.urls import reverse
 from django.utils import timezone
 from django.utils.html import format_html
 from django.utils.http import url_has_allowed_host_and_scheme
+from django.utils.safestring import mark_safe
 from django.views.generic import DetailView, ListView, TemplateView, View
 from django.views.generic.edit import (
     CreateView,
@@ -204,7 +206,7 @@ class PickupLocationsUpdate(FormFrictionMixin, LoginRequiredMixin, AuctionViewMi
 
     def dispatch(self, request, *args, **kwargs):
         self.auction = self.get_object().auction
-        self.is_auction_admin
+        self.require_auction_admin()
         return super().dispatch(request, *args, **kwargs)
 
     def form_valid(self, form, **kwargs):
@@ -224,7 +226,7 @@ class PickupLocationsCreate(FormFrictionMixin, LoginRequiredMixin, AuctionViewMi
 
     def dispatch(self, request, *args, **kwargs):
         self.auction = Auction.objects.exclude(is_deleted=True).filter(slug=kwargs.pop("slug")).first()
-        self.is_auction_admin
+        self.require_auction_admin()
         return super().dispatch(request, *args, **kwargs)
 
     def get_form_kwargs(self):
@@ -1101,6 +1103,22 @@ class AuctionBarcodeScan(LoginRequiredMixin, AuctionViewMixin, View):
         )
 
 
+#: ``<``, ``>`` and ``&`` as JSON string escapes, the set ``django.utils.html.json_script`` uses.
+_CHART_JSON_ESCAPES = {ord(">"): "\\u003E", ord("<"): "\\u003C", ord("&"): "\\u0026"}
+
+
+def _chart_json(data):
+    """``data`` as JSON safe to write straight into a ``<script>`` block.
+
+    ``json.dumps`` does not escape ``<``, so a lot name or referrer containing ``</script>`` closed
+    the tag and everything after it ran as markup -- and a referrer reaches these charts from the
+    unauthenticated page-view beacon. ``ensure_ascii`` (the default) already escapes U+2028/U+2029.
+    Returns a ``SafeString``, so the template's ``|safe`` is a no-op rather than the only thing
+    standing between a stranger's text and the page.
+    """
+    return mark_safe(json.dumps(data).translate(_CHART_JSON_ESCAPES))  # noqa: S308 - escaped above
+
+
 class AuctionStats(LoginRequiredMixin, AuctionViewMixin, DetailView):
     """Fun facts about an auction"""
 
@@ -1186,33 +1204,31 @@ class AuctionStats(LoginRequiredMixin, AuctionViewMixin, DetailView):
             messages.info(self.request, "Not all stats are available for old auctions.")
 
         # Add all stat data to context for template rendering
-        import json
-
-        context["stats_activity_json"] = json.dumps(auction.get_stat_activity)
-        context["stats_attrition_json"] = json.dumps(auction.get_stat_attrition)
-        context["stats_auctioneer_speed_json"] = json.dumps(auction.get_stat_auctioneer_speed)
-        context["stats_lot_sell_prices_json"] = json.dumps(auction.get_stat_lot_sell_prices)
-        context["stats_referrers_json"] = json.dumps(auction.get_stat_referrers)
-        context["stats_images_json"] = json.dumps(auction.get_stat_images)
-        context["stats_travel_distance_json"] = json.dumps(auction.get_stat_travel_distance)
-        context["stats_previous_auctions_json"] = json.dumps(auction.get_stat_previous_auctions)
-        context["stats_lots_submitted_json"] = json.dumps(auction.get_stat_lots_submitted)
-        context["stats_location_volume_json"] = json.dumps(auction.get_stat_location_volume)
-        context["stats_feature_use_json"] = json.dumps(auction.get_stat_feature_use)
+        context["stats_activity_json"] = _chart_json(auction.get_stat_activity)
+        context["stats_attrition_json"] = _chart_json(auction.get_stat_attrition)
+        context["stats_auctioneer_speed_json"] = _chart_json(auction.get_stat_auctioneer_speed)
+        context["stats_lot_sell_prices_json"] = _chart_json(auction.get_stat_lot_sell_prices)
+        context["stats_referrers_json"] = _chart_json(auction.get_stat_referrers)
+        context["stats_images_json"] = _chart_json(auction.get_stat_images)
+        context["stats_travel_distance_json"] = _chart_json(auction.get_stat_travel_distance)
+        context["stats_previous_auctions_json"] = _chart_json(auction.get_stat_previous_auctions)
+        context["stats_lots_submitted_json"] = _chart_json(auction.get_stat_lots_submitted)
+        context["stats_location_volume_json"] = _chart_json(auction.get_stat_location_volume)
+        context["stats_feature_use_json"] = _chart_json(auction.get_stat_feature_use)
 
         # Add comparison auction stats if available
         if "compare_auction" in context:
             compare_auction = context["compare_auction"]
-            context["compare_stats_activity_json"] = json.dumps(compare_auction.get_stat_activity)
-            context["compare_stats_attrition_json"] = json.dumps(compare_auction.get_stat_attrition)
-            context["compare_stats_auctioneer_speed_json"] = json.dumps(compare_auction.get_stat_auctioneer_speed)
-            context["compare_stats_lot_sell_prices_json"] = json.dumps(compare_auction.get_stat_lot_sell_prices)
-            context["compare_stats_referrers_json"] = json.dumps(compare_auction.get_stat_referrers)
-            context["compare_stats_images_json"] = json.dumps(compare_auction.get_stat_images)
-            context["compare_stats_travel_distance_json"] = json.dumps(compare_auction.get_stat_travel_distance)
-            context["compare_stats_previous_auctions_json"] = json.dumps(compare_auction.get_stat_previous_auctions)
-            context["compare_stats_lots_submitted_json"] = json.dumps(compare_auction.get_stat_lots_submitted)
-            context["compare_stats_location_volume_json"] = json.dumps(compare_auction.get_stat_location_volume)
-            context["compare_stats_feature_use_json"] = json.dumps(compare_auction.get_stat_feature_use)
+            context["compare_stats_activity_json"] = _chart_json(compare_auction.get_stat_activity)
+            context["compare_stats_attrition_json"] = _chart_json(compare_auction.get_stat_attrition)
+            context["compare_stats_auctioneer_speed_json"] = _chart_json(compare_auction.get_stat_auctioneer_speed)
+            context["compare_stats_lot_sell_prices_json"] = _chart_json(compare_auction.get_stat_lot_sell_prices)
+            context["compare_stats_referrers_json"] = _chart_json(compare_auction.get_stat_referrers)
+            context["compare_stats_images_json"] = _chart_json(compare_auction.get_stat_images)
+            context["compare_stats_travel_distance_json"] = _chart_json(compare_auction.get_stat_travel_distance)
+            context["compare_stats_previous_auctions_json"] = _chart_json(compare_auction.get_stat_previous_auctions)
+            context["compare_stats_lots_submitted_json"] = _chart_json(compare_auction.get_stat_lots_submitted)
+            context["compare_stats_location_volume_json"] = _chart_json(compare_auction.get_stat_location_volume)
+            context["compare_stats_feature_use_json"] = _chart_json(compare_auction.get_stat_feature_use)
 
         return context

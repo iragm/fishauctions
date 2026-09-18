@@ -11,6 +11,7 @@ import zoneinfo
 from django.conf import settings  # import the settings file
 
 from auctions import dmca
+from auctions.client_ip import client_ip
 
 DEFAULT_USER_TIMEZONE = "America/New_York"
 GOOGLE_OAUTH_PLACEHOLDER_VALUES = {
@@ -181,11 +182,7 @@ def add_location(request):
     needs_save = False
     if request.user.is_authenticated:
         # No cookies: the IP gives a location later, see set_user_location.py.
-        x_forwarded_for = request.META.get("HTTP_X_FORWARDED_FOR")
-        if x_forwarded_for:
-            ip = x_forwarded_for.split(",")[0]
-        else:
-            ip = request.META.get("REMOTE_ADDR")
+        ip = client_ip(request) or None
         # Only update if IP address has changed
         if request.user.userdata.last_ip_address != ip:
             request.user.userdata.last_ip_address = ip

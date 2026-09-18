@@ -515,7 +515,8 @@ class ClubAdminView(LoginRequiredMixin, ClubViewMixin, HTMxTableView):
                 )
             )
         body = "".join(str(b) for b in bits)
-        return format_html('<div class="text-center py-3">{}</div>', mark_safe(body))
+        # S308: body is the join of format_html() results built just above.
+        return format_html('<div class="text-center py-3">{}</div>', mark_safe(body))  # noqa: S308
 
     def get_table_kwargs(self, **kwargs):
         kwargs = super().get_table_kwargs(**kwargs)

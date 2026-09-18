@@ -5,7 +5,6 @@ sheets, pickup-location manifests, the add-to-calendar link and the no-show acti
 """
 
 import ast
-import csv
 import logging
 import uuid
 from datetime import timedelta
@@ -58,6 +57,8 @@ from auctions.models import (
     guess_category,
 )
 from auctions.services import attachment_filename
+from auctions.services import csv_writer as safe_csv_writer
+from auctions.views.club_integrations import _ical_escape
 
 from .base import AuctionViewMixin, close_modal_response
 from .printing import LotLabelView
@@ -151,8 +152,7 @@ class AuctionBulkPrintingPDF(LotLabelView):
 
     def dispatch(self, request, *args, **kwargs):
         self.auction = Auction.objects.exclude(is_deleted=True).filter(slug=kwargs["slug"]).first()
-        self.is_auction_admin
-
+        self.require_auction_admin()
         self.selected_tos = request.GET.get("selected_tos", None)
         self.print_only_unprinted = request.GET.get("print_only_unprinted", "True") == "True"
         if not self.selected_tos:
@@ -215,7 +215,7 @@ class PickupLocationsIncoming(View, AuctionViewMixin):
         self.location = PickupLocation.objects.filter(pk=kwargs.pop("pk")).first()
         if self.location:
             self.auction = self.location.auction
-            self.is_auction_admin
+            self.require_auction_admin()
             return super().dispatch(request, *args, **kwargs)
 
     def get(self, request):
@@ -224,7 +224,7 @@ class PickupLocationsIncoming(View, AuctionViewMixin):
         response = HttpResponse(content_type="text/csv")
         name = attachment_filename(self.location.name.lower().replace(" ", "_"))
         response["Content-Disposition"] = f'attachment; filename="incoming_lots_destined_for_{name}.csv"'
-        csv_writer = csv.writer(response)
+        csv_writer = safe_csv_writer(response)
         csv_writer.writerow(
             [
                 "Lot number",
@@ -255,7 +255,7 @@ class PickupLocationsOutgoing(View, AuctionViewMixin):
         self.location = PickupLocation.objects.filter(pk=kwargs.pop("pk")).first()
         if self.location:
             self.auction = self.location.auction
-            self.is_auction_admin
+            self.require_auction_admin()
             return super().dispatch(request, *args, **kwargs)
 
     def get(self, request):
@@ -264,7 +264,7 @@ class PickupLocationsOutgoing(View, AuctionViewMixin):
         response = HttpResponse(content_type="text/csv")
         name = attachment_filename(self.location.name.lower().replace(" ", "_"))
         response["Content-Disposition"] = f'attachment; filename="outgoing_lots_coming_from_{name}.csv"'
-        csv_writer = csv.writer(response)
+        csv_writer = safe_csv_writer(response)
         csv_writer.writerow(["Lot number", "Seller name", "Lot name", "Destination", "Winner name"])
         for lot in queryset:
             csv_writer.writerow(
@@ -406,10 +406,17 @@ class AddToCalendarView(LoginRequiredMixin, View):
             return response
 
     def _generate_ics(self, title, description, start, end, location):
-        """Return a valid ICS file string (UTC-based, RFC5545 compliant)"""
+        """Return a valid ICS file string (UTC-based, RFC5545 compliant).
+
+        Every field goes through ``_ical_escape``: an auction title or a pickup address holding a
+        newline used to inject whole iCal properties -- a second VEVENT, an alarm, a forged
+        ORGANIZER -- into the file a member downloads.
+        """
         uid = uuid.uuid4()
         now_utc = timezone.now()
-        escaped_description = description.replace("\n", "\\n")
+        escaped_description = _ical_escape(description)
+        title = _ical_escape(title)
+        location = _ical_escape(location)
         return (
             "BEGIN:VCALENDAR\r\n"
             "VERSION:2.0\r\n"
@@ -551,7 +558,7 @@ class AddTosMemo(APIView, AuctionViewMixin):
         if not self.auctiontos:
             raise Http404
         self.auction = self.auctiontos.auction
-        self.is_auction_admin
+        self.require_auction_admin()
         return super().dispatch(request, *args, **kwargs)
 
     def get(self, request, *args, **kwargs):
@@ -569,14 +576,14 @@ class AddTosMemo(APIView, AuctionViewMixin):
         raise Http404
 
 
-class AuctionNoShow(TemplateView, LoginRequiredMixin, AuctionViewMixin):
+class AuctionNoShow(LoginRequiredMixin, AuctionViewMixin, TemplateView):
     """Tools for cleaning up after somebody doesn't show up for an auction."""
 
     template_name = "auctions/noshow.html"
 
     def dispatch(self, request, *args, **kwargs):
         self.auction = get_object_or_404(Auction, slug=kwargs.pop("slug"), is_deleted=False)
-        self.is_auction_admin
+        self.require_auction_admin()
         self.tos = get_object_or_404(AuctionTOS, auction=self.auction, bidder_number=kwargs.pop("tos"))
         return super().dispatch(request, *args, **kwargs)
 

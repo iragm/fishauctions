@@ -159,6 +159,12 @@ app.conf.beat_schedule = {
         "schedule": 86400.0,  # Run every 24 hours
     },
     # Delete sent mail older than settings.MAIL_RETENTION_DAYS.
+    # Delete expired sessions. Without it django_session only grows: one row per anonymous
+    # visitor, and /api/pageview/ writes one per unauthenticated beacon.
+    "clearsessions": {
+        "task": "auctions.tasks.clearsessions",
+        "schedule": 86400.0,  # Run every 24 hours
+    },
     "cleanup_mail": {
         "task": "auctions.tasks.cleanup_mail",
         "schedule": 86400.0,  # Run every 24 hours

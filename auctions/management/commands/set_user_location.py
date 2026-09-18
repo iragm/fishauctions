@@ -1,5 +1,7 @@
 import datetime
+import json
 import logging
+from ipaddress import ip_address
 
 import requests
 from django.core.management.base import BaseCommand
@@ -9,6 +11,39 @@ from django.utils import timezone
 from auctions.models import Location, PageView, UserData
 
 logger = logging.getLogger(__name__)
+
+#: https, not http: the reply places people on the map, so anyone on the path could otherwise move
+#: them anywhere.
+BATCH_URL = "https://ip-api.com/batch"
+
+#: Without one, a stalled third party hangs the task until Celery's hard limit kills the worker.
+REQUEST_TIMEOUT = 30
+
+#: ip-api caps a batch at 100.
+MAX_BATCH = 100
+
+
+def _batch_body(addresses):
+    """The JSON body for one ip-api batch: unique, valid addresses only.
+
+    Built with ``json.dumps`` rather than string concatenation. These values come from a request
+    header, so they are whatever somebody sent -- a quote in one used to break the body apart, and
+    could inject entries into it. ``ip_address`` also drops the substring de-duplication that was
+    here, which treated "1.1.1.1" as already present once "11.1.1.12" had been added.
+    """
+    seen = []
+    for raw in addresses:
+        text = (raw or "").strip()
+        if not text or text in seen:
+            continue
+        try:
+            ip_address(text)
+        except ValueError:
+            continue
+        seen.append(text)
+        if len(seen) >= MAX_BATCH:
+            break
+    return json.dumps(seen)
 
 
 class Command(BaseCommand):
@@ -22,14 +57,10 @@ class Command(BaseCommand):
             last_ip_address__isnull=False,
             user__date_joined__lte=recently,
         ).order_by("-last_activity")[:100]
-        # A string, not a list, and single quotes are not allowed in it.
-        ip_list = "["
         if users:
-            for user in users:
-                ip_list += f'"{user.last_ip_address}",'
-            ip_list = ip_list[:-1] + "]"  # trailing , breaks things
+            ip_list = _batch_body(user.last_ip_address for user in users)
             # fields=1106113 is lat, lng and country; see https://ip-api.com/docs/api:batch#test
-            r = requests.post("http://ip-api.com/batch?fields=1106113", data=ip_list)
+            r = requests.post(BATCH_URL + "?fields=1106113", data=ip_list, timeout=REQUEST_TIMEOUT)
             if r.status_code == 200:
                 ip_addresses = r.json()
                 for user in users:
@@ -128,14 +159,10 @@ class Command(BaseCommand):
             .order_by("-date_start")[:100]
         )
         # now that we've cycled
-        ip_list = "["
         if pageviews:
-            for view in pageviews:
-                if view.ip_address not in ip_list:
-                    ip_list += f'"{view.ip_address}",'
-            ip_list = ip_list[:-1] + "]"  # trailing , breaks things
+            ip_list = _batch_body(view.ip_address for view in pageviews)
             # See https://ip-api.com/docs/api:batch#test
-            r = requests.post("http://ip-api.com/batch?fields=25024", data=ip_list)
+            r = requests.post(BATCH_URL + "?fields=25024", data=ip_list, timeout=REQUEST_TIMEOUT)
             if r.status_code == 200:
                 ip_addresses = r.json()
                 # now, we cycle through views again and assign their location based on IP

@@ -55,9 +55,10 @@ def strip_origin_from_urls(apps, schema_editor):
     connection = schema_editor.connection
     if connection.vendor != "mysql":
         return
+    # The only interpolation below is this table name, which Django gives us; S608 can't see that.
     table = apps.get_model("auctions", "PageView")._meta.db_table
     with connection.cursor() as cursor:
-        cursor.execute(f"SELECT MIN(id), MAX(id) FROM `{table}`")
+        cursor.execute(f"SELECT MIN(id), MAX(id) FROM `{table}`")  # noqa: S608
         low, high = cursor.fetchone()
     if low is None:
         return
@@ -69,7 +70,7 @@ def strip_origin_from_urls(apps, schema_editor):
         with connection.cursor() as cursor:
             if origin:
                 cursor.execute(
-                    f"UPDATE `{table}` "
+                    f"UPDATE `{table}` "  # noqa: S608
                     "SET url = COALESCE(NULLIF(REGEXP_REPLACE("
                     "    REGEXP_REPLACE(url, %s, ''), '#.*$', ''"
                     "), ''), '/') "
@@ -78,7 +79,7 @@ def strip_origin_from_urls(apps, schema_editor):
                 )
                 changed += cursor.rowcount
             cursor.execute(
-                f"UPDATE `{table}` SET url = '' "
+                f"UPDATE `{table}` SET url = '' "  # noqa: S608
                 "WHERE id BETWEEN %s AND %s AND url <> '' AND url IS NOT NULL "
                 "AND url NOT LIKE '/%%' AND url NOT LIKE 'http://%%' AND url NOT LIKE 'https://%%'",
                 window,

@@ -1684,7 +1684,7 @@ class AddPersonTests(PaletteAssistTestCase):
             {"name": "Mike Smith", "auction": self.in_person_auction.title, "bidder_number": "555"}
         )
         self.assertIn("error", result)
-        self.assertIn("already in use", result["error"].lower())
+        self.assertIn("already has this bidder number", result["error"].lower())
 
     def test_it_writes_nothing_during_assist(self):
         self._script({"action": "add_person", "params": {"name": "Jane Doe"}, "summary": "Add Jane"})

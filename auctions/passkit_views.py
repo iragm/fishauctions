@@ -176,6 +176,8 @@ class PassKitLogView(View):
             logs = json.loads(request.body or b"{}").get("logs", [])
         except ValueError:
             logs = []
+        # Unauthenticated and unthrottled: clamp the length and strip newlines so a device can't
+        # forge log lines or fill the disk.
         for line in logs[:20]:
-            logger.warning("PassKit device log: %s", line)
+            logger.warning("PassKit device log: %s", str(line)[:500].replace("\r", " ").replace("\n", " "))
         return HttpResponse(status=200)

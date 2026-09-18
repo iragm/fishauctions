@@ -218,7 +218,12 @@ class StandardTestCase(CsvImportTestMixin, TestCase):
             user=cls.user, auction=cls.online_auction, pickup_location=cls.location, bidder_number="503"
         )
         cls.in_person_tos = AuctionTOS.objects.create(
-            user=cls.user, auction=cls.in_person_auction, pickup_location=cls.location, bidder_number="504"
+            user=cls.user,
+            auction=cls.in_person_auction,
+            # The in-person auction's own location: cls.location belongs to the online auction, and
+            # a participant collecting somewhere in a different auction is not a thing that happens.
+            pickup_location=cls.in_person_location,
+            bidder_number="504",
         )
         cls.tosB = AuctionTOS.objects.create(
             user=cls.userB, auction=cls.online_auction, pickup_location=cls.location, bidder_number="505"

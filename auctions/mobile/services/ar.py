@@ -288,11 +288,10 @@ def ingest_observations(auction, user, session_id, fov_hdeg, frames):
 
 
 def _client_ip(request):
-    """Best-effort client IP (first X-Forwarded-For hop, else REMOTE_ADDR); '' when unknown."""
-    fwd = request.META.get("HTTP_X_FORWARDED_FOR")
-    if fwd:
-        return fwd.split(",")[0].strip()
-    return request.META.get("REMOTE_ADDR") or ""
+    """The caller's address; see :mod:`auctions.client_ip`. Kept as a name three modules import."""
+    from auctions.client_ip import client_ip
+
+    return client_ip(request)
 
 
 def record_ar_events(auction, user, events, request):

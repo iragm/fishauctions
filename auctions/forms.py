@@ -59,7 +59,6 @@ from .models import (
     AuctionDropdown,
     AuctionTOS,
     BapAward,
-    Bid,
     Category,
     ChatSubscription,
     Club,
@@ -90,7 +89,14 @@ from .models import (
     VolunteerJob,
     normalize_species_name,
 )
-from .services import auction_to_copy, clone_lot_values, user_can_clone_lot
+from .services import (
+    auction_to_copy,
+    bidder_number_conflict,
+    bidder_number_taken_message,
+    clone_lot_values,
+    member_holding_bidder_number,
+    user_can_clone_lot,
+)
 from .site_setup import SINGLE_CLUB_DEFAULT_MANAGE_MODE, get_single_club
 from .species_matching import (
     species_already_named,
@@ -473,14 +479,10 @@ class QuickAddTOS(forms.ModelForm):
 
     class Meta:
         model = AuctionTOS
-        fields = [
-            "bidder_number",
-            "name",
-            "email",
-            "phone_number",
-            "address",
-            "pickup_location",
-        ]
+        # The constant, not a copy of it: __init__ configures is_club_member, so leaving it out
+        # made the class raise KeyError on its own. Nothing noticed because the only caller is a
+        # modelformset_factory that passes QUICK_ADD_TOS_FIELDS as ``fields`` and overrides this.
+        fields = list(QUICK_ADD_TOS_FIELDS)
         widgets = {
             "address": forms.Textarea(attrs={"rows": 2}),
         }
@@ -508,16 +510,18 @@ class QuickAddTOS(forms.ModelForm):
         cleaned_data = super().clean()
         bidder_number = cleaned_data.get("bidder_number")
         if bidder_number:
-            existing_tos = AuctionTOS.objects.filter(bidder_number=bidder_number, auction=self.auction).order_by(
-                "-createdon"
-            )
             pk = cleaned_data.get("pk")
-            if pk:
-                existing_tos = existing_tos.exclude(pk=pk)
-            else:
+            existing_tos = AuctionTOS.objects.filter(pk=pk).first() if pk else None
+            if not pk:
                 self.bidder_numbers_on_this_form.append(bidder_number)
-            if existing_tos.count() or self.bidder_numbers_on_this_form.count(bidder_number) > 1:
-                self.add_error("bidder_number", "This bidder number is already in use")
+            # services.bidder_number_conflict covers the club scope too, which matters here: in a
+            # club-managed auction the number belongs to the ClubMember and is copied to every
+            # auction, so one free in this auction alone would displace somebody on the next sync.
+            holder = bidder_number_conflict(bidder_number, auction=self.auction, exclude_tos=existing_tos)
+            if holder:
+                self.add_error("bidder_number", bidder_number_taken_message(holder))
+            elif self.bidder_numbers_on_this_form.count(bidder_number) > 1:
+                self.add_error("bidder_number", "This bidder number is used twice on this form")
         if cleaned_data.get("email") and not cleaned_data.get("pk"):
             # duplicate email check for new users only
             existing_tos = (
@@ -1213,6 +1217,9 @@ class EditLot(forms.ModelForm):
         else:
             self.fields["custom_dropdown"].widget = HiddenInput()
         self.fields["banned"].initial = self.lot.banned
+        # Scoped to this auction: the dal widget's forward=["auction"] filters the dropdown only, so
+        # without this a POST could name any AuctionTOS on the site and bill a stranger for this lot.
+        self.fields["auctiontos_winner"].queryset = AuctionTOS.objects.filter(auction=self.auction)
         self.fields["auctiontos_winner"].initial = self.lot.auctiontos_winner
         # and some housekeeping on labels and help text
         self.fields["winning_price"].label = "Sell price"
@@ -1379,6 +1386,11 @@ class EditLot(forms.ModelForm):
                 winning_price = cleaned_data.get("winning_price")
                 if winning_price is not None and winning_price != winning_price.to_integral_value():
                     self.add_error("winning_price", "This auction only allows whole dollar amounts.")
+        # Belt and braces with the queryset above: a winner from another auction would put this lot's
+        # charge on their invoice there, because Invoice is keyed on the AuctionTOS.
+        winner = cleaned_data.get("auctiontos_winner")
+        if winner and auction and winner.auction_id != auction.pk:
+            self.add_error("auctiontos_winner", "That bidder is not in this auction")
         if not cleaned_data.get("auctiontos_winner") and cleaned_data.get("winning_price"):
             self.add_error("auctiontos_winner", "You need to set a winner")
         if cleaned_data.get("auctiontos_winner") and not cleaned_data.get("winning_price"):
@@ -1555,17 +1567,16 @@ class CreateEditAuctionTOS(forms.ModelForm):
         widgets = {"address": forms.Textarea(attrs={"rows": 3})}
 
     def clean(self):
+        # No "did you change the auction" check here: ``auction`` is not one of Meta.fields, so it
+        # was never in cleaned_data and the check never ran -- it only referenced a ``self.user``
+        # this form does not set, which would have raised the day anybody added the field.
         cleaned_data = super().clean()
-        auction = cleaned_data.get("auction")
-        if auction:
-            if not auction.permission_check(self.user):
-                self.add_error("auction", "How did you even manage to change this field?")
         bidder_number = cleaned_data.get("bidder_number")
-        other_bidder_numbers = AuctionTOS.objects.filter(auction=self.auction, bidder_number=bidder_number)
-        if self.auctiontos:
-            other_bidder_numbers = other_bidder_numbers.exclude(pk=self.auctiontos.pk)
-        if other_bidder_numbers.exists():
-            self.add_error("bidder_number", "This bidder number is already in this auction")
+        # Club scope as well as auction scope: see services.bidder_number_conflict. Editing a row that
+        # is a club member's shadow never collides with that member's own number.
+        holder = bidder_number_conflict(bidder_number, auction=self.auction, exclude_tos=self.auctiontos)
+        if holder:
+            self.add_error("bidder_number", bidder_number_taken_message(holder))
         email = cleaned_data.get("email")
         if email:
             other_emails = AuctionTOS.objects.filter(auction=self.auction, email=email)
@@ -1574,34 +1585,6 @@ class CreateEditAuctionTOS(forms.ModelForm):
             if other_emails.exists():
                 self.add_error("email", "This email is already in this auction")
         return cleaned_data
-
-
-class CreateBid(forms.ModelForm):
-    # amount = forms.IntegerField()
-    def __init__(self, *args, **kwargs):
-        self.req = kwargs.pop("request", None)
-        self.lot = kwargs.pop("lot", None)
-        super().__init__(*args, **kwargs)
-        self.helper = FormHelper()
-        self.helper.form_method = "post"
-        self.helper.form_class = "form-inline"
-        self.helper.form_tag = True
-        self.helper.layout = Layout(
-            "user",
-            "lot_number",
-            "amount",
-            Submit("submit", "Place bid", css_class="place-bid btn-info"),
-        )
-        self.fields["user"].widget = HiddenInput()
-        self.fields["lot_number"].widget = HiddenInput()
-
-    class Meta:
-        model = Bid
-        fields = [
-            "user",
-            "lot_number",
-            "amount",
-        ]
 
 
 class AuctionNoShowForm(forms.Form):
@@ -5415,10 +5398,7 @@ class ClubMemberAdminForm(MarksClubMemberAdminEditedMixin, forms.ModelForm):
         club = self._club or (self.instance.club if self.instance and self.instance.pk else None)
         if not club:
             return bidder_number
-        clash = (
-            ClubMember.objects.filter(club=club, bidder_number=bidder_number).exclude(pk=self.instance.pk or 0).exists()
-        )
-        if clash:
+        if member_holding_bidder_number(club, bidder_number, exclude_member=self.instance):
             msg = f"Bidder number '{bidder_number}' is already used by another member in this club."
             raise forms.ValidationError(msg)
         # No check against the club's auctions: saving takes the number from its holder

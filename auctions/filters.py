@@ -1072,10 +1072,11 @@ def get_recommended_lots(
     latitude=0,
     longitude=0,
     qty=10,
-    keywords=[],
+    keywords=None,
     exclude_pk=None,  # lot pk to leave out (e.g. the lot the user is currently viewing)
 ):
     """The recommendation system: a queryset of lots ready for a template."""
+    keywords = keywords or []
     if auction:
         listType = "auction"
     qs = LotFilter(

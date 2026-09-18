@@ -25,6 +25,7 @@ from django.utils import timezone
 from .email_routing import sender_with_display_name
 from .llm import LLMError, get_provider
 from .models import ClubHistory, DonationEmail, DonationUnsubscribe, DonationVendor, LLMUsage
+from .palette_actions import untrusted, untrusted_short  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -323,7 +324,13 @@ def summarize_incoming(email_row, *, user=None):
         return ""
 
     body = truncate_for_model(strip_quoted_reply(email_row.body), INCOMING_BODY_LIMIT)
-    prompt = f"Vendor: {vendor.name}\nSubject: {email_row.subject}\n\nTheir reply:\n{body}"
+    # Fenced like every other outsider's text on this site (auctions/mcp/CLAUDE.md): subject and
+    # body are whatever was emailed to the vendor alias, so they are data, never instructions.
+    prompt = (
+        f"Vendor: {untrusted_short(vendor.name)}\n"
+        f"Subject: {untrusted_short(email_row.subject)}\n\n"
+        f"Their reply:\n{untrusted(body)}"
+    )
     result = None
     try:
         result = provider.complete_json(_INCOMING_SYSTEM_PROMPT, [{"role": "user", "content": prompt}])

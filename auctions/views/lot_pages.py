@@ -1227,7 +1227,7 @@ class LotAdmin(LoginRequiredMixin, TemplateView, FormMixin, AuctionViewMixin):
             self.auction = self.lot.auction
         else:
             raise Http404
-        self.is_auction_admin
+        self.require_auction_admin()
         self.lot_initial_winner = self.lot.auctiontos_winner
         return super().dispatch(request, *args, **kwargs)
 

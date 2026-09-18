@@ -614,11 +614,9 @@ class SquareWebhookView(SquareAPIMixin, View):
     def verify_signature(self, request, raw_body, signature):
         """Verify Square's signature: base64(HMAC-SHA256(key, notification_url + body))."""
         if not settings.SQUARE_WEBHOOK_SIGNATURE_KEY:
-            logger.warning("SQUARE_WEBHOOK_SIGNATURE_KEY not configured - skipping signature verification")
-            if settings.DEBUG:
-                return True  # Allow webhook if signature key not configured
-            else:
-                return False
+            # post() has already refused this case outside DEBUG; never verify against nothing.
+            logger.warning("SQUARE_WEBHOOK_SIGNATURE_KEY not configured - cannot verify signature")
+            return bool(settings.DEBUG)
 
         try:
             from square.utils.webhooks_helper import verify_signature as square_verify_signature
@@ -657,8 +655,17 @@ class SquareWebhookView(SquareAPIMixin, View):
             logger.exception("Invalid JSON in Square webhook: %s", exc)
             return HttpResponseBadRequest("invalid json")
 
-        # Verify webhook signature if configured
-        if settings.SQUARE_WEBHOOK_SIGNATURE_KEY:
+        # An unverified body is refused, never processed. With no signature key there is nothing to
+        # verify with, so the answer is no: the refund branch below writes a negative payment from
+        # the body alone, which is not something to do on a stranger's say-so. DEBUG keeps the local
+        # webhook tester working.
+        if not settings.SQUARE_WEBHOOK_SIGNATURE_KEY:
+            if settings.DEBUG:
+                logger.warning("SQUARE_WEBHOOK_SIGNATURE_KEY not configured - accepting unverified webhook (DEBUG)")
+            else:
+                logger.error("Square webhook refused: SQUARE_WEBHOOK_SIGNATURE_KEY is not configured")
+                return HttpResponseForbidden("webhook not configured")
+        else:
             signature = request.headers.get("X-Square-Hmacsha256-Signature", "")
             if not signature:
                 logger.error("Square webhook missing signature header")

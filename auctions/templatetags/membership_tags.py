@@ -37,7 +37,8 @@ def membership_barcode(value, barcode_type="code128"):
         # Strip the XML declaration so the SVG can be embedded directly in HTML.
         if svg.startswith("<?xml"):
             svg = svg.split("?>", 1)[1]
-        return mark_safe(svg)
+        # S308: SVG this function just rendered with python-barcode from a digits-only value.
+        return mark_safe(svg)  # noqa: S308
     except Exception:
         logger.exception("Failed to generate barcode for value=%r", value)
         return ""
