@@ -627,6 +627,8 @@ SOCIALACCOUNT_EMAIL_VERIFICATION = "mandatory"
 SOCIALACCOUNT_AUTO_SIGNUP = True
 # Needed to revoke Apple grants on account deletion, which drops these rows.
 SOCIALACCOUNT_STORE_TOKENS = True
+# Its only job is the address allauth counts its rate limits against; see the module.
+ACCOUNT_ADAPTER = "auctions.account_adapter.FishAuctionsAccountAdapter"
 SOCIALACCOUNT_ADAPTER = "auctions.social_adapter.FishAuctionsSocialAccountAdapter"
 
 INTERNAL_IPS = [

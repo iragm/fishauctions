@@ -7,10 +7,11 @@ from decimal import Decimal
 
 from django.contrib.auth import get_user_model
 from django.http import HttpResponse
-from django.test import TestCase
+from django.test import RequestFactory, TestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
 
+from auctions.client_ip import client_ip
 from auctions.models import Auction, AuctionTOS, Club, PickupLocation
 from auctions.services import attachment_filename, csv_cell
 from auctions.tests import StandardTestCase
@@ -441,3 +442,42 @@ class ContentSecurityPolicyTestCase(TestCase):
         self.assertNotIn("frame-ancestors", policy)
         self.assertIn("object-src 'none'", policy)
         self.assertIn("form-action 'self'", policy)
+
+
+class ClientIpTestCase(TestCase):
+    """Everything counted per address has to agree on which header says who the caller is."""
+
+    HEADERS = {
+        "REMOTE_ADDR": "172.18.0.5",  # the nginx container, identical for every visitor
+        "HTTP_X_FORWARDED_FOR": "1.2.3.4, 172.18.0.1",  # the left-most entry is the caller's to write
+        "HTTP_X_REAL_IP": "203.0.113.9",  # nginx, from $remote_addr
+    }
+
+    def test_the_helper_reads_x_real_ip(self):
+        request = RequestFactory().get("/", **self.HEADERS)
+        self.assertEqual(client_ip(request), "203.0.113.9")
+
+    @override_settings(BEHIND_CLOUDFLARE=True)
+    def test_cloudflare_wins_when_we_are_behind_it(self):
+        request = RequestFactory().get("/", HTTP_CF_CONNECTING_IP="198.51.100.7", **self.HEADERS)
+        self.assertEqual(client_ip(request), "198.51.100.7")
+
+    def test_allauth_agrees(self):
+        """allauth's rate limits use their own helper, which on its own answers REMOTE_ADDR.
+
+        Behind nginx that is the proxy, so ``login_failed: 10/m/ip`` and the rest were one bucket
+        for the whole site. auctions.account_adapter is what puts them on the same address.
+        """
+        from allauth.account.adapter import get_adapter
+
+        request = RequestFactory().get("/", **self.HEADERS)
+        self.assertEqual(get_adapter().get_client_ip(request), client_ip(request))
+
+    def test_allauth_still_answers_with_no_proxy_header(self):
+        """A request that never went through nginx: the adapter raises PermissionDenied on None, so
+        replacing allauth's fallback rather than preceding it would 403 every account page.
+        """
+        from allauth.account.adapter import get_adapter
+
+        request = RequestFactory().get("/", REMOTE_ADDR="198.51.100.4")
+        self.assertEqual(get_adapter().get_client_ip(request), "198.51.100.4")
