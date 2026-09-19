@@ -449,6 +449,10 @@ class CommandPaletteAnalyticsView(AdminOnlyViewMixin, TemplateView):
         )
         context["llm_transcript"] = self._transcript(usage)
         context["llm_failures"] = usage.filter(success=False).count()
+        # Told to wait by the provider rather than failing: the site's own ceiling is set too high.
+        context["llm_busy"] = usage.filter(response_kind=palette_assist.FAIL_BUSY).count()
+        context["llm_load_percent"] = round(100 * palette_assist.site_load())
+        context["llm_tokens_per_minute"] = palette_assist._tokens_per_minute()
         context["llm_by_action"] = list(
             usage.exclude(action="")
             .values("action")

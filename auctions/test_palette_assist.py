@@ -4344,3 +4344,93 @@ class NavigateOnlyTests(PaletteAssistTestCase):
         from auctions.forms import ChangeUserPreferencesForm
 
         self.assertIn("palette_navigate_only", ChangeUserPreferencesForm.Meta.fields)
+
+
+class SiteLoadTests(PaletteAssistTestCase):
+    """Everyone gets slower before anyone gets refused, and the waiting is on screen.
+
+    The per-user limits do nothing about ten people each inside their own; the ceiling that binds
+    first is the provider's, and reaching it answers every user at once with an error.
+    """
+
+    def setUp(self):
+        super().setUp()
+        cache.delete(palette_assist._minute_key())
+        cache.delete(palette_assist._BREAKER_KEY)
+
+    def test_an_idle_site_waits_for_nothing(self):
+        self.assertEqual(palette_assist.site_load(), 0.0)
+        self.assertEqual(palette_assist.wait_for_the_queue(0.0), 0.0)
+
+    def test_nobody_waits_until_it_is_busy(self):
+        self.assertEqual(palette_assist.wait_for_the_queue(palette_assist.BUSY_THRESHOLD - 0.01), 0.0)
+
+    def test_the_busier_it_is_the_longer_everybody_waits(self):
+        gentle = palette_assist.wait_for_the_queue(0.8)
+        hard = palette_assist.wait_for_the_queue(0.95)
+        self.assertGreater(gentle, 0)
+        self.assertGreater(hard, gentle)
+        self.assertLessEqual(palette_assist.wait_for_the_queue(5.0), palette_assist.MAX_WAIT_SECONDS)
+
+    def test_what_a_call_cost_is_counted_against_the_minute(self):
+        palette_assist.spend_tokens(30_000)
+        self.assertGreater(palette_assist.site_load(), 0)
+        palette_assist.spend_tokens(30_000)
+        self.assertAlmostEqual(palette_assist.site_load(), 60_000 / palette_assist._tokens_per_minute(), places=3)
+
+    def test_a_busy_site_says_so_while_it_waits(self):
+        palette_assist.spend_tokens(int(palette_assist._tokens_per_minute() * 0.9))
+        self._script({"action": "go_to_page", "params": {"page": "watched"}, "summary": ""})
+        response = self._assist("what am I watching right now")
+        self.assertTrue(any("Busy" in line for line in response.progress_messages), response.progress_messages)
+        self.assertEqual(response.json()["kind"], "navigate")
+
+    def test_a_failing_provider_is_left_alone_and_search_answers(self):
+        for _ in range(palette_assist.BREAKER_FAILURES):
+            palette_assist.note_provider_failure()
+        self.assertTrue(palette_assist.provider_is_resting())
+        self._script()  # calling the provider at all would raise
+        data = self._assist("when does this auction start").json()
+        self.assertIn(data["kind"], {"results", "navigate", "clarify", "error"})
+        self.assertEqual(self.provider.call_count, 0)
+
+    def test_one_success_puts_it_back_in_service(self):
+        palette_assist.note_provider_failure()
+        palette_assist.note_provider_success()
+        self.assertFalse(palette_assist.provider_is_resting())
+
+    def test_being_rate_limited_waits_and_tries_again(self):
+        """A 429 is the provider saying "in a moment", not "no"."""
+
+        class Limited(FakeProvider):
+            calls = 0
+
+            def complete(self, system, messages, tools=None, max_tokens=800, tool_choice=""):
+                Limited.calls += 1
+                if Limited.calls == 1:
+                    msg = "slow down"
+                    raise llm.RateLimited(msg, retry_after=0.01)
+                return as_result({"action": "go_to_page", "params": {"page": "watched"}, "summary": ""})
+
+        llm.set_provider_override(Limited())
+        data = self._assist("what am I watching right now").json()
+        self.assertEqual(data["kind"], "navigate", data)
+        self.assertEqual(Limited.calls, 2)
+
+
+class PerUserBudgetTests(PaletteAssistTestCase):
+    """A person's allowance is counted in commands, not in the rounds those commands happened to cost."""
+
+    def test_a_command_costs_one_whatever_it_takes(self):
+        cache.delete(f"palette_assist_requests_{self.user.pk}")
+        for _ in range(3):
+            self.assertIsNone(palette_assist.check_request_budget(self.user))
+
+    def test_too_many_commands_is_refused_with_a_sentence(self):
+        cache.delete(f"palette_assist_requests_{self.user.pk}")
+        for _ in range(palette_assist.WINDOW_MAX_REQUESTS):
+            palette_assist.check_request_budget(self.user)
+        self.assertEqual(palette_assist.check_request_budget(self.user), palette_assist.WINDOW_MESSAGE)
+
+    def test_the_round_backstop_is_looser_than_the_command_cap(self):
+        self.assertGreater(palette_assist.WINDOW_MAX_CALLS, palette_assist.WINDOW_MAX_REQUESTS)

@@ -43,6 +43,18 @@ class LLMError(Exception):
     """Any failure talking to the provider. Callers degrade gracefully."""
 
 
+class RateLimited(LLMError):
+    """The provider is refusing for now, not failing. Its own ``Retry-After`` is on ``retry_after``.
+
+    Worth its own class because the two want opposite handling: an outage should stop us calling for
+    a while, and this should make everyone wait a little and then work.
+    """
+
+    def __init__(self, message: str, retry_after: float = 0.0) -> None:
+        super().__init__(message)
+        self.retry_after = retry_after
+
+
 class UnsupportedParameter(Exception):
     def __init__(self, name: str) -> None:
         super().__init__(name)
@@ -206,6 +218,15 @@ class OpenAIProvider(LLMProvider):
             for name in OPTIONAL_PARAMETERS:
                 if name in payload and name in response.text:
                     raise UnsupportedParameter(name)
+        if response.status_code == 429:
+            # Their own number if they sent one; OpenAI's is often well under a second.
+            try:
+                retry_after = float(response.headers.get("retry-after", "") or 0)
+            except ValueError:
+                retry_after = 0.0
+            logger.info("LLM provider is rate limiting us: %s", response.text[:200])
+            msg = "Language model is rate limiting this site"
+            raise RateLimited(msg, retry_after=retry_after)
         if response.status_code != 200:
             logger.warning("LLM provider returned %s: %s", response.status_code, response.text[:500])
             msg = f"Language model returned HTTP {response.status_code}"

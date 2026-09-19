@@ -153,7 +153,7 @@ this only quotes its opening sentence.
   `sanitize_summernote_html`, `remove_html_color_tags`
 - **`lifecycle.py`** (547 lines)
   Phase 9: measuring buyers, sellers and people with no account (``docs/phase_9.md``).
-- **`llm.py`** (360 lines)
+- **`llm.py`** (381 lines)
   Provider abstraction for everything on this site that talks to a language model.
 - **`mailchimp.py`** (654 lines)
   One-way Django -> Mailchimp sync for clubs.
@@ -182,7 +182,7 @@ this only quotes its opening sentence.
   `push_configured`, `user_prefers_push`, `user_has_app_push`, `notify_user`, `notify_running_total`, `send_fcm_message`, `send_fcm_data_message`
 - **`palette_actions.py`** (13551 lines)
   The things the command palette's assist, and ``/mcp/``, are allowed to do.
-- **`palette_assist.py`** (1757 lines)
+- **`palette_assist.py`** (1898 lines)
   Natural-language orchestration for the command palette.
 - **`palette_routes.py`** (1835 lines)
   Every named URL, as a :class:`Route` the palette assistant can reach or an :data:`EXCLUDED` entry
@@ -420,7 +420,7 @@ this only quotes its opening sentence.
   `PageViewPathTests`, `MigrationHostListTests`, `PageViewCreateStoresAPathTests`
 - **`test_palette_account.py`** (870 lines)
   The rest of the account, and the auction and club setup pages behind it.
-- **`test_palette_assist.py`** (4346 lines)
+- **`test_palette_assist.py`** (4436 lines)
   Tests for the command palette's natural-language assist.
 - **`test_palette_core.py`** (1265 lines)
   The command palette itself, and the mobile surfaces that call into it.
@@ -807,7 +807,7 @@ Every view on the site, split by the part of it the view belongs to.
 - **`moderation.py`** (217 lines)
   The copyright policy page, the notice form, and the report button on a lot.
   `DmcaPolicyView`, `CopyrightNoticeCreate`, `ReportContentCreate`
-- **`palette.py`** (556 lines)
+- **`palette.py`** (560 lines)
   The command palette's views (ask, execute, cancel, report) and ``/ai/``, the API keys and OAuth
 - **`payments.py`** (1054 lines)
   Connecting PayPal and Square accounts and taking payments through them.
@@ -852,7 +852,7 @@ This will make sure the app is always imported when
 - **`firebase_config.py`** (88 lines)
   Parse the public Firebase client-config files that ship with the mobile build.
   `load_android_config`, `load_ios_config`, `load_firebase_client_config`
-- **`settings.py`** (1147 lines)
+- **`settings.py`** (1151 lines)
   Django settings for fishauctions. Reads .env; variables are documented in .env.example.
 - **`static_storage.py`** (52 lines)
   Content-hashed names for `/static/`, tolerant of the two things that would break a deploy.

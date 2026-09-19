@@ -25,6 +25,15 @@
     from the provider's cache and are billed at a fraction of the normal input rate — only
     <strong>{{ llm_uncached_prompt_tokens }}</strong> were charged at full price.
   </small></p>
+  {% comment %}
+    The site's own token budget, not one person's. Past 60% of it everybody's commands are held for a
+    moment before the model is called; reaching the provider's own limit instead refuses every user at
+    once. A count here means the ceiling is set too close to theirs.
+  {% endcomment %}
+  <p class="mb-1"><small>
+    Using <strong>{{ llm_load_percent }}%</strong> of this minute's site budget ({{ llm_tokens_per_minute }} tokens).
+    {% if llm_busy %}<span class="badge bg-warning text-dark">{{ llm_busy }} held back by the provider</span>{% endif %}
+  </small></p>
   <p class="mb-1"><small>
     <strong>{{ llm_rounds_per_query }}</strong> model calls across {{ llm_requests }} request{{ llm_requests|pluralize }}.
     Each round re-sends the whole system prompt, so this is the multiplier on everything above.

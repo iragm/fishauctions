@@ -59,12 +59,30 @@ lookup/action/question/answer/refusal. `complete_json` stays for the four caller
 not a call (species matching, donations, the two speaker commands).
 
 **Every turn ends in something the user can touch**: a link, a countdown card, a question with
-clickable options, or two sentences with the things they name linked underneath. A paragraph is not
-one of those — in a one-line box, "would you like A or B?" as prose is a dead end, especially by
-voice. So `tool_choice="required"`, answering is `answer_the_user`, and `read_reply` turns a question
-written as an answer back into a clarify card and refuses a promise to look something up ("please
-wait a moment while I look up the auctions list" used to be a final reply, having looked nothing up).
-`echoes_the_query` refuses a call that put the whole sentence into one of its own fields.
+clickable options, or a read's own summary with the things it names linked underneath. A paragraph is
+not one of those — in a one-line box, "would you like A or B?" as prose is a dead end, especially by
+voice. So `tool_choice="required"`, and **the model has no tool that takes a sentence**: an answer is
+the resolver's own `summary`, and the model's contribution is choosing which read holds it. It once
+said "I've updated the email on your account" about a write that never ran. `read_reply` still
+rescues a question written as prose into a clarify card, and `echoes_the_query` refuses a call that
+put the whole sentence into one of its own fields.
+
+`answers_on_its_own` ends the turn on the read itself rather than asking again. Measured: given a
+`describe_auction` result that plainly answered the question, the model called `describe_auction` a
+second time — it has the answer and no way to say so. A read that produced a summary has answered,
+unless it is one of `STEP_LOOKUPS` (the `find_*` pair, `find_page`, `my_context`, which exist to feed
+another tool) or the query names something to do.
+
+`asks_for_something_removed` takes the writes away for a turn that names a skill the palette gave up:
+told to refund a lot with no tool for it, the model reached for `no_sale`, and "give bob 10 points"
+became a $10 charge on his invoice. The vocabulary is built from `MCP_ONLY_SKILLS` minus every word
+the surviving writes are named by — **nothing is listed in the prompt**, because what the box can't do
+is an endless list and it would cost tokens every round.
+
+`navigation_shortcut` answers "take me to my invoices" from the route catalog with no model call at
+all, when one route is clearly ahead of the next. `navigate_only` — a preference, and
+`ASSISTANT_NAVIGATE_ONLY` for everybody — keeps the writes off permanently; the site-wide one also
+refuses a countdown card that was already on screen.
 
 The links come from `palette_actions.KEY_ABOUT`, the same block `/mcp/` turns into `resource_link`s:
 `assist_stream` collects it off every lookup and `about_groups` turns it into rows. It used to be
@@ -79,6 +97,21 @@ cache that stays warm between people instead of going cold between one person's 
 Palette-only, not in the MCP layer: `obvious_match`/`shortcut_match`, the confirm countdown and its
 trust window, `humanize`, the `_give_up` fallback ladder, `sanitize_context`/`_carry_over` memory,
 throttles, cancel/report analytics.
+
+## When it gets busy
+
+The per-user limits (`check_request_budget`, counted per command; `check_call_budget` as a backstop
+on rounds) do nothing about ten people each inside their own. The ceiling that binds first is the
+provider's: about 8.6k tokens a call against a 200k-per-minute account is roughly 23 calls a minute
+for the whole site, and reaching it answers every user at once with an error.
+
+So everybody gets slower before anybody gets refused, and the waiting is on screen. `site_load()` is
+what this minute has cost against `LLM_TOKENS_PER_MINUTE`; past `BUSY_THRESHOLD`
+`wait_for_the_queue` holds each request a little longer the busier it is, to `MAX_WAIT_SECONDS` —
+after which ordinary search is the better answer and they can have it now. A `429` is
+`llm.RateLimited`, which waits out the provider's own `Retry-After` and tries once more, because it
+means "in a moment", not "no". `BREAKER_FAILURES` consecutive failures rest the model for a minute,
+since an outage otherwise answers every caller with a ten-second timeout.
 
 ## Watching it work
 

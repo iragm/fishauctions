@@ -702,6 +702,10 @@ ASSISTANT_ENABLED_FOR_USERS = parse_bool_env(os.environ.get("ASSISTANT_ENABLED_F
 # On: the palette takes people to pages and never writes, for everybody, whatever each has chosen.
 # The kill switch for a write that misfires during somebody's auction, and the default for new users.
 ASSISTANT_NAVIGATE_ONLY = parse_bool_env(os.environ.get("ASSISTANT_NAVIGATE_ONLY") or None, default=False)
+# Tokens a minute the command palette will spend before it starts making everybody wait a little.
+# Deliberately under the provider's own per-minute limit: the point is never to reach theirs, because
+# past it every user is refused at once instead of each waiting a second.
+LLM_TOKENS_PER_MINUTE = int(os.environ.get("LLM_TOKENS_PER_MINUTE") or 150000)
 SQUARE_ENABLED_FOR_USERS = parse_bool_env(os.environ.get("SQUARE_ENABLED_FOR_USERS") or None, default=False)
 USERS_ARE_TRUSTED_BY_DEFAULT = parse_bool_env(os.environ.get("USERS_ARE_TRUSTED_BY_DEFAULT") or None, default=True)
 UNTRUSTED_MESSAGE = os.environ.get(

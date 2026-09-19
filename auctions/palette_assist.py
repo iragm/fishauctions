@@ -278,11 +278,15 @@ TRUST_WINDOW_SECONDS = 600
 
 MAX_QUERY_LENGTH = 600
 
-# Throttling: 1/second is the anti-bot floor, the window cap is the spend ceiling.
+# Throttling: 1/second is the anti-bot floor, the window caps are the spend ceiling.
 COOLDOWN_SECONDS = 1
 COOLDOWN_MESSAGE = "One at a time — try that again in a second."
 WINDOW_SECONDS = 300
-WINDOW_MAX_CALLS = 30
+#: Commands per window. Counted per *request*, because that is what a person does; counting model
+#: calls meant one unlucky four-round query spent an eighth of somebody's afternoon allowance.
+WINDOW_MAX_REQUESTS = 20
+#: And a backstop on the rounds those requests are allowed to cost between them.
+WINDOW_MAX_CALLS = 60
 WINDOW_MESSAGE = "You've used a lot of commands just now. Give it a few minutes and try again."
 
 KIND_RESULTS = "results"
@@ -302,6 +306,7 @@ FAIL_MODEL_ERROR = "model_error"  # the model said it couldn't do this
 FAIL_PROVIDER = "provider_error"  # we couldn't reach the provider at all
 FAIL_INVALID = "invalid_shape"  # the model replied with something off-contract
 FAIL_THROTTLED = "throttled"  # the user hit the spend ceiling
+FAIL_BUSY = "provider_busy"  # the whole site is over the provider's limit, not an outage
 #: Recorded when we couldn't act but ordinary search had something worth showing.
 KIND_FALLBACK = "fallback"
 
@@ -346,19 +351,122 @@ def check_cooldown(user) -> str | None:
     return COOLDOWN_MESSAGE
 
 
-def check_call_budget(user) -> str | None:
-    """Enforce the sustained cap on model calls. Returns a message when the user is over it."""
-    key = f"palette_assist_calls_{user.pk}"
+def _bump(key: str) -> int:
+    """One more in this window, returning the running count."""
     cache.add(key, 0, timeout=WINDOW_SECONDS)
     try:
-        used = cache.incr(key)
+        return cache.incr(key)
     except ValueError:
-        # The key expired between add and incr; treat this as the first call of a new window.
+        # The key expired between add and incr; treat this as the first of a new window.
         cache.set(key, 1, timeout=WINDOW_SECONDS)
-        used = 1
-    if used > WINDOW_MAX_CALLS:
+        return 1
+
+
+def check_request_budget(user) -> str | None:
+    """Enforce the cap on commands. One per thing the user typed. Returns a message when over."""
+    if _bump(f"palette_assist_requests_{user.pk}") > WINDOW_MAX_REQUESTS:
         return WINDOW_MESSAGE
     return None
+
+
+def check_call_budget(user) -> str | None:
+    """Enforce the backstop on model calls, which one request may cost several of."""
+    if _bump(f"palette_assist_calls_{user.pk}") > WINDOW_MAX_CALLS:
+        return WINDOW_MESSAGE
+    return None
+
+
+# --- how busy the whole site is ----------------------------------------------
+#
+# The per-user limits below stop one person running away with it. They do nothing about ten people
+# each within their own limit, and the ceiling that binds first is the provider's: at roughly 8.6k
+# tokens a call against a 200k-tokens-per-minute account, the whole site gets about 23 calls a minute.
+# Past that every user gets "I couldn't reach the assistant just now" at once.
+#
+# So: everyone gets slower before anyone gets refused, and the waiting is on screen.
+
+
+#: Tokens a minute this site will spend before it starts making people wait. Under the provider's own
+#: limit on purpose -- the point is to never reach theirs.
+def _tokens_per_minute() -> int:
+    from django.conf import settings
+
+    return int(getattr(settings, "LLM_TOKENS_PER_MINUTE", 0) or 150_000)
+
+
+#: Load at which the waiting starts. Below this nobody notices anything.
+BUSY_THRESHOLD = 0.6
+#: The longest anybody is made to wait before their command is given up on. Two model calls' worth of
+#: patience; past it, ordinary search is a better answer than a spinner.
+MAX_WAIT_SECONDS = 8.0
+#: Consecutive provider failures before the model is left alone for a while. An outage answers every
+#: caller with a ten second timeout otherwise.
+BREAKER_FAILURES = 4
+BREAKER_COOLDOWN_SECONDS = 60
+
+_TOKENS_KEY = "palette_tokens_spent_"
+_BREAKER_KEY = "palette_provider_failures"
+
+
+def _minute_key(now: float | None = None) -> str:
+    return f"{_TOKENS_KEY}{int((now or time.time()) // 60)}"
+
+
+def spend_tokens(count: int) -> None:
+    """Record what a call cost, for the minute it landed in. Best-effort; a lost count only under-counts."""
+    if count <= 0:
+        return
+    key = _minute_key()
+    try:
+        cache.add(key, 0, timeout=120)
+        cache.incr(key, count)
+    except (ValueError, Exception):  # noqa: B014 - the key can expire between add and incr
+        logger.debug("Could not record palette token spend")
+
+
+def site_load() -> float:
+    """Tokens spent this minute as a fraction of what this site allows itself. 0 when idle."""
+    try:
+        spent = cache.get(_minute_key()) or 0
+    except Exception:
+        return 0.0
+    return float(spent) / float(_tokens_per_minute())
+
+
+def wait_for_the_queue(load: float) -> float:
+    """How long to hold this request, in seconds, at that load.
+
+    Nothing until :data:`BUSY_THRESHOLD`, then a ramp: the busier the site the longer everybody waits,
+    which is the whole mechanism. Capped, because past :data:`MAX_WAIT_SECONDS` search is the better
+    answer and the person can see it now rather than the right answer in a minute.
+    """
+    if load < BUSY_THRESHOLD:
+        return 0.0
+    over = (load - BUSY_THRESHOLD) / (1.0 - BUSY_THRESHOLD)
+    return min(MAX_WAIT_SECONDS, round(over * MAX_WAIT_SECONDS, 1))
+
+
+def provider_is_resting() -> bool:
+    """Whether consecutive failures have taken the model out of service for a moment."""
+    try:
+        return int(cache.get(_BREAKER_KEY) or 0) >= BREAKER_FAILURES
+    except Exception:
+        return False
+
+
+def note_provider_failure() -> None:
+    try:
+        cache.add(_BREAKER_KEY, 0, timeout=BREAKER_COOLDOWN_SECONDS)
+        cache.incr(_BREAKER_KEY)
+    except Exception:
+        logger.debug("Could not record a provider failure")
+
+
+def note_provider_success() -> None:
+    try:
+        cache.delete(_BREAKER_KEY)
+    except Exception:
+        logger.debug("Could not clear the provider failure count")
 
 
 # --- input sanitising --------------------------------------------------------
@@ -1524,6 +1632,11 @@ def assist_stream(request, query: str, context: Any = None, path: str = ""):
         yield {"kind": KIND_RESULTS, "groups": groups}
         return
 
+    over_budget = check_request_budget(user)
+    if over_budget:
+        yield {"kind": KIND_ERROR, "message": over_budget}
+        return
+
     yield _progress(opening_line(query))
 
     # One id for every round of this one thing they typed, and one clock for what they waited.
@@ -1565,15 +1678,43 @@ def assist_stream(request, query: str, context: Any = None, path: str = ""):
             log_assist(user, query, KIND_ERROR)
             yield {"kind": KIND_ERROR, "message": over_budget}
             return
+        if provider_is_resting():
+            # The model has failed several times running; a spinner and a timeout help nobody.
+            record(None, FAIL_PROVIDER, success=False)
+            log_assist(user, query, KIND_ERROR)
+            yield _give_up(request, query, "The assistant is having a moment. Here's what I found:", None)
+            return
+        held = wait_for_the_queue(site_load())
+        if held:
+            yield _progress(f"Busy right now — waiting {held:.0f} second{'s' if held >= 1.5 else ''}…")
+            time.sleep(held)
         try:
             # "required": a bare paragraph is the one reply this box cannot render.
             result = provider.complete(system, messages, tools, tool_choice="required")
+        except llm.RateLimited as limited:
+            # Not an outage: the provider will take this in a moment. Wait its own number, retry once.
+            pause = min(MAX_WAIT_SECONDS, max(float(limited.retry_after or 0), 1.0))
+            logger.info("Assist waiting %ss for the provider's rate limit", pause)
+            yield _progress("Busy right now — still working…")
+            time.sleep(pause)
+            try:
+                result = provider.complete(system, messages, tools, tool_choice="required")
+            except LLMError as error:
+                logger.warning("Assist still rate limited: %s", error)
+                note_provider_failure()
+                usage_id = record(None, FAIL_BUSY, success=False)
+                log_assist(user, query, KIND_ERROR)
+                yield _give_up(request, query, "Everyone's using this at once. Here's what I found:", usage_id)
+                return
         except LLMError as error:
             logger.warning("Assist provider error: %s", error)
+            note_provider_failure()
             usage_id = record(None, FAIL_PROVIDER, success=False)
             log_assist(user, query, KIND_ERROR)
             yield _give_up(request, query, "I couldn't reach the assistant just now.", usage_id)
             return
+        note_provider_success()
+        spend_tokens(result.total_tokens)
 
         reply = read_reply(result, user, query)
         kind = reply["kind"]
