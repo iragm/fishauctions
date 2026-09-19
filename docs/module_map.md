@@ -75,7 +75,7 @@ this only quotes its opening sentence.
   `check_bidding_permissions`, `reset_lot_end_time`, `bid_on_lot`, `place_bid_and_broadcast`
 - **`brevo.py`** (570 lines)
   One-way Django -> Brevo sync for clubs, built like auctions/mailchimp.py.
-- **`client_ip.py`** (36 lines)
+- **`client_ip.py`** (82 lines)
   Where a request came from, for the things that count per address.
   `client_ip`
 - **`cloudflare_cache.py`** (70 lines)
@@ -442,7 +442,7 @@ this only quotes its opening sentence.
   `QueryGrowthMixin`, `AuctionUsersTableQueryCountTests`, `AuctionLotAdminTableQueryCountTests`, `LotDetailQueryCountTests`, `InvoiceQueryCountTests`, `SellerAndFeedbackQueryCountTests`, `LongLivedInstanceTests`, `CachedPropertyWiringTests`, `LotListQueryCountTests`, `LotCachedPropertyTests`
 - **`test_remote_print.py`** (539 lines)
   Printing from a computer to the phone's Bluetooth label printer.
-- **`test_security.py`** (490 lines)
+- **`test_security.py`** (506 lines)
   Tests that AuctionTOS and user data are protected: unauthenticated and non-admin users can't reach
   `AuctionTOSSecurityTestCase`, `LotOrderCookieTestCase`, `AttachmentFilenameTestCase`, `ExportFilenameTestCase`, `CsvCellTestCase`, `ContentSecurityPolicyTestCase`, `ClientIpTestCase`
 - **`test_site_config.py`** (782 lines)

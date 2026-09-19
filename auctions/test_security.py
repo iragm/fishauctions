@@ -464,10 +464,26 @@ class ClientIpTestCase(TestCase):
         self.assertEqual(client_ip(request), "203.0.113.9")
 
     @override_settings(BEHIND_CLOUDFLARE=True)
-    def test_cloudflare_wins_when_we_are_behind_it(self):
-        headers = {**self.HEADERS, "HTTP_CF_CONNECTING_IP": "198.51.100.7"}
+    def test_cloudflare_wins_when_the_request_really_came_from_cloudflare(self):
+        """X-Real-IP is an edge machine, so the header CF wrote is the one that names the visitor."""
+        headers = {
+            **self.HEADERS,
+            "HTTP_X_REAL_IP": "172.64.0.1",  # 172.64.0.0/13, one of Cloudflare's published ranges
+            "HTTP_CF_CONNECTING_IP": "198.51.100.7",
+        }
         request = RequestFactory().get("/", **headers)
         self.assertEqual(client_ip(request), "198.51.100.7")
+
+    @override_settings(BEHIND_CLOUDFLARE=True)
+    def test_a_forged_cloudflare_header_straight_to_the_origin_counts_for_nothing(self):
+        """Anyone who finds the origin address can send CF-Connecting-IP; nginx passes it through.
+
+        Believing it would hand that caller ban evasion, shill-bid detection, geolocation and every
+        rate limit. The connection didn't come from a Cloudflare machine, so it isn't believed.
+        """
+        headers = {**self.HEADERS, "HTTP_CF_CONNECTING_IP": "198.51.100.7"}
+        request = RequestFactory().get("/", **headers)
+        self.assertEqual(client_ip(request), "203.0.113.9")
 
     def test_allauth_agrees(self):
         """allauth's rate limits use their own helper, which on its own answers REMOTE_ADDR.
