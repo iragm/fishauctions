@@ -4434,3 +4434,40 @@ class PerUserBudgetTests(PaletteAssistTestCase):
 
     def test_the_round_backstop_is_looser_than_the_command_cap(self):
         self.assertGreater(palette_assist.WINDOW_MAX_CALLS, palette_assist.WINDOW_MAX_REQUESTS)
+
+
+class AuctionHintTests(PaletteAssistTestCase):
+    """A model asked for "the fall auction" sends back fall_auction about as often as fall auction.
+
+    Neither the slug nor the title holds an underscore, so the auction was simply not found and the
+    next round answered about whichever one happened to be the default.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.named = Auction.objects.create(
+            title="Riverbend Spring Auction",
+            slug="riverbend-spring-auction",
+            created_by=self.user,
+            date_start=timezone.now() - datetime.timedelta(hours=1),
+            date_end=timezone.now() + datetime.timedelta(days=2),
+        )
+
+    def test_the_spellings_a_model_actually_sends(self):
+        for hint in (
+            "Riverbend Spring Auction",
+            "riverbend spring auction",
+            "Riverbend_Spring_Auction",
+            "riverbend-spring-auction",
+            "the Riverbend Spring Auction",
+            "our riverbend spring auction",
+            "riverbend",
+        ):
+            auction, problem = palette_actions.resolve_auction(self.user, hint)
+            self.assertIsNone(problem, hint)
+            self.assertEqual(auction.pk, self.named.pk, hint)
+
+    def test_a_name_that_is_nobodys_is_still_refused(self):
+        auction, problem = palette_actions.resolve_auction(self.user, "an auction that does not exist")
+        self.assertIsNone(auction)
+        self.assertTrue(problem)

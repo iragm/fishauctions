@@ -229,16 +229,10 @@ def resolve_auction(user, hint: str = "", page: dict[str, Any] | None = None, ig
     """
     joined = command_palette._joined_auctions(user)
     if hint:
-        match = joined.filter(Q(slug=hint) | Q(title__iexact=hint)).first()
-        if not match:
-            match = joined.filter(title__icontains=hint).first()
+        match = _auction_matching(joined, hint)
         if not match:
             # Promoted auctions are public; writes still check admin rights.
-            public = command_palette._visible_auctions(user).filter(promote_this_auction=True)
-            match = (
-                public.filter(Q(slug=hint) | Q(title__iexact=hint)).first()
-                or public.filter(title__icontains=hint).first()
-            )
+            match = _auction_matching(command_palette._visible_auctions(user).filter(promote_this_auction=True), hint)
         if not match:
             return None, (
                 f"I couldn't find an auction called “{hint}”. It has to be one you run, one "
@@ -282,6 +276,35 @@ def resolve_auction(user, hint: str = "", page: dict[str, Any] | None = None, ig
             "name, or ask me which auctions you're in."
         )
     return auction, None
+
+
+def _auction_hints(hint: str) -> list[str]:
+    """The spellings of one hint worth trying, most literal first.
+
+    A model asked for "the fall auction" sends back ``fall_auction`` about as often as ``fall
+    auction``, and neither the slug nor the title contains an underscore, so the auction was simply
+    not found and the next round landed on whichever one was the default.
+    """
+    hints = [hint]
+    loosened = re.sub(r"[_-]+", " ", hint).strip()
+    without_article = re.sub(r"^(the|my|our)\s+", "", loosened, flags=re.IGNORECASE).strip()
+    for candidate in (loosened, without_article):
+        if candidate and candidate not in hints:
+            hints.append(candidate)
+    return hints
+
+
+def _auction_matching(queryset, hint: str):
+    """The first auction in *queryset* any spelling of *hint* names, or ``None``."""
+    for candidate in _auction_hints(hint):
+        match = queryset.filter(Q(slug=candidate) | Q(title__iexact=candidate)).first()
+        if match:
+            return match
+    for candidate in _auction_hints(hint):
+        match = queryset.filter(title__icontains=candidate).first()
+        if match:
+            return match
+    return None
 
 
 def remember_auction(request, auction) -> None:
