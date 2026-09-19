@@ -4096,3 +4096,86 @@ class ShortcutQueueTests(PaletteAssistTestCase):
         self.client.force_login(self.user)
         self.client.post(reverse("command_palette_analytics"), {"phrase": "anything", "route": "not_a_route"})
         self.assertFalse(CommandPalettePage.objects.filter(search_term="anything").exists())
+
+
+class LotSubmissionRulesTests(PaletteAssistTestCase):
+    """add_lot / add_lots go through the auction's own gates, for an agent as for a person.
+
+    Everything here is ``services.lot_add_block`` and ``QuickAddLot``, the same two the bulk page uses.
+    An admin is exempt from the rules an admin sets; nobody else is, whichever door they came through.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.auction = self.in_person_auction
+        self.seller = AuctionTOS.objects.filter(
+            auction=self.auction, user=self.member
+        ).first() or AuctionTOS.objects.create(
+            auction=self.auction, user=self.member, name="Member", pickup_location=self.in_person_location
+        )
+        self.request = self._request_for(self.member)
+
+    def _lots(self):
+        return Lot.objects.filter(auctiontos_seller=self.seller, is_deleted=False).count()
+
+    def _add(self, names, user=None):
+        return palette_actions.run_action(
+            self._request_for(user or self.member), "add_lots", {"lots": names, "auction": self.auction.slug}
+        )
+
+    def test_lot_submission_ending_stops_a_non_admin(self):
+        self.auction.lot_submission_end_date = timezone.now() - datetime.timedelta(days=1)
+        self.auction.save()
+        result = self._add(["too late", "also too late"])
+        self.assertIn("error", result)
+        self.assertEqual(self._lots(), 0)
+
+    def test_an_admin_may_still_add_after_submission_ends(self):
+        self.auction.lot_submission_end_date = timezone.now() - datetime.timedelta(days=1)
+        self.auction.save()
+        result = palette_actions.run_action(
+            self._request_for(self.user), "add_lots", {"lots": ["admin lot"], "auction": self.auction.slug}
+        )
+        self.assertNotIn("error", result, result)
+
+    def test_max_lots_per_user_means_that_number_and_not_one_more(self):
+        """``QuickAddLot`` counted with ``>``, so every seller got exactly one lot over the limit."""
+        self.auction.max_lots_per_user = 2
+        self.auction.allow_additional_lots_as_donation = False
+        self.auction.save()
+        self._add(["one", "two", "three", "four"])
+        self.assertEqual(self._lots(), 2)
+
+    def test_the_cap_holds_one_lot_at_a_time_too(self):
+        self.auction.max_lots_per_user = 1
+        self.auction.allow_additional_lots_as_donation = False
+        self.auction.save()
+        for name in ("a", "b", "c"):
+            palette_actions.run_action(
+                self._request_for(self.member), "add_lot", {"name": name, "auction": self.auction.slug}
+            )
+        self.assertEqual(self._lots(), 1)
+
+    def test_a_seller_who_may_not_sell_is_refused(self):
+        AuctionTOS.objects.filter(pk=self.seller.pk).update(selling_allowed=False)
+        result = self._add(["not allowed"])
+        self.assertIn("error", result)
+        self.assertEqual(self._lots(), 0)
+
+    def test_only_an_admin_adds_lots_for_somebody_else(self):
+        other = AuctionTOS.objects.filter(auction=self.auction).exclude(pk=self.seller.pk).first()
+        result = palette_actions.run_action(
+            self._request_for(self.member),
+            "add_lots",
+            {"lots": ["for someone else"], "auction": self.auction.slug, "bidder": other.bidder_number or other.name},
+        )
+        self.assertIn("error", result)
+        self.assertIn("admin", result["error"].lower())
+
+    def test_an_auction_the_seller_never_joined_is_refused(self):
+        AuctionTOS.objects.filter(auction=self.online_auction, user=self.member).delete()
+        result = palette_actions.run_action(
+            self._request_for(self.member), "add_lots", {"lots": ["trespassing"], "auction": self.online_auction.slug}
+        )
+        self.assertIn("error", result)
+        self.assertFalse(Lot.objects.filter(lot_name__icontains="trespassing").exists())

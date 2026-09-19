@@ -703,9 +703,12 @@ class QuickAddLot(forms.ModelForm):
             if self.auction.allow_additional_lots_as_donation:
                 existing_lots = existing_lots.exclude(donation=True)
             if not cleaned_data.get("lot_number"):
-                # new lots only
+                # new lots only. ``>=``, not ``>``: the lot being validated isn't in either count yet,
+                # so ``>`` let every seller add exactly one over the limit. ``CreateLotForm`` has
+                # always counted it this way; this form is the palette's and /mcp/'s, and an auction's
+                # own rule has to mean the same number whichever door a lot comes through.
                 total_lots = existing_lots.count() + self.new_lot_count
-                if total_lots > self.auction.max_lots_per_user:
+                if total_lots >= self.auction.max_lots_per_user:
                     if self.auction.allow_additional_lots_as_donation:
                         if not cleaned_data.get("donation"):
                             self.add_error("donation", "Any additional lots need to be a donation")
