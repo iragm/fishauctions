@@ -9,8 +9,9 @@
 **Every turn ends in something the user can touch**: a link, a countdown card, a question with
 clickable options, or one or two sentences with the things they name linked underneath
 (:func:`about_groups`). A bare paragraph is not one of those, which is why the model is called with
-``tool_choice="required"`` and answers through :data:`ANSWER_THE_USER` — a paragraph offering three
-choices is a dead end in a one-line box, and it was what this used to return most of the time.
+``tool_choice="required"``, and an answer is a *read's own summary*: the model picks which read holds
+it (:func:`answers_on_its_own`) and the resolver supplies the sentence. It once told somebody "I've
+updated the email on your account" about a write that never ran.
 
 The provider enforces tool schemas; ``run_action`` and the resolvers enforce everything else.
 
@@ -61,13 +62,18 @@ TOTAL_BUDGET_SECONDS = 20.0
 MAX_CONTEXT_ENTRIES = 5
 
 # How much of a lookup's result is fed back to the model. The largest (``describe_auction`` with
-# long rules) fits with ~700 characters to spare; :func:`lookup_payload` logs when that runs out.
-MAX_LOOKUP_RESULT_CHARS = 5000
+# long rules) fits with a few hundred characters to spare; :func:`lookup_payload` logs when that runs
+# out. Raised from 5000 when every read gained a ``summary`` — the sentence the user is shown, which
+# the model also sees so it can tell whether that read answered the question.
+MAX_LOOKUP_RESULT_CHARS = 5600
 
 #: The palette's own three tools, absent from ``/mcp/`` where hosts ask, answer and fail for themselves.
 ASK_THE_USER = "ask_the_user"
 CANNOT_DO_THIS = "cannot_do_this"
-ANSWER_THE_USER = "answer_the_user"
+#: Reads that exist to feed another tool rather than to answer: they turn a name into a bidder
+#: number or a lot number. Every other read, having produced a summary, has answered the question,
+#: and :func:`answers_on_its_own` stops the loop there.
+STEP_LOOKUPS = frozenset({"find_person", "find_lot", "find_page", "my_context"})
 
 PALETTE_TOOLS: list[dict[str, Any]] = [
     {
@@ -108,28 +114,6 @@ PALETTE_TOOLS: list[dict[str, Any]] = [
             "additionalProperties": False,
         },
         "annotations": {"title": "Cannot do this", "readOnlyHint": True, "destructiveHint": False},
-    },
-    {
-        "name": ANSWER_THE_USER,
-        "title": "Answer the user",
-        "description": (
-            "Answer a question in one or two short sentences, from a tool result in this "
-            "conversation or from the facts about this user. Never from memory, never a guess, and "
-            "never to say what you are about to do — do the thing instead. A question you want to "
-            "put back to them is ask_the_user, not this."
-        ),
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "message": {
-                    "type": "string",
-                    "description": "string, required. One or two sentences, leading with the fact.",
-                }
-            },
-            "required": ["message"],
-            "additionalProperties": False,
-        },
-        "annotations": {"title": "Answer the user", "readOnlyHint": True, "destructiveHint": False},
     },
 ]
 
@@ -195,6 +179,11 @@ def _write_vocabulary() -> frozenset[str]:
     return _write_vocabulary_cache
 
 
+def asks_for_a_write(query: str) -> bool:
+    """Whether the query actually names something the palette can do: "add", "check in", "renew"."""
+    return bool(set(normalize_query(query).split()) & _write_vocabulary())
+
+
 def wants_the_writes(query: str) -> bool:
     """Whether this query is worth sending the write tools with. Generous on purpose: a question with
     no write word in it loses them, and everything else keeps them.
@@ -202,7 +191,7 @@ def wants_the_writes(query: str) -> bool:
     words = set(normalize_query(query).split())
     if not words:
         return True
-    if words & _write_vocabulary():
+    if asks_for_a_write(query):
         return True
     return not (words & _QUESTION_WORDS or query.strip().endswith("?"))
 
@@ -383,6 +372,63 @@ def shortcut_match(request, query: str) -> list[dict[str, Any]] | None:
             CommandPalettePage.objects.filter(pk=page.pk).update(hits=F("hits") + 1)
             return [{"label": "Go to", "items": items}]
     return None
+
+
+#: Ways of saying "go there". Only the verb is stripped: "my" and "the" are left on the front of the
+#: destination, because "my invoices" finds one page and "invoices" finds two and picks neither.
+_NAVIGATION_OPENERS = (
+    "take me to",
+    "where do i find",
+    "where do i see",
+    "where do i go for",
+    "where are",
+    "where is",
+    "jump to",
+    "show me",
+    "go to",
+    "open",
+)
+
+#: How far ahead of the runner-up a route has to score to be followed without asking the model.
+NAVIGATION_CONFIDENCE = 2.0
+
+
+def navigation_shortcut(request, query: str):
+    """A navigation the route catalog is sure about, answered without a model call.
+
+    "take me to my invoices" is the plainest thing anybody types into this box, and it was costing a
+    round trip and sometimes landing on a read instead: ``my_activity`` and ``go_to_page`` compete for
+    the same phrasing, and the model has to pick a key out of four hundred. Here the sentence names
+    its own destination, so the matcher does it — free, instant, and it cannot pick a write.
+
+    Only when one route is clearly ahead of the next; anything closer is left to the model.
+    """
+    lowered = query.lower().strip()
+    for opener in _NAVIGATION_OPENERS:
+        if lowered.startswith(opener + " "):
+            target = query.strip()[len(opener) :].strip(" ?.")
+            break
+    else:
+        return None
+    if not target:
+        return None
+    scored = palette_routes.match_routes_with_scores(target, request.user, limit=2)
+    if not scored:
+        return None
+    (route, best), runner_up = scored[0], (scored[1][1] if len(scored) > 1 else 0.0)
+    if best - runner_up < NAVIGATION_CONFIDENCE:
+        return None
+    result = palette_routes.resolve_route(request, route, {})
+    if "error" in result or not result.get("url"):
+        return None
+    return {
+        "kind": KIND_NAVIGATE,
+        "url": result["url"],
+        "message": result.get("summary", "") or f"Taking you to {route.label.lower()}.",
+        "action": "go_to_page",
+        "data": _carry_over(result),
+        "route": route.key,
+    }
 
 
 def preloadable_lookup(query: str) -> str | None:
@@ -580,60 +626,29 @@ def obvious_match(request, query: str) -> list[dict[str, Any]] | None:
 # --- prompt building ---------------------------------------------------------
 
 
-SYSTEM_PROMPT = """You turn what a user typed or said into one action on an online fish-auction site.
+SYSTEM_PROMPT = """You turn one thing a person typed or said into one tool call on a fish auction site.
 
-You have tools. Every reply is a tool call — there is no plain-text reply, because the person is
-reading this in a one-line box where only a tool's result can be shown, clicked or undone.
+Always call a tool. Never write a reply of your own: they read the tool's result, not your words.
 
-**Call a read-only tool** (find_person, find_lot, my_context, describe_*) to look something up
-before deciding — to turn a name into a bidder number, or to check which auction they're in. You'll
-be given the result and can then act. You may do this a few times.
+- A question — when, how much, how many, is it, what are the rules — is always a read, never a page:
+  call describe_auction / describe_lot / describe_person / describe_club. What it returns is the
+  answer they see, so pick the one that holds it and you are done.
+- find_person and find_lot turn a name into a number for the tool you call next.
+- "take me to", "show me", "open", "where is", "where do I" — that is go_to_page with one of the
+  keys below, not a read. Send them there.
+- Doing something: call that tool. They get a countdown and a cancel button, so guess confidently
+  rather than asking.
+- ask_the_user only when you truly cannot tell what they meant.
+- cannot_do_this only when this site does not do it at all. Not knowing the page is not that: guess
+  the closest one and go there.
 
-**Call an action tool** to do the thing. The user gets a 5 second countdown with a cancel button
-before anything is written, so a confident, sensible guess is better than a question.
+Leave 'auction' out unless they named one. Never invent a number or a price. Never put their whole
+sentence in a field. When they say "that lot" or "another one", look in the earlier exchanges.
+With an action you may add one short sentence for the countdown card: "Add blue shrimp for Bob".
 
-**Call go_to_page** to take them somewhere. Its 'page' parameter takes one of the destination keys
-listed below, which is every page this site has.
+Facts about this person are the first message below.
 
-**Call ask_the_user** when you genuinely can't tell what they meant.
-
-**Call cannot_do_this** only when the request is not something this site does at all.
-
-**Call answer_the_user** to answer a question — but only from a tool result above, or from the
-facts about this user in the conversation. Never from memory, and never a guess: if it isn't in one
-of those two places, look it up first. One or two sentences; they are reading this in a small box,
-and whatever you name is linked for them underneath, so do not spell out slugs or addresses.
-Answer the question that was asked, and lead with the fact rather than with "Yes" or "No": write
-"The Fall Auction is in person, not online", never "Yes. The Fall Auction is in person". A yes that
-contradicts the sentence after it is worse than no answer at all. Never say you are about to look
-something up — you have the tools, so look it up in this same reply.
-
-Rules:
-- If the user does not say which auction, leave 'auction' out — it defaults to whatever they are
-  looking at right now, and then to their most recent auction.
-- When the user refers to something from earlier in the conversation ("print that label", "add
-  another one"), use the details in the recent exchanges below.
-- Do not make up bidder numbers, lot numbers or prices. Look them up or ask.
-- **Never show the user a slug, a database id, a route key or a URL.** Those are for you. The user
-  gets titles and names: "the Spring Auction 2026", not "s-auction-july-2026"; "the lot list", not
-  "auction_lot_list". Never repeat a tool result back to them raw.
-- A question about how something works ("what are the rules", "how do I earn points", "when does
-  submission close") wants an answer, not a page. Call the matching describe_* tool and then answer
-  in words. Send them to a page only when they asked to go somewhere, or when the answer is
-  genuinely not in anything you can look up.
-- **Never say you can't help just because nothing fits.** Every page on this site is listed below,
-  so if you can't work out a specific action, take your best guess at what the user was trying to
-  reach and send them there with go_to_page. Landing on roughly the right page is useful; telling
-  them you don't understand is not.
-- When you call an action, you may also write one short sentence saying what will happen. It is
-  shown to the user on the countdown card, so write it for them: "Add a lot of blue shrimp to the
-  Spring Auction for Bob (bidder 14)".
-
-The facts about this user — which auctions and clubs they are in, and what they were last looking
-at — are the first message in the conversation below.
-
-Pages you can open with go_to_page (this is every page on the site — the 'page' parameter must be
-one of these keys):
+go_to_page keys (every page on the site):
 {pages}
 """
 
@@ -692,8 +707,9 @@ MAX_SUMMARY_CHARS = 300
 MAX_QUESTION_CHARS = 400
 MAX_OPTION_CHARS = 120
 MAX_OPTIONS = 6
-#: Cap on an answer. Two sentences in a one-line box; the old 1200 was a wall of text by design.
-MAX_ANSWER_CHARS = 300
+#: Cap on an answer. It is a resolver's own summary now, so this guards against a long one, not
+#: against a model in full flow; the 300 that replaced 1200 was sized for the latter.
+MAX_ANSWER_CHARS = 700
 
 #: Openings that mean the model is about to ask rather than tell. A sentence starting with one of
 #: these and ending in a question mark is the clarifying question it should have asked with.
@@ -715,29 +731,6 @@ _ASKING_OPENERS = (
     "let me know",
 )
 
-#: "I'll look that up" — a promise, not an answer. The loop has rounds left; make it use one.
-_PROMISES = (
-    "please wait",
-    "one moment",
-    "just a moment",
-    "hold on",
-    "let me look",
-    "let me check",
-    "let me find",
-    "let me pull",
-    "i'll look",
-    "i will look",
-    "i'll check",
-    "i will check",
-    "i'll find",
-    "i'll pull",
-    "i'll get",
-    "looking that up",
-    "checking now",
-    "i can help you",
-    "i can assist",
-)
-
 
 def _sentences(message: str) -> list[str]:
     return [part.strip() for part in re.split(r"(?<=[.!?])\s+", message.strip()) if part.strip()]
@@ -757,12 +750,6 @@ def _is_really_a_question(message: str) -> str:
         if lowered.startswith(_ASKING_OPENERS):
             return sentence
     return ""
-
-
-def _promises_to_act(message: str) -> bool:
-    """Whether an answer is a promise to do something rather than the thing itself."""
-    lowered = message.lower()
-    return any(promise in lowered for promise in _PROMISES)
 
 
 def echoes_the_query(params: dict[str, Any], query: str) -> bool:
@@ -803,17 +790,6 @@ def read_reply(result, user=None, query: str = "") -> dict[str, Any]:
                 "kind": "error",
                 "message": (reason or "That isn't something this site does.")[:MAX_QUESTION_CHARS],
             }
-        if call.name == ANSWER_THE_USER:
-            message = str(params.get("message") or "").strip()
-            if not message:
-                return {"kind": "invalid", "reason": "answered nothing"}
-            question = _is_really_a_question(message)
-            if question:
-                # The model wrote out the clarifying question it should have asked with.
-                return {"kind": "clarify", "message": question[:MAX_QUESTION_CHARS], "options": []}
-            if _promises_to_act(message):
-                return {"kind": "invalid", "reason": "promised to look it up instead of doing it", "retry": True}
-            return {"kind": "answer", "message": message[:MAX_ANSWER_CHARS]}
         action = palette_actions.get_action(call.name)
         if action is None or action.mcp_only:
             # Only reachable behind an LLM_BASE_URL that doesn't enforce the tool list.
@@ -834,18 +810,16 @@ def read_reply(result, user=None, query: str = "") -> dict[str, Any]:
             "summary": (getattr(result, "text", "") or "").strip()[:MAX_SUMMARY_CHARS],
         }
 
-    # A bare paragraph is off-contract: ``tool_choice="required"`` forbids it, so this is only
-    # reachable behind an endpoint that doesn't enforce it. Held to the same two guards as
-    # ``answer_the_user`` rather than shipped as-is, which is how the wall of text used to arrive.
+    # Prose is off-contract: the model has no tool that takes words, and ``tool_choice="required"``
+    # means it should not be able to send any. Only an endpoint that doesn't enforce the tool list
+    # gets here. A question it wrote out is still worth rescuing as a card; anything else earns a round.
     text = (getattr(result, "text", "") or "").strip()
     if not text:
         return {"kind": "invalid", "reason": "empty reply"}
     question = _is_really_a_question(text)
     if question:
         return {"kind": "clarify", "message": question[:MAX_QUESTION_CHARS], "options": []}
-    if _promises_to_act(text):
-        return {"kind": "invalid", "reason": "promised to look it up instead of doing it", "retry": True}
-    return {"kind": "answer", "message": text[:MAX_ANSWER_CHARS]}
+    return {"kind": "invalid", "reason": "wrote a reply of its own instead of calling a tool", "retry": True}
 
 
 # --- keeping identifiers out of what the user reads --------------------------
@@ -1286,11 +1260,15 @@ _CARRY_OVER_KEYS = ("lot_id", "lot_name", "bidder_number", "auction", "club")
 def _carry_over(result: dict[str, Any]) -> dict[str, Any]:
     """The few values worth remembering for the next command ("print *that* label", "his email is…",
     "another in the same auction").
+
+    Scalars only: ``describe_auction`` calls its whole payload ``auction``, and carrying that forward
+    put a dict where every other result puts a slug.
     """
     data = {}
     for key in _CARRY_OVER_KEYS:
-        if result.get(key) is not None:
-            data[key] = result[key]
+        value = result.get(key)
+        if value is not None and isinstance(value, (str, int, float)) and not isinstance(value, bool):
+            data[key] = value
     return data
 
 
@@ -1420,6 +1398,21 @@ def lookup_payload(name: str, result: Any) -> str:
     )
 
 
+def answers_on_its_own(action, query: str, result: Any) -> bool:
+    """Whether this read's own summary is the answer, so the loop stops without another model call.
+
+    Measured, not assumed: given a ``describe_auction`` result that plainly answered the question, the
+    model called ``describe_auction`` again rather than any tool meaning "show that" — it has the
+    answer and no way to say so. The server can see the same thing without asking.
+
+    Not for a query that wants something done ("add a lot", "check in bob"), where a read is a step on
+    the way, and not for the reads that exist to feed another tool (:data:`STEP_LOOKUPS`).
+    """
+    if action.name in STEP_LOOKUPS or asks_for_a_write(query):
+        return False
+    return bool(isinstance(result, dict) and result.get("summary"))
+
+
 def _rounds_allowed(lookups_run: set) -> int:
     """Model calls this request may still make: one more once a lookup has fetched something real."""
     return MAX_ROUNDS_AFTER_LOOKUP if lookups_run else MAX_ROUNDS
@@ -1444,6 +1437,13 @@ def assist_stream(request, query: str, context: Any = None, path: str = ""):
     groups = shortcut_match(request, query)
     if groups is not None:
         yield {"kind": KIND_RESULTS, "groups": groups}
+        return
+
+    # "take me to my invoices" names its own destination; no model call needed.
+    going = navigation_shortcut(request, query)
+    if going is not None:
+        log_assist(user, query, KIND_NAVIGATE)
+        yield humanize_response(going, user)
         return
 
     if not assist_enabled_for(user):
@@ -1474,6 +1474,8 @@ def assist_stream(request, query: str, context: Any = None, path: str = ""):
     messages = build_messages(user, query, entries, request.palette_page)
     # Every object a lookup touched, so the answer can be clicked. See :func:`about_groups`.
     abouts: list[dict[str, Any]] = []
+    # The last read that said something a person could read.
+    found: dict[str, Any] = {}
     nudges = 0
     lookups_run: set[tuple[str, str]] = set()
     # Recorded as if the model asked, so it won't ask again and the extra round is earned.
@@ -1561,31 +1563,31 @@ def assist_stream(request, query: str, context: Any = None, path: str = ""):
             lookup_result = palette_actions.run_action(request, action.name, reply["params"])
             # Before ``strip_internal``: this is the only place the objects it touched are named.
             abouts.extend(_about_blocks(lookup_result))
+            if isinstance(lookup_result, dict) and lookup_result.get("summary"):
+                found = {"summary": str(lookup_result["summary"]), "action": action.name, "result": lookup_result}
+            if answers_on_its_own(action, query, lookup_result):
+                record(result, KIND_ANSWER, action.name, destination=_answered_from(lookups_run))
+                log_assist(user, query, KIND_ANSWER)
+                # What the answer is about, linked. Ordinary search results only when it is about
+                # nothing, which is the case a keyword search was always a poor answer to.
+                groups = about_groups(user, abouts)
+                if not groups:
+                    related = _search_fallback(request, query, "")
+                    groups = related["groups"] if related else []
+                yield humanize_response(
+                    {
+                        "kind": KIND_ANSWER,
+                        "message": found["summary"][:MAX_ANSWER_CHARS],
+                        "groups": groups,
+                        # "when does the fall auction start" then "sign me up" means that auction.
+                        "data": _carry_over({**_merge_about(abouts), **_carry_over(lookup_result)}),
+                    },
+                    user,
+                )
+                return
             messages.append(llm.tool_call_message([result.tool_calls[0]]))
             messages.append(llm.tool_result_message(result.tool_calls[0], lookup_payload(action.name, lookup_result)))
             continue
-
-        if kind == "answer":
-            # Only a single parameterless lookup is recorded as a destination (preloadable).
-            record(result, KIND_ANSWER, destination=_answered_from(lookups_run))
-            log_assist(user, query, KIND_ANSWER)
-            # What the answer is about, linked. Ordinary search results only if it is about nothing,
-            # which is the case a keyword search was always a poor answer to.
-            groups = about_groups(user, abouts)
-            if not groups:
-                related = _search_fallback(request, query, "")
-                groups = related["groups"] if related else []
-            yield humanize_response(
-                {
-                    "kind": KIND_ANSWER,
-                    "message": reply["message"],
-                    "groups": groups,
-                    # "when does the fall auction start" then "sign me up" means that auction.
-                    "data": _carry_over(_merge_about(abouts)),
-                },
-                user,
-            )
-            return
 
         if kind == "clarify":
             record(result, KIND_CLARIFY)

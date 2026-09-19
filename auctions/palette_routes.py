@@ -1521,6 +1521,11 @@ def match_routes(query: str, user=None, limit: int = 5) -> list[Route]:
     """Rank this user's permitted destinations by token overlap with a query: a simple safety net for when
     the model sends a description instead of a key.
     """
+    return [route for route, _ in match_routes_with_scores(query, user, limit)]
+
+
+def match_routes_with_scores(query: str, user=None, limit: int = 5) -> list[tuple[Route, float]]:
+    """:func:`match_routes` with each route's score, for callers deciding whether it is sure enough."""
     words = _tokens(query)
     if not words:
         return []
@@ -1540,7 +1545,7 @@ def match_routes(query: str, user=None, limit: int = 5) -> list[Route]:
             # Index keeps ties stable, favouring earlier entries.
             scored.append((score, -index, route))
     scored.sort(key=lambda item: (item[0], item[1]), reverse=True)
-    return [route for _, _, route in scored[:limit]]
+    return [(route, score) for score, _, route in scored[:limit]]
 
 
 def get_route(key: str) -> Route | None:

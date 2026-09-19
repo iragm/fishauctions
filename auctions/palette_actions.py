@@ -447,6 +447,33 @@ def _slugs(items) -> list[str]:
     return found
 
 
+def _sentence(*parts: Any) -> str:
+    """Join the parts that aren't empty into one line: "A — b, c. d"."""
+    return " ".join(str(part).strip() for part in parts if part)
+
+
+def _said_plainly(pairs: list[tuple[str, Any]]) -> str:
+    """ "2 lots, 31 people, 1 seller" from (label, value) pairs, dropping the empty ones.
+
+    A label ending in s loses it for a count of one, which covers lots/people/bids/members and leaves
+    "sold", "won" and "checked in" alone.
+    """
+    said = []
+    for label, value in pairs:
+        if not value:
+            continue
+        said.append(f"{value} {label[:-1] if value == 1 and label.endswith('s') else label}")
+    return ", ".join(said)
+
+
+def _money(value: Any) -> str:
+    """A money figure as somebody would write it. ``str(Decimal)`` gave "$0E-8"."""
+    try:
+        return f"{Decimal(str(value)).quantize(Decimal('0.01')):,}"
+    except (InvalidOperation, TypeError, ValueError):
+        return str(value)
+
+
 def _lot_echo(lot) -> dict[str, Any]:
     """What a tool that acted on one lot says it acted on: number, name, auction, link, so a wrong lot is
     noticed. The link is ``lot_link`` (``/auctions/<auction>/lots/<number>/``), the label's address.
@@ -1627,7 +1654,21 @@ def find_person(request, params: dict[str, Any]) -> dict[str, Any]:
 
 def my_context(request, params: dict[str, Any]) -> dict[str, Any]:
     """Who the user is and what they're working on: clubs, auctions, role."""
-    return user_context(request.user, _page(request))
+    data = user_context(request.user, _page(request))
+    running = data.get("auctions") or []
+    working_on = (data.get("last_auction") or {}).get("title")
+    data["summary"] = _sentence(
+        f"You're working on {working_on}." if working_on else "",
+        (
+            f"{len(running)} auction{'s' if len(running) != 1 else ''} running: "
+            + ", ".join(row["title"] for row in running[:4])
+            + "."
+            if running
+            else "Nothing of yours is running right now."
+        ),
+        ("You help run " + ", ".join(data["admin_clubs"][:3]) + ".") if data.get("admin_clubs") else "",
+    )
+    return data
 
 
 def lot_fields_in_use(auction) -> dict[str, Any]:
@@ -3281,7 +3322,31 @@ def describe_auction(request, params: dict[str, Any]) -> dict[str, Any]:
     # Rules as plain text, truncated.
     data["rules"] = untrusted(plain_text(auction.summernote_description, limit=RULES_LIMIT))
     data["url"] = auction.get_absolute_url()
-    return {"found": True, "auction": data, **_about(auction=auction)}
+    # Pickup locations are strings for some auctions and rows for others.
+    where = ", ".join(
+        str(location.get("name", "") if isinstance(location, dict) else location)
+        for location in (data.get("pickup_locations") or [])
+    ).strip(", ")
+    summary = _sentence(
+        f"{auction.title} —",
+        ("online" if auction.is_online else "in person") + (f", run by {auction.club.name}." if auction.club else "."),
+        f"Starts {data['starts']}." if data.get("starts") else "",
+        (
+            f"Lot submission is open until {data['lot_submission_closes']}."
+            if data.get("lot_submission_open_now") and data.get("lot_submission_closes")
+            else (
+                "Lot submission has closed." if data.get("starts") and not data.get("lot_submission_open_now") else ""
+            )
+        ),
+        f"Pickup at {where}." if where else "",
+        # The counts are what "how many lots", "how big is it" and "how many people" are asking.
+        _said_plainly(
+            [("lots", data.get("lots")), ("sold", data.get("lots_sold")), ("people", data.get("participants"))]
+        )
+        + ".",
+        ("This auction is over." if data.get("over") else ""),
+    )
+    return {"found": True, "summary": summary, "auction": data, **_about(auction=auction)}
 
 
 def describe_club(request, params: dict[str, Any]) -> dict[str, Any]:
@@ -3337,7 +3402,17 @@ def describe_club(request, params: dict[str, Any]) -> dict[str, Any]:
             "members_with_an_account": members.filter(user__isnull=False).count(),
             "points_last_recalculated": club.last_bap_recalculation,
         }
-    return {"found": True, "club": data, **_about(club=club)}
+    summary = _sentence(
+        f"{club.name}.",
+        (
+            f"Membership is ${_money(club.membership_annual_fee)} a year."
+            if club.enable_membership and club.membership_annual_fee
+            else ""
+        ),
+        ("You're a member." if membership else ("You're not a member." if club.enable_membership else "")),
+        f"Contact: {club.contact_email}." if club.contact_email else "",
+    )
+    return {"found": True, "summary": summary, "club": data, **_about(club=club)}
 
 
 def _club_events(club, limit: int = 5, user=None) -> list[dict[str, Any]]:
@@ -3401,7 +3476,19 @@ def describe_lot(request, params: dict[str, Any]) -> dict[str, Any]:
             "seller_bidder_number": seller.bidder_number if seller else None,
             "winner_bidder_number": lot.auctiontos_winner.bidder_number if lot.auctiontos_winner else None,
         }
-    return {"found": True, "lot": data, **_about(lot=lot)}
+    summary = _sentence(
+        f"Lot {data['lot_number']} {data['name']} in {data['auction']} —",
+        (
+            f"sold for ${_money(data['winning_price'])}."
+            if data.get("sold")
+            else _said_plainly([("bids", data.get("bids"))])
+            + (f" at ${_money(data['current_price'])}." if data.get("bids") else "")
+        )
+        or (f"${_money(data['reserve_price'])} minimum, no bids yet." if data.get("reserve_price") else "No bids yet."),
+        f"{data['quantity']} in the lot." if (data.get("quantity") or 0) > 1 else "",
+        f"Bidding closes {data['bidding_closes']}." if data.get("bidding_closes") and not data.get("sold") else "",
+    )
+    return {"found": True, "summary": summary, "lot": data, **_about(lot=lot)}
 
 
 def _lot_live_state(lot, user) -> dict[str, Any]:
@@ -3472,8 +3559,18 @@ def describe_person(request, params: dict[str, Any]) -> dict[str, Any]:
     lots = Lot.objects.filter(auctiontos_seller=tos, is_deleted=False)
     won = Lot.objects.filter(auctiontos_winner=tos, is_deleted=False)
     invoice = tos.invoice
+    summary = _sentence(
+        f"{untrusted_short(tos.name)}" + (f", bidder {tos.bidder_number}," if tos.bidder_number else ""),
+        f"in {auction.title}.",
+        "Checked in." if tos.checked_in else "",
+        _said_plainly([("lots brought", lots.count()), ("lots won", won.count())]) + "."
+        if lots.count() or won.count()
+        else "",
+        (f"Invoice: {invoice.get_status_display().lower()}, ${_money(invoice.rounded_net)}." if invoice else ""),
+    )
     return {
         "found": True,
+        "summary": summary,
         "person": {
             "name": untrusted_short(tos.name),
             "bidder_number": tos.bidder_number,
@@ -3544,6 +3641,32 @@ def _time_left(auction) -> dict[str, Any]:
     return data
 
 
+def _time_phrase(data: dict[str, Any]) -> str:
+    """ "closes in 2 hours" / "already closed", from the ``time`` block :func:`_time_left` built."""
+    time = data.get("time") or {}
+    left = time.get("time_left")
+    if not left:
+        return ""
+    return "already closed." if "already" in str(left) else f"{left} left."
+
+
+def _numbers_summary(auction, data: dict[str, Any]) -> str:
+    """The counts anyone allowed to see them is asking for."""
+    return _sentence(
+        f"{auction.title}:",
+        _said_plainly(
+            [
+                ("lots", data.get("lots_total")),
+                ("sold", data.get("lots_sold")),
+                ("people", data.get("participants")),
+                ("checked in", data.get("checked_in")),
+            ]
+        )
+        + ".",
+        _time_phrase(data),
+    )
+
+
 def auction_numbers(request, params: dict[str, Any]) -> dict[str, Any]:
     """Running totals for an auction ("how many sold?", "what's the gross?"), from the auction's own
     properties. Counts for admins or public-stats auctions; money for admins only.
@@ -3560,7 +3683,7 @@ def auction_numbers(request, params: dict[str, Any]) -> dict[str, Any]:
             f"{auction.title} doesn't publish its numbers, so I can only say how long is left. "
             "Its admins can see the rest."
         )
-        return {"found": True, "numbers": data}
+        return {"found": True, "summary": _sentence(f"{auction.title}:", _time_phrase(data)), "numbers": data}
 
     lots = Lot.objects.filter(auction=auction, is_deleted=False)
     sold = auction.total_sold_lots
@@ -3580,7 +3703,7 @@ def auction_numbers(request, params: dict[str, Any]) -> dict[str, Any]:
         data["checked_in"] = AuctionTOS.objects.filter(auction=auction, checked_in__isnull=False).count()
         data["not_checked_in"] = AuctionTOS.objects.filter(auction=auction, checked_in__isnull=True).count()
     if not is_admin:
-        return {"found": True, "numbers": data}
+        return {"found": True, "summary": _numbers_summary(auction, data), "numbers": data}
     from .models import Invoice
 
     invoices = Invoice.objects.filter(auction=auction)
@@ -3593,7 +3716,14 @@ def auction_numbers(request, params: dict[str, Any]) -> dict[str, Any]:
         "invoices_paid": invoices.filter(status="PAID").count(),
         "invoices_unpaid": invoices.exclude(status="PAID").count(),
     }
-    return {"found": True, "numbers": data}
+    summary = _sentence(
+        _numbers_summary(auction, data),
+        f"${_money(auction.gross)} gross, ${_money(auction.club_profit)} to the club.",
+        _said_plainly([("invoices unpaid", data["_admin"]["invoices_unpaid"])]) + "."
+        if data["_admin"]["invoices_unpaid"]
+        else "",
+    )
+    return {"found": True, "summary": summary, "numbers": data}
 
 
 def my_activity(request, params: dict[str, Any]) -> dict[str, Any]:
@@ -3606,14 +3736,14 @@ def my_activity(request, params: dict[str, Any]) -> dict[str, Any]:
     if problem:
         # Not an error: memberships still answer, and the problem becomes a note.
         data["note"] = problem.get("more_info_needed") if isinstance(problem, dict) else problem
-        return {"found": True, "activity": data}
+        return {"found": True, "summary": _membership_summary(data), "activity": data}
     remember_auction(request, auction)
 
     tos = _own_tos(user, auction)
     data["auction"] = auction.title
     if not tos:
         data["note"] = f"You haven't joined {auction.title}, so you have nothing in it yet."
-        return {"found": True, "activity": data}
+        return {"found": True, "summary": data["note"], "activity": data}
 
     mine = Lot.objects.filter(auctiontos_seller=tos, is_deleted=False)
     won = Lot.objects.filter(auctiontos_winner=tos, is_deleted=False)
@@ -3651,7 +3781,35 @@ def my_activity(request, params: dict[str, Any]) -> dict[str, Any]:
         )
     else:
         data["watching_ending_soon"] = soon
-    return {"found": True, "activity": data}
+    invoice_line = ""
+    if data.get("invoice"):
+        owed = "you owe" if data["invoice"]["you_owe_the_club"] else "you're owed"
+        invoice_line = f"Your invoice: {owed} ${_money(data['invoice']['total'])}, {data['invoice']['status'].lower()}."
+    summary = _sentence(
+        f"In {auction.title}" + (f", bidder {tos.bidder_number}" if tos.bidder_number else "") + ":",
+        _said_plainly(
+            [
+                ("lots in", data.get("lots_submitted")),
+                ("sold", data.get("lots_sold")),
+                ("won", data.get("lots_won")),
+                ("watched", data.get("watching")),
+            ]
+        )
+        + "."
+        if any(data.get(key) for key in ("lots_submitted", "lots_sold", "lots_won", "watching"))
+        else "nothing yet.",
+        invoice_line,
+    )
+    return {"found": True, "summary": summary, "activity": data}
+
+
+def _membership_summary(data: dict[str, Any]) -> str:
+    """What to say when there is no auction to talk about: the memberships, and why there isn't one."""
+    clubs = data.get("memberships") or []
+    if clubs:
+        named = ", ".join(f"{row['club']} ({'paid up' if row['paid_up'] else 'lapsed'})" for row in clubs[:4])
+        return _sentence(f"Your memberships: {named}.", data.get("note") or "")
+    return _sentence(data.get("note") or "You aren't a member of any club yet.")
 
 
 def _membership_facts(user) -> list[dict[str, Any]]:
@@ -4508,7 +4666,19 @@ def club_numbers(request, params: dict[str, Any]) -> dict[str, Any]:
             "balance": str(balance if balance is not None else Decimal("0.00")),
             "note": "This is the club's book balance, the same figure the treasurer report opens with.",
         }
-    return {"found": True, "club_numbers": data}
+    summary = _sentence(
+        f"{club.name}:",
+        _said_plainly(
+            [
+                ("members", data.get("members")),
+                ("paid up", data.get("paid_up")),
+                ("lapsed", data.get("lapsed")),
+            ]
+        )
+        + ".",
+        (f"Balance ${_money(data['_money']['balance'])}." if data.get("_money") else ""),
+    )
+    return {"found": True, "summary": summary, "club_numbers": data}
 
 
 def list_club_members(request, params: dict[str, Any]) -> dict[str, Any]:

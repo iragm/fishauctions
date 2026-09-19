@@ -180,13 +180,12 @@ this only quotes its opening sentence.
 - **`notifications.py`** (313 lines)
   Email to mobile-push routing.
   `push_configured`, `user_prefers_push`, `user_has_app_push`, `notify_user`, `notify_running_total`, `send_fcm_message`, `send_fcm_data_message`
-- **`palette_actions.py`** (13381 lines)
+- **`palette_actions.py`** (13551 lines)
   The things the command palette's assist, and ``/mcp/``, are allowed to do.
-- **`palette_assist.py`** (1683 lines)
+- **`palette_assist.py`** (1685 lines)
   Natural-language orchestration for the command palette.
-- **`palette_routes.py`** (1830 lines)
+- **`palette_routes.py`** (1835 lines)
   Every named URL, as a :class:`Route` the palette assistant can reach or an :data:`EXCLUDED` entry
-  `Route`, `excluded_reason`, `is_third_party`, `audit`, `catalog_for_prompt`, `match_routes`, `get_route`, `route_needs_an_auction`, `resolve_route`, `page_context_from_path`
 - **`passkit_views.py`** (183 lines)
   Apple PassKit web service: the endpoints installed Wallet passes talk to.
   `PassKitRegistrationView`, `PassKitDeviceRegistrationsView`, `PassKitPassView`, `PassKitLogView`
@@ -421,7 +420,7 @@ this only quotes its opening sentence.
   `PageViewPathTests`, `MigrationHostListTests`, `PageViewCreateStoresAPathTests`
 - **`test_palette_account.py`** (870 lines)
   The rest of the account, and the auction and club setup pages behind it.
-- **`test_palette_assist.py`** (4181 lines)
+- **`test_palette_assist.py`** (4241 lines)
   Tests for the command palette's natural-language assist.
 - **`test_palette_core.py`** (1265 lines)
   The command palette itself, and the mobile surfaces that call into it.
