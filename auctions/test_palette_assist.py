@@ -4050,3 +4050,49 @@ class RequestGroupingTests(PaletteAssistTestCase):
         self.assertTrue(row.variant)
         self.assertEqual(row.variant, palette_assist.variant())
         self.assertGreaterEqual(row.elapsed_ms, 0)
+
+
+class ShortcutQueueTests(PaletteAssistTestCase):
+    """Mining has always been there; nothing ran it, so nothing was ever mined."""
+
+    def _answered(self, query, destination, times):
+        for _ in range(times):
+            LLMUsage.objects.create(user=self.user, query=query, destination=destination, success=True)
+
+    def test_a_phrase_answered_the_same_way_every_time_is_proposed(self):
+        self._answered("where do I pay", "my_invoices", palette_assist.MINE_MIN_COUNT)
+        proposals = palette_assist.shortcut_proposals()
+        self.assertEqual([row["phrase"] for row in proposals], ["where do i pay"])
+        self.assertEqual(proposals[0]["route"], "my_invoices")
+
+    def test_one_disagreement_leaves_it_to_the_model(self):
+        self._answered("where do I pay", "my_invoices", palette_assist.MINE_MIN_COUNT)
+        self._answered("where do I pay", "watched", 1)
+        self.assertEqual(palette_assist.shortcut_proposals(), [])
+
+    def test_a_phrase_asked_twice_is_not_enough(self):
+        self._answered("where do I pay", "my_invoices", 2)
+        self.assertEqual(palette_assist.shortcut_proposals(), [])
+
+    def test_accepting_one_answers_it_without_the_model_from_then_on(self):
+        self._answered("where do I pay", "my_invoices", palette_assist.MINE_MIN_COUNT)
+        self.client.force_login(self.user)
+        self.user.is_superuser = True
+        self.user.save()
+        response = self.client.post(
+            reverse("command_palette_analytics"), {"phrase": "where do i pay", "route": "my_invoices"}
+        )
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(palette_assist.shortcut_proposals(), [])
+        # And the phrase now answers from the shortcut, without reaching the provider.
+        self._script()
+        groups = palette_assist.shortcut_match(self._request_for(self.user), "where do I pay")
+        self.assertTrue(groups)
+        self.assertEqual(self.provider.call_count, 0)
+
+    def test_a_phrase_that_is_not_on_the_list_is_refused(self):
+        self.user.is_superuser = True
+        self.user.save()
+        self.client.force_login(self.user)
+        self.client.post(reverse("command_palette_analytics"), {"phrase": "anything", "route": "not_a_route"})
+        self.assertFalse(CommandPalettePage.objects.filter(search_term="anything").exists())
