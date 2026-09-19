@@ -450,16 +450,23 @@ class ClientIpTestCase(TestCase):
     HEADERS = {
         "REMOTE_ADDR": "172.18.0.5",  # the nginx container, identical for every visitor
         "HTTP_X_FORWARDED_FOR": "1.2.3.4, 172.18.0.1",  # the left-most entry is the caller's to write
+        "HTTP_CF_CONNECTING_IP": "5.5.5.5",  # nothing strips this when we are not behind Cloudflare
         "HTTP_X_REAL_IP": "203.0.113.9",  # nginx, from $remote_addr
     }
 
     def test_the_helper_reads_x_real_ip(self):
+        """And nothing else: both of the others are headers the caller writes.
+
+        nginx overwrites X-Real-IP from $remote_addr but passes CF-Connecting-IP straight through,
+        so off Cloudflare it is worth no more than X-Forwarded-For.
+        """
         request = RequestFactory().get("/", **self.HEADERS)
         self.assertEqual(client_ip(request), "203.0.113.9")
 
     @override_settings(BEHIND_CLOUDFLARE=True)
     def test_cloudflare_wins_when_we_are_behind_it(self):
-        request = RequestFactory().get("/", HTTP_CF_CONNECTING_IP="198.51.100.7", **self.HEADERS)
+        headers = {**self.HEADERS, "HTTP_CF_CONNECTING_IP": "198.51.100.7"}
+        request = RequestFactory().get("/", **headers)
         self.assertEqual(client_ip(request), "198.51.100.7")
 
     def test_allauth_agrees(self):
