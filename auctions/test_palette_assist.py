@@ -4471,3 +4471,35 @@ class AuctionHintTests(PaletteAssistTestCase):
         auction, problem = palette_actions.resolve_auction(self.user, "an auction that does not exist")
         self.assertIsNone(auction)
         self.assertTrue(problem)
+
+
+class AuctionNamedInTheSentenceTests(PaletteAssistTestCase):
+    """The model drops a named auction often enough that the sentence is worth reading."""
+
+    def _named(self, sentence):
+        return palette_actions.auction_named_in(self.user, sentence)
+
+    def test_the_title_in_the_sentence_wins(self):
+        title = self.in_person_auction.title
+        self.assertEqual(getattr(self._named(f"when does the {title} start?"), "pk", None), self.in_person_auction.pk)
+        self.assertEqual(
+            getattr(self._named(f"what are the rules for {title.lower()}"), "pk", None), self.in_person_auction.pk
+        )
+
+    def test_it_does_not_reach_for_a_word_that_happens_to_match(self):
+        for sentence in ("add a lot of blue shrimp", "check in bob", "when does it start?", ""):
+            self.assertIsNone(self._named(sentence), sentence)
+
+    def test_a_resolver_uses_it_when_the_model_leaves_the_parameter_out(self):
+        self.user.userdata.last_auction_used = self.online_auction
+        self.user.userdata.save()
+        request = self._request_for(self.user)
+        request.palette_query = f"when does the {self.in_person_auction.title} start?"
+        result = palette_actions.run_action(request, "describe_auction", {})
+        self.assertIn(self.in_person_auction.title, result["summary"])
+
+    def test_a_parameter_the_model_did_pass_still_wins(self):
+        request = self._request_for(self.user)
+        request.palette_query = f"when does the {self.in_person_auction.title} start?"
+        result = palette_actions.run_action(request, "describe_auction", {"auction": self.online_auction.slug})
+        self.assertIn(self.online_auction.title, result["summary"])

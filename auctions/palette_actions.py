@@ -191,6 +191,11 @@ def _decimal(params: dict[str, Any], key: str) -> Decimal | None:
         return None
 
 
+def _query(request) -> str:
+    """What the person actually said, when a resolver needs to read a name out of it. "" for an agent."""
+    return str(getattr(request, "palette_query", "") or "")
+
+
 def _page(request) -> dict[str, Any]:
     """What the user is looking at, set on the request by ``palette_assist``. Always a dict."""
     return getattr(request, "palette_page", None) or {}
@@ -321,11 +326,43 @@ def remember_auction(request, auction) -> None:
     userdata.save(update_fields=["last_auction_used"])
 
 
+def auction_named_in(user, sentence: str):
+    """The auction whose own title the sentence spells out, or ``None``.
+
+    The model drops the auction parameter for "when does the fall auction start?" often enough to
+    matter, and the answer that comes back is about whichever auction was the default — as confident
+    as the right one. The name is right there in what they said, so read it off.
+
+    Deliberately strict: the whole title, or every word of it that isn't "auction". "add a lot of
+    blue shrimp" must not find an auction called Blue.
+    """
+    asked = " ".join(re.findall(r"[a-z0-9']+", (sentence or "").lower()))
+    if not asked:
+        return None
+    for auction in command_palette._joined_auctions(user).order_by("-date_start")[:LIST_LIMIT]:
+        title = " ".join(re.findall(r"[a-z0-9']+", (auction.title or "").lower()))
+        if not title:
+            continue
+        if title in asked:
+            return auction
+        words = [word for word in title.split() if word != "auction"]
+        if words and all(f" {word} " in f" {asked} " for word in words):
+            return auction
+    return None
+
+
 def _auction_or_problem(request, params: dict[str, Any], key: str = "auction", ignore_current: bool = False):
     """The auction an action acts on, or a result to return. One entry point, so the ambiguity question
     and ``remember_auction`` happen everywhere.
     """
-    auction, problem = resolve_auction(request.user, _str(params, key), _page(request), ignore_current=ignore_current)
+    hint = _str(params, key)
+    if not hint:
+        # They named one and the model didn't pass it on.
+        named = auction_named_in(request.user, getattr(request, "palette_query", ""))
+        if named is not None:
+            remember_auction(request, named)
+            return named, None
+    auction, problem = resolve_auction(request.user, hint, _page(request), ignore_current=ignore_current)
     if problem is not None:
         return None, (problem if isinstance(problem, dict) else _error(problem))
     remember_auction(request, auction)
@@ -2744,7 +2781,7 @@ def join_auction(request, params: dict[str, Any]) -> dict[str, Any]:
 
     user = request.user
     hint = _str(params, "auction") or _str(params, "name")
-    auction, problem = _resolve_described_auction(user, hint, _page(request))
+    auction, problem = _resolve_described_auction(user, hint, _page(request), _query(request))
     if problem:
         return problem if isinstance(problem, dict) else _error(problem)
     remember_auction(request, auction)
@@ -3257,20 +3294,22 @@ POINTS_NOT_DESCRIBED: dict[str, str] = {
 }
 
 
-def _resolve_described_auction(user, hint: str, page: dict[str, Any] | None):
-    """An auction to describe: a named one they can see (``_visible_auctions``), else the one on their page
-    (unscoped: it's on their screen), else ``resolve_auction``'s order.
+def _resolve_described_auction(user, hint: str, page: dict[str, Any] | None, sentence: str = ""):
+    """An auction to describe: a named one they can see (``_visible_auctions``), else the one named in
+    *sentence*, else the one on their page (unscoped: it's on their screen), else ``resolve_auction``'s
+    order.
     """
     from .models import Auction
 
     visible = command_palette._visible_auctions(user)
     if hint:
-        match = visible.filter(Q(slug=hint) | Q(title__iexact=hint)).first()
-        if not match:
-            match = visible.filter(title__icontains=hint).first()
+        match = _auction_matching(visible, hint)
         if not match:
             return None, f"I couldn't find an auction called “{hint}”."
         return match, None
+    named = auction_named_in(user, sentence)
+    if named is not None:
+        return named, None
     page_slug = (page or {}).get("auction")
     if page_slug:
         # Not re-scoped: every field is on the page they're on.
@@ -3305,7 +3344,9 @@ def _resolve_described_auction(user, hint: str, page: dict[str, Any] | None):
 def describe_auction(request, params: dict[str, Any]) -> dict[str, Any]:
     """One auction: dates, rules, fees, lot fields, and admin stats for admins."""
     user = request.user
-    auction, problem = _resolve_described_auction(user, _str(params, "auction") or _str(params, "name"), _page(request))
+    auction, problem = _resolve_described_auction(
+        user, _str(params, "auction") or _str(params, "name"), _page(request), _query(request)
+    )
     if problem:
         return problem if isinstance(problem, dict) else _error(problem)
     remember_auction(request, auction)
@@ -3695,7 +3736,9 @@ def auction_numbers(request, params: dict[str, Any]) -> dict[str, Any]:
     properties. Counts for admins or public-stats auctions; money for admins only.
     """
     user = request.user
-    auction, problem = _resolve_described_auction(user, _str(params, "auction") or _str(params, "name"), _page(request))
+    auction, problem = _resolve_described_auction(
+        user, _str(params, "auction") or _str(params, "name"), _page(request), _query(request)
+    )
     if problem:
         return problem if isinstance(problem, dict) else _error(problem)
     remember_auction(request, auction)

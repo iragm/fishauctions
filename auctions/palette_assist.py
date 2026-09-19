@@ -1605,6 +1605,9 @@ def assist_stream(request, query: str, context: Any = None, path: str = ""):
     query = (query or "").strip()[:MAX_QUERY_LENGTH]
     # Parsed once and hung on the request for every resolver.
     request.palette_page = palette_routes.page_context_from_path(user, path) if path else {}
+    # What they actually said, for the resolvers: the model drops a named auction often enough that
+    # the sentence is worth reading when the parameter is missing.
+    request.palette_query = query
 
     if not query:
         yield {"kind": KIND_RESULTS, "groups": command_palette.search(request, "")}
