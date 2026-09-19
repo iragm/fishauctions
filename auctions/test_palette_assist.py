@@ -4,6 +4,7 @@ import datetime
 import json
 import re
 from io import StringIO
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from asgiref.sync import async_to_sync
@@ -4239,3 +4240,107 @@ class ReadsThatAnswerTests(PaletteAssistTestCase):
         data = self._assist("when does that auction start?").json()
         self.assertEqual(data["kind"], "answer")
         self.assertEqual(self.provider.call_count, 1)
+
+
+class RemovedCapabilityTests(PaletteAssistTestCase):
+    """Asked for something the palette gave up, the model reached for the nearest write it still had.
+
+    "refund lot 14" came back as a countdown for ``no_sale``; "give bob 10 points for the corydoras"
+    as a $10 charge on his invoice. Nothing is listed in the prompt — the model is never told what it
+    can't do, which is an endless list. The tools it is handed say it instead.
+    """
+
+    def _names(self, query):
+        return {tool["name"] for tool in palette_assist.tools_for(self.user, query)}
+
+    def test_it_is_left_with_no_way_to_write(self):
+        for query in (
+            "refund lot 14",
+            "give bob 10 points for the corydoras",
+            "change my email to ada@example.com",
+            "move the pickup time to 11am",
+            "send an announcement to the club",
+            "bid $20 on lot 14",
+            "edit lot 14",
+        ):
+            offered = self._names(query)
+            writes = {
+                name
+                for name in offered
+                if (palette_actions.get_action(name) or SimpleNamespace(danger=None)).danger
+                == palette_actions.DANGER_CONFIRM
+            }
+            self.assertEqual(writes, set(), f"{query} can still write: {writes}")
+            self.assertIn("go_to_page", offered, query)
+
+    def test_a_skill_the_palette_kept_is_untouched(self):
+        for query in (
+            "lot 101 sold to bidder 14 for 25",
+            "check in bob",
+            "add a lot of blue shrimp",
+            "add $5 to jane's invoice for the raffle",
+            "renew bob's membership",
+            "undo that",
+        ):
+            self.assertFalse(palette_assist.asks_for_something_removed(query), query)
+            self.assertIn("set_lot_winner", self._names(query), query)
+
+    def test_a_shared_verb_does_not_rescue_a_skill_that_left(self):
+        """ "change" stayed and "email" didn't; the noun is the one that names the capability."""
+        self.assertTrue(palette_assist.asks_for_something_removed("change my email to ada@example.com"))
+
+    def test_a_question_still_gets_the_reads(self):
+        """ "what are the pickup times?" is answerable even though pickup locations aren't editable here."""
+        self.assertIn("describe_auction", self._names("what are the pickup times?"))
+
+    def test_nothing_about_it_is_in_the_prompt(self):
+        prompt = palette_assist.build_system_prompt(self.user)
+        for name in ("refund_lot", "award_points", "place_bid", "update_pickup_location"):
+            self.assertNotIn(name, prompt)
+
+
+class NavigateOnlyTests(PaletteAssistTestCase):
+    """Take me to the page and stop there: the user's own preference, and the site-wide kill switch."""
+
+    def _writes_offered(self, user):
+        return {
+            name
+            for name in (tool["name"] for tool in palette_assist.tools_for(user))
+            if (palette_actions.get_action(name) or SimpleNamespace(danger=None)).danger
+            == palette_actions.DANGER_CONFIRM
+        }
+
+    def test_off_by_default(self):
+        self.assertFalse(palette_assist.navigate_only(self.user))
+        self.assertTrue(self._writes_offered(self.user))
+
+    def test_a_user_who_asked_for_it_is_offered_no_write(self):
+        self.user.userdata.palette_navigate_only = True
+        self.user.userdata.save()
+        self.user.userdata.refresh_from_db()
+        self.assertTrue(palette_assist.navigate_only(self.user))
+        self.assertEqual(self._writes_offered(self.user), set())
+        self.assertIn("go_to_page", {tool["name"] for tool in palette_assist.tools_for(self.user)})
+
+    def test_a_question_is_still_answered(self):
+        self.user.userdata.palette_navigate_only = True
+        self.user.userdata.save()
+        self._script({"lookup": "describe_auction", "params": {}})
+        data = self._assist("when does this auction start").json()
+        self.assertEqual(data["kind"], "answer")
+
+    @override_settings(ASSISTANT_NAVIGATE_ONLY=True)
+    def test_the_site_wide_switch_overrides_everybody(self):
+        self.assertTrue(palette_assist.navigate_only(self.user))
+        self.assertEqual(self._writes_offered(self.user), set())
+
+    @override_settings(ASSISTANT_NAVIGATE_ONLY=True)
+    def test_a_countdown_left_on_screen_cannot_still_run(self):
+        """The switch is for a write misfiring mid-auction, so a card already showing has to die too."""
+        response = self._execute("check_in", {"person": "555"})
+        self.assertEqual(response.json()["kind"], "error")
+
+    def test_the_preference_is_on_the_preferences_page(self):
+        from auctions.forms import ChangeUserPreferencesForm
+
+        self.assertIn("palette_navigate_only", ChangeUserPreferencesForm.Meta.fields)

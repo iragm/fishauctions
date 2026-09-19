@@ -699,6 +699,9 @@ PAYPAL_ENABLED_FOR_USERS = parse_bool_env(os.environ.get("PAYPAL_ENABLED_FOR_USE
 # New users get the assistant by default; per user in the admin, or `manage.py change_assistant off`.
 # Still requires a configured model.
 ASSISTANT_ENABLED_FOR_USERS = parse_bool_env(os.environ.get("ASSISTANT_ENABLED_FOR_USERS") or None, default=True)
+# On: the palette takes people to pages and never writes, for everybody, whatever each has chosen.
+# The kill switch for a write that misfires during somebody's auction, and the default for new users.
+ASSISTANT_NAVIGATE_ONLY = parse_bool_env(os.environ.get("ASSISTANT_NAVIGATE_ONLY") or None, default=False)
 SQUARE_ENABLED_FOR_USERS = parse_bool_env(os.environ.get("SQUARE_ENABLED_FOR_USERS") or None, default=False)
 USERS_ARE_TRUSTED_BY_DEFAULT = parse_bool_env(os.environ.get("USERS_ARE_TRUSTED_BY_DEFAULT") or None, default=True)
 UNTRUSTED_MESSAGE = os.environ.get(

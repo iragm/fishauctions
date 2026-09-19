@@ -118,6 +118,20 @@ PALETTE_TOOLS: list[dict[str, Any]] = [
 ]
 
 
+def navigate_only(user) -> bool:
+    """Whether this user's palette opens pages and never writes.
+
+    Theirs to choose on the preferences page, and ``ASSISTANT_NAVIGATE_ONLY`` turns it on for
+    everybody — the kill switch for a write that misfires in the middle of somebody's auction.
+    """
+    from django.conf import settings
+
+    if getattr(settings, "ASSISTANT_NAVIGATE_ONLY", False):
+        return True
+    userdata = getattr(user, "userdata", None)
+    return bool(userdata and userdata.palette_navigate_only)
+
+
 def tools_for(user, query: str = "") -> list[dict[str, Any]]:
     """Every tool this user's palette may call: the shared catalogue, plus the three above.
 
@@ -135,11 +149,20 @@ def tools_for(user, query: str = "") -> list[dict[str, Any]]:
         for tool in mcp_tools.tool_descriptors(user)
         if not getattr(palette_actions.get_action(tool["name"]), "mcp_only", False)
     ]
+    reads = [tool for tool in shared if not _is_a_write(tool)]
+    if navigate_only(user):
+        # Reads still answer a question; nothing here can change anything.
+        return [*reads, *PALETTE_TOOLS]
+    if query and asks_for_something_removed(query) and not asks_a_question(query):
+        # They asked for something this box no longer does. The page still does it, so leave the
+        # tools that reach a page and the ones that aim it at the right lot or person — and nothing
+        # that could write. Told to refund a lot with no way to, it reached for no_sale.
+        reachable = [tool for tool in reads if tool["name"] in STEP_LOOKUPS or _is_navigation(tool)]
+        return [*reachable, *PALETTE_TOOLS]
     if not query or wants_the_writes(query):
-        reads = [tool for tool in shared if not _is_a_write(tool)]
         writes = [tool for tool in shared if _is_a_write(tool)]
         return [*reads, *PALETTE_TOOLS, *writes]
-    return [*(tool for tool in shared if not _is_a_write(tool)), *PALETTE_TOOLS]
+    return [*reads, *PALETTE_TOOLS]
 
 
 def _is_a_write(tool: dict[str, Any]) -> bool:
@@ -147,11 +170,17 @@ def _is_a_write(tool: dict[str, Any]) -> bool:
     return bool(action and action.danger == palette_actions.DANGER_CONFIRM)
 
 
+def _is_navigation(tool: dict[str, Any]) -> bool:
+    action = palette_actions.get_action(tool["name"])
+    return bool(action and action.danger == palette_actions.DANGER_NAVIGATE)
+
+
 #: Question words that, with nothing from :func:`_write_vocabulary` in the query, mean nobody is
 #: asking for anything to be changed.
 _QUESTION_WORDS = frozenset("what when where which who whom whose why how".split())
 
 _write_vocabulary_cache: frozenset[str] | None = None
+_removed_vocabulary_cache: frozenset[str] | None = None
 
 
 #: Words this whole site is about, so a query containing one has said nothing about wanting a write.
@@ -179,9 +208,49 @@ def _write_vocabulary() -> frozenset[str]:
     return _write_vocabulary_cache
 
 
+def _removed_vocabulary() -> frozenset[str]:
+    """Words that name a capability the palette gave up: "refund", "award points", "place a bid".
+
+    Built from :data:`palette_actions.MCP_ONLY_SKILLS`, minus every word the surviving writes are
+    named by, so an overlap like "add" or "undo" never fires. Nothing is listed by hand and nothing
+    is listed in the prompt — the model is never told what it can't do, which is an endless list.
+    """
+    global _removed_vocabulary_cache
+    if _removed_vocabulary_cache is None:
+        words: set[str] = set()
+        for name in palette_actions.MCP_ONLY_SKILLS:
+            action = palette_actions.get_action(name)
+            if action is None or action.lookup:
+                continue
+            words.update(normalize_query(f"{action.name.replace('_', ' ')} {action.confirm_template}").split())
+        _removed_vocabulary_cache = frozenset(words - _FILLER - _TOO_GENERAL - _write_vocabulary())
+    return _removed_vocabulary_cache
+
+
 def asks_for_a_write(query: str) -> bool:
     """Whether the query actually names something the palette can do: "add", "check in", "renew"."""
     return bool(set(normalize_query(query).split()) & _write_vocabulary())
+
+
+#: Verbs both halves of the registry are described by, so hitting one says nothing about which half
+#: was meant. "change my email" names a capability that left and a verb that stayed.
+_SHARED_VERBS = frozenset("add set change update make take give send put remove delete create edit new".split())
+
+
+def asks_for_something_removed(query: str) -> bool:
+    """Whether the query names a capability that is on ``/mcp/`` and not here, and nothing that is.
+
+    "refund lot 14" became a countdown for ``no_sale`` and "give bob 10 points for the corydoras"
+    became a $10 charge on his invoice: told to do something it no longer has a tool for, the model
+    reaches for the nearest one it does have. Taking the writes away for that turn leaves it the page.
+
+    A word from a skill that stayed calls it off — unless that word is only a shared verb, which is
+    how "change my email" was reading as a skill the palette still has.
+    """
+    words = set(normalize_query(query).split())
+    if not words & _removed_vocabulary():
+        return False
+    return not (words & _write_vocabulary() - _SHARED_VERBS)
 
 
 def wants_the_writes(query: str) -> bool:
@@ -1665,6 +1734,9 @@ def execute(request, name: str, params: Any, path: str = "") -> dict[str, Any]:
     # A countdown started before assist was turned off must not still run.
     if not assist_enabled_for(request.user):
         return {"kind": KIND_ERROR, "message": "I don't know how to do that."}
+    if navigate_only(request.user):
+        # Same for a card that was on screen when the switch went the other way.
+        return {"kind": KIND_ERROR, "message": "I can only take you to the right page. That one's done there."}
     request.palette_page = palette_routes.page_context_from_path(request.user, path) if path else {}
     action = palette_actions.get_action(name)
     if action is None:

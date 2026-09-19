@@ -3639,6 +3639,7 @@ class ChangeUserPreferencesForm(forms.ModelForm):
             "show_nearby_auctions",
             "distance_unit",
             "preferred_currency",
+            "palette_navigate_only",
         )
 
     def __init__(self, user, *args, **kwargs):
@@ -3672,6 +3673,10 @@ class ChangeUserPreferencesForm(forms.ModelForm):
             Div(
                 Div(
                     "show_nearby_auctions",
+                    css_class="col-md-12",
+                ),
+                Div(
+                    "palette_navigate_only",
                     css_class="col-md-12",
                 ),
                 css_class="row",

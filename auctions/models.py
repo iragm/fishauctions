@@ -10524,6 +10524,15 @@ def get_default_use_llm_search():
     return getattr(settings, "ASSISTANT_ENABLED_FOR_USERS", True)
 
 
+def get_default_palette_navigate_only():
+    """Whether the palette only opens pages (ASSISTANT_NAVIGATE_ONLY), site-wide and per user.
+
+    The site-wide setting is also the kill switch: turned on, no palette write can run for anybody,
+    whatever each person has chosen.
+    """
+    return getattr(settings, "ASSISTANT_NAVIGATE_ONLY", False)
+
+
 def get_default_square_enabled():
     return getattr(settings, "SQUARE_ENABLED_FOR_USERS", False)
 
@@ -10643,6 +10652,14 @@ class UserData(CachedPropertiesMixin, models.Model):
     dismissed_cookies_tos = models.BooleanField(default=False)
     show_ad_controls = models.BooleanField(default=False, blank=True)
     show_ad_controls.help_text = "Show a tab for ads on all pages"
+    palette_navigate_only = models.BooleanField(
+        default=get_default_palette_navigate_only, blank=True, verbose_name="Only let the command palette open pages"
+    )
+    palette_navigate_only.help_text = (
+        "Tick this and the command palette will take you to the right page and stop there, instead of "
+        "doing things for you.  It can still find a lot, a person or an auction and answer a question "
+        "about one; it just won't record a sale or check anybody in."
+    )
     use_llm_search = models.BooleanField(
         default=get_default_use_llm_search, blank=True, verbose_name="AI command palette"
     )
