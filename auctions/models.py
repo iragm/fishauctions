@@ -12421,6 +12421,30 @@ class LLMUsage(models.Model):
             "makes it the shortest queue on the analytics page and the first one worth reading."
         ),
     )
+    request_id = models.CharField(
+        max_length=32,
+        blank=True,
+        db_index=True,
+        help_text=(
+            "One id shared by every round of one thing somebody typed, so a lookup and the answer "
+            "it fed are one story and not two. Without it the only way to group rounds was by the "
+            "text of the query, which counted two people asking the same thing as one."
+        ),
+    )
+    elapsed_ms = models.PositiveIntegerField(
+        default=0,
+        help_text="Milliseconds from the query arriving to this round finishing. What the person actually waited.",
+    )
+    variant = models.CharField(
+        max_length=16,
+        blank=True,
+        db_index=True,
+        help_text=(
+            "A fingerprint of the assistant that answered: its prompt, the skills it was offered "
+            "and the model. It changes on its own when any of those do, so a before and an after "
+            "can be put either side of a deploy without anybody remembering the date."
+        ),
+    )
 
     class Meta:
         ordering = ["-createdon"]

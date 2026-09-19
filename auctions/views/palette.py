@@ -12,6 +12,8 @@ from django.contrib import messages
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.db.models import (
     Count,
+    Max,
+    Min,
     Q,
     Sum,
 )
@@ -27,6 +29,7 @@ from django.views.generic import TemplateView, View
 
 from auctions.models import (
     AssistantSkillRequest,
+    CommandPalettePage,
     CommandPaletteSearch,
     LLMUsage,
     UserAPIKey,
@@ -421,12 +424,30 @@ class CommandPaletteAnalyticsView(AdminOnlyViewMixin, TemplateView):
             if context["llm_prompt_tokens"]
             else 0
         )
-        # Rounds per request multiply everything above.
-        context["llm_rounds_per_query"] = (
-            round(context["llm_calls"] / usage.values("query").distinct().count(), 2)
-            if usage.values("query").distinct().count()
-            else 0
+        # Rounds per request multiply everything above. Counted over ``request_id``, not over the
+        # text: by query string, two people asking the same thing were one query and the average was
+        # whatever the duplicates made it.
+        requests = usage.exclude(request_id="").values("request_id").distinct().count()
+        context["llm_requests"] = requests
+        context["llm_rounds_per_query"] = round(usage.exclude(request_id="").count() / requests, 2) if requests else 0
+        slowest = usage.exclude(request_id="").order_by("-elapsed_ms").values_list("elapsed_ms", flat=True).first()
+        context["llm_slowest_ms"] = slowest or 0
+        context["llm_variants"] = list(
+            usage.exclude(variant="")
+            .values("variant")
+            .annotate(
+                count=Count("id"),
+                requests=Count("request_id", distinct=True),
+                failures=Count("id", filter=Q(success=False)),
+                cancelled=Count("id", filter=Q(cancelled=True)),
+                reported=Count("id", filter=Q(reported=True)),
+                tokens=Sum("total_tokens"),
+                first_seen=Min("createdon"),
+                last_seen=Max("createdon"),
+            )
+            .order_by("-last_seen")[:6]
         )
+        context["llm_transcript"] = self._transcript(usage)
         context["llm_failures"] = usage.filter(success=False).count()
         context["llm_by_action"] = list(
             usage.exclude(action="")
@@ -459,4 +480,77 @@ class CommandPaletteAnalyticsView(AdminOnlyViewMixin, TemplateView):
         context["llm_cancelled_queries"] = list(
             cancelled.exclude(query="").values("query", "action").annotate(count=Count("id")).order_by("-count")[:15]
         )
+        context["shortcut_proposals"] = palette_assist.shortcut_proposals()
         return context
+
+    def post(self, request, *args, **kwargs):
+        """Accept one mined shortcut. See :func:`palette_assist.shortcut_proposals`."""
+        from auctions import command_palette, palette_assist, palette_routes
+
+        phrase = (request.POST.get("phrase") or "").strip()
+        route_key = (request.POST.get("route") or "").strip()
+        route = palette_routes.get_route(route_key)
+        # Both come from the page's own list, so anything else is a stale form or a typed URL.
+        if not phrase or route is None:
+            messages.error(request, "That shortcut proposal is no longer on the list.")
+            return redirect(reverse("command_palette_analytics"))
+        if palette_assist.normalize_query(phrase) in palette_assist.phrases_with_a_shortcut():
+            messages.info(request, f"“{phrase}” already has a shortcut.")
+            return redirect(reverse("command_palette_analytics"))
+        CommandPalettePage.objects.create(
+            search_term=phrase[:200],
+            target=f"{command_palette.ROUTE_TARGET_PREFIX}{route.key}"[:100],
+            title=route.label[:200],
+            description="Accepted from the assistant's own repeated answers on this page.",
+        )
+        messages.success(request, f"“{phrase}” now goes straight to {route.label.lower()} without a model call.")
+        return redirect(reverse("command_palette_analytics"))
+
+    #: Requests shown in full. A handful of people use this, so the useful view is every exchange in
+    #: order, not a percentage of a hundred: a rate over five users is one person's afternoon.
+    TRANSCRIPT_LIMIT = 40
+
+    def _transcript(self, usage):
+        """The last few requests, each with its rounds in the order they happened.
+
+        One row per model call is what the table holds; one story per thing somebody typed is what
+        makes it readable, and ``request_id`` is what turns the first into the second.
+        """
+        rows = list(
+            usage.exclude(request_id="")
+            .select_related("user")
+            .order_by("-createdon", "-pk")[: self.TRANSCRIPT_LIMIT * 4]
+        )
+        requests = {}
+        for row in rows:
+            request = requests.setdefault(
+                row.request_id,
+                {
+                    "request_id": row.request_id,
+                    "user": row.user,
+                    "query": row.query,
+                    "when": row.createdon,
+                    "rounds": [],
+                    "elapsed_ms": 0,
+                    "tokens": 0,
+                    "cancelled": False,
+                    "reported": False,
+                    "variant": row.variant,
+                },
+            )
+            # Rows arrive newest first; each request's rounds read oldest first.
+            request["rounds"].insert(0, row)
+            request["query"] = request["query"] or row.query
+            request["when"] = min(request["when"], row.createdon)
+            request["elapsed_ms"] = max(request["elapsed_ms"], row.elapsed_ms)
+            request["tokens"] += row.total_tokens
+            request["cancelled"] = request["cancelled"] or row.cancelled
+            request["reported"] = request["reported"] or row.reported
+        ordered = sorted(requests.values(), key=lambda request: request["when"], reverse=True)
+        for request in ordered:
+            last = request["rounds"][-1]
+            # What the person was left looking at, which is the only part of a request that "worked".
+            request["outcome"] = last.response_kind
+            request["action"] = last.action
+            request["failed"] = not last.success
+        return ordered[: self.TRANSCRIPT_LIMIT]

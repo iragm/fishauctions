@@ -202,6 +202,14 @@
     }
 
     function activate(data) {
+      if (data.type === "example") {
+        // Fill the box and stop. An example carries a made-up lot number, so running it on the spot
+        // would be a countdown card for somebody else's bidder; they edit it and press enter.
+        input.value = data.title;
+        input.focus();
+        input.setSelectionRange(input.value.length, input.value.length);
+        return;
+      }
       if (data.type === "search") {
         // Re-run a recent search inside the palette rather than navigating away.
         input.value = data.title;

@@ -56,11 +56,19 @@ view or service it goes through. This file keeps only choices that look like mis
 
 ## `mcp_only` writes
 
-Fifteen writes are on `/mcp/` but not in the palette (`remove_lot`, `queue_lot`/`unqueue_lot`,
-`remove_bid`, `remove_award`, `set_member_active`, `remove_person`, `remove_invoice_adjustment`,
-`set_point_rule`, `set_invoice_renewal`, `resend_member_card`, `leave_feedback`,
-`hide_chat_message`, `record_club_money`, `rotate_lot_image`). Their old `NOT_A_SKILL` excuses were
-about speech, which says nothing about an agent holding a lot number. All are confirm-tier.
+Most writes are on `/mcp/` and not in the palette. `palette_actions.MCP_ONLY_SKILLS` is the list and
+the reason for each; `test_palette_assist.DriftTests` pins the sixteen the palette keeps, which is
+the list that gets quietly shorter.
+
+The palette keeps a write only when you can say it in one sentence, you say it with your hands full,
+and you say it more than once in a while — and not even then if the page shows you something you have
+to see before deciding. That leaves the auction floor, the checkout table and the door. Everything
+else is a page `go_to_page` reaches.
+
+`add_lot`/`add_lots` are the one pair where both surfaces have the skill under different names: the
+palette's `add_a_lot` is navigate-only and opens the lot form pre-filled (`LotCreateView.get_initial`
+reads the fields off the query string), because the species matching, the auction's field rules and
+the seller's own eyes are all on that page. No caller is ever offered both.
 
 - `remove_person` refuses anyone with an invoice or lots; deleting cascades their money away.
 - Queue **reordering** is absent: it rewrites every row.

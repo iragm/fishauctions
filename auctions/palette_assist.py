@@ -6,6 +6,12 @@
 2. Otherwise a bounded tool-calling loop (:data:`MAX_ROUNDS`, :data:`TOTAL_BUDGET_SECONDS`) over the
    same catalogue ``/mcp/`` serves (:func:`auctions.mcp.tools.tool_descriptors`).
 
+**Every turn ends in something the user can touch**: a link, a countdown card, a question with
+clickable options, or one or two sentences with the things they name linked underneath
+(:func:`about_groups`). A bare paragraph is not one of those, which is why the model is called with
+``tool_choice="required"`` and answers through :data:`ANSWER_THE_USER` — a paragraph offering three
+choices is a dead end in a one-line box, and it was what this used to return most of the time.
+
 The provider enforces tool schemas; ``run_action`` and the resolvers enforce everything else.
 
   ``safe``     -> executed here, returned as ``done``
@@ -27,10 +33,12 @@ import json
 import logging
 import re
 import time
+import uuid
 from typing import Any
 
 from django.core.cache import cache
-from django.db.models import F
+from django.db.models import F, Q
+from django.urls import reverse
 
 from . import command_palette, llm, palette_actions, palette_routes
 from .llm import LLMError, assist_enabled, get_provider
@@ -41,8 +49,10 @@ logger = logging.getLogger(__name__)
 # Agent loop bounds. Every round resends the ~3k-token prompt. Measured: usable answers took one
 # round, occasionally two; none needed three.
 MAX_ROUNDS = 2
-#: The ceiling once a lookup has run: it has earned the round needed to say what it found.
-MAX_ROUNDS_AFTER_LOOKUP = 3
+#: The ceiling once a lookup has run: it has earned the rounds needed to say what it found. Raised
+#: from 3 when the registry cut halved the prompt -- "who won lot 12" spent two rounds looking and
+#: then ran out before it could say what it had found.
+MAX_ROUNDS_AFTER_LOOKUP = 4
 #: How many times the model is worth telling that it already has what it just asked for again.
 MAX_REPEAT_NUDGES = 1
 TOTAL_BUDGET_SECONDS = 20.0
@@ -54,9 +64,10 @@ MAX_CONTEXT_ENTRIES = 5
 # long rules) fits with ~700 characters to spare; :func:`lookup_payload` logs when that runs out.
 MAX_LOOKUP_RESULT_CHARS = 5000
 
-#: The palette's own two tools, absent from ``/mcp/`` where hosts ask and fail for themselves.
+#: The palette's own three tools, absent from ``/mcp/`` where hosts ask, answer and fail for themselves.
 ASK_THE_USER = "ask_the_user"
 CANNOT_DO_THIS = "cannot_do_this"
+ANSWER_THE_USER = "answer_the_user"
 
 PALETTE_TOOLS: list[dict[str, Any]] = [
     {
@@ -98,14 +109,40 @@ PALETTE_TOOLS: list[dict[str, Any]] = [
         },
         "annotations": {"title": "Cannot do this", "readOnlyHint": True, "destructiveHint": False},
     },
+    {
+        "name": ANSWER_THE_USER,
+        "title": "Answer the user",
+        "description": (
+            "Answer a question in one or two short sentences, from a tool result in this "
+            "conversation or from the facts about this user. Never from memory, never a guess, and "
+            "never to say what you are about to do — do the thing instead. A question you want to "
+            "put back to them is ask_the_user, not this."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "message": {
+                    "type": "string",
+                    "description": "string, required. One or two sentences, leading with the fact.",
+                }
+            },
+            "required": ["message"],
+            "additionalProperties": False,
+        },
+        "annotations": {"title": "Answer the user", "readOnlyHint": True, "destructiveHint": False},
+    },
 ]
 
 
-def tools_for(user) -> list[dict[str, Any]]:
-    """Every tool this user's palette may call: the shared catalogue, plus the two above.
+def tools_for(user, query: str = "") -> list[dict[str, Any]]:
+    """Every tool this user's palette may call: the shared catalogue, plus the three above.
 
     ``Action.mcp_only`` actions are dropped: ``read_source`` and ``club_api`` return pages of text,
     and the rest are writes. ``go_to_page`` still reaches every one of their pages.
+
+    A *query* asks for the tiered list. The writes come last and are dropped for a question, so the
+    shorter list is a byte-exact **prefix** of the longer one and both share one cached prompt —
+    tiering by suffix rather than by set. No query means the whole catalogue.
     """
     from .mcp import tools as mcp_tools
 
@@ -114,7 +151,60 @@ def tools_for(user) -> list[dict[str, Any]]:
         for tool in mcp_tools.tool_descriptors(user)
         if not getattr(palette_actions.get_action(tool["name"]), "mcp_only", False)
     ]
-    return [*shared, *PALETTE_TOOLS]
+    if not query or wants_the_writes(query):
+        reads = [tool for tool in shared if not _is_a_write(tool)]
+        writes = [tool for tool in shared if _is_a_write(tool)]
+        return [*reads, *PALETTE_TOOLS, *writes]
+    return [*(tool for tool in shared if not _is_a_write(tool)), *PALETTE_TOOLS]
+
+
+def _is_a_write(tool: dict[str, Any]) -> bool:
+    action = palette_actions.get_action(tool["name"])
+    return bool(action and action.danger == palette_actions.DANGER_CONFIRM)
+
+
+#: Question words that, with nothing from :func:`_write_vocabulary` in the query, mean nobody is
+#: asking for anything to be changed.
+_QUESTION_WORDS = frozenset("what when where which who whom whose why how".split())
+
+_write_vocabulary_cache: frozenset[str] | None = None
+
+
+#: Words this whole site is about, so a query containing one has said nothing about wanting a write.
+#: Without these, "when does the fall auction start?" kept every write tool, because two of them have
+#: the word auction in their name.
+_TOO_GENERAL = frozenset("auction auctions lot lots club clubs member members person people user users".split())
+
+
+def _write_vocabulary() -> frozenset[str]:
+    """The words the registry's own writes are named and confirmed by.
+
+    Built from the registry, so a new write brings its own trigger words and nothing here is kept in
+    step by hand. Names and confirm lines only: the *examples* are full spoken sentences, and their
+    incidental nouns ("the fall auction", "blue shrimp", "bob") matched everything.
+    """
+    global _write_vocabulary_cache
+    if _write_vocabulary_cache is None:
+        words: set[str] = set()
+        for action in palette_actions.ACTIONS.values():
+            if action.mcp_only or action.danger != palette_actions.DANGER_CONFIRM:
+                continue
+            text = f"{action.name.replace('_', ' ')} {action.confirm_template}"
+            words.update(normalize_query(text).split())
+        _write_vocabulary_cache = frozenset(words - _FILLER - _TOO_GENERAL)
+    return _write_vocabulary_cache
+
+
+def wants_the_writes(query: str) -> bool:
+    """Whether this query is worth sending the write tools with. Generous on purpose: a question with
+    no write word in it loses them, and everything else keeps them.
+    """
+    words = set(normalize_query(query).split())
+    if not words:
+        return True
+    if words & _write_vocabulary():
+        return True
+    return not (words & _QUESTION_WORDS or query.strip().endswith("?"))
 
 
 # A query this short that already has a good match is answered by search alone.
@@ -328,6 +418,102 @@ def preloadable_lookup(query: str) -> str | None:
     return verdict or None
 
 
+#: How many times a phrase must be asked the same way before it is worth writing down: low enough for
+#: the long tail, high enough that one person experimenting doesn't make shortcuts for everybody.
+MINE_MIN_COUNT = 5
+
+
+def mine_shortcuts(min_count: int = MINE_MIN_COUNT):
+    """Phrases the assistant has always answered with the same destination, and the ones it hasn't.
+
+    Returns ``(candidates, rejected)``. **The model's own repeated answers are the ground truth**,
+    which is what makes this safe: nothing here scores or guesses. Unanimity is required, not a
+    majority — one disagreement and the phrase is left alone, because a query that resolves two ways
+    is one where context matters.
+
+    ``lookup:<name>`` rows are dropped: a lookup has no URL to point a shortcut at and its answer
+    differs per user. Those are already handled by :func:`preloadable_lookup`, and
+    :func:`mine_preloaded_lookups` reports them so the whole picture is on screen.
+    """
+    from collections import defaultdict
+
+    destinations = defaultdict(set)
+    counts = defaultdict(int)
+    rows = LLMUsage.objects.filter(success=True).exclude(destination="").exclude(query="")
+    for query, destination in rows.values_list("query", "destination"):
+        phrase = normalize_query(query)
+        if not phrase or destination.startswith(LOOKUP_DESTINATION_PREFIX):
+            continue
+        destinations[phrase].add(destination)
+        counts[phrase] += 1
+    candidates = {}
+    rejected = {}
+    for phrase, routes in destinations.items():
+        if counts[phrase] < min_count:
+            continue
+        if len(routes) == 1:
+            candidates[phrase] = (next(iter(routes)), counts[phrase])
+        else:
+            rejected[phrase] = routes
+    return candidates, rejected
+
+
+def mine_preloaded_lookups(min_count: int = MINE_MIN_COUNT):
+    """Phrases the assistant keeps answering out of one lookup, and how often.
+
+    Nothing to create — :func:`preloadable_lookup` already acts on these — but "why is this phrase not
+    in the shortcut list" has an answer and it should be on screen.
+    """
+    from collections import defaultdict
+
+    counts = defaultdict(int)
+    names = defaultdict(set)
+    rows = (
+        LLMUsage.objects.filter(success=True, destination__startswith=LOOKUP_DESTINATION_PREFIX)
+        .exclude(query="")
+        .values_list("query", "destination")
+    )
+    for query, destination in rows:
+        phrase = normalize_query(query)
+        if not phrase:
+            continue
+        counts[phrase] += 1
+        names[phrase].add(destination[len(LOOKUP_DESTINATION_PREFIX) :])
+    return {
+        phrase: (sorted(names[phrase]), count)
+        for phrase, count in counts.items()
+        if count >= min_count and len(names[phrase]) == 1
+    }
+
+
+def phrases_with_a_shortcut() -> set[str]:
+    """Every phrase already covered by a shortcut, normalized the same way as the queries."""
+    phrases = set()
+    for page in CommandPalettePage.objects.all():
+        for phrase in command_palette._page_phrases(page):
+            phrases.add(normalize_query(phrase))
+    return phrases
+
+
+def shortcut_proposals(min_count: int = MINE_MIN_COUNT) -> list[dict[str, Any]]:
+    """Shortcuts worth creating, for the analytics page's approval queue.
+
+    The mining has always been there; nothing ran it, so nothing was ever mined. Every one of these
+    accepted is a query that stops costing a model call and stops being able to come back wrong.
+    """
+    candidates, _ = mine_shortcuts(min_count)
+    existing = phrases_with_a_shortcut()
+    proposals = []
+    for phrase, (route_key, count) in sorted(candidates.items(), key=lambda item: -item[1][1]):
+        if phrase in existing:
+            continue
+        route = palette_routes.get_route(route_key)
+        proposals.append(
+            {"phrase": phrase, "route": route_key, "label": route.label if route else route_key, "count": count}
+        )
+    return proposals
+
+
 def _answered_from(lookups_run: set[tuple[str, str]]) -> str:
     """The ``destination`` to record: the single parameterless lookup behind an answer, or ""."""
     if len(lookups_run) != 1:
@@ -362,20 +548,31 @@ def _preload_messages(request, query: str, messages: list[dict[str, Any]]) -> st
     return name
 
 
+def asks_a_question(query: str) -> bool:
+    """Whether the user is asking rather than naming something. A question is never an obvious match."""
+    words = normalize_query(query).split()
+    return bool(query.strip().endswith("?") or (words and words[0] in _QUESTION_WORDS))
+
+
 def obvious_match(request, query: str) -> list[dict[str, Any]] | None:
-    """Ordinary search groups when a short, non-command query already has a clear match."""
+    """Ordinary search groups when a short, non-command query already has a clear match.
+
+    The match has to be in a result's own title. It used to be enough for the search to return *any*
+    page at all, so "who won lot 12" was answered with the Won lots page and never reached the model
+    — four words and a weak page hit were all it took to swallow a question.
+    """
     if _looks_like_a_command(query) or len(query.split()) > SHORT_QUERY_WORDS:
         return None
-    groups = command_palette.search(request, query)
-    if not groups:
+    if asks_a_question(query):
         return None
     lowered = query.lower().strip()
+    if not lowered:
+        return None
+    groups = command_palette.search(request, query)
     for group in groups:
-        if group["label"] == "Go to" and group["items"]:
-            return groups
         for item in group["items"]:
             title = (item.get("title") or "").lower()
-            if lowered and (lowered == title or lowered in title):
+            if lowered == title or lowered in title:
                 return groups
     return None
 
@@ -385,7 +582,8 @@ def obvious_match(request, query: str) -> list[dict[str, Any]] | None:
 
 SYSTEM_PROMPT = """You turn what a user typed or said into one action on an online fish-auction site.
 
-You have tools. Call one of them, or reply in plain words.
+You have tools. Every reply is a tool call — there is no plain-text reply, because the person is
+reading this in a one-line box where only a tool's result can be shown, clicked or undone.
 
 **Call a read-only tool** (find_person, find_lot, my_context, describe_*) to look something up
 before deciding — to turn a name into a bidder number, or to check which auction they're in. You'll
@@ -401,12 +599,14 @@ listed below, which is every page this site has.
 
 **Call cannot_do_this** only when the request is not something this site does at all.
 
-**Reply in plain words** to answer a question — but only from a tool result above, or from the
-facts under "About this user". Never from memory, and never a guess: if it isn't in one of those
-two places, look it up first. Two or three sentences at most; they are reading this in a small box.
+**Call answer_the_user** to answer a question — but only from a tool result above, or from the
+facts about this user in the conversation. Never from memory, and never a guess: if it isn't in one
+of those two places, look it up first. One or two sentences; they are reading this in a small box,
+and whatever you name is linked for them underneath, so do not spell out slugs or addresses.
 Answer the question that was asked, and lead with the fact rather than with "Yes" or "No": write
 "The Fall Auction is in person, not online", never "Yes. The Fall Auction is in person". A yes that
-contradicts the sentence after it is worse than no answer at all.
+contradicts the sentence after it is worse than no answer at all. Never say you are about to look
+something up — you have the tools, so look it up in this same reply.
 
 Rules:
 - If the user does not say which auction, leave 'auction' out — it defaults to whatever they are
@@ -429,36 +629,49 @@ Rules:
   shown to the user on the countdown card, so write it for them: "Add a lot of blue shrimp to the
   Spring Auction for Bob (bidder 14)".
 
+The facts about this user — which auctions and clubs they are in, and what they were last looking
+at — are the first message in the conversation below.
+
 Pages you can open with go_to_page (this is every page on the site — the 'page' parameter must be
 one of these keys):
 {pages}
-
-About this user:
-{context}
 """
 
 
 def build_system_prompt(user, page: dict[str, Any] | None = None, app_destinations=()) -> str:
-    """The system prompt: the page catalog (``palette_routes.ROUTE_LIST``) and the user's context.
+    """The system prompt: the instructions and the page catalog (``palette_routes.ROUTE_LIST``).
 
     Skills are tool definitions (:func:`tools_for`), not prompt text. The catalog (~1k tokens) is
     filtered for relevance, not security, and saves a lookup round. ``app_destinations`` adds the app's
     native screens.
+
+    **Nothing user-specific goes in here.** The catalog and the app's screens depend only on which of
+    three permissions the user holds, so the whole message is byte-identical for everyone in a tier
+    and they share one cached prompt prefix at the provider. A per-user prefix went cold between
+    sessions and was paid for again every time; the user's own facts ride in the first user message
+    instead (:func:`context_message`). ``page`` is unused, kept for positional callers.
     """
-    # ``strip_internal``: the resource URIs ``my_context`` carries are dead weight in a prompt.
-    context = json.dumps(
-        palette_actions.strip_internal(palette_actions.user_context(user, page)), indent=None, default=str
-    )
     pages = palette_routes.catalog_for_prompt(user)
     if app_destinations:
         pages += "\nIn the app, where this user is right now (native screens, same 'page' parameter):\n"
         pages += "\n".join(f"  {name}: {description}" for name, description in app_destinations)
-    return SYSTEM_PROMPT.format(pages=pages, context=context)
+    return SYSTEM_PROMPT.format(pages=pages)
 
 
-def build_messages(query: str, context: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """The user turn: recent exchanges, then the query. Tool turns are built by :mod:`auctions.llm`."""
-    messages: list[dict[str, Any]] = []
+def context_message(user, page: dict[str, Any] | None = None) -> dict[str, Any]:
+    """The user's own facts, as the conversation's first message. See :func:`build_system_prompt`."""
+    # ``strip_internal``: the resource URIs ``my_context`` carries are dead weight in a prompt.
+    facts = json.dumps(
+        palette_actions.strip_internal(palette_actions.user_context(user, page)), indent=None, default=str
+    )
+    return {"role": "user", "content": "About this user:\n" + facts}
+
+
+def build_messages(user, query: str, context: list[dict[str, Any]], page: dict[str, Any] | None = None):
+    """The conversation: this user's facts, recent exchanges, then the query. Tool turns are built by
+    :mod:`auctions.llm`.
+    """
+    messages: list[dict[str, Any]] = [context_message(user, page)]
     if context:
         messages.append(
             {
@@ -479,13 +692,96 @@ MAX_SUMMARY_CHARS = 300
 MAX_QUESTION_CHARS = 400
 MAX_OPTION_CHARS = 120
 MAX_OPTIONS = 6
-#: Cap on a plain-text answer. They are reading it in a small box.
-MAX_ANSWER_CHARS = 1200
+#: Cap on an answer. Two sentences in a one-line box; the old 1200 was a wall of text by design.
+MAX_ANSWER_CHARS = 300
+
+#: Openings that mean the model is about to ask rather than tell. A sentence starting with one of
+#: these and ending in a question mark is the clarifying question it should have asked with.
+_ASKING_OPENERS = (
+    "do you",
+    "would you",
+    "did you",
+    "should i",
+    "shall i",
+    "which ",
+    "what ",
+    "who ",
+    "where ",
+    "when ",
+    "are you",
+    "is that",
+    "can you tell",
+    "tell me",
+    "let me know",
+)
+
+#: "I'll look that up" — a promise, not an answer. The loop has rounds left; make it use one.
+_PROMISES = (
+    "please wait",
+    "one moment",
+    "just a moment",
+    "hold on",
+    "let me look",
+    "let me check",
+    "let me find",
+    "let me pull",
+    "i'll look",
+    "i will look",
+    "i'll check",
+    "i will check",
+    "i'll find",
+    "i'll pull",
+    "i'll get",
+    "looking that up",
+    "checking now",
+    "i can help you",
+    "i can assist",
+)
 
 
-def read_reply(result, user=None) -> dict[str, Any]:
-    """Read one model reply into a dict with a ``kind``: lookup, action, the palette's two tools, or an
-    answer. Shape is already enforced by the provider. ``user`` is unused, kept for positional callers.
+def _sentences(message: str) -> list[str]:
+    return [part.strip() for part in re.split(r"(?<=[.!?])\s+", message.strip()) if part.strip()]
+
+
+def _is_really_a_question(message: str) -> str:
+    """The question inside an answer that is actually asking something, or ``""``.
+
+    ``ask_the_user`` exists and a weak model ignores it, writing the question out as prose instead.
+    Prose can't be clicked, so a voice user dead-ends on it. This finds it and sends it back through
+    the clarify card.
+    """
+    for sentence in _sentences(message):
+        if not sentence.endswith("?"):
+            continue
+        lowered = sentence.lower().lstrip("-•* ")
+        if lowered.startswith(_ASKING_OPENERS):
+            return sentence
+    return ""
+
+
+def _promises_to_act(message: str) -> bool:
+    """Whether an answer is a promise to do something rather than the thing itself."""
+    lowered = message.lower()
+    return any(promise in lowered for promise in _PROMISES)
+
+
+def echoes_the_query(params: dict[str, Any], query: str) -> bool:
+    """Whether a call just put the user's whole sentence into one of its own text fields.
+
+    "add lots to my next club auction" came back as add_person with the name "add lots to my next
+    club auction". The countdown card catches it, but only after asking somebody to read their own
+    words back; a call that has understood nothing is better spent on another round.
+    """
+    asked = normalize_query(query)
+    if not asked or len(asked.split()) < 3:
+        return False
+    return any(isinstance(value, str) and normalize_query(value) == asked for value in params.values())
+
+
+def read_reply(result, user=None, query: str = "") -> dict[str, Any]:
+    """Read one model reply into a dict with a ``kind``: lookup, action, the palette's three tools, or
+    an answer. Shape is already enforced by the provider. ``user`` is unused, kept for positional
+    callers. ``query`` is what the person typed, for :func:`echoes_the_query`.
     """
     calls = getattr(result, "tool_calls", None) or []
     if calls:
@@ -503,13 +799,33 @@ def read_reply(result, user=None) -> dict[str, Any]:
             return {"kind": "clarify", "message": question[:MAX_QUESTION_CHARS], "options": options}
         if call.name == CANNOT_DO_THIS:
             reason = str(params.get("reason") or "").strip()
-            return {"kind": "error", "message": (reason or "That isn't something this site does.")[:MAX_QUESTION_CHARS]}
+            return {
+                "kind": "error",
+                "message": (reason or "That isn't something this site does.")[:MAX_QUESTION_CHARS],
+            }
+        if call.name == ANSWER_THE_USER:
+            message = str(params.get("message") or "").strip()
+            if not message:
+                return {"kind": "invalid", "reason": "answered nothing"}
+            question = _is_really_a_question(message)
+            if question:
+                # The model wrote out the clarifying question it should have asked with.
+                return {"kind": "clarify", "message": question[:MAX_QUESTION_CHARS], "options": []}
+            if _promises_to_act(message):
+                return {"kind": "invalid", "reason": "promised to look it up instead of doing it", "retry": True}
+            return {"kind": "answer", "message": message[:MAX_ANSWER_CHARS]}
         action = palette_actions.get_action(call.name)
         if action is None or action.mcp_only:
             # Only reachable behind an LLM_BASE_URL that doesn't enforce the tool list.
             return {"kind": "invalid", "reason": f"unknown tool {call.name!r}"}
         if action.lookup:
             return {"kind": "lookup", "action": action, "params": params}
+        if echoes_the_query(params, query):
+            return {
+                "kind": "invalid",
+                "reason": f"{action.name} was called with the whole query as a field",
+                "retry": True,
+            }
         # The model's own sentence, if any, is the countdown summary; else ``default_summary``.
         return {
             "kind": "action",
@@ -518,10 +834,18 @@ def read_reply(result, user=None) -> dict[str, Any]:
             "summary": (getattr(result, "text", "") or "").strip()[:MAX_SUMMARY_CHARS],
         }
 
+    # A bare paragraph is off-contract: ``tool_choice="required"`` forbids it, so this is only
+    # reachable behind an endpoint that doesn't enforce it. Held to the same two guards as
+    # ``answer_the_user`` rather than shipped as-is, which is how the wall of text used to arrive.
     text = (getattr(result, "text", "") or "").strip()
-    if text:
-        return {"kind": "answer", "message": text[:MAX_ANSWER_CHARS]}
-    return {"kind": "invalid", "reason": "empty reply"}
+    if not text:
+        return {"kind": "invalid", "reason": "empty reply"}
+    question = _is_really_a_question(text)
+    if question:
+        return {"kind": "clarify", "message": question[:MAX_QUESTION_CHARS], "options": []}
+    if _promises_to_act(text):
+        return {"kind": "invalid", "reason": "promised to look it up instead of doing it", "retry": True}
+    return {"kind": "answer", "message": text[:MAX_ANSWER_CHARS]}
 
 
 # --- keeping identifiers out of what the user reads --------------------------
@@ -601,6 +925,33 @@ def humanize_response(response: dict[str, Any], user=None) -> dict[str, Any]:
 # --- usage logging -----------------------------------------------------------
 
 
+_variant_cache: str | None = None
+
+
+def variant() -> str:
+    """A fingerprint of the assistant as it stands: its prompt, the skills it offers, and the model.
+
+    Recorded on every row so the analytics page can compare a week of one assistant with a week of the
+    next. It changes by itself when any of the three does, which is the only version number nobody
+    forgets to bump.
+    """
+    global _variant_cache
+    if _variant_cache is None:
+        from django.conf import settings
+
+        skills = sorted(name for name, action in palette_actions.ACTIONS.items() if not action.mcp_only)
+        material = "|".join(
+            [
+                SYSTEM_PROMPT,
+                *skills,
+                str(getattr(settings, "LLM_MODEL", "")),
+                str(getattr(settings, "LLM_REASONING_EFFORT", "")),
+            ]
+        )
+        _variant_cache = hashlib.sha256(material.encode("utf-8")).hexdigest()[:8]
+    return _variant_cache
+
+
 def record_usage(
     user,
     result,
@@ -609,11 +960,16 @@ def record_usage(
     action_name: str = "",
     success: bool = True,
     destination: str = "",
+    request_id: str = "",
+    started: float | None = None,
 ) -> int | None:
     """Write one :class:`LLMUsage` row and return its id (sent back on cancel). Never breaks the request."""
     try:
         return LLMUsage.objects.create(
             destination=(destination or "")[:100],
+            request_id=(request_id or "")[:32],
+            elapsed_ms=int((time.monotonic() - started) * 1000) if started else 0,
+            variant=variant(),
             user=user,
             model=(result.model if result else "")[:100],
             prompt_tokens=result.prompt_tokens if result else 0,
@@ -667,6 +1023,30 @@ def mark_reported(user, usage_id: Any) -> bool:
     except Exception:
         logger.exception("Could not record a palette failure report")
         return False
+
+
+def note_missing_skill(request, query: str, reason: str) -> None:
+    """Record a refusal as a skill request, on the model's behalf.
+
+    ``cannot_do_this`` is the honest signal that somebody wanted something this site doesn't do, and it
+    was only ever written down when the model *also* chose to call ``request_a_skill`` — which it
+    rarely did, so the queue stayed empty while the refusals piled up. Keyed on the query, so the same
+    phrase from the same person updates one row. Best-effort: never breaks the reply.
+    """
+    query = (query or "").strip()
+    if not query or not getattr(request.user, "is_authenticated", False):
+        return
+    try:
+        palette_actions.run_action(
+            request,
+            "request_a_skill",
+            {
+                "skill": query[:100],
+                "reason": f"Asked in the command palette. The assistant refused: {reason}"[:2000],
+            },
+        )
+    except Exception:
+        logger.exception("Could not record a refused palette query as a skill request")
 
 
 def log_assist(user, query: str, kind: str) -> None:
@@ -784,6 +1164,119 @@ def _result_to_response(action, params: dict[str, Any], result: dict[str, Any], 
         # Carried into the next command's context, so "print that label" knows which lot.
         "data": _carry_over(result),
     }
+
+
+# --- links to whatever the answer is about -----------------------------------
+#
+# Every resolver already says which objects it touched, in ``palette_actions.KEY_ABOUT``: it is what
+# ``/mcp/`` turns into ``resource_link`` blocks. The palette used to strip it and throw it away, so
+# "the next TFCB auction is on the 19th" arrived with no way to open that auction. These turn the
+# same block into rows the user can click.
+
+#: Rows offered under an answer. Enough to name what was talked about, not a second search result.
+MAX_ANSWER_LINKS = 6
+
+
+def _about_blocks(result: Any) -> list[dict[str, Any]]:
+    """The ``_about`` block a resolver's result carries, if any."""
+    if not isinstance(result, dict):
+        return []
+    about = result.get(palette_actions.KEY_ABOUT)
+    return [about] if isinstance(about, dict) and about else []
+
+
+def _merge_about(blocks: list[dict[str, Any]]) -> dict[str, Any]:
+    """One ``_about`` from several, later blocks winning the single-valued keys.
+
+    A lookup run late in the conversation is the one the answer is about: ``describe_auction`` after
+    ``my_context`` means the answer is about that auction, not about all fifteen of them.
+    """
+    merged: dict[str, Any] = {}
+    many: dict[str, list[str]] = {"auctions": [], "clubs": []}
+    for block in blocks:
+        for key, value in block.items():
+            if key in many:
+                many[key].extend(slug for slug in value or () if slug not in many[key])
+            elif value:
+                merged[key] = value
+    for key, slugs in many.items():
+        if slugs:
+            merged[key] = slugs
+    return merged
+
+
+def links_for_about(user, about: dict[str, Any]) -> list[dict[str, Any]]:
+    """Palette items for the objects an ``_about`` block names, most specific first.
+
+    Scoped to what this user can already see, so an echoed slug can't become an oracle — the same
+    rule :func:`_names_for_slugs` follows.
+    """
+    from .models import Club, Lot
+
+    if not about:
+        return []
+    items: list[dict[str, Any]] = []
+    seen: set[str] = set()
+
+    def add(item: dict[str, Any] | None) -> None:
+        if item and item["url"] and item["url"] not in seen and len(items) < MAX_ANSWER_LINKS:
+            seen.add(item["url"])
+            items.append(item)
+
+    visible = command_palette._visible_auctions(user)
+    auction_slug = about.get("auction")
+    if auction_slug and about.get("lot"):
+        # ``lot_number_display`` is one of three columns depending on the auction's numbering, so all
+        # three are matched rather than guessing which one this auction uses.
+        number = str(about["lot"])
+        matches = Q(custom_lot_number=number)
+        if number.isdigit():
+            matches |= Q(lot_number_int=int(number)) | Q(pk=int(number))
+        lot = (
+            Lot.objects.exclude(is_deleted=True)
+            .filter(auction__in=command_palette._joined_auctions(user), auction__slug=auction_slug)
+            .filter(matches)
+            .select_related("auction")
+            .first()
+        )
+        if lot:
+            add(command_palette._item("lot", lot.lot_name, lot.get_absolute_url(), "bi-tag", lot.auction.title, lot.pk))
+    slugs = [slug for slug in [auction_slug, *(about.get("auctions") or ())] if slug]
+    if slugs:
+        found = {auction.slug: auction for auction in visible.filter(slug__in=slugs).select_related("club")}
+        for slug in slugs:
+            auction = found.get(slug)
+            if auction:
+                add(
+                    command_palette._item(
+                        "auction",
+                        auction.title,
+                        auction.get_absolute_url(),
+                        "bi-hammer",
+                        auction.club.name if auction.club else "",
+                        auction.pk,
+                    )
+                )
+    club_slugs = [slug for slug in [about.get("club"), *(about.get("clubs") or ())] if slug]
+    if club_slugs:
+        for club in Club.objects.filter(slug__in=club_slugs, active=True):
+            add(
+                command_palette._item(
+                    "club",
+                    club.name,
+                    reverse("club_detail", kwargs={"slug": club.slug}),
+                    "bi-people",
+                    club.abbreviation or "",
+                    club.pk,
+                )
+            )
+    return items
+
+
+def about_groups(user, blocks: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The one group of links to show under an answer, or nothing."""
+    items = links_for_about(user, _merge_about(blocks))
+    return [{"label": "About", "items": items}] if items else []
 
 
 #: Values a resolver may hand forward. Must stay a subset of what ``sanitize_context`` accepts.
@@ -964,13 +1457,23 @@ def assist_stream(request, query: str, context: Any = None, path: str = ""):
 
     yield _progress(opening_line(query))
 
+    # One id for every round of this one thing they typed, and one clock for what they waited.
+    request_id = uuid.uuid4().hex
+    started = time.monotonic()
+
+    def record(result, kind, action_name="", success=True, destination=""):
+        return record_usage(
+            user, result, query, kind, action_name, success, destination, request_id=request_id, started=started
+        )
+
     entries = sanitize_context(context)
     provider = get_provider()
     system = build_system_prompt(user, request.palette_page, command_palette.app_destinations_for_prompt(request))
     # Built once per request: two queries, unchanged mid-loop.
-    tools = tools_for(user)
-    messages = build_messages(query, entries)
-    started = time.monotonic()
+    tools = tools_for(user, query)
+    messages = build_messages(user, query, entries, request.palette_page)
+    # Every object a lookup touched, so the answer can be clicked. See :func:`about_groups`.
+    abouts: list[dict[str, Any]] = []
     nudges = 0
     lookups_run: set[tuple[str, str]] = set()
     # Recorded as if the model asked, so it won't ask again and the extra round is earned.
@@ -987,27 +1490,45 @@ def assist_stream(request, query: str, context: Any = None, path: str = ""):
         # Per model call: a spend ceiling on tokens.
         over_budget = check_call_budget(user)
         if over_budget:
-            record_usage(user, None, query, FAIL_THROTTLED, success=False)
+            record(None, FAIL_THROTTLED, success=False)
             log_assist(user, query, KIND_ERROR)
             yield {"kind": KIND_ERROR, "message": over_budget}
             return
         try:
-            result = provider.complete(system, messages, tools)
+            # "required": a bare paragraph is the one reply this box cannot render.
+            result = provider.complete(system, messages, tools, tool_choice="required")
         except LLMError as error:
             logger.warning("Assist provider error: %s", error)
-            usage_id = record_usage(user, None, query, FAIL_PROVIDER, success=False)
+            usage_id = record(None, FAIL_PROVIDER, success=False)
             log_assist(user, query, KIND_ERROR)
             yield _give_up(request, query, "I couldn't reach the assistant just now.", usage_id)
             return
 
-        reply = read_reply(result, user)
+        reply = read_reply(result, user, query)
         kind = reply["kind"]
 
         if kind == "invalid":
-            # Schemas are enforced, so this means a non-enforcing LLM_BASE_URL or an empty reply.
-            # Asking again won't fix either; fall back to search.
-            record_usage(user, result, query, FAIL_INVALID, success=False)
+            record(result, FAIL_INVALID, success=False)
             logger.info("Assist got an unusable reply: %s", reply.get("reason"))
+            # "Please wait a moment while I look up the auctions list" used to end the request right
+            # there, having looked nothing up. It has tools and rounds left, so say so once.
+            if reply.get("retry") and nudges < MAX_REPEAT_NUDGES and round_number < _rounds_allowed(lookups_run):
+                nudges += 1
+                nudge = (
+                    "That reply was not shown to the person, because it was not something they can "
+                    "read, click or undo. You have the tools in front of you: use one of them "
+                    "properly now, in this reply. Never put their whole sentence into a field — "
+                    "work out which words are the name, the number and the amount."
+                )
+                calls = getattr(result, "tool_calls", None) or []
+                if calls:
+                    messages.append(llm.tool_call_message([calls[0]]))
+                    messages.append(llm.tool_result_message(calls[0], nudge))
+                else:
+                    messages.append({"role": "user", "content": nudge})
+                continue
+            # Otherwise: a non-enforcing LLM_BASE_URL or an empty reply, and asking again won't fix
+            # either. Fall back to search.
             break
 
         if kind == "lookup":
@@ -1015,7 +1536,7 @@ def assist_stream(request, query: str, context: Any = None, path: str = ""):
             # A repeated identical lookup: the answer hasn't changed.
             signature = (action.name, json.dumps(reply["params"], sort_keys=True, default=str))
             if signature in lookups_run:
-                record_usage(user, result, query, "lookup", action.name)
+                record(result, "lookup", action.name)
                 if nudges >= MAX_REPEAT_NUDGES:
                     logger.info("Assist repeated the %s lookup; stopping", action.name)
                     break
@@ -1036,42 +1557,58 @@ def assist_stream(request, query: str, context: Any = None, path: str = ""):
                 continue
             lookups_run.add(signature)
             yield _progress(narrate_lookup(action, reply["params"]))
-            record_usage(user, result, query, "lookup", action.name)
+            record(result, "lookup", action.name)
             lookup_result = palette_actions.run_action(request, action.name, reply["params"])
+            # Before ``strip_internal``: this is the only place the objects it touched are named.
+            abouts.extend(_about_blocks(lookup_result))
             messages.append(llm.tool_call_message([result.tool_calls[0]]))
             messages.append(llm.tool_result_message(result.tool_calls[0], lookup_payload(action.name, lookup_result)))
             continue
 
         if kind == "answer":
             # Only a single parameterless lookup is recorded as a destination (preloadable).
-            record_usage(user, result, query, KIND_ANSWER, destination=_answered_from(lookups_run))
+            record(result, KIND_ANSWER, destination=_answered_from(lookups_run))
             log_assist(user, query, KIND_ANSWER)
-            related = _search_fallback(request, query, "")
+            # What the answer is about, linked. Ordinary search results only if it is about nothing,
+            # which is the case a keyword search was always a poor answer to.
+            groups = about_groups(user, abouts)
+            if not groups:
+                related = _search_fallback(request, query, "")
+                groups = related["groups"] if related else []
             yield humanize_response(
                 {
                     "kind": KIND_ANSWER,
                     "message": reply["message"],
-                    "groups": related["groups"] if related else [],
+                    "groups": groups,
+                    # "when does the fall auction start" then "sign me up" means that auction.
+                    "data": _carry_over(_merge_about(abouts)),
                 },
                 user,
             )
             return
 
         if kind == "clarify":
-            record_usage(user, result, query, KIND_CLARIFY)
+            record(result, KIND_CLARIFY)
             log_assist(user, query, KIND_CLARIFY)
             response = {"kind": KIND_CLARIFY, "message": reply["message"], "options": reply["options"]}
             if not reply["options"]:
-                # A question with nothing to click dead-ends voice users; offer search results.
-                fallback = _search_fallback(request, query, "")
-                if fallback:
-                    response["groups"] = fallback["groups"]
+                # A question with nothing to click dead-ends voice users; offer whatever it is about,
+                # and ordinary search results when it is about nothing yet.
+                groups = about_groups(user, abouts)
+                if not groups:
+                    fallback = _search_fallback(request, query, "")
+                    groups = fallback["groups"] if fallback else []
+                if groups:
+                    response["groups"] = groups
             yield humanize_response(response, user)
             return
 
         if kind == "error":
-            usage_id = record_usage(user, result, query, FAIL_MODEL_ERROR, success=False)
+            usage_id = record(result, FAIL_MODEL_ERROR, success=False)
             log_assist(user, query, KIND_ERROR)
+            # The model saying the site can't do this is the one honest record of a missing skill,
+            # and it used to be kept only when the model also chose to call request_a_skill.
+            note_missing_skill(request, query, reply["message"])
             yield _give_up(request, query, reply["message"], usage_id)
             return
 
@@ -1084,7 +1621,7 @@ def assist_stream(request, query: str, context: Any = None, path: str = ""):
         if action.danger == palette_actions.DANGER_CONFIRM and action.asks_first:
             # Do NOT execute: the execute endpoint re-runs the resolver after the countdown.
             # ``asks_first=False`` runs the write here instead, still through ``run_action``.
-            usage_id = record_usage(user, result, query, KIND_COUNTDOWN, action.name)
+            usage_id = record(result, KIND_COUNTDOWN, action.name)
             log_assist(user, query, KIND_COUNTDOWN)
             yield humanize_response(_countdown_response(request, action, params, summary, usage_id), user)
             return
@@ -1096,16 +1633,16 @@ def assist_stream(request, query: str, context: Any = None, path: str = ""):
             palette_actions.remember_undo(request.user, action.name, action_result)
         if response["kind"] == KIND_ERROR:
             # Keep the specific reason, with search results underneath.
-            usage_id = record_usage(user, result, query, KIND_ERROR, action.name, success=False)
+            usage_id = record(result, KIND_ERROR, action.name, success=False)
             log_assist(user, query, KIND_ERROR)
             yield {**humanize_response(response, user), "usage_id": usage_id}
             return
-        record_usage(user, result, query, response["kind"], action.name, destination=response.get("route", ""))
+        record(result, response["kind"], action.name, destination=response.get("route", ""))
         log_assist(user, query, response["kind"])
         yield humanize_response(response, user)
         return
 
-    usage_id = record_usage(user, None, query, FAIL_GAVE_UP, success=False)
+    usage_id = record(None, FAIL_GAVE_UP, success=False)
     log_assist(user, query, KIND_ERROR)
     yield _give_up(request, query, "I couldn't work out how to do that.", usage_id)
 

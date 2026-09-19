@@ -9,6 +9,7 @@ Resolvers return lists, since a target may fan out. Club shortcuts resolve again
 club" (the last used). Permissions reuse ``check_club_permission`` and the model helpers.
 """
 
+import hashlib
 import re
 from datetime import timedelta
 from types import SimpleNamespace
@@ -1272,6 +1273,50 @@ def _club_default_items(user):
     return items
 
 
+#: Examples offered at once. Three is a hint; a list is a manual.
+EXAMPLE_LIMIT = 3
+
+#: Skills whose example makes no sense cold, before there is anything to undo or complain about.
+_NO_EXAMPLE = frozenset({"undo_last", "request_a_skill", "set_my_auction", "set_my_club", "answer_question"})
+
+
+def _example_items(request):
+    """A few things this user could say, from the registry's own ``examples``.
+
+    Nothing anywhere told anyone the box takes sentences, so nobody typed one. Clicking fills the
+    input and stops: an example carries a made-up lot number, and running it on the spot would be a
+    countdown card for somebody else's bidder. They edit it and press enter.
+
+    Rotates daily so the same three don't become furniture.
+    """
+    from . import palette_actions, palette_assist
+
+    user = request.user
+    if not palette_assist.assist_enabled_for(user):
+        return []
+    phrases = []
+    for action in palette_actions.actions_for(user):
+        if action.mcp_only or action.lookup or action.name in _NO_EXAMPLE:
+            continue
+        phrases.extend((action.name, example) for example in action.examples)
+    if not phrases:
+        return []
+    # Stable within a day and per user, so reopening the palette isn't a slot machine.
+    seed = f"{getattr(user, 'pk', 0)}-{timezone.now():%Y-%m-%d}"
+    shuffled = sorted(phrases, key=lambda pair: hashlib.md5(f"{seed}-{pair[0]}-{pair[1]}".encode()).hexdigest())  # noqa: S324
+    seen_actions = set()
+    items = []
+    for name, phrase in shuffled:
+        # One per skill, so three examples are three different things you can do.
+        if name in seen_actions:
+            continue
+        seen_actions.add(name)
+        items.append(_item("example", phrase, "", "bi-chat-square-text"))
+        if len(items) >= EXAMPLE_LIMIT:
+            break
+    return items
+
+
 def default_items(request, *, app_deep_links=True):
     """Groups shown when the palette opens with no query."""
     user = request.user
@@ -1321,6 +1366,10 @@ def default_items(request, *, app_deep_links=True):
         pass
     if primary:
         groups.append({"label": "Pick up where you left off", "items": primary})
+
+    examples = _example_items(request)
+    if examples:
+        groups.append({"label": "Try saying", "items": examples})
 
     recent = []
     seen = set()

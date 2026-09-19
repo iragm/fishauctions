@@ -118,15 +118,11 @@ class Action:
     idempotent: bool | None = None
     #: MCP ``openWorldHint``: true only for ``read_source``, which fetches the public repository.
     open_world: bool = False
-    #: Offered over ``/mcp/`` only, never in the palette's tool list. Permissions are never checked
-    #: differently, and ``go_to_page`` still reaches every page.
+    #: Offered over ``/mcp/`` only, never in the palette's tool list. Not set here: set from
+    #: :data:`MCP_ONLY_SKILLS`, which is where the reason for each one is written down.
     #:
-    #: Two reasons. The palette's answer is a sentence paid from this site's model budget, so a page
-    #: of text (``read_source``, ``club_api``) is wrong for it. And the excuses for many writes were
-    #: about mishearing speech, which doesn't apply to an agent sending a lot number it just read
-    #: (``remove_lot`` and below).
-    #:
-    #: Never a way to give an agent something a person may not do.
+    #: Permissions are never checked differently, ``go_to_page`` still reaches every page, and this
+    #: is never a way to give an agent something a person may not do.
     mcp_only: bool = False
 
     def accepts(self, key: str) -> bool:
@@ -937,6 +933,64 @@ def add_lots(request, params: dict[str, Any]) -> dict[str, Any]:
                 "url": reverse("auction_lot_list", kwargs={"slug": auction.slug}),
             },
         ],
+    )
+
+
+#: What a spoken lot maps to on the lot form. ``LotCreateView.get_initial`` pre-fills any of its own
+#: fields from the query string, so the page arrives filled in and nothing has been written yet.
+_LOT_PREFILL: dict[str, str] = {
+    "name": "lot_name",
+    "quantity": "quantity",
+    "reserve_price": "reserve_price",
+    "buy_now_price": "buy_now_price",
+    "donation": "donation",
+    "i_bred_this_fish": "i_bred_this_fish",
+    "description": "summernote_description",
+}
+
+
+def add_a_lot(request, params: dict[str, Any]) -> dict[str, Any]:
+    """Open the page for adding a lot, with whatever the user described already filled in. Never writes.
+
+    The palette's half of a pair: this one and ``add_lot``/``add_lots`` (both ``mcp_only``) are the
+    same skill for two different callers, and no caller is ever offered both. The difference is who is looking: the form does the species matching, the auction's own field
+    rules and the validation, and the seller sees exactly what they are about to create before any of
+    it is saved -- none of which a countdown card can do. It also ends the add_lot/add_lots split,
+    which the model could never pick between: an auction with bulk adding on gets the bulk page, which
+    is the right answer for one lot and for ten.
+    """
+    auction, problem = resolve_auction(request.user, _str(params, "auction"), _page(request))
+    if isinstance(problem, dict):
+        # Several auctions running and nothing to prefer: a question with the names in it.
+        return problem
+    if auction:
+        remember_auction(request, auction)
+    # A string problem just means we can't tell which auction; the page has its own picker.
+    if auction and command_palette._use_bulk_add_lots(auction):
+        return _ok(
+            f"Opening the bulk lot page for {auction.title}.",
+            url=reverse("bulk_add_lots_for_myself", kwargs={"slug": auction.slug}),
+            auction=auction.slug,
+            **_about(auction=auction),
+        )
+    prefill = {}
+    for spoken, form_field in _LOT_PREFILL.items():
+        value = params.get(spoken)
+        if isinstance(value, bool):
+            prefill[form_field] = "true" if value else "false"
+        elif value not in (None, ""):
+            prefill[form_field] = str(value)[:MAX_SPOKEN_DESCRIPTION_CHARS]
+    if auction:
+        prefill["auction"] = auction.slug
+    url = reverse("new_lot")
+    if prefill:
+        url += "?" + urlencode(prefill)
+    named = _str(params, "name")
+    where = f" in {auction.title}" if auction else ""
+    return _ok(
+        f"Opening the new lot page{where}" + (f", filled in for {tidy_lot_name(named)}." if named else "."),
+        url=url,
+        **({"auction": auction.slug, **_about(auction=auction)} if auction else {}),
     )
 
 
@@ -10107,6 +10161,41 @@ register(
 
 register(
     Action(
+        name="add_a_lot",
+        description=(
+            "Add a lot, or several lots — a lot is an item for sale. Opens the page for it with "
+            "what they described already filled in, ready for them to check and save. Anything "
+            "about adding, listing or selling lots is this, however many: 'add a lot', 'add lots "
+            "to my next auction', 'list my guppies'. This is how a lot gets added here: the "
+            "form matches the species, applies the auction's own rules and shows them what they are "
+            "about to create. Pass everything they said; anything you leave out is just an empty "
+            "box on the form. A lot is a thing — fish, plants, shrimp, food, equipment. If what "
+            "they want to add is a PERSON ('add mike smith'), they mean add_person. Never look a "
+            "lot up before calling this: a lot they are adding does not exist yet, and the page "
+            "finds their own previous lot of the same name by itself."
+        ),
+        params={
+            "name": "string, optional. What the item is, e.g. 'blue shrimp'. Never a person's name.",
+            "auction": "string, optional. Auction slug or title. See my_context.",
+            "quantity": "integer, optional. How many are in this one lot — one lot number, one label.",
+            "reserve_price": "number, optional. The minimum bid.",
+            "buy_now_price": "number, optional.",
+            "donation": "boolean, optional.",
+            "i_bred_this_fish": (
+                "boolean, optional. True when the seller bred or grew this themselves — 'I bred "
+                "these'. This is what earns breeder award points, so never drop it."
+            ),
+            "description": "string, optional. A few sentences about the lot. Only what they actually said.",
+        },
+        danger=DANGER_NAVIGATE,
+        resolver=add_a_lot,
+        aliases={"lot_name", "price", "count", "bidder"},
+        examples=["add a lot of blue shrimp", "sell my guppies", "I want to list 3 java ferns"],
+    )
+)
+
+register(
+    Action(
         name="add_lots",
         description=(
             "Add SEVERAL lots to one auction at once. Use this whenever the user names more than "
@@ -10509,7 +10598,10 @@ register(
         description=(
             "Add a person to an auction so they can bid and sell. For auction admins and club "
             "staff only. This is what 'add mike smith' means: a person's name is a person, not a "
-            "lot. Use check_in instead when they are already in the auction and are arriving."
+            "lot. Use check_in instead when they are already in the auction and are arriving. "
+            "ONLY for a person with a name. 'add a lot', 'add lots', 'add some shrimp' are "
+            "add_a_lot, and 'name' here is never a whole sentence — if you cannot see a person's "
+            "name in what they said, this is the wrong tool."
         ),
         params={
             "name": "string, required. The person's name.",
@@ -11194,7 +11286,6 @@ register(
         resolver=club_api,
         aliases={"api_key", "section"},
         # mcp_only: a documentation topic exceeds MAX_LOOKUP_RESULT_CHARS on its own.
-        mcp_only=True,
         examples=[
             "what API keys do we have?",
             "write me something that posts our lots to our website",
@@ -12155,7 +12246,6 @@ register(
         lookup=True,
         open_world=True,
         # The only open-world tool, and kept off the palette (see Action.mcp_only).
-        mcp_only=True,
         examples=[
             "how does the lot recommendation system work",
             "how does the site decide which lots are eligible for breeder points",
@@ -12223,7 +12313,6 @@ register(
         resolver=remove_lot,
         aliases={"name", "query", "lot_id", "deactivate"},
         confirm_template="Remove a lot",
-        mcp_only=True,
         examples=["delete lot 19", "take my shrimp lot off sale", "put lot 4 back on sale"],
     )
 )
@@ -12247,7 +12336,6 @@ register(
         idempotent=True,
         confirm_template="Queue a lot",
         needs=NEEDS_AUCTION_ADMIN,
-        mcp_only=True,
         examples=["queue up lot 40", "add lot 12 to the queue"],
     )
 )
@@ -12270,7 +12358,6 @@ register(
         idempotent=True,
         confirm_template="Take a lot out of the queue",
         needs=NEEDS_AUCTION_ADMIN,
-        mcp_only=True,
         examples=["drop lot 42 from the queue", "take 7 out of the running order"],
     )
 )
@@ -12297,7 +12384,6 @@ register(
         resolver=remove_bid,
         aliases={"name", "query", "lot_id", "bidder", "bidder_number"},
         confirm_template="Remove a bid",
-        mcp_only=True,
         examples=["remove my bid on lot 9", "take bidder 14's bid off lot 22"],
     )
 )
@@ -12322,7 +12408,6 @@ register(
         aliases={"name", "query", "lot_id"},
         confirm_template="Take back breeder points",
         needs=NEEDS_CLUB_ADMIN,
-        mcp_only=True,
         examples=["undo the points on lot 14", "take back the award for lot 3"],
     )
 )
@@ -12347,7 +12432,6 @@ register(
         aliases={"name", "status", "deactivate", "reactivate"},
         confirm_template="Change a member's status",
         needs=NEEDS_CLUB_ADMIN,
-        mcp_only=True,
         examples=["deactivate Jane in the club", "bring Sam back as a member"],
     )
 )
@@ -12372,7 +12456,6 @@ register(
         aliases={"name", "bidder", "bidder_number"},
         confirm_template="Remove somebody from an auction",
         needs=NEEDS_AUCTION_ADMIN,
-        mcp_only=True,
         examples=["remove bidder 51, I added them twice", "take Jane out of the auction"],
     )
 )
@@ -12400,7 +12483,6 @@ register(
         aliases={"name", "bidder", "bidder_number", "note", "reason"},
         confirm_template="Take a line off an invoice",
         needs=NEEDS_AUCTION_ADMIN,
-        mcp_only=True,
         examples=["take the raffle line off Jane's invoice", "remove the $5 discount from bidder 14"],
     )
 )
@@ -12428,7 +12510,6 @@ register(
         resolver=set_point_rule,
         confirm_template="Set a breeder points rule",
         needs=NEEDS_CLUB_ADMIN,
-        mcp_only=True,
         examples=["Corydoras are worth 15 points at our club", "make cichlids 10 points"],
     )
 )
@@ -12453,7 +12534,6 @@ register(
         aliases={"name", "bidder", "bidder_number", "value"},
         confirm_template="Change a membership renewal on an invoice",
         needs=NEEDS_AUCTION_ADMIN,
-        mcp_only=True,
         examples=["Jane's renewing, put it on her invoice", "take the renewal off bidder 14's invoice"],
     )
 )
@@ -12477,7 +12557,6 @@ register(
         aliases={"name"},
         confirm_template="Email a membership card",
         needs=NEEDS_CLUB_ADMIN,
-        mcp_only=True,
         examples=["send Jane her membership card again", "resend Sam's card"],
     )
 )
@@ -12506,7 +12585,6 @@ register(
         resolver=leave_feedback,
         aliases={"name", "query", "lot_id", "comment", "feedback", "role"},
         confirm_template="Leave feedback",
-        mcp_only=True,
         examples=["leave positive feedback on lot 9", "the fish arrived dead, negative feedback on lot 12"],
     )
 )
@@ -12534,7 +12612,6 @@ register(
         aliases={"name", "query", "lot_id", "text", "restore"},
         confirm_template="Hide a chat message",
         needs=NEEDS_AUCTION_ADMIN,
-        mcp_only=True,
         examples=["hide that message on lot 14", "put the hidden message on lot 3 back"],
     )
 )
@@ -12566,7 +12643,6 @@ register(
         aliases={"note", "label"},
         confirm_template="Record a line in the club's books",
         needs=NEEDS_CLUB_ADMIN,
-        mcp_only=True,
         examples=["put $40 in the books for raffle prizes", "record -120 for hall hire"],
     )
 )
@@ -12592,7 +12668,6 @@ register(
         resolver=rotate_lot_image,
         aliases={"name", "query", "lot_id", "image"},
         confirm_template="Change a lot's picture",
-        mcp_only=True,
         examples=["turn the photo on lot 14 the right way up", "make the second picture on lot 3 the thumbnail"],
     )
 )
@@ -12706,6 +12781,138 @@ def actions_for(user=None) -> list[Action]:
             continue
         allowed.append(action)
     return allowed
+
+
+# --- which surface offers which skill ----------------------------------------
+#
+# Every action here is offered over ``/mcp/``. These are the ones the *palette* doesn't list, each
+# with the reason it isn't worth a line in a one-line box. Written down in one table rather than as a
+# flag on each registration, because it is one editorial decision about one surface -- what the
+# palette is for -- and reading it has to be possible in one sitting.
+#
+# The test a write has to pass to keep its place: it fits in one spoken sentence with nothing to read
+# back, it gets said mid-task with your hands full, and it happens more than once in a while. One
+# thing overrides all three -- if the page shows you something you need to see before deciding, it is
+# navigate-only. Permissions are never involved: ``go_to_page`` still reaches every one of these
+# pages, and an agent may do all of it.
+
+_AGENT_OUTPUT = (
+    "Pages of text, for a caller that reads pages. The palette's answer is one or two sentences "
+    "paid for out of this site's own model budget."
+)
+_PRECISE_TARGET = (
+    "A write an agent can aim exactly, from a number it just read back. The excuse was always about "
+    "mishearing speech, which is the palette's problem and not an agent's."
+)
+_READ_IT_FIRST = "The page is the question: you have to read what is on it before you can decide."
+_SPEAK_THE_FORM = (
+    "A form whose fields are the explanation, or an argument nobody can say out loud -- a link, a "
+    "set of coordinates, a scientific name."
+)
+_ONCE_A_SEASON = "Done once a season or once ever, sitting at a screen, with the page open in front of you."
+_FIND_THE_FIELD = (
+    "Already covered without a model: the palette's own search indexes every settings field, so "
+    "typing the setting's name lands on that control with its own explanation next to it."
+)
+
+#: Actions offered over ``/mcp/`` and left off the palette's tool list: name -> why.
+MCP_ONLY_SKILLS: dict[str, str] = {
+    # Output meant for an agent, too long for the palette.
+    "read_source": _AGENT_OUTPUT,
+    "club_api": _AGENT_OUTPUT,
+    # Writes an agent can target precisely; the palette reaches these pages via go_to_page.
+    "remove_lot": _PRECISE_TARGET,
+    "queue_lot": _PRECISE_TARGET,
+    "unqueue_lot": _PRECISE_TARGET,
+    "remove_bid": _PRECISE_TARGET,
+    "remove_award": _PRECISE_TARGET,
+    "set_member_active": _PRECISE_TARGET,
+    "remove_person": _PRECISE_TARGET,
+    "remove_invoice_adjustment": _PRECISE_TARGET,
+    "set_point_rule": _PRECISE_TARGET,
+    "set_invoice_renewal": _PRECISE_TARGET,
+    "resend_member_card": _PRECISE_TARGET,
+    "leave_feedback": _PRECISE_TARGET,
+    "hide_chat_message": _PRECISE_TARGET,
+    "record_club_money": _PRECISE_TARGET,
+    "rotate_lot_image": _PRECISE_TARGET,
+    # Settings, which ordinary search already answers better than a model can.
+    "update_auction_setting": _FIND_THE_FIELD,
+    "update_club_setting": _FIND_THE_FIELD,
+    "update_preferences": _FIND_THE_FIELD,
+    "update_printing_preferences": _FIND_THE_FIELD,
+    "update_label_fields": _FIND_THE_FIELD,
+    # You have to look at something first.
+    "review_points": _READ_IT_FIRST,
+    "refund_lot": _READ_IT_FIRST,
+    "retract_announcement": _READ_IT_FIRST,
+    "send_club_announcement": (
+        "It fires at Discord, push, email and the club's website at once, and which of those it goes "
+        "to is the part you have to see before you say it."
+    ),
+    # A form, or an argument that can't be spoken.
+    "add_lot_image": _SPEAK_THE_FORM,
+    "remove_lot_image": _SPEAK_THE_FORM,
+    "add_pickup_location": _SPEAK_THE_FORM,
+    "update_pickup_location": _SPEAK_THE_FORM,
+    "add_dropdown_option": _SPEAK_THE_FORM,
+    "remove_dropdown_option": _SPEAK_THE_FORM,
+    "add_club_event": _SPEAK_THE_FORM,
+    "update_club_event": _SPEAK_THE_FORM,
+    "add_species": _SPEAK_THE_FORM,
+    "name_a_species": _SPEAK_THE_FORM,
+    "set_lot_species": _SPEAK_THE_FORM,
+    "add_lot": (
+        "The palette opens the lot form instead (add_a_lot), pre-filled: the species matching, the "
+        "auction's field rules and the seller's own eyes are all on that page, and none of them fit "
+        "on a countdown card. An agent, writing structured fields it read somewhere, keeps the write."
+    ),
+    "add_lots": (
+        "One skill split in two, which the model could never pick between. add_a_lot opens the bulk "
+        "page for an auction that has one, which is the same answer for one lot and for ten."
+    ),
+    "edit_lot": _SPEAK_THE_FORM,
+    "update_person": "Correcting somebody's details is desk work with the record in front of you; adding them at the door is not.",
+    "update_club_member": "As update_person: correcting a record is done with that record on screen in front of you.",
+    # Once a season.
+    "create_auction": _ONCE_A_SEASON,
+    "set_current_auction": _ONCE_A_SEASON,
+    "change_email": _ONCE_A_SEASON,
+    "update_username": _ONCE_A_SEASON,
+    "update_contact_info": _ONCE_A_SEASON,
+    "sync_club_calendar": _ONCE_A_SEASON,
+    "send_membership_card": _ONCE_A_SEASON,
+    "award_points": (
+        "Points are awarded off a list of lots the club is working through, on the page that shows "
+        "the list. Saying one at a time was never the way it is done."
+    ),
+    "request_volunteers": (
+        "The description, the number of people and the bounty are three fields somebody reads back "
+        "before it goes to every phone in the room."
+    ),
+    "cancel_volunteer_request": (
+        "The undo half of request_volunteers, which is itself a page: withdrawing the request means "
+        "looking at which one, on the page that lists them."
+    ),
+    "place_bid": (
+        "Money, irreversible, and the number arrives here through speech. The lot page has a bid box "
+        "on it, which is where a misheard amount is caught -- by the person, before it is a bid."
+    ),
+    "undo_sale": (
+        "'undo that' still reverses a sale the palette made: undo_last runs this by name. What this "
+        "adds is undoing a *named* lot somebody sold on a page, which is the set-winners page's own "
+        "job, with the lot on screen."
+    ),
+    "undo_check_in": "As undo_sale: 'undo that' covers the palette's own, and the check-in page undoes its own.",
+}
+
+_unknown_skills = sorted(set(MCP_ONLY_SKILLS) - set(ACTIONS))
+if _unknown_skills:
+    # Import-time, because a typo here silently leaves a skill on the palette.
+    msg = f"MCP_ONLY_SKILLS names actions that don't exist: {', '.join(_unknown_skills)}"
+    raise ValueError(msg)
+for _name in MCP_ONLY_SKILLS:
+    ACTIONS[_name].mcp_only = True
 
 
 # --- the skill audit ---------------------------------------------------------
@@ -12868,6 +13075,14 @@ _PALETTE = "The palette's own endpoint. It is the thing running the skills."
 
 #: Views with no skill, and why.
 NOT_A_SKILL: dict[str, str] = {
+    # The assistant looking at itself
+    "CommandPaletteAnalyticsView": (
+        "Accepts one shortcut the assistant mined out of its own answers, which changes what the "
+        "palette does for everybody on the site. What makes a proposal safe to accept is that a "
+        "person has just read the phrase, the page it resolved to and how many times -- three "
+        "columns that only exist on this page. An assistant accepting its own proposals is the "
+        "one reader whose agreement means nothing."
+    ),
     # The usability instruments
     "FormAbandonedBeacon": (
         "The page reporting that somebody edited a form and left without saving it. It is a "

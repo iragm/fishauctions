@@ -11,13 +11,22 @@ depending on who asked — resolvers call the same form, view or service the web
 
 A skill cannot exist for one surface and not the other, with one named subtraction:
 `Action.mcp_only` keeps a skill off the palette's *tool list* while `palette_routes` still guarantees
-`go_to_page` reaches its page. Two things qualify a skill for `mcp_only`, both about the client and
-neither about the capability: **who reads the answer** (`read_source`/`club_api` return pages of
-text, wrong for a one-line box paid for out of this site's own model budget), and **who does the
-acting** (writes excused in `NOT_A_SKILL` by arguments about speech, which don't apply to a caller
-sending back a lot number it just read from `list_lots`). Fifteen writes plus these two reads;
-`test_palette_assist.DriftTests.MCP_ONLY` is the written-out list. What each skill goes through is
-catalogued in `docs/mcp_skills.md`.
+`go_to_page` reaches its page. **`palette_actions.MCP_ONLY_SKILLS` is the list and the argument for
+each entry**, in one table rather than a flag per registration, because it is one editorial decision
+about one surface and reading it has to be possible in one sitting. A reason there is about the
+client, never about the capability: **who reads the answer** (`read_source`/`club_api` return pages
+of text, wrong for a one-line box paid for out of this site's own model budget), and **who does the
+acting** — the palette keeps a write only when you can say it in one sentence, you say it with your
+hands full, and you say it more than once in a while, and not even then if the page shows you
+something you have to see before deciding. Sixteen writes survive that: the auction floor, the
+checkout table and the door. `test_palette_assist.DriftTests` pins those sixteen — the list that gets
+quietly shorter — rather than the fifty-odd that don't. What each skill goes through is catalogued in
+`docs/mcp_skills.md`.
+
+`add_lot`/`add_lots` are the one pair where both surfaces have the skill under different names: the
+palette's is `add_a_lot`, navigate-only, which opens the lot form with what was said already in it.
+No caller is offered both, and the name matters — the same tool called `sell_a_lot` lost every
+"add lots to my next auction" to `add_person`, which has the word add in its name.
 
 ```
 auctions/mcp/tools.py      tool_descriptors(user, writes=) / call_tool(request, name, args)
@@ -43,15 +52,46 @@ auctions/mcp/auth.py       who is calling
 
 ## The palette as a client
 
-`palette_assist.tools_for` is `mcp.tools.tool_descriptors(user)` plus two tools of its own —
-`ask_the_user`, `cannot_do_this`. `llm.complete` sends them as OpenAI function definitions
-(`llm.as_openai_tool`). `read_reply` maps "which tool" to lookup/action/question/refusal.
-`complete_json` stays for the four callers that want data, not a call (species matching, donations,
-the two speaker commands).
+`palette_assist.tools_for` is `mcp.tools.tool_descriptors(user)` plus three tools of its own —
+`ask_the_user`, `cannot_do_this`, `answer_the_user`. `llm.complete` sends them as OpenAI function
+definitions (`llm.as_openai_tool`). `read_reply` maps "which tool" to
+lookup/action/question/answer/refusal. `complete_json` stays for the four callers that want data,
+not a call (species matching, donations, the two speaker commands).
+
+**Every turn ends in something the user can touch**: a link, a countdown card, a question with
+clickable options, or two sentences with the things they name linked underneath. A paragraph is not
+one of those — in a one-line box, "would you like A or B?" as prose is a dead end, especially by
+voice. So `tool_choice="required"`, answering is `answer_the_user`, and `read_reply` turns a question
+written as an answer back into a clarify card and refuses a promise to look something up ("please
+wait a moment while I look up the auctions list" used to be a final reply, having looked nothing up).
+`echoes_the_query` refuses a call that put the whole sentence into one of its own fields.
+
+The links come from `palette_actions.KEY_ABOUT`, the same block `/mcp/` turns into `resource_link`s:
+`assist_stream` collects it off every lookup and `about_groups` turns it into rows. It used to be
+stripped and thrown away, so "the next auction is on the 19th" arrived with no way to open it.
+
+`tools_for(user, query)` drops the writes for a question. The writes come **last**, so the short list
+is a byte-exact prefix of the long one and both share one cached prompt. For the same reason nothing
+user-specific is in the system prompt: the facts about the user ride in the first message
+(`context_message`), leaving a prompt that is identical for everyone in a permission tier, and a
+cache that stays warm between people instead of going cold between one person's sessions.
 
 Palette-only, not in the MCP layer: `obvious_match`/`shortcut_match`, the confirm countdown and its
 trust window, `humanize`, the `_give_up` fallback ladder, `sanitize_context`/`_carry_over` memory,
 throttles, cancel/report analytics.
+
+## Watching it work
+
+`/admin-dashboard/palette-analytics/`. `LLMUsage.request_id` is one id per thing somebody typed, so
+a lookup and the answer it fed are one story — rounds-per-request was counted over the *text* of the
+query before, which made two people asking the same thing one query. `variant` fingerprints the
+prompt, the skill list and the model together, so a deploy that changes any of them starts a new row
+and a before and an after can sit next to each other without anybody remembering the date. With a
+handful of users a rate is one person's afternoon, so the page prints every exchange in order.
+
+`palette_assist.shortcut_proposals` offers phrases the assistant has answered the same way every
+single time, one button each. The mining was always there and nothing ever ran it. An accepted
+phrase stops reaching the model at all: no call, no wait, and no way for it to come back wrong.
 
 ## Transport and auth
 

@@ -36,7 +36,7 @@ DEFAULT_MAX_TOKENS = 2000
 DEFAULT_REASONING_EFFORT = "minimal"
 
 # Keys older models or compatible servers may not know; dropped one at a time on rejection.
-OPTIONAL_PARAMETERS = ("max_completion_tokens", "reasoning_effort")
+OPTIONAL_PARAMETERS = ("max_completion_tokens", "reasoning_effort", "tool_choice")
 
 
 class LLMError(Exception):
@@ -116,11 +116,13 @@ class LLMProvider:
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]] | None = None,
         max_tokens: int = DEFAULT_MAX_TOKENS,
+        tool_choice: str = "",
     ) -> LLMResult:
         """Send ``system`` + ``messages`` and let the model call one of ``tools`` or answer.
 
         ``tools`` are MCP-shaped descriptors. Assistant ``tool_calls`` and ``tool`` result turns are built
-        with :func:`tool_call_message` and :func:`tool_result_message`. Raises :class:`LLMError`.
+        with :func:`tool_call_message` and :func:`tool_result_message`. ``tool_choice`` of ``"required"``
+        forbids a plain reply. Raises :class:`LLMError`.
         """
         msg = "complete must be implemented by a subclass"
         raise NotImplementedError(msg)
@@ -180,12 +182,15 @@ class OpenAIProvider(LLMProvider):
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]] | None = None,
         max_tokens: int = DEFAULT_MAX_TOKENS,
+        tool_choice: str = "",
     ) -> LLMResult:
         payload = self._payload(system, messages, max_tokens)
         if tools:
             payload["tools"] = [as_openai_tool(tool) for tool in tools]
-            # "auto": answering in words is legitimate.
-            payload["tool_choice"] = "auto"
+            # The palette sends "required": every outcome it can show the user is a tool, so a bare
+            # paragraph is the one reply it cannot render. An endpoint that rejects the key falls
+            # back to "auto" through ``OPTIONAL_PARAMETERS``.
+            payload["tool_choice"] = tool_choice or "auto"
         return self._parse_tools(self._send(payload, max_tokens))
 
     def _post(self, payload: dict[str, Any]) -> dict[str, Any]:
