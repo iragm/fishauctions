@@ -116,6 +116,14 @@ def _visible_auctions(user):
     return qs.filter(_auction_visibility_filter(user)).distinct()
 
 
+def _auction_membership_filter(user):
+    """The relationships that make an auction one of this user's: joined it, created it, or runs the club."""
+    club_admin = Q(club__members__user=user, club__members__is_deleted=False) & (
+        Q(club__members__permission_admin=True) | Q(club__members__permission_manage_auctions=True)
+    )
+    return Q(auctiontos__user=user) | Q(auctiontos__email=user.email) | Q(created_by=user) | club_admin
+
+
 def _joined_auctions(user):
     """Auctions the user has a real relationship with, never merely promoted ones: created, joined, or run
     by a club they help run (club officers who never joined as bidders). Lot search is scoped to these.
@@ -125,12 +133,20 @@ def _joined_auctions(user):
         return qs
     if not user.is_authenticated:
         return qs.none()
-    club_admin = Q(club__members__user=user, club__members__is_deleted=False) & (
-        Q(club__members__permission_admin=True) | Q(club__members__permission_manage_auctions=True)
-    )
-    return qs.filter(
-        Q(auctiontos__user=user) | Q(auctiontos__email=user.email) | Q(created_by=user) | club_admin
-    ).distinct()
+    return qs.filter(_auction_membership_filter(user)).distinct()
+
+
+def _own_auctions(user):
+    """``_joined_auctions`` without the superuser shortcut: the auctions this person is actually in.
+
+    A superuser naming an auction gets the whole site, which is right for a name they typed and wrong
+    for a name read out of a sentence -- every club's auction becomes a candidate for a word somebody
+    happened to say. See :func:`auctions.palette_actions.auction_named_in`.
+    """
+    qs = Auction.objects.exclude(is_deleted=True)
+    if not getattr(user, "is_authenticated", False):
+        return qs.none()
+    return qs.filter(_auction_membership_filter(user)).distinct()
 
 
 def _use_bulk_add_lots(auction):

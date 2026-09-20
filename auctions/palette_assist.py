@@ -1479,7 +1479,12 @@ def _countdown_ms(request, action, params: dict[str, Any], context: str) -> int:
 
 
 def _countdown_response(request, action, params: dict[str, Any], summary: str, usage_id=None) -> dict[str, Any]:
-    """The card shown before a database change. ``context`` comes from the server, not the model's summary."""
+    """The card shown before a database change. ``context`` comes from the server, not the model's summary.
+
+    Which auction this card is about is decided **here** and written into ``params``, so the run after
+    the countdown cannot land on a different one. See :func:`palette_actions.pin_the_subject`.
+    """
+    params = palette_actions.pin_the_subject(request, action, params)
     context = palette_actions.action_context(request, action, params)
     return {
         "kind": KIND_COUNTDOWN,

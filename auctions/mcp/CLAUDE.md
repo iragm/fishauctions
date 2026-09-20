@@ -186,6 +186,17 @@ the whole registry as three people who shouldn't reach a tenant's objects.
   (`live_auctions`) → `last_auction_used` as tie-break/last resort. Several running with no tie-break
   is a **question**, never a guess. `_auction_or_problem`/`_club_or_problem` are the single wrapper
   call-sites so `remember_auction` can't be forgotten.
+- **`_named_or_resolved` is the one place the sentence is read**, so the action, the label on its
+  confirmation card (`action_context`) and the run after that card all decide the same way.
+  `auction_named_in` is whole words only and needs the title said straight through, every
+  distinguishing word of it said somewhere, or — for a one-word title — that word said beside an
+  auction noun; it is scoped to `command_palette._own_auctions`, since `_joined_auctions` hands a
+  superuser every club's auction. A loosened hint is never matched *loosely* when what's left is
+  generic (`_GENERIC_HINTS`): stripping the article off "the auction" left a word every title
+  contains, and `title__icontains` then returned whichever came first.
+- **`pin_the_subject` writes the resolved auction into a countdown card's own params.** The card is
+  built in one request and confirmed in another, and `execute` never sees the sentence; without it a
+  card naming one auction ran against another.
 - `_joined_auctions`: created, joined, or run by a club they help run. A name also gets one look at
   publicly promoted auctions; every write still checks admin rights.
 - `my_context` (named in the server `instructions` as the thing to call first) lists those auctions

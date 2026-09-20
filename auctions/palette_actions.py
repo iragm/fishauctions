@@ -299,13 +299,34 @@ def _auction_hints(hint: str) -> list[str]:
     return hints
 
 
+#: Hints that name nothing on their own. Stripping the article off "the auction" leaves a word every
+#: auction on the site contains, and matching it loosely used to return whichever one came first --
+#: where saying nothing at all is a clear "I couldn't find an auction called that".
+_GENERIC_HINTS = frozenset("auction auctions sale sales swap show club event my our the".split())
+
+#: Shortest hint worth matching loosely. Two letters inside a title is a coincidence, not a name.
+MIN_FUZZY_HINT = 3
+
+
+def _worth_matching_loosely(candidate: str) -> bool:
+    """Whether a hint says enough to be matched against part of a title rather than the whole of one."""
+    return len(candidate) >= MIN_FUZZY_HINT and candidate.lower() not in _GENERIC_HINTS
+
+
 def _auction_matching(queryset, hint: str):
-    """The first auction in *queryset* any spelling of *hint* names, or ``None``."""
-    for candidate in _auction_hints(hint):
+    """The first auction in *queryset* any spelling of *hint* names, or ``None``.
+
+    Every spelling is tried exactly first, so a real auction called "Auction" is still reachable by
+    name; only the loose pass is fussy about what it will accept.
+    """
+    candidates = _auction_hints(hint)
+    for candidate in candidates:
         match = queryset.filter(Q(slug=candidate) | Q(title__iexact=candidate)).first()
         if match:
             return match
-    for candidate in _auction_hints(hint):
+    for candidate in candidates:
+        if not _worth_matching_loosely(candidate):
+            continue
         match = queryset.filter(title__icontains=candidate).first()
         if match:
             return match
@@ -326,47 +347,126 @@ def remember_auction(request, auction) -> None:
     userdata.save(update_fields=["last_auction_used"])
 
 
+#: Title words the whole site is named by, so spelling one out names no particular auction.
+_TITLE_STOPWORDS = frozenset("auction auctions sale sales swap show event the a an of and for at".split())
+
+#: Auction nouns a lone distinguishing word has to sit beside before it counts as a name: "the blue
+#: auction" names the Blue auction and "add a lot of blue shrimp" names nothing.
+_TITLE_ANCHORS = frozenset("auction auctions sale sales swap show event".split())
+
+#: Distinguishing words a title needs before scattered mentions of them add up to a name.
+MIN_TITLE_WORDS_NAMED = 2
+
+
+def _words(text: str) -> list[str]:
+    return re.findall(r"[a-z0-9']+", (text or "").lower())
+
+
+def _says_in_a_row(asked: list[str], title: list[str]) -> bool:
+    """Whether *asked* contains *title* as a run of consecutive whole words."""
+    if not title or len(title) > len(asked):
+        return False
+    return any(asked[start : start + len(title)] == title for start in range(len(asked) - len(title) + 1))
+
+
+def _beside_an_anchor(word: str, asked: list[str]) -> bool:
+    """Whether *word* appears in *asked* next to an auction noun."""
+    for index, spoken in enumerate(asked):
+        if spoken == word and any(
+            neighbour in _TITLE_ANCHORS for neighbour in asked[max(0, index - 1) : index] + asked[index + 1 : index + 2]
+        ):
+            return True
+    return False
+
+
 def auction_named_in(user, sentence: str):
     """The auction whose own title the sentence spells out, or ``None``.
 
     The model drops the auction parameter for "when does the fall auction start?" often enough to
-    matter, and the answer that comes back is about whichever auction was the default — as confident
+    matter, and the answer that comes back is about whichever auction was the default -- as confident
     as the right one. The name is right there in what they said, so read it off.
 
-    Deliberately strict: the whole title, or every word of it that isn't "auction". "add a lot of
-    blue shrimp" must not find an auction called Blue.
+    Whole words only, and one of three ways: the title said straight through ("the spring online
+    auction"), every distinguishing word of it said somewhere, or -- for a title with only one word
+    that isn't what every auction is called -- that word said next to an auction noun. So "add a lot
+    of blue shrimp" does not find an auction called Blue, "did prices fall this year" does not find
+    the Fall Auction, and "the blue auction" finds Blue. The longest title that fits wins, so "Fall
+    Auction 2026" beats "Fall Auction" when both are spelled out.
+
+    Scoped to :func:`command_palette._own_auctions` rather than ``_joined_auctions``: a superuser is
+    handed every auction on the site, and reading a name out of a sentence against all of them makes
+    another club's auction a candidate for any word this person happened to say.
     """
-    asked = " ".join(re.findall(r"[a-z0-9']+", (sentence or "").lower()))
+    asked = _words(sentence)
     if not asked:
         return None
-    for auction in command_palette._joined_auctions(user).order_by("-date_start")[:LIST_LIMIT]:
-        title = " ".join(re.findall(r"[a-z0-9']+", (auction.title or "").lower()))
-        if not title:
+    spoken = set(asked)
+    best = None
+    best_strength = 0
+    for auction in command_palette._own_auctions(user).order_by("-date_start")[:LIST_LIMIT]:
+        title = _words(auction.title)
+        if not title or len(title) <= best_strength:
             continue
-        if title in asked:
-            return auction
-        words = [word for word in title.split() if word != "auction"]
-        if words and all(f" {word} " in f" {asked} " for word in words):
-            return auction
-    return None
+        distinguishing = [word for word in title if word not in _TITLE_STOPWORDS]
+        if not distinguishing:
+            continue
+        named = (
+            (len(title) > 1 and _says_in_a_row(asked, title))
+            or (len(distinguishing) >= MIN_TITLE_WORDS_NAMED and spoken.issuperset(distinguishing))
+            or (len(distinguishing) == 1 and _beside_an_anchor(distinguishing[0], asked))
+        )
+        if named:
+            best, best_strength = auction, len(title)
+    return best
+
+
+def _named_or_resolved(request, hint: str, ignore_current: bool = False):
+    """``(auction, problem)``, reading the name out of what they said when no hint was passed.
+
+    The one place the sentence is consulted, so the action, the label on its confirmation card and
+    the run after that card all decide the same way. Nothing is remembered here -- see
+    :func:`_auction_or_problem` -- because this also answers questions nobody has agreed to yet.
+    """
+    if not hint:
+        # They named one and the model didn't pass it on.
+        named = auction_named_in(request.user, _query(request))
+        if named is not None:
+            # For the analytics page: which answers came from reading the sentence rather than from
+            # a parameter is the only way to tell whether doing so helps.
+            request.palette_read_the_query = True
+            return named, None
+    return resolve_auction(request.user, hint, _page(request), ignore_current=ignore_current)
 
 
 def _auction_or_problem(request, params: dict[str, Any], key: str = "auction", ignore_current: bool = False):
     """The auction an action acts on, or a result to return. One entry point, so the ambiguity question
     and ``remember_auction`` happen everywhere.
     """
-    hint = _str(params, key)
-    if not hint:
-        # They named one and the model didn't pass it on.
-        named = auction_named_in(request.user, getattr(request, "palette_query", ""))
-        if named is not None:
-            remember_auction(request, named)
-            return named, None
-    auction, problem = resolve_auction(request.user, hint, _page(request), ignore_current=ignore_current)
+    auction, problem = _named_or_resolved(request, _str(params, key), ignore_current=ignore_current)
     if problem is not None:
         return None, (problem if isinstance(problem, dict) else _error(problem))
     remember_auction(request, auction)
     return auction, None
+
+
+def pin_the_subject(request, action: Action, params: dict[str, Any]) -> dict[str, Any]:
+    """*params* with the auction this command is about written into them.
+
+    A confirmation card is built in one request and confirmed in another, and everything that decides
+    which auction -- the page they were on, what is running, the sentence they typed -- can differ
+    between the two. The card said Fall Auction and the write landed on whichever auction the next
+    request resolved to, with nothing on screen to say so. So whatever *this* request decided is
+    written down instead of worked out again.
+
+    ``run_action`` still re-resolves and re-checks every permission on the way through; this only
+    removes an ambiguity it would otherwise settle differently.
+    """
+    if not action.accepts("auction") or _str(params, "auction"):
+        return params
+    auction, problem = _named_or_resolved(request, "")
+    if problem is not None or auction is None:
+        return params
+    return {**params, "auction": auction.slug}
 
 
 def resolve_person(user, auction, hint: str):
@@ -2781,7 +2881,7 @@ def join_auction(request, params: dict[str, Any]) -> dict[str, Any]:
 
     user = request.user
     hint = _str(params, "auction") or _str(params, "name")
-    auction, problem = _resolve_described_auction(user, hint, _page(request), _query(request))
+    auction, problem = _resolve_described_auction(request, hint)
     if problem:
         return problem if isinstance(problem, dict) else _error(problem)
     remember_auction(request, auction)
@@ -3294,21 +3394,27 @@ POINTS_NOT_DESCRIBED: dict[str, str] = {
 }
 
 
-def _resolve_described_auction(user, hint: str, page: dict[str, Any] | None, sentence: str = ""):
+def _resolve_described_auction(request, hint: str):
     """An auction to describe: a named one they can see (``_visible_auctions``), else the one named in
-    *sentence*, else the one on their page (unscoped: it's on their screen), else ``resolve_auction``'s
-    order.
+    what they said, else the one on their page (unscoped: it's on their screen), else
+    ``resolve_auction``'s order.
+
+    Takes the request rather than its pieces so the sentence, the page and the "read out of the
+    sentence" flag all come from the one place :func:`_named_or_resolved` gets them.
     """
     from .models import Auction
 
+    user = request.user
+    page = _page(request)
     visible = command_palette._visible_auctions(user)
     if hint:
         match = _auction_matching(visible, hint)
         if not match:
             return None, f"I couldn't find an auction called “{hint}”."
         return match, None
-    named = auction_named_in(user, sentence)
+    named = auction_named_in(user, _query(request))
     if named is not None:
+        request.palette_read_the_query = True
         return named, None
     page_slug = (page or {}).get("auction")
     if page_slug:
@@ -3344,9 +3450,7 @@ def _resolve_described_auction(user, hint: str, page: dict[str, Any] | None, sen
 def describe_auction(request, params: dict[str, Any]) -> dict[str, Any]:
     """One auction: dates, rules, fees, lot fields, and admin stats for admins."""
     user = request.user
-    auction, problem = _resolve_described_auction(
-        user, _str(params, "auction") or _str(params, "name"), _page(request), _query(request)
-    )
+    auction, problem = _resolve_described_auction(request, _str(params, "auction") or _str(params, "name"))
     if problem:
         return problem if isinstance(problem, dict) else _error(problem)
     remember_auction(request, auction)
@@ -3736,9 +3840,7 @@ def auction_numbers(request, params: dict[str, Any]) -> dict[str, Any]:
     properties. Counts for admins or public-stats auctions; money for admins only.
     """
     user = request.user
-    auction, problem = _resolve_described_auction(
-        user, _str(params, "auction") or _str(params, "name"), _page(request), _query(request)
-    )
+    auction, problem = _resolve_described_auction(request, _str(params, "auction") or _str(params, "name"))
     if problem:
         return problem if isinstance(problem, dict) else _error(problem)
     remember_auction(request, auction)
@@ -12940,7 +13042,9 @@ def action_context(request, action: Action, params: dict[str, Any]) -> str:
         )
         if wants_auction:
             hint = _str(params, "auction") or (_str(params, "target") if action.name == "go_to_page" else "")
-            auction, problem = resolve_auction(request.user, hint, _page(request))
+            # ``_named_or_resolved``, not ``resolve_auction``: the label has to name the auction the
+            # action will actually touch, and that one reads the sentence when no hint was passed.
+            auction, problem = _named_or_resolved(request, hint)
             return auction.title if not problem else ""
     except Exception:  # pragma: no cover - never let a label break the request
         logger.exception("Could not describe the context for %s", action.name)

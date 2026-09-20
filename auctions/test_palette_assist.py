@@ -14,7 +14,7 @@ from django.test import Client, SimpleTestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
 
-from auctions import llm, palette_actions, palette_assist, palette_routes
+from auctions import command_palette, llm, palette_actions, palette_assist, palette_routes
 from auctions.llm import LLMError, LLMProvider, LLMResult, ToolCall
 from auctions.models import (
     Auction,
@@ -2358,7 +2358,7 @@ class DisclosureTests(PaletteAssistTestCase):
     def test_a_stale_pointer_is_not_described_either(self):
         self.member.userdata.last_auction_used = self.secret
         self.member.userdata.save()
-        auction, error = palette_actions._resolve_described_auction(self.member, "", {})
+        auction, error = palette_actions._resolve_described_auction(self._request_for(self.member), "")
         self.assertIsNone(auction)
         self.assertTrue(error)
 
@@ -4503,3 +4503,159 @@ class AuctionNamedInTheSentenceTests(PaletteAssistTestCase):
         request.palette_query = f"when does the {self.in_person_auction.title} start?"
         result = palette_actions.run_action(request, "describe_auction", {"auction": self.online_auction.slug})
         self.assertIn(self.online_auction.title, result["summary"])
+
+
+class TitlesAreReadAsWholeWordsTests(PaletteAssistTestCase):
+    """Reading a name out of a sentence has to be strict, because nothing downstream can tell it was a
+    guess: the card that comes back looks exactly as confident as one the model named.
+    """
+
+    def _named(self, sentence, user=None):
+        return palette_actions.auction_named_in(user or self.user, sentence)
+
+    def _auction(self, title, **kwargs):
+        auction = Auction.objects.create(
+            title=title,
+            created_by=self.user,
+            date_start=timezone.now() + datetime.timedelta(days=kwargs.pop("in_days", 1)),
+            date_end=timezone.now() + datetime.timedelta(days=30),
+            **kwargs,
+        )
+        AuctionTOS.objects.create(user=self.user, auction=auction, pickup_location=self.location, is_admin=True)
+        return auction
+
+    def test_a_title_inside_another_word_is_not_a_name(self):
+        """``title in asked`` matched substrings: an auction called Al answered "how many personal lots"."""
+        self._auction("Al")
+        self.assertIsNone(self._named("how many personal lots are there"))
+
+    def test_one_ordinary_word_is_not_a_name_on_its_own(self):
+        """The invariant this was written for: "add a lot of blue shrimp" must not find Blue."""
+        self._auction("Blue")
+        self.assertIsNone(self._named("add a lot of blue shrimp"))
+        self.assertIsNone(self._named("the water looks blue in that photo"))
+
+    def test_one_word_beside_an_auction_noun_is(self):
+        blue = self._auction("Blue")
+        self.assertEqual(getattr(self._named("when does the blue auction start?"), "pk", None), blue.pk)
+
+    def test_a_title_made_only_of_words_every_auction_has_never_names_one(self):
+        self._auction("Auction")
+        self.assertIsNone(self._named("when does the fall auction start?"))
+
+    def test_a_single_distinguishing_word_scattered_in_a_sentence_is_not_a_name(self):
+        self._auction("Fall Auction")
+        self.assertIsNone(self._named("did prices fall this year"))
+
+    def test_the_longest_title_that_fits_wins(self):
+        self._auction("Fall Auction", in_days=2)
+        newer = self._auction("Fall Auction 2026", in_days=1)
+        self.assertEqual(getattr(self._named("how did the fall auction 2026 go?"), "pk", None), newer.pk)
+
+    def test_a_superuser_does_not_read_another_club_s_auction_out_of_a_sentence(self):
+        """``_joined_auctions`` hands a superuser the whole site, which is every other club's auction."""
+        stranger = Auction.objects.create(
+            title="Riverside Koi Swap",
+            created_by=self.userB,
+            date_start=timezone.now() + datetime.timedelta(days=1),
+            date_end=timezone.now() + datetime.timedelta(days=30),
+        )
+        self.admin_user.is_superuser = True
+        self.admin_user.save()
+        self.assertIn(stranger, command_palette._joined_auctions(self.admin_user))
+        self.assertNotIn(stranger, command_palette._own_auctions(self.admin_user))
+        self.assertIsNone(self._named("how did the riverside koi swap go?", user=self.admin_user))
+        # Named outright, they can still reach it: only reading it out of a sentence is narrowed.
+        auction, problem = palette_actions.resolve_auction(self.admin_user, "Riverside Koi Swap")
+        self.assertIsNone(problem)
+        self.assertEqual(auction.pk, stranger.pk)
+
+
+class GenericHintTests(PaletteAssistTestCase):
+    """Loosening a hint must not loosen it into a word every auction contains."""
+
+    def test_an_article_stripped_to_nothing_useful_matches_nothing(self):
+        """ "the auction" became "auction", and ``title__icontains`` then returned whichever came first."""
+        for hint in ("the auction", "my auction", "my-auction", "our auctions"):
+            auction, problem = palette_actions.resolve_auction(self.user, hint)
+            self.assertIsNone(auction, hint)
+            self.assertIn("couldn't find", str(problem), hint)
+
+    def test_a_real_name_still_resolves_every_way_it_is_spelled(self):
+        for hint in (
+            self.online_auction.slug,
+            # What the model sends back about as often as the slug itself.
+            self.online_auction.slug.replace("-", "_"),
+            self.online_auction.title,
+            f"the {self.online_auction.title}",
+        ):
+            auction, problem = palette_actions.resolve_auction(self.user, hint)
+            self.assertIsNone(problem, hint)
+            self.assertEqual(auction.pk, self.online_auction.pk, hint)
+
+    def test_an_auction_actually_called_that_is_still_reachable_by_name(self):
+        plain = Auction.objects.create(
+            title="Auction",
+            created_by=self.user,
+            date_start=timezone.now() + datetime.timedelta(days=1),
+            date_end=timezone.now() + datetime.timedelta(days=30),
+        )
+        auction, problem = palette_actions.resolve_auction(self.user, "Auction")
+        self.assertIsNone(problem)
+        self.assertEqual(auction.pk, plain.pk)
+
+
+class PinnedSubjectTests(PaletteAssistTestCase):
+    """A confirmation card and the write it confirms have to be about the same auction.
+
+    The card is built in one request and confirmed in another, and every input that decides which
+    auction -- the page they were on, what is running, the sentence they typed -- can differ between
+    the two. ``execute`` never sees the sentence at all.
+    """
+
+    def test_the_card_writes_the_auction_into_its_own_parameters(self):
+        action = palette_actions.get_action("add_person")
+        request = self._request_for(self.user)
+        request.palette_query = f"add mike smith to the {self.online_auction.title}"
+        pinned = palette_actions.pin_the_subject(request, action, {"name": "Mike Smith"})
+        self.assertEqual(pinned["auction"], self.online_auction.slug)
+        # The label the user reads names the same one.
+        self.assertEqual(palette_actions.action_context(request, action, pinned), self.online_auction.title)
+
+    def test_an_auction_the_model_named_is_left_alone(self):
+        action = palette_actions.get_action("add_person")
+        request = self._request_for(self.user)
+        request.palette_query = f"add mike smith to the {self.online_auction.title}"
+        params = {"name": "Mike Smith", "auction": self.in_person_auction.slug}
+        self.assertEqual(palette_actions.pin_the_subject(request, action, params), params)
+
+    def test_an_action_that_has_no_auction_is_untouched(self):
+        action = palette_actions.get_action("set_my_club")
+        request = self._request_for(self.user)
+        request.palette_query = f"the {self.online_auction.title}"
+        self.assertNotIn("auction", palette_actions.pin_the_subject(request, action, {"club": "x"}))
+
+    def test_the_countdown_card_carries_the_auction_through_to_execute(self):
+        # Their working auction is the online one; the sentence names the other.
+        self.user.userdata.last_auction_used = self.online_auction
+        self.user.userdata.save()
+        self._script(
+            {
+                "action": "add_person",
+                "params": {"name": "Mike Smith"},
+                "summary": "Add Mike Smith",
+            }
+        )
+        data = self._assist(f"add mike smith to the {self.in_person_auction.title}").json()
+        self.assertEqual(data["kind"], "countdown", data)
+        # Without this the params go back to execute with no auction in them, and execute -- which
+        # cannot read the sentence -- resolves the working auction instead.
+        self.assertEqual(data["params"].get("auction"), self.in_person_auction.slug)
+        self.assertEqual(data["context"], self.in_person_auction.title)
+
+    def test_the_label_names_the_auction_read_out_of_the_sentence(self):
+        """``action_context`` resolved separately, so the card could name one auction and act on another."""
+        action = palette_actions.get_action("add_person")
+        request = self._request_for(self.user)
+        request.palette_query = f"add mike smith to the {self.online_auction.title}"
+        self.assertEqual(palette_actions.action_context(request, action, {}), self.online_auction.title)
