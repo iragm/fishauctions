@@ -2,6 +2,7 @@
 connections page. The action catalogue is :mod:`auctions.palette_actions`.
 """
 
+import asyncio
 import json
 import logging
 from datetime import timedelta
@@ -231,6 +232,11 @@ class CommandPaletteAssistView(CommandPaletteAssistBase):
     The body must be an async generator, or ASGI buffers the whole stream. ``assist_stream`` is sync,
     so each event goes through ``sync_to_async``. Nothing is written here; confirm-tier actions come
     back as a countdown for the execute endpoint.
+
+    A progress event may carry ``wait_seconds`` -- the queue holding this request back while the site
+    is busy. It is awaited **here**, not slept through in the generator: Django gives each request its
+    own single-thread executor, so sleeping in there pins that thread and the database connection on
+    it for the whole wait, at exactly the load the wait exists to manage.
     """
 
     def post(self, request, *args, **kwargs):
@@ -261,6 +267,10 @@ class CommandPaletteAssistView(CommandPaletteAssistBase):
                 if event is STREAM_DONE:
                     return
                 yield json.dumps(event, default=str) + "\n"
+                # The line is on screen before the wait it announces, and the wait costs no thread.
+                held = palette_assist.wait_between_events(event) if isinstance(event, dict) else 0.0
+                if held:
+                    await asyncio.sleep(held)
 
         response = StreamingHttpResponse(lines(), content_type="application/x-ndjson")
         response["Cache-Control"] = "private, no-store"

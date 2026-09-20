@@ -1,8 +1,10 @@
 """Tests for the command palette's natural-language assist."""
 
 import datetime
+import inspect
 import json
 import re
+import time
 from io import StringIO
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -30,6 +32,7 @@ from auctions.models import (
 )
 from auctions.test_support import isolated_cache
 from auctions.tests import StandardTestCase
+from auctions.views import palette as palette_views
 
 
 def as_result(reply):
@@ -304,10 +307,16 @@ class AuthAndThrottleTests(PaletteAssistTestCase):
         self.assertEqual(second.status_code, 429)
 
     def test_sustained_call_budget(self):
+        """Over the cap the model is not called -- and the answer is search results, not a dead end.
+
+        This fires in the middle of somebody's auction. "Give it a few minutes and try again" is not
+        something a person working a check-in desk can use, and the whole argument of the queue above
+        is that everybody gets slower before anybody gets refused.
+        """
         cache.set(f"palette_assist_calls_{self.user.pk}", palette_assist.WINDOW_MAX_CALLS, timeout=300)
         self._script({"error": "nope"})
         response = self._assist("add a lot of blue shrimp please")
-        self.assertEqual(response.json()["kind"], "error")
+        self.assertIn(response.json()["kind"], {"results", "navigate"}, response.json())
         self.assertEqual(self.provider.call_count, 0, "over the window cap, no model call should happen")
 
 
@@ -2237,14 +2246,16 @@ class DriftTests(PaletteAssistTestCase):
         data = model_to_dict(tos, fields=CreateEditAuctionTOS.Meta.fields)
         self.assertEqual(set(data), set(CreateEditAuctionTOS.Meta.fields))
 
-    def test_a_truncated_lookup_says_it_was_truncated(self):
-        payload = palette_assist.lookup_payload("describe_auction", {"rules": "x" * 9000})
-        self.assertIn("TRUNCATED", payload)
+    def test_an_oversized_lookup_says_what_was_done_to_it(self):
+        """Long prose is abbreviated in place; the end of the result is no longer simply cut off."""
+        payload = palette_assist.lookup_payload("describe_auction", {"rules": "x" * 9000, "pickup": "Clubhouse"})
+        self.assertIn("shortened", payload)
         self.assertIn("Do not fill in anything", payload)
+        self.assertIn("Clubhouse", payload, "a key past the long field has to survive")
 
     def test_a_payload_that_fits_is_sent_verbatim(self):
         payload = palette_assist.lookup_payload("my_context", {"username": "bob"})
-        self.assertNotIn("TRUNCATED", payload)
+        self.assertNotIn("shortened", payload)
         self.assertIn('"username": "bob"', payload)
 
     def test_every_money_field_on_an_auction_is_described_or_excused(self):
@@ -4773,3 +4784,157 @@ class PinnedSubjectTests(PaletteAssistTestCase):
         request = self._request_for(self.user)
         request.palette_query = f"add mike smith to the {self.online_auction.title}"
         self.assertEqual(palette_actions.action_context(request, action, {}), self.online_auction.title)
+
+
+class BudgetCeilingTests(PaletteAssistTestCase):
+    """``TOTAL_BUDGET_SECONDS`` has to be a ceiling, not a thing checked once a round has already run."""
+
+    def test_a_round_does_not_start_without_room_for_the_call_it_needs(self):
+        started = time.monotonic() - (palette_assist.TOTAL_BUDGET_SECONDS - llm.DEFAULT_TIMEOUT_SECONDS + 1)
+        self.assertLess(palette_assist._time_left(started), llm.DEFAULT_TIMEOUT_SECONDS)
+
+    def test_the_wait_never_eats_the_time_the_call_needs(self):
+        self.assertGreaterEqual(
+            palette_assist.TOTAL_BUDGET_SECONDS,
+            palette_assist.MAX_WAIT_SECONDS + llm.DEFAULT_TIMEOUT_SECONDS,
+            "a full queue wait plus one call has to fit inside the budget",
+        )
+
+    def test_a_wait_is_handed_to_the_caller_rather_than_slept_through(self):
+        """``assist_stream`` runs on a thread with a database connection on it; the view awaits instead."""
+        event = palette_assist._progress("Busy right now — waiting 3 seconds…", wait=3.0)
+        self.assertEqual(event["wait_seconds"], 3.0)
+        self.assertEqual(palette_assist.wait_between_events(event), 3.0)
+
+    def test_a_plain_status_line_asks_for_no_wait(self):
+        self.assertEqual(palette_assist.wait_between_events(palette_assist._progress("Working…")), 0.0)
+
+    def test_a_nonsense_wait_is_ignored_and_a_long_one_is_capped(self):
+        self.assertEqual(palette_assist.wait_between_events({"wait_seconds": "soon"}), 0.0)
+        self.assertEqual(palette_assist.wait_between_events({"wait_seconds": 600}), palette_assist.MAX_WAIT_SECONDS)
+
+    def test_the_streaming_view_awaits_a_wait_instead_of_blocking(self):
+        source = inspect.getsource(palette_views.CommandPaletteAssistView)
+        self.assertIn("await asyncio.sleep", source)
+        self.assertNotIn("time.sleep", source)
+
+
+class TokenReservationTests(PaletteAssistTestCase):
+    """A call has to count against the budget while it is in flight, not only once it comes back."""
+
+    def setUp(self):
+        super().setUp()
+        for offset in (0, -60, -120):
+            cache.delete(palette_assist._minute_key(time.time() + offset))
+        cache.delete(palette_assist._BREAKER_KEY)
+
+    def test_a_call_counts_before_it_has_happened(self):
+        """Spending only on the way back left ten simultaneous requests all reading a load of zero."""
+        before = palette_assist.site_load()
+        palette_assist.reserve_tokens()
+        self.assertGreater(palette_assist.site_load(), before)
+
+    def test_the_reservation_is_corrected_by_what_it_really_cost(self):
+        reservation = palette_assist.reserve_tokens(9000)
+        palette_assist.settle_tokens(reservation, 3000)
+        self.assertAlmostEqual(palette_assist.site_load(), 3000 / palette_assist._tokens_per_minute(), places=3)
+
+    def test_a_call_that_never_happened_gives_its_reservation_back(self):
+        palette_assist.settle_tokens(palette_assist.reserve_tokens(9000), 0)
+        self.assertEqual(palette_assist.site_load(), 0.0)
+
+    def test_the_window_slides_instead_of_resetting_on_the_minute(self):
+        """A hard reset lets the whole held-back queue go at once, every sixty seconds."""
+        palette_assist._add_tokens(palette_assist._minute_key(time.time() - 60), 60_000)
+        carried = palette_assist.site_load()
+        self.assertGreater(carried, 0.0, "last minute's spend has to count for something")
+        self.assertLess(carried, 60_000 / palette_assist._tokens_per_minute())
+
+    def test_the_breaker_rests_for_its_whole_window_from_the_moment_it_trips(self):
+        """``cache.add`` sets a timeout only on creation, so the rest used to start at failure one."""
+        with patch.object(cache, "set", wraps=cache.set) as refreshed:
+            for _ in range(palette_assist.BREAKER_FAILURES):
+                palette_assist.note_provider_failure()
+        self.assertTrue(palette_assist.provider_is_resting())
+        refreshed.assert_called_with(
+            palette_assist._BREAKER_KEY,
+            palette_assist.BREAKER_FAILURES,
+            timeout=palette_assist.BREAKER_COOLDOWN_SECONDS,
+        )
+
+
+class LookupTruncationTests(PaletteAssistTestCase):
+    """What overflows is one or two long prose fields; what a tail cut removes is whole keys."""
+
+    def test_a_long_result_keeps_every_key(self):
+        result = {
+            "auction": {
+                "title": "Fall Auction",
+                "rules": "No dyed fish. " * 800,
+                "pickup_locations": ["Clubhouse"],
+                "lots": 12,
+            },
+            "summary": "Starts Thursday.",
+        }
+        payload = palette_assist.lookup_payload("describe_auction", result)
+        for key in ("title", "rules", "pickup_locations", "lots", "summary"):
+            self.assertIn(key, payload, key)
+        self.assertIn("Clubhouse", payload)
+        self.assertIn("…", payload)
+
+    def test_a_shortened_result_says_so_without_claiming_to_be_cut_off(self):
+        payload = palette_assist.lookup_payload("describe_auction", {"rules": "x" * 40_000})
+        self.assertIn("shortened", payload)
+        self.assertIn("Do not fill in anything this result does not show", payload)
+
+    def test_a_result_that_fits_is_passed_through_untouched(self):
+        payload = palette_assist.lookup_payload("my_context", {"username": "bob"})
+        self.assertEqual(payload, 'Result of my_context: {"username": "bob"}')
+
+    def test_an_auction_with_real_writing_on_it_still_fits(self):
+        """Fixture auctions have empty text fields; a live one has paragraphs in several of them."""
+        for field in ("summernote_description", "notes"):
+            if hasattr(self.in_person_auction, field):
+                setattr(self.in_person_auction, field, "House rules. " * 400)
+        self.in_person_auction.save()
+        request = self._request_for(self.user)
+        result = palette_actions.run_action(request, "describe_auction", {"auction": self.in_person_auction.slug})
+        payload = palette_assist.lookup_payload("describe_auction", result)
+        self.assertIn("pickup", payload.lower())
+        self.assertIn(self.in_person_auction.title, payload)
+
+
+class ConnectionReleaseTests(SimpleTestCase):
+    """The wait gives up its database connection, but never one inside a transaction."""
+
+    def test_it_leaves_a_connection_in_a_transaction_alone(self):
+        """``close()`` in a transaction marks it ``closed_in_transaction`` and every query after raises."""
+        closed = []
+        connection = SimpleNamespace(
+            in_atomic_block=True,
+            closed_in_transaction=False,
+            close=lambda: closed.append(True),
+        )
+        with patch("django.db.connections.all", return_value=[connection]):
+            palette_assist._let_go_of_the_database()
+        self.assertEqual(closed, [])
+
+    def test_it_closes_an_idle_one(self):
+        closed = []
+        connection = SimpleNamespace(
+            in_atomic_block=False,
+            closed_in_transaction=False,
+            close=lambda: closed.append(True),
+        )
+        with patch("django.db.connections.all", return_value=[connection]):
+            palette_assist._let_go_of_the_database()
+        self.assertEqual(closed, [True])
+
+    def test_a_broken_connection_does_not_break_the_request(self):
+        def explode():
+            message = "gone"
+            raise RuntimeError(message)
+
+        connection = SimpleNamespace(in_atomic_block=False, closed_in_transaction=False, close=explode)
+        with patch("django.db.connections.all", return_value=[connection]):
+            palette_assist._let_go_of_the_database()  # must not raise

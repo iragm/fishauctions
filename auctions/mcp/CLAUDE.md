@@ -119,12 +119,29 @@ provider's: about 8.6k tokens a call against a 200k-per-minute account is roughl
 for the whole site, and reaching it answers every user at once with an error.
 
 So everybody gets slower before anybody gets refused, and the waiting is on screen. `site_load()` is
-what this minute has cost against `LLM_TOKENS_PER_MINUTE`; past `BUSY_THRESHOLD`
-`wait_for_the_queue` holds each request a little longer the busier it is, to `MAX_WAIT_SECONDS` —
-after which ordinary search is the better answer and they can have it now. A `429` is
-`llm.RateLimited`, which waits out the provider's own `Retry-After` and tries once more, because it
-means "in a moment", not "no". `BREAKER_FAILURES` consecutive failures rest the model for a minute,
-since an outage otherwise answers every caller with a ten-second timeout.
+what the **last** minute cost against `LLM_TOKENS_PER_MINUTE` — two buckets, the older weighted by
+how much of it is still in the window, because one bucket dropping to zero on the minute released the
+whole held-back queue at once every sixty seconds. `reserve_tokens`/`settle_tokens` charge
+`ESTIMATED_CALL_TOKENS` **before** the call and correct it after: spending only on the way back left
+a call invisible while in flight, so ten people typing at once all read a load of zero and all went.
+Past `BUSY_THRESHOLD` `wait_for_the_queue` holds each request a little longer the busier it is, to
+`MAX_WAIT_SECONDS` — after which ordinary search is the better answer and they can have it now.
+
+**The wait is the caller's to do.** `assist_stream` yields it as `wait_seconds` on a progress event
+and `CommandPaletteAssistView` awaits it; sleeping in the generator pinned that request's
+thread-sensitive executor thread *and* its database connection (`CONN_MAX_AGE` is 0, so a stream holds
+one to the end) for the whole wait, at exactly the load where connections are what runs out.
+`_let_go_of_the_database` drops it first. `assist()` sleeps for itself, so `?stream=false` can't walk
+past the queue.
+
+A `429` is `llm.RateLimited`, which waits out the provider's own `Retry-After` and tries once more,
+because it means "in a moment", not "no" — but only if `TOTAL_BUDGET_SECONDS` has room for the wait
+*and* the call it pays for. That budget is checked with `llm.DEFAULT_TIMEOUT_SECONDS` of headroom
+rather than merely "not yet spent", which had let one round run to 36 seconds before anything looked
+at the clock. `BREAKER_FAILURES` consecutive failures rest the model for a minute, timed from the
+moment it trips: `cache.add` sets a timeout only on creation, so the rest used to start at failure
+one. Per user, `WINDOW_MAX_REQUESTS` is set where a working admin won't meet it, and going over hands
+back search results rather than a refusal.
 
 ## Watching it work
 

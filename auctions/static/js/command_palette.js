@@ -38,7 +38,13 @@
     var CONTEXT_KEY = "cp_assist_context";
     var CONTEXT_MAX = 5;
     var assistInFlight = false;
+    var assistAbort = null;
     var countdownTimer = null;
+    // The server gives itself twenty seconds of model calls plus the queue it may be held in. Past
+    // this the connection is not slow, it is gone -- a restart mid-stream, a proxy that dropped it --
+    // and without a stop the box spins forever with no way back: `assistInFlight` only clears when
+    // the fetch settles, so Enter does nothing even after closing and reopening the palette.
+    var ASSIST_TIMEOUT_MS = 45000;
     // Bumped whenever we start an assist request. A plain search fired by an earlier keystroke is
     // still in flight at that point, and when it lands it calls render() -- which used to wipe the
     // progress strip and print "No results found." over the top of a request that was working fine.
@@ -825,6 +831,12 @@
       }
       assistInFlight = true;
       renderGeneration += 1; // any search already in flight is now stale
+      assistAbort = typeof AbortController === "undefined" ? null : new AbortController();
+      var timedOut = false;
+      var assistTimer = window.setTimeout(function () {
+        timedOut = true;
+        abortAssist();
+      }, ASSIST_TIMEOUT_MS);
       finalized = true; // this query ends in an assist result, not an abandoned search
       // A search armed by the last keystroke (or by the interim speech transcript) is about to be
       // answered by this request instead, so don't let it land on top of the assist result.
@@ -838,6 +850,7 @@
         // `path` lets the server work out which auction/club/lot we're looking at. It resolves the
         // path through its own URLconf and re-checks every object, so this is a hint, not a claim.
         body: JSON.stringify({ q: query, context: loadContext(), path: window.location.pathname }),
+        signal: assistAbort ? assistAbort.signal : undefined,
       })
         .then(function (resp) {
           return readNdjson(resp, function (event) {
@@ -854,16 +867,37 @@
           // spinner that never resolves.
           if (!answered) {
             answered = true;
-            renderAssist(query, { kind: "error", message: "I couldn't reach the assistant just now." });
+            renderAssist(query, {
+              kind: "error",
+              message: timedOut
+                ? "That took too long. Try again, or search for it instead."
+                : "I couldn't reach the assistant just now.",
+            });
           }
         })
         .then(function () {
+          window.clearTimeout(assistTimer);
           // The stream ended without a final object (truncated response, server restart).
           if (!answered) {
             renderAssist(query, { kind: "error", message: "I couldn't reach the assistant just now." });
           }
+          assistAbort = null;
           assistInFlight = false;
         });
+    }
+
+    // Stop whatever the box is waiting on and let it take another command. Closing the palette on a
+    // request that will never land used to leave Enter dead until the page was reloaded.
+    function abortAssist() {
+      if (assistAbort) {
+        try {
+          assistAbort.abort();
+        } catch (err) {
+          /* an aborted controller is already what we wanted */
+        }
+      }
+      assistAbort = null;
+      assistInFlight = false;
     }
 
     // --- Speech to text ------------------------------------------------------
@@ -1262,6 +1296,7 @@
       hideMicHint();
       cancelCountdown();
       cancelPendingNavigation();
+      abortAssist();
       flushFinal();
     });
 

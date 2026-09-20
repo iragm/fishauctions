@@ -340,10 +340,15 @@ COOLDOWN_MESSAGE = "One at a time — try that again in a second."
 WINDOW_SECONDS = 300
 #: Commands per window. Counted per *request*, because that is what a person does; counting model
 #: calls meant one unlucky four-round query spent an eighth of somebody's afternoon allowance.
-WINDOW_MAX_REQUESTS = 20
+#:
+#: Set where a working admin will not meet it. At twenty, running a check-in desk at four commands a
+#: minute hit the wall inside five minutes and was told to come back later -- which is the thing
+#: :func:`wait_for_the_queue` exists to avoid. The ceiling that is meant to bind is the site's own
+#: token budget, and it now counts calls while they are still in flight.
+WINDOW_MAX_REQUESTS = 60
 #: And a backstop on the rounds those requests are allowed to cost between them.
-WINDOW_MAX_CALLS = 60
-WINDOW_MESSAGE = "You've used a lot of commands just now. Give it a few minutes and try again."
+WINDOW_MAX_CALLS = 150
+WINDOW_MESSAGE = "You've used a lot of commands just now. Here's what I found:"
 
 KIND_RESULTS = "results"
 KIND_NAVIGATE = "navigate"
@@ -460,33 +465,67 @@ MAX_WAIT_SECONDS = 8.0
 BREAKER_FAILURES = 4
 BREAKER_COOLDOWN_SECONDS = 60
 
+#: What a call is assumed to cost before it is made. Charged up front and corrected when the real
+#: number arrives, because spending only on the way back leaves a call invisible for the whole time
+#: it is in flight -- so ten people typing at once all read a load of zero and all go.
+ESTIMATED_CALL_TOKENS = 9000
+
 _TOKENS_KEY = "palette_tokens_spent_"
 _BREAKER_KEY = "palette_provider_failures"
+
+#: Buckets outlive their minute so the one before this one can still be read. See :func:`site_load`.
+_BUCKET_SECONDS = 180
 
 
 def _minute_key(now: float | None = None) -> str:
     return f"{_TOKENS_KEY}{int((now or time.time()) // 60)}"
 
 
-def spend_tokens(count: int) -> None:
-    """Record what a call cost, for the minute it landed in. Best-effort; a lost count only under-counts."""
-    if count <= 0:
+def _add_tokens(key: str, delta: int) -> None:
+    """Move one minute's running total by *delta*, which may be negative when a reservation settles."""
+    if not delta:
         return
-    key = _minute_key()
     try:
-        cache.add(key, 0, timeout=120)
-        cache.incr(key, count)
+        cache.add(key, 0, timeout=_BUCKET_SECONDS)
+        cache.incr(key, delta)
     except (ValueError, Exception):  # noqa: B014 - the key can expire between add and incr
         logger.debug("Could not record palette token spend")
 
 
+def spend_tokens(count: int) -> None:
+    """Record what a call cost, against this minute. Best-effort; a lost count only under-counts."""
+    _add_tokens(_minute_key(), count)
+
+
+def reserve_tokens(count: int = ESTIMATED_CALL_TOKENS) -> tuple[str, int]:
+    """Charge a call to the budget *before* making it. Returns what :func:`settle_tokens` needs back."""
+    key = _minute_key()
+    _add_tokens(key, count)
+    return key, count
+
+
+def settle_tokens(reservation: tuple[str, int], actual: int) -> None:
+    """Correct a reservation once the call's real cost is known, against the minute it was made in."""
+    key, reserved = reservation
+    _add_tokens(key, int(actual) - int(reserved))
+
+
 def site_load() -> float:
-    """Tokens spent this minute as a fraction of what this site allows itself. 0 when idle."""
+    """Tokens spent over the last minute as a fraction of what this site allows itself. 0 when idle.
+
+    Two buckets, the older one weighted by how much of it is still inside the window, rather than one
+    bucket that drops to zero on the minute: at a load high enough to be holding people back, a hard
+    reset lets the whole queue go at once, every sixty seconds.
+    """
+    now = time.time()
     try:
-        spent = cache.get(_minute_key()) or 0
+        current = int(cache.get(_minute_key(now)) or 0)
+        previous = int(cache.get(_minute_key(now - 60)) or 0)
     except Exception:
         return 0.0
-    return float(spent) / float(_tokens_per_minute())
+    elapsed = (now % 60) / 60.0
+    spent = current + previous * (1.0 - elapsed)
+    return max(0.0, spent / float(_tokens_per_minute()))
 
 
 def wait_for_the_queue(load: float) -> float:
@@ -511,9 +550,15 @@ def provider_is_resting() -> bool:
 
 
 def note_provider_failure() -> None:
+    """One more consecutive failure. At :data:`BREAKER_FAILURES` the model is left alone for a while."""
     try:
         cache.add(_BREAKER_KEY, 0, timeout=BREAKER_COOLDOWN_SECONDS)
-        cache.incr(_BREAKER_KEY)
+        failures = cache.incr(_BREAKER_KEY)
+        if failures >= BREAKER_FAILURES:
+            # The rest starts when the breaker trips, not when the first failure happened: ``add``
+            # sets a timeout only on creation, so four failures spread over a minute rested for
+            # whatever seconds were left of it.
+            cache.set(_BREAKER_KEY, failures, timeout=BREAKER_COOLDOWN_SECONDS)
     except Exception:
         logger.debug("Could not record a provider failure")
 
@@ -1629,19 +1674,69 @@ def _give_up(request, query: str, message: str, usage_id=None) -> dict[str, Any]
     return {"kind": KIND_ERROR, "message": humanize(message, request.user), "usage_id": usage_id}
 
 
-def lookup_payload(name: str, result: Any) -> str:
-    """One lookup's result as the model's next message. If it must cut, it says so and the model is told
-    to send the user to the page. ``test_palette_assist`` asserts describe_* payloads fit.
+#: Shortest a piece of prose is worth shortening to. Below this a field says nothing at all, and the
+#: whole result is better off declared truncated than quietly emptied.
+MIN_FIELD_CHARS = 60
+
+
+def _shorten_fields(value: Any, cap: int) -> Any:
+    """*value* with every string longer than *cap* abbreviated, structure untouched."""
+    if isinstance(value, str):
+        return value if len(value) <= cap else value[: cap - 1].rstrip() + "…"
+    if isinstance(value, dict):
+        return {key: _shorten_fields(item, cap) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_shorten_fields(item, cap) for item in value]
+    return value
+
+
+def _fit_to_budget(result: Any, budget: int) -> tuple[str, bool]:
+    """*result* as JSON inside *budget*, and whether anything had to be shortened.
+
+    What overflows is one or two long prose fields -- an auction's rules, a lot's description -- and
+    what a tail cut removes is whole keys off the end, which on ``describe_auction`` is the pickup
+    locations and the counts. So the prose is abbreviated until the whole thing fits and every key
+    survives. The cap is found by halving rather than guessed, since one long field and forty short
+    ones need very different ones.
     """
-    body = json.dumps(palette_actions.strip_internal(result), default=str)
-    if len(body) <= MAX_LOOKUP_RESULT_CHARS:
+    body = json.dumps(result, default=str)
+    if len(body) <= budget:
+        return body, False
+    low, high = MIN_FIELD_CHARS, max(MIN_FIELD_CHARS, len(body))
+    best = ""
+    while low <= high:
+        cap = (low + high) // 2
+        attempt = json.dumps(_shorten_fields(result, cap), default=str)
+        if len(attempt) <= budget:
+            best = attempt
+            low = cap + 1
+        else:
+            high = cap - 1
+    return (best, True) if best else (body[:budget], True)
+
+
+def lookup_payload(name: str, result: Any) -> str:
+    """One lookup's result as the model's next message, inside :data:`MAX_LOOKUP_RESULT_CHARS`.
+
+    Long prose is abbreviated in place rather than the end of the result being cut off, so the model
+    still sees every key. ``test_palette_assist`` asserts the describe_* payloads survive an auction
+    with a realistic amount of writing on it.
+    """
+    stripped = palette_actions.strip_internal(result)
+    body, shortened = _fit_to_budget(stripped, MAX_LOOKUP_RESULT_CHARS)
+    if not shortened:
         return f"Result of {name}: {body}"
-    logger.warning("Lookup %s returned %s chars and was truncated to %s", name, len(body), MAX_LOOKUP_RESULT_CHARS)
+    logger.warning(
+        "Lookup %s returned %s chars and its long fields were shortened to fit %s",
+        name,
+        len(json.dumps(stripped, default=str)),
+        MAX_LOOKUP_RESULT_CHARS,
+    )
     return (
-        f"Result of {name} (TRUNCATED — this is not the whole result, and the end of it is missing): "
-        f"{body[:MAX_LOOKUP_RESULT_CHARS]}\n"
-        "Do not fill in anything the truncated result does not show. If the user asked about "
-        "something that isn't in it, say you can't see it here and send them to the relevant page."
+        f"Result of {name} (long text fields end in … where they were shortened to fit; every key is "
+        f"here): {body}\n"
+        "Do not fill in anything this result does not show. If the user asked about something that "
+        "isn't in it, say you can't see it here and send them to the relevant page."
     )
 
 
@@ -1670,8 +1765,54 @@ def _rounds_allowed(lookups_run: set) -> int:
     return MAX_ROUNDS_AFTER_LOOKUP if lookups_run else MAX_ROUNDS
 
 
-def _progress(text: str) -> dict[str, Any]:
-    return {"kind": KIND_PROGRESS, "message": text}
+def _progress(text: str, wait: float = 0.0) -> dict[str, Any]:
+    """A status line for the user, optionally asking the caller to wait before pulling the next event.
+
+    The waiting is the caller's to do, not this generator's. ``assist_stream`` runs on a thread of its
+    own with a database connection open on it, and sleeping there pins both for the whole wait -- at
+    exactly the load the wait exists to manage. :class:`~auctions.views.palette.CommandPaletteAssistView`
+    sends the line, then awaits, then asks for the next event.
+    """
+    event: dict[str, Any] = {"kind": KIND_PROGRESS, "message": text}
+    if wait > 0:
+        event["wait_seconds"] = round(float(wait), 1)
+    return event
+
+
+def wait_between_events(event: dict[str, Any]) -> float:
+    """Seconds a consumer of :func:`assist_stream` should pause for after sending *event*."""
+    try:
+        return max(0.0, min(MAX_WAIT_SECONDS, float(event.get("wait_seconds") or 0)))
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _time_left(started: float) -> float:
+    """Seconds of :data:`TOTAL_BUDGET_SECONDS` still unspent."""
+    return TOTAL_BUDGET_SECONDS - (time.monotonic() - started)
+
+
+def _let_go_of_the_database() -> None:
+    """Close this thread's connections before a wait, so a queued request isn't holding one.
+
+    ``CONN_MAX_AGE`` is 0 under ASGI, so the connection opened by the first query stays open until the
+    response finishes -- which for a stream is the end of the whole exchange. Waiting is the one time
+    that matters: it only happens when the site is busy, which is when connections are what runs out.
+    Django opens another one on the next query.
+
+    Never inside a transaction. ``close()`` there doesn't close anything -- it marks the connection
+    ``closed_in_transaction`` and demands a rollback, and every query after it raises. Nothing here
+    runs in one, but a test case wraps the whole thing in one, and so would ``ATOMIC_REQUESTS``.
+    """
+    from django.db import connections
+
+    try:
+        for connection in connections.all(initialized_only=True):
+            if connection.in_atomic_block or connection.closed_in_transaction:
+                continue
+            connection.close()
+    except Exception:  # pragma: no cover - never let housekeeping break a request
+        logger.debug("Could not release the database connection before waiting")
 
 
 def assist_stream(request, query: str, context: Any = None, path: str = ""):
@@ -1712,7 +1853,10 @@ def assist_stream(request, query: str, context: Any = None, path: str = ""):
 
     over_budget = check_request_budget(user)
     if over_budget:
-        yield {"kind": KIND_ERROR, "message": over_budget}
+        # Search results rather than a dead end: this fires mid-auction, and "come back later" is
+        # not an answer somebody working a check-in desk can use.
+        log_assist(user, query, KIND_ERROR)
+        yield _give_up(request, query, over_budget, None)
         return
 
     yield _progress(opening_line(query))
@@ -1745,16 +1889,20 @@ def assist_stream(request, query: str, context: Any = None, path: str = ""):
 
     round_number = 0
     while round_number < _rounds_allowed(lookups_run):
-        if time.monotonic() - started > TOTAL_BUDGET_SECONDS:
+        # A call can take the provider's whole timeout, so a round needs room for one before it
+        # starts. Checking only that the budget hasn't already gone let one round run to 36 seconds
+        # -- an eight second wait, a ten second call, a rate limit, and ten more -- before anything
+        # looked at the clock.
+        if _time_left(started) < llm.DEFAULT_TIMEOUT_SECONDS:
             logger.info("Assist budget exhausted after %s rounds", round_number)
             break
         round_number += 1
         # Per model call: a spend ceiling on tokens.
         over_budget = check_call_budget(user)
         if over_budget:
-            record(None, FAIL_THROTTLED, success=False)
+            usage_id = record(None, FAIL_THROTTLED, success=False)
             log_assist(user, query, KIND_ERROR)
-            yield {"kind": KIND_ERROR, "message": over_budget}
+            yield _give_up(request, query, over_budget, usage_id)
             return
         if provider_is_resting():
             # The model has failed several times running; a spinner and a timeout help nobody.
@@ -1762,22 +1910,33 @@ def assist_stream(request, query: str, context: Any = None, path: str = ""):
             log_assist(user, query, KIND_ERROR)
             yield _give_up(request, query, "The assistant is having a moment. Here's what I found:", None)
             return
-        held = wait_for_the_queue(site_load())
-        if held:
-            yield _progress(f"Busy right now — waiting {held:.0f} second{'s' if held >= 1.5 else ''}…")
-            time.sleep(held)
+        # Never wait so long that there is no time left to make the call it is waiting for.
+        held = min(wait_for_the_queue(site_load()), max(0.0, _time_left(started) - llm.DEFAULT_TIMEOUT_SECONDS))
+        if held >= 0.5:
+            _let_go_of_the_database()
+            yield _progress(f"Busy right now — waiting {held:.0f} second{'s' if held >= 1.5 else ''}…", wait=held)
+        reservation = reserve_tokens()
         try:
             # "required": a bare paragraph is the one reply this box cannot render.
             result = provider.complete(system, messages, tools, tool_choice="required")
         except llm.RateLimited as limited:
-            # Not an outage: the provider will take this in a moment. Wait its own number, retry once.
+            # Not an outage: the provider will take this in a moment. Wait its own number, retry once
+            # -- if there is time for both the wait and the call it pays for.
             pause = min(MAX_WAIT_SECONDS, max(float(limited.retry_after or 0), 1.0))
+            if _time_left(started) < pause + llm.DEFAULT_TIMEOUT_SECONDS:
+                settle_tokens(reservation, 0)
+                logger.info("Assist rate limited with no time left to wait %ss", pause)
+                usage_id = record(None, FAIL_BUSY, success=False)
+                log_assist(user, query, KIND_ERROR)
+                yield _give_up(request, query, "Everyone's using this at once. Here's what I found:", usage_id)
+                return
             logger.info("Assist waiting %ss for the provider's rate limit", pause)
-            yield _progress("Busy right now — still working…")
-            time.sleep(pause)
+            _let_go_of_the_database()
+            yield _progress("Busy right now — still working…", wait=pause)
             try:
                 result = provider.complete(system, messages, tools, tool_choice="required")
             except LLMError as error:
+                settle_tokens(reservation, 0)
                 logger.warning("Assist still rate limited: %s", error)
                 note_provider_failure()
                 usage_id = record(None, FAIL_BUSY, success=False)
@@ -1785,6 +1944,7 @@ def assist_stream(request, query: str, context: Any = None, path: str = ""):
                 yield _give_up(request, query, "Everyone's using this at once. Here's what I found:", usage_id)
                 return
         except LLMError as error:
+            settle_tokens(reservation, 0)
             logger.warning("Assist provider error: %s", error)
             note_provider_failure()
             usage_id = record(None, FAIL_PROVIDER, success=False)
@@ -1792,7 +1952,7 @@ def assist_stream(request, query: str, context: Any = None, path: str = ""):
             yield _give_up(request, query, "I couldn't reach the assistant just now.", usage_id)
             return
         note_provider_success()
-        spend_tokens(result.total_tokens)
+        settle_tokens(reservation, result.total_tokens)
 
         reply = read_reply(result, user, query)
         kind = reply["kind"]
@@ -1938,11 +2098,19 @@ def assist_stream(request, query: str, context: Any = None, path: str = ""):
 
 
 def assist(request, query: str, context: Any = None, path: str = "") -> dict[str, Any]:
-    """Answer one palette command and return just the answer (non-streaming :func:`assist_stream`)."""
+    """Answer one palette command and return just the answer (non-streaming :func:`assist_stream`).
+
+    Progress events are dropped, but their waits are not: this path has no client to pace it, so
+    skipping them would let ``?stream=false`` walk past the queue everyone else is standing in.
+    """
     response: dict[str, Any] = {"kind": KIND_ERROR, "message": "I couldn't work out how to do that."}
     for event in assist_stream(request, query, context, path):
-        if event.get("kind") != KIND_PROGRESS:
-            response = event
+        if event.get("kind") == KIND_PROGRESS:
+            held = wait_between_events(event)
+            if held:
+                time.sleep(held)
+            continue
+        response = event
     return response
 
 
