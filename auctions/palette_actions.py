@@ -1831,6 +1831,58 @@ def my_context(request, params: dict[str, Any]) -> dict[str, Any]:
     return data
 
 
+def my_bidder_number(request, params: dict[str, Any]) -> dict[str, Any]:
+    """The signed-in user's own bidder number in one auction, and whether they're checked in yet.
+
+    ``describe_person`` already answers this about anybody, and is auction-admin only -- so the
+    person who most needs the number, standing at the door about to bid with it, is exactly the one
+    it refuses. This is about the caller and nobody else, which is what lets it be open to everybody.
+    """
+    auction, problem = _auction_or_problem(request, params)
+    if problem is not None:
+        return problem
+    tos = _own_tos(request.user, auction)
+    if tos is None:
+        return {
+            "found": False,
+            "auction": auction.title,
+            "summary": f"You haven't joined {auction.title}, so you don't have a bidder number there yet.",
+            # Its own page, which is where joining happens; ``join_auction`` is the tool for doing it.
+            "followups": [_auction_followup(auction)],
+            **_about(auction=auction),
+        }
+    if not tos.bidder_number:
+        return {
+            "found": True,
+            "auction": auction.title,
+            "bidder_number": "",
+            "summary": (
+                f"You're in {auction.title}, but you haven't been given a bidder number yet. "
+                "Whoever runs the auction sets it, usually at check-in."
+            ),
+            **_about(auction=auction),
+        }
+    checked_in = ""
+    if auction.use_check_in_mode:
+        checked_in = "You're checked in." if tos.checked_in else "You haven't checked in yet."
+    return _ok(
+        _sentence(
+            f"You're bidder {tos.bidder_number} at {auction.title}.",
+            checked_in,
+            f"Pickup at {tos.pickup_location.name}." if tos.pickup_location else "",
+        ),
+        found=True,
+        bidder_number=tos.bidder_number,
+        auction=auction.title,
+        checked_in=bool(tos.checked_in),
+        # An auction that doesn't use check-in has nobody to check you in, so the flag above means
+        # nothing there and saying so is better than a "no" that reads like a problem.
+        uses_check_in=auction.use_check_in_mode,
+        pickup_location=tos.pickup_location.name if tos.pickup_location else "",
+        **_about(auction=auction, person=tos),
+    )
+
+
 def lot_fields_in_use(auction) -> dict[str, Any]:
     """The optional per-lot fields this auction has on, under the club's labels, so the model knows e.g.
     "CARES species" is ``custom_field_1``. Empty for most auctions.
@@ -12017,6 +12069,27 @@ register(
         resolver=my_context,
         lookup=True,
         examples=["which auctions am I in", "what am I working on", "which clubs am I in"],
+    )
+)
+
+register(
+    Action(
+        name="my_bidder_number",
+        description=(
+            "The signed-in user's OWN bidder number in one auction, and whether they have checked "
+            "in yet. About themselves only -- describe_person is the tool for somebody else, and "
+            'is admin-only. "what\'s my bidder number", "what number am I bidding under", '
+            '"am I checked in yet?".'
+        ),
+        params={"auction": "string, optional. Auction slug or title. See my_context."},
+        danger=DANGER_SAFE,
+        resolver=my_bidder_number,
+        lookup=True,
+        examples=[
+            "what's my bidder number",
+            "what number am I bidding under at the fall auction",
+            "am I checked in yet?",
+        ],
     )
 )
 

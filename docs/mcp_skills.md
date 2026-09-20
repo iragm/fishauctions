@@ -43,6 +43,12 @@ view or service it goes through. This file keeps only choices that look like mis
 - `list_club_members` does not say whether a row has a site account.
 - `deny` leaves `bap_auto_reason` alone; undoing an undecided lot is a no-op, not a refusal.
 
+- `my_bidder_number` is the one read about a participant that is **not** admin-gated, because it is
+  about the caller and nobody else (`_own_tos`, matched on user or email). `describe_person` answers
+  the same fact about anybody and is auction-admin only, which left the person holding the paddle
+  with no way to ask. `uses_check_in` rides along so "not checked in" isn't reported at an auction
+  that has no check-in.
+
 ## Account, history, help, source
 
 - `change_email` changes nothing until the link is followed (`nothing_was_changed_yet`).

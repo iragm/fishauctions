@@ -4990,3 +4990,62 @@ class ConnectionReleaseTests(SimpleTestCase):
         connection = SimpleNamespace(in_atomic_block=False, closed_in_transaction=False, close=explode)
         with patch("django.db.connections.all", return_value=[connection]):
             palette_assist._let_go_of_the_database()  # must not raise
+
+
+class MyBidderNumberTests(RunActionTestCase):
+    """A bidder's own number, for the person holding the paddle rather than the person running the door.
+
+    ``describe_person`` has always answered this and has always been auction-admin only, so the one
+    who most needs the number is the one it refuses.
+    """
+
+    def _run(self, user, params=None):
+        request = self._request_for(user)
+        return palette_actions.run_action(request, "my_bidder_number", params or {})
+
+    def test_a_bidder_is_told_their_own_number(self):
+        result = self._run(self.member, {"auction": self.in_person_auction.slug})
+        self.assertTrue(result.get("found"))
+        self.assertEqual(result["bidder_number"], self.in_person_buyer.bidder_number)
+        self.assertIn(str(self.in_person_buyer.bidder_number), result["summary"])
+
+    def test_it_needs_no_admin_rights(self):
+        self.assertFalse(self.in_person_auction.permission_check(self.member))
+        self.assertTrue(self._run(self.member, {"auction": self.in_person_auction.slug}).get("found"))
+        # The admin tool for the same fact still refuses them.
+        refused = palette_actions.run_action(
+            self._request_for(self.member),
+            "describe_person",
+            {"name": str(self.in_person_buyer.bidder_number), "auction": self.in_person_auction.slug},
+        )
+        self.assertFalse(refused.get("found"))
+
+    def test_somebody_who_has_not_joined_is_told_so_and_offered_the_auction(self):
+        result = self._run(self.userB, {"auction": self.in_person_auction.slug})
+        self.assertFalse(result.get("found"))
+        self.assertIn("haven't joined", result["summary"])
+        self.assertTrue(result["followups"][0]["url"])
+
+    def test_check_in_is_only_mentioned_where_there_is_any(self):
+        """A "no" about check-in reads like a problem at an auction that has no check-in at all."""
+        result = self._run(self.member, {"auction": self.in_person_auction.slug})
+        self.assertEqual(result["uses_check_in"], self.in_person_auction.use_check_in_mode)
+        if not self.in_person_auction.use_check_in_mode:
+            self.assertNotIn("checked in", result["summary"])
+
+    def test_it_reads_the_auction_out_of_the_sentence_like_every_other_read(self):
+        request = self._request_for(self.member)
+        request.palette_query = f"what's my bidder number at the {self.in_person_auction.title}"
+        result = palette_actions.run_action(request, "my_bidder_number", {})
+        self.assertEqual(result["auction"], self.in_person_auction.title)
+
+    def test_it_is_a_read_on_both_surfaces(self):
+        action = palette_actions.get_action("my_bidder_number")
+        self.assertTrue(action.lookup)
+        self.assertEqual(action.danger, palette_actions.DANGER_SAFE)
+        self.assertFalse(action.mcp_only, "a bidder asking their own number is a palette question too")
+
+    def test_it_is_offered_to_a_plain_bidder_over_mcp(self):
+        from auctions.mcp import tools as mcp_tools
+
+        self.assertIn("my_bidder_number", {tool["name"] for tool in mcp_tools.tool_descriptors(self.member)})

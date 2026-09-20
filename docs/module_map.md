@@ -94,7 +94,7 @@ this only quotes its opening sentence.
 - **`club_matching.py`** (228 lines)
   Which club does this belong to? Name normalisation, initialisms, and the auction backlog.
   `normalize`, `initials`, `derived_abbreviation`, `similarity`, `is_hand_written`, `best_match`, `Suggestion`, `suggest_clubs`
-- **`command_palette.py`** (1491 lines)
+- **`command_palette.py`** (1507 lines)
   Shared logic for the command palette, behind the JSON views.
   `resolve_page`, `app_destinations_for_prompt`, `app_deep_link_by_name`, `default_items`, `search`, `log_search`
 - **`consumers.py`** (435 lines)
@@ -163,7 +163,7 @@ this only quotes its opening sentence.
 - **`model_caching.py`** (79 lines)
   ``@cached_property`` on a model, and the invalidation that makes it safe.
   `InvalidatesRelatedCache`, `CachedPropertiesMixin`
-- **`models.py`** (13444 lines)
+- **`models.py`** (13481 lines)
   The database: 80 models, mostly in one file because 29 of them form a single dependency cycle
 - **`moderation_admin.py`** (139 lines)
   The Django admin for the moderation queue: reports, copyright notices and strikes.
@@ -180,9 +180,9 @@ this only quotes its opening sentence.
 - **`notifications.py`** (313 lines)
   Email to mobile-push routing.
   `push_configured`, `user_prefers_push`, `user_has_app_push`, `notify_user`, `notify_running_total`, `send_fcm_message`, `send_fcm_data_message`
-- **`palette_actions.py`** (13617 lines)
+- **`palette_actions.py`** (13794 lines)
   The things the command palette's assist, and ``/mcp/``, are allowed to do.
-- **`palette_assist.py`** (1901 lines)
+- **`palette_assist.py`** (2199 lines)
   Natural-language orchestration for the command palette.
 - **`palette_routes.py`** (1835 lines)
   Every named URL, as a :class:`Route` the palette assistant can reach or an :data:`EXCLUDED` entry
@@ -420,7 +420,7 @@ this only quotes its opening sentence.
   `PageViewPathTests`, `MigrationHostListTests`, `PageViewCreateStoresAPathTests`
 - **`test_palette_account.py`** (870 lines)
   The rest of the account, and the auction and club setup pages behind it.
-- **`test_palette_assist.py`** (4505 lines)
+- **`test_palette_assist.py`** (5051 lines)
   Tests for the command palette's natural-language assist.
 - **`test_palette_core.py`** (1265 lines)
   The command palette itself, and the mobile surfaces that call into it.
@@ -807,7 +807,7 @@ Every view on the site, split by the part of it the view belongs to.
 - **`moderation.py`** (217 lines)
   The copyright policy page, the notice form, and the report button on a lot.
   `DmcaPolicyView`, `CopyrightNoticeCreate`, `ReportContentCreate`
-- **`palette.py`** (560 lines)
+- **`palette.py`** (587 lines)
   The command palette's views (ask, execute, cancel, report) and ``/ai/``, the API keys and OAuth
 - **`payments.py`** (1054 lines)
   Connecting PayPal and Square accounts and taking payments through them.
