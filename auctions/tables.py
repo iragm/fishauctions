@@ -1347,10 +1347,15 @@ class DonationVendorHTMxTable(tables.Table):
         super().__init__(*args, **kwargs)
 
     def render_name(self, value, record):
+        """The vendor's name, under the icon for however they're reached: one shop icon on every row
+        said nothing, and how to ask them is the fact you want before clicking.
+        """
         return format_html(
             "<a href='' hx-noget hx-get='{}' hx-target='#modals-here' hx-trigger='click'>"
-            "<i class='bi bi-shop me-1'></i>{}</a>",
+            "<i class='bi {} me-1' title='{}'></i>{}</a>",
             reverse("club_donation_vendor", kwargs={"pk": record.pk}),
+            record.contact_method_icon,
+            record.get_contact_method_display(),
             value,
         )
 
@@ -1403,7 +1408,11 @@ class DonationVendorHTMxTable(tables.Table):
         return format_html("<span title='{}'>{}</span>", record.followup_due, formatted)
 
     def render_contact(self, value, record):
-        """A button that opens the email dialog, or explains why the vendor can't be contacted."""
+        """A button that opens the right dialog, or explains why the vendor can't be contacted.
+
+        Two dialogs: the email one for a vendor we can write to, and the dossier for a vendor whose own
+        form, phone or counter is where the asking happens.
+        """
         reason = donations.contact_blocked_reason(record, self.quota)
         if reason:
             # The toast handler is delegated from club_donation_vendors.html, surviving htmx swaps.
@@ -1412,9 +1421,11 @@ class DonationVendorHTMxTable(tables.Table):
                 "data-reason='{}'><i class='bi bi-envelope-slash me-1'></i>Contact</button>",
                 reason,
             )
+        off_site = record.contacted_off_site
         return format_html(
             "<button type='button' class='btn btn-sm btn-primary' hx-get='{}' "
             "hx-target='#modals-here' hx-trigger='click'>"
-            "<i class='bi bi-envelope me-1'></i>Contact</button>",
-            reverse("club_donation_contact", kwargs={"pk": record.pk}),
+            "<i class='bi {} me-1'></i>Contact</button>",
+            reverse("club_donation_dossier" if off_site else "club_donation_contact", kwargs={"pk": record.pk}),
+            "bi-clipboard-check" if off_site else "bi-envelope",
         )

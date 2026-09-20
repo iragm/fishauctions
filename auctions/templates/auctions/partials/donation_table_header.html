@@ -14,7 +14,7 @@ a desktop.  The table filters as you type, so there is no apply button.
 <div class="d-flex flex-wrap gap-2 align-items-center mb-2">
   <span class="dropdown">
     <button class="btn btn-sm btn-primary dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false">
-      <i class="bi bi-funnel"></i> {{ selected_status_label|default:"Any status" }}
+      <i class="bi bi-funnel"></i> <span id="donation-status-label">{{ selected_status_label|default:"Any status" }}</span>
     </button>
     {% comment %}htmx sits on the menu rather than on each radio: change events bubble, so one set of attributes covers the lot. Keep these in step with donation_filter_attrs() in filters.py.{% endcomment %}
     <div class="dropdown-menu" hx-get="" hx-target="div.table-container" hx-trigger="change" hx-swap="outerHTML" hx-indicator=".progress" hx-include=".donation-filter-control">
@@ -34,5 +34,36 @@ a desktop.  The table filters as you type, so there is no apply button.
     <i class="bi bi-plus-circle"></i> Add vendor
   </a>
 
-  <small class="text-muted">Type <span class="text-warning">due</span> to see only vendors needing a follow-up.</small>
 </div>
+
+<script>
+  (function () {
+    // This header is rendered outside div.table-container, so an htmx swap re-renders the rows and
+    // not the button above them: picking a status filtered the table while the button went on saying
+    // "Any status". Nothing re-renders it, so nothing re-binds this either -- once is right.
+    var label = document.getElementById('donation-status-label');
+    if (!label || label.dataset.bound) { return; }
+    label.dataset.bound = '1';
+    function showWhatIsApplied() {
+      var checked = document.querySelector("input[name='status']:checked");
+      var row = checked && checked.closest('label');
+      label.textContent = row ? row.textContent.trim() : 'Any status';
+    }
+    document.addEventListener('change', function (event) {
+      if (event.target.name === 'status') { showWhatIsApplied(); }
+    });
+    // The overdue banner sits further up the page, outside this partial. Rather than fetching for
+    // itself, it ticks the radio and lets the menu's own htmx do the work, so one click can't leave
+    // the table and the button disagreeing. Without JS its href is a plain page load.
+    document.addEventListener('click', function (event) {
+      var link = event.target.closest('a[data-donation-status]');
+      if (!link) { return; }
+      var radio = document.querySelector("input[name='status'][value='" + link.dataset.donationStatus + "']");
+      if (!radio) { return; }
+      event.preventDefault();
+      radio.checked = true;
+      radio.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    showWhatIsApplied();
+  })();
+</script>

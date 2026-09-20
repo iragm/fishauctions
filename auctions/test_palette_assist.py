@@ -2211,6 +2211,7 @@ class DriftTests(PaletteAssistTestCase):
         "send_membership_card": "resend_member_card",
         "cancel_volunteer_request": "request_volunteers",
         "undo_check_in": "check_in",
+        "update_donation_vendor": "add_donation_vendor",
     }
 
     def test_every_mcp_only_write_is_still_reachable_as_a_page(self):
@@ -4699,7 +4700,13 @@ class SurvivingWritesStayReachableTests(PaletteAssistTestCase):
         "add_person": ("add somebody to the auction", "add anybody who turns up", "put someone on the list"),
         "set_my_auction": ("set the current auction to the fall one", "make this my current auction"),
         "check_in": ("check somebody in", "check bob in"),
-        "set_lot_winner": ("lot 101 sold to bidder 14 for 25", "record the sale of lot 3"),
+        # The third is why "donation" is in ``_TOO_GENERAL``: the donation desk took the word to
+        # ``/mcp/``, and an auctioneer saying it means the flag on the lot in their hand.
+        "set_lot_winner": (
+            "lot 101 sold to bidder 14 for 25",
+            "record the sale of lot 3",
+            "lot 7 sold to bidder 4 as a donation",
+        ),
         "no_sale": ("mark lot 14 as not sold", "no sale on lot 14"),
         "renew_membership": ("renew bob's membership",),
         "add_invoice_adjustment": ("add $5 to jane's invoice for the raffle",),

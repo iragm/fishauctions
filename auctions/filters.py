@@ -1758,7 +1758,7 @@ class DonationVendorFilter(django_filters.FilterSet):
     )
     status = django_filters.ChoiceFilter(
         label="Status",
-        choices=DonationVendor.STATUS_CHOICES,
+        choices=DonationVendor.STATUS_FILTER_CHOICES,
         method="filter_by_status",
         widget=HiddenInput(),
     )
@@ -1782,13 +1782,17 @@ class DonationVendorFilter(django_filters.FilterSet):
     def filter_by_status(self, queryset, name, value):
         if not value:
             return queryset
+        if value == DonationVendor.FOLLOWUP_DUE:
+            # Whose turn it is, which is what the list is usually opened to find out. Not a status of
+            # its own: a vendor is due whatever they last said.
+            return queryset.filter(followup_due__lte=timezone.now())
         return queryset.filter(status=value)
 
     def vendor_search(self, queryset, name, value):
         value = (value or "").strip()
         if not value:
             return queryset
-        # "due" as a keyword: not worth a permanent control.
+        # Typing it still works, now that ?status=due is the control.
         if value.lower() in ("due", "overdue", "followup", "follow up"):
             return queryset.filter(followup_due__lte=timezone.now())
         return queryset.filter(Q(name__icontains=value) | Q(contact_name__icontains=value) | Q(email__icontains=value))

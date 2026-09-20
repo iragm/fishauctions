@@ -1266,6 +1266,7 @@ EXCLUDED: dict[str, str] = {
     "club_donation_vendor": _API,
     "club_donation_vendor_create": _API,
     "club_donation_contact": _API,
+    "club_donation_dossier": _API,
     "club_donation_email": _API,
     "club_donation_vendor_delete": _ACTION_ONLY,
     "club_announcement_retract": (

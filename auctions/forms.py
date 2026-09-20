@@ -5840,6 +5840,14 @@ class ClubDonationSettingsForm(forms.ModelForm):
             "donation_followup_days",
             "donation_context",
             "donation_mailing_address",
+            # The dossier, for vendors whose donation request form is on their own site.
+            "donation_legal_name",
+            "donation_tax_id",
+            "donation_tax_status",
+            "donation_contact_name",
+            "donation_phone",
+            "donation_website",
+            "donation_expected_attendance",
         ]
         widgets = {
             "donation_email_mode": forms.RadioSelect(),
@@ -5901,6 +5909,28 @@ class ClubDonationSettingsForm(forms.ModelForm):
                 "copy/pasted into your own email program."
             )
             self.initial["donation_email_mode"] = Club.DONATION_EMAIL_MODE_COPY
+        self.helper.layout = Layout(
+            "enable_donation_tracking",
+            "donation_email_mode",
+            "donation_followup_days",
+            "donation_context",
+            "donation_mailing_address",
+            Fieldset(
+                "Your details, for their form",
+                HTML(
+                    '<p class="text-muted">Some vendors only take donation requests through a form on '
+                    "their own site. Fill these in once and the Contact button hands them to you with a "
+                    "copy button each, so you aren't hunting for your tax ID every time.</p>"
+                ),
+                "donation_legal_name",
+                "donation_tax_id",
+                "donation_tax_status",
+                "donation_contact_name",
+                "donation_phone",
+                "donation_website",
+                "donation_expected_attendance",
+            ),
+        )
         add_bootstrap_classes(self)
         # form-select would make each radio a dropdown-sized box.
         self.fields["donation_email_mode"].widget.attrs["class"] = "form-check-input"
@@ -5940,11 +5970,21 @@ class DonationVendorForm(forms.ModelForm):
 
     class Meta:
         model = DonationVendor
-        fields = ["name", "contact_name", "email", "status", "followup_due", "context"]
+        fields = [
+            "name",
+            "contact_name",
+            "contact_method",
+            "email",
+            "contact_url",
+            "status",
+            "followup_due",
+            "context",
+        ]
         widgets = {
             "name": forms.TextInput(attrs={"placeholder": "Business name"}),
             "contact_name": forms.TextInput(attrs={"placeholder": "Who you talk to there"}),
             "email": forms.EmailInput(attrs={"placeholder": "email@example.com"}),
+            "contact_url": forms.TextInput(attrs={"placeholder": "https://example.com/donation-requests"}),
             "context": forms.Textarea(
                 attrs={
                     "rows": 3,
@@ -5968,6 +6008,10 @@ class DonationVendorForm(forms.ModelForm):
             self.helper.form_action = post_url
         self.fields["contact_name"].required = False
         self.fields["email"].required = False
+        self.fields["contact_url"].required = False
+        # Optional so an older caller that doesn't know the field can't be refused by it; a missing
+        # value means whatever this vendor already is, and email for a new one.
+        self.fields["contact_method"].required = False
         vendor = self.instance if self.instance and self.instance.pk else None
         if vendor and vendor.followup_due:
             # A date input shows the local day of the stored datetime.
@@ -5980,7 +6024,16 @@ class DonationVendorForm(forms.ModelForm):
             ].help_text = "This vendor unsubscribed. They cannot be contacted again from any club on this site."
             self.fields["email"].disabled = True
         add_bootstrap_classes(self)
-        base_fields = ["name", "contact_name", "email", "status", "followup_due", "context"]
+        base_fields = [
+            "name",
+            "contact_name",
+            "contact_method",
+            "email",
+            "contact_url",
+            "status",
+            "followup_due",
+            "context",
+        ]
         if not vendor:
             # New vendors start their clock today via save().
             del self.fields["followup_due"]
@@ -6017,6 +6070,30 @@ class DonationVendorForm(forms.ModelForm):
             msg = f"{existing.name} already uses this email address."
             raise forms.ValidationError(msg)
         return email
+
+    def clean_contact_method(self):
+        """Left out means unchanged, and email for a vendor who doesn't exist yet."""
+        method = self.cleaned_data.get("contact_method")
+        if method:
+            return method
+        if self.instance and self.instance.pk:
+            return self.instance.contact_method
+        return DonationVendor.CONTACT_EMAIL
+
+    def clean(self):
+        """A webform vendor needs the address of the form, or the Contact button has nowhere to send anybody."""
+        cleaned_data = super().clean()
+        method = cleaned_data.get("contact_method")
+        if method == DonationVendor.CONTACT_WEBFORM and not (cleaned_data.get("contact_url") or "").strip():
+            self.add_error("contact_url", "Which page is their request form on?")
+        return cleaned_data
+
+    def clean_contact_url(self):
+        """A pasted address without a scheme is still the address they meant."""
+        url = (self.cleaned_data.get("contact_url") or "").strip()
+        if url and "://" not in url:
+            url = f"https://{url}"
+        return url
 
     def clean_followup_due(self):
         """The picked day as the start of that local day."""

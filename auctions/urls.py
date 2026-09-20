@@ -1257,6 +1257,11 @@ urlpatterns = [
         name="club_donation_contact",
     ),
     path(
+        "donations/vendor/<int:pk>/dossier/",
+        donation_views.DonationDossierView.as_view(),
+        name="club_donation_dossier",
+    ),
+    path(
         "donations/email/<int:pk>/",
         donation_views.DonationEmailPreviewView.as_view(),
         name="club_donation_email",

@@ -120,9 +120,9 @@ class ClubDonationVendorsView(LoginRequiredMixin, DonationPermissionMixin, HTMxT
         )
         # The status menu is written by the header template, not crispy.
         selected_status = (self.request.GET.get("status") or "").strip()
-        context["status_choices"] = DonationVendor.STATUS_CHOICES
+        context["status_choices"] = DonationVendor.STATUS_FILTER_CHOICES
         context["selected_status"] = selected_status
-        context["selected_status_label"] = dict(DonationVendor.STATUS_CHOICES).get(selected_status, "Any status")
+        context["selected_status_label"] = dict(DonationVendor.STATUS_FILTER_CHOICES).get(selected_status, "Any status")
         return context
 
 
@@ -206,10 +206,18 @@ class DonationVendorPanelView(LoginRequiredMixin, DonationPermissionMixin, View)
             "emails": vendor.emails.all() if vendor else [],
             "modal_title": vendor.name if vendor else "Add vendor",
             "can_send": self.club.sends_donation_email,
-            "contact_url": reverse("club_donation_contact", kwargs={"pk": vendor.pk}) if vendor else "",
+            # Whichever dialog this vendor's method needs: the email one, or the dossier.
+            "contact_url": self._contact_dialog_url(vendor),
             "cannot_contact_reason": donations.contact_blocked_reason(vendor) if vendor else "",
             "reply_to_address": vendor.reply_to_address if vendor else "",
         }
+
+    @staticmethod
+    def _contact_dialog_url(vendor):
+        if not vendor:
+            return ""
+        route = "club_donation_dossier" if vendor.contacted_off_site else "club_donation_contact"
+        return reverse(route, kwargs={"pk": vendor.pk})
 
     def get(self, request, slug=None, pk=None):
         self._load(request, slug=slug, pk=pk)
@@ -420,6 +428,64 @@ class DonationContactView(LoginRequiredMixin, DonationPermissionMixin, View):
         except DonationSendError as error:
             return render(request, "auctions/donation_contact_modal.html", self._step_two_context(form, str(error)))
         messages.success(request, toast)
+        return close_modal_response("reload-page")
+
+
+class DonationDossierView(LoginRequiredMixin, DonationPermissionMixin, View):
+    """The Contact dialog for a vendor this site cannot write to: their own form, a phone call, a visit.
+
+    ``GET`` hands over the club's answers with a copy button each, plus a link to the vendor's form.
+    ``POST`` records that it was done (``donations.record_offsite_contact``), which costs nothing
+    against the daily email allowance -- a person filled the form in, on somebody else's website.
+    """
+
+    def _load(self, request, pk):
+        self.vendor = get_object_or_404(DonationVendor.objects.select_related("club"), pk=pk, is_deleted=False)
+        self.club = self.vendor.club
+        self.check_donation_permission()
+
+    def _context(self, error=""):
+        vendor = self.vendor
+        # The person at the keyboard answers "contact name" when the club hasn't pinned one: a form
+        # asks who is requesting, not who works at the vendor.
+        rows = list(self.club.donation_dossier(asked_by=self.request.user))
+        next_event = self.club.next_donation_event
+        if next_event:
+            rows.append(("Event", next_event))
+        # The vendor's own tracked address, not a member's: their answer then lands on this row, and
+        # the conversation moves to email by itself (``donations.adopt_replying_address``).
+        reply_to = vendor.reply_to_address if self.club.sends_donation_email else ""
+        if reply_to:
+            rows.append(("Email for their reply", reply_to))
+        if vendor.contact_name and vendor.contact_method != DonationVendor.CONTACT_WEBFORM:
+            # Who to ask for on the phone or at the counter. A form has no field for it.
+            rows.append(("Ask for", vendor.contact_name))
+        return {
+            "club": self.club,
+            "vendor": vendor,
+            "rows": rows,
+            "reply_to_address": reply_to,
+            "is_webform": vendor.contact_method == DonationVendor.CONTACT_WEBFORM,
+            "modal_title": f"Contact {vendor.name}",
+            "post_url": reverse("club_donation_dossier", kwargs={"pk": vendor.pk}),
+            "settings_url": reverse("club_donation_settings", kwargs={"slug": self.club.slug}),
+            "can_edit_settings": self.user_has_club_permission("permission_edit_club"),
+            "error": error,
+        }
+
+    def get(self, request, pk):
+        self._load(request, pk)
+        return render(request, "auctions/donation_dossier_modal.html", self._context())
+
+    def post(self, request, pk):
+        self._load(request, pk)
+        try:
+            donations.record_offsite_contact(
+                self.vendor, note=(request.POST.get("note") or "").strip(), user=request.user
+            )
+        except DonationSendError as error:
+            return render(request, "auctions/donation_dossier_modal.html", self._context(str(error)))
+        messages.success(request, f"Recorded a donation request to {self.vendor.name}.")
         return close_modal_response("reload-page")
 
 

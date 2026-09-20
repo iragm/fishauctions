@@ -108,10 +108,10 @@ this only quotes its opening sentence.
 - **`dmca.py`** (227 lines)
   The DMCA designated agent, the takedown, and the repeat-infringer policy.
   `agent`, `is_configured`, `agent_email`, `strike_count`, `record_strike`, `take_down`, `terminate`
-- **`donation_views.py`** (527 lines)
+- **`donation_views.py`** (593 lines)
   Donation tracking views: the vendor table, the vendor panel, and the contact dialog.
-  `DonationPermissionMixin`, `ClubDonationVendorsView`, `ClubDonationSettingsView`, `DonationVendorPanelView`, `DonationVendorDeleteView`, `DonationContactView`, `DonationEmailPreviewView`, `DonationUnsubscribeView`, `InboundDonationEmailView`
-- **`donations.py`** (829 lines)
+  `DonationPermissionMixin`, `ClubDonationVendorsView`, `ClubDonationSettingsView`, `DonationVendorPanelView`, `DonationVendorDeleteView`, `DonationContactView`, `DonationDossierView`, `DonationEmailPreviewView`, `DonationUnsubscribeView`, `InboundDonationEmailView`
+- **`donations.py`** (953 lines)
   Donation tracking: asking vendors for donations and reading their replies.
 - **`email_routing.py`** (174 lines)
   `email_routing_enabled`, `email_routing_domain`, `build_routed_sender_address`, `sender_with_display_name`, `admin_routing_email`, `resolve_donation_alias`, `resolve_routing_info`, `resolve_routed_recipient`
@@ -121,7 +121,7 @@ this only quotes its opening sentence.
 - **`field_adoption.py`** (208 lines)
   Which settings has anybody ever changed, reconstructed from the rows rather than a changelog.
   `FieldAdoption`, `model_field_default`, `form_field_names`, `history_edit_counts`, `field_adoption`, `auction_field_adoption`
-- **`filters.py`** (1794 lines)
+- **`filters.py`** (1798 lines)
   The search and filter boxes above every table.
 - **`fishbase.py`** (59 lines)
   Where the species list comes from.
@@ -129,7 +129,7 @@ this only quotes its opening sentence.
 - **`form_friction.py`** (169 lines)
   The view mixin that writes :class:`auctions.friction_models.FormFailure` rows.
   `error_codes`, `abandon_token`, `read_abandon_token`, `FormFrictionMixin`
-- **`forms.py`** (6104 lines)
+- **`forms.py`** (6181 lines)
   Every form on the site.
 - **`friction_models.py`** (74 lines)
   Where people get stuck: one row per rejected form submission.
@@ -163,7 +163,7 @@ this only quotes its opening sentence.
 - **`model_caching.py`** (79 lines)
   ``@cached_property`` on a model, and the invalidation that makes it safe.
   `InvalidatesRelatedCache`, `CachedPropertiesMixin`
-- **`models.py`** (13481 lines)
+- **`models.py`** (13656 lines)
   The database: 80 models, mostly in one file because 29 of them form a single dependency cycle
 - **`moderation_admin.py`** (139 lines)
   The Django admin for the moderation queue: reports, copyright notices and strikes.
@@ -180,11 +180,11 @@ this only quotes its opening sentence.
 - **`notifications.py`** (313 lines)
   Email to mobile-push routing.
   `push_configured`, `user_prefers_push`, `user_has_app_push`, `notify_user`, `notify_running_total`, `send_fcm_message`, `send_fcm_data_message`
-- **`palette_actions.py`** (13794 lines)
+- **`palette_actions.py`** (14568 lines)
   The things the command palette's assist, and ``/mcp/``, are allowed to do.
-- **`palette_assist.py`** (2199 lines)
+- **`palette_assist.py`** (2209 lines)
   Natural-language orchestration for the command palette.
-- **`palette_routes.py`** (1835 lines)
+- **`palette_routes.py`** (1836 lines)
   Every named URL, as a :class:`Route` the palette assistant can reach or an :data:`EXCLUDED` entry
 - **`passkit_views.py`** (183 lines)
   Apple PassKit web service: the endpoints installed Wallet passes talk to.
@@ -226,7 +226,7 @@ this only quotes its opening sentence.
   `normalize_category_name`, `CategoryResolver`, `hint_for`, `assign_categories`
 - **`species_matching.py`** (1034 lines)
   Turn a typed lot name into a short list of species to pick from, or nothing.
-- **`tables.py`** (1420 lines)
+- **`tables.py`** (1431 lines)
   The ``django_tables2`` tables behind every list on the site.
 - **`tasks.py`** (1735 lines)
   Celery tasks for the auctions app. Many wrap the management command of the same name.
@@ -334,7 +334,7 @@ this only quotes its opening sentence.
 - **`test_dmca.py`** (468 lines)
   What the DMCA safe harbour needs to be true, checked.
   `AgentConfigurationTests`, `DmcaPageTests`, `NoticeIntakeTests`, `NoticeRoutingTests`, `ReportContentTests`, `StrikeTests`, `TakedownRemovesTheMaterialTests`, `MobileConfigTests`, `ImageSourceLabelTests`, `AccountDeletionTests`
-- **`test_donations.py`** (1661 lines)
+- **`test_donations.py`** (2471 lines)
   Tests for donation tracking: routing, the inbound webhook, the LLM seams, and the UI gates.
 - **`test_endauctions.py`** (902 lines)
   Tests for the ``endauctions`` command and the websocket consumers.
@@ -375,7 +375,7 @@ this only quotes its opening sentence.
   Mailchimp and Brevo: syncing members, webhooks, self-service and what gets redacted.
 - **`test_mcp.py`** (1339 lines)
   Tests for the MCP tool catalogue.
-- **`test_mcp_permissions.py`** (629 lines)
+- **`test_mcp_permissions.py`** (670 lines)
   Every tool on ``/mcp/``, run against somebody else's club and auction.
   `secrets`, `CrossTenantTestCase`, `NobodyElsesDataTests`, `NobodyElsesRowsTests`, `NothingCrashesInsteadOfRefusingTests`, `PrintLabelsByPrimaryKeyTests`, `AuctionSetupBelongsToTheAuctionTests`, `ClubSetupBelongsToTheClubTests`
 - **`test_mcp_resources.py`** (308 lines)
@@ -420,7 +420,7 @@ this only quotes its opening sentence.
   `PageViewPathTests`, `MigrationHostListTests`, `PageViewCreateStoresAPathTests`
 - **`test_palette_account.py`** (870 lines)
   The rest of the account, and the auction and club setup pages behind it.
-- **`test_palette_assist.py`** (5051 lines)
+- **`test_palette_assist.py`** (5058 lines)
   Tests for the command palette's natural-language assist.
 - **`test_palette_core.py`** (1265 lines)
   The command palette itself, and the mobile surfaces that call into it.
@@ -507,7 +507,7 @@ this only quotes its opening sentence.
   `patch_views`, `WritableMediaRoot`, `give_contact_info`, `CsvImportTestMixin`, `StandardTestCase`, `SuiteStaysFastTests`, `EveryTestStartsInTheSiteTimezoneTests`
 - **`tests_selenium.py`** (1139 lines)
   Selenium browser tests for client-side JavaScript, HTMx and websockets.
-- **`urls.py`** (1287 lines)
+- **`urls.py`** (1292 lines)
   Every URL on the site, and the one place a new one has to be declared.
 - **`usability_report.py`** (276 lines)
   The usability measurements for the dashboard.

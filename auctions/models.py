@@ -326,6 +326,13 @@ def guess_category(text):
     return None
 
 
+def _display_name(user):
+    """What to write on a form as a person's name, or "". The site's usual fallback order."""
+    if not user or not getattr(user, "is_authenticated", False):
+        return ""
+    return (user.get_full_name() or user.username or "").strip()
+
+
 def normalize_email(value):
     """Strip and lowercase an email; empty input returns "" (not None) to match field convention."""
     return (value or "").strip().lower()
@@ -965,6 +972,57 @@ class Club(CloudflareImageMixin, models.Model):
         verbose_name="Donation mailing address",
         help_text="Where vendors should send physical donations. Included in donation emails.",
     )
+    # The dossier: the answers every vendor's donation-request form asks for, kept once instead of
+    # being hunted down per form. Text only -- no uploads, so no determination letter lives here.
+    # Read through ``donation_dossier``.
+    donation_legal_name = models.CharField(
+        max_length=255,
+        blank=True,
+        default="",
+        verbose_name="Legal name",
+        help_text="Only if it differs from the club name a form would otherwise get.",
+    )
+    donation_tax_id = models.CharField(
+        max_length=50,
+        blank=True,
+        default="",
+        verbose_name="Tax ID",
+        help_text="EIN or TIN. Nearly every donation form asks for one.",
+    )
+    donation_tax_status = models.CharField(
+        max_length=120,
+        blank=True,
+        default="",
+        verbose_name="Tax status",
+        help_text="As you would write it on a form, e.g. 501(c)(3) public charity, or 501(c)(7) social club.",
+    )
+    donation_website = models.CharField(
+        max_length=255,
+        blank=True,
+        default="",
+        verbose_name="Website",
+    )
+    donation_phone = models.CharField(
+        max_length=50,
+        blank=True,
+        default="",
+        verbose_name="Phone",
+        help_text="A number a vendor can call back. Forms often make this required.",
+    )
+    donation_contact_name = models.CharField(
+        max_length=255,
+        blank=True,
+        default="",
+        verbose_name="Contact name",
+        help_text="Whose name goes on the request.",
+    )
+    donation_expected_attendance = models.CharField(
+        max_length=120,
+        blank=True,
+        default="",
+        verbose_name="Expected attendance",
+        help_text="How many people come, as you would answer it: 80, or 60-100.",
+    )
     DONATION_FOLLOWUP_CHOICES = (
         (1, "1 day"),
         (3, "3 days"),
@@ -1187,6 +1245,40 @@ class Club(CloudflareImageMixin, models.Model):
     def donation_tracking_enabled(self):
         """True when this club may use donation tracking at all."""
         return bool(self.enable_donation_tracking)
+
+    def donation_dossier(self, asked_by=None):
+        """The club's answers to what a vendor's donation form asks, as ``(label, value)`` rows.
+
+        One list, so the modal, the MCP read and any future surface can't drift into disagreeing about
+        what the club's tax ID is. Blank answers are dropped: a form field nobody filled in is worse
+        than absent, because it looks answered. The vendor's own reply address is added per vendor by
+        the caller, since it is not a fact about the club.
+
+        The contact name a form asks for is *the requester's*, not the vendor's. A club that pinned one
+        gets that; otherwise it is *asked_by*, the person at the keyboard, who is the true answer.
+        """
+        rows = [
+            ("Organization", self.donation_legal_name or self.name),
+            ("Tax ID", self.donation_tax_id),
+            ("Tax status", self.donation_tax_status),
+            ("Contact name", self.donation_contact_name or _display_name(asked_by)),
+            ("Phone", self.donation_phone),
+            ("Website", self.donation_website),
+            ("Expected attendance", self.donation_expected_attendance),
+            ("Mailing address", self.donation_mailing_address.strip()),
+            ("About the club", self.donation_context.strip()),
+        ]
+        return [(label, value) for label, value in rows if value]
+
+    @property
+    def next_donation_event(self):
+        """The club's next event as one line, or "". What a form means by "event name and date"."""
+        event = self.events.filter(date_start__gte=timezone.now()).order_by("date_start").first()
+        if not event:
+            return ""
+        when = timezone.localtime(event.date_start).strftime("%B %-d, %Y")
+        where = f" at {event.location}" if event.location else ""
+        return f"{event.title} on {when}{where}"
 
     @property
     def sends_donation_email(self):
@@ -2236,7 +2328,7 @@ class DonationVendor(models.Model):
     STATUS_DO_NOT_CONTACT = "do_not_contact"
     STATUS_CHOICES = (
         (STATUS_NEW, "New"),
-        (STATUS_EMAIL_SENT, "Initial email sent"),
+        (STATUS_EMAIL_SENT, "Initial request sent"),
         (STATUS_INTERESTED, "Interested"),
         (STATUS_PROMISED, "Donation promised"),
         (STATUS_RECEIVED, "Donation received"),
@@ -2246,10 +2338,43 @@ class DonationVendor(models.Model):
     # Statuses the LLM may set. "Received" needs a human; "Do not contact" only via unsubscribe.
     LLM_ASSIGNABLE_STATUSES = (STATUS_INTERESTED, STATUS_PROMISED, STATUS_NOT_INTERESTED)
 
+    #: Not a status: the question the list is usually opened to answer, which cuts across all of them.
+    #: One spelling for the status menu, the banner's link and ``list_donation_vendors``, so ``?status=due``
+    #: means the same thing wherever it is written.
+    FOLLOWUP_DUE = "due"
+    STATUS_FILTER_CHOICES = ((FOLLOWUP_DUE, "Due for a follow-up"), *STATUS_CHOICES)
+
+    CONTACT_EMAIL = "email"
+    CONTACT_WEBFORM = "webform"
+    CONTACT_PHONE = "phone"
+    CONTACT_IN_PERSON = "in_person"
+    CONTACT_METHOD_CHOICES = (
+        (CONTACT_EMAIL, "Email"),
+        (CONTACT_WEBFORM, "Their donation request form"),
+        (CONTACT_PHONE, "Phone"),
+        (CONTACT_IN_PERSON, "In person"),
+    )
+    #: Methods this site cannot perform: it holds the club's answers and records what was done.
+    OFFSITE_CONTACT_METHODS = (CONTACT_WEBFORM, CONTACT_PHONE, CONTACT_IN_PERSON)
+
     club = models.ForeignKey(Club, on_delete=models.CASCADE, related_name="donation_vendors")
     name = models.CharField(max_length=255, verbose_name="Vendor name")
     contact_name = models.CharField(max_length=255, blank=True, default="")
     email = models.CharField(max_length=255, blank=True, default="", db_index=True)
+    contact_method = models.CharField(
+        max_length=20,
+        choices=CONTACT_METHOD_CHOICES,
+        default=CONTACT_EMAIL,
+        verbose_name="Contact them by",
+        help_text="Large businesses usually take donation requests only through a form on their own site.",
+    )
+    contact_url = models.CharField(
+        max_length=500,
+        blank=True,
+        default="",
+        verbose_name="Their request form",
+        help_text="If this vendor uses a webform for initial contacts instead of an email.  Leave this blank if you have their email address.",
+    )
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_NEW, db_index=True)
     last_contact = models.DateTimeField(
         null=True,
@@ -2305,24 +2430,53 @@ class DonationVendor(models.Model):
                 kwargs["update_fields"] = list(kwargs["update_fields"]) + ["status"]
         super().save(*args, **kwargs)
 
+    #: Bootstrap icon per contact method. The vendor list used one shop icon for every row, which
+    #: said nothing; this is the one fact about a vendor you want before you click.
+    CONTACT_METHOD_ICONS = {
+        CONTACT_EMAIL: "bi-envelope",
+        CONTACT_WEBFORM: "bi-globe",
+        CONTACT_PHONE: "bi-telephone",
+        CONTACT_IN_PERSON: "bi-shop",
+    }
+
+    @property
+    def contact_method_icon(self):
+        return self.CONTACT_METHOD_ICONS.get(self.contact_method, "bi-shop")
+
+    @property
+    def contacted_off_site(self):
+        """Whether reaching this vendor is something a person does elsewhere and reports back."""
+        return self.contact_method in self.OFFSITE_CONTACT_METHODS
+
     @property
     def can_be_contacted(self):
-        """Whether we're allowed to write to this vendor at all."""
-        if self.is_deleted or not self.email:
+        """Whether this vendor may be approached at all, by whichever method they take.
+
+        An unsubscribe blocks every method, not just email: it is the vendor saying stop.
+        """
+        if self.is_deleted:
             return False
         if self.unsubscribed or self.status == self.STATUS_DO_NOT_CONTACT:
             return False
-        return not DonationUnsubscribe.is_unsubscribed(self.email)
+        if self.contact_method == self.CONTACT_WEBFORM:
+            return bool(self.contact_url)
+        if self.contacted_off_site:
+            return True
+        return bool(self.email) and not DonationUnsubscribe.is_unsubscribed(self.email)
 
     @property
     def cannot_contact_reason(self):
         """Why the Contact button is unavailable, or "". Shown as a tooltip."""
-        if not self.email:
-            return "Add an email address for this vendor first"
         if self.unsubscribed:
             return "This vendor unsubscribed and cannot be contacted again"
         if self.status == self.STATUS_DO_NOT_CONTACT:
             return "This vendor is marked do not contact"
+        if self.contact_method == self.CONTACT_WEBFORM:
+            return "" if self.contact_url else "Add the address of their request form first"
+        if self.contacted_off_site:
+            return ""
+        if not self.email:
+            return "Add an email address for this vendor first"
         if DonationUnsubscribe.is_unsubscribed(self.email):
             return "This email address unsubscribed from donation requests"
         return ""
@@ -2348,8 +2502,12 @@ class DonationVendor(models.Model):
 
 
 class DonationEmail(models.Model):
-    """One message to or from a donation vendor: a record, not a mail client. Outgoing rows on send or copy;
-    incoming from the inbound webhook. Plain text, images stripped.
+    """One contact with a donation vendor: a record, not a mail client. Outgoing rows on send, on copy, or
+    when somebody reports submitting the vendor's own form; incoming from the inbound webhook. Plain
+    text, images stripped.
+
+    Still named for email because email is what all but one ``channel`` is, and the table holds every
+    foreign key in the thread.
     """
 
     DIRECTION_INCOMING = "in"
@@ -2358,9 +2516,26 @@ class DonationEmail(models.Model):
         (DIRECTION_INCOMING, "Incoming"),
         (DIRECTION_OUTGOING, "Outgoing"),
     )
+    CHANNEL_EMAIL = "email"
+    CHANNEL_WEBFORM = "webform"
+    CHANNEL_PHONE = "phone"
+    CHANNEL_IN_PERSON = "in_person"
+    CHANNEL_CHOICES = (
+        (CHANNEL_EMAIL, "Email"),
+        (CHANNEL_WEBFORM, "Their donation request form"),
+        (CHANNEL_PHONE, "Phone"),
+        (CHANNEL_IN_PERSON, "In person"),
+    )
 
     vendor = models.ForeignKey(DonationVendor, on_delete=models.CASCADE, related_name="emails")
     direction = models.CharField(max_length=3, choices=DIRECTION_CHOICES, db_index=True)
+    channel = models.CharField(
+        max_length=20,
+        choices=CHANNEL_CHOICES,
+        default=CHANNEL_EMAIL,
+        db_index=True,
+        help_text="How this contact happened. Only email rows count against the daily email allowance.",
+    )
     sender = models.CharField(max_length=255, blank=True, default="")
     recipients = models.CharField(max_length=1000, blank=True, default="")
     subject = models.CharField(max_length=500, blank=True, default="")

@@ -296,10 +296,12 @@ opt out: `check_in`, `watch_lot`, `review_points`. The bar is confirm-tier and i
   reimplemented by a resolver whose own docstring says it's that view's body; an excuse whose whole
   argument is "hard to say out loud" isn't one.
   `test_palette_skills.PageOnlyWriteRegistryTests` fails the build on all three.
-- One gap in that guarantee: `palette_actions.postable_views()` requires `hasattr(view, "post")`, so
+- Two gaps in that guarantee. `palette_actions.postable_views()` requires `hasattr(view, "post")`, so
   `CreateUserIgnoreCategory`/`DeleteUserIgnoreCategory` (which write in `get()`, no URL name) are in
-  none of `postable_views()`, `NOT_A_SKILL` or `palette_routes.EXCLUDED` — the only user-facing
-  writes in that blind spot.
+  none of `postable_views()`, `NOT_A_SKILL` or `palette_routes.EXCLUDED`. And it reads only
+  `palette_actions.AUDITED_VIEW_MODULES` — `auctions.views` and `auctions.donation_views`; the latter
+  was added when the donation skills arrived, having held five user-facing writes in none of the three
+  tables. `app_links`, `apple_notifications` and `passkit_views` are still outside it.
 - `request_a_skill` records what an agent couldn't do; `/admin-dashboard/assistant-requests/` is the
   queue, ordered by distinct askers. Row content is model-written: displayed, escaped, never executed.
 - `docs/mcp_next.md` is the standing list of unused spec features, including what's already rejected.

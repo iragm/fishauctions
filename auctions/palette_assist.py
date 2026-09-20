@@ -210,7 +210,14 @@ _removed_vocabulary_cache: frozenset[str] | None = None
 #: Words this whole site is about, so a query containing one has said nothing about wanting a write.
 #: Without these, "when does the fall auction start?" kept every write tool, because two of them have
 #: the word auction in their name.
-_TOO_GENERAL = frozenset("auction auctions lot lots club clubs member members person people user users".split())
+#:
+#: **donation** is here for the opposite reason. Every lot has a donation flag, so "sell the java fern
+#: as a donation" and "add 5 donation lots" are floor work -- but the donation *desk* went to ``/mcp/``
+#: and took the word with it, which read those as skills the palette gave up and took ``set_lot_winner``
+#: away mid-auction. "vendor" is the word that actually names the desk, and it stays.
+_TOO_GENERAL = frozenset(
+    "auction auctions lot lots club clubs member members person people user users donation donations".split()
+)
 
 
 #: Words people use in each other's place. Both vocabularies below are built out of the registry's
@@ -225,6 +232,9 @@ _SYNONYMS: tuple[frozenset[str], ...] = (
     frozenset({"current", "default"}),
     frozenset({"message", "announcement"}),
     frozenset({"buyer", "bidder"}),
+    # The donation desk is named by its plural and by the word clubs actually use for it; the
+    # registry only ever says "vendor".
+    frozenset({"vendor", "vendors", "sponsor", "sponsors"}),
 )
 
 

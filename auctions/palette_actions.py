@@ -50,7 +50,7 @@ from django.utils.http import urlencode
 from django.utils.text import Truncator
 
 from . import command_palette, palette_routes, source_code
-from .models import AuctionTOS, ClubMember, Lot
+from .models import AuctionTOS, ClubMember, DonationVendor, Lot
 from .services import (
     apply_club_member_to_tos,
     check_in_auctiontos,
@@ -6450,6 +6450,554 @@ def award_points(request, params: dict[str, Any]) -> dict[str, Any]:
     )
 
 
+# --- donation vendors --------------------------------------------------------
+#
+#   list_donation_vendors      the work queue, most overdue first
+#   describe_donation_vendor   one vendor and the conversation so far
+#   add_donation_vendor        one row, through the vendor form
+#   update_donation_vendor     status, email, context, follow-up date
+#   contact_donation_vendor    a message the caller wrote, sent or recorded
+#
+# Adding a row sends nothing. What is rationed is contacting, and it already was:
+# ``donations.MAX_DONATION_EMAILS_PER_DAY`` a club a day, counted off the stored messages, so a call
+# here and the site's own dialog draw on one allowance. There is deliberately no bulk add and no
+# import -- a list of four hundred strangers is four hundred confirmed writes, and it buys nothing,
+# since the mailbox is what is bounded and not the address book.
+
+
+def _donation_club_or_problem(request, params: dict[str, Any], key: str = "club"):
+    """The club a donation action acts on, or a result to return.
+
+    The two questions ``donation_views.DonationPermissionMixin.check_donation_permission`` asks: the
+    feature is on, and this person holds ``permission_manage_donations`` (club admins included).
+    """
+    from .views import check_club_permission
+
+    club, problem = _club_or_problem(request, params, key)
+    if problem:
+        return None, problem
+    if not club.donation_tracking_enabled:
+        return None, _error(f"{club.name} doesn't have donation tracking turned on, so it has no vendors to work with.")
+    if not check_club_permission(request.user, club, "permission_manage_donations"):
+        return None, _error(f"You don't have permission to manage {club.name}'s donation vendors.")
+    return club, None
+
+
+def _resolve_vendor(club, hint: str):
+    """One of a club's donation vendors by business name, contact name or email: ``(vendor, problem)``."""
+    from .models import DonationVendor
+
+    hint = (hint or "").strip()
+    if not hint:
+        return None, _need("Which vendor? Give me the business name or their email address.")
+    vendors = DonationVendor.objects.filter(club=club, is_deleted=False)
+    exact = vendors.filter(Q(name__iexact=hint) | Q(email__iexact=hint)).first()
+    if exact:
+        return exact, None
+    matches = list(vendors.filter(Q(name__icontains=hint) | Q(contact_name__icontains=hint))[: AMBIGUOUS_LIMIT + 1])
+    if not matches:
+        return None, _error(f"I couldn't find a donation vendor called “{hint}” in {club.name}.")
+    if len(matches) > 1:
+        return None, _need(
+            f"There's more than one vendor matching “{hint}” in {club.name}. Which one?",
+            [{"label": vendor.name, "value": vendor.name} for vendor in matches],
+        )
+    return matches[0], None
+
+
+def _donation_followups(club) -> list[dict[str, str]]:
+    url = reverse("club_donation_vendors", kwargs={"slug": club.slug})
+    return [{"label": f"{club.name}'s donation vendors", "url": url}]
+
+
+def _vendor_row(vendor, *, latest_reply=None) -> dict[str, Any]:
+    """One vendor as a row. A business and its staff are third parties, so their names are fenced."""
+    return {
+        "vendor": untrusted_short(vendor.name),
+        "contact_name": untrusted_short(vendor.contact_name) or None,
+        "email": vendor.email or None,
+        "status": vendor.get_status_display(),
+        "contact_method": vendor.get_contact_method_display(),
+        "contact_url": vendor.contact_url or None,
+        "last_contact": vendor.last_contact.strftime("%Y-%m-%d") if vendor.last_contact else None,
+        "followup_due": vendor.followup_due.strftime("%Y-%m-%d") if vendor.followup_due else None,
+        "followup_overdue": bool(vendor.is_followup_due),
+        "latest_reply": untrusted(latest_reply) if latest_reply else None,
+        "can_be_contacted": bool(vendor.can_be_contacted),
+        "cannot_contact_reason": vendor.cannot_contact_reason or None,
+    }
+
+
+def _quota_block(club) -> dict[str, Any]:
+    """What is left of the club's daily donation-email allowance. On every donation answer, because it is
+    what decides whether the next send is refused.
+    """
+    from . import donations
+
+    quota = donations.donation_email_quota(club)
+    return {
+        "emails_sent_today": quota.used,
+        "emails_left_today": quota.remaining,
+        "daily_email_limit": quota.limit,
+        "allowance_resets": quota.resets_in_words,
+    }
+
+
+#: Each stored status and the words somebody would name it by. ``received`` and ``do_not_contact`` are
+#: reachable here on purpose: they are the two ``DonationVendor.LLM_ASSIGNABLE_STATUSES`` withholds
+#: from the reply summarizer, so a person asserting them is the point.
+_VENDOR_STATUS_WORDS = {
+    DonationVendor.STATUS_NEW: ("new", "not_contacted"),
+    DonationVendor.STATUS_EMAIL_SENT: ("sent", "emailed", "email_sent", "contacted", "waiting"),
+    DonationVendor.STATUS_INTERESTED: ("interested", "keen"),
+    DonationVendor.STATUS_PROMISED: ("promised", "committed", "promised_a_donation"),
+    DonationVendor.STATUS_RECEIVED: ("received", "donated", "gave", "arrived", "in_hand"),
+    DonationVendor.STATUS_NOT_INTERESTED: ("not_interested", "declined", "no", "refused", "said_no"),
+    DonationVendor.STATUS_DO_NOT_CONTACT: ("do_not_contact", "unsubscribed", "opted_out", "stop"),
+}
+
+#: ``status`` values on :func:`list_donation_vendors` that aren't a stored status.
+_VENDOR_DUE_WORDS = ("due", "overdue", "followup", "follow_up", "followup_due", "needs_a_nudge", "chase")
+
+#: Each way of reaching a vendor and the words for it. A big chain takes requests only through a form
+#: on its own site, which this site cannot fill in -- see :func:`record_donation_contact`.
+_CONTACT_METHOD_WORDS = {
+    DonationVendor.CONTACT_EMAIL: ("email", "e_mail", "mail"),
+    DonationVendor.CONTACT_WEBFORM: ("webform", "web_form", "form", "website", "online_form", "portal", "their_form"),
+    DonationVendor.CONTACT_PHONE: ("phone", "telephone", "call", "by_phone"),
+    DonationVendor.CONTACT_IN_PERSON: ("in_person", "in_store", "visit", "counter", "walk_in"),
+}
+
+
+def _contact_method(hint: str) -> str | None:
+    """One stored contact method from what the caller called it, or ``None``."""
+    asked = (hint or "").strip().lower().replace(" ", "_").replace("-", "_")
+    if not asked:
+        return None
+    return next((method for method, words in _CONTACT_METHOD_WORDS.items() if asked in words), None)
+
+
+def _dossier_block(club, vendor, asked_by=None) -> dict[str, Any]:
+    """The club's answers to what a vendor's request form asks, for a vendor this site can't write to.
+
+    ``Club.donation_dossier`` is the one list, shared with the dialog a person uses, so a tool and a
+    copy button can't disagree about the club's tax ID. The reply address is the vendor's own, which is
+    what turns a form submission into a tracked conversation.
+    """
+    rows = dict(club.donation_dossier(asked_by=asked_by))
+    event = club.next_donation_event
+    if event:
+        rows["Event"] = event
+    if club.sends_donation_email and vendor.reply_to_address:
+        rows["Email for their reply"] = vendor.reply_to_address
+    return rows
+
+
+def _vendor_status(hint: str) -> str | None:
+    """One stored status from what the caller called it, or ``None`` if it's nothing we store."""
+    asked = (hint or "").strip().lower().replace(" ", "_").replace("-", "_")
+    if not asked:
+        return None
+    return next((status for status, words in _VENDOR_STATUS_WORDS.items() if asked in words), None)
+
+
+def list_donation_vendors(request, params: dict[str, Any]) -> dict[str, Any]:
+    """A club's donation vendors, ordered as ``ClubDonationVendorsView.get_queryset`` orders them -- most
+    overdue first -- each with what they last said.
+    """
+    from django.db.models import F, OuterRef, Subquery
+
+    from .models import DonationEmail
+
+    club, problem = _donation_club_or_problem(request, params)
+    if problem:
+        return problem
+    asked = (_str(params, "status") or "all").lower().replace(" ", "_").replace("-", "_")
+    vendors = (
+        DonationVendor.objects.filter(club=club, is_deleted=False)
+        .annotate(
+            # One string per vendor, so a subquery rather than a prefetch, exactly as the page does it.
+            latest_reply_summary=Subquery(
+                DonationEmail.objects.filter(vendor=OuterRef("pk"), direction=DonationEmail.DIRECTION_INCOMING)
+                .order_by("-date")
+                .values("summary")[:1]
+            )
+        )
+        .order_by(F("followup_due").asc(nulls_last=True), "name")
+    )
+    label = "are on the list"
+    if asked in _VENDOR_DUE_WORDS:
+        vendors = vendors.filter(followup_due__lte=timezone.now())
+        label = "are due a follow-up"
+    elif asked not in {"all", ""}:
+        status = _vendor_status(asked)
+        if status is None:
+            return _error(
+                f"I don't know the vendor status “{asked}”. "
+                "Try: all, due, new, sent, interested, promised, received, not_interested, do_not_contact."
+            )
+        vendors = vendors.filter(status=status)
+        label = f"are “{dict(DonationVendor.STATUS_CHOICES)[status]}”"
+    rows = list(vendors)
+    total = len(rows)
+    limit, offset = _slice(params)
+    page = rows[offset : offset + limit]
+    return {
+        "found": bool(total),
+        "club": club.name,
+        "vendors": [_vendor_row(vendor, latest_reply=vendor.latest_reply_summary) for vendor in page],
+        "count": total,
+        "showing": len(page),
+        "offset": offset,
+        **_quota_block(club),
+        "summary": f"{total} of {club.name}'s donation vendors {label}.{_showing(total, limit, offset)}",
+        "followups": _donation_followups(club),
+        **_about(club=club),
+    }
+
+
+#: Messages returned with one vendor: enough to answer them without the whole thread.
+VENDOR_EMAIL_LIMIT = 6
+
+#: Characters of one stored message returned.
+VENDOR_BODY_LIMIT = 2000
+
+
+def describe_donation_vendor(request, params: dict[str, Any]) -> dict[str, Any]:
+    """One vendor, the conversation so far, and the club's own donation details -- what
+    ``DonationVendorPanelView`` puts in the panel, for a caller writing the next message.
+    """
+    from . import donations
+
+    club, problem = _donation_club_or_problem(request, params)
+    if problem:
+        return problem
+    vendor, problem = _resolve_vendor(club, _str(params, "vendor") or _str(params, "name"))
+    if problem:
+        return problem
+    thread = []
+    for email_row in vendor.emails.all()[:VENDOR_EMAIL_LIMIT]:
+        # Our own footer back out: it is appended on the way out and is not part of what was said.
+        body = donations.truncate_for_model(donations.strip_donation_footer(email_row.body), VENDOR_BODY_LIMIT)
+        incoming = email_row.is_incoming
+        thread.append(
+            {
+                "direction": "from them" if incoming else "from the club",
+                "date": email_row.date.strftime("%Y-%m-%d"),
+                # Their words are a stranger's; the club's own are not fenced.
+                "subject": untrusted_short(email_row.subject) if incoming else email_row.subject,
+                "summary": untrusted(email_row.summary) or None,
+                "body": untrusted(body) if incoming else body,
+                "bounced": email_row.bounced or None,
+            }
+        )
+    summary = f"{vendor.name} in {club.name}: {vendor.get_status_display().lower()}."
+    if vendor.contacted_off_site:
+        summary += f" Contacted by {vendor.get_contact_method_display().lower()}, not from this site."
+    if vendor.is_followup_due:
+        summary += " A follow-up is due."
+    elif vendor.followup_due:
+        summary += f" Follow up on {vendor.followup_due:%B %-d}."
+    if not vendor.can_be_contacted:
+        summary += f" {vendor.cannot_contact_reason}."
+    return {
+        "found": True,
+        "club": club.name,
+        **_vendor_row(vendor),
+        "context": untrusted(vendor.context) or None,
+        "messages": thread,
+        "message_count": vendor.emails.count(),
+        "club_sends_the_email": bool(club.sends_donation_email),
+        "club_donation_context": club.donation_context.strip() or None,
+        "club_mailing_address": club.donation_mailing_address.strip() or None,
+        # Only where it is the thing needed: for an email vendor it is a second copy of the club's
+        # settings nobody asked for.
+        "what_their_form_asks_for": (
+            _dossier_block(club, vendor, asked_by=request.user) if vendor.contacted_off_site else None
+        ),
+        **_quota_block(club),
+        "summary": summary,
+        "followups": _donation_followups(club),
+        **_about(club=club),
+    }
+
+
+def _vendor_form(club, data, instance=None):
+    """The vendor form, as ``DonationVendorPanelView`` builds it."""
+    from .forms import DonationVendorForm
+
+    return DonationVendorForm(data, instance=instance, club=club)
+
+
+def add_donation_vendor(request, params: dict[str, Any]) -> dict[str, Any]:
+    """Add one donation vendor through ``DonationVendorForm``, with the Add button's history line.
+
+    One row a call. Nothing goes out: a vendor is a record until somebody contacts them.
+    """
+    from .models import ClubHistory
+
+    club, problem = _donation_club_or_problem(request, params)
+    if problem:
+        return problem
+    name = _str(params, "name") or _str(params, "vendor")
+    if not name:
+        return _need("What's the business called?")
+    status = DonationVendor.STATUS_NEW
+    if _str(params, "status"):
+        status = _vendor_status(_str(params, "status"))
+        if status is None:
+            return _error(f"I don't know the vendor status “{_str(params, 'status')}”.")
+    method = DonationVendor.CONTACT_EMAIL
+    if _str(params, "contact_method"):
+        method = _contact_method(_str(params, "contact_method"))
+        if method is None:
+            return _error(
+                f"I don't know “{_str(params, 'contact_method')}” as a way to contact a vendor. "
+                "It's email, webform, phone or in person."
+            )
+    elif _str(params, "contact_url") and not _str(params, "email"):
+        # A form's address and no email address is a webform vendor however it was asked for; any
+        # other reading leaves them uncontactable with the answer sitting right there.
+        method = DonationVendor.CONTACT_WEBFORM
+    form = _vendor_form(
+        club,
+        {
+            "name": name,
+            "contact_name": _str(params, "contact_name"),
+            "contact_method": method,
+            "email": _str(params, "email"),
+            "contact_url": _str(params, "contact_url") or _str(params, "url"),
+            "status": status,
+            "context": _str(params, "context") or _str(params, "notes"),
+        },
+    )
+    if not form.is_valid():
+        return _form_problem(form)
+    # ``save(commit=False)`` already sets the club and starts the follow-up clock.
+    vendor = form.save(commit=False)
+    vendor.createdby = request.user
+    vendor.save()
+    ClubHistory.objects.create(
+        club=club,
+        user=request.user,
+        action=f"Added donation vendor {vendor.name} {via(request)}",
+        applies_to="DONATIONS",
+    )
+    summary = f"Added {vendor.name} to {club.name}'s donation vendors."
+    if vendor.unsubscribed:
+        summary += " That address unsubscribed from donation requests, so they're marked do not contact."
+    elif vendor.contacted_off_site:
+        summary += (
+            f" They're contacted by {vendor.get_contact_method_display().lower()}, so asking them is "
+            "somebody's own doing — record_donation_contact is how it gets written down here."
+        )
+    elif not vendor.email:
+        summary += " No email address yet, so they can't be contacted from here."
+    return _ok(
+        summary,
+        vendor=vendor.name,
+        club=club.name,
+        vendor_status=vendor.get_status_display(),
+        followups=_donation_followups(club),
+        **_about(club=club),
+    )
+
+
+def update_donation_vendor(request, params: dict[str, Any]) -> dict[str, Any]:
+    """Change one vendor's status, email, contact name, notes or follow-up date, through the form the vendor
+    panel posts. "Donation received" is a person's word, which is why it is here and not in the summarizer.
+    """
+    from .models import ClubHistory
+
+    club, problem = _donation_club_or_problem(request, params)
+    if problem:
+        return problem
+    vendor, problem = _resolve_vendor(club, _str(params, "vendor") or _str(params, "name"))
+    if problem:
+        return problem
+    changes: dict[str, Any] = {}
+    for key in ("contact_name", "email"):
+        if _str(params, key):
+            changes[key] = _str(params, key)
+    if _str(params, "contact_url") or _str(params, "url"):
+        changes["contact_url"] = _str(params, "contact_url") or _str(params, "url")
+    if _str(params, "contact_method"):
+        method = _contact_method(_str(params, "contact_method"))
+        if method is None:
+            return _error(
+                f"I don't know “{_str(params, 'contact_method')}” as a way to contact a vendor. "
+                "It's email, webform, phone or in person."
+            )
+        changes["contact_method"] = method
+    elif changes.get("contact_url") and not vendor.email and vendor.contact_method == DonationVendor.CONTACT_EMAIL:
+        # Somebody went and found their form for a vendor with no address: the method has to follow, or
+        # the answer sits on a row that still says it can't be contacted.
+        changes["contact_method"] = DonationVendor.CONTACT_WEBFORM
+    if _str(params, "context") or _str(params, "notes"):
+        changes["context"] = _str(params, "context") or _str(params, "notes")
+    if _str(params, "new_name"):
+        changes["name"] = _str(params, "new_name")
+    if _str(params, "followup_due") or _str(params, "date"):
+        changes["followup_due"] = _str(params, "followup_due") or _str(params, "date")
+    if _str(params, "status"):
+        status = _vendor_status(_str(params, "status"))
+        if status is None:
+            return _error(f"I don't know the vendor status “{_str(params, 'status')}”.")
+        changes["status"] = status
+    if not changes:
+        return _need(
+            f"What should I change about {vendor.name}? Their status, email, contact name, the notes on "
+            "them, or when to follow up."
+        )
+    if vendor.unsubscribed and ({"status", "email"} & set(changes)):
+        # The form disables both fields for an unsubscribed vendor, so it would keep the old value and
+        # this would report a change that never happened.
+        return _error(f"{vendor.name} unsubscribed, so their status and email address can't be changed.")
+    data = {
+        "name": vendor.name,
+        "contact_name": vendor.contact_name,
+        "contact_method": vendor.contact_method,
+        "email": vendor.email,
+        "contact_url": vendor.contact_url,
+        "status": vendor.status,
+        "context": vendor.context,
+        "followup_due": timezone.localtime(vendor.followup_due).date() if vendor.followup_due else "",
+    }
+    data.update(changes)
+    form = _vendor_form(club, data, instance=vendor)
+    if not form.is_valid():
+        return _form_problem(form)
+    vendor = form.save()
+    ClubHistory.objects.create(
+        club=club,
+        user=request.user,
+        action=f"Updated donation vendor {vendor.name} {via(request)}",
+        applies_to="DONATIONS",
+    )
+    told = (
+        ", ".join(sorted(changes))
+        .replace("followup_due", "follow-up date")
+        .replace("contact_url", "request form")
+        .replace("_", " ")
+    )
+    return _ok(
+        f"Updated {vendor.name}'s {told} in {club.name}. They're “{vendor.get_status_display()}”, "
+        f"contacted by {vendor.get_contact_method_display().lower()}.",
+        vendor=vendor.name,
+        club=club.name,
+        vendor_status=vendor.get_status_display(),
+        followups=_donation_followups(club),
+        **_about(club=club),
+    )
+
+
+def contact_donation_vendor(request, params: dict[str, Any]) -> dict[str, Any]:
+    """Send a donation email the caller wrote, through ``donations.send_request`` -- or file it through
+    ``donations.record_copied_request`` for a club that sends its own donation mail.
+
+    Those two add everything that isn't the message: the club's postal address, the unsubscribe link,
+    the per-vendor reply address that lands the answer back on this row, the follow-up clock, and the
+    daily allowance. Only the subject and body are the caller's, which is the part this site was
+    writing for itself before.
+    """
+    from . import donations
+    from .donations import DonationSendError
+
+    club, problem = _donation_club_or_problem(request, params)
+    if problem:
+        return problem
+    vendor, problem = _resolve_vendor(club, _str(params, "vendor") or _str(params, "name"))
+    if problem:
+        return problem
+    if vendor.contacted_off_site:
+        # Not a refusal to help: the next step is real, it is just somebody else's to take.
+        how = vendor.get_contact_method_display().lower()
+        answer = _error(
+            f"{vendor.name} takes donation requests by {how}, not email, so nothing can be sent from "
+            f"here. describe_donation_vendor has what their form asks for; record_donation_contact "
+            "writes down that it was done."
+        )
+        if vendor.contact_url:
+            answer["their_form"] = vendor.contact_url
+        return answer
+    subject = _str(params, "subject")
+    body = _str(params, "body")
+    if not subject or not body:
+        return _need(f"What should the email to {vendor.name} say? I need a subject line and a body.")
+    blocked = donations.contact_blocked_reason(vendor)
+    if blocked:
+        return _error(blocked)
+    try:
+        if club.sends_donation_email:
+            donations.send_request(vendor, subject=subject[:200], body=body, user=request.user)
+            summary = f"Sent a donation request to {vendor.name} at {vendor.email}."
+        else:
+            donations.record_copied_request(vendor, subject=subject[:200], body=body, user=request.user)
+            summary = (
+                f"Recorded a donation request for {vendor.name}. {club.name} sends its own donation mail, "
+                "so this was filed rather than sent -- it's on the vendor's page to copy out."
+            )
+    except DonationSendError as error:
+        return _error(str(error))
+    vendor.refresh_from_db()
+    if vendor.followup_due:
+        summary += f" Follow up on {vendor.followup_due:%B %-d} if they don't reply."
+    return _ok(
+        summary,
+        vendor=vendor.name,
+        club=club.name,
+        vendor_status=vendor.get_status_display(),
+        **_quota_block(club),
+        followups=_donation_followups(club),
+        **_about(club=club),
+    )
+
+
+def record_donation_contact(request, params: dict[str, Any]) -> dict[str, Any]:
+    """Write down a donation request that was made somewhere this site can't reach, through
+    ``donations.record_offsite_contact`` -- the body of the Mark contacted button on ``DonationDossierView``.
+
+    Spends none of the daily email allowance: the person did the asking, on the vendor's own website or
+    over the phone, and no mail left here. It sets the same follow-up clock and status a send does, so a
+    vendor asked through their form still comes up for a nudge.
+    """
+    from . import donations
+    from .donations import DonationSendError
+
+    club, problem = _donation_club_or_problem(request, params)
+    if problem:
+        return problem
+    vendor, problem = _resolve_vendor(club, _str(params, "vendor") or _str(params, "name"))
+    if problem:
+        return problem
+    if not vendor.contacted_off_site:
+        return _error(
+            f"{vendor.name} is contacted by email, which this site does itself. "
+            "contact_donation_vendor sends it and records it in one go."
+        )
+    try:
+        email_row = donations.record_offsite_contact(
+            vendor,
+            note=_str(params, "note") or _str(params, "asked_for") or _str(params, "body"),
+            user=request.user,
+        )
+    except DonationSendError as error:
+        return _error(str(error))
+    vendor.refresh_from_db()
+    summary = f"Recorded a donation request to {vendor.name} via {email_row.get_channel_display().lower()}."
+    if vendor.followup_due:
+        summary += f" Follow up on {vendor.followup_due:%B %-d} if they don't reply."
+    return _ok(
+        summary,
+        vendor=vendor.name,
+        club=club.name,
+        vendor_status=vendor.get_status_display(),
+        **_quota_block(club),
+        followups=_donation_followups(club),
+        **_about(club=club),
+    )
+
+
 # --- the points desk ---------------------------------------------------------
 #
 #   points_queue   what the club has to decide (club points admins)
@@ -7818,8 +8366,11 @@ _CLUB_FEATURES: tuple[dict[str, Any], ...] = (
     {
         "key": "donation_tracking",
         "name": "Donation tracking",
-        "what": "Donated lots recorded and the donor thanked, with a receipt.",
+        "what": (
+            "The businesses you ask to donate raffle and auction prizes, what each one said, and when to chase them."
+        ),
         "on": lambda club: club.donation_tracking_enabled,
+        "tool": "list_donation_vendors",
         "settings": ("enable_donation_tracking",),
     },
     {
@@ -12549,6 +13100,190 @@ register(
 
 register(
     Action(
+        name="list_donation_vendors",
+        description=(
+            "List the businesses a club is asking to donate something to a raffle or charity "
+            "auction, and where each conversation has got to. Most overdue first, so "
+            "status='due' is the club's work queue: who hasn't replied and is owed a nudge. "
+            "Also answers 'who promised us something?', 'who said no?', 'what did they say?'. "
+            "Club donation staff only."
+        ),
+        params={
+            "status": (
+                "string, optional, default all. One of: all, due (a follow-up date that has "
+                "passed), new, sent, interested, promised, received, not_interested, do_not_contact."
+            ),
+            "club": "string, optional. Club name. See my_context.",
+            **PAGING_PARAMS,
+        },
+        danger=DANGER_SAFE,
+        resolver=list_donation_vendors,
+        lookup=True,
+        needs=NEEDS_CLUB_ADMIN,
+    )
+)
+
+register(
+    Action(
+        name="describe_donation_vendor",
+        description=(
+            "Read one donation vendor: their status, their contact, what the club knows about "
+            "them, and the emails to and from them with the newest first. This is what their "
+            "last message actually said, which list_donation_vendors only summarizes in a line. "
+            "It also returns the club's own donation details — its standing description, its "
+            "postal address, and whether this site sends the mail or the club copies it out. "
+            "Club donation staff only."
+        ),
+        params={
+            "vendor": "string, required. The business name, their contact's name, or their email address.",
+            "club": "string, optional. Club name. See my_context.",
+        },
+        danger=DANGER_SAFE,
+        resolver=describe_donation_vendor,
+        aliases={"name"},
+        lookup=True,
+        needs=NEEDS_CLUB_ADMIN,
+    )
+)
+
+register(
+    Action(
+        name="add_donation_vendor",
+        description=(
+            "Put one business on a club's donation list: a shop to ask, or one that has already "
+            "given something. Adding a row sends nothing — contact_donation_vendor does that. "
+            "One business a call; there is no import. Club donation staff only."
+        ),
+        params={
+            "name": "string, required. The business name.",
+            "email": "string, optional. Without one they can be tracked but not contacted.",
+            "contact_name": "string, optional. The person the club deals with there.",
+            "status": (
+                "string, optional, default new. Where this one already stands: new, sent, "
+                "interested, promised, received, not_interested, do_not_contact."
+            ),
+            "contact_method": (
+                "string, optional, default email. How this business takes a donation request: email, "
+                "webform (a form on their own site), phone, or in person. Chains are usually webform."
+            ),
+            "contact_url": ("string, optional. The page their request form is on, for contact_method=webform."),
+            "context": (
+                "string, optional. What they sell, what they gave last time, who introduced them — "
+                "it goes to whoever writes the email, so it is the difference between a good "
+                "request and a generic one."
+            ),
+            "club": "string, optional. Club name. See my_context.",
+        },
+        danger=DANGER_CONFIRM,
+        resolver=add_donation_vendor,
+        aliases={"vendor", "notes", "url"},
+        confirm_template="Add a donation vendor",
+        examples=[
+            "add the corner pet shop to our donation list",
+            "add fishy business, they gave a gift card last year",
+        ],
+        needs=NEEDS_CLUB_ADMIN,
+    )
+)
+
+register(
+    Action(
+        name="update_donation_vendor",
+        description=(
+            "Change one donation vendor: their status, email, contact name, the notes on them, or "
+            "when to chase them again. Recording that a donation actually arrived is this — "
+            "'received' is the one status nothing infers from an email, because somebody has to "
+            "have the thing in their hands. Club donation staff only."
+        ),
+        params={
+            "vendor": "string, required. The business name, their contact's name, or their email address.",
+            "status": (
+                "string, optional. new, sent, interested, promised, received, not_interested, or do_not_contact."
+            ),
+            "email": "string, optional.",
+            "contact_name": "string, optional.",
+            "contact_method": ("string, optional. email, webform (a form on their own site), phone, or in person."),
+            "contact_url": (
+                "string, optional. The page their request form is on. Setting it for a vendor who has "
+                "no email address makes them a webform vendor."
+            ),
+            "context": "string, optional. Replaces what the club knows about them.",
+            "followup_due": "string, optional. YYYY-MM-DD, the day they should come up for a nudge.",
+            "new_name": "string, optional. A correction to the business name.",
+            "club": "string, optional. Club name. See my_context.",
+        },
+        danger=DANGER_CONFIRM,
+        idempotent=True,
+        resolver=update_donation_vendor,
+        aliases={"name", "notes", "date", "url"},
+        confirm_template="Update a donation vendor",
+        examples=[
+            "the corner pet shop dropped off a gift card",
+            "mark fishy business not interested",
+            "petco only takes requests through their website",
+        ],
+        needs=NEEDS_CLUB_ADMIN,
+    )
+)
+
+register(
+    Action(
+        name="record_donation_contact",
+        description=(
+            "Write down that somebody asked a donation vendor whose requests don't go by email — "
+            "filled in the form on their own site, phoned them, or asked at the counter. This site "
+            "can't do any of those, so this is the record that it happened: it moves the vendor to "
+            "'initial email sent' and starts the follow-up clock, and it spends none of the club's "
+            "daily email allowance. Club donation staff only."
+        ),
+        params={
+            "vendor": "string, required. The business name, their contact's name, or their email address.",
+            "note": (
+                "string, optional. What was asked for, kept with the vendor so the next person can see "
+                "it. No copy of a form submission exists otherwise."
+            ),
+            "club": "string, optional. Club name. See my_context.",
+        },
+        danger=DANGER_CONFIRM,
+        resolver=record_donation_contact,
+        aliases={"name", "asked_for", "body"},
+        confirm_template="Record a donation request",
+        examples=["I submitted petco's donation form", "called the corner pet shop about the raffle"],
+        needs=NEEDS_CLUB_ADMIN,
+    )
+)
+
+register(
+    Action(
+        name="contact_donation_vendor",
+        description=(
+            "Email one donation vendor a message you wrote, and record it against them. The site "
+            "adds the club's postal address, the unsubscribe link and a reply address that brings "
+            "their answer back onto their row. A club set up to send its own donation mail gets "
+            "the message filed to copy out instead of sent. Counts against the club's daily "
+            "donation-email allowance, which every donation read reports. Club donation staff only."
+        ),
+        params={
+            "vendor": "string, required. The business name, their contact's name, or their email address.",
+            "subject": "string, required. The subject line.",
+            "body": (
+                "string, required. The message as plain text, signed off from the club. No "
+                "unsubscribe line and no postal address: both are appended."
+            ),
+            "club": "string, optional. Club name. See my_context.",
+        },
+        danger=DANGER_CONFIRM,
+        destructive=True,
+        resolver=contact_donation_vendor,
+        aliases={"name", "message"},
+        confirm_template="Email a donation vendor",
+        examples=["ask the corner pet shop for a raffle donation", "reply to fishy business about the gift card"],
+        needs=NEEDS_CLUB_ADMIN,
+    )
+)
+
+register(
+    Action(
         name="auctions_near_me",
         description=(
             "List every auction the user is in — their clubs' own auctions included, at any "
@@ -13227,12 +13962,25 @@ _FIND_THE_FIELD = (
     "Already covered without a model: the palette's own search indexes every settings field, so "
     "typing the setting's name lands on that control with its own explanation next to it."
 )
+_DONATION_DESK = (
+    "Chasing sponsors is a spreadsheet job done sitting down: the thread you are answering, the "
+    "status you are correcting and the daily allowance you are spending are all on the donations "
+    "page, and none of them fit in a one-line box. The email itself is worse -- it goes to a "
+    "stranger in the club's name and somebody reads it before it leaves."
+)
 
 #: Actions offered over ``/mcp/`` and left off the palette's tool list: name -> why.
 MCP_ONLY_SKILLS: dict[str, str] = {
     # Output meant for an agent, too long for the palette.
     "read_source": _AGENT_OUTPUT,
     "club_api": _AGENT_OUTPUT,
+    # The donation desk, all of it.
+    "list_donation_vendors": _DONATION_DESK,
+    "describe_donation_vendor": _DONATION_DESK,
+    "add_donation_vendor": _DONATION_DESK,
+    "update_donation_vendor": _DONATION_DESK,
+    "record_donation_contact": _DONATION_DESK,
+    "contact_donation_vendor": _DONATION_DESK,
     # Writes an agent can target precisely; the palette reaches these pages via go_to_page.
     "remove_lot": _PRECISE_TARGET,
     "queue_lot": _PRECISE_TARGET,
@@ -13337,6 +14085,12 @@ for _name in MCP_ONLY_SKILLS:
 SKILLS: dict[str, str] = {
     "AuctionBulkPrinting": "print_labels",
     "AuctionCheckIn": "check_in",
+    # The donation desk. One panel serves add and edit, so ``update_donation_vendor`` rides on the
+    # same page as its twin.
+    "DonationVendorPanelView": "add_donation_vendor",
+    "DonationContactView": "contact_donation_vendor",
+    "DonationDossierView": "record_donation_contact",
+    "ClubDonationSettingsView": "update_club_setting",
     # The account pages. Password, email and social sign-in stay pages (allauth, verification email).
     "UserLocationUpdate": "update_contact_info",
     "UsernameUpdate": "update_username",
@@ -13723,7 +14477,21 @@ NOT_A_SKILL: dict[str, str] = {
     "ClubMemberValidation": _MACHINE,
     "GetClubs": _MACHINE,
     "LotAutocomplete": _MACHINE,
+    # The donation desk's other three
+    "DonationVendorDeleteView": (
+        "Throws away a business's record and the whole correspondence with them, which is the one "
+        "thing on that page nothing else can put back -- and it is almost never what is wanted. "
+        "Every reason for wanting a sponsor gone is answered by marking them do not contact, which "
+        "keeps the address on the list so nobody writes to them again by accident. Deleting the row "
+        "loses exactly that protection."
+    ),
+    "DonationUnsubscribeView": (
+        "The vendor's own opt-out, performed by a stranger with no account on this site from a link "
+        "in their email. It is permanent, it applies to every club here, and it is deliberately the "
+        "one thing about a vendor that the club asking them for money cannot do on their behalf."
+    ),
     # Webhooks, callbacks and tokens
+    "InboundDonationEmailView": _WEBHOOK,
     "BrevoWebhookView": _WEBHOOK,
     "DiscordInteractionsView": _WEBHOOK,
     "MailchimpWebhookView": _WEBHOOK,
@@ -13749,12 +14517,18 @@ NOT_A_SKILL: dict[str, str] = {
 }
 
 
-def postable_views() -> dict[str, list[str]]:
-    """Every view in ``auctions.views`` accepting a POST, and the URL names reaching it.
+#: Modules the write audit reads. ``auctions.views`` is a package, so it is matched as a prefix;
+#: equality alone would match nothing and silently pass. ``donation_views`` is a module of its own
+#: that sends mail in a club's name, so leaving it out left five user-facing writes in none of the
+#: three tables. ``app_links``, ``apple_notifications`` and ``passkit_views`` are still outside.
+AUDITED_VIEW_MODULES = ("auctions.views", "auctions.donation_views")
 
-    Keyed by class name, since some capabilities have no URL name. A **prefix** match on
-    ``__module__`` (``auctions.views`` is a package); equality would match nothing and silently pass.
-    ``test_palette_skills`` checks the audit still sees views.
+
+def postable_views() -> dict[str, list[str]]:
+    """Every view in :data:`AUDITED_VIEW_MODULES` accepting a POST, and the URL names reaching it.
+
+    Keyed by class name, since some capabilities have no URL name. ``test_palette_skills`` checks the
+    audit still sees views.
     """
     from django.urls import get_resolver
 
@@ -13769,8 +14543,8 @@ def postable_views() -> dict[str, list[str]]:
     for pattern in walk(get_resolver()):
         callback = pattern.callback
         view = getattr(callback, "view_class", None) or getattr(callback, "cls", None)
-        in_views = view is not None and (
-            view.__module__ == "auctions.views" or view.__module__.startswith("auctions.views.")
+        in_views = view is not None and any(
+            view.__module__ == module or view.__module__.startswith(f"{module}.") for module in AUDITED_VIEW_MODULES
         )
         if not in_views or not hasattr(view, "post"):
             continue

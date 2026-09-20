@@ -31,6 +31,7 @@ from auctions.models import (
     Club,
     ClubEvent,
     ClubMember,
+    DonationVendor,
     Invoice,
     Lot,
     PickupLocation,
@@ -53,6 +54,12 @@ def secrets() -> tuple[str, ...]:
         f"{SENTINEL} Guppy Trio",
         f"{SENTINEL} Spring Auction",
         f"{SENTINEL} Meeting",
+        f"{SENTINEL} Pet Supply",
+        f"{SENTINEL} Big Box",
+        f"https://{SENTINEL.lower()}.example.invalid/donations",
+        f"{SENTINEL} Buyer",
+        f"{SENTINEL}VENDORNOTE",
+        f"{SENTINEL.lower()}-vendor@example.invalid",
         f"{SENTINEL}MEMO",
         f"{SENTINEL.lower()}-member@example.invalid",
         f"{SENTINEL.lower()}-bidder@example.invalid",
@@ -73,6 +80,7 @@ WATCHED = (
     PickupLocation,
     AuctionDropdown,
     VolunteerJob,
+    DonationVendor,
 )
 
 
@@ -93,7 +101,13 @@ class CrossTenantTestCase(TestCase):
             username="their_owner", password="x", email="their-owner@example.invalid"
         )
         self.their_club = Club.objects.create(
-            name="Northside Aquarists", abbreviation="NA", enable_breeder_award_program=True
+            name="Northside Aquarists",
+            abbreviation="NA",
+            enable_breeder_award_program=True,
+            # On, so the donation tools get as far as their permission check rather than stopping at
+            # a feature flag and passing the audit for the wrong reason.
+            enable_donation_tracking=True,
+            donation_mailing_address="NA\n1 North St\nSpringfield, IL 62701",
         )
         ClubMember.objects.create(
             club=self.their_club,
@@ -149,6 +163,21 @@ class CrossTenantTestCase(TestCase):
         # One row each for the setup tables, so there's something of theirs to try to change.
         self.their_dropdown_option = AuctionDropdown.objects.create(
             auction=self.their_auction, user=self.their_owner, value=f"{SENTINEL}Fish"
+        )
+        self.their_vendor = DonationVendor.objects.create(
+            club=self.their_club,
+            name=f"{SENTINEL} Pet Supply",
+            contact_name=f"{SENTINEL} Buyer",
+            email=f"{SENTINEL.lower()}-vendor@example.invalid",
+            context=f"{SENTINEL}VENDORNOTE",
+        )
+        # A second one whose requests only go through their own website, so the tools that only work
+        # on those get driven too.
+        self.their_webform_vendor = DonationVendor.objects.create(
+            club=self.their_club,
+            name=f"{SENTINEL} Big Box",
+            contact_method=DonationVendor.CONTACT_WEBFORM,
+            contact_url=f"https://{SENTINEL.lower()}.example.invalid/donations",
         )
         self.their_volunteer_job = VolunteerJob.objects.create(
             auction=self.their_auction,
@@ -319,6 +348,17 @@ class CrossTenantTestCase(TestCase):
             "last_name": "Person",
             "custom_checkbox": True,
             "reference_link": "https://example.invalid/fish",
+            # The donation desk. ``status`` above is "paid", which is not a vendor status, so these
+            # two carry their own probes as far as the permission check.
+            "vendor": f"{SENTINEL} Pet Supply",
+            "contact_name": "Audit Contact",
+            "contact_method": "webform",
+            "contact_url": "https://audit.example.invalid/donations",
+            "note": "audit note",
+            "context": "audit context",
+            "followup_due": (timezone.now() + datetime.timedelta(days=14)).strftime("%Y-%m-%d"),
+            "subject": "Audit subject",
+            "body": "Audit body, sent by nobody who should be able to.",
         }
 
     def _params_for(self, action):
@@ -347,6 +387,7 @@ class CrossTenantTestCase(TestCase):
             "PickupLocation": {self.their_location.pk},
             "AuctionDropdown": {self.their_dropdown_option.pk},
             "VolunteerJob": {self.their_volunteer_job.pk},
+            "DonationVendor": {self.their_vendor.pk, self.their_webform_vendor.pk},
         }
 
     def _assert_nothing_of_theirs_moved(self, before, after, where, *, may_create_inside=False):
