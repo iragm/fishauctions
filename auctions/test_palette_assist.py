@@ -4904,6 +4904,58 @@ class LookupTruncationTests(PaletteAssistTestCase):
         self.assertIn(self.in_person_auction.title, payload)
 
 
+class UsageColumnsTests(PaletteAssistTestCase):
+    """The analytics page could say a command was cancelled but never what it was cancelled *on*."""
+
+    def test_a_row_records_what_the_command_was_about(self):
+        self._script({"action": "check_in", "params": {"person": "555"}, "summary": "Check in bidder 555"})
+        self._assist(f"check in bidder 555 at the {self.online_auction.title}")
+        row = LLMUsage.objects.latest("pk")
+        self.assertEqual(row.subject, self.online_auction.title)
+        self.assertTrue(row.read_the_query, "the auction came out of the sentence, and that is worth counting")
+
+    def test_a_turn_that_lost_its_write_tools_says_so(self):
+        self._script({"action": "go_to_page", "params": {"page": "watched"}, "summary": ""})
+        self._assist("refund lot 14")
+        self.assertEqual(LLMUsage.objects.latest("pk").tools_offered, palette_assist.TOOLS_PAGES)
+
+    def test_an_ordinary_command_is_marked_as_having_had_everything(self):
+        self._script({"action": "go_to_page", "params": {"page": "watched"}, "summary": ""})
+        self._assist("take bob's lot off the watch list")
+        self.assertEqual(LLMUsage.objects.latest("pk").tools_offered, palette_assist.TOOLS_ALL)
+
+    def test_a_question_is_marked_as_having_had_the_reads(self):
+        self._script({"lookup": "describe_auction", "params": {}})
+        self._assist("what are the pickup times?")
+        self.assertEqual(LLMUsage.objects.first().tools_offered, palette_assist.TOOLS_READS)
+
+    def test_the_tier_names_match_what_tools_for_actually_hands_over(self):
+        for query, tier in (
+            ("check in bob", palette_assist.TOOLS_ALL),
+            ("what time is check in?", palette_assist.TOOLS_READS),
+            ("refund lot 14", palette_assist.TOOLS_PAGES),
+        ):
+            self.assertEqual(palette_assist.tools_tier(self.user, query), tier, query)
+        self.user.userdata.palette_navigate_only = True
+        self.user.userdata.save()
+        self.user.userdata.refresh_from_db()
+        self.assertEqual(palette_assist.tools_tier(self.user, "check in bob"), palette_assist.TOOLS_LOCKED)
+
+    def test_the_analytics_page_shows_all_of_it(self):
+        self._script({"action": "go_to_page", "params": {"page": "watched"}, "summary": ""})
+        self._assist("refund lot 14")
+        self.admin_user.is_superuser = True
+        self.admin_user.is_staff = True
+        self.admin_user.save()
+        self.client.force_login(self.admin_user)
+        response = self.client.get(reverse("command_palette_analytics"))
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("llm_writes_withheld", response.context)
+        self.assertIn("llm_read_the_query", response.context)
+        self.assertIn("llm_provider_resting", response.context)
+        self.assertEqual(response.context["llm_writes_withheld"], 1)
+
+
 class ConnectionReleaseTests(SimpleTestCase):
     """The wait gives up its database connection, but never one inside a transaction."""
 

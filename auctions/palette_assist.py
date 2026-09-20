@@ -1223,10 +1223,16 @@ def record_usage(
     destination: str = "",
     request_id: str = "",
     started: float | None = None,
+    subject: str = "",
+    read_the_query: bool = False,
+    tools_offered: str = "",
 ) -> int | None:
     """Write one :class:`LLMUsage` row and return its id (sent back on cancel). Never breaks the request."""
     try:
         return LLMUsage.objects.create(
+            subject=(subject or "")[:200],
+            read_the_query=bool(read_the_query),
+            tools_offered=(tools_offered or "")[:20],
             destination=(destination or "")[:100],
             request_id=(request_id or "")[:32],
             elapsed_ms=int((time.monotonic() - started) * 1000) if started else 0,
@@ -1532,6 +1538,27 @@ def links_for_about(user, about: dict[str, Any]) -> list[dict[str, Any]]:
                 )
             )
     return items
+
+
+def subject_of(request, action, params: dict[str, Any] | None, blocks: list[dict[str, Any]]) -> str:
+    """What this round was about, for the analytics page: the auction, club or lot it names.
+
+    The same line the confirmation card shows, so the two can be compared. Falling back to whatever
+    the reads touched means a lookup round is labelled too. Best-effort, and never worth an
+    exception: a missing label costs a column on an admin page.
+    """
+    try:
+        if action is not None:
+            label = palette_actions.action_context(request, action, params or {})
+            if label:
+                return label[:200]
+        merged = _merge_about(blocks or [])
+        for key in ("lot", "auction", "club"):
+            if merged.get(key):
+                return str(merged[key])[:200]
+    except Exception:  # pragma: no cover - a label is not worth a failed request
+        logger.debug("Could not describe what this round was about")
+    return ""
 
 
 def about_groups(user, blocks: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -1865,15 +1892,29 @@ def assist_stream(request, query: str, context: Any = None, path: str = ""):
     request_id = uuid.uuid4().hex
     started = time.monotonic()
 
-    def record(result, kind, action_name="", success=True, destination=""):
+    def record(result, kind, action_name="", success=True, destination="", action=None, params=None):
         return record_usage(
-            user, result, query, kind, action_name, success, destination, request_id=request_id, started=started
+            user,
+            result,
+            query,
+            kind,
+            action_name,
+            success,
+            destination,
+            request_id=request_id,
+            started=started,
+            subject=subject_of(request, action, params, abouts),
+            # Set by ``palette_actions._named_or_resolved`` when it read the auction out of what they
+            # said because the model left the parameter out.
+            read_the_query=bool(getattr(request, "palette_read_the_query", False)),
+            tools_offered=tier,
         )
 
     entries = sanitize_context(context)
     provider = get_provider()
     system = build_system_prompt(user, request.palette_page, command_palette.app_destinations_for_prompt(request))
     # Built once per request: two queries, unchanged mid-loop.
+    tier = tools_tier(user, query)
     tools = tools_for(user, query)
     messages = build_messages(user, query, entries, request.palette_page)
     # Every object a lookup touched, so the answer can be clicked. See :func:`about_groups`.
@@ -2007,14 +2048,21 @@ def assist_stream(request, query: str, context: Any = None, path: str = ""):
                 continue
             lookups_run.add(signature)
             yield _progress(narrate_lookup(action, reply["params"]))
-            record(result, "lookup", action.name)
+            record(result, "lookup", action.name, action=action, params=reply["params"])
             lookup_result = palette_actions.run_action(request, action.name, reply["params"])
             # Before ``strip_internal``: this is the only place the objects it touched are named.
             abouts.extend(_about_blocks(lookup_result))
             if isinstance(lookup_result, dict) and lookup_result.get("summary"):
                 found = {"summary": str(lookup_result["summary"]), "action": action.name, "result": lookup_result}
             if answers_on_its_own(action, query, lookup_result):
-                record(result, KIND_ANSWER, action.name, destination=_answered_from(lookups_run))
+                record(
+                    result,
+                    KIND_ANSWER,
+                    action.name,
+                    destination=_answered_from(lookups_run),
+                    action=action,
+                    params=reply["params"],
+                )
                 log_assist(user, query, KIND_ANSWER)
                 # What the answer is about, linked. Ordinary search results only when it is about
                 # nothing, which is the case a keyword search was always a poor answer to.
@@ -2071,7 +2119,7 @@ def assist_stream(request, query: str, context: Any = None, path: str = ""):
         if action.danger == palette_actions.DANGER_CONFIRM and action.asks_first:
             # Do NOT execute: the execute endpoint re-runs the resolver after the countdown.
             # ``asks_first=False`` runs the write here instead, still through ``run_action``.
-            usage_id = record(result, KIND_COUNTDOWN, action.name)
+            usage_id = record(result, KIND_COUNTDOWN, action.name, action=action, params=params)
             log_assist(user, query, KIND_COUNTDOWN)
             yield humanize_response(_countdown_response(request, action, params, summary, usage_id), user)
             return
@@ -2083,11 +2131,18 @@ def assist_stream(request, query: str, context: Any = None, path: str = ""):
             palette_actions.remember_undo(request.user, action.name, action_result)
         if response["kind"] == KIND_ERROR:
             # Keep the specific reason, with search results underneath.
-            usage_id = record(result, KIND_ERROR, action.name, success=False)
+            usage_id = record(result, KIND_ERROR, action.name, success=False, action=action, params=params)
             log_assist(user, query, KIND_ERROR)
             yield {**humanize_response(response, user), "usage_id": usage_id}
             return
-        record(result, response["kind"], action.name, destination=response.get("route", ""))
+        record(
+            result,
+            response["kind"],
+            action.name,
+            destination=response.get("route", ""),
+            action=action,
+            params=params,
+        )
         log_assist(user, query, response["kind"])
         yield humanize_response(response, user)
         return

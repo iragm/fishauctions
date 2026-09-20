@@ -12401,7 +12401,12 @@ class LLMUsage(models.Model):
     )
     completion_tokens = models.PositiveIntegerField(default=0)
     total_tokens = models.PositiveIntegerField(default=0)
-    query = models.CharField(max_length=600, blank=True, help_text="What the user typed or said.")
+    query = models.CharField(
+        max_length=600,
+        blank=True,
+        db_index=True,
+        help_text="What the user typed or said.",
+    )
     response_kind = models.CharField(
         max_length=30,
         blank=True,
@@ -12462,11 +12467,43 @@ class LLMUsage(models.Model):
             "can be put either side of a deploy without anybody remembering the date."
         ),
     )
+    subject = models.CharField(
+        max_length=200,
+        blank=True,
+        help_text=(
+            "The auction, club or lot this round was about -- the same line the confirmation card "
+            "shows. Without it a repeatedly cancelled phrase says only that we picked the wrong "
+            "thing, never which thing, and 'it answered about the wrong auction' cannot be checked "
+            "at all."
+        ),
+    )
+    read_the_query = models.BooleanField(
+        default=False,
+        help_text=(
+            "The auction was read out of the sentence because the model left the parameter out. "
+            "Worth counting on its own: it is a guess made on the user's behalf, and the card it "
+            "produces looks exactly as confident as one the model named."
+        ),
+    )
+    tools_offered = models.CharField(
+        max_length=20,
+        blank=True,
+        help_text=(
+            "Which slice of the catalogue this round was handed: all, reads (a question), pages (a "
+            "skill the palette gave up, so nothing that writes) or locked (navigate-only). A turn "
+            "that quietly lost its write tools is otherwise an ordinary navigation on this page."
+        ),
+    )
 
     class Meta:
         ordering = ["-createdon"]
         verbose_name = "LLM usage"
         verbose_name_plural = "LLM usage"
+        indexes = [
+            # The transcript reads newest first, and the mined-shortcut lookups read by phrase. Rows
+            # are kept for as long as the assistant has a history worth comparing, so both grow.
+            models.Index(fields=["-createdon"], name="llmusage_createdon_desc"),
+        ]
 
     def __str__(self):
         return f"{self.user} · {self.model} · {self.total_tokens} tokens ({self.response_kind})"

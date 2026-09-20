@@ -152,6 +152,14 @@ prompt, the skill list and the model together, so a deploy that changes any of t
 and a before and an after can sit next to each other without anybody remembering the date. With a
 handful of users a rate is one person's afternoon, so the page prints every exchange in order.
 
+Three columns exist because the page could say a command went wrong and never say what it went wrong
+*on*: **`subject`** is the auction, club or lot it landed on — the same line its confirmation card
+showed, so "it answered about the wrong auction" is checkable; **`read_the_query`** marks the ones
+where the server read that auction out of the sentence because the model left the parameter out, a
+guess made on somebody's behalf; **`tools_offered`** names the tier (`all`/`reads`/`pages`/`locked`),
+so a turn that quietly lost its write tools isn't just another navigation. The page also shows
+whether the breaker is open right now, which was previously visible only as slow answers.
+
 `palette_assist.shortcut_proposals` offers phrases the assistant has answered the same way every
 single time, one button each. The mining was always there and nothing ever ran it. An accepted
 phrase stops reaching the model at all: no call, no wait, and no way for it to come back wrong.

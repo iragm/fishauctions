@@ -463,6 +463,13 @@ class CommandPaletteAnalyticsView(AdminOnlyViewMixin, TemplateView):
         context["llm_busy"] = usage.filter(response_kind=palette_assist.FAIL_BUSY).count()
         context["llm_load_percent"] = round(100 * palette_assist.site_load())
         context["llm_tokens_per_minute"] = palette_assist._tokens_per_minute()
+        # Whether the breaker is open right now. Load and the held-back count were already here; "the
+        # model is resting" was the one state of the three that showed up only as slow answers.
+        context["llm_provider_resting"] = palette_assist.provider_is_resting()
+        # A turn handed fewer tools than it asked for, and a turn whose auction the server read out of
+        # the sentence rather than the model naming it: both change the answer, neither was visible.
+        context["llm_writes_withheld"] = usage.exclude(tools_offered__in=["", palette_assist.TOOLS_ALL]).count()
+        context["llm_read_the_query"] = usage.filter(read_the_query=True).count()
         context["llm_by_action"] = list(
             usage.exclude(action="")
             .values("action")
@@ -492,7 +499,10 @@ class CommandPaletteAnalyticsView(AdminOnlyViewMixin, TemplateView):
             else 0
         )
         context["llm_cancelled_queries"] = list(
-            cancelled.exclude(query="").values("query", "action").annotate(count=Count("id")).order_by("-count")[:15]
+            cancelled.exclude(query="")
+            .values("query", "action", "subject")
+            .annotate(count=Count("id"))
+            .order_by("-count")[:15]
         )
         context["shortcut_proposals"] = palette_assist.shortcut_proposals()
         return context
@@ -550,6 +560,9 @@ class CommandPaletteAnalyticsView(AdminOnlyViewMixin, TemplateView):
                     "cancelled": False,
                     "reported": False,
                     "variant": row.variant,
+                    "subject": "",
+                    "tools_offered": row.tools_offered,
+                    "read_the_query": False,
                 },
             )
             # Rows arrive newest first; each request's rounds read oldest first.
@@ -560,6 +573,10 @@ class CommandPaletteAnalyticsView(AdminOnlyViewMixin, TemplateView):
             request["tokens"] += row.total_tokens
             request["cancelled"] = request["cancelled"] or row.cancelled
             request["reported"] = request["reported"] or row.reported
+            # The last round that knew what it was acting on names the request: a lookup that only
+            # turned a name into a bidder number has nothing to say here, and the write after it does.
+            request["subject"] = row.subject or request["subject"]
+            request["read_the_query"] = request["read_the_query"] or row.read_the_query
         ordered = sorted(requests.values(), key=lambda request: request["when"], reverse=True)
         for request in ordered:
             last = request["rounds"][-1]

@@ -33,6 +33,19 @@
   <p class="mb-1"><small>
     Using <strong>{{ llm_load_percent }}%</strong> of this minute's site budget ({{ llm_tokens_per_minute }} tokens).
     {% if llm_busy %}<span class="badge bg-warning text-dark">{{ llm_busy }} held back by the provider</span>{% endif %}
+    {% if llm_provider_resting %}<span class="badge bg-danger">model resting after repeated failures</span>{% endif %}
+  </small></p>
+  {% comment %}
+    Two ways a command can quietly become something smaller than it asked for. Writes withheld means
+    the words named a skill that only /mcp/ has, so the turn was handed pages and nothing that could
+    change a row -- which looks exactly like an ordinary navigation unless it is counted here. Read
+    from the sentence means the model left the auction out and the server worked out which one was
+    meant; a guess made on somebody's behalf is worth watching even when it is usually right.
+  {% endcomment %}
+  <p class="mb-1"><small>
+    <strong>{{ llm_writes_withheld }}</strong> round{{ llm_writes_withheld|pluralize }} had the writes
+    taken away (named a skill this box gave up) ·
+    <strong>{{ llm_read_the_query }}</strong> read the auction out of the sentence.
   </small></p>
   <p class="mb-1"><small>
     <strong>{{ llm_rounds_per_query }}</strong> model calls across {{ llm_requests }} request{{ llm_requests|pluralize }}.
@@ -128,7 +141,7 @@
 <div class="table-responsive">
   <table class="table table-sm table-striped align-middle">
     <thead><tr>
-      <th>When</th><th>Who</th><th>Query</th><th>What it did</th><th class="text-end">Waited</th><th class="text-end">Tokens</th>
+      <th>When</th><th>Who</th><th>Query</th><th>What it did</th><th>About</th><th class="text-end">Waited</th><th class="text-end">Tokens</th>
     </tr></thead>
     <tbody>
       {% for row in llm_transcript %}
@@ -140,6 +153,15 @@
           {% for round in row.rounds %}<span class="text-nowrap"><code>{{ round.response_kind }}</code>{% if round.action %} <small class="text-muted">{{ round.action }}</small>{% endif %}</span>{% if not forloop.last %} <i class="bi bi-arrow-right-short"></i> {% endif %}{% endfor %}
           {% if row.cancelled %}<span class="badge bg-warning text-dark ms-1">cancelled</span>{% endif %}
           {% if row.reported %}<span class="badge bg-danger ms-1">reported</span>{% endif %}
+          {% if row.tools_offered and row.tools_offered != "all" %}<span class="badge bg-secondary ms-1">{{ row.tools_offered }} only</span>{% endif %}
+        </td>
+        <td>
+          {% comment %}
+            Which auction, club or lot the command landed on -- the same line its confirmation card
+            showed. "It answered about the wrong auction" could not be checked without this.
+          {% endcomment %}
+          <small class="text-muted">{{ row.subject|default:"—" }}</small>
+          {% if row.read_the_query %}<i class="bi bi-chat-quote text-muted" title="read out of the sentence, not named by the model"></i>{% endif %}
         </td>
         <td class="text-end text-nowrap"><small>{{ row.elapsed_ms }}ms</small></td>
         <td class="text-end"><small>{{ row.tokens }}</small></td>
@@ -193,12 +215,13 @@
   </p>
   <div class="table-responsive">
     <table class="table table-sm table-borderless mb-0">
-      <thead><tr><th>Query</th><th>Was going to run</th><th class="text-end">Count</th></tr></thead>
+      <thead><tr><th>Query</th><th>Was going to run</th><th>On what</th><th class="text-end">Count</th></tr></thead>
       <tbody>
         {% for row in llm_cancelled_queries %}
         <tr>
           <td>{{ row.query }}</td>
           <td><small class="text-muted">{{ row.action }}</small></td>
+          <td><small class="text-muted">{{ row.subject|default:"—" }}</small></td>
           <td class="text-end">{{ row.count }}</td>
         </tr>
         {% endfor %}
