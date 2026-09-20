@@ -30,6 +30,7 @@ import logging
 from dataclasses import dataclass, field
 from urllib.parse import urlparse
 
+from django.core.exceptions import ValidationError
 from django.utils import timezone
 
 from . import club_matching
@@ -126,7 +127,7 @@ def read_csv(handle, *, source: str = "") -> tuple[list[ImportedClub], list[str]
     import 296 clubs and say so, since failing the whole file means the typo gets fixed by deleting the
     row.
     """
-    from .models import Club
+    from .models import Club, clean_email_address
 
     valid_methods = {choice for choice, _label in Club.CONTACT_METHOD_CHOICES if choice}
     reader = csv.DictReader(handle)
@@ -147,6 +148,18 @@ def read_csv(handle, *, source: str = "") -> tuple[list[ImportedClub], list[str]
                 f"{', '.join(sorted(valid_methods))}; left blank"
             )
             method = ""
+        if values["contact_email"]:
+            try:
+                values["contact_email"] = clean_email_address(values["contact_email"])
+            except ValidationError:
+                # Blanked rather than skipped, as with contact_method above: a club lead is its name
+                # and its homepage, and dropping the whole row over a typo in a secondary column is
+                # what this function's docstring exists to refuse.
+                complaints.append(
+                    f"Row {number} ({values['name']}): contact_email "
+                    f"'{values['contact_email']}' is not an email address; left blank"
+                )
+                values["contact_email"] = ""
         if values["homepage"] and not is_a_club_host(values["homepage"]):
             # Overwhelmingly a Facebook URL in the homepage column: move it rather than drop it.
             if not values["facebook_page"]:

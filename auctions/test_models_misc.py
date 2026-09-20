@@ -4,7 +4,9 @@ import datetime
 from unittest.mock import patch
 
 from django.contrib.auth.models import User
+from django.core.exceptions import ValidationError
 from django.core.management import call_command
+from django.test import SimpleTestCase
 from django.urls import reverse
 from django.utils import timezone
 
@@ -15,8 +17,47 @@ from auctions.models import (
     PageView,
     PickupLocation,
     UserData,
+    clean_email_address,
+    note_email_if_unusable,
 )
 from auctions.tests import StandardTestCase
+
+
+class EmailAddressCheckingTests(SimpleTestCase):
+    """The two ways this site reacts to an address that isn't one.
+
+    ``clean_email_address`` refuses, for anything a person typed into a form. ``note_email_if_unusable``
+    keeps it and says so, for the paths a machine feeds where refusing loses the record.
+    """
+
+    GOOD = ("bob@example.com", "  Mixed@Case.COM ", "a.b+tag@sub.example.co.uk")
+    BAD = ("bob@example", "not an email", "@example.com", "bob@@example.com", "a@b.c")
+
+    def test_a_real_address_comes_back_normalized(self):
+        self.assertEqual(clean_email_address("  Mixed@Case.COM "), "mixed@case.com")
+        for good in self.GOOD:
+            self.assertTrue(clean_email_address(good))
+
+    def test_blank_is_not_a_typo(self):
+        for blank in ("", "   ", None):
+            self.assertEqual(clean_email_address(blank), "")
+            self.assertEqual(note_email_if_unusable(blank, "a test"), "")
+
+    def test_anything_else_is_refused(self):
+        for bad in self.BAD:
+            with self.assertRaises(ValidationError, msg=bad):
+                clean_email_address(bad)
+
+    def test_the_machine_path_keeps_it_and_warns(self):
+        for bad in self.BAD:
+            with self.assertLogs("auctions.models", level="WARNING") as logs:
+                kept = note_email_if_unusable(bad, "a PayPal payment")
+            self.assertEqual(kept, bad.strip().lower(), bad)
+            self.assertIn("a PayPal payment", logs.output[0])
+
+    def test_the_machine_path_is_quiet_about_a_good_one(self):
+        with self.assertNoLogs("auctions.models", level="WARNING"):
+            self.assertEqual(note_email_if_unusable(" Bob@Example.com ", "a test"), "bob@example.com")
 
 
 class ModelMethodsTestCase(StandardTestCase):

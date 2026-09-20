@@ -40,6 +40,7 @@ from auctions.models import (
     PayPalSeller,
     SquareSeller,
     UserData,
+    note_email_if_unusable,
 )
 from auctions.tasks import (
     maybe_send_membership_renewal_confirmation,
@@ -295,6 +296,9 @@ def _find_or_create_subscription_member(club, subscription_id, email):
         member = ClubMember.objects.filter(club=club, email__iexact=email, is_deleted=False).first()
         if member:
             return member
+        # Kept even if it isn't an address: this email is the only identifier the subscription has,
+        # so refusing it would leave somebody's paid membership attached to nobody.
+        email = note_email_if_unusable(email, f"a PayPal subscription for {club.name}")
         member = ClubMember.objects.create(club=club, email=email)
         # No acting user in a webhook.
         ClubHistory.objects.create(

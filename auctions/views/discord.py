@@ -42,6 +42,7 @@ from auctions.models import (
     ClubHistory,
     ClubMember,
     Lot,
+    clean_email_address,
 )
 from auctions.services import (
     BAP_DECISIONS,
@@ -437,7 +438,9 @@ class DiscordInteractionsView(View):
         if email:
             # Emails are never verified here, so anyone can claim any address: nothing on Discord
             # may expose member information, not even a name, without a granted role.
-            if len(email) < 5 or "@" not in email:
+            try:
+                email = clean_email_address(email)
+            except ValidationError:
                 return _discord_ephemeral("❌ Please enter a valid email address.")
             existing_by_email = ClubMember.objects.filter(club=club, email=email, is_deleted=False).first()
             if existing_by_email:

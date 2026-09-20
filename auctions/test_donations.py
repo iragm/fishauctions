@@ -269,6 +269,31 @@ class InboundDonationWebhookTests(DonationTestMixin, TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(DonationEmail.objects.filter(vendor=self.vendor).count(), 1)
 
+    def test_a_bounce_is_marked_as_one_and_not_read_as_a_reply(self):
+        """The failure notice comes back to the vendor's own alias, so without this a dead address
+        reads on the page as a vendor who wrote back.
+        """
+        payload = self.reply_payload(subject="Undelivered Mail Returned to Sender")
+        payload["from"] = "Mail Delivery Subsystem <MAILER-DAEMON@mail.example>"
+        self.post(payload)
+        email = DonationEmail.objects.get(vendor=self.vendor)
+        self.assertTrue(email.bounced)
+        # Nothing in a bounce is the vendor's word, so it never reaches the model or their status.
+        self.assertEqual(email.summary, "")
+        self.assertEqual(self.provider.calls, [])
+        self.vendor.refresh_from_db()
+        self.assertEqual(self.vendor.status, DonationVendor.STATUS_NEW)
+        self.assertTrue(ClubHistory.objects.filter(club=self.club, action__icontains="bounced").exists())
+
+    def test_a_plain_reply_is_not_marked_bounced(self):
+        self.post(self.reply_payload())
+        self.assertFalse(DonationEmail.objects.get(vendor=self.vendor).bounced)
+
+    def test_no_model_configured_spends_none_of_the_summary_budget(self):
+        self.use_provider(FakeProvider(configured=False))
+        self.post(self.reply_payload())
+        self.assertEqual(donations.calls_used_today(self.club, "incoming"), 0)
+
 
 @isolated_cache("donations")
 class IncomingStatusRulesTests(DonationTestMixin, TestCase):
@@ -1437,6 +1462,50 @@ class VendorFormTests(DonationTestMixin, TestCase):
         self.assertNotIn("followup_due", self.form().fields)
         self.assertIn("followup_due", self.form(instance=self.vendor).fields)
 
+    def test_an_address_that_is_not_an_address_is_refused(self):
+        """``DonationVendor.email`` is a CharField, so the form field validates nothing by itself and
+        the EmailInput widget only talks to a browser -- which an MCP caller isn't.
+        """
+        from auctions.forms import DonationVendorForm
+
+        for bad in ("not an email", "bob@example", "@example.com", "bob@@example.com"):
+            form = DonationVendorForm(
+                {"name": "Somewhere", "contact_name": "", "email": bad, "status": "new", "context": ""},
+                club=self.club,
+            )
+            self.assertFalse(form.is_valid(), bad)
+            self.assertIn("email", form.errors, bad)
+
+    def test_a_real_address_still_saves_and_is_lowercased(self):
+        from auctions.forms import DonationVendorForm
+
+        form = DonationVendorForm(
+            {"name": "Somewhere", "contact_name": "", "email": "  Mixed@Case.COM ", "status": "new", "context": ""},
+            club=self.club,
+        )
+        self.assertTrue(form.is_valid(), form.errors)
+        self.assertEqual(form.cleaned_data["email"], "mixed@case.com")
+
+    def test_a_vendor_with_no_address_is_still_allowed(self):
+        """Blank is not a typo: a vendor can be tracked before anybody has found their address."""
+        from auctions.forms import DonationVendorForm
+
+        form = DonationVendorForm(
+            {"name": "Somewhere", "contact_name": "", "email": "", "status": "new", "context": ""},
+            club=self.club,
+        )
+        self.assertTrue(form.is_valid(), form.errors)
+
+    def test_the_skill_refuses_a_bad_address_too(self):
+        request = RequestFactory().post("/")
+        request.user = self.admin
+        request.palette_page = {}
+        result = palette_actions.run_action(
+            request, "add_donation_vendor", {"name": "Somewhere", "email": "bob@example"}
+        )
+        self.assertIn("error", result)
+        self.assertFalse(DonationVendor.objects.filter(name="Somewhere").exists())
+
     def test_a_new_vendor_is_due_for_a_follow_up_straight_away(self):
         before = timezone.now()
         self.client.post(
@@ -1712,10 +1781,36 @@ class DonationSkillTests(DonationTestMixin, TestCase):
         self.assertNotIn("error", result)
         self.assertEqual(result["count"], 1)
 
+    def test_the_donation_permission_alone_gets_the_skills_described(self):
+        """Being allowed to run a skill is no use if it is never in the catalogue. ``actions_for``
+        listed a hand-written set of permissions, and donation staff hold none of them.
+        """
+        staff = User.objects.create_user(username="don_listed", password="pw", email="l@example.com")
+        ClubMember.objects.create(club=self.club, user=staff, permission_manage_donations=True)
+        offered = {action.name for action in palette_actions.actions_for(staff)}
+        self.assertTrue(set(self.SKILLS) <= offered, set(self.SKILLS) - offered)
+
+    def test_somebody_with_no_club_permission_is_offered_none_of_them(self):
+        offered = {action.name for action in palette_actions.actions_for(self.outsider)}
+        self.assertFalse(set(self.SKILLS) & offered)
+
     def test_an_outsider_reaches_nothing(self):
         result = self._run("list_donation_vendors", {"club": self.club.slug}, user=self.outsider)
         self.assertIn("error", result)
         self.assertNotIn("Fishy Business", json.dumps(result))
+
+    def test_message_is_read_as_the_body_it_is_accepted_as(self):
+        """``message`` is in the action's aliases, so it isn't refused; it has to be read too, or the
+        email is dropped and the caller is asked for a body they already gave.
+        """
+        self.club.donation_email_mode = Club.DONATION_EMAIL_MODE_COPY
+        self.club.save()
+        result = self._run(
+            "contact_donation_vendor",
+            {"vendor": "Fishy Business", "subject": "Hi", "message": "Please donate a tank."},
+        )
+        self.assertTrue(result.get("ok"), result)
+        self.assertIn("Please donate a tank.", DonationEmail.objects.get(vendor=self.vendor).body)
 
     # --- reading -------------------------------------------------------------
 
@@ -2090,6 +2185,18 @@ class WebformVendorTests(DonationTestMixin, TestCase):
             donations.send_request(self.chain, subject="Hi", body="Please donate", user=self.admin)
         self.assertEqual(DonationEmail.objects.count(), 0)
 
+    def test_an_email_vendor_cannot_be_filed_as_an_off_site_contact(self):
+        """The dossier dialog is reachable by URL for any vendor. Recording an email vendor there
+        would spend the daily allowance on a row that reads as a sent message with no message in it.
+        """
+        with self.assertRaises(donations.DonationSendError):
+            donations.record_offsite_contact(self.vendor, note="I called them", user=self.admin)
+        self.assertEqual(DonationEmail.objects.count(), 0)
+        response = self.client.post(self.dossier_url(self.vendor), {"note": "I called them"})
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "sends itself")
+        self.assertEqual(DonationEmail.objects.count(), 0)
+
     # --- the dossier ---------------------------------------------------------
 
     def test_the_edit_form_carries_the_switch_between_the_two_destinations(self):
@@ -2337,6 +2444,19 @@ class WebformVendorTests(DonationTestMixin, TestCase):
             self.chain.refresh_from_db()
             self.assertEqual(self.chain.email, "", machine)
             self.assertEqual(self.chain.contact_method, DonationVendor.CONTACT_WEBFORM, machine)
+
+    def test_a_from_header_that_is_not_an_address_is_not_adopted(self):
+        """No form on this path, and the header is whatever a stranger's mail server put there."""
+        donations.record_incoming(
+            self.chain,
+            sender="postmaster@localhost",
+            recipients=self.chain.reply_to_address,
+            subject="Re:",
+            body="Hello",
+        )
+        self.chain.refresh_from_db()
+        self.assertEqual(self.chain.email, "")
+        self.assertEqual(self.chain.contact_method, DonationVendor.CONTACT_WEBFORM)
 
     def test_an_address_another_vendor_already_holds_is_not_taken(self):
         """The uniqueness rule the form applies; this path has no form to apply it."""

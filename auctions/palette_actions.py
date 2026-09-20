@@ -6921,7 +6921,9 @@ def contact_donation_vendor(request, params: dict[str, Any]) -> dict[str, Any]:
             answer["their_form"] = vendor.contact_url
         return answer
     subject = _str(params, "subject")
-    body = _str(params, "body")
+    # ``message`` is an accepted spelling of the body, so read it: taking it and then asking for a
+    # body is worse than refusing the word outright.
+    body = _str(params, "body") or _str(params, "message")
     if not subject or not body:
         return _need(f"What should the email to {vendor.name} say? I need a subject line and a body.")
     blocked = donations.contact_blocked_reason(vendor)
@@ -13885,18 +13887,19 @@ def run_action(request, name: str, params: dict[str, Any]) -> dict[str, Any]:
 
 
 def _runs_a_club(user) -> bool:
-    """Whether this user administers any club (one query). Generous: a hidden skill looks like a missing one."""
-    return (
-        ClubMember.objects.filter(user=user, is_deleted=False)
-        .filter(
-            Q(permission_admin=True)
-            | Q(permission_add_edit=True)
-            | Q(permission_view=True)
-            | Q(permission_manage_bap=True)
-            | Q(permission_manage_auctions=True)
-        )
-        .exists()
-    )
+    """Whether this user administers any club (one query). Generous: a hidden skill looks like a missing one.
+
+    Every club permission counts, read off ``CLUB_PERMISSION_FIELDS`` rather than listed again here. A
+    hand-written list went stale the moment a job got a flag of its own: donation staff hold only
+    ``permission_manage_donations``, so the six donation skills their permission exists for were the
+    ones never described to them.
+    """
+    from .views import CLUB_PERMISSION_FIELDS
+
+    any_permission = Q()
+    for flag in CLUB_PERMISSION_FIELDS:
+        any_permission |= Q(**{flag: True})
+    return ClubMember.objects.filter(user=user, is_deleted=False).filter(any_permission).exists()
 
 
 def administers_anything(user) -> bool:

@@ -28,6 +28,7 @@ from auctions.models import (
     LotHistory,
     MobileOfflineOp,
     PickupLocation,
+    note_email_if_unusable,
 )
 from auctions.services import apply_club_member_to_tos, ensure_club_member, existing_tos_for_club_member
 
@@ -262,7 +263,9 @@ class _OpApplier:
         if not pickup:
             return self._conflict("not_found", "This auction has no pickup location to add a user to")
 
-        email = (op.get("email") or "").strip()
+        # Replayed from the app's queue, typed at a check-in desk hours ago. Failing the op now would
+        # strand it: nobody is holding the phone to correct a typo.
+        email = note_email_if_unusable(op.get("email"), "a queued offline check-in")
         phone_number = (op.get("phone_number") or "").strip()
         # Club-managed auctions keep bidder numbers on the ClubMember, so create one (its signals
         # create the participant row, which is adopted rather than duplicated).

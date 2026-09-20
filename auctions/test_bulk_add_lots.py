@@ -1041,6 +1041,10 @@ class ImportLotsFromCSVViewTests(StandardTestCase):
         """CSV import handles boolean fields correctly"""
         self.client.login(username=self.admin_user.username, password="testpassword")
         url = reverse("import_lots_from_csv", kwargs={"slug": self.online_auction.slug})
+        # As every other CSV test here does: the shared fixture leaves this None, which the f-string
+        # below would otherwise write into the file as the literal "None".
+        self.online_tos.email = "testuser@example.com"
+        self.online_tos.save()
 
         # Create CSV with boolean fields
         csv_content = (

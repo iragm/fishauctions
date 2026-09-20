@@ -28,7 +28,7 @@ from django.contrib.auth.hashers import check_password, make_password
 from django.contrib.auth.models import User
 from django.contrib.sites.models import Site
 from django.core.exceptions import ValidationError
-from django.core.validators import MaxValueValidator, MinValueValidator
+from django.core.validators import MaxValueValidator, MinValueValidator, validate_email
 from django.db import models, transaction
 from django.db.models import (
     BooleanField,
@@ -336,6 +336,42 @@ def _display_name(user):
 def normalize_email(value):
     """Strip and lowercase an email; empty input returns "" (not None) to match field convention."""
     return (value or "").strip().lower()
+
+
+def clean_email_address(value):
+    """Normalize *value* and reject anything that isn't an address. Returns the normalized address.
+
+    Blank passes and comes back "": an address nobody gave is not a typo, and every email column here
+    is optional. Anything else goes through Django's own ``EmailValidator``, which is what a ModelForm
+    over an ``EmailField`` already applies -- so a ``CharField`` column checked here and an
+    ``EmailField`` column checked by its form agree, and there is one definition of the thing.
+
+    Raises ``ValidationError``, so a form's ``clean_<field>`` can call it and say nothing else.
+    Separate from :func:`normalize_email` on purpose: that one also cleans up *lookups*, where a
+    malformed address means "no match", not "refuse".
+    """
+    email = normalize_email(value)
+    if email:
+        validate_email(email)
+    return email
+
+
+def note_email_if_unusable(value, where):
+    """Normalize *value*, logging a warning instead of raising when it isn't an address.
+
+    For the paths a machine feeds and no person is watching: a payment webhook, a capture callback,
+    the app replaying its offline queue. Refusing there loses the record -- the subscription with
+    nobody attached to it, the queued check-in that never lands -- and the money has already moved.
+    So the address is kept as given and *said out loud*, which is the part that was missing: until
+    now a malformed address from PayPal was indistinguishable from a good one.
+    """
+    email = normalize_email(value)
+    if email:
+        try:
+            validate_email(email)
+        except ValidationError:
+            logger.warning("Storing %r from %s: it is not a valid email address", email, where)
+    return email
 
 
 def _default_membership_number():

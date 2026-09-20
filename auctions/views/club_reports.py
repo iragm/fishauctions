@@ -595,6 +595,9 @@ class ClubMemberCSVImportView(LoginRequiredMixin, CSVContactImportMixin, ClubVie
         email, name = fields["email"], fields["name"]
         if not email and not name:
             return {**base, "action": "skip", "reason": "Row has no name or email"}
+        bad_email = self.bad_email_reason(email)
+        if bad_email:
+            return {**base, "action": "skip", "reason": bad_email}
         if email:
             existing = self.club.find_member(email=email)
             if existing:

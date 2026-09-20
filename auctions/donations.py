@@ -20,11 +20,12 @@ from dataclasses import dataclass
 from email.utils import parseaddr
 
 from django.core.cache import cache
+from django.core.exceptions import ValidationError
 from django.utils import timezone
 
 from .email_routing import sender_with_display_name
 from .llm import LLMError, get_provider
-from .models import ClubHistory, DonationEmail, DonationUnsubscribe, DonationVendor, LLMUsage, normalize_email
+from .models import ClubHistory, DonationEmail, DonationUnsubscribe, DonationVendor, LLMUsage, clean_email_address
 from .palette_actions import untrusted, untrusted_short  # noqa: E402
 
 logger = logging.getLogger(__name__)
@@ -319,13 +320,19 @@ def summarize_incoming(email_row, *, user=None):
     Writes the summary onto *email_row* and returns it (possibly empty). Never raises: a model
     that is down, misconfigured, or over budget must not lose the club a vendor's reply.
     """
+    if email_row.bounced:
+        # A delivery failure is a machine telling us the address is dead. Nothing in it is the
+        # vendor's word, and summarizing it would put it in their "latest reply" column.
+        return ""
     vendor = email_row.vendor
     club = vendor.club
+    provider = get_provider()
+    # Before charging, as in ``draft_request``: with no provider nothing is asked, so a site with no
+    # model configured must not spend a club's whole day of budget on calls it never makes.
+    if not provider.is_configured():
+        return ""
     if not check_rate_limit(club, "incoming", MAX_INCOMING_LLM_CALLS_PER_DAY):
         logger.info("Donation summary skipped for club %s: daily model budget used up", club.pk)
-        return ""
-    provider = get_provider()
-    if not provider.is_configured():
         return ""
 
     body = truncate_for_model(strip_quoted_reply(email_row.body), INCOMING_BODY_LIMIT)
@@ -398,7 +405,13 @@ def adopt_replying_address(vendor, sender, *, user=None):
 
     if not vendor.contacted_off_site:
         return False
-    address = normalize_email(sender)
+    try:
+        # A ``From:`` header is whatever a stranger's mail server put there, and this path has no form
+        # to check it. An unusable address is the same as none: don't write it onto the vendor.
+        address = clean_email_address(sender)
+    except ValidationError:
+        logger.info("Not adopting %r for vendor %s: not a usable address", sender, vendor.pk)
+        address = ""
     if vendor.email:
         # We already know how to write to them; only the method was wrong.
         address = vendor.email
@@ -435,6 +448,7 @@ def record_incoming(vendor, *, sender, recipients, subject, body, message_id="",
     # Before the row, so the history reads in the order it happened.
     adopt_replying_address(vendor, sender)
     now = timezone.now()
+    bounced = is_a_delivery_failure(sender)
     email_row = DonationEmail.objects.create(
         vendor=vendor,
         direction=DonationEmail.DIRECTION_INCOMING,
@@ -444,15 +458,17 @@ def record_incoming(vendor, *, sender, recipients, subject, body, message_id="",
         body=strip_email_html(body),
         message_id=(message_id or "")[:500],
         date=date or now,
+        bounced=bounced,
     )
-    # They wrote back; the club owes the next move.
+    # Something came back; the club owes the next move either way -- a reply to answer, or an address
+    # to fix.
     vendor.last_contact = now
     vendor.followup_due = now
     vendor.save(update_fields=["last_contact", "followup_due"])
     ClubHistory.objects.create(
         club=vendor.club,
         user=None,
-        action=f"Received a donation reply from {vendor.name}",
+        action=(f"Email to {vendor.name} bounced" if bounced else f"Received a donation reply from {vendor.name}"),
         applies_to="DONATIONS",
     )
     return email_row, True
@@ -830,15 +846,39 @@ _NO_REPLY_LOCAL_PARTS = (
 )
 
 
-def is_a_no_reply_address(email):
-    """Whether *email*'s local part says a person will never read what is sent back to it."""
+#: The subset of :data:`_NO_REPLY_LOCAL_PARTS` that means the message never reached anybody. A
+#: "noreply@" auto-acknowledgement is a machine answering; these are the machine saying it failed.
+_DELIVERY_FAILURE_LOCAL_PARTS = (
+    "mailer-daemon",
+    "mailerdaemon",
+    "postmaster",
+    "bounce",
+    "bounces",
+)
+
+
+def _local_part_is(email, markers):
+    """Whether *email*'s local part is one of *markers*, with the ``+tag``/``-tag`` forms relays add."""
     local = (email or "").split("@")[0].strip().lower()
     if not local:
         return False
     return any(
-        local == marker or local.startswith(f"{marker}+") or local.startswith(f"{marker}-")
-        for marker in _NO_REPLY_LOCAL_PARTS
+        local == marker or local.startswith(f"{marker}+") or local.startswith(f"{marker}-") for marker in markers
     )
+
+
+def is_a_no_reply_address(email):
+    """Whether *email*'s local part says a person will never read what is sent back to it."""
+    return _local_part_is(email, _NO_REPLY_LOCAL_PARTS)
+
+
+def is_a_delivery_failure(email):
+    """Whether a message from *email* is a bounce rather than the vendor answering.
+
+    The only bounce signal this site gets: SES delivers the failure notice to the vendor's own alias,
+    so without this every dead address reads on the page as a vendor who wrote back.
+    """
+    return _local_part_is(email, _DELIVERY_FAILURE_LOCAL_PARTS)
 
 
 def record_offsite_contact(vendor, *, note="", user=None, channel=None):
@@ -852,6 +892,15 @@ def record_offsite_contact(vendor, *, note="", user=None, channel=None):
     channel = channel or vendor.contact_method
     if channel not in dict(DonationEmail.CHANNEL_CHOICES):
         channel = DonationEmail.CHANNEL_WEBFORM
+    if channel == DonationEmail.CHANNEL_EMAIL:
+        # Email is the one channel this site performs itself, so there is nothing here to report:
+        # filing it as one would spend the daily allowance and leave a row that reads as a sent
+        # message with no message in it.
+        msg = (
+            f"{vendor.name} is contacted by email, which this site sends itself. "
+            "Use the Contact button to write to them."
+        )
+        raise DonationSendError(msg)
     if not vendor.can_be_contacted:
         raise DonationSendError(vendor.cannot_contact_reason or "This vendor cannot be contacted.")
     how = dict(DonationEmail.CHANNEL_CHOICES)[channel]

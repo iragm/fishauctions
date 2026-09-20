@@ -15,6 +15,7 @@ import requests
 from django.contrib import messages
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.core.cache import cache
+from django.core.exceptions import ValidationError
 from django.db import transaction
 from django.db.models import (
     Q,
@@ -38,6 +39,7 @@ from auctions.forms import (
 from auctions.models import (
     Auction,
     AuctionTOS,
+    clean_email_address,
     normalize_email,
 )
 
@@ -163,6 +165,22 @@ class CSVContactImportMixin:
             if value is not None:
                 return value
         return default_response
+
+    @staticmethod
+    def bad_email_reason(email):
+        """Why *email* can't be imported, or "". Blank passes: a row without an address is ordinary.
+
+        A spreadsheet is where most bad addresses come from, and the preview is the one place a person
+        is already reading the file row by row -- so a typo is reported there rather than stored and
+        found later when the mail doesn't arrive.
+        """
+        if not (email or "").strip():
+            return ""
+        try:
+            clean_email_address(email)
+        except ValidationError:
+            return f"“{email}” is not a valid email address"
+        return ""
 
     @staticmethod
     def csv_columns_exist(field_names, columns):
@@ -566,6 +584,9 @@ class BulkAddUsers(LoginRequiredMixin, CSVContactImportMixin, AuctionViewMixin, 
         base = {"fields": fields, "present": present, "target_pk": None, "target_display": "", "match_type": None}
         if not name and not email:
             return {**base, "action": "skip", "reason": "Row has no name or email"}
+        bad_email = self.bad_email_reason(email)
+        if bad_email:
+            return {**base, "action": "skip", "reason": bad_email}
         if email:
             existing = self.auction.find_user(email=email)
             if existing:

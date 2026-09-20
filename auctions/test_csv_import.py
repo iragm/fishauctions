@@ -830,6 +830,39 @@ class CSVImportPreviewTests(StandardTestCase):
             AuctionTOS.objects.filter(auction=self.online_auction, email="previewonly@example.com").exists()
         )
 
+    def test_a_row_whose_email_is_not_an_email_is_skipped_and_says_why(self):
+        """A spreadsheet is where most bad addresses come from, and the preview is where a person is
+        already reading the file row by row.
+        """
+        self.client.login(username=self.admin_user.username, password="testpassword")
+        csv_file = SimpleUploadedFile(
+            "u.csv",
+            b"name,email\nGood Row,good@example.com\nTypo Row,bob@example\n",
+            content_type="text/csv",
+        )
+        upload = self.client.post(self._bulk_add_url(), {"csv_file": csv_file})
+        preview = self.client.get(upload["Location"])
+        self.assertContains(preview, "is not a valid email address")
+        self.assertContains(preview, "bob@example")
+        # And confirming imports the good row only. A second handle: the first upload read that one.
+        self.run_csv_import(
+            self._bulk_add_url(),
+            SimpleUploadedFile(
+                "u.csv",
+                b"name,email\nGood Row,good@example.com\nTypo Row,bob@example\n",
+                content_type="text/csv",
+            ),
+        )
+        self.assertTrue(AuctionTOS.objects.filter(auction=self.online_auction, email="good@example.com").exists())
+        self.assertFalse(AuctionTOS.objects.filter(auction=self.online_auction, name="Typo Row").exists())
+
+    def test_a_row_with_no_email_at_all_is_still_imported(self):
+        """Blank is not a typo; plenty of walk-ins have no address."""
+        self.client.login(username=self.admin_user.username, password="testpassword")
+        csv_file = SimpleUploadedFile("u.csv", b"name,bidder number\nNo Address Person,9911\n", content_type="text/csv")
+        self.run_csv_import(self._bulk_add_url(), csv_file)
+        self.assertTrue(AuctionTOS.objects.filter(auction=self.online_auction, name="No Address Person").exists())
+
     def test_preview_page_renders_with_duplicate_radios(self):
         """GET ?preview renders the merge/create choice for a possible duplicate."""
         self.online_tos.name = "Bob Smith"

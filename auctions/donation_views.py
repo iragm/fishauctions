@@ -282,7 +282,7 @@ class DonationContactView(LoginRequiredMixin, DonationPermissionMixin, View):
     """The write-an-email dialog, in three steps within one modal.
 
     ``GET`` is step 1 (context and last email), ``POST step=generate`` step 2 (the editable draft), and
-    ``POST step=send`` commits. Step 2 is reachable from itself (Regenerate).
+    ``POST step=send`` commits.
     """
 
     def _load(self, request, pk):

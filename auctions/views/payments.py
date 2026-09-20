@@ -34,6 +34,7 @@ from auctions.models import (
     PayPalSeller,
     SquareSeller,
     UserData,
+    note_email_if_unusable,
 )
 
 from .base import (
@@ -390,6 +391,8 @@ class PayPalAPIMixin:
 
         if invoice.auctiontos_user:
             if payer_email and not invoice.auctiontos_user.email:
+                # The payment already went through; a odd-looking address is worth keeping and saying.
+                payer_email = note_email_if_unusable(payer_email, "a PayPal payment")
                 invoice.auctiontos_user.email = payer_email
                 invoice.auctiontos_user.save()
                 if invoice.auction:

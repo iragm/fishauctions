@@ -87,6 +87,7 @@ from .models import (
     UserData,
     UserLabelPrefs,
     VolunteerJob,
+    clean_email_address,
     normalize_species_name,
 )
 from .services import (
@@ -4731,6 +4732,12 @@ class ClubEmailSettingsForm(forms.ModelForm):
     _HTML_TAG_RE = re.compile(r"<[^<>]+>")
     _URL_RE = re.compile(r"https?://", re.IGNORECASE)
 
+    def clean_contact_email(self):
+        """``Club.contact_email`` is a ``CharField``, so its form field validates nothing on its own --
+        and this is the address members' replies are sent to.
+        """
+        return clean_email_address(self.cleaned_data.get("contact_email")) or None
+
     def clean(self):
         cleaned = super().clean()
         for field_name in self._EMAIL_TEXT_FIELDS:
@@ -6059,7 +6066,10 @@ class DonationVendorForm(forms.ModelForm):
             self.helper.add_input(Submit("submit", "Save", css_class="btn-primary"))
 
     def clean_email(self):
-        email = (self.cleaned_data.get("email") or "").strip().lower()
+        """Shape first, then uniqueness. The column is a ``CharField``, so nothing else checks it, and
+        an address typed wrong here is one nobody ever gets a reply from.
+        """
+        email = clean_email_address(self.cleaned_data.get("email"))
         if not email or not self._club:
             return email
         duplicates = DonationVendor.objects.filter(club=self._club, email=email, is_deleted=False)

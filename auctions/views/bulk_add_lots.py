@@ -800,6 +800,9 @@ class ImportLotsFromCSV(LoginRequiredMixin, CSVContactImportMixin, AuctionViewMi
             return {**base, "action": "skip", "reason": "Missing lot number and complete bidder information"}
         if not fields["lot_name"]:
             return {**base, "action": "skip", "reason": "Missing required lot information (lot name)"}
+        bad_email = self.bad_email_reason(fields["email"])
+        if bad_email:
+            return {**base, "action": "skip", "reason": bad_email}
         # Step 3: an exact email match attaches silently; a name-only match is a duplicate.
         seller_by_email = self.auction.find_user(email=fields["email"])
         if seller_by_email:

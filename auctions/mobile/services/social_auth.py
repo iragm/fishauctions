@@ -32,6 +32,9 @@ import secrets
 
 from django.conf import settings
 from django.core.cache import cache
+from django.core.exceptions import ValidationError
+
+from auctions.models import clean_email_address
 
 logger = logging.getLogger(__name__)
 
@@ -173,7 +176,13 @@ def _apply_apple_first_authorization_hints(response: dict, data: dict) -> None:
 
     if response.get("email"):
         return
-    hint_email = (data.get("email") or "").strip()
+    try:
+        hint_email = clean_email_address(data.get("email"))
+    except ValidationError:
+        # A hint is a convenience, not a credential. Dropping a malformed one lets sign-in finish and
+        # allauth ask for an address; refusing the request would fail the whole sign-in over it.
+        logger.info("Ignoring an Apple email hint that isn't an address")
+        return
     if not hint_email:
         return
     response["email"] = hint_email
