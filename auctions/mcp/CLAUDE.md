@@ -53,7 +53,7 @@ auctions/mcp/auth.py       who is calling
 ## The palette as a client
 
 `palette_assist.tools_for` is `mcp.tools.tool_descriptors(user)` plus three tools of its own —
-`ask_the_user`, `cannot_do_this`, `answer_the_user`. `llm.complete` sends them as OpenAI function
+`ask_the_user` and `cannot_do_this` — there is no tool that takes a sentence. `llm.complete` sends them as OpenAI function
 definitions (`llm.as_openai_tool`). `read_reply` maps "which tool" to
 lookup/action/question/answer/refusal. `complete_json` stays for the four callers that want data,
 not a call (species matching, donations, the two speaker commands).
@@ -92,7 +92,20 @@ stripped and thrown away, so "the next auction is on the 19th" arrived with no w
 is a byte-exact prefix of the long one and both share one cached prompt. For the same reason nothing
 user-specific is in the system prompt: the facts about the user ride in the first message
 (`context_message`), leaving a prompt that is identical for everyone in a permission tier, and a
-cache that stays warm between people instead of going cold between one person's sessions.
+cache that stays warm between people instead of going cold between one person's sessions. The
+`asks_for_something_removed` tier is the exception: it is a *subset* of the reads rather than a
+shorter suffix, so it shares no cached prefix and costs full price. Watch the cached percentage on
+the analytics page if those turns stop being rare.
+
+**A question is settled before any word bag is consulted.** `asks_a_question` — a question mark, a
+question word, or a yes/no opener — runs first in `wants_the_writes` and guards `asks_for_a_write` in
+`answers_on_its_own`. It used to run second, and the writes are named after the things people ask
+about: ten of fifteen plainly-phrased questions contain a write word, so "what time is check in?" was
+handed `check_in` *and* could not be answered by the read that answered it. Both vocabularies also
+grow through `_SYNONYMS`, because they are built out of the registry's wording and nobody speaks the
+registry's wording — `remove_person` says "somebody" and `add_person` says "someone", which took every
+write away from "add somebody to the auction". `SurvivingWritesStayReachableTests` pins that the
+sixteen are still reachable by the words people use; `DriftTests` only pins that they exist.
 
 Palette-only, not in the MCP layer: `obvious_match`/`shortcut_match`, the confirm countdown and its
 trust window, `humanize`, the `_give_up` fallback ladder, `sanitize_context`/`_carry_over` memory,

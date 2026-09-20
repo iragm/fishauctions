@@ -3909,9 +3909,18 @@ class ToolTieringTests(PaletteAssistTestCase):
             offered = {tool["name"] for tool in palette_assist.tools_for(self.user, query)}
             self.assertIn("set_lot_winner", offered, query)
 
-    def test_a_question_mentioning_a_write_keeps_them(self):
+    def test_a_question_about_a_write_is_answered_rather_than_handed_the_write(self):
+        """Asking how to do a thing is not asking for it to be done.
+
+        This used to keep ``check_in``, on the argument that the question mentioned it. But the
+        writes are named after the things people ask about, so that rule handed ``check_in`` to "what
+        time is check in?" and ``set_lot_winner`` to "is lot 12 sold?" as well. The question shape is
+        checked first now: the reads that answer it are still there, and nothing that acts is.
+        """
         offered = {tool["name"] for tool in palette_assist.tools_for(self.user, "how do I check someone in?")}
-        self.assertIn("check_in", offered)
+        self.assertNotIn("check_in", offered)
+        self.assertIn("describe_auction", offered)
+        self.assertIn("go_to_page", offered)
 
     def test_the_short_list_is_a_prefix_of_the_long_one(self):
         """So both share one cached prompt at the provider instead of splitting it in two."""
@@ -4603,6 +4612,111 @@ class GenericHintTests(PaletteAssistTestCase):
         auction, problem = palette_actions.resolve_auction(self.user, "Auction")
         self.assertIsNone(problem)
         self.assertEqual(auction.pk, plain.pk)
+
+
+class QuestionsNeverGetWriteToolsTests(PaletteAssistTestCase):
+    """The writes are named after the things people ask about, so a question keeps hitting them.
+
+    Ten of fifteen plainly-phrased questions contain a word some write is named by. The question
+    check used to run *after* that word check, so "what time is check in?" was handed ``check_in``
+    and "is lot 12 sold?" was handed ``set_lot_winner``.
+    """
+
+    QUESTIONS = (
+        "what time is check in",
+        "when does check in start?",
+        "is lot 12 sold",
+        "what is my invoice total",
+        "when is the next door prize draw",
+        "how do i renew my membership",
+        "who is the last person to check in",
+        "can i still add a lot",
+    )
+
+    def _writes(self, query):
+        return {
+            name
+            for name in (tool["name"] for tool in palette_assist.tools_for(self.user, query))
+            if (palette_actions.get_action(name) or SimpleNamespace(danger=None)).danger
+            == palette_actions.DANGER_CONFIRM
+        }
+
+    def test_no_question_is_handed_anything_that_writes(self):
+        for query in self.QUESTIONS:
+            self.assertTrue(palette_assist.asks_a_question(query), query)
+            self.assertFalse(palette_assist.wants_the_writes(query), query)
+            self.assertEqual(self._writes(query), set(), query)
+
+    def test_a_question_is_still_answered_by_the_read_that_answered_it(self):
+        """The same word bag stopped these being answered at all: the read could not end the turn."""
+        for query in self.QUESTIONS:
+            self.assertTrue(
+                palette_assist.answers_on_its_own(
+                    palette_actions.get_action("describe_auction"), query, {"summary": "Starts at two."}
+                ),
+                query,
+            )
+
+    def test_one_model_call_answers_a_question_carrying_a_write_word(self):
+        self._script({"lookup": "describe_auction", "params": {"auction": self.in_person_auction.slug}})
+        data = self._assist("what time is check in?").json()
+        self.assertEqual(data["kind"], "answer", data)
+        self.assertEqual(self.provider.call_count, 1)
+
+    def test_telling_it_to_do_something_still_gets_the_writes(self):
+        for query in ("check in bob", "mark lot 14 sold", "add someone to the auction", "renew bob's membership"):
+            self.assertFalse(palette_assist.asks_a_question(query), query)
+            self.assertTrue(palette_assist.wants_the_writes(query), query)
+
+    def test_an_imperative_opening_with_do_is_not_read_as_a_question(self):
+        """ "do the check in for bob" is an instruction; "does bob have a bidder number" is not."""
+        self.assertFalse(palette_assist.asks_a_question("do the check in for bob"))
+        self.assertTrue(palette_assist.asks_a_question("does bob have a bidder number"))
+
+
+class SurvivingWritesStayReachableTests(PaletteAssistTestCase):
+    """``DriftTests`` pins that the sixteen writes still exist. This pins that you can still reach them.
+
+    Both vocabularies are built out of the registry's own wording, and nobody speaks the registry's
+    wording. ``remove_person`` is confirmed as "Remove somebody from an auction", so **somebody**
+    counted as a skill the palette gave up -- and ``add_person``, which survived, says "someone". "add
+    somebody to the auction" lost every write tool it needed while "add someone" worked.
+    """
+
+    #: A few ways a person actually says each surviving write, rather than how its confirm line does.
+    PHRASINGS = {
+        "add_person": ("add somebody to the auction", "add anybody who turns up", "put someone on the list"),
+        "set_my_auction": ("set the current auction to the fall one", "make this my current auction"),
+        "check_in": ("check somebody in", "check bob in"),
+        "set_lot_winner": ("lot 101 sold to bidder 14 for 25", "record the sale of lot 3"),
+        "no_sale": ("mark lot 14 as not sold", "no sale on lot 14"),
+        "renew_membership": ("renew bob's membership",),
+        "add_invoice_adjustment": ("add $5 to jane's invoice for the raffle",),
+        "draw_door_prize": ("draw a door prize",),
+        "undo_last": ("undo that", "undo the last thing"),
+    }
+
+    def _offered(self, query):
+        return {tool["name"] for tool in palette_assist.tools_for(self.user, query)}
+
+    def test_every_phrasing_still_reaches_the_write_it_names(self):
+        for name, phrasings in self.PHRASINGS.items():
+            for query in phrasings:
+                self.assertFalse(
+                    palette_assist.asks_for_something_removed(query),
+                    f"{query!r} reads as a skill the palette gave up, so {name} is out of reach",
+                )
+                self.assertIn(name, self._offered(query), query)
+
+    def test_synonyms_of_a_surviving_write_are_not_counted_as_skills_that_left(self):
+        for word in ("somebody", "anybody", "current"):
+            self.assertIn(word, palette_assist._write_vocabulary(), word)
+            self.assertNotIn(word, palette_assist._removed_vocabulary(), word)
+
+    def test_two_words_for_the_same_missing_skill_agree(self):
+        """ "remove lot 14" took the writes away and "delete lot 14" did not; both mean the same thing."""
+        self.assertTrue(palette_assist.asks_for_something_removed("remove lot 14"))
+        self.assertTrue(palette_assist.asks_for_something_removed("delete lot 14"))
 
 
 class PinnedSubjectTests(PaletteAssistTestCase):

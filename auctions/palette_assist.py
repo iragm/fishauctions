@@ -132,6 +132,26 @@ def navigate_only(user) -> bool:
     return bool(userdata and userdata.palette_navigate_only)
 
 
+#: Which slice of the catalogue a turn was handed. Recorded on every row, because a turn that quietly
+#: lost its write tools is otherwise indistinguishable from an ordinary navigation on the analytics
+#: page -- and "it stopped adding people" is exactly the report that looks like one.
+TOOLS_ALL = "all"
+TOOLS_READS = "reads"
+TOOLS_PAGES = "pages"
+TOOLS_LOCKED = "locked"
+
+
+def tools_tier(user, query: str = "") -> str:
+    """Which of :data:`TOOLS_ALL` and friends this user and query get. See :func:`tools_for`."""
+    if navigate_only(user):
+        return TOOLS_LOCKED
+    if query and asks_for_something_removed(query) and not asks_a_question(query):
+        return TOOLS_PAGES
+    if not query or wants_the_writes(query):
+        return TOOLS_ALL
+    return TOOLS_READS
+
+
 def tools_for(user, query: str = "") -> list[dict[str, Any]]:
     """Every tool this user's palette may call: the shared catalogue, plus the three above.
 
@@ -150,18 +170,22 @@ def tools_for(user, query: str = "") -> list[dict[str, Any]]:
         if not getattr(palette_actions.get_action(tool["name"]), "mcp_only", False)
     ]
     reads = [tool for tool in shared if not _is_a_write(tool)]
-    if navigate_only(user):
-        # Reads still answer a question; nothing here can change anything.
-        return [*reads, *PALETTE_TOOLS]
-    if query and asks_for_something_removed(query) and not asks_a_question(query):
+    tier = tools_tier(user, query)
+    if tier == TOOLS_PAGES:
         # They asked for something this box no longer does. The page still does it, so leave the
         # tools that reach a page and the ones that aim it at the right lot or person — and nothing
         # that could write. Told to refund a lot with no way to, it reached for no_sale.
+        #
+        # This one is a *subset* of the reads rather than a shorter suffix, so unlike the tier below
+        # it is not a prefix of the full list and does not share its cached prompt. Watch the cached
+        # percentage on the analytics page if these turns ever stop being rare.
         reachable = [tool for tool in reads if tool["name"] in STEP_LOOKUPS or _is_navigation(tool)]
         return [*reachable, *PALETTE_TOOLS]
-    if not query or wants_the_writes(query):
+    if tier == TOOLS_ALL:
         writes = [tool for tool in shared if _is_a_write(tool)]
         return [*reads, *PALETTE_TOOLS, *writes]
+    # TOOLS_READS (a question) and TOOLS_LOCKED (navigate-only) are the same list for different
+    # reasons: reads still answer a question, and nothing here can change anything.
     return [*reads, *PALETTE_TOOLS]
 
 
@@ -189,6 +213,30 @@ _removed_vocabulary_cache: frozenset[str] | None = None
 _TOO_GENERAL = frozenset("auction auctions lot lots club clubs member members person people user users".split())
 
 
+#: Words people use in each other's place. Both vocabularies below are built out of the registry's
+#: own wording, and nobody speaks the registry's wording: ``add_person`` is confirmed as "Add someone
+#: to the auction" and ``remove_person`` as "Remove somebody from an auction", so "add somebody to
+#: the auction" read as a skill that had left and lost every write tool for the turn.
+_SYNONYMS: tuple[frozenset[str], ...] = (
+    frozenset({"someone", "somebody", "anyone", "anybody"}),
+    frozenset({"remove", "delete"}),
+    frozenset({"picture", "photo", "image"}),
+    frozenset({"money", "cash", "payment"}),
+    frozenset({"current", "default"}),
+    frozenset({"message", "announcement"}),
+    frozenset({"buyer", "bidder"}),
+)
+
+
+def _with_synonyms(words: set[str]) -> set[str]:
+    """*words*, plus every word somebody would use in place of one of them."""
+    grown = set(words)
+    for group in _SYNONYMS:
+        if grown & group:
+            grown |= group
+    return grown
+
+
 def _write_vocabulary() -> frozenset[str]:
     """The words the registry's own writes are named and confirmed by.
 
@@ -204,7 +252,7 @@ def _write_vocabulary() -> frozenset[str]:
                 continue
             text = f"{action.name.replace('_', ' ')} {action.confirm_template}"
             words.update(normalize_query(text).split())
-        _write_vocabulary_cache = frozenset(words - _FILLER - _TOO_GENERAL)
+        _write_vocabulary_cache = frozenset(_with_synonyms(words) - _FILLER - _TOO_GENERAL)
     return _write_vocabulary_cache
 
 
@@ -223,7 +271,7 @@ def _removed_vocabulary() -> frozenset[str]:
             if action is None or action.lookup:
                 continue
             words.update(normalize_query(f"{action.name.replace('_', ' ')} {action.confirm_template}").split())
-        _removed_vocabulary_cache = frozenset(words - _FILLER - _TOO_GENERAL - _write_vocabulary())
+        _removed_vocabulary_cache = frozenset(_with_synonyms(words) - _FILLER - _TOO_GENERAL - _write_vocabulary())
     return _removed_vocabulary_cache
 
 
@@ -254,12 +302,20 @@ def asks_for_something_removed(query: str) -> bool:
 
 
 def wants_the_writes(query: str) -> bool:
-    """Whether this query is worth sending the write tools with. Generous on purpose: a question with
-    no write word in it loses them, and everything else keeps them.
+    """Whether this query is worth sending the write tools with. Generous on purpose: anything that
+    isn't a question and doesn't read like one keeps them.
+
+    The question check comes **first**. It used to come after :func:`asks_for_a_write`, so a question
+    carrying a write word kept every write: "what time is check in?" was handed ``check_in``, "is lot
+    12 sold?" ``set_lot_winner`` and ``no_sale``, "what is my invoice total?" ``set_invoice_status``.
+    Ten of fifteen plainly-phrased questions contain a word some write is named by, because the
+    writes are named after the things people ask about.
     """
     words = set(normalize_query(query).split())
     if not words:
         return True
+    if asks_a_question(query):
+        return False
     if asks_for_a_write(query):
         return True
     return not (words & _QUESTION_WORDS or query.strip().endswith("?"))
@@ -771,10 +827,19 @@ def _preload_messages(request, query: str, messages: list[dict[str, Any]]) -> st
     return name
 
 
+#: Openers that make a sentence a yes/no question. "do" and "have" are deliberately absent: "do the
+#: check in" and "have bob checked in" are things people tell the box to do, not things they ask.
+_YES_NO_OPENERS = frozenset("is are was were does did can could will would should am".split())
+
+
 def asks_a_question(query: str) -> bool:
-    """Whether the user is asking rather than naming something. A question is never an obvious match."""
+    """Whether the user is asking rather than telling. A question is never an obvious match, never
+    loses its reads, and never wants a write tool however many write words it happens to contain.
+    """
+    if query.strip().endswith("?"):
+        return True
     words = normalize_query(query).split()
-    return bool(query.strip().endswith("?") or (words and words[0] in _QUESTION_WORDS))
+    return bool(words and (words[0] in _QUESTION_WORDS or words[0] in _YES_NO_OPENERS))
 
 
 def obvious_match(request, query: str) -> list[dict[str, Any]] | None:
@@ -1590,7 +1655,12 @@ def answers_on_its_own(action, query: str, result: Any) -> bool:
     Not for a query that wants something done ("add a lot", "check in bob"), where a read is a step on
     the way, and not for the reads that exist to feed another tool (:data:`STEP_LOOKUPS`).
     """
-    if action.name in STEP_LOOKUPS or asks_for_a_write(query):
+    if action.name in STEP_LOOKUPS:
+        return False
+    # A question carrying a write word is still a question, and the read that produced a summary has
+    # answered it. Without this, "what time is check in?" could never be answered at all: the loop
+    # re-called the same read, spent its nudge, ran out of rounds and fell back to keyword search.
+    if asks_for_a_write(query) and not asks_a_question(query):
         return False
     return bool(isinstance(result, dict) and result.get("summary"))
 
