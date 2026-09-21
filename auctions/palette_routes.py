@@ -215,6 +215,12 @@ ROUTE_LIST: list[Route] = [
         "Account",
         keywords=["api key", "mcp", "claude", "connect an assistant", "token", "ai"],
     ),
+    _r(
+        "account_data_export",
+        "Download everything this site knows about me",
+        "Account",
+        keywords=["export my data", "download my data", "copy of my data", "what do you know about me", "gdpr"],
+    ),
     _r("account_delete", "Delete my account", "Account", keywords=["close account", "delete me", "gdpr"]),
     _r("paypal_seller", "My PayPal payout settings", "Account", keywords=["paypal", "get paid", "payout"]),
     _r("paypal_connect", "Connect PayPal", "Account", keywords=["link paypal", "set up paypal"]),

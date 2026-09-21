@@ -40,6 +40,7 @@ PUBLIC_ROUTE_NAMES = frozenset(
         "ignore_categories", "feedback", "messages", "my_bids", "my_invoices", "selling", "watched",
         "won_lots", "my_lot_report", "my_won_lot_csv", "my_lots_page_view_history", "user_api_keys",
         "chat_subscriptions", "auction_confirm", "all_my_users", "paypal_seller", "square_seller",
+        "account_data_export",
         "command_palette", "unsubscribe", "auction_join",
         # Beacons, health and static documents.
         "pageview", "form_abandoned", "check_username", "get_ad", "click_ad", "service_worker",

@@ -1,0 +1,2 @@
+{% comment %}Sender identification on every email. auctions/email_footer.py says why, and why the opt-out line is conditional.{% endcomment %}
+<br><small style="color:#666666;">{{ site_name }}{% if mailing_address %} &middot; {{ mailing_address }}{% endif %}{% if unsubscribe %}<br><a href="https://{{ domain }}/unsubscribe/{{ unsubscribe }}/" style="color:#666666;">Stop promotional emails</a>{% endif %}</small>

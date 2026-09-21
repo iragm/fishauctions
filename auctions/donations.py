@@ -705,8 +705,18 @@ def strip_donation_footer(text):
     return _FOOTER_SEPARATOR_RE.sub("", body[:index].rstrip()).strip()
 
 
+class MissingMailingAddress(Exception):
+    """The club has no postal address, so no donation email can be composed.
+
+    Raised rather than falling back to the club's name alone: a name is not an address, and a
+    donation request is bulk commercial email to a stranger -- the one thing here that is
+    unambiguously covered by CAN-SPAM and CASL, both of which require a physical address in the
+    message. ``DonationContactView`` turns this into a screen pointing at the settings page.
+    """
+
+
 def unsubscribe_footer(vendor):
-    """The physical address and opt-out line US bulk commercial email must carry.
+    """The physical address and opt-out line bulk commercial email must carry.
 
     The club is named once, as the first line of the address block, added only if the club left it out.
     """
@@ -716,8 +726,9 @@ def unsubscribe_footer(vendor):
     club = vendor.club
     address = club.donation_mailing_address.strip()
     if not address:
-        block = club.name
-    elif club.name.strip().lower() in address.lower():
+        msg = f"{club.name} has no mailing address set, and a donation request has to carry one."
+        raise MissingMailingAddress(msg)
+    if club.name.strip().lower() in address.lower():
         block = address
     else:
         block = f"{club.name}\n{address}"

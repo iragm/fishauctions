@@ -635,6 +635,11 @@ urlpatterns = [
         name="notification_preferences",
     ),
     path(
+        "account/data/",
+        login_required(views.AccountDataExportView.as_view()),
+        name="account_data_export",
+    ),
+    path(
         "account/delete/",
         login_required(views.AccountDeleteView.as_view()),
         name="account_delete",

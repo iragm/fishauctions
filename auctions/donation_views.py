@@ -308,6 +308,22 @@ class DonationContactView(LoginRequiredMixin, DonationPermissionMixin, View):
             "last_email_direction": previous.direction,
         }
 
+    def _missing_address_context(self):
+        """The dialog replaced by "set your address first".
+
+        Composing needs the footer, and the footer needs a postal address (see
+        ``donations.MissingMailingAddress``), so this is refused before the admin writes anything
+        rather than after.
+        """
+        return {
+            "club": self.club,
+            "vendor": self.vendor,
+            "step": "no_address",
+            "modal_title": f"Contact {self.vendor.name}",
+            "error": "Your club needs a mailing address before it can send donation email.",
+            "settings_url": reverse("club_donation_settings", kwargs={"slug": self.club.slug}),
+        }
+
     def _blocked_context(self):
         """The dialog replaced by "not today", when the daily allowance is gone."""
         return {
@@ -345,6 +361,8 @@ class DonationContactView(LoginRequiredMixin, DonationPermissionMixin, View):
 
     def get(self, request, pk):
         self._load(request, pk)
+        if not self.club.donation_mailing_address.strip():
+            return render(request, "auctions/donation_contact_modal.html", self._missing_address_context())
         if self.quota.exhausted:
             return render(request, "auctions/donation_contact_modal.html", self._blocked_context())
         form = DonationContactForm(
@@ -358,6 +376,8 @@ class DonationContactView(LoginRequiredMixin, DonationPermissionMixin, View):
     def post(self, request, pk):
         self._load(request, pk)
         step = request.POST.get("step")
+        if not self.club.donation_mailing_address.strip():
+            return render(request, "auctions/donation_contact_modal.html", self._missing_address_context())
         if self.quota.exhausted:
             # Nothing may be written past the limit, so don't offer a screen that ends in a refusal.
             return render(request, "auctions/donation_contact_modal.html", self._blocked_context())

@@ -116,6 +116,7 @@ GROUPS = (
             # /account/ redirects to the reader's own public page -- what other people see. One row:
             # the navbar's "Account information" and the ribbon's "My account" were one URL.
             Row("account", "Public user page", "bi-person-fill"),
+            Row("account_data_export", "Download my data", "bi-download"),
             # Not `text-danger`: painting one nav row red makes it the loudest thing in the menu.
             # The page itself is where the red lives.
             Row("account_delete", "Delete account", "bi-trash"),

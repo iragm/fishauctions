@@ -28,11 +28,9 @@ import logging
 from django.conf import settings
 from django.utils import timezone
 
-logger = logging.getLogger(__name__)
+from auctions.email_footer import UNSET_MAILING_ADDRESS
 
-#: What ``MAILING_ADDRESS`` says when unset (settings.py); falling back to it would publish "No
-#: address configured" as the agent's address.
-_UNSET_MAILING_ADDRESS = "No address configured"
+logger = logging.getLogger(__name__)
 
 #: Strikes before the policy calls for termination. Published in the terms and on /dmca/, so all
 #: three have to agree.
@@ -55,7 +53,7 @@ def agent():
         _setting("DMCA_AGENT_EMAIL") or _setting("ADMIN_EMAIL") or (settings.ADMINS[0][1] if settings.ADMINS else "")
     )
     address = _setting("DMCA_AGENT_ADDRESS") or _setting("MAILING_ADDRESS")
-    if address == _UNSET_MAILING_ADDRESS:
+    if address == UNSET_MAILING_ADDRESS:
         address = ""
     block = {
         "service_provider": _setting("DMCA_SERVICE_PROVIDER_NAME"),

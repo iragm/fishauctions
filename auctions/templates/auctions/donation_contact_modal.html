@@ -34,6 +34,18 @@ step "blocked" is what a club sees once it has used up its donation emails for t
           <button type="button" class="btn btn-secondary" data-modal-close-action="none">Close</button>
         </div>
 
+        {% elif step == "no_address" %}
+        <div class="modal-body">
+          <p class="mb-0 text-muted">
+            Every donation email has to carry your club's postal address - that's the law in the US
+            and Canada, not a setting we invented. Add it once and this dialog works from then on.
+          </p>
+        </div>
+        <div class="modal-footer">
+          <a class="btn btn-primary" href="{{ settings_url }}">Donation settings</a>
+          <button type="button" class="btn btn-secondary" data-modal-close-action="none">Close</button>
+        </div>
+
         {% elif step == "context" %}
         <form method="post" action="{{ post_url }}" hx-post="{{ post_url }}" hx-target="#modals-here"
               hx-indicator="#donation-generating">

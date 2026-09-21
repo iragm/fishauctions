@@ -3885,7 +3885,12 @@ class Auction(CachedPropertiesMixin, models.Model):
     )
     reserve_price.help_text = "Allow users to set a minimum bid on their lots"
     tax = models.PositiveIntegerField(default=0, validators=[MinValueValidator(0)])
-    tax.help_text = "A percent added to the buyer's invoice for all won lots (e.g. enter 7 for 7% sales tax). Leave at 0 for no tax."
+    tax.help_text = (
+        "A percent added to the buyer's invoice for all won lots (e.g. enter 7 for 7% sales tax). Leave at 0 for "
+        "no tax. One rate for the whole auction: whether your club has to charge tax, at what rate, what it shows "
+        "on an invoice (Canadian clubs have to name GST/HST separately, with their registration number) and what "
+        "it does with the money afterwards are your club's to get right."
+    )
     advanced_lot_adding = models.BooleanField(default=False)
     advanced_lot_adding.help_text = "Show lot number, quantity and description fields when bulk adding lots"
     use_quantity_field = models.BooleanField(default=False, blank=True)

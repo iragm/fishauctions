@@ -13,6 +13,7 @@ from django.urls import reverse
 from django.views.generic import TemplateView
 
 from auctions import dmca
+from auctions.email_footer import mailing_address
 from auctions.site_setup import get_server_public_ip
 
 from .base import AdminOnlyViewMixin
@@ -376,14 +377,16 @@ class AdminSetupChecklistView(AdminOnlyViewMixin, TemplateView):
             {
                 "section": "Core setup",
                 "name": "Site identity & branding",
-                # A preference, not a credential: always "Done"; the help text explains it.
-                "configured": True,
+                # Every value here is a preference rather than a credential, except one: without a
+                # real MAILING_ADDRESS every email this site sends goes out with no postal address on
+                # it, which US and Canadian anti-spam law require. So that one decides the badge.
+                "configured": bool(mailing_address()),
                 "what_it_does": (
                     "Branding shown across the site and on emails:"
                     "<ul class='mb-0'>"
                     "<li><code>NAVBAR_BRAND</code> &mdash; shown at the top of every page (also the single club's name).</li>"
                     "<li><code>COPYRIGHT_MESSAGE</code> &mdash; shown in the footer. HTML is allowed.</li>"
-                    "<li><code>MAILING_ADDRESS</code> &mdash; your physical address, shown next to the unsubscribe link on promo emails (required by anti-spam law).</li>"
+                    "<li><code>MAILING_ADDRESS</code> &mdash; your physical address, on the bottom of every email this site sends. Required by US and Canadian anti-spam law, and the one value here that isn't optional: while it is unset the footer leaves it out rather than printing a placeholder, and this item says &ldquo;Needs setup&rdquo;. Put the club's legal name on the first line.</li>"
                     "<li><code>WEBSITE_FOCUS</code> &mdash; the plural, lowercase noun your site is about, e.g. <code>fish</code>, <code>birds</code>, <code>items</code>.</li>"
                     "<li><code>I_BRED_THIS_FISH_LABEL</code> &mdash; the label shown next to the &ldquo;breeder points&rdquo; checkbox.</li>"
                     "<li><code>WEEKLY_PROMO_MESSAGE</code> &mdash; extra text included in the weekly promotional email (plain text only; usually left blank).</li>"

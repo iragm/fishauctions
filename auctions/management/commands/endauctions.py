@@ -50,7 +50,13 @@ def declare_winners_on_lots(lots):
                     mail.send(
                         lot.user.email,
                         template="lot_ended_relist",
-                        context={"domain": current_site.domain, "lot": lot},
+                        # A nudge to list something again is a commercial message, so it carries the
+                        # opt-out the shared footer draws from this token.
+                        context={
+                            "domain": current_site.domain,
+                            "lot": lot,
+                            "unsubscribe": lot.user.userdata.unsubscribe_link,
+                        },
                     )
                 except Exception:
                     logger.exception("Failed to send relist warning email for lot %s", lot.pk)

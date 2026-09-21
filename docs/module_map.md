@@ -29,7 +29,10 @@ this only quotes its opening sentence.
 - **`account_deletion.py`** (390 lines)
   Account deletion: what "delete my account" means here, and the machinery for it.
   `deletion_due_date`, `blacklist_refresh_tokens`, `request_deletion`, `cancel_deletion`, `deletion_summary`, `delete_account`, `process_due_deletions`
-- **`account_nav.py`** (199 lines)
+- **`account_export.py`** (290 lines)
+  "Download my data": everything this site holds about one person, as one JSON file.
+  `export`, `filename`
+- **`account_nav.py`** (200 lines)
   The **Account setup** menu: which pages are in it, which one you're on, and where /account/setup/ lands.
   `Row`, `Group`, `active_page`, `remember`, `landing_url`, `groups_for`
 - **`admin.py`** (1567 lines)
@@ -105,14 +108,17 @@ this only quotes its opening sentence.
 - **`discord_events.py`** (341 lines)
   Discord scheduled events for clubs.
   `send_channel_message`, `delete_channel_message`, `create_scheduled_event`, `cancel_scheduled_event`, `sync_club_events`, `sync_one_event`, `sync_auction_events`
-- **`dmca.py`** (227 lines)
+- **`dmca.py`** (225 lines)
   The DMCA designated agent, the takedown, and the repeat-infringer policy.
   `agent`, `is_configured`, `agent_email`, `strike_count`, `record_strike`, `take_down`, `terminate`
-- **`donation_views.py`** (593 lines)
+- **`donation_views.py`** (613 lines)
   Donation tracking views: the vendor table, the vendor panel, and the contact dialog.
   `DonationPermissionMixin`, `ClubDonationVendorsView`, `ClubDonationSettingsView`, `DonationVendorPanelView`, `DonationVendorDeleteView`, `DonationContactView`, `DonationDossierView`, `DonationEmailPreviewView`, `DonationUnsubscribeView`, `InboundDonationEmailView`
-- **`donations.py`** (1002 lines)
+- **`donations.py`** (1013 lines)
   Donation tracking: asking vendors for donations and reading their replies.
+- **`email_footer.py`** (37 lines)
+  The identification block every email this site sends has to carry.
+  `mailing_address`
 - **`email_routing.py`** (174 lines)
   `email_routing_enabled`, `email_routing_domain`, `build_routed_sender_address`, `sender_with_display_name`, `admin_routing_email`, `resolve_donation_alias`, `resolve_routing_info`, `resolve_routed_recipient`
 - **`error_views.py`** (35 lines)
@@ -163,7 +169,7 @@ this only quotes its opening sentence.
 - **`model_caching.py`** (79 lines)
   ``@cached_property`` on a model, and the invalidation that makes it safe.
   `InvalidatesRelatedCache`, `CachedPropertiesMixin`
-- **`models.py`** (13692 lines)
+- **`models.py`** (13697 lines)
   The database: 80 models, mostly in one file because 29 of them form a single dependency cycle
 - **`moderation_admin.py`** (139 lines)
   The Django admin for the moderation queue: reports, copyright notices and strikes.
@@ -184,7 +190,7 @@ this only quotes its opening sentence.
   The things the command palette's assist, and ``/mcp/``, are allowed to do.
 - **`palette_assist.py`** (2209 lines)
   Natural-language orchestration for the command palette.
-- **`palette_routes.py`** (1836 lines)
+- **`palette_routes.py`** (1842 lines)
   Every named URL, as a :class:`Route` the palette assistant can reach or an :data:`EXCLUDED` entry
 - **`passkit_views.py`** (183 lines)
   Apple PassKit web service: the endpoints installed Wallet passes talk to.
@@ -238,6 +244,9 @@ this only quotes its opening sentence.
   `iter_template_files`, `check_text`, `check_modal_container`, `check_templates`, `main`
 - **`test_account_deletion.py`** (708 lines)
   Tests for account deletion.
+- **`test_account_export.py`** (143 lines)
+  Download my data: what the file contains, what it must never contain, and who may ask for it.
+  `ExportContentsTests`, `ExportExcludesCredentialsTests`, `ExportAccessTests`, `FilenameTests`, `MenuTests`
 - **`test_account_nav.py`** (302 lines)
   The Account setup menu: `auctions/account_nav.py`, its sidebar, and /account/setup/.
   `SidebarReachTests`, `LandingTests`, `PaymentRowTests`, `NavbarTests`, `SettingsSplitTests`
@@ -336,6 +345,9 @@ this only quotes its opening sentence.
   `AgentConfigurationTests`, `DmcaPageTests`, `NoticeIntakeTests`, `NoticeRoutingTests`, `ReportContentTests`, `StrikeTests`, `TakedownRemovesTheMaterialTests`, `MobileConfigTests`, `ImageSourceLabelTests`, `AccountDeletionTests`
 - **`test_donations.py`** (2591 lines)
   Tests for donation tracking: routing, the inbound webhook, the LLM seams, and the UI gates.
+- **`test_email_compliance.py`** (158 lines)
+  The parts of an outgoing email that anti-spam law requires, and the donation footer's address.
+  `render`, `EveryEmailTemplateCarriesTheFooterTests`, `FooterContentsTests`, `UnconfiguredAddressTests`, `DonationRequestNeedsAnAddressTests`
 - **`test_endauctions.py`** (902 lines)
   Tests for the ``endauctions`` command and the websocket consumers.
   `LotEndauctionsMethodsTests`, `WebsocketClientDisconnectTests`, `WebSocketConsumerTests`, `HasEverGrantedPermissionTests`
@@ -470,13 +482,13 @@ this only quotes its opening sentence.
   `SupportUrlWorksSignedOutTests`, `SupportPageIsTheHelpPageTests`, `OldContactUrlStillWorksTests`, `VideoEmbedFitsItsContainerTests`, `SupportFormDeliveryTests`, `SupportFormSignedInTests`
 - **`test_tap_to_pay.py`** (1128 lines)
   Tests for the Tap to Pay on iPhone review-guide work (TTP-1..4).
-- **`test_template_a11y.py`** (97 lines)
+- **`test_template_a11y.py`** (129 lines)
   Guards the two accessibility rules in auctions/template_a11y.py.
-  `TemplatesAreAccessibleTests`, `CheckerBehaviourTests`, `HtmxAnnouncementTests`
+  `TemplatesAreAccessibleTests`, `CheckerBehaviourTests`, `HtmxAnnouncementTests`, `SkipLinkAndLandmarkTests`
 - **`test_template_hygiene.py`** (141 lines)
   Guards against the template mistakes that produce a wrong page without an error.
   `TemplateTagsAreParseableTests`, `TemplateLintTests`, `OneModalContainerPerPageTests`
-- **`test_tenancy.py`** (401 lines)
+- **`test_tenancy.py`** (402 lines)
   Three guards that hold whether or not anyone remembered.
   `RouteAuthorizationTests`, `TenancyInvariantTests`, `BidderNumberTests`
 - **`test_usability_instruments.py`** (401 lines)
@@ -507,7 +519,7 @@ this only quotes its opening sentence.
   `patch_views`, `WritableMediaRoot`, `give_contact_info`, `CsvImportTestMixin`, `StandardTestCase`, `SuiteStaysFastTests`, `EveryTestStartsInTheSiteTimezoneTests`
 - **`tests_selenium.py`** (1139 lines)
   Selenium browser tests for client-side JavaScript, HTMx and websockets.
-- **`urls.py`** (1292 lines)
+- **`urls.py`** (1297 lines)
   Every URL on the site, and the one place a new one has to be declared.
 - **`usability_report.py`** (276 lines)
   The usability measurements for the dashboard.
@@ -561,7 +573,7 @@ this only quotes its opening sentence.
   `Command`
 - **`empty_account_and_move_data.py`** (35 lines)
   `Command`
-- **`endauctions.py`** (139 lines)
+- **`endauctions.py`** (145 lines)
   `declare_winners_on_lots`, `deactivate_pretty_much_over_lots`, `Command`
 - **`ensure_site_defaults.py`** (71 lines)
   `Command`
@@ -732,6 +744,9 @@ The site's Model Context Protocol server, and the tool catalogue behind it.
   `currency_symbol`, `format_price`
 - **`distance_filters.py`** (56 lines)
   `convert_distance`, `distance_display`
+- **`email_tags.py`** (38 lines)
+  The two tags every emailed template ends with. See :mod:`auctions.email_footer` for why.
+  `email_footer`, `email_footer_text`
 - **`membership_tags.py`** (115 lines)
   `membership_barcode`, `google_wallet_save_url`
 - **`species_tags.py`** (11 lines)
@@ -741,9 +756,9 @@ The site's Model Context Protocol server, and the tool catalogue behind it.
 
 Every view on the site, split by the part of it the view belongs to.
 
-- **`account.py`** (561 lines)
+- **`account.py`** (593 lines)
   The reader's own account: profile, username, preferences, notifications, deletion.
-- **`admin_checklist.py`** (1059 lines)
+- **`admin_checklist.py`** (1062 lines)
   The admin setup checklist: the one page that says what a new site still needs.
   `AdminSetupChecklistView`
 - **`ajax.py`** (754 lines)

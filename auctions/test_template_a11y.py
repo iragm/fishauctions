@@ -95,3 +95,35 @@ class HtmxAnnouncementTests(SimpleTestCase):
         self.assertIn("htmx:afterRequest", self.base)
         after_request = self.base.split("htmx:afterRequest", 1)[1][:400]
         self.assertIn("removeAttribute('aria-busy')", after_request)
+
+
+class SkipLinkAndLandmarkTests(SimpleTestCase):
+    """WCAG 2.4.1 Bypass Blocks, which base.html failed outright: a navbar, a cookie bar, a location
+    prompt and up to three alert rows sat above the content with no way past them, and no ``<main>``
+    for a screen reader to jump to.
+
+    Read out of the template source rather than a rendered page: these have to hold for every page on
+    the site, and base.html is the only place either can be defined.
+    """
+
+    def setUp(self):
+        self.base = (REPO_ROOT / "auctions" / "templates" / "base.html").read_text()
+
+    def test_there_is_exactly_one_main_landmark(self):
+        self.assertEqual(self.base.count("<main"), 1)
+        self.assertEqual(self.base.count("</main>"), 1)
+
+    def test_the_skip_link_is_the_first_thing_in_the_body(self):
+        body = self.base.split("<body", 1)[1]
+        first_link = body.find("<a ")
+        skip_link = body.find('class="visually-hidden-focusable"')
+        self.assertNotEqual(skip_link, -1, "base.html has no skip link")
+        self.assertEqual(
+            first_link,
+            body.rfind("<a ", 0, skip_link + 1),
+            "something focusable comes before the skip link, so tabbing no longer reaches it first",
+        )
+
+    def test_the_skip_link_points_at_the_main_landmark(self):
+        target = self.base.split('<a href="#', 1)[1].split('"', 1)[0]
+        self.assertIn(f'<main id="{target}"', self.base)

@@ -262,6 +262,38 @@ class AccountDeleteView(TemplateView):
         return redirect(f"{reverse('account_logout')}?next={quote(target)}")
 
 
+class AccountDataExportView(TemplateView):
+    """ "Download my data": the page that says what is in the file, and the file itself.
+
+    One URL, two jobs: ``?download=1`` returns the JSON, anything else renders the page. A second
+    named URL would have to be catalogued twice for one button, and the page is the thing that makes
+    the download honest -- it says what is left out before the file is opened.
+
+    The opposite number of :class:`AccountDeleteView`, and named in the same menu: a right to a copy
+    and a right to deletion are the same right facing two ways, and a site that offers only the
+    destructive half is the wrong way round.
+    """
+
+    template_name = "account_data_export.html"
+
+    def get(self, request, *args, **kwargs):
+        from auctions import account_export
+
+        if request.GET.get("download"):
+            data = account_export.export(request.user)
+            response = JsonResponse(data, json_dumps_params={"indent": 2})
+            response["Content-Disposition"] = f'attachment; filename="{account_export.filename(request.user)}"'
+            return response
+        return super().get(request, *args, **kwargs)
+
+    def get_context_data(self, **kwargs):
+        from auctions import account_export
+
+        context = super().get_context_data(**kwargs)
+        context["not_included"] = account_export.NOT_INCLUDED
+        return context
+
+
 class AccountDeletedView(TemplateView):
     """Shown after requesting deletion; public, because the session is gone by the time it loads."""
 
