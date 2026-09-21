@@ -455,6 +455,10 @@ INBOUND_ROUTING_SECRET = os.environ.get("INBOUND_ROUTING_SECRET", "").strip()
 # IOS_APP_LINKS: "TEAMID.bundle.id", comma-separated.
 ANDROID_APP_LINKS = [entry for entry in os.environ.get("ANDROID_APP_LINKS", "").split(",") if entry.strip()]
 IOS_APP_LINKS = [entry for entry in os.environ.get("IOS_APP_LINKS", "").split(",") if entry.strip()]
+# The token OpenAI's plugin submission portal issues for this plugin, served from
+# /.well-known/openai-apps-challenge (auctions/mcp/verification.py). Blank 404s, which is what a
+# deployment that isn't the one being submitted wants.
+OPENAI_APPS_CHALLENGE_TOKEN = os.environ.get("OPENAI_APPS_CHALLENGE_TOKEN", "").strip()
 DEFAULT_FROM_EMAIL = (
     f"info@{EMAIL_ROUTING_DOMAIN}"
     if SES_ROUTE_EMAILS_ENABLED
@@ -1096,6 +1100,28 @@ SIMPLE_JWT = {
 # --- OAuth 2.1 for the MCP endpoint ------------------------------------------
 #
 # How Claude's apps get permission to act as a person through /mcp/ (auctions/mcp/auth.py).
+#
+# OIDC_RSA_KEYFILE is a PEM private key next to .env, and the only switch OIDC has: with it the
+# server also answers as an OpenID provider (auctions/mcp/oidc.py), which is what lets ChatGPT's
+# plugin directory read a verified email address. Without it OIDC stays off rather than advertising
+# an `openid` scope it could not sign a token for. Generate one with:
+#
+#     openssl genrsa -out oidc.pem 2048
+_oidc_keyfile = os.environ.get("OIDC_RSA_KEYFILE", "").strip()
+OIDC_RSA_PRIVATE_KEY = ""
+if _oidc_keyfile:
+    try:
+        OIDC_RSA_PRIVATE_KEY = (BASE_DIR / _oidc_keyfile).read_text()
+    except OSError as _oidc_err:
+        # Don't raise: a box that boots with OIDC off is diagnosable; one that won't boot isn't.
+        import logging as _logging
+
+        _logging.getLogger(__name__).warning(
+            "OIDC_RSA_KEYFILE=%s could not be read (%s: %s); OpenID Connect disabled.",
+            _oidc_keyfile,
+            type(_oidc_err).__name__,
+            _oidc_err,
+        )
 OAUTH2_PROVIDER = {
     # Scopes are a ceiling like UserAPIKey.allow_writes, never a grant. ``offline_access`` gets a
     # refresh token.
@@ -1103,6 +1129,20 @@ OAUTH2_PROVIDER = {
         "read": "Look things up: auctions, lots, people, invoices, club members",
         "write": "Add and change things you could change yourself on the website",
         "offline_access": "Stay connected without signing in again",
+        # OIDC, and only when there is a key to sign with: a scope in this table is advertised in
+        # both discovery documents *and* in the protected-resource metadata, so listing one the
+        # server can't honour is a promise made to every client, not a feature waiting to be
+        # switched on. Not in DEFAULT_SCOPES either -- a client that asks for nothing is asking to
+        # act, not to be told who it is acting as. ChatGPT asks for both by name because they are
+        # advertised.
+        **(
+            {
+                "openid": "Know which account you signed in with",
+                "email": "See the email address on your account",
+            }
+            if OIDC_RSA_PRIVATE_KEY
+            else {}
+        ),
     },
     # All three by default: a connector that names no scopes silently lost its write tools, and
     # without offline_access it dies after an hour.
@@ -1145,6 +1185,19 @@ OAUTH2_PROVIDER = {
     "COMPLIANT_BCP_RFC9700_ACCESS_TOKEN_TRANSPORT": True,
     # RFC 9207 `iss` in the authorization response (mix-up defence).
     "COMPLIANT_BCP_RFC9700_AUTHZ_RESPONSE_ISS": True,
+    # OpenID Connect, for the verified email address ChatGPT's directory uses to keep a work
+    # account out of a personal workspace. Off without a key: see auctions/mcp/oidc.py for why the
+    # two can't be separated, and for the RS256 every registered client is given.
+    "OIDC_ENABLED": bool(OIDC_RSA_PRIVATE_KEY),
+    "OIDC_RSA_PRIVATE_KEY": OIDC_RSA_PRIVATE_KEY,
+    "OAUTH2_VALIDATOR_CLASS": "auctions.mcp.oidc.Validator",
+    # The OIDC document has its own copy of this list and defaults to a shorter one, which would
+    # have the two discovery documents disagreeing about whether a public client can use the token
+    # endpoint -- the CIMD trapdoor again, one document further down.
+    "OIDC_TOKEN_ENDPOINT_AUTH_METHODS_SUPPORTED": ["none", "client_secret_post", "client_secret_basic"],
+    # Same again for response types: the OIDC document defaults to the whole OpenID menu, hybrid
+    # flows included, none of which this server grants.
+    "OIDC_RESPONSE_TYPES_SUPPORTED": ["code"],
     # check --deploy's W008 (http redirect URIs) is expected: Claude Code's loopback callback is http.
     #
     # COMPLIANT_BCP_RFC9700_TOKEN_STORAGE is left off: token hashing breaks the refresh grace period.

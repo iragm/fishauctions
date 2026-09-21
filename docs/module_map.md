@@ -60,7 +60,7 @@ this only quotes its opening sentence.
 - **`apple_wallet.py`** (333 lines)
   Apple Wallet (PassKit): .pkpass generation and pass-update pushes.
   `is_configured`, `ensure_apple_pass_auth_token`, `generate_pkpass_for_member`, `send_pass_update_notification`
-- **`apps.py`** (41 lines)
+- **`apps.py`** (44 lines)
   `AuctionsConfig`
 - **`aquarium_species.py`** (277 lines)
   The curated aquarium-trade species list (plants, invertebrates, live food, cultivars), and the
@@ -190,7 +190,7 @@ this only quotes its opening sentence.
   The things the command palette's assist, and ``/mcp/``, are allowed to do.
 - **`palette_assist.py`** (2209 lines)
   Natural-language orchestration for the command palette.
-- **`palette_routes.py`** (1842 lines)
+- **`palette_routes.py`** (1843 lines)
   Every named URL, as a :class:`Route` the palette assistant can reach or an :data:`EXCLUDED` entry
 - **`passkit_views.py`** (183 lines)
   Apple PassKit web service: the endpoints installed Wallet passes talk to.
@@ -421,6 +421,9 @@ this only quotes its opening sentence.
 - **`test_module_map.py`** (151 lines)
   Guards the module map against drift and verifies module docstring rules are enforced.
   `ModuleMapIsCurrentTests`, `ModuleRulesTests`, `RuleCheckerTests`, `SummaryTests`, `ViewsPackageStaysAcyclicTests`
+- **`test_openai_apps.py`** (226 lines)
+  What a plugin directory asks of this server, beyond what an MCP client already asks.
+  `with_oidc`, `without_oidc`, `DomainVerificationTests`, `WidgetPointerTests`, `OpenIDTests`
 - **`test_page_view_beacon.py`** (158 lines)
   One view per page, recorded on every page, with no timer in front of it.
   `BeaconSourceTests`, `WhatCountsAsViewingAnAuctionTests`, `OneViewPerPageTests`, `RowsFromTheBeaconTests`
@@ -488,7 +491,7 @@ this only quotes its opening sentence.
 - **`test_template_hygiene.py`** (141 lines)
   Guards against the template mistakes that produce a wrong page without an error.
   `TemplateTagsAreParseableTests`, `TemplateLintTests`, `OneModalContainerPerPageTests`
-- **`test_tenancy.py`** (402 lines)
+- **`test_tenancy.py`** (405 lines)
   Three guards that hold whether or not anyone remembered.
   `RouteAuthorizationTests`, `TenancyInvariantTests`, `BidderNumberTests`
 - **`test_usability_instruments.py`** (401 lines)
@@ -519,7 +522,7 @@ this only quotes its opening sentence.
   `patch_views`, `WritableMediaRoot`, `give_contact_info`, `CsvImportTestMixin`, `StandardTestCase`, `SuiteStaysFastTests`, `EveryTestStartsInTheSiteTimezoneTests`
 - **`tests_selenium.py`** (1139 lines)
   Selenium browser tests for client-side JavaScript, HTMx and websockets.
-- **`urls.py`** (1297 lines)
+- **`urls.py`** (1306 lines)
   Every URL on the site, and the one place a new one has to be declared.
 - **`usability_report.py`** (276 lines)
   The usability measurements for the dashboard.
@@ -653,6 +656,9 @@ The site's Model Context Protocol server, and the tool catalogue behind it.
 - **`icons.py`** (100 lines)
   Icons for the tools, the prompts, the resources and the server itself.
   `domain`, `absolute`, `icons`, `for_action`, `for_prompt`, `for_uri`, `server`
+- **`oidc.py`** (75 lines)
+  OpenID Connect on top of the OAuth 2.1 server, for the one thing OAuth alone can't say: who.
+  `Validator`, `sign_with_rs256`
 - **`prompts.py`** (238 lines)
   Prompts: multi-step recipes offered to the *person* to pick off a menu, not to the model.
   `Argument`, `Prompt`, `descriptors`, `prompt_list`, `render`, `complete`, `completes`
@@ -667,7 +673,10 @@ The site's Model Context Protocol server, and the tool catalogue behind it.
 - **`transport.py`** (139 lines)
   The HTTP end of the MCP server: one view, at ``/mcp/``. Nothing here knows what a tool is.
   `MCPEndpointView`
-- **`widgets.py`** (153 lines)
+- **`verification.py`** (28 lines)
+  Proving to a plugin directory that this host is ours.
+  `openai_apps_challenge`
+- **`widgets.py`** (167 lines)
   Interactive views this server publishes as MCP-app widgets.
   `resource_descriptors`, `read_resource`, `tool_meta`
 
@@ -867,7 +876,7 @@ This will make sure the app is always imported when
 - **`firebase_config.py`** (88 lines)
   Parse the public Firebase client-config files that ship with the mobile build.
   `load_android_config`, `load_ios_config`, `load_firebase_client_config`
-- **`settings.py`** (1151 lines)
+- **`settings.py`** (1204 lines)
   Django settings for fishauctions. Reads .env; variables are documented in .env.example.
 - **`static_storage.py`** (52 lines)
   Content-hashed names for `/static/`, tolerant of the two things that would break a deploy.

@@ -190,6 +190,15 @@ root per RFC 8414/9728). Settings that fail silently rather than erroring:
 - `/o/applications/…` is wrapped in `is_superuser`; `/o/register/` in
   `mcp.auth.throttle_registration`. Consent screen is ours (`auctions/templates/oauth2_provider/`).
 - `SOURCE_CODE_URL` / `SOURCE_CODE_BRANCH` drive `read_source`; blank turns the tool off.
+- **OIDC is one switch, `OIDC_RSA_KEYFILE`** (`auctions/mcp/oidc.py`). `/mcp/` never needs identity;
+  this exists so a plugin directory can read a *verified* email address and keep a work account out
+  of a personal workspace. No key means the `openid`/`email` scopes are not advertised at all —
+  a scope in `SCOPES` is a promise in three documents, including the protected-resource one. With a
+  key, every `Application` is given RS256 on the way into the database, because DCR and CIMD both
+  leave `algorithm` blank and the first `openid` request would be signed with nothing.
+- `/.well-known/openai-apps-challenge` (`auctions/mcp/verification.py`) serves
+  `OPENAI_APPS_CHALLENGE_TOKEN` and nothing else — one token, no JSON, no redirect, no sign-in.
+  Blank 404s: two hosts answering with different tokens is how a shared host name fails to verify.
 
 Rules:
 
@@ -270,7 +279,10 @@ the whole registry as three people who shouldn't reach a tenant's objects.
   `describe_lot`, `describe_auction`, invoice reads/writes and the membership card. One template
   bakes in `view` per resource — no second payload, no second permission check.
   `@modelcontextprotocol/ext-apps` is vendored unmodified; `csp.connectDomains` is empty and stays
-  empty — no widget calls a tool.
+  empty — no widget calls a tool. `openai/outputTemplate` rides beside `ui/resourceUri` and is the
+  **only** thing duplicated for ChatGPT: it documents that key as a compatibility alias, the mime
+  type and CSP are already the shared spelling, and a widget that silently doesn't draw is worth
+  more than one key on nine tools.
 - **Prompts** (`auctions/mcp/prompts.py`): `run_check_in`, `chase_unpaid`, `set_up_next_year`,
   `write_announcement`, `build_an_integration` — the only safe place for a multi-step recipe, because
   a person picks it off a menu rather than a model choosing it. Nothing in a prompt body is

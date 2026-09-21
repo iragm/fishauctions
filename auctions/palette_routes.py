@@ -1331,6 +1331,7 @@ EXCLUDED: dict[str, str] = {
     # excused by the `apple_` third-party prefix by accident.
     "android_assetlinks": _INFRA,
     "apple_app_site_association": _INFRA,
+    "openai_apps_challenge": _INFRA,
     # Remote print: the waiting page polls the first; the others are its Try again and Cancel.
     "remote_print_job": _API,
     "remote_print_job_retry": _API,

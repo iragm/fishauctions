@@ -62,6 +62,9 @@ PUBLIC_ROUTE_NAMES = frozenset(
         "club_bap_embed", "club_calendar", "oauth-resource-metadata", "oauth-resource-metadata-path",
         "oauth-server-metadata", "oauth-server-metadata-issuer", "authorized-token-list", "device",
         "mobile-config", "square_success", "paypal_success",
+        # The OIDC signing keys, once OIDC_RSA_KEYFILE is set: a JWKS is public keys, and a client
+        # has to read it before it holds anything at all. 404s on a deployment with no key.
+        "jwks-info", "oidc-connect-discovery-info",
     }
 )  # fmt: skip
 

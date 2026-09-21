@@ -5,6 +5,9 @@ class AuctionsConfig(AppConfig):
     name = "auctions"
 
     def ready(self):
+        # auctions.mcp.oidc registers the pre_save that gives a newly registered OAuth client a
+        # signing algorithm; auctions.signals is the rest of the site's.
+        import auctions.mcp.oidc  # noqa: F401
         import auctions.signals  # noqa: F401
 
         self._require_ads_txt()

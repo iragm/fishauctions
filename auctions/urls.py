@@ -16,6 +16,7 @@ from django.views.generic.base import RedirectView, TemplateView
 from django_ses.views import SESEventWebhookView
 
 from . import app_links, apple_notifications, donation_views, passkit_views, views
+from .mcp import verification
 from .mcp.transport import MCPEndpointView
 
 urlpatterns = [
@@ -27,6 +28,14 @@ urlpatterns = [
         ".well-known/apple-app-site-association",
         app_links.apple_app_site_association,
         name="apple_app_site_association",
+    ),
+    # Domain verification for OpenAI's plugin directory (auctions/mcp/verification.py). Same three
+    # constraints as the two files above -- exact path, no redirect, no sign-in -- and the body is
+    # the token and nothing else.
+    path(
+        ".well-known/openai-apps-challenge",
+        verification.openai_apps_challenge,
+        name="openai_apps_challenge",
     ),
     # allauth mounts these under /3rdparty/, but the app's WebView allowlist is built around
     # /social/... (AllauthWebScreen). Same views, second path; the names stay allauth's so reverse()
