@@ -378,7 +378,9 @@ class AuctionHTMxTable(tables.Table):
                 )
         if auction.joined and not auction.is_last_used:
             result += format_html(" <span class='badge bg-success text-dark'>Joined</span>")
-        result += auction.template_lot_link_first_column + auction.template_promo_info
+        # Both are safe strings, but template_promo_info is "" when there is no promo, and
+        # SafeString + str is a plain str -- which the table would then escape onto the page.
+        result += format_html("{}{}", auction.template_lot_link_first_column, auction.template_promo_info)
         return result
 
     class Meta:

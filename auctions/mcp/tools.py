@@ -137,17 +137,20 @@ def descriptor(action: palette_actions.Action) -> dict[str, Any]:
     """One MCP tool descriptor.
 
     ``tools/list`` is paid for in context every session, so keys that restate the spec's default are
-    omitted: ``destructiveHint``/``idempotentHint`` on read-only tools, ``idempotentHint: false``, and
-    ``annotations.title``. ``openWorldHint`` is always sent because its default is ``true``.
+    omitted: ``annotations.title``, and ``idempotentHint`` wherever it would be ``false``.
+
+    The three hints a directory reads are always sent, defaults or not. ``openWorldHint`` because
+    its default is ``true``; ``destructiveHint`` on a read because OpenAI's plugin review counts a
+    hint it has to infer as a missing one, and forty-one reads' worth of ``false`` is the cheapest
+    thing on this endpoint.
     """
     annotations: dict[str, Any] = {
         "readOnlyHint": read_only(action),
         "openWorldHint": action.open_world,
+        "destructiveHint": action.destructive,
     }
-    if not read_only(action):
-        annotations["destructiveHint"] = action.destructive
-        if idempotent(action):
-            annotations["idempotentHint"] = True
+    if not read_only(action) and idempotent(action):
+        annotations["idempotentHint"] = True
     built = {
         "name": action.name,
         "title": title_for(action),

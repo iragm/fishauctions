@@ -108,10 +108,31 @@ class RegistryConformance(SimpleTestCase):
             self.assertEqual(annotations["readOnlyHint"], action.danger != palette_actions.DANGER_CONFIRM)
             self.assertEqual(annotations["openWorldHint"], action.open_world, name)
 
-    def test_only_the_source_reader_reaches_outside_this_site(self):
-        """Only ``read_source`` sets ``openWorldHint``: it fetches the published source code."""
+    def test_the_tools_that_reach_outside_this_site_are_the_ones_that_send(self):
+        """``openWorldHint`` is the tool's purpose, not its side effects.
+
+        Eleven: the ones whose whole job is to reach an address, a server or a calendar this site
+        doesn't own, plus ``read_source``, which fetches the published repository. Pinned as a set
+        rather than a count, because the failure it guards against is a *new* sender quietly
+        defaulting to false -- not the list getting shorter.
+        """
         reaching = {name for name, built in self.by_name.items() if built["annotations"]["openWorldHint"]}
-        self.assertEqual(reaching, {"read_source"})
+        self.assertEqual(
+            reaching,
+            {
+                "read_source",
+                "send_club_announcement",
+                "retract_announcement",
+                "send_membership_card",
+                "resend_member_card",
+                "contact_donation_vendor",
+                "add_club_event",
+                "update_club_event",
+                "request_volunteers",
+                "cancel_volunteer_request",
+                "change_email",
+            },
+        )
 
     def test_a_write_says_whether_it_destroys_and_whether_it_repeats(self):
         for name, descriptor in self.by_name.items():
@@ -125,13 +146,14 @@ class RegistryConformance(SimpleTestCase):
             else:
                 self.assertNotIn("idempotentHint", annotations, f"{name} says the default out loud")
 
-    def test_a_read_carries_neither_hint(self):
-        """Reads carry neither destructive nor idempotent hint; tools/list costs context every session."""
+    def test_a_read_says_it_destroys_nothing_and_leaves_the_rest_out(self):
+        """A read still spells ``destructiveHint`` out -- a plugin directory reads all three hints and
+        counts one it has to infer as missing. ``idempotentHint`` stays off: nobody audits it."""
         for name, descriptor in self.by_name.items():
             annotations = descriptor["annotations"]
             if not annotations["readOnlyHint"]:
                 continue
-            self.assertNotIn("destructiveHint", annotations, f"{name} reads; the hint means nothing")
+            self.assertIs(annotations["destructiveHint"], False, f"{name} reads; it destroys nothing")
             self.assertNotIn("idempotentHint", annotations, f"{name} reads; the hint means nothing")
 
     def test_every_parameter_declares_its_type(self):

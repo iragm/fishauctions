@@ -22,6 +22,9 @@ core.*
 # sit alongside .env at repo root. Root-only patterns so committed files in subdirs
 # (fixtures, devcontainer, vscode, swag/) are unaffected.
 /*.json
+# ...except the one generated file that belongs in the diff: the 114 tool justifications uploaded
+# to OpenAI's plugin form. Regenerate with `manage.py chatgpt_submission --write`.
+!/chatgpt-app-submission.json
 /*.p12
 /*.pem
 db.sqlite3

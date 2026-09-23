@@ -1233,7 +1233,14 @@ class EditLot(forms.ModelForm):
         self.fields["auctiontos_winner"].label = "Winner"
         winner_help_test = ""
         if lot.high_bidder:
-            winner_help_test = f"High bidder: <span class='text-warning'>{lot.high_bidder_for_admins}</span> Bid: <span class='text-warning'>${lot.high_bid}</span> {lot.auction_show_high_bidder_template}"
+            # Crispy renders help_text with |safe, and high_bidder_for_admins is the bidder's own
+            # typed name -- the same thing the AuctionTOS table escapes.
+            winner_help_test = format_html(
+                "High bidder: <span class='text-warning'>{}</span> Bid: <span class='text-warning'>${}</span> {}",
+                lot.high_bidder_for_admins,
+                lot.high_bid,
+                lot.auction_show_high_bidder_template,
+            )
         self.fields["auctiontos_winner"].help_text = winner_help_test
         self.fields["quantity"].help_text = ""
         self.fields["donation"].help_text = ""
@@ -1493,9 +1500,12 @@ class CreateEditAuctionTOS(forms.ModelForm):
             self.fields["name"].initial = self.auctiontos.name
             self.fields["email"].initial = self.auctiontos.email
             if self.auctiontos.pk and self.auctiontos.email_address_status == "BAD":
-                self.fields[
-                    "email"
-                ].help_text = f"<span class='text-warning'>Emails sent to {self.auctiontos.email} have bounced</span>, try to get an updated email from this user."
+                # The address is whatever an organizer typed, and crispy renders help_text with |safe.
+                self.fields["email"].help_text = format_html(
+                    "<span class='text-warning'>Emails sent to {} have bounced</span>,"
+                    " try to get an updated email from this user.",
+                    self.auctiontos.email,
+                )
             self.fields["phone_number"].initial = getattr(
                 self.auctiontos, "phone_as_string", self.auctiontos.phone_number
             )
@@ -2368,7 +2378,9 @@ class AuctionEditForm(forms.ModelForm):
             self.fields["enable_square_payments"].widget = forms.HiddenInput()
         else:
             if paypal_seller:
-                self.fields["enable_online_payments"].help_text += f"<br>Payments sent to {paypal_seller}"
+                self.fields["enable_online_payments"].help_text = format_html(
+                    "{}<br>Payments sent to {}", self.fields["enable_online_payments"].help_text, paypal_seller
+                )
             elif uses_site_paypal:
                 self.fields["enable_online_payments"].help_text += "<br>Payments go to the site's PayPal account"
             else:
@@ -2376,7 +2388,9 @@ class AuctionEditForm(forms.ModelForm):
                 self.fields["enable_online_payments"].widget = forms.HiddenInput()
 
             if square_seller:
-                self.fields["enable_square_payments"].help_text += f"<br>Payments sent to {square_seller}"
+                self.fields["enable_square_payments"].help_text = format_html(
+                    "{}<br>Payments sent to {}", self.fields["enable_square_payments"].help_text, square_seller
+                )
             else:
                 # Square requires an actual linked seller record (no site fallback).
                 self.fields["enable_square_payments"].widget = forms.HiddenInput()

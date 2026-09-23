@@ -57,8 +57,15 @@ UNSAFE_SUMMERNOTE_TAGS = frozenset(
 #: through untouched and the rule could only ever be as complete as the list of attributes we thought
 #: of. ``style`` is filtered further below.
 ALLOWED_SUMMERNOTE_ATTRIBUTES = frozenset(
-    {"href", "src", "alt", "title", "style", "class", "colspan", "rowspan", "start", "type", "datetime", "cite"}
-)
+    {"href", "src", "alt", "title", "style", "class", "colspan", "rowspan", "start", "type", "datetime", "cite",
+     "target", "rel"}
+)  # fmt: skip
+
+#: ``target`` values worth keeping. Summernote's link dialog ships with ``linkTargetBlank`` on, so
+#: every link anybody has ever inserted carries ``target="_blank"`` -- dropping the attribute made
+#: those links open in the same tab the next time the page was saved. Anything else named a frame,
+#: which this site has none of.
+ALLOWED_LINK_TARGETS = frozenset({"_blank", "_self", "_parent", "_top"})
 
 #: CSS properties Summernote's toolbar produces. Everything else goes: ``position``/``z-index`` alone
 #: let stored content cover the page it is displayed on.
@@ -106,6 +113,15 @@ def sanitize_summernote_html(text, allowed_tags=None):
                 # Covers every ``on*`` handler, and everything else nobody has had to think of yet.
                 del tag[attr_name]
                 continue
+            if normalized_attr == "target":
+                # A frame name would be a target this site can't have, and reverse tabnabbing is
+                # only closed by ``rel`` (below), which old browsers still need spelled out.
+                value = attr_value[0] if isinstance(attr_value, list) else attr_value
+                if str(value).lower() not in ALLOWED_LINK_TARGETS:
+                    del tag[attr_name]
+                continue
+            if normalized_attr == "rel":
+                continue
             # The URI-bearing attributes allowed in Summernote content.
             if normalized_attr in {"href", "src", "xlink:href"}:
                 # Some parsers represent multi-valued attributes as lists.
@@ -122,6 +138,11 @@ def sanitize_summernote_html(text, allowed_tags=None):
                     for value in values
                 ):
                     del tag[attr_name]
+
+    # A link that opens a tab gets the opener closed off, whatever rel it arrived with.
+    for tag in soup.find_all("a", target=True):
+        if str(tag.get("target", "")).lower() == "_blank":
+            tag["rel"] = "noopener noreferrer"
 
     # Remove 'color' attribute from <font> tags
     for tag in soup.find_all("font"):

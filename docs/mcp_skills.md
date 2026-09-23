@@ -124,7 +124,7 @@ to see before deciding. That leaves the auction floor, the checkout table and th
 else is a page `go_to_page` reaches.
 
 `add_lot`/`add_lots` are the one pair where both surfaces have the skill under different names: the
-palette's `add_a_lot` is navigate-only and opens the lot form pre-filled (`LotCreateView.get_initial`
+palette's `add_a_lot_via_webform` is navigate-only and opens the lot form pre-filled (`LotCreateView.get_initial`
 reads the fields off the query string), because the species matching, the auction's field rules and
 the seller's own eyes are all on that page. No caller is ever offered both.
 

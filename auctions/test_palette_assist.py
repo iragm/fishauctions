@@ -1122,7 +1122,7 @@ class RegistryTests(PaletteAssistTestCase):
         # Exact names: "renew_member" is a prefix of renew_membership, which this user does get.
         for name in ("award_points", "renew_member", "set_invoice_status"):
             self.assertNotIn(name, offered)
-        for name in ("watch_lot", "add_a_lot", "renew_membership"):
+        for name in ("watch_lot", "add_a_lot_via_webform", "renew_membership"):
             self.assertIn(name, offered)
 
     def test_every_action_has_a_valid_danger_level(self):
@@ -1330,7 +1330,9 @@ class PageAwarenessTests(PaletteAssistTestCase):
     def test_adding_a_lot_uses_the_auction_the_user_is_looking_at(self):
         self.user.userdata.last_auction_used = self.online_auction
         self.user.userdata.save()
-        self._script({"action": "add_a_lot", "params": {"name": "context shrimp"}, "summary": "Open the lot form"})
+        self._script(
+            {"action": "add_a_lot_via_webform", "params": {"name": "context shrimp"}, "summary": "Open the lot form"}
+        )
         path = reverse("auction_lot_list", kwargs={"slug": self.in_person_auction.slug})
         data = self._assist("add a lot of context shrimp for me please", path=path).json()
         self.assertEqual(data["kind"], "navigate", data)
@@ -1607,7 +1609,7 @@ class LotReuseTests(PaletteAssistTestCase):
         """``add_lot`` is ``mcp_only``, so this drives the resolver the way ``/mcp/`` does.
 
         Lot reuse is the resolver's behaviour and an agent still gets it; the palette's own route to
-        the same place is ``add_a_lot``, which fills the form in and writes nothing.
+        the same place is ``add_a_lot_via_webform``, which fills the form in and writes nothing.
         """
         result = palette_actions.run_action(self._request_for(self.user), "add_lot", params)
         self.assertNotIn("error", result, result)
@@ -1722,7 +1724,7 @@ class AddPersonTests(PaletteAssistTestCase):
         self.assertFalse(AuctionTOS.objects.filter(name="Jane Doe").exists())
 
     def test_add_lot_warns_the_model_off_making_a_person_into_a_lot(self):
-        description = self._tool("add_a_lot")["description"]
+        description = self._tool("add_a_lot_via_webform")["description"]
         self.assertIn("add_person", description)
         self.assertIn("PERSON", description)
 
@@ -3975,7 +3977,7 @@ class SellALotTests(PaletteAssistTestCase):
         self.in_person_auction.allow_bulk_adding_lots = False
         self.in_person_auction.save()
         result = palette_actions.run_action(
-            self._request_for(self.user), "add_a_lot", {"name": "blue shrimp", "quantity": 3}
+            self._request_for(self.user), "add_a_lot_via_webform", {"name": "blue shrimp", "quantity": 3}
         )
         self.assertIn("lot_name=blue+shrimp", result["url"])
         self.assertIn("quantity=3", result["url"])
@@ -3983,7 +3985,7 @@ class SellALotTests(PaletteAssistTestCase):
 
     def test_it_writes_nothing(self):
         before = Lot.objects.count()
-        self._script({"action": "add_a_lot", "params": {"name": "nothing shrimp"}, "summary": ""})
+        self._script({"action": "add_a_lot_via_webform", "params": {"name": "nothing shrimp"}, "summary": ""})
         data = self._assist("add a lot of nothing shrimp").json()
         self.assertEqual(data["kind"], "navigate", data)
         self.assertEqual(Lot.objects.count(), before)
@@ -3991,7 +3993,9 @@ class SellALotTests(PaletteAssistTestCase):
     def test_an_auction_with_bulk_adding_gets_the_bulk_page(self):
         self.in_person_auction.allow_bulk_adding_lots = True
         self.in_person_auction.save()
-        result = palette_actions.run_action(self._request_for(self.user), "add_a_lot", {"name": "blue shrimp"})
+        result = palette_actions.run_action(
+            self._request_for(self.user), "add_a_lot_via_webform", {"name": "blue shrimp"}
+        )
         self.assertIn(reverse("bulk_add_lots_for_myself", kwargs={"slug": self.in_person_auction.slug}), result["url"])
 
 

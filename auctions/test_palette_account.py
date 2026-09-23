@@ -663,11 +663,6 @@ class ClubIntegrationTests(AccountTestCase):
         self.club.refresh_from_db()
         self.assertTrue(self.club.enable_donation_tracking)
 
-    def test_syncing_a_calendar_nobody_connected_says_so(self):
-        result = self._run("sync_club_calendar", {"club": self.club.name})
-        self.assertIn("error", result)
-        self.assertIn("OAuth", result["error"])
-
     def test_the_website_snippets_are_listed_with_what_would_show(self):
         result = self._run("club_website_snippets", {"club": self.club.name})
         self.assertTrue(result.get("found"), result)

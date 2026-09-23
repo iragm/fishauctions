@@ -504,3 +504,78 @@ class ClientIpTestCase(TestCase):
 
         request = RequestFactory().get("/", REMOTE_ADDR="198.51.100.4")
         self.assertEqual(get_adapter().get_client_ip(request), "198.51.100.4")
+
+
+class TableCellMarkupTests(StandardTestCase):
+    """A table cell that builds markup has to say it is markup, or the table prints it as text.
+
+    ``SafeString + str`` is a plain ``str``: one unmarked piece anywhere in a cell throws the whole
+    cell's safety away, and ``django_tables2`` then escapes it, so the page shows its own HTML.
+    That is how the auctions list came to show ``&lt;a href=...`` to everyone -- the markup was all
+    built with ``format_html``, and one property returning ``""`` at the end undid it.
+    """
+
+    def test_the_auctions_list_prints_links_not_their_source(self):
+        self.client.force_login(self.user)
+        response = self.client.get(reverse("auctions"))
+        self.assertNotContains(response, "&lt;a href")
+        self.assertContains(response, self.online_auction.get_absolute_url())
+
+    def test_every_auction_row_is_marked_safe(self):
+        """Directly, because the page only shows auctions a visitor can see."""
+        from django.utils.safestring import SafeData
+
+        from auctions.tables import AuctionHTMxTable
+
+        auction = self.online_auction
+        auction.is_last_used = False
+        auction.joined = False
+        auction.distance = None
+        # No promo text is the ordinary case, and the one that used to lose the cell's safety.
+        auction.extra_promo_text = ""
+        cell = AuctionHTMxTable([]).render_auction(auction.title, auction)
+        self.assertIsInstance(cell, SafeData)
+
+
+class SummernoteSanitizerTests(TestCase):
+    """The editor's own output has to survive the sanitizer, or saving a page rewrites it.
+
+    The attribute allowlist that closed off ``on*`` handlers also took ``target`` with it, and
+    Summernote ships ``linkTargetBlank`` on -- so every link anybody had inserted lost its new tab
+    the next time an organizer saved the auction. Nothing here had a test, which is why.
+    """
+
+    def sanitize(self, html):
+        from auctions.html_sanitize import sanitize_summernote_html
+
+        return sanitize_summernote_html(html)
+
+    def test_a_link_keeps_the_new_tab_summernote_gave_it(self):
+        result = self.sanitize('<p><a href="https://example.com/" target="_blank">rules</a></p>')
+        self.assertIn('target="_blank"', result)
+        self.assertIn("https://example.com/", result)
+
+    def test_a_link_that_opens_a_tab_cannot_reach_back(self):
+        """Old browsers need rel spelled out; the sanitizer writes it whatever arrived."""
+        result = self.sanitize('<a href="https://example.com/" target="_blank" rel="opener">x</a>')
+        self.assertIn("noopener", result)
+        self.assertNotIn('rel="opener"', result)
+
+    def test_a_target_naming_a_frame_goes(self):
+        self.assertNotIn("target", self.sanitize('<a href="https://example.com/" target="sidebar">x</a>'))
+
+    def test_a_handler_still_goes(self):
+        self.assertNotIn("onclick", self.sanitize('<a href="https://example.com/" onclick="steal()">x</a>'))
+
+    def test_a_script_url_still_goes_even_with_a_target(self):
+        result = self.sanitize('<a href="javascript:alert(1)" target="_blank">x</a>')
+        self.assertNotIn("javascript:", result)
+
+    def test_a_script_tag_still_goes_with_its_contents(self):
+        self.assertNotIn("alert", self.sanitize("<p>hi</p><script>alert(1)</script>"))
+
+    def test_ordinary_formatting_survives(self):
+        html = '<p><b>bold</b> <i>italic</i></p><ul><li>one</li></ul><span style="font-size: 14px;">big</span>'
+        result = self.sanitize(html)
+        for fragment in ("<b>", "<i>", "<li>", "font-size"):
+            self.assertIn(fragment, result)

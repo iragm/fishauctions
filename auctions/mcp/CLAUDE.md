@@ -24,7 +24,7 @@ quietly shorter — rather than the fifty-odd that don't. What each skill goes t
 `docs/mcp_skills.md`.
 
 `add_lot`/`add_lots` are the one pair where both surfaces have the skill under different names: the
-palette's is `add_a_lot`, navigate-only, which opens the lot form with what was said already in it.
+palette's is `add_a_lot_via_webform`, navigate-only, which opens the lot form with what was said already in it.
 No caller is offered both, and the name matters — the same tool called `sell_a_lot` lost every
 "add lots to my next auction" to `add_person`, which has the word add in its name.
 

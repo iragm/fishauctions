@@ -2266,7 +2266,6 @@ class PageOnlyWriteRegistryTests(SimpleTestCase):
         "ClubMoneyCreateView": "record_club_money",
         "ImagesRotate": "rotate_lot_image",
         "ImagesPrimary": "rotate_lot_image",
-        "GoogleCalendarSyncNowView": "sync_club_calendar",
     }
 
     def test_each_moved_view_names_its_new_skill(self):

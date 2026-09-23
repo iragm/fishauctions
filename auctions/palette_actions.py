@@ -116,7 +116,15 @@ class Action:
     #: Whether repeating a call leaves the same state. ``None`` derives it (reads yes, writes no); set
     #: ``True`` on writes that set rather than append. See ``mcp.tools.idempotent``.
     idempotent: bool | None = None
-    #: MCP ``openWorldHint``: true only for ``read_source``, which fetches the public repository.
+    #: MCP ``openWorldHint``. True where the point of the tool is to reach somebody or something
+    #: outside this site: an email to an address we don't own, a Discord post, a push notification,
+    #: a Google Calendar, the public repository ``read_source`` reads. It is about the tool's
+    #: purpose, not its side effects -- half the writes here send a notification of some kind, and a
+    #: rule that counted those would mark the whole registry and tell a reader nothing.
+    #:
+    #: **A lot being publicly visible on this site is not open-world.** A bounded service somebody
+    #: is signed in to stays closed however public its pages are; that is the line a plugin
+    #: directory draws, and the same line ``add_lot`` and ``answer_question`` sit on the near side of.
     open_world: bool = False
     #: Offered over ``/mcp/`` only, never in the palette's tool list. Not set here: set from
     #: :data:`MCP_ONLY_SKILLS`, which is where the reason for each one is written down.
@@ -1136,7 +1144,7 @@ _LOT_PREFILL: dict[str, str] = {
 }
 
 
-def add_a_lot(request, params: dict[str, Any]) -> dict[str, Any]:
+def add_a_lot_via_webform(request, params: dict[str, Any]) -> dict[str, Any]:
     """Open the page for adding a lot, with whatever the user described already filled in. Never writes.
 
     The palette's half of a pair: this one and ``add_lot``/``add_lots`` (both ``mcp_only``) are the
@@ -8348,7 +8356,6 @@ _CLUB_FEATURES: tuple[dict[str, Any], ...] = (
         "name": "Google Calendar",
         "what": "Your events kept in step with a Google calendar, both ways.",
         "on": lambda club: club.google_calendar_connected,
-        "tool": "sync_club_calendar",
         "page": "connecting a calendar is a Google sign-in, on the calendar settings page",
     },
     {
@@ -8415,50 +8422,6 @@ def _how_to_turn_it_on(feature: dict[str, Any]) -> str:
     if feature.get("page"):
         parts.append(feature["page"])
     return "; ".join(parts)
-
-
-def sync_club_calendar(request, params: dict[str, Any]) -> dict[str, Any]:
-    """Sync a club's Google Calendar now. ``GoogleCalendarSyncNowView``'s own body: the sync, then a forced
-    re-check of public sharing, which decides the subscribe link members get.
-    """
-    from . import club_events
-    from . import google_calendar as gcal
-    from .views import check_club_permission
-
-    user = request.user
-    club, problem = _club_or_problem(request, params)
-    if problem:
-        return problem
-    if not check_club_permission(user, club, "permission_edit_club"):
-        return _error(f"You don't have permission to change {club.name}'s calendar.")
-    if not club.google_calendar_connected:
-        return _error(
-            f"{club.name} hasn't connected a Google Calendar. Connecting one is an OAuth sign-in, "
-            "so it has to be done on the calendar settings page."
-        )
-    club_events.sync_club(club)
-    club.refresh_from_db()
-    if club.google_calendar_last_error:
-        return _error(f"The sync failed: {untrusted_short(club.google_calendar_last_error)}")
-    gcal.refresh_public_flag(club, force=True)
-    club.refresh_from_db()
-    return _ok(
-        f"Synced {club.name}'s calendar.",
-        club=club.name,
-        calendar_is_shared_publicly=club.google_calendar_is_public,
-        subscribe_url=club.calendar_subscribe_url,
-        note=(
-            None
-            if club.google_calendar_is_public
-            else (
-                "The calendar isn't shared publicly, so members get this site's own feed rather "
-                "than the club's Google one. Sharing has to be switched on in Google Calendar."
-            )
-        ),
-        followups=[
-            {"label": "Calendar settings", "url": reverse("club_google_calendar_config", kwargs={"slug": club.slug})}
-        ],
-    )
 
 
 def club_website_snippets(request, params: dict[str, Any]) -> dict[str, Any]:
@@ -11104,10 +11067,11 @@ register(
 
 register(
     Action(
-        name="add_a_lot",
+        name="add_a_lot_via_webform",
         description=(
-            "Add a lot, or several lots — a lot is an item for sale. Opens the page for it with "
-            "what they described already filled in, ready for them to check and save. Anything "
+            "Opens the page for adding a lot, or several lots — a lot is an item for sale — with "
+            "what they described already filled in, ready for them to check and save. Nothing is "
+            "saved by calling this; the person saves it. Anything "
             "about adding, listing or selling lots is this, however many: 'add a lot', 'add lots "
             "to my next auction', 'list my guppies'. This is how a lot gets added here: the "
             "form matches the species, applies the auction's own rules and shows them what they are "
@@ -11131,7 +11095,7 @@ register(
             "description": "string, optional. A few sentences about the lot. Only what they actually said.",
         },
         danger=DANGER_NAVIGATE,
-        resolver=add_a_lot,
+        resolver=add_a_lot_via_webform,
         aliases={"lot_name", "price", "count", "bidder"},
         examples=["add a lot of blue shrimp", "sell my guppies", "I want to list 3 java ferns"],
     )
@@ -11302,6 +11266,7 @@ register(
 register(
     Action(
         name="change_email",
+        open_world=True,
         description=(
             "Change this user's own email address. It does NOT take effect straight away: a "
             "confirmation link is sent to the new address and the change happens when they open "
@@ -11439,6 +11404,7 @@ register(
 register(
     Action(
         name="send_membership_card",
+        open_world=True,
         description=(
             "Email a club membership card to the address already on that membership. With no "
             "'person' it sends the user their own card — 'send me my membership card', 'I lost my "
@@ -11543,7 +11509,7 @@ register(
             "staff only. This is what 'add mike smith' means: a person's name is a person, not a "
             "lot. Use check_in instead when they are already in the auction and are arriving. "
             "ONLY for a person with a name. 'add a lot', 'add lots', 'add some shrimp' are "
-            "add_a_lot, and 'name' here is never a whole sentence — if you cannot see a person's "
+            "add_a_lot_via_webform, and 'name' here is never a whole sentence — if you cannot see a person's "
             "name in what they said, this is the wrong tool."
         ),
         params={
@@ -12037,6 +12003,7 @@ register(
 register(
     Action(
         name="add_club_event",
+        open_world=True,
         description=(
             "Put a meeting, swap, talk or workshop on a club's calendar. It reaches the club page, "
             "the club's iCal feed, Google Calendar and Discord in the same breath. Club admins "
@@ -12062,6 +12029,7 @@ register(
 register(
     Action(
         name="update_club_event",
+        open_world=True,
         description=(
             "Move, rename or call off something on a club's calendar. Club admins only. An event "
             "generated by an auction only takes a new title and description — its dates belong to "
@@ -12089,6 +12057,7 @@ register(
 register(
     Action(
         name="send_club_announcement",
+        open_world=True,
         description=(
             "Say one thing to everybody in a club, in as many places at once as the club has set "
             "up: Discord, push notifications, its mailing list, its own website. Needs the "
@@ -12116,6 +12085,7 @@ register(
 register(
     Action(
         name="retract_announcement",
+        open_world=True,
         description=(
             "Take back the club's most recent announcement. If it hasn't gone out yet it never "
             "does; if it has, this deletes the Discord post and takes it off the website, and says "
@@ -12153,26 +12123,6 @@ register(
         aliases={"name"},
         confirm_template="Set the current auction",
         examples=["make the spring auction our current one"],
-        needs=NEEDS_CLUB_ADMIN,
-    )
-)
-
-register(
-    Action(
-        name="sync_club_calendar",
-        description=(
-            "Push a club's events to its Google Calendar right now, instead of waiting for the "
-            "hourly sync. Also re-reads whether the calendar is shared publicly, which decides "
-            "which subscribe link members are given. Connecting a calendar in the first place is a "
-            "Google sign-in and has to happen on the settings page."
-        ),
-        params={"club": "string, optional. Club name. See my_context."},
-        danger=DANGER_CONFIRM,
-        idempotent=True,
-        resolver=sync_club_calendar,
-        aliases={"name"},
-        confirm_template="Sync the club calendar",
-        examples=["sync our calendar", "I just changed something in Google Calendar"],
         needs=NEEDS_CLUB_ADMIN,
     )
 )
@@ -12434,6 +12384,7 @@ register(
 register(
     Action(
         name="request_volunteers",
+        open_world=True,
         description=(
             "Ask the people at an in-person auction for help with a job — it goes to the phones of "
             "everyone in the auction with the app. Auction admins only, in-person auctions only. "
@@ -12457,6 +12408,7 @@ register(
 register(
     Action(
         name="cancel_volunteer_request",
+        open_world=True,
         description=(
             "Cancel a request for help and withdraw the notification that went out with it. Auction admins only."
         ),
@@ -13258,6 +13210,7 @@ register(
 register(
     Action(
         name="contact_donation_vendor",
+        open_world=True,
         description=(
             "Email one donation vendor a message you wrote, and record it against them. The site "
             "adds the club's postal address, the unsubscribe link and a reply address that brings "
@@ -13689,6 +13642,7 @@ register(
 register(
     Action(
         name="resend_member_card",
+        open_world=True,
         description=(
             "Email a club member a fresh link to their membership card. Club admins only. This is "
             "the admin version of send_membership_card, which only ever sends the caller their own. "
@@ -14027,12 +13981,12 @@ MCP_ONLY_SKILLS: dict[str, str] = {
     "name_a_species": _SPEAK_THE_FORM,
     "set_lot_species": _SPEAK_THE_FORM,
     "add_lot": (
-        "The palette opens the lot form instead (add_a_lot), pre-filled: the species matching, the "
+        "The palette opens the lot form instead (add_a_lot_via_webform), pre-filled: the species matching, the "
         "auction's field rules and the seller's own eyes are all on that page, and none of them fit "
         "on a countdown card. An agent, writing structured fields it read somewhere, keeps the write."
     ),
     "add_lots": (
-        "One skill split in two, which the model could never pick between. add_a_lot opens the bulk "
+        "One skill split in two, which the model could never pick between. add_a_lot_via_webform opens the bulk "
         "page for an auction that has one, which is the same answer for one lot and for ten."
     ),
     "edit_lot": _SPEAK_THE_FORM,
@@ -14044,7 +13998,6 @@ MCP_ONLY_SKILLS: dict[str, str] = {
     "change_email": _ONCE_A_SEASON,
     "update_username": _ONCE_A_SEASON,
     "update_contact_info": _ONCE_A_SEASON,
-    "sync_club_calendar": _ONCE_A_SEASON,
     "send_membership_card": _ONCE_A_SEASON,
     "award_points": (
         "Points are awarded off a list of lots the club is working through, on the page that shows "
@@ -14177,9 +14130,6 @@ SKILLS: dict[str, str] = {
     "ClubMoneyCreateView": "record_club_money",
     "ImagesRotate": "rotate_lot_image",
     "ImagesPrimary": "rotate_lot_image",
-    # sync_club_calendar is this view's body; it was misfiled in NOT_A_SKILL, which
-    # test_palette_skills now also catches.
-    "GoogleCalendarSyncNowView": "sync_club_calendar",
 }
 
 # Shared reasons.
@@ -14450,6 +14400,13 @@ NOT_A_SKILL: dict[str, str] = {
     "ClubGoogleCalendarConfigView": _SETUP,
     "ClubMemberDiscordAdminView": _SETUP,
     "GoogleCalendarDisconnectView": _SETUP,
+    "GoogleCalendarSyncNowView": (
+        "The club calendar syncs itself hourly (``auctions.tasks.sync_club_calendars``), so there "
+        "is no capability here to give anybody -- only the chance to have it happen sooner. This "
+        "was a skill, and what it bought was a tool whose honest answer most of the time was that "
+        "nothing had changed since the last sync. The button stays for the person sitting on the "
+        "settings page who has just edited something in Google Calendar and wants to watch it land."
+    ),
     "MailchimpAudienceSelectView": _SETUP,
     "MailchimpDisconnectView": _SETUP,
     "MailchimpSyncNowView": _SETUP,
