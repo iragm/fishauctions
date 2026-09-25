@@ -72,7 +72,8 @@ class Command(BaseCommand):
         )
         for tos in online_auction_welcome:
             tos.confirm_email_sent = True
-            tos.save()
+            # Only the flag: a full save pushes this row's contact fields up to its ClubMember.
+            tos.save(update_fields=["confirm_email_sent"])
             if not tos.auction.closed:
                 send_tos_notification("online_auction_welcome", tos)
                 if tos.closer_location_savings > 9:
@@ -102,7 +103,8 @@ class Command(BaseCommand):
         )
         for tos in in_person_auction_welcome:
             tos.confirm_email_sent = True
-            tos.save()
+            # Only the flag: a full save pushes this row's contact fields up to its ClubMember.
+            tos.save(update_fields=["confirm_email_sent"])
             send_tos_notification("in_person_auction_welcome", tos)
         print_reminder_qs = base_qs.filter(print_reminder_email_sent=False)
         online_auction_print_reminder = print_reminder_qs.filter(
@@ -111,7 +113,8 @@ class Command(BaseCommand):
         )
         for tos in online_auction_print_reminder:
             tos.print_reminder_email_sent = True
-            tos.save()
+            # Only the flag: a full save pushes this row's contact fields up to its ClubMember.
+            tos.save(update_fields=["print_reminder_email_sent"])
             if tos.unbanned_lot_count:
                 send_tos_notification("auction_print_reminder", tos)
         # For in-person auctions, include manually added users who have added lots themselves
@@ -127,7 +130,8 @@ class Command(BaseCommand):
         )
         for tos in in_person_auction_print_reminder:
             tos.print_reminder_email_sent = True
-            tos.save()
+            # Only the flag: a full save pushes this row's contact fields up to its ClubMember.
+            tos.save(update_fields=["print_reminder_email_sent"])
             if tos.self_submitted_unbanned_lot_count:
                 send_tos_notification("auction_print_reminder", tos)
 
@@ -137,7 +141,7 @@ class Command(BaseCommand):
         )
         for auction in auctions_that_need_print_reminder:
             auction.reprint_reminder_sent = True
-            auction.save()
+            auction.save(update_fields=["reprint_reminder_sent"])
             if auction.date_start > timezone.now() + datetime.timedelta(hours=4):
                 sellers_to_remind = base_qs.filter(auction=auction)
                 for seller in sellers_to_remind:
@@ -155,7 +159,7 @@ class Command(BaseCommand):
         )
         for campaign in join_auction_reminder:
             email = campaign.user.email
-            lots = Lot.objects.filter(pageview__user=campaign.user, auction=campaign.auction)
+            lots = Lot.objects.filter(pageview__user=campaign.user, auction=campaign.auction).distinct()
             campaign.email_sent = True
             campaign.save()
             send_email = True

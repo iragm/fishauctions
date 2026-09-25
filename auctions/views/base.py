@@ -13,7 +13,6 @@ from datetime import date as date_type
 from datetime import timedelta
 from decimal import Decimal
 
-import requests
 from django.conf import settings
 from django.contrib import messages
 from django.core.exceptions import ImproperlyConfigured, PermissionDenied
@@ -31,7 +30,7 @@ from django.http import (
 from django.shortcuts import get_object_or_404, redirect
 from django.utils import timezone
 from django.utils.functional import cached_property
-from django.utils.html import escape
+from django.utils.http import url_has_allowed_host_and_scheme
 from django_filters.views import FilterView
 from django_tables2 import SingleTableMixin
 from rest_framework.permissions import BasePermission
@@ -137,7 +136,7 @@ class AuctionViewMixin:
         """Whether request.user created or administers the auction."""
         if not self.auction:
             msg = "you must set self.auction (typically in dispatch) for self.is_auction_admin to be available"
-            raise requests.HTTPError(msg) from None
+            raise ImproperlyConfigured(msg)
         result = self._auction_permission
         if not result:
             if self.allow_non_admins:
@@ -187,6 +186,20 @@ class AuctionViewMixin:
         if not self.auction or not self.auction.club_id:
             return False
         return bool(self.auction.permission_check(self.request.user))
+
+
+def club_from_url(slug):
+    """The club a URL names: its slug, or failing that its abbreviation (the oldest, if two share one).
+
+    Slug first, always: an abbreviation that happened to equal another club's slug used to win whenever
+    its club was the older of the two, and every page and embed at that URL showed the wrong club.
+    """
+    if not slug:
+        return None
+    return (
+        Club.objects.filter(slug=slug).first()
+        or Club.objects.filter(abbreviation=slug).exclude(abbreviation="").order_by("pk").first()
+    )
 
 
 def check_club_permission(user, club, permission_name):
@@ -303,6 +316,23 @@ def _upsert_clubmember_shadow_tos(
 _SCRIPT_JSON_ESCAPES = {ord("<"): "\\u003C", ord(">"): "\\u003E", ord("&"): "\\u0026"}
 
 
+def browser_timezone(request):
+    """The ``user_timezone`` cookie if it names a real timezone, else the site's. Forms activate it, and
+    an unknown name raised ZoneInfoNotFoundError on every form that read it.
+    """
+    from auctions.context_processors import _safe_timezone
+
+    return _safe_timezone(request.COOKIES.get("user_timezone")) or settings.TIME_ZONE
+
+
+def safe_next_url(request, default):
+    """``?next=`` if it points at this site, else ``default``: never a way to send someone elsewhere."""
+    next_url = request.GET.get("next")
+    if next_url and url_has_allowed_host_and_scheme(next_url, allowed_hosts={request.get_host()}):
+        return next_url
+    return default
+
+
 def script_json(value):
     """``json.dumps`` safe inside an inline ``<script>``: escapes the characters Django's
     ``|json_script`` does, so ``</script>`` can't close the tag.
@@ -333,8 +363,8 @@ def close_modal_response(
         detail["tableSelector"] = table_selector
     body = ""
     if toast:
-        # The toast plugin concatenates HTML, so escape names and emails.
-        toast_options = script_json({"title": escape(toast), "type": toast_type, "delay": 8000})
+        # Text: the toast plugin (base.html) escapes it. script_json keeps it inside the script tag.
+        toast_options = script_json({"title": toast, "type": toast_type, "delay": 8000})
         body += f"<script>window.jQuery && window.jQuery.toast({toast_options});</script>"
     body += f"<script>window.closeModal({script_json(detail)});</script>"
     headers = {}
@@ -443,7 +473,7 @@ def _should_mark_invoice_renewal_needed(invoice):
     expiration_date = member.membership_expiration_date
     if not expiration_date:
         return True
-    return expiration_date <= timezone.now().date() + timedelta(days=30)
+    return expiration_date <= timezone.localdate() + timedelta(days=30)
 
 
 def _sync_tos_alternate_split(tos, invoice=None):
@@ -519,7 +549,7 @@ def _process_invoice_membership_renewal(invoice, acting_user=None, payment_metho
                 # Link the email-only member to the user.
                 member.user = user
                 member.save(update_fields=["user"])
-            today = timezone.now().date()
+            today = timezone.localdate()
             old_expiration = member.membership_expiration_date
             member.membership_expiration_date = _compute_member_renewal_expiration(club, member, today)
             new_expiration = member.membership_expiration_date
@@ -674,7 +704,7 @@ def _bap_leaderboard(club, field, current_member):
 
 
 def _last_n_month_starts(count):
-    month = timezone.now().date().replace(day=1)
+    month = timezone.localdate().replace(day=1)
     months = []
     for _ in range(count):
         months.append(month)
@@ -687,7 +717,7 @@ def _last_n_month_starts(count):
 
 def _ytd_month_starts():
     """Months from Jan 1 of the current year through the current month."""
-    today = timezone.now().date()
+    today = timezone.localdate()
     months = []
     month = today.replace(month=1, day=1)
     current = today.replace(day=1)
@@ -863,7 +893,7 @@ class ClubViewMixin:
 
     def get_club(self, slug):
         if not self.club and slug:
-            self.club = Club.objects.filter(Q(slug=slug) | Q(abbreviation=slug)).order_by("pk").first()
+            self.club = club_from_url(slug)
             if not self.club:
                 raise Http404
 
@@ -979,24 +1009,15 @@ class AuctionAdminAnywhereViewMixin:
 
 
 class AuctionStatsPermissionsMixin:
-    """For graph classes"""
+    """For graph classes: ``is_auction_admin`` without raising, so dispatch can redirect a non-admin.
+
+    Charts are admin-only whatever ``make_stats_public`` says, like the stats page they draw on.
+    """
 
     @property
     def is_auction_admin(self):
         """Whether request.user created or administers the auction."""
-        if not self.auction:
-            msg = "you must set self.auction (typically in dispatch) for self.is_auction_admin to be available"
-            raise Exception(msg)
-        result = self.auction.permission_check(self.request.user)
-        if not result:
-            if not self.auction.make_stats_public:
-                logger.debug("non-admins allowed")
-
-            else:
-                raise PermissionDenied()
-        else:
-            logger.debug("allowing user %s to view %s", self.request.user, self.auction)
-        return result
+        return bool(self.auction.permission_check(self.request.user))
 
 
 class LocationMixin:

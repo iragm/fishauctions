@@ -62,6 +62,7 @@ from auctions.views.club_integrations import _ical_escape
 
 from .base import AuctionViewMixin, close_modal_response
 from .printing import LotLabelView
+from .selling import _lot_invoices, _recalculate_invoices
 
 logger = logging.getLogger(__name__)
 
@@ -151,7 +152,7 @@ class AuctionBulkPrintingPDF(LotLabelView):
         return self.queryset
 
     def dispatch(self, request, *args, **kwargs):
-        self.auction = Auction.objects.exclude(is_deleted=True).filter(slug=kwargs["slug"]).first()
+        self.auction = get_object_or_404(Auction, slug=kwargs["slug"], is_deleted=False)
         self.require_auction_admin()
         self.selected_tos = request.GET.get("selected_tos", None)
         self.print_only_unprinted = request.GET.get("print_only_unprinted", "True") == "True"
@@ -294,6 +295,8 @@ class AddToCalendarView(LoginRequiredMixin, View):
         self.location_pk = request.GET.get("location")
 
         # Validate location exists
+        if not str(self.location_pk or "").isdigit():
+            raise Http404
         self.location = get_object_or_404(PickupLocation, pk=self.location_pk)
         self.auction = self.location.auction
 
@@ -443,7 +446,7 @@ class CategoryFinder(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request, *args, **kwargs):
-        lot_name = request.POST["lot_name"]
+        lot_name = request.POST.get("lot_name") or ""
         result = guess_category(lot_name)
         if result:
             result = {"name": result.name, "value": result.pk}
@@ -462,10 +465,8 @@ class AuctionFinder(APIView):
         return redirect(reverse("home"))
 
     def post(self, request, *args, **kwargs):
-        try:
-            self.auction = Auction.objects.filter(pk=request.POST["auction"]).first()
-        except ValueError:
-            self.auction = None
+        pk = (request.POST.get("auction") or "").strip()
+        self.auction = Auction.objects.filter(pk=pk).first() if pk.isdigit() else None
         if not self.auction or not AuctionTOS.objects.filter(user=request.user, auction=self.auction):
             # you don't get to query auctions you haven't joined
             result = {}
@@ -506,10 +507,8 @@ class LotChatSubscribe(APIView):
         return redirect(reverse("home"))
 
     def post(self, request, *args, **kwargs):
-        try:
-            lot = Lot.objects.filter(pk=request.POST["lot"]).first()
-        except ValueError:
-            lot = None
+        pk = (request.POST.get("lot") or "").strip()
+        lot = Lot.objects.filter(pk=pk).first() if pk.isdigit() else None
         if not lot:
             msg = f"No lot found with key {lot}"
             raise Http404(msg)
@@ -523,7 +522,7 @@ class LotChatSubscribe(APIView):
                     user=request.user,
                     lot=lot,
                 )
-            unsubscribed = request.POST["unsubscribed"]
+            unsubscribed = request.POST.get("unsubscribed")
             if unsubscribed == "true":  # classic javascript, again
                 subscription.unsubscribed = True
             else:
@@ -565,10 +564,11 @@ class AddTosMemo(APIView, AuctionViewMixin):
         return redirect(reverse("home"))
 
     def post(self, request, *args, **kwargs):
-        memo = request.POST["memo"]
-        if memo or memo == "":
+        memo = request.POST.get("memo")
+        if memo is not None:
+            memo = memo[:500]
             self.auctiontos.memo = memo
-            self.auctiontos.save()
+            self.auctiontos.save(update_fields=["memo"])
             # Sync the memo back to the ClubMember when the auction manages users through the club.
             if self.auction.is_club_managed and self.auctiontos.clubmember_id:
                 ClubMember.objects.filter(pk=self.auctiontos.clubmember_id).update(memo=memo)
@@ -628,9 +628,12 @@ class AuctionNoShowAction(AuctionNoShow, FormMixin):
             refund_bought_lots = form.cleaned_data["refund_bought_lots"]
             leave_negative_feedback = form.cleaned_data["leave_negative_feedback"]
             ban_this_user = form.cleaned_data["ban_this_user"]
+            # Refunds change both sides of each lot, and nothing else recalculates them.
+            touched_invoices = []
             if refund_sold_lots:
                 actions += "refunded sold lots, "
                 for lot in self.tos.lots_qs:
+                    touched_invoices += _lot_invoices(lot)
                     if lot.winning_price:
                         lot.refund(100, request.user)
                     else:
@@ -638,7 +641,9 @@ class AuctionNoShowAction(AuctionNoShow, FormMixin):
             if refund_bought_lots:
                 actions += "refunded bought lots, "
                 for lot in self.tos.bought_lots_qs:
+                    touched_invoices += _lot_invoices(lot)
                     lot.refund(100, request.user)
+            _recalculate_invoices(touched_invoices)
             if leave_negative_feedback:
                 actions += "left negative feedback, "
                 for lot in self.tos.bought_lots_qs:
@@ -646,15 +651,15 @@ class AuctionNoShowAction(AuctionNoShow, FormMixin):
                     lot.winner_feedback_text = "Did not pay"
                     lot.save()
                 for lot in self.tos.lots_qs:
-                    lot.feedback_rating - 1
+                    lot.feedback_rating = -1
                     lot.feedback_text = "Did not provide lot"
                     lot.save()
             if ban_this_user:
                 actions += "banned user from future auctions, "
                 # The user is banned whether or not the tos was manually added, and the response
                 # says nothing either way -- it would tell a caller whether an account exists.
-                user = User.objects.filter(email=self.tos.email).first()
-                if self.tos.email and user:
+                user = self.tos.user or (User.objects.filter(email=self.tos.email).first() if self.tos.email else None)
+                if user:
                     obj, created = UserBan.objects.update_or_create(
                         banned_user=user,
                         user=request.user,

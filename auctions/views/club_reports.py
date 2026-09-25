@@ -117,7 +117,7 @@ class ClubStatsView(LoginRequiredMixin, ClubViewMixin, TemplateView):
         """One definition of "paid member" for the whole site — see filters.membership_paid_q."""
         from auctions.filters import membership_paid_q
 
-        return membership_paid_q(timezone.now().date())
+        return membership_paid_q(timezone.localdate())
 
     def _get_cached_club_stats(self, auction):
         cached_stats = auction.cached_stats or {}
@@ -170,7 +170,7 @@ class ClubStatsView(LoginRequiredMixin, ClubViewMixin, TemplateView):
         }
 
     def get_membership_growth_chart_data(self):
-        end_date = timezone.now().date()
+        end_date = timezone.localdate()
         start_date = end_date - timedelta(days=self.membership_window_days)
         total_days = (end_date - start_date).days
         start_dt = timezone.make_aware(
@@ -788,7 +788,7 @@ class ClubMemberCSVExportView(LoginRequiredMixin, ClubViewMixin, View):
                 member.bap_points,
                 member.hap_points,
                 member.membership_last_paid or "",
-                member.createdon.date(),
+                timezone.localtime(member.createdon).date(),
                 member.source,
                 member.contact_status,
                 member.discord_id or "",

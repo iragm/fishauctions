@@ -13,6 +13,7 @@ from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth.models import User
 from django.contrib.sites.models import Site
+from django.core.cache import cache
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.core.files.base import ContentFile
 from django.db.models import (
@@ -30,6 +31,7 @@ from django.shortcuts import get_object_or_404, redirect
 from django.template.loader import render_to_string
 from django.urls import reverse
 from django.utils import timezone
+from django.utils.html import format_html
 from PIL import Image
 from rest_framework.authentication import SessionAuthentication, TokenAuthentication
 from rest_framework.exceptions import NotAuthenticated
@@ -94,7 +96,10 @@ class CreateUserBan(APIView):
 
     def post(self, request, pk):
         user = request.user
-        bannedUser = User.objects.get(pk=pk)
+        bannedUser = get_object_or_404(User, pk=pk)
+        if bannedUser.pk == user.pk:
+            # Banning yourself removed your own lots from every auction you run.
+            return redirect(reverse("userpage", kwargs={"slug": bannedUser.username}))
         obj, created = UserBan.objects.update_or_create(
             banned_user=bannedUser,
             user=user,
@@ -144,7 +149,7 @@ class LotDeactivate(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request, pk):
-        lot = Lot.objects.get(pk=pk, is_deleted=False)
+        lot = get_object_or_404(Lot, pk=pk, is_deleted=False)
 
         # Owner or superuser, and not lots in auctions.
         if lot.auction:
@@ -174,7 +179,7 @@ class UserUnban(APIView):
 
     def post(self, request, pk):
         user = request.user
-        bannedUser = User.objects.get(pk=pk)
+        bannedUser = get_object_or_404(User, pk=pk)
         obj, created = UserBan.objects.update_or_create(
             banned_user=bannedUser,
             user=user,
@@ -241,6 +246,10 @@ class ImagesRotate(APIView):
         return HttpResponse("Success")
 
 
+#: The ratings a lot's feedback can hold. "0" clears one.
+FEEDBACK_RATINGS = ("-1", "0", "1")
+
+
 class Feedback(APIView):
     """Leave buyer or seller feedback on a lot: api/feedback/<lot_number>/<buyer|seller>."""
 
@@ -263,13 +272,16 @@ class Feedback(APIView):
             if lot.auctiontos_winner:
                 if lot.auctiontos_winner.user:
                     if (lot.auctiontos_winner.user.pk == request.user.pk) or (
-                        lot.auctiontos_winner.email == request.user.email
+                        request.user.email and lot.auctiontos_winner.email == request.user.email
                     ):
                         winner_checks_pass = True
+        # Anything else was a DataError 500, or a stored rating of 7 that no count reads.
+        rating = data.get("rating")
+        if rating not in FEEDBACK_RATINGS:
+            rating = None
         if winner_checks_pass:
-            rating = data.get("rating")
-            if rating:
-                lot.feedback_rating = rating
+            if rating is not None:
+                lot.feedback_rating = int(rating)
                 lot.save()
             text = data.get("text")
             if text:
@@ -279,9 +291,8 @@ class Feedback(APIView):
         if leave_as == "seller" and lot.is_owned_by(request.user):
             seller_checks_pass = True
         if seller_checks_pass:
-            rating = data.get("rating")
-            if rating:
-                lot.winner_feedback_rating = rating
+            if rating is not None:
+                lot.winner_feedback_rating = int(rating)
                 lot.save()
             text = data.get("text")
             if text:
@@ -326,6 +337,26 @@ def page_view_path(url, host=""):
     return (parts.path or "/")[:600]
 
 
+#: Beacon writes one address may make in a minute. Both beacons are ``AllowAny`` and a cookieless
+#: caller costs a session row as well as the row itself -- a PageView, which is kept forever. Set
+#: well above a busy venue's shared wifi, where every phone is one address.
+PAGE_VIEWS_PER_ADDRESS_PER_MINUTE = 300
+ABANDONED_FORMS_PER_ADDRESS_PER_MINUTE = 30
+
+
+def beacon_over_the_limit(request, bucket, limit):
+    """Count one write against the caller's address; True once this minute's ``limit`` is spent."""
+    key = f"{bucket}:{client_ip(request) or 'unknown'}"
+    count = cache.get_or_set(key, 0, timeout=60)
+    if count >= limit:
+        return True
+    try:
+        cache.incr(key)
+    except ValueError:  # the window expired between the read and the increment
+        cache.set(key, 1, timeout=60)
+    return False
+
+
 class FormAbandonedBeacon(APIView):
     """Record a form someone edited and left without saving, posted by ``unsaved_changes.js`` via sendBeacon.
 
@@ -355,6 +386,8 @@ class FormAbandonedBeacon(APIView):
             seconds = max(0, min(int(request.POST.get("seconds", 0) or 0), 60 * 60 * 24))
         except (TypeError, ValueError):
             seconds = None
+        if beacon_over_the_limit(request, "form-abandoned", ABANDONED_FORMS_PER_ADDRESS_PER_MINUTE):
+            return JsonResponse({"recorded": False}, status=200)
         user = request.user if request.user.is_authenticated else None
         if not user and not request.session.session_key:
             request.session.save()
@@ -388,6 +421,8 @@ class PageViewCreate(APIView):
     permission_classes = [AllowAny]
 
     def post(self, request):
+        if beacon_over_the_limit(request, "pageview", PAGE_VIEWS_PER_ADDRESS_PER_MINUTE):
+            return HttpResponse(status=204)
         data = request.POST
         auction = beacon_subject(Auction, data.get("auction"))
         lot_number = beacon_subject(Lot, data.get("lot"), is_deleted=False)
@@ -412,15 +447,15 @@ class PageViewCreate(APIView):
             # .get() with no default: an absent referrer is an ordinary beacon, not a 500. This
             # endpoint is AllowAny, so a missing field must never raise.
             referrer = clean_referrer(data.get("referrer") or "")[:600]
+            # PageView.source is 200 characters, and STRICT mode refuses a longer one.
             source = data.get("src", None)
+            if source:
+                source = source[:200]
             uid = data.get("uid", None)
             # mark auction campaign results if applicable present
             ip = client_ip(request)
             if uid:  # and not request.user.is_authenticated:
-                userdata = UserData.objects.filter(unsubscribe_link=uid).first()
-                if userdata:
-                    userdata.last_activity = timezone.now()
-                    userdata.save()
+                UserData.objects.filter(unsubscribe_link=uid).update(last_activity=timezone.now())
             if source:
                 campaign = AuctionCampaign.objects.filter(uuid=source).first()
                 if campaign and campaign.result == "NONE":
@@ -602,15 +637,17 @@ class InvoiceRenewalNeededToggleView(APIView):
         oob_discount = f"<table>{oob_discount}</table>"
         oob_tax = f"<table>{oob_tax}</table>"
         oob_total = f"<table>{oob_total}</table>"
-        oob_summary_checkout = (
-            f'<span id="quick-checkout-invoice-summary" hx-swap-oob="outerHTML">{invoice.invoice_summary_short}</span>'
+        oob_summary_checkout = format_html(
+            '<span id="quick-checkout-invoice-summary" hx-swap-oob="outerHTML">{}</span>',
+            invoice.invoice_summary_short,
         )
-        oob_summary_invoice = (
-            f'<span id="invoice-summary-short" hx-swap-oob="outerHTML">{invoice.invoice_summary_short}</span>'
+        oob_summary_invoice = format_html(
+            '<span id="invoice-summary-short" hx-swap-oob="outerHTML">{}</span>', invoice.invoice_summary_short
         )
-        # The auctiontos/clubmember admin modal's title.
-        modal_name = invoice.invoice_summary
-        oob_modal_title = f'<h5 class="modal-title" id="modal-invoice-title" hx-swap-oob="outerHTML">{modal_name}</h5>'
+        # The auctiontos/clubmember admin modal's title. It carries the person's name, which they typed.
+        oob_modal_title = format_html(
+            '<h5 class="modal-title" id="modal-invoice-title" hx-swap-oob="outerHTML">{}</h5>', invoice.invoice_summary
+        )
         response = HttpResponse(
             body
             + oob_fee
@@ -630,7 +667,7 @@ class UpdateLotPushNotificationsView(APIPostView):
     def post(self, request, *args, **kwargs):
         userdata = request.user.userdata
         userdata.push_notifications_when_lots_sell = True
-        userdata.save()
+        userdata.save(update_fields=["push_notifications_when_lots_sell"])
         return JsonResponse({"result": "success"})
 
 

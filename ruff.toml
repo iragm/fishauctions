@@ -3,7 +3,6 @@ line-length = 120
 [lint]
 ignore = [
     "E501",
-    "E722",
     "PT009",
     "PT027",
     # Bandit rules that are noise in this codebase, so that S308 (mark_safe) and S113 (no request

@@ -462,6 +462,8 @@ def _archive_member(client, member, list_id):
     """Soft-delete (archive) the contact; ignore 404 if they were never synced."""
     from mailchimp_marketing.api_client import ApiClientError
 
+    if not member.email:
+        return
     try:
         client.lists.delete_list_member(list_id, subscriber_hash(member.email))
     except ApiClientError as e:

@@ -857,6 +857,9 @@ def _safely(label, do_it):
     """Run one step of a nightly job, logging and swallowing whatever it raises."""
     try:
         do_it()
+    except SoftTimeLimitExceeded:
+        # An Exception subclass: swallowing it left the job running on to the hard kill.
+        raise
     except Exception:
         logger.exception("Nightly step %s failed", label)
 
@@ -939,6 +942,8 @@ def _send_one_welcome(member):
             update_fields.append("send_welcome_email")
         member.save(update_fields=update_fields)
         return
+    # Marked first: if anything after the send raises, the member is not welcomed again every night.
+    member.save(update_fields=update_fields)
     if member.send_welcome_email and member.club.send_welcome_email_to_new_members:
         sent = send_club_member_email(
             member,
@@ -953,7 +958,6 @@ def _send_one_welcome(member):
                 action=f"Sent welcome letter to {member} ({member.email})",
                 applies_to="MEMBERS",
             )
-    member.save(update_fields=update_fields)
 
 
 @shared_task(bind=True, ignore_result=True)

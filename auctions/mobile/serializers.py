@@ -492,11 +492,23 @@ class ArObservationBatchSerializer(serializers.Serializer):
 # ---------------------------------------------------------------------------
 
 
+class FiniteFloatField(serializers.FloatField):
+    """A float that must be a real number: DRF's FloatField takes "nan", which no range check rejects and
+    which then reached raw distance SQL as ``radians(nan)``.
+    """
+
+    def to_internal_value(self, data):
+        value = super().to_internal_value(data)
+        if not math.isfinite(value):
+            self.fail("invalid")
+        return value
+
+
 class CheckinPingSerializer(serializers.Serializer):
     """Request body for POST /api/mobile/checkin/ping/ — the phone's current position."""
 
-    latitude = serializers.FloatField(min_value=-90, max_value=90)
-    longitude = serializers.FloatField(min_value=-180, max_value=180)
+    latitude = FiniteFloatField(min_value=-90, max_value=90)
+    longitude = FiniteFloatField(min_value=-180, max_value=180)
 
 
 class CheckinJoinSerializer(serializers.Serializer):
@@ -509,8 +521,8 @@ class CheckinSetLocationSerializer(serializers.Serializer):
     """Request body for POST /api/mobile/checkin/set-location/."""
 
     auction = serializers.CharField()
-    latitude = serializers.FloatField(min_value=-90, max_value=90)
-    longitude = serializers.FloatField(min_value=-180, max_value=180)
+    latitude = FiniteFloatField(min_value=-90, max_value=90)
+    longitude = FiniteFloatField(min_value=-180, max_value=180)
 
 
 # ---------------------------------------------------------------------------

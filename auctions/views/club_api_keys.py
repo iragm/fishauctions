@@ -168,7 +168,7 @@ def club_api_documentation_context(club, api_key):
 
     Every example is filled in from this club, so it shows a request its admin can paste and run.
     """
-    today = timezone.now().date()
+    today = timezone.localdate()
     now = timezone.now()
     return {
         "site_domain": Site.objects.get_current().domain,
@@ -317,7 +317,7 @@ class ClubMemberMapView(LoginRequiredMixin, ClubViewMixin, TemplateView):
         from django.db.models import BooleanField, Case, Value, When
         from django.utils import timezone
 
-        today = timezone.now().date()
+        today = timezone.localdate()
         expired_whens = [When(membership_expiration_date__lt=today, then=Value(True))]
         if self.club.membership_annual_fee:
             expired_whens.append(When(membership_expiration_date__isnull=True, then=Value(True)))

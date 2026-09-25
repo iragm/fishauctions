@@ -51,6 +51,10 @@ class DeviceService:
         if fcm_token is not None:
             defaults["fcm_token"] = fcm_token
             defaults["fcm_token_updated_at"] = timezone.now()
+        elif MobileDevice.objects.filter(device_uuid=device_uuid).exclude(user=user).exists():
+            # Changing hands with no token of its own: keeping the old one would send this user's
+            # pushes to the previous owner's phone.
+            defaults["fcm_token"] = ""
 
         device, created = MobileDevice.objects.update_or_create(
             device_uuid=device_uuid,

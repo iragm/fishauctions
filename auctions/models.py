@@ -239,6 +239,17 @@ def find_image(name, user, auction):
     return qs.first()
 
 
+def email_q(lookup, email):
+    """``Q(<lookup>=email)``, or a Q that matches nothing when there is no address.
+
+    Rows are matched to an account by email all over the site, and participants added by hand often
+    have none: a bare ``Q(email=user.email)`` for an account without one matched every one of them.
+    """
+    if not email:
+        return Q(pk__in=[])
+    return Q(**{lookup: email})
+
+
 def distance_to(
     latitude,
     longitude,
@@ -1709,7 +1720,7 @@ class ClubMember(CachedPropertiesMixin, ContactRecord):
     @property
     def is_paid_member(self) -> bool:
         """True when dues are current. The single source of truth for UI gates and wallet passes."""
-        today = timezone.now().date()
+        today = timezone.localdate()
         if self.membership_expiration_date:
             return self.membership_expiration_date >= today
         if self.membership_last_paid:
@@ -1730,6 +1741,7 @@ class ClubMember(CachedPropertiesMixin, ContactRecord):
         if self.membership_last_paid:
             paid = self.membership_last_paid
             if self.club.membership_system == "january_first":
+                # January 1, as _compute_member_renewal_expiration writes it.
                 return datetime.date(paid.year + 1, 1, 1)
             return paid + datetime.timedelta(days=365)
         return None
@@ -1779,7 +1791,7 @@ class ClubMember(CachedPropertiesMixin, ContactRecord):
         if not roles_qs:
             return None
 
-        today = timezone.now().date()
+        today = timezone.localdate()
         if self.membership_expiration_date:
             membership_valid = self.membership_expiration_date >= today
         elif self.membership_last_paid:
@@ -2013,7 +2025,7 @@ class ClubMember(CachedPropertiesMixin, ContactRecord):
     @property
     def is_expired(self):
         if self.membership_expiration_date:
-            return self.membership_expiration_date < timezone.now().date()
+            return self.membership_expiration_date < timezone.localdate()
         return bool(self.club.membership_annual_fee) and not self.is_paid_member
 
     @property
@@ -2021,7 +2033,7 @@ class ClubMember(CachedPropertiesMixin, ContactRecord):
         """Membership expires within the next 30 days (and is not already expired)."""
         if not self.membership_expiration_date:
             return False
-        today = timezone.now().date()
+        today = timezone.localdate()
         return today <= self.membership_expiration_date <= today + datetime.timedelta(days=30)
 
     @property
@@ -2108,13 +2120,7 @@ class ClubMember(CachedPropertiesMixin, ContactRecord):
         )
         if not send_reminder or not self.club.membership_payment_emails_enabled:
             return None
-        expiration_date = self.membership_expiration_date
-        if not expiration_date and self.membership_last_paid:
-            paid = self.membership_last_paid
-            if self.club.membership_system == "january_first":
-                expiration_date = datetime.date(paid.year + 1, 1, 1)
-            else:
-                expiration_date = paid + datetime.timedelta(days=365)
+        expiration_date = self.effective_expiration_date
         if not expiration_date:
             return None
         reminder_date = expiration_date - datetime.timedelta(days=days_before)
@@ -4501,7 +4507,7 @@ class Auction(CachedPropertiesMixin, models.Model):
                 if location.second_pickup_time:
                     if location.second_pickup_time < time_to_use:
                         error = True
-            except:
+            except Exception:
                 error = False
             if error:
                 return reverse("edit_pickup", kwargs={"pk": location.pk})
@@ -4525,7 +4531,7 @@ class Auction(CachedPropertiesMixin, models.Model):
     def timezone(self):
         try:
             return pytz_timezone(self.created_by.userdata.timezone)
-        except:
+        except Exception:
             return pytz_timezone(settings.TIME_ZONE)
 
     @property
@@ -4784,8 +4790,9 @@ class Auction(CachedPropertiesMixin, models.Model):
         """Force update of all invoice totals in this auction"""
         invoices = Invoice.objects.filter(auction=self.pk)
         for invoice in invoices:
+            # recalculate() saves the one column; a full save here wrote a stale status back over a
+            # payment that landed in between.
             invoice.recalculate()
-            invoice.save()
 
     @property
     def show_invoice_ready_button(self):
@@ -5590,7 +5597,7 @@ class Auction(CachedPropertiesMixin, models.Model):
         ]:
             try:
                 medians.append(median_value(lots_subset, "winning_price"))
-            except:
+            except Exception:
                 medians.append(0)
             averages.append(lots_subset.aggregate(avg_value=Avg("winning_price"))["avg_value"])
             counts.append(lots_subset.count())
@@ -6049,13 +6056,13 @@ class PickupLocation(InvalidatesRelatedCache, CachedPropertiesMixin, models.Mode
     def __str__(self):
         if self.pickup_by_mail:
             return "Mail me my lots"
-        return self.name
+        return self.name or ""
 
     @property
     def short_name(self):
         if self.pickup_by_mail:
             return "Mail"
-        words = self.name.split()
+        words = (self.name or "").split()
         abbreviation = ""
         for word in words:
             abbreviation += word[0].upper()
@@ -6956,6 +6963,9 @@ class AuctionTOS(InvalidatesRelatedCache, CachedPropertiesMixin, models.Model):
         if duplicate_invoice:
             InvoiceAdjustment.objects.filter(invoice=duplicate_invoice).update(invoice=invoice)
             InvoicePayment.objects.filter(invoice=duplicate_invoice).update(invoice=invoice)
+            # Its ledger rows too, or the invoice's delete orphans them (SET_NULL) and the club books the
+            # moved lots twice.
+            invoice._absorb_duplicate_ledger(duplicate_invoice)
         invoice.recalculate()
         merge_action = f"Merged {duplicate.name} (bidder #{duplicate.bidder_number}) into {self.name} (bidder #{self.bidder_number}): {reason}"
         if self.auction.is_club_managed and self.auction.club_id:
@@ -7082,7 +7092,7 @@ class AuctionTOS(InvalidatesRelatedCache, CachedPropertiesMixin, models.Model):
     def timezone(self):
         try:
             return pytz_timezone(self.user.userdata.timezone)
-        except:
+        except Exception:
             return self.auction.timezone
 
     @property
@@ -7908,7 +7918,7 @@ class Lot(CachedPropertiesMixin, models.Model):
         """Create a Square refund for ``percent`` of the winning price. Error string or None."""
         from decimal import Decimal
 
-        from auctions.models import InvoicePayment, SquareSeller
+        from auctions.models import InvoicePayment
 
         if not self.winning_price or self.winning_price <= 0:
             return "No valid winning price for this lot"
@@ -7941,7 +7951,8 @@ class Lot(CachedPropertiesMixin, models.Model):
             return f"Insufficient funds available to refund. Available: {payment.amount_available_to_refund}, Requested: {refund_amount}"
 
         # Get seller's Square credentials
-        seller = SquareSeller.objects.filter(user=self.auction.created_by).first()
+        # The account that took the payment: a club auction's is the club's, not its creator's.
+        seller = self.auction.effective_square_seller
         if not seller:
             return "Seller has not connected their Square account"
 
@@ -8050,7 +8061,7 @@ class Lot(CachedPropertiesMixin, models.Model):
         """String of location of the winner for this lot"""
         try:
             return str(self.auctiontos_winner.pickup_location)
-        except:
+        except Exception:
             pass
         tos = AuctionTOS.objects.filter(user=self.winner, auction=self.auction).first()
         if tos:
@@ -8062,7 +8073,7 @@ class Lot(CachedPropertiesMixin, models.Model):
         """Pickup location of the seller"""
         try:
             return self.auctiontos_seller.pickup_location
-        except:
+        except Exception:
             pass
         tos = AuctionTOS.objects.filter(user=self.user, auction=self.auction).first()
         if tos:
@@ -8297,7 +8308,7 @@ class Lot(CachedPropertiesMixin, models.Model):
             return "not_club_member"
         seller_user = seller_user or member.user
         if club.only_active_members_can_participate:
-            today = timezone.now().date()
+            today = timezone.localdate()
             if member.membership_expiration_date:
                 valid = member.membership_expiration_date >= today
             elif member.membership_last_paid:
@@ -8377,7 +8388,7 @@ class Lot(CachedPropertiesMixin, models.Model):
         member = ClubMember.objects.filter(club=club, user=seller_user, is_deleted=False).first()
         if not member:
             return
-        award_date = self.date_end.date() if self.date_end else timezone.now().date()
+        award_date = timezone.localtime(self.date_end).date() if self.date_end else timezone.localdate()
         placeholder = self.bap_placeholder
         bap_pts = points if placeholder == "BAP" else 0
         hap_pts = points if placeholder == "HAP" else 0
@@ -8461,7 +8472,8 @@ class Lot(CachedPropertiesMixin, models.Model):
         if self.ended:
             return False
         if (
-            not self.auction.is_online
+            self.auction
+            and not self.auction.is_online
             and self.auction.date_online_bidding_ends
             and self.auction.online_bidding != "disable"
             and timezone.now() > self.auction.date_online_bidding_ends
@@ -8484,7 +8496,8 @@ class Lot(CachedPropertiesMixin, models.Model):
             return self.cannot_change_reason
         if self.auction:
             # Editable until lot submission ends.
-            if timezone.now() > self.auction.lot_submission_end_date:
+            end = self.auction.lot_submission_end_date
+            if end and timezone.now() > end:
                 return "Lot submission is over for this auction"
         return False
 
@@ -8501,15 +8514,13 @@ class Lot(CachedPropertiesMixin, models.Model):
             return self.cannot_change_reason
         if self.auction and self.auction.is_online and self.auction.unsold_lot_fee:
             # Deletable until 24 hours before lot submission ends.
-            if timezone.now() > self.auction.lot_submission_end_date - datetime.timedelta(hours=24):
+            end = self.auction.lot_submission_end_date
+            if end and timezone.now() > end - datetime.timedelta(hours=24):
                 return "It's too late to delete lots in this auction"
         if self.auction and self.auction.unsold_lot_fee:
             # you have at most 24 hours to delete a lot
             if timezone.now() > self.date_posted + datetime.timedelta(hours=24):
-                if timezone.now() < self.date_posted + datetime.timedelta(minutes=20):
-                    pass  # you are allowed to delete very new lots
-                else:
-                    return "You can only delete auction lots in the first 24 hours after they have been created."
+                return "You can only delete auction lots in the first 24 hours after they have been created."
         return False
 
     @property
@@ -8693,7 +8704,7 @@ class Lot(CachedPropertiesMixin, models.Model):
             # $1 more than the second highest bid
             bidPrice = allBids[0].amount
             return bidPrice
-        except:
+        except Exception:
             return self.reserve_price
 
     @cached_property
@@ -8764,7 +8775,7 @@ class Lot(CachedPropertiesMixin, models.Model):
         try:
             bids = self.bids
             return bids[0].user
-        except:
+        except Exception:
             return False
 
     @cached_property
@@ -9044,7 +9055,7 @@ class Lot(CachedPropertiesMixin, models.Model):
     def seller_ip(self):
         try:
             return self.user.userdata.last_ip_address
-        except:
+        except Exception:
             return None
 
     @cached_property
@@ -9570,10 +9581,12 @@ class Invoice(CachedPropertiesMixin, models.Model):
         if not self.auction:
             return None
         if self.auction.is_online and not self.auction.closed and self.status == "DRAFT":
-            timedelta = self.dynamic_end - timezone.now()
-            seconds = timedelta.total_seconds()
+            # The auction's: Invoice has no dynamic_end, and this raised for every open invoice while
+            # an online auction was still running.
+            end = self.auction.date_end and self.auction.dynamic_end
+            seconds = (end - timezone.now()).total_seconds() if end else 0
             if seconds > 0:
-                minutes = seconds // 60
+                minutes = int(seconds // 60)
                 return f"This auction hasn't ended yet.  You'll be able to pay in {minutes} minutes."
         if not self.auction.is_online:
             # In-person invoices always show a pay button.
@@ -9661,7 +9674,7 @@ class Invoice(CachedPropertiesMixin, models.Model):
         expiration_date = member.membership_expiration_date
         if not expiration_date:
             return "Unknown"
-        days_until_expiration = (expiration_date - timezone.now().date()).days
+        days_until_expiration = (expiration_date - timezone.localdate()).days
         if days_until_expiration < 0:
             return f"Expired {abs(days_until_expiration)} day(s) ago"
         if days_until_expiration <= 14:
@@ -9697,12 +9710,8 @@ class Invoice(CachedPropertiesMixin, models.Model):
 
     @cached_property
     def first_bid_payout(self):
-        try:
-            if self.auction.first_bid_payout:
-                if self.lots_bought:
-                    return self.auction.first_bid_payout
-        except:
-            pass
+        if self.auction and self.auction.first_bid_payout and self.lots_bought:
+            return self.auction.first_bid_payout
         return 0
 
     @cached_property
@@ -9890,7 +9899,7 @@ class Invoice(CachedPropertiesMixin, models.Model):
     def sold_lots_queryset_sorted(self):
         try:
             return sorted(self.sold_lots_queryset, key=lambda t: str(t.winner_location))
-        except:
+        except Exception:
             return self.sold_lots_queryset
 
     @cached_property
@@ -9934,7 +9943,8 @@ class Invoice(CachedPropertiesMixin, models.Model):
     @cached_property
     def total_sold_gross(self):
         """Total winning price of all lots sold"""
-        return self.sold_lots_queryset.aggregate(total=Sum("winning_price"))["total"] or 0
+        # Banned lots are never charged, as in Auction.gross.
+        return self.sold_lots_queryset.exclude(banned=True).aggregate(total=Sum("winning_price"))["total"] or 0
 
     @cached_property
     def total_sold(self):
@@ -9959,9 +9969,9 @@ class Invoice(CachedPropertiesMixin, models.Model):
     def total_donations(self):
         """Total value of all donated lots"""
         return (
-            self.sold_lots_queryset.filter(winning_price__isnull=False, donation=True).aggregate(
-                total=Sum("winning_price")
-            )["total"]
+            self.sold_lots_queryset.filter(winning_price__isnull=False, donation=True)
+            .exclude(banned=True)
+            .aggregate(total=Sum("winning_price"))["total"]
             or 0
         )
 
@@ -10165,6 +10175,9 @@ class Invoice(CachedPropertiesMixin, models.Model):
         aren't orphaned and nothing is double-booked. Mirrors the duplicate's rows rather than re-deriving,
         so a frozen canonical ledger isn't rewritten.
         """
+        # Tap to Pay attempts too: they cascade with the duplicate, and an open one is what stops a
+        # second charge on the card.
+        TapToPayAttempt.objects.filter(invoice=duplicate).update(invoice=self)
         rows = list(ClubMoney.objects.filter(invoice=duplicate))
         if not rows:
             return
@@ -11330,7 +11343,8 @@ class UserData(CachedPropertiesMixin, models.Model):
     @cached_property
     def lots_sold(self):
         """All lots this user has sold"""
-        return self.my_lots_qs.filter(winner__isnull=False).count()
+        # In-person wins are recorded on auctiontos_winner only; total_sold counts both.
+        return self.my_lots_qs.filter(Q(winner__isnull=False) | Q(auctiontos_winner__isnull=False)).count()
 
     @cached_property
     def total_sold(self):
@@ -11456,7 +11470,7 @@ class UserData(CachedPropertiesMixin, models.Model):
 
     @cached_property
     def auctions_admined(self):
-        return Auction.objects.filter(auctiontos__email=self.user.email, auctiontos__is_admin=True).count()
+        return Auction.objects.filter(email_q("auctiontos__email", self.user.email), auctiontos__is_admin=True).count()
 
     @cached_property
     def auctions_i_admin(self):

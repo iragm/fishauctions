@@ -38,6 +38,8 @@ from auctions.models import (
     AuctionTOS,
     Invoice,
     InvoiceAdjustment,
+    TapToPayAttempt,
+    email_q,
 )
 from auctions.tables import (
     InvoiceHTMxTable,
@@ -46,6 +48,9 @@ from auctions.tables import (
 from .base import AuctionViewMixin, HTMxTableView, _ensure_invoice_renewal_state, check_club_permission
 
 logger = logging.getLogger(__name__)
+
+#: Whole dollars. InvoiceAdjustmentForm has no ceiling, and past the column's range the save 500s.
+MAX_ADJUSTMENT_AMOUNT = 99999
 
 
 class Invoices(LoginRequiredMixin, HTMxTableView):
@@ -65,7 +70,7 @@ class Invoices(LoginRequiredMixin, HTMxTableView):
         """
         return (
             Invoice.objects.filter(
-                Q(auctiontos_user__user=self.request.user) | Q(auctiontos_user__email=self.request.user.email)
+                Q(auctiontos_user__user=self.request.user) | email_q("auctiontos_user__email", self.request.user.email)
             )
             .select_related("auction", "auction__club", "auctiontos_user")
             .order_by("-date")
@@ -135,15 +140,16 @@ class InvoiceCreateView(LoginRequiredMixin, View, AuctionViewMixin):
         )
 
         if existing_invoice:
-            # Check for and delete any duplicate invoices (keep the oldest)
             duplicate_invoices = Invoice.objects.filter(auctiontos_user=auctiontos, auction=auctiontos.auction).exclude(
                 pk=existing_invoice.pk
             )
-
             duplicate_count = duplicate_invoices.count()
             if duplicate_count > 0:
-                duplicate_invoices.delete()
-                messages.info(request, f"Removed {duplicate_count} duplicate invoice(s)")
+                # A plain delete cascaded their payments and adjustments away. save() merges newer
+                # duplicates into the oldest, but doesn't know about tap-to-pay attempts.
+                TapToPayAttempt.objects.filter(invoice__in=duplicate_invoices).update(invoice=existing_invoice)
+                existing_invoice.save(update_fields=["calculated_total"])
+                messages.info(request, f"Merged {duplicate_count} duplicate invoice(s) into this one")
 
             # Redirect to existing invoice
             messages.info(request, "Invoice already exists for this user")
@@ -186,7 +192,8 @@ class InvoiceView(DetailView, FormMixin, AuctionViewMixin):
             ).get(pk=self.kwargs.get(self.pk_url_kwarg))
         except Invoice.DoesNotExist:
             self.object = None
-            if self.request.user.is_authenticated:
+            # Only the /auctions/<slug>/invoice/ route has a slug; /invoices/<pk>/ has none.
+            if self.request.user.is_authenticated and self.kwargs.get("slug"):
                 self.object = Invoice.objects.filter(
                     auctiontos_user__user=self.request.user,
                     auction__slug=self.kwargs["slug"],
@@ -199,7 +206,8 @@ class InvoiceView(DetailView, FormMixin, AuctionViewMixin):
         self.is_admin = False
         invoice = self.get_object()
         if not invoice:
-            auction = Auction.objects.exclude(is_deleted=True).filter(slug=self.kwargs["slug"]).first()
+            slug = self.kwargs.get("slug")
+            auction = Auction.objects.exclude(is_deleted=True).filter(slug=slug).first() if slug else None
             if auction:
                 messages.error(
                     request,
@@ -224,7 +232,8 @@ class InvoiceView(DetailView, FormMixin, AuctionViewMixin):
                 and invoice.buyer == request.user
                 or invoice.auctiontos_user
                 and (
-                    invoice.auctiontos_user.email == request.user.email or invoice.auctiontos_user.user == request.user
+                    (request.user.email and invoice.auctiontos_user.email == request.user.email)
+                    or invoice.auctiontos_user.user == request.user
                 )
             ):
                 mark_invoice_viewed_by_user = True
@@ -237,7 +246,9 @@ class InvoiceView(DetailView, FormMixin, AuctionViewMixin):
             return redirect(reverse("home"))
         if mark_invoice_viewed_by_user:
             setattr(invoice, self.form_view, True)  # this will set printed or opened as appropriate
-            invoice.save()
+            # The one column: a full save here wrote a copy loaded before Square's webhook marked the
+            # invoice paid back over PAID, on the page Square's success redirect lands on.
+            invoice.save(update_fields=[self.form_view])
         self.InvoiceAdjustmentFormSet = modelformset_factory(
             InvoiceAdjustment, extra=1, can_delete=True, form=InvoiceAdjustmentForm
         )
@@ -292,6 +303,10 @@ class InvoiceView(DetailView, FormMixin, AuctionViewMixin):
             form_kwargs={"invoice": self.get_object()},
             queryset=self.queryset,
         )
+        if adjustment_formset.is_valid():
+            for form in adjustment_formset.forms:
+                if (form.cleaned_data.get("amount") or 0) > MAX_ADJUSTMENT_AMOUNT:
+                    form.add_error("amount", f"Adjustments can be at most ${MAX_ADJUSTMENT_AMOUNT:,}")
         if adjustment_formset.is_valid() and self.is_admin:
             adjustments = adjustment_formset.save(commit=False)
             for adjustment in adjustments:

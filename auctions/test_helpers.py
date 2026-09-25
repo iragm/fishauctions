@@ -595,14 +595,29 @@ class FormsUtilityTestCase(TestCase):
         self.assertEqual(clean_summernote("<svg><desc><img src=x onerror=alert(1)></desc></svg>"), "")
         self.assertEqual(clean_summernote("<p>Keep <acme>this</acme></p>"), "<p>Keep this</p>")
 
-    def test_summernote_widget_includes_upload_url_in_rendered_html(self):
+    def test_summernote_uploads_are_off(self):
+        """The endpoint was open to anonymous posts and kept the client's extension (stored XSS)."""
+        from django.core.files.uploadedfile import SimpleUploadedFile
         from django.urls import reverse
+
+        gif = b"GIF89a\x01\x00\x01\x00\x80\x00\x00\x00\x00\x00\xff\xff\xff!\xf9\x04\x01\x00\x00\x00\x00,\x00\x00\x00\x00\x01\x00\x01\x00\x00\x02\x02D\x01\x00;"
+        from django.contrib.auth.models import User
+        from django_summernote.models import Attachment
+
+        for user in (None, User.objects.create_user("uploader", "uploader@example.com", "pw")):
+            if user:
+                self.client.force_login(user)
+            response = self.client.post(
+                reverse("django_summernote-upload_attachment"),
+                {"files": SimpleUploadedFile("x.html", gif, content_type="text/html")},
+            )
+            self.assertNotEqual(response.status_code, 200)
+        self.assertFalse(Attachment.objects.exists())
+
+    def test_summernote_widget_disables_drag_and_drop(self):
         from django_summernote.widgets import SummernoteWidget
 
-        upload_url = reverse("django_summernote-upload_attachment")
         html = SummernoteWidget().render("description", "", attrs={"id": "id_description"})
-
-        self.assertIn(upload_url, html)
         self.assertIn('"disableDragAndDrop": true', html)
 
 

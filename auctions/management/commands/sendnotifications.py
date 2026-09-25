@@ -28,7 +28,7 @@ class Command(BaseCommand):
                     if watch.user:
                         notify_targets[watch.user.pk] = watch.user
                 auction.watch_warning_email_sent = True
-                auction.save()
+                auction.save(update_fields=["watch_warning_email_sent"])
             # else:
             #    self.stdout.write(f'{auction} still in progress')
         # Handle lots that aren't attached to an auction
@@ -43,7 +43,7 @@ class Command(BaseCommand):
         for lot in ending_soon:
             self.stdout.write(f"{lot}")
             lot.watch_warning_email_sent = True
-            lot.save()
+            lot.save(update_fields=["watch_warning_email_sent"])
         # Collected all watchers; push for opted-in app users, otherwise email exactly as before.
         from auctions.notifications import notify_user
 

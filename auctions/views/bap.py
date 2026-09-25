@@ -369,7 +369,7 @@ class BapAwardAdminView(APIView):
         if member:
             initial["club_member"] = member
         if lot.date_end:
-            initial["date"] = lot.date_end.date()
+            initial["date"] = timezone.localtime(lot.date_end).date()
         points = lot.default_bap_points(club)
         placeholder = lot.bap_placeholder
         if placeholder == "HAP":
@@ -399,13 +399,19 @@ class BapAwardAdminView(APIView):
         title = f"Edit award for {award.club_member}" if award else f"Add points — {club.name}"
         return {"modal_title": title, "form": form}
 
+    @staticmethod
+    def _lot_from_query(request, club):
+        """``?lot_pk=``, only from one of this club's auctions: a lot from another club's was marked
+        decided in that club's points queue.
+        """
+        lot_pk = str(request.GET.get("lot_pk") or "")
+        if not lot_pk.isdigit():
+            return None
+        return Lot.objects.filter(pk=lot_pk, is_deleted=False, banned=False, auction__club=club).first()
+
     def get(self, request, slug=None, pk=None):
         club, award = self._get_club_and_award(request, slug=slug, pk=pk)
-        lot = None
-        if not award:
-            lot_pk = request.GET.get("lot_pk")
-            if lot_pk:
-                lot = Lot.objects.filter(pk=lot_pk, is_deleted=False, banned=False).first()
+        lot = None if award else self._lot_from_query(request, club)
         post_url = (
             reverse("bapaward_admin", kwargs={"pk": award.pk})
             if award
@@ -417,11 +423,7 @@ class BapAwardAdminView(APIView):
 
     def post(self, request, slug=None, pk=None):
         club, award = self._get_club_and_award(request, slug=slug, pk=pk)
-        lot = None
-        if not award:
-            lot_pk = request.GET.get("lot_pk")
-            if lot_pk:
-                lot = Lot.objects.filter(pk=lot_pk, is_deleted=False, banned=False).first()
+        lot = None if award else self._lot_from_query(request, club)
         post_url = (
             reverse("bapaward_admin", kwargs={"pk": award.pk})
             if award
@@ -435,6 +437,8 @@ class BapAwardAdminView(APIView):
             if lot and not award:
                 award_obj.lot = lot
             award_obj.save()
+            # An edit changes the points on the lot it came from too.
+            lot = lot or award_obj.lot
             if lot:
                 placeholder = lot.bap_placeholder
                 lot.bap_points_awarded = (
@@ -581,7 +585,7 @@ class BapAwardCSVImportView(LoginRequiredMixin, CSVContactImportMixin, ClubViewM
         member = ClubMember.objects.filter(pk=fields.get("member_pk"), club=self.club, is_deleted=False).first()
         if not member:
             return "skipped"
-        award_date = date_type.fromisoformat(fields["date"]) if fields.get("date") else timezone.now().date()
+        award_date = date_type.fromisoformat(fields["date"]) if fields.get("date") else timezone.localdate()
         BapAward.objects.create(
             club_member=member,
             date=award_date,

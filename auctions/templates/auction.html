@@ -83,7 +83,7 @@ src="https://maps.googleapis.com/maps/api/js?key={{google_maps_api_key}}&callbac
 async
 ></script>
 <script>
-
+{% comment %}The info window's HTML is built in JS: a location's name is HTML-escaped and then JS-escaped, since escaped only for HTML a \x3c in it came out as a tag.{% endcomment %}
 function initMap() {
     var map;
     var bounds = new google.maps.LatLngBounds();
@@ -92,7 +92,7 @@ function initMap() {
     var markers = [
         {% for location in pickup_locations %}
         {%if location.has_coordinates %}
-        ['{{ location.name }}', {{ location.latitude }},{{ location.longitude }}],
+        ["{{ location.name|escapejs }}", {{ location.latitude }},{{ location.longitude }}],
         {% endif %}
         {% endfor %}
     ];
@@ -100,8 +100,8 @@ function initMap() {
         {% for location in pickup_locations %}
         {%if location.has_coordinates %}
         ['<div class="info_content" style="color:black;">' +
-        '<h5>{{ location.name }}</h5>' +
-        `{% include 'location_fragment_map.html' %}</div>`],
+        '<h5>{{ location.name|force_escape|escapejs }}</h5>' +
+        "{% filter escapejs %}{% include 'location_fragment_map.html' %}{% endfilter %}</div>"],
         {% endif %}
         {% endfor %}
     ];

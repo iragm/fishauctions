@@ -336,7 +336,7 @@ def _book_paypal_subscription_payment(club, member, subscription):
         return None
     if amount <= 0:
         return None
-    payment_date = _parse_paypal_datetime_date(last_payment.get("time")) or timezone.now().date()
+    payment_date = _parse_paypal_datetime_date(last_payment.get("time")) or timezone.localdate()
     if ClubMoney.objects.filter(
         club=club,
         category=ClubMoney.CATEGORY_MEMBERSHIP,
@@ -429,7 +429,7 @@ def _apply_paypal_subscription_event(club, subscription):
         return
     old_expiration = member.membership_expiration_date
     member.paypal_subscription_id = subscription_id
-    member.membership_last_paid = timezone.now().date()
+    member.membership_last_paid = timezone.localdate()
     if advanced:
         member.membership_expiration_date = next_date
     member.save()
@@ -721,6 +721,25 @@ class SquareWebhookView(SquareAPIMixin, View):
                         invoice = None
                         logger.warning("Square webhook: non-numeric reference_id: %s", reference_id)
                     if invoice:
+                        # Only money paid into this invoice's own Square account counts for it. The
+                        # reference id is whatever the paying merchant set, so without this any
+                        # connected seller could create an order naming another auction's invoice,
+                        # pay themselves, and mark that invoice paid.
+                        payee = (
+                            (invoice.club or invoice.auction).effective_square_seller
+                            if (invoice.club or invoice.auction)
+                            else None
+                        )
+                        currency = (payment.get("amount_money") or {}).get("currency", "USD")
+                        if not payee or not seller or payee.pk != seller.pk or currency != invoice.currency:
+                            logger.warning(
+                                "Square webhook: payment %s names invoice %s, which merchant %s does not collect for",
+                                payment_id,
+                                invoice.pk,
+                                merchant_id,
+                            )
+                            invoice = None
+                    if invoice:
                         amount_money = payment.get("amount_money", {})
                         amount_value = Decimal(amount_money.get("amount", 0)) / 100
                         currency = amount_money.get("currency", "USD")
@@ -837,9 +856,11 @@ class SquareWebhookView(SquareAPIMixin, View):
                         payment_record.save()
 
                     payment_record.invoice.recalculate()
-                    if created:
-                        action = f"Refund via Square for bidder {payment_record.invoice.auctiontos_user.bidder_number} in the amount of {refund_amount} {payment_record.currency}"
-                        payment_record.invoice.auction.create_history(applies_to="INVOICES", action=action, user=None)
+                    invoice = payment_record.invoice
+                    # A club renewal invoice has neither, and the refund above must still stand.
+                    if created and invoice.auction and invoice.auctiontos_user:
+                        action = f"Refund via Square for bidder {invoice.auctiontos_user.bidder_number} in the amount of {refund_amount} {payment_record.currency}"
+                        invoice.auction.create_history(applies_to="INVOICES", action=action, user=None)
                     logger.info("Square refund completed for payment %s", payment_id)
 
         elif event_type == "oauth.authorization.revoked":

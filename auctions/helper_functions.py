@@ -1,4 +1,4 @@
-"""Small helpers with no home of their own: email scrubbing, currency symbols, histogram bins."""
+"""Small helpers with no home of their own: email scrubbing, currency symbols, histogram bins, location cookies."""
 
 import re
 from collections import Counter
@@ -17,6 +17,22 @@ def scrub_emails(text):
     if not text:
         return text
     return EMAIL_IN_TEXT_RE.sub("[email redacted]", str(text))
+
+
+def cookie_coordinates(request):
+    """``(latitude, longitude)`` from the browser's location cookies as floats, or ``(None, None)``.
+
+    The cookies are whatever the browser sends; passed on as they came, one that isn't a number made
+    every page that sorts by distance raise.
+    """
+    try:
+        latitude = float(request.COOKIES.get("latitude", ""))
+        longitude = float(request.COOKIES.get("longitude", ""))
+    except (TypeError, ValueError):
+        return None, None
+    if not (-90 <= latitude <= 90 and -180 <= longitude <= 180):
+        return None, None
+    return latitude, longitude
 
 
 def get_currency_symbol(currency_code):
@@ -54,7 +70,7 @@ def bin_data(
     # some cleanup and validation first
     try:
         queryset = queryset.order_by(field_name)
-    except:
+    except Exception:
         if start_bin is None or end_bin is None:
             msg = f"queryset cannot be ordered by '{field_name}', so start_bin and end_bin are required"
             raise ValueError(msg)

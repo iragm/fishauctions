@@ -51,6 +51,7 @@ from auctions.forms import (
     EditLot,
     validate_image_url,
 )
+from auctions.helper_functions import cookie_coordinates
 from auctions.models import (
     Auction,
     AuctionTOS,
@@ -70,13 +71,14 @@ from auctions.services import (
     copy_lot_images,
     missing_contact_info,
     readable_list,
+    remove_bid,
     user_can_clone_lot,
 )
 from auctions.species_matching import record_choice as record_species_choice
 from auctions.species_matching import remember as remember_species
 
-from .base import AuctionViewMixin, check_club_permission, close_modal_response
-from .selling import notify_watchers_lot_selling_soon
+from .base import AuctionViewMixin, check_club_permission, close_modal_response, safe_next_url
+from .selling import _lot_invoices, _recalculate_invoices, notify_watchers_lot_selling_soon
 
 logger = logging.getLogger(__name__)
 #: Page-view history window. Also what keeps it cheap: PageView is the largest table.
@@ -308,8 +310,7 @@ class ViewLot(DetailView):
             "auctiontos_winner__pickup_location",
             "winner__userdata",
         )
-        latitude = self.request.COOKIES.get("latitude")
-        longitude = self.request.COOKIES.get("longitude")
+        latitude, longitude = cookie_coordinates(self.request)
         if latitude and longitude:
             qs = qs.annotate(distance=_lot_distance_to(latitude, longitude))
         elif self.request.user.is_authenticated:
@@ -497,7 +498,7 @@ class ViewLot(DetailView):
         if self.request.user.is_authenticated:
             userData = self.request.user.userdata
             userData.last_activity = timezone.now()
-            userData.save()
+            userData.save(update_fields=["last_activity"])
             if userData.last_ip_address:
                 if userData.last_ip_address != lot.seller_ip and lot.bidder_ip_same_as_seller:
                     messages.info(
@@ -585,6 +586,7 @@ class ViewLot(DetailView):
         if (
             lot.auctiontos_winner
             and self.request.user.is_authenticated
+            and self.request.user.email
             and self.request.user.email == lot.auctiontos_winner.email
         ) or (lot.winner and self.request.user.is_authenticated and self.request.user == lot.winner):
             if lot.feedback_rating == 0 and lot.date_end and timezone.now() > lot.date_end + timedelta(days=2):
@@ -649,10 +651,7 @@ class ImageCreateView(LoginRequiredMixin, CreateView):
         return super().dispatch(request, *args, **kwargs)
 
     def get_success_url(self):
-        data = self.request.GET.copy()
-        if len(data) == 0:
-            data["next"] = self.lot.lot_link
-        return data["next"]
+        return safe_next_url(self.request, self.lot.lot_link)
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
@@ -786,14 +785,14 @@ class LotValidation(LoginRequiredMixin):
                 lot.reserve_price = lot.auction.minimum_bid
             if lot.auction.buy_now == "disable" and lot.buy_now_price:
                 lot.buy_now_price = None
-            if (lot.auction.buy_now == "require") and not lot.buy_now_price:
+            if (lot.auction.buy_now == "required") and not lot.buy_now_price:
                 lot.buy_now_price = lot.auction.minimum_bid
                 messages.error(self.request, "You need to set a buy now price for this lot!")
             lot.date_end = lot.auction.date_end
             userData = self.request.user.userdata
             userData.last_auction_used = lot.auction
             userData.last_activity = timezone.now()
-            userData.save()
+            userData.save(update_fields=["last_auction_used", "last_activity"])
             auctiontos = AuctionTOS.objects.filter(user=self.request.user, auction=lot.auction).first()
             if not auctiontos:
                 # Shouldn't happen: CreateLotForm.clean() checks for an auctiontos.
@@ -1180,25 +1179,7 @@ class BidDelete(LoginRequiredMixin, DeleteView):
             history_message = secrets.choice(own_bid_removal_messages).format(user=self.request.user)
         else:
             history_message = f"{self.request.user} has removed {bid.user}'s bid"
-        if lot.ended:
-            lot.winner = None
-            lot.auctiontos_winner = None
-            lot.winning_price = None
-            if lot.auction and lot.auction.date_end:
-                lot.date_end = lot.auction.date_end
-            else:
-                lot.date_end = timezone.now() + timedelta(days=lot.lot_run_duration)
-            lot.active = True
-            lot.buy_now_used = False
-            if lot.label_printed:
-                lot.label_needs_reprinting = True
-            lot.save()
-        bid.delete()
-        # Also soft-delete any other bid records for this user on the same lot
-        Bid.objects.exclude(is_deleted=True).filter(
-            user=bid.user,
-            lot_number=lot,
-        ).update(is_deleted=True)
+        remove_bid(bid)
         LotHistory.objects.create(lot=lot, user=self.request.user, message=history_message, changed_price=True)
         return HttpResponseRedirect(success_url)
 
@@ -1246,7 +1227,12 @@ class LotAdmin(LoginRequiredMixin, TemplateView, FormMixin, AuctionViewMixin):
 
     def post(self, request, *args, **kwargs):
         form = self.get_form()
+        # EditLot has no minimum on it, and a negative price would pay the buyer.
+        if form.is_valid() and (form.cleaned_data.get("winning_price") or 0) < 0:
+            form.add_error("winning_price", "The sell price can't be negative")
         if form.is_valid():
+            # Taken before the change: a winner or price change otherwise leaves these stale.
+            stale_invoices = _lot_invoices(self.lot)
             if form.has_changed():
                 self.lot.auction.create_history(
                     applies_to="LOTS",
@@ -1324,6 +1310,7 @@ class LotAdmin(LoginRequiredMixin, TemplateView, FormMixin, AuctionViewMixin):
                             obj.auto_award_bap_points()
                         except Exception:
                             logger.exception("auto_award_bap_points failed for lot %s", obj.pk)
+            _recalculate_invoices(stale_invoices)
             return close_modal_response("reload-page")
         else:
             return self.form_invalid(form)

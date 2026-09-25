@@ -307,7 +307,9 @@ class CommandPaletteCancelView(View):
             data = json.loads((request.body or b"").decode("utf-8") or "{}")
         except (ValueError, UnicodeDecodeError):
             data = {}
-        data = data or {}
+        # A JSON list or number parses too.
+        if not isinstance(data, dict):
+            data = {}
         # The page's auction keys the trust window.
         request.palette_page = palette_routes.page_context_from_path(request.user, data.get("path") or "")
         recorded = palette_assist.mark_cancelled(
@@ -330,7 +332,9 @@ class CommandPaletteReportView(View):
             data = json.loads((request.body or b"").decode("utf-8") or "{}")
         except (ValueError, UnicodeDecodeError):
             data = {}
-        recorded = palette_assist.mark_reported(request.user, (data or {}).get("usage_id"))
+        if not isinstance(data, dict):
+            data = {}
+        recorded = palette_assist.mark_reported(request.user, data.get("usage_id"))
         return JsonResponse({"recorded": recorded})
 
 

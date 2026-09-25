@@ -45,7 +45,8 @@ def _member_from_serial(pass_type_id, serial_number):
     if not is_configured() or pass_type_id != settings.APPLE_WALLET_PASS_TYPE_IDENTIFIER:
         return None
     prefix, _, pk = serial_number.partition("-")
-    if prefix != "member" or not pk.isdigit():
+    # isdecimal, not isdigit: "²" is a digit that int() refuses.
+    if prefix != "member" or not pk.isdecimal():
         return None
     return ClubMember.objects.filter(pk=int(pk)).select_related("club", "user").first()
 
@@ -83,10 +84,11 @@ class PassKitRegistrationView(View):
         if not _is_authorized(request, member):
             return HttpResponse(status=401)
         try:
-            push_token = json.loads(request.body or b"{}").get("pushToken", "")
+            body = json.loads(request.body or b"{}")
         except ValueError:
-            push_token = ""
-        if not push_token:
+            body = {}
+        push_token = body.get("pushToken", "") if isinstance(body, dict) else ""
+        if not push_token or not isinstance(push_token, str):
             return HttpResponse(status=400)
         # update_or_create, since APNs tokens rotate and the registration tracks the newest.
         _registration, created = AppleDeviceRegistration.objects.update_or_create(
@@ -173,8 +175,11 @@ class PassKitLogView(View):
 
     def post(self, request):
         try:
-            logs = json.loads(request.body or b"{}").get("logs", [])
+            body = json.loads(request.body or b"{}")
         except ValueError:
+            body = {}
+        logs = body.get("logs", []) if isinstance(body, dict) else []
+        if not isinstance(logs, list):
             logs = []
         # Unauthenticated and unthrottled: clamp the length and strip newlines so a device can't
         # forge log lines or fill the disk.

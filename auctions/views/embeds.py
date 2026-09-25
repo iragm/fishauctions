@@ -37,13 +37,12 @@ from auctions.forms import (
 )
 from auctions.models import (
     Auction,
-    Club,
     ClubAnnouncement,
     ClubHistory,
     ClubMember,
 )
 
-from .base import ClubViewMixin
+from .base import ClubViewMixin, club_from_url
 from .club_members import BAP_EMBED_PROGRAM_FIELDS, BAP_EMBED_PROGRAM_LABELS
 
 logger = logging.getLogger(__name__)
@@ -154,7 +153,7 @@ class BapEmbedView(View):
         return response
 
     def get(self, request, slug):
-        club = Club.objects.filter(Q(slug=slug) | Q(abbreviation=slug)).order_by("pk").first()
+        club = club_from_url(slug)
         if not club or not club.enable_breeder_award_program:
             raise Http404
 
@@ -244,7 +243,7 @@ class ClubEventsEmbedView(View):
     json_key = "events"
 
     def get(self, request, slug):
-        club = Club.objects.filter(Q(slug=slug) | Q(abbreviation=slug)).order_by("pk").first()
+        club = club_from_url(slug)
         if not club:
             raise Http404
 
@@ -310,7 +309,7 @@ class ClubAnnouncementsEmbedView(View):
     """Public, embeddable list of a club's latest announcements; ?count= defaults to one."""
 
     def get(self, request, slug):
-        club = Club.objects.filter(Q(slug=slug) | Q(abbreviation=slug)).order_by("pk").first()
+        club = club_from_url(slug)
         if not club:
             raise Http404
         try:
@@ -377,7 +376,7 @@ class ClubAuctionEmbedView(View):
     """Public, embeddable strip for the club's current auction; empty between auctions."""
 
     def get(self, request, slug):
-        club = Club.objects.filter(Q(slug=slug) | Q(abbreviation=slug)).order_by("pk").first()
+        club = club_from_url(slug)
         if not club:
             raise Http404
         row = _club_auction_embed_row(request, _club_current_auction(club))

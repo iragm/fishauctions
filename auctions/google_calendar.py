@@ -163,7 +163,13 @@ def get_access_token(club):
     if resp.status_code != 200:
         # A revoked or expired refresh token never recovers: disconnect so the page prompts reconnection.
         detail = _readable_error(resp)
-        if resp.status_code in (400, 401):
+        # Only invalid_grant is this club's token. invalid_client (a wrong or rotated site secret) is
+        # the same 400/401 for every club, and disconnecting on it wiped every club's connection.
+        try:
+            oauth_error = (resp.json() or {}).get("error", "")
+        except ValueError:
+            oauth_error = ""
+        if resp.status_code in (400, 401) and oauth_error == "invalid_grant":
             disconnect(club, error=f"Google access was revoked ({detail}). Please reconnect.")
         msg = f"Google refused to refresh the access token: {detail}"
         raise GoogleCalendarError(msg)

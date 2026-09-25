@@ -1067,6 +1067,48 @@ class ClientMetadataDocumentTests(SimpleTestCase):
     """
 
     #: What claude.ai actually serves, fetched from the live document.
+    #: What chatgpt.com/oauth/client.json served on 2026-09-25.
+    CHATGPT_DOCUMENT = {
+        "client_id": "https://chatgpt.com/oauth/client.json",
+        "client_uri": "https://chatgpt.com/",
+        "redirect_uris": ["https://chatgpt.com/connector_platform_oauth_redirect"],
+        "token_endpoint_auth_method": "private_key_jwt",
+        "token_endpoint_auth_methods_supported": ["none", "private_key_jwt"],
+        "grant_types": ["authorization_code", "refresh_token"],
+        "response_types": ["code"],
+        "client_name": "ChatGPT",
+        "logo_uri": "https://persistent.oaistatic.com/sonic/misc/openai-logo.png",
+        "token_endpoint_auth_signing_alg": "RS256",
+        "jwks_uri": "https://chatgpt.com/oauth/jwks.json",
+    }
+
+    def test_chatgpts_document_maps_to_a_public_client(self):
+        """It said ``private_key_jwt``, which the toolkit refused with "Invalid client_id parameter value"."""
+        from oauth2_provider.cimd import _build_application_kwargs
+
+        from auctions.mcp.cimd import ClientMetadataFetcher
+
+        with patch("oauth2_provider.cimd.SafeMetadataFetcher.fetch", return_value=(self.CHATGPT_DOCUMENT, 300)):
+            metadata, _ = ClientMetadataFetcher().fetch(self.CHATGPT_DOCUMENT["client_id"])
+        self.assertEqual(metadata["token_endpoint_auth_method"], "none")
+        self.assertEqual(_build_application_kwargs(metadata)["authorization_grant_type"], "authorization-code")
+
+    def test_a_confidential_only_document_is_still_refused(self):
+        from auctions.mcp.cimd import narrow_auth_method
+
+        document = {
+            "token_endpoint_auth_method": "private_key_jwt",
+            "token_endpoint_auth_methods_supported": ["private_key_jwt"],
+        }
+        self.assertIs(narrow_auth_method(document), document)
+        document = {"token_endpoint_auth_method": "private_key_jwt"}
+        self.assertIs(narrow_auth_method(document), document)
+
+    def test_claudes_document_is_untouched_by_the_auth_method_narrowing(self):
+        from auctions.mcp.cimd import narrow_auth_method
+
+        self.assertIs(narrow_auth_method(self.CLAUDE_DOCUMENT), self.CLAUDE_DOCUMENT)
+
     CLAUDE_DOCUMENT = {
         "client_id": "https://claude.ai/oauth/mcp-oauth-client-metadata",
         "client_name": "Claude",

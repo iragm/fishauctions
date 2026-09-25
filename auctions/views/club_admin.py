@@ -207,7 +207,8 @@ class ClubBarcodeLabelsView(LoginRequiredMixin, ClubViewMixin, TemplateView):
                 label_text = (label_texts[i] if i < len(label_texts) else "").strip()
                 try:
                     amount = int(float(amount_raw))
-                except (ValueError, TypeError):
+                except (ValueError, TypeError, OverflowError):
+                    # OverflowError: "inf".
                     amount = 0
                 if amount > 0 and label_text:
                     prefix = "010" if label_type == "charge" else "000"
@@ -431,7 +432,7 @@ class ClubMemberRenewPageView(LoginRequiredMixin, ClubViewMixin, View):
         context = {
             "club": self.club,
             "member": member,
-            "default_date": member.membership_expiration_date or timezone.now().date(),
+            "default_date": member.membership_expiration_date or timezone.localdate(),
             "next_url": request.GET.get("next", ""),
         }
         return render(request, "auctions/club_member_renew_page.html", context)
@@ -600,7 +601,11 @@ class ClubMemberMergeView(LoginRequiredMixin, ClubViewMixin, View):
             "summary_lines": [
                 f"{source} will be deactivated.",
                 f"{target} will be kept.",
-                "Permission flags from the removed member will be merged into the surviving member.",
+                (
+                    "Permission flags from the removed member will be merged into the surviving member."
+                    if check_club_permission(self.request.user, self.club, "permission_admin")
+                    else "The removed member's club roles are not carried over; a club admin can set them."
+                ),
                 "Any missing Discord ID, points, or paid-through date on the kept member will be copied over.",
             ],
             "target_field_name": "target",
@@ -631,7 +636,11 @@ class ClubMemberMergeView(LoginRequiredMixin, ClubViewMixin, View):
         source = self._get_member(pk)
         next_url = self._safe_next_url(request)
         if request.POST.get("step") == "review":
-            target = get_object_or_404(ClubMember, pk=request.POST.get("target"), club=self.club)
+            target_pk = str(request.POST.get("target") or "")
+            if not target_pk.isdigit() or int(target_pk) == source.pk:
+                # Merging a member into themselves only deactivated them.
+                raise Http404
+            target = get_object_or_404(ClubMember, pk=target_pk, club=self.club)
             review_form = ClubMemberMergeReviewForm(request.POST, instance=target)
             if review_form.is_valid():
                 with transaction.atomic():
@@ -649,17 +658,24 @@ class ClubMemberMergeView(LoginRequiredMixin, ClubViewMixin, View):
                         if source_val is not None and not target_val:
                             setattr(target, field, source_val)
                             update_fields.add(field)
+                    # Carrying roles over is granting them, which only a club admin may do
+                    # (ClubMemberPermissionsView): otherwise add/edit could merge the president into
+                    # their own row and come out an admin.
+                    can_grant_roles = check_club_permission(request.user, self.club, "permission_admin")
                     for perm_field in [
                         "permission_admin",
                         "permission_view",
                         "permission_export",
                         "permission_add_edit",
                         "permission_edit_club",
+                        "permission_money",
                         "permission_manage_auctions",
                         "permission_manage_bap",
                         "permission_manage_donations",
                         "permission_send_announcements",
                     ]:
+                        if not can_grant_roles:
+                            break
                         if getattr(source, perm_field, False) and not getattr(target, perm_field, False):
                             setattr(target, perm_field, True)
                             update_fields.add(perm_field)

@@ -263,7 +263,11 @@ def export(user):
         ],
         "chat_messages": [
             {"lot": _plain(row.lot), "message": row.message, "when": _plain(row.timestamp)}
-            for row in LotHistory.objects.filter(user=user).exclude(message="").select_related("lot")
+            # changed_price rows are the site's own lines ("X was removed as the winner"), written with the
+            # acting admin as user: about somebody else, and not anything this person said.
+            for row in LotHistory.objects.filter(user=user, changed_price=False)
+            .exclude(message="")
+            .select_related("lot")
         ],
         "watched_lots": [
             {"lot": _plain(row.lot_number), "watched_since": _plain(row.createdon)}

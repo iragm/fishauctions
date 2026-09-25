@@ -20,6 +20,7 @@ from django.db import transaction
 from django.db.models import Q
 from django.utils import timezone
 
+from auctions.bidding import MAX_BID
 from auctions.models import (
     Auction,
     AuctionTOS,
@@ -398,6 +399,9 @@ class _OpApplier:
         try:
             price = Decimal(str(raw)).quantize(Decimal("0.01"))
         except (InvalidOperation, ValueError, TypeError):
+            return None
+        # As DynamicSetLotWinner.validate_price: NaN quantizes, then raises on the first comparison.
+        if not price.is_finite() or price < 0 or price > MAX_BID:
             return None
         if self.auction.only_whole_dollar_bids and price != price.to_integral_value():
             return None

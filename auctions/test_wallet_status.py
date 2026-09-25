@@ -1091,15 +1091,15 @@ class CloseModalResponseEscapingTests(TestCase):
         self.assertEqual(body.count("</script>"), 1)
         self.assertIn("\\u003C", body)
 
-    def test_a_toast_is_html_escaped_for_the_toast_plugin(self):
-        """A toast title is HTML-escaped for the plugin and then JSON-escaped for the script tag."""
+    def test_a_toast_title_is_left_as_text_for_the_toast_plugin(self):
+        """A toast title is left as text (the plugin escapes it) and JSON-escaped for the script tag."""
         from auctions.views import close_modal_response
 
         response = close_modal_response(toast="<b>Bob</b> & Sons has no email address on file.")
         body = response.content.decode()
         self.assertNotIn("<b>", body)
         title = json.loads(body.split("toast(")[1].split(");")[0])["title"]
-        self.assertEqual(title, "&lt;b&gt;Bob&lt;/b&gt; &amp; Sons has no email address on file.")
+        self.assertEqual(title, "<b>Bob</b> & Sons has no email address on file.")
 
     def test_extra_triggers_still_ride_along_as_a_plain_json_header(self):
         from auctions.views import close_modal_response

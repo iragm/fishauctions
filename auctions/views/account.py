@@ -15,6 +15,7 @@ from django.contrib.messages.views import SuccessMessageMixin
 from django.contrib.sites.models import Site
 from django.core.exceptions import PermissionDenied
 from django.db.models import (
+    Count,
     Q,
 )
 from django.db.models.base import Model as Model
@@ -22,7 +23,7 @@ from django.http import (
     Http404,
     JsonResponse,
 )
-from django.shortcuts import redirect
+from django.shortcuts import get_object_or_404, redirect
 from django.urls import reverse
 from django.utils import timezone
 from django.utils.http import url_has_allowed_host_and_scheme
@@ -56,6 +57,8 @@ from auctions.models import (
 )
 from auctions.notifications import push_configured
 from auctions.services import CONTACT_GATE_NEEDS_PHONE
+
+from .base import safe_next_url
 
 logger = logging.getLogger(__name__)
 
@@ -119,11 +122,7 @@ class UsernameUpdate(UpdateView, SuccessMessageMixin):
         return super().dispatch(request, *args, **kwargs)
 
     def get_success_url(self):
-        data = self.request.GET.copy()
-        if len(data) == 0:
-            # "/users/" + str(self.kwargs['pk'])
-            data["next"] = reverse("account")
-        return data["next"]
+        return safe_next_url(self.request, reverse("account"))
 
 
 class UserLabelPrefsView(UpdateView, SuccessMessageMixin):
@@ -134,10 +133,7 @@ class UserLabelPrefsView(UpdateView, SuccessMessageMixin):
     user_pk = None
 
     def get_success_url(self):
-        data = self.request.GET.copy()
-        if len(data) == 0:
-            data["next"] = reverse("userpage", kwargs={"slug": self.request.user.username})
-        return data["next"]
+        return safe_next_url(self.request, reverse("userpage", kwargs={"slug": self.request.user.username}))
 
     def get_object(self, *args, **kwargs):
         label_prefs, created = UserLabelPrefs.objects.get_or_create(
@@ -382,11 +378,7 @@ class UserLocationUpdate(UpdateView, SuccessMessageMixin):
         return super().dispatch(request, *args, **kwargs)
 
     def get_success_url(self):
-        data = self.request.GET.copy()
-        if len(data) == 0:
-            data["next"] = reverse("userpage", kwargs={"slug": self.request.user.username})
-            # "/users/" + str(self.kwargs['pk'])
-        return data["next"]
+        return safe_next_url(self.request, reverse("userpage", kwargs={"slug": self.request.user.username}))
 
     def get_object(self, *args, **kwargs):
         return UserData.objects.get(user__pk=self.user_pk)  # get the hack
@@ -461,34 +453,29 @@ class UserChartView(APIView):
         if not request.user.is_superuser:
             raise PermissionDenied()
         user = kwargs.get("pk", None)
-        allBids = (
+        # Counted by the database: PageView is never purged, so a busy account is a lot of rows.
+        bids = (
             Bid.objects.exclude(is_deleted=True)
-            .select_related("lot_number__species_category")
             .filter(user=user, lot_number__species_category__isnull=False)
+            .order_by()
+            .values_list("lot_number__species_category__name")
+            .annotate(count=Count("pk"))
         )
-        pageViews = PageView.objects.select_related("lot_number__species_category").filter(
-            user=user, lot_number__species_category__isnull=False
+        views = (
+            PageView.objects.filter(user=user, lot_number__species_category__isnull=False)
+            .order_by()
+            .values_list("lot_number__species_category__name")
+            .annotate(count=Count("pk"))
         )
-        # Inefficient, but only run for admins and async of page load. Most of it could be a join
-        # and a count, but the attributes and sorting keep changing.
-
         categories = {}
-        for item in allBids:
-            category = str(item.lot_number.species_category)
-            categories.setdefault(category, {"bids": 0, "views": 0})["bids"] += 1
-        for item in pageViews:
-            category = str(item.lot_number.species_category)
-            categories.setdefault(category, {"bids": 0, "views": 0})["views"] += 1
-        # sort the result
-        sortedCategories = sorted(categories, key=lambda t: -categories[t]["views"])
-        # Format for chart.js.
-        labels = []
-        bids = []
-        views = []
-        for item in sortedCategories:
-            labels.append(item)
-            bids.append(categories[item]["bids"])
-            views.append(categories[item]["views"])
+        for name, count in bids:
+            categories.setdefault(str(name), {"bids": 0, "views": 0})["bids"] += count
+        for name, count in views:
+            categories.setdefault(str(name), {"bids": 0, "views": 0})["views"] += count
+        # Most viewed first, for chart.js.
+        labels = sorted(categories, key=lambda name: (-categories[name]["views"], -categories[name]["bids"], name))
+        bids = [categories[name]["bids"] for name in labels]
+        views = [categories[name]["views"] for name in labels]
         return JsonResponse(data={"labels": labels, "bids": bids, "views": views})
 
 
@@ -542,7 +529,7 @@ class CreateUserIgnoreCategory(APIView):
             messages.error(request, "Sign in to ignore categories")
             return redirect(reverse("home"))
         pk = self.kwargs.get("pk", None)
-        category = Category.objects.get(pk=pk)
+        category = get_object_or_404(Category, pk=pk)
         result, created = UserIgnoreCategory.objects.update_or_create(category=category, user=request.user)
         return JsonResponse(data={"pk": result.pk})
 
@@ -558,7 +545,7 @@ class DeleteUserIgnoreCategory(APIView):
             messages.error(request, "Sign in to show categories")
             return redirect(reverse("home"))
         pk = self.kwargs.get("pk", None)
-        category = Category.objects.get(pk=pk)
+        category = get_object_or_404(Category, pk=pk)
         try:
             exists = UserIgnoreCategory.objects.get(category=category, user=request.user)
             exists.delete()
@@ -577,17 +564,14 @@ class GetUserIgnoreCategory(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request, *args, **kwargs):
-        categories = Category.objects.all().order_by("name")
+        ignored = set(UserIgnoreCategory.objects.filter(user=request.user).values_list("category_id", flat=True))
         results = []
-        for category in categories:
+        for category in Category.objects.all().order_by("name"):
             item = {
                 "id": category.pk,
                 "text": category.name,
             }
-            try:
-                UserIgnoreCategory.objects.get(user=request.user, category=category.pk)
+            if category.pk in ignored:
                 item["selected"] = True
-            except UserIgnoreCategory.DoesNotExist:
-                pass
             results.append(item)
         return JsonResponse({"results": results}, safe=False)

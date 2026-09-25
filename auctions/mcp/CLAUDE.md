@@ -184,8 +184,9 @@ root per RFC 8414/9728). Settings that fail silently rather than erroring:
 - `DCR_REGISTRATION_PERMISSION_CLASSES` must allow anonymous registration (the toolkit default
   refuses it); `ALLOW_LOCALHOST_LOOPBACK` for Claude Code's portless `http://localhost/callback`.
 - `/mcp` is matched with and without the trailing slash — `APPEND_SLASH` drops a POST body.
-- `auctions/mcp/cimd.py` drops grant types we don't advertise before mapping a client metadata
-  document, or claude.ai gets `invalid_request: Invalid client_id parameter value`.
+- `auctions/mcp/cimd.py` drops grant types we don't advertise, and maps ChatGPT's legacy
+  `private_key_jwt` preference to `none`, before mapping a client metadata document; otherwise
+  claude.ai / ChatGPT get `invalid_request: Invalid client_id parameter value`.
 - `DEFAULT_SCOPES` is `read write offline_access`; refresh tokens live 180 days.
 - `/o/applications/…` is wrapped in `is_superuser`; `/o/register/` in
   `mcp.auth.throttle_registration`. Consent screen is ours (`auctions/templates/oauth2_provider/`).

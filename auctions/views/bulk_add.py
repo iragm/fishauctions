@@ -203,7 +203,8 @@ class CSVContactImportMixin:
             messages.error(
                 self.request, f"Unable to read file. Make sure this is a valid UTF-8 CSV file. Error was: {e}"
             )
-            return None
+            # A response, not None: two importers returned this straight from post(), a 500.
+            return self._hx_aware_redirect(self.import_cancel_url())
 
     # ------------------------------------------------------------------
     # Preview / confirm framework
@@ -486,7 +487,7 @@ class BulkAddUsers(LoginRequiredMixin, CSVContactImportMixin, AuctionViewMixin, 
             import_from_auction = self.request.GET.get("import")
             if import_from_auction:
                 other_auction = Auction.objects.exclude(is_deleted=True).filter(slug=import_from_auction).first()
-                if not other_auction.permission_check(self.request.user):
+                if not other_auction or not other_auction.permission_check(self.request.user):
                     messages.error(
                         self.request,
                         f"You don't have permission to add users from {other_auction}",

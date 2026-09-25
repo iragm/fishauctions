@@ -60,7 +60,15 @@ from auctions.services import (
     readable_list,
 )
 
-from .base import AuctionViewMixin, _ensure_invoice_renewal_state, _find_club_member, close_modal_response
+from .base import (
+    AuctionViewMixin,
+    _ensure_invoice_renewal_state,
+    _find_club_member,
+    browser_timezone,
+    close_modal_response,
+    safe_next_url,
+)
+from .selling import _lot_invoices, _recalculate_invoices
 
 logger = logging.getLogger(__name__)
 
@@ -75,8 +83,9 @@ class AuctionTOSDelete(LoginRequiredMixin, TemplateView, FormMixin, AuctionViewM
     allow_non_admins = True
 
     def dispatch(self, request, *args, **kwargs):
-        pk = kwargs.pop("pk")
-        self.auctiontos = AuctionTOS.objects.filter(pk=pk).first()
+        pk = str(kwargs.pop("pk"))
+        # The route is <str:pk>.
+        self.auctiontos = AuctionTOS.objects.filter(pk=pk).first() if pk.isdigit() else None
         if not self.auctiontos:
             raise Http404
         self.auction = self.auctiontos.auction
@@ -183,6 +192,8 @@ class AuctionTOSDelete(LoginRequiredMixin, TemplateView, FormMixin, AuctionViewM
         )
 
     def _get_merge_target(self, target_pk):
+        if not str(target_pk or "").isdigit():
+            raise Http404
         return get_object_or_404(AuctionTOS, pk=target_pk, auction=self.auction)
 
     def get(self, request, *args, **kwargs):
@@ -235,9 +246,13 @@ class AuctionTOSDelete(LoginRequiredMixin, TemplateView, FormMixin, AuctionViewM
             if form.cleaned_data["delete_lots"]:
                 sold_lots = Lot.objects.exclude(is_deleted=True).filter(auctiontos_seller=self.auctiontos)
                 won_lots = Lot.objects.exclude(is_deleted=True).filter(auctiontos_winner=self.auctiontos)
+                # The other side of each lot: its buyer, or the seller who just lost the sale.
+                touched_invoices = []
                 for lot in sold_lots:
+                    touched_invoices += _lot_invoices(lot)
                     lot.delete()
                 for lot in won_lots:
+                    touched_invoices += _lot_invoices(lot)
                     LotHistory.objects.create(
                         lot=lot,
                         user=request.user,
@@ -251,6 +266,7 @@ class AuctionTOSDelete(LoginRequiredMixin, TemplateView, FormMixin, AuctionViewM
                     lot.winning_price = None
                     lot.active = True
                     lot.save()
+                _recalculate_invoices(touched_invoices)
                 self.auction.create_history(
                     applies_to="USERS", action=f"Deleted {self.auctiontos.name}", user=request.user
                 )
@@ -400,7 +416,13 @@ class AuctionTOSAdmin(LoginRequiredMixin, TemplateView, FormMixin, AuctionViewMi
         feedback.id = "id_name_feedback";
         feedback.className = "valid-feedback d-block cursor-pointer";
         var buttonText = response.id_email ? "Click to use " + response.id_email : "Click to fill in details";
-        feedback.innerHTML = "<button role='button' class='btn btn-sm btn-info' id='autocompleteTosForm'>" + buttonText + "</button>";
+        // textContent: the email is whatever was stored, not necessarily an address.
+        var button = document.createElement("button");
+        button.setAttribute("role", "button");
+        button.className = "btn btn-sm btn-info";
+        button.id = "autocompleteTosForm";
+        button.textContent = buttonText;
+        feedback.appendChild(button);
         var autocomplete = response;
         document.getElementById('id_name').parentNode.appendChild(feedback);
 
@@ -529,7 +551,10 @@ class AuctionTOSAdmin(LoginRequiredMixin, TemplateView, FormMixin, AuctionViewMi
             obj.email = form.cleaned_data["email"]
             obj.phone_number = form.cleaned_data["phone_number"]
             obj.address = form.cleaned_data["address"]
-            obj.is_admin = form.cleaned_data["is_admin"]
+            # Making someone an auction admin is the auction admin's call: this view also opens for club
+            # add/edit-people, who could otherwise tick it on their own row.
+            if self.auction.permission_check(request.user):
+                obj.is_admin = form.cleaned_data["is_admin"]
             obj.bidding_allowed = form.cleaned_data["bidding_allowed"]
             obj.selling_allowed = form.cleaned_data["selling_allowed"]
             obj.is_club_member = form.cleaned_data["is_club_member"]
@@ -666,7 +691,7 @@ class AuctionCreateView(LoginRequiredMixin, FormFrictionMixin, CreateView):
     def get_form_kwargs(self, *args, **kwargs):
         kwargs = super().get_form_kwargs(*args, **kwargs)
         kwargs["user"] = self.request.user
-        kwargs["user_timezone"] = self.request.COOKIES.get("user_timezone", settings.TIME_ZONE)
+        kwargs["user_timezone"] = browser_timezone(self.request)
         data = self.request.GET.copy()
         self.cloned_from = data.get("copy", None)
         kwargs["cloned_from"] = self.cloned_from
@@ -831,13 +856,7 @@ class AuctionInfo(FormFrictionMixin, FormMixin, DetailView, AuctionViewMixin):
         return self.object
 
     def get_success_url(self):
-        data = self.request.GET.copy()
-        try:
-            if not data["next"]:
-                data["next"] = self.auction.view_lot_link
-            return data["next"]
-        except Exception:
-            return self.auction.view_lot_link
+        return safe_next_url(self.request, self.auction.view_lot_link)
 
     def get_form_kwargs(self):
         form_kwargs = super().get_form_kwargs()

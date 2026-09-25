@@ -29,7 +29,7 @@ from django.middleware.csrf import get_token
 from django.shortcuts import get_object_or_404, redirect
 from django.urls import reverse
 from django.utils import timezone
-from django.utils.html import format_html
+from django.utils.html import escape, format_html
 from django.utils.http import url_has_allowed_host_and_scheme
 from django.utils.safestring import mark_safe
 from django.views.generic import DetailView, ListView, TemplateView, View
@@ -83,9 +83,11 @@ from .base import (
     AuctionViewMixin,
     HTMxTableView,
     _upsert_clubmember_shadow_tos,
+    browser_timezone,
     check_club_permission,
     close_modal_response,
 )
+from .invoices import MAX_ADJUSTMENT_AMOUNT
 
 logger = logging.getLogger(__name__)
 # return HttpResponse(f"Max bid: ${self.lot.max_bid: .2f}")
@@ -115,6 +117,9 @@ class PickupLocationsDelete(LoginRequiredMixin, AuctionViewMixin, DeleteView):
 
     def dispatch(self, request, *args, **kwargs):
         self.auction = self.get_object().auction
+        if not self.auction:
+            # No auction, so no admin to check against.
+            raise Http404
         self.success_url = reverse("auction_pickup_location", kwargs={"slug": self.auction.slug})
         if self.get_object().auction.location_qs.count() < 2:
             self.success_url = reverse("auction_main", kwargs={"slug": self.auction.slug})
@@ -152,7 +157,7 @@ class PickupLocationForm:
         kwargs = super().get_form_kwargs()
         kwargs["user"] = self.request.user
         kwargs["auction"] = self.auction
-        kwargs["user_timezone"] = self.request.COOKIES.get("user_timezone", settings.TIME_ZONE)
+        kwargs["user_timezone"] = browser_timezone(self.request)
         return kwargs
 
     def get_success_url(self):
@@ -206,6 +211,8 @@ class PickupLocationsUpdate(FormFrictionMixin, LoginRequiredMixin, AuctionViewMi
 
     def dispatch(self, request, *args, **kwargs):
         self.auction = self.get_object().auction
+        if not self.auction:
+            raise Http404
         self.require_auction_admin()
         return super().dispatch(request, *args, **kwargs)
 
@@ -225,7 +232,7 @@ class PickupLocationsCreate(FormFrictionMixin, LoginRequiredMixin, AuctionViewMi
     """Create a new pickup location"""
 
     def dispatch(self, request, *args, **kwargs):
-        self.auction = Auction.objects.exclude(is_deleted=True).filter(slug=kwargs.pop("slug")).first()
+        self.auction = get_object_or_404(Auction, slug=kwargs.pop("slug"), is_deleted=False)
         self.require_auction_admin()
         return super().dispatch(request, *args, **kwargs)
 
@@ -262,7 +269,7 @@ class AuctionUpdate(FormFrictionMixin, LoginRequiredMixin, AuctionViewMixin, Upd
         kwargs = super().get_form_kwargs(*args, **kwargs)
         kwargs["user"] = self.request.user
         kwargs["cloned_from"] = None
-        kwargs["user_timezone"] = self.request.COOKIES.get("user_timezone", settings.TIME_ZONE)
+        kwargs["user_timezone"] = browser_timezone(self.request)
         return kwargs
 
     def get_context_data(self, **kwargs):
@@ -361,7 +368,7 @@ class AuctionUpdate(FormFrictionMixin, LoginRequiredMixin, AuctionViewMixin, Upd
             )
 
         # Warn when an important time is set to midnight.
-        user_tz = self.request.COOKIES.get("user_timezone", settings.TIME_ZONE)
+        user_tz = browser_timezone(self.request)
         try:
             user_tz = pytz_timezone(user_tz)
         except Exception:  # Catch any invalid timezone errors
@@ -447,7 +454,7 @@ class AuctionDropdownOptionsAPI(APIView, AuctionViewMixin):
             option = AuctionDropdown.objects.create(auction=self.auction, user=request.user, value=value)
             return JsonResponse({"success": True, "option": {"id": option.pk, "value": option.value}})
 
-        if not option_id:
+        if not str(option_id or "").isdigit():
             return JsonResponse({"success": False, "error": "Option id is required"})
         option = AuctionDropdown.objects.filter(pk=option_id, auction=self.auction).first()
         if not option:
@@ -795,7 +802,9 @@ class AuctionCheckIn(LoginRequiredMixin, AuctionViewMixin, View):
 
     def get(self, request, *args, **kwargs):
         tos = self.auctiontos
-        bidder_number = tos.bidder_number if tos.bidder_number and tos.bidder_number != "ERROR" else ""
+        # Both typed by people (the name by the participant themselves), so both are escaped.
+        bidder_number = escape(tos.bidder_number if tos.bidder_number and tos.bidder_number != "ERROR" else "")
+        name = escape(tos.name or "")
         check_in_url = reverse("auction_check_in", kwargs={"pk": tos.pk})
         html = f"""
 <div data-htmx-modal-root>
@@ -804,7 +813,7 @@ class AuctionCheckIn(LoginRequiredMixin, AuctionViewMixin, View):
   <div class="modal-dialog modal-dialog-centered">
     <div class="modal-content">
       <div class="modal-header">
-        <h5 class="modal-title" id="checkInModalLabel">Check in {tos.name}</h5>
+        <h5 class="modal-title" id="checkInModalLabel">Check in {name}</h5>
         <button type="button" class="btn-close btn-close-white" data-modal-close-action="none" aria-label="Close"></button>
       </div>
       <form hx-post="{check_in_url}" hx-target="#modals-here" hx-swap="innerHTML">
@@ -956,10 +965,14 @@ class AuctionBarcodeScan(LoginRequiredMixin, AuctionViewMixin, View):
         """
         try:
             amount_val = round(float(adjustment_amount))
-        except (ValueError, TypeError):
+        except (ValueError, TypeError, OverflowError):
             return "", None
         if amount_val <= 0:
             return "", None
+        if amount_val > MAX_ADJUSTMENT_AMOUNT:
+            return "", JsonResponse(
+                {"ok": False, "message": f"Adjustments can be at most ${MAX_ADJUSTMENT_AMOUNT:,}."}, status=400
+            )
         invoice = Invoice.objects.filter(auctiontos_user=tos).first()
         if invoice and invoice.status != "DRAFT":
             return "", JsonResponse(
@@ -975,6 +988,7 @@ class AuctionBarcodeScan(LoginRequiredMixin, AuctionViewMixin, View):
             amount=amount_val,
             notes=adjustment_label[:150],
         )
+        invoice.recalculate()
         sign = "+" if adjustment_type == "ADD" else "-"
         return f"{sign}${amount_val} {adjustment_label}".strip(), None
 

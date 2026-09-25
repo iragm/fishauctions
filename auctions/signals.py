@@ -141,20 +141,20 @@ def on_save_auction(sender, instance, **kwargs):
             instance.invoice_email_sent = True
             if instance.date_start:
                 instance.followup_email_due = instance.date_start + datetime.timedelta(hours=FOLLOWUP_EMAIL_DELAY_HOURS)
-    if not instance.is_online:
-        try:
-            from auctions.models import PickupLocation
+    # An in-person auction with nowhere to collect lots gets a placeholder. Only when it has no location
+    # at all: get_or_create(is_default=True) brought a deleted placeholder back on every save, beside
+    # the location the organizer had put in its place. A new auction has no pk yet, so this waits for
+    # the next save.
+    if not instance.is_online and instance.pk:
+        from auctions.models import PickupLocation
 
-            PickupLocation.objects.get_or_create(
+        if not PickupLocation.objects.filter(auction=instance).exists():
+            PickupLocation.objects.create(
                 auction=instance,
                 is_default=True,
-                defaults={
-                    "name": str(instance)[:50],
-                    "pickup_time": instance.date_start,
-                },
+                name=str(instance)[:50],
+                pickup_time=instance.date_start,
             )
-        except Exception:
-            pass
 
 
 @receiver(pre_save, sender="auctions.UserData")
@@ -167,7 +167,7 @@ def update_user_location(sender, instance, **kwargs):
         cutLocation = instance.location_coordinates.split(",")
         instance.latitude = float(cutLocation[0])
         instance.longitude = float(cutLocation[1])
-    except:
+    except Exception:
         pass
 
 
@@ -660,6 +660,9 @@ def link_unattached_tos_for_user(user, reason="duplicate detected on login"):
     """
     from auctions.models import AuctionTOS, Lot
 
+    if not user.email:
+        # Hand-added participants often have no address: a blank one would claim every one of them.
+        return
     linked_tos_pks = []
     auctiontoss = AuctionTOS.objects.filter(user__isnull=True, email=user.email)
     for auctiontos in auctiontoss:
@@ -702,7 +705,8 @@ def user_logged_in_callback(sender, user, request, **kwargs):
     from auctions.models import ClubMember
 
     # No ClubHistory: automatic, no actor.
-    ClubMember.objects.filter(user__isnull=True, email=user.email, is_deleted=False).update(user=user)
+    if user.email:
+        ClubMember.objects.filter(user__isnull=True, email=user.email, is_deleted=False).update(user=user)
     ensure_single_club_membership_for_user(user)
 
 
@@ -860,34 +864,36 @@ def on_uploaded_image_deleted(sender, instance, **kwargs):
     if sender.objects.filter(**{field_name: name}).exists():
         return
 
-    urls = []
-    thumbnailer = get_thumbnailer(field_file)
-    try:
-        urls.append(field_file.url)
-        for thumbnail in thumbnailer.get_thumbnails():
-            urls.append(thumbnail.url)
-    except Exception:
-        # The file still goes; only the purge list is shorter.
-        logger.exception("Could not list files to purge for %s %s", sender.__name__, name)
-    try:
-        thumbnailer.delete_thumbnails()
-        field_file.delete(save=False)
-    except Exception:
-        logger.exception("Could not delete the file for %s %s", sender.__name__, name)
-        return
+    def delete_files():
+        # After commit, like the purge: a delete that rolled back used to leave its row pointing at a
+        # file that was already gone.
+        urls = []
+        thumbnailer = get_thumbnailer(field_file)
+        try:
+            urls.append(field_file.url)
+            for thumbnail in thumbnailer.get_thumbnails():
+                urls.append(thumbnail.url)
+        except Exception:
+            # The file still goes; only the purge list is shorter.
+            logger.exception("Could not list files to purge for %s %s", sender.__name__, name)
+        try:
+            thumbnailer.delete_thumbnails()
+            field_file.delete(save=False)
+        except Exception:
+            logger.exception("Could not delete the file for %s %s", sender.__name__, name)
+            return
 
-    absolute = []
-    try:
-        domain = Site.objects.get_current().domain
-    except Exception:
-        domain = ""
-    for url in urls:
-        absolute.append(f"https://{domain}{url}" if domain and url.startswith("/") else url)
-    if absolute:
-        from .tasks import purge_edge_cache
+        try:
+            domain = Site.objects.get_current().domain
+        except Exception:
+            domain = ""
+        absolute = [f"https://{domain}{url}" if domain and url.startswith("/") else url for url in urls]
+        if absolute:
+            from .tasks import purge_edge_cache
 
-        # on_commit, as above.
-        transaction.on_commit(lambda purge=absolute: purge_edge_cache.delay(purge))
+            purge_edge_cache.delay(absolute)
+
+    transaction.on_commit(delete_files)
 
 
 @receiver(post_save, sender="auctions.ThermalPrinterProfile")
@@ -963,3 +969,37 @@ def geocode_speaker_on_location_change(sender, instance, created, **kwargs):
     location_changed = created or (current_location != getattr(instance, "_previous_location", ""))
     if location_changed and not instance.location_coordinates:
         transaction.on_commit(lambda: geocode_speaker.delay(instance.pk))
+
+
+def _sign_out_the_app(sender, request=None, user=None, **kwargs):
+    """A new password retires the app's refresh tokens: they last for months, and one stolen before the
+    reset would otherwise keep rotating after it.
+    """
+    from auctions.account_deletion import blacklist_refresh_tokens
+
+    if user is not None:
+        blacklist_refresh_tokens(user)
+
+
+def _connect_password_signals():
+    from allauth.account.signals import password_changed, password_reset, password_set
+
+    for signal in (password_changed, password_reset, password_set):
+        signal.connect(_sign_out_the_app, dispatch_uid=f"sign_out_the_app_{signal}")
+
+
+_connect_password_signals()
+
+
+@receiver(user_logged_in, dispatch_uid="signed_in_session_lifetime")
+def use_the_signed_in_session_lifetime(sender, user, request, **kwargs):
+    """Drop the anonymous expiry the session carried in, so it gets ``SESSION_COOKIE_AGE``.
+
+    ``ShortAnonymousSessionMiddleware`` gives an anonymous session 14 days, and ``login()`` keeps the
+    session's data -- expiry included -- when it cycles the key. Only allauth's password form sets
+    the lifetime again afterwards; a social, email-confirmation, password-reset or code sign-in kept
+    the 14 days.
+    """
+    session = getattr(request, "session", None) if request is not None else None
+    if session is not None:
+        session.set_expiry(None)

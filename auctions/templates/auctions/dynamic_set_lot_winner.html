@@ -88,8 +88,8 @@
           $("#success_banner").removeClass('bg-danger');
         }
 
-        $("#last_sold_lot_number").html(response.last_sold_lot_number);
-        $("#success_message").html(response.success_message);
+        $("#last_sold_lot_number").text(response.last_sold_lot_number);
+        $("#success_message").text(response.success_message);
         if (response.hide_undo_button) {
           $("#undo_button").addClass('d-none');
         } else {

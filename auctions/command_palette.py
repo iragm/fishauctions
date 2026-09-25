@@ -28,6 +28,7 @@ from .models import (
     CommandPaletteSearch,
     Invoice,
     Lot,
+    email_q,
 )
 
 # Max results returned per group for live search.
@@ -106,7 +107,7 @@ def _auction_visibility_filter(user):
     promoted_filter = Q(promote_this_auction=True, date_start__lte=next_90_days, date_posted__gte=two_years_ago)
     if not user.is_authenticated:
         return promoted_filter
-    return Q(auctiontos__user=user) | Q(auctiontos__email=user.email) | Q(created_by=user) | promoted_filter
+    return Q(auctiontos__user=user) | email_q("auctiontos__email", user.email) | Q(created_by=user) | promoted_filter
 
 
 def _visible_auctions(user):
@@ -121,7 +122,7 @@ def _auction_membership_filter(user):
     club_admin = Q(club__members__user=user, club__members__is_deleted=False) & (
         Q(club__members__permission_admin=True) | Q(club__members__permission_manage_auctions=True)
     )
-    return Q(auctiontos__user=user) | Q(auctiontos__email=user.email) | Q(created_by=user) | club_admin
+    return Q(auctiontos__user=user) | email_q("auctiontos__email", user.email) | Q(created_by=user) | club_admin
 
 
 def _joined_auctions(user):

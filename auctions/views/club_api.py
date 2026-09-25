@@ -378,7 +378,7 @@ class ClubMemberBapAwardAPIView(ClubAPIViewMixin, APIView):
         serializer.is_valid(raise_exception=True)
         award = BapAward.objects.create(
             club_member=member,
-            date=serializer.validated_data.get("date") or timezone.now().date(),
+            date=serializer.validated_data.get("date") or timezone.localdate(),
             points=serializer.validated_data["points"],
             notes=serializer.validated_data.get("notes", ""),
             awarded_by=None if self.is_api_key_request() else request.user,

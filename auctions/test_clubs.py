@@ -1346,5 +1346,31 @@ class ClubMemberUpdateTests(CsvImportTestMixin, TestCase):
         self.assertEqual(self.member.email, "merged@example.com")
         self.assertEqual(self.member.phone_number, "5553334444")
         self.assertEqual(self.member.address, "222 Updated Ave")
-        self.assertTrue(self.member.permission_export)
+        # Only a club admin's merge carries roles over; add/edit alone would be granting them.
+        self.assertFalse(self.member.permission_export)
         self.assertEqual(self.member.membership_last_paid, timezone.now().date())
+
+    def test_a_club_admins_merge_carries_the_roles_over(self):
+        owner_member, _ = ClubMember.objects.get_or_create(club=self.club, user=self.owner)
+        owner_member.permission_admin = True
+        owner_member.save()
+        source = ClubMember.objects.create(
+            club=self.club, name="Treasurer", email="t@example.com", permission_money=True, permission_export=True
+        )
+        self.client.login(username="cu_owner", password="testpass")
+        url = reverse("club_member_merge", kwargs={"slug": self.club.slug, "pk": source.pk})
+        self.client.post(url, {"step": "review", "target": self.member.pk, "name": "Jane Doe"})
+        self.member.refresh_from_db()
+        self.assertTrue(self.member.permission_export)
+        self.assertTrue(self.member.permission_money)
+
+    def test_a_member_cannot_be_merged_into_themselves(self):
+        owner_member, _ = ClubMember.objects.get_or_create(club=self.club, user=self.owner)
+        owner_member.permission_add_edit = True
+        owner_member.save()
+        self.client.login(username="cu_owner", password="testpass")
+        url = reverse("club_member_merge", kwargs={"slug": self.club.slug, "pk": self.member.pk})
+        response = self.client.post(url, {"step": "review", "target": self.member.pk, "name": "Jane Doe"})
+        self.assertEqual(response.status_code, 404)
+        self.member.refresh_from_db()
+        self.assertFalse(self.member.is_deleted)

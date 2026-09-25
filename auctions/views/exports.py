@@ -51,6 +51,7 @@ from auctions.models import (
     LotHistory,
     PageView,
     add_price_info,
+    email_q,
     find_image,
 )
 from auctions.services import attachment_filename
@@ -69,7 +70,7 @@ class MyWonLotCSV(LoginRequiredMixin, View):
 
     def get(self, request):
         lots = add_price_info(
-            Lot.objects.filter(Q(winner=request.user) | Q(auctiontos_winner__email=request.user.email))
+            Lot.objects.filter(Q(winner=request.user) | email_q("auctiontos_winner__email", request.user.email))
             .exclude(is_deleted=True)
             # auction as well as species: lot.scientific_name reads the auction's setting.
             .select_related("species", "auction")
@@ -99,7 +100,7 @@ class MyLotReportView(LoginRequiredMixin, View):
 
     def get(self, request):
         lots = add_price_info(
-            Lot.objects.filter(Q(user=request.user) | Q(auctiontos_seller__email=request.user.email))
+            Lot.objects.filter(Q(user=request.user) | email_q("auctiontos_seller__email", request.user.email))
             .exclude(is_deleted=True)
             # auction too: lot.scientific_name reads the auction's setting.
             .select_related("bap_award__club_member__club", "species", "auction")
@@ -842,8 +843,8 @@ class FindImageIcon(APIView):
         return super().dispatch(request, *args, **kwargs)
 
     def post(self, request, *args, **kwargs):
-        name = request.POST["name"]
-        result = find_image(name, None, self.auction)
+        name = request.POST.get("name") or ""
+        result = find_image(name, None, self.auction) if name else None
         if result:
             return HttpResponse("image available")
         return HttpResponse("")
@@ -965,7 +966,8 @@ class AuctionShowHighBidder(APIView, AuctionViewMixin):
     def get(self, request, *args, **kwargs):
         if not self.lot.max_bid_revealed_by:
             self.lot.max_bid_revealed_by = request.user
-            self.lot.save()
+            # The one column: bids change this row while it's open, and a full save put them back.
+            self.lot.save(update_fields=["max_bid_revealed_by"])
             LotHistory.objects.create(
                 lot=self.lot,
                 user=self.request.user,

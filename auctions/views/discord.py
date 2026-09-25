@@ -625,7 +625,7 @@ class DiscordInteractionsView(View):
             if club.membership_annual_fee:
                 lines.append("Status: ❌ Expired — please renew your membership")
         else:
-            today = timezone.now().date()
+            today = timezone.localdate()
             expiry_ts = int(datetime.combine(expiry, datetime.min.time(), date_tz.utc).timestamp())
             if expiry >= today:
                 lines.append(f"Status: ✅ Active — expires <t:{expiry_ts}:D>")
@@ -901,18 +901,42 @@ class ClubDiscordSendJoinMessageView(LoginRequiredMixin, ClubViewMixin, View):
         return super().dispatch(request, *args, **kwargs)
 
     def post(self, request, *args, **kwargs):
+        config_url = reverse("club_discord_config", kwargs={"slug": self.club.slug})
         channel_id = request.POST.get("channel_id", "").strip()
         if not channel_id:
             messages.error(request, "Please enter a channel ID.")
-            return redirect(reverse("club_discord_config", kwargs={"slug": self.club.slug}))
+            return redirect(config_url)
+        # It goes into the API path, so a snowflake and nothing else.
+        if not (channel_id.isascii() and channel_id.isdecimal()):
+            messages.error(request, "A channel ID is a number.")
+            return redirect(config_url)
 
         bot_token = getattr(settings, "DISCORD_BOT_TOKEN", "")
         if not bot_token:
             messages.error(request, "DISCORD_BOT_TOKEN is not configured.")
-            return redirect(reverse("club_discord_config", kwargs={"slug": self.club.slug}))
+            return redirect(config_url)
+        if not self.club.discord_server_id:
+            messages.error(request, "Connect this club's Discord server first.")
+            return redirect(config_url)
+
+        headers = {"Authorization": f"Bot {bot_token}", "Content-Type": "application/json"}
+        # The bot is in every club's server, so the channel has to be checked against this club's own:
+        # otherwise any club admin could post as the bot into somebody else's server.
+        try:
+            channel = requests.get(f"https://discord.com/api/v10/channels/{channel_id}", headers=headers, timeout=10)
+        except requests.RequestException as exc:
+            logger.exception("Error looking up Discord channel: %s", exc)
+            messages.error(request, "Network error while checking the channel.")
+            return redirect(config_url)
+        try:
+            guild_id = str(channel.json().get("guild_id") or "") if channel.status_code == 200 else ""
+        except (ValueError, AttributeError):
+            guild_id = ""
+        if not guild_id or guild_id != str(self.club.discord_server_id).strip():
+            messages.error(request, "That channel isn't in this club's Discord server.")
+            return redirect(config_url)
 
         url = f"https://discord.com/api/v10/channels/{channel_id}/messages"
-        headers = {"Authorization": f"Bot {bot_token}", "Content-Type": "application/json"}
         payload = {
             "content": f"Welcome to **{self.club.name}**! Click the button below to register and get access to the server.",
             "components": [
@@ -934,10 +958,10 @@ class ClubDiscordSendJoinMessageView(LoginRequiredMixin, ClubViewMixin, View):
         except requests.RequestException as exc:
             logger.exception("Error sending Discord join message: %s", exc)
             messages.error(request, "Network error while sending join message.")
-            return redirect(reverse("club_discord_config", kwargs={"slug": self.club.slug}))
+            return redirect(config_url)
 
         if resp.status_code == 200 or resp.status_code == 201:  # Discord returns 200 or 201 depending on version
             messages.success(request, "Join message sent to the channel!")
         else:
             messages.error(request, f"Discord API error {resp.status_code}: could not send message.")
-        return redirect(reverse("club_discord_config", kwargs={"slug": self.club.slug}))
+        return redirect(config_url)

@@ -46,13 +46,14 @@ ALLOWED_HOSTS = [
     os.environ.get("ALLOWED_HOST_3", ""),
 ]
 CSRF_TRUSTED_ORIGINS = [
-    "http://localhost",
-    "http://127.0.0.1",
     "https://" + os.environ.get("SITE_DOMAIN", ""),
     "https://" + os.environ.get("ALLOWED_HOST_1", ""),
     "https://" + os.environ.get("ALLOWED_HOST_2", ""),
     "https://" + os.environ.get("ALLOWED_HOST_3", ""),
 ]
+# Plain-http local origins are for development only.
+if DEBUG:
+    CSRF_TRUSTED_ORIGINS += ["http://localhost", "http://127.0.0.1"]
 
 
 # Logs go to /home/logs, bind-mounted from ./logs so they survive deploys. If unwritable, fall back
@@ -869,6 +870,12 @@ SUMMERNOTE_THEME = "bs5"
 
 SUMMERNOTE_CONFIG = {
     "iframe": True,
+    # No uploads. The picture tool is off, but the upload endpoint was still open to anyone, signed in
+    # or not, and kept the client's file extension: an image/HTML polyglot named x.html was served as
+    # a page on this site. Refused here rather than with disable_attachment, which also removes the URL
+    # the editor widget reverses, so every summernote field would raise.
+    "attachment_require_authentication": True,
+    "test_func_upload_view": lambda request: False,
     "summernote": {
         # Change editor size
         "width": "100%",

@@ -53,6 +53,7 @@ from auctions.models import (
     Lot,
     SearchHistory,
     UserData,
+    email_q,
 )
 from auctions.tables import (
     AuctionHTMxTable,
@@ -215,7 +216,7 @@ class ToDefaultLandingPage(View):
             try:
                 userData = request.user.userdata
                 userData.last_activity = timezone.now()
-                userData.save()
+                userData.save(update_fields=["last_activity"])
             except AttributeError:
                 # probably not signed in
                 pass
@@ -343,14 +344,14 @@ class AllAuctions(LocationMixin, HTMxTableView):
         qs = qs.exclude(is_deleted=True)
         joined_subquery = Exists(
             AuctionTOS.objects.filter(
-                Q(user=self.request.user) | Q(email=self.request.user.email),
+                Q(user=self.request.user) | email_q("email", self.request.user.email),
                 auction=OuterRef("pk"),
             )
         )
         qs = (
             qs.filter(
                 Q(auctiontos__user=self.request.user)
-                | Q(auctiontos__email=self.request.user.email)
+                | email_q("auctiontos__email", self.request.user.email)
                 | Q(created_by=self.request.user)
                 | standard_filter
             )

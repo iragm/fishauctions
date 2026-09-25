@@ -586,16 +586,17 @@ Nothing has been dropped -- see the git history of this file if a fact looks mis
                                         $('#bid_amount').removeClass('is-invalid');
                                         $('#confirmBid').modal('show');
                                         {% if force_buy_now %}
-                                        var dialogText = "Buy {{ lot.lot_name }} now for $" + bid + "?<br><br><small>All sales are final</small>";
+                                        var dialogText = "Buy {{ lot.lot_name|force_escape|escapejs }} now for $" + bid + "?<br><br><small>All sales are final</small>";
                                         {% else %}
-                                        var dialogText = "Bid $" + bid + " on {{ lot.lot_name }}<br><br><small>{% if not lot.auction.allow_deleting_bids %}All bids are final{% endif %}</small>";
+                                        var dialogText = "Bid $" + bid + " on {{ lot.lot_name|force_escape|escapejs }}<br><br><small>{% if not lot.auction.allow_deleting_bids %}All bids are final{% endif %}</small>";
                                         {% endif %}
                                         {% if not lot.auction %}
-                                            dialogText += "<br><div>This lot is sold directly by {{ lot.user }}.  Make sure to check the user's feedback.</div>";
+                                            dialogText += "<br><div>This lot is sold directly by {{ lot.user|force_escape|escapejs }}.  Make sure to check the user's feedback.</div>";
                                             {% if request.user.is_authenticated and request.user.userdata.last_auction_used and not request.user.userdata.last_auction_used.closed %}
-                                                dialogText += "<br><div class='text-warning'>This lot is not part of {{ request.user.userdata.last_auction_used }}</div>";
+                                                dialogText += "<br><div class='text-warning'>This lot is not part of {{ request.user.userdata.last_auction_used|force_escape|escapejs }}</div>";
                                             {% endif %}
                                         {% endif %}
+                                        {% comment %}The names above are HTML-escaped and then JS-escaped: escaped only for HTML, a \x3c in a lot name came out as a tag once .html() parsed it.{% endcomment %}
                                         $('#confirmDialogText').html(dialogText);
                                         document.querySelector('#finalize-bid').onclick = function(e) {
                                             // Place the bid over plain HTTP so it is saved even if the
@@ -995,7 +996,7 @@ grey box with a drop shadow. It is a card now, like every other panel on the pag
         function handleLotSocketMessage(e) {
             const data = JSON.parse(e.data);
             if (data.current_high_bid) {
-                $("#price").html(data.current_high_bid);
+                $("#price").text(data.current_high_bid);
                 $(document).prop('title', '🔴$' + data.current_high_bid + ": " + originalTitle);
                 clearTimeout(removeDot);
                 var removeDot = setTimeout(function(){$(document).prop('title', '$' + data.current_high_bid + ": " + originalTitle);}, 500);
@@ -1008,7 +1009,7 @@ grey box with a drop shadow. It is a card now, like every other panel on the pag
                 }
             }
             if (data.high_bidder_pk) {
-                $('#high_bidder_name').html(data.high_bidder_name);
+                $('#high_bidder_name').text(data.high_bidder_name);
                 $('#price_label').html("Current bid:");
             }
             var messageClass = "warning";
@@ -1048,14 +1049,22 @@ grey box with a drop shadow. It is a card now, like every other panel on the pag
                     $('#bid_area').html('<div class="help-note mt-2"><i class="bi bi-clock-history"></i><div>Bidding has ended on this lot</div></div>');
                 }
                 $.toast({
-                    title: data.message,
+                    title: escapeLotSocketText(data.message),
                     type: messageClass,
                     delay: 10000
                 });
             }
         };
+        // Names and messages on this socket are what people typed; they only ever reach the page as text.
+        function escapeLotSocketText(value) {
+            var node = document.createElement('div');
+            node.textContent = value == null ? '' : String(value);
+            return node.innerHTML;
+        }
         function addChat(pk, username, message, timestamp) {
-            message = message.replace(/</g, "&lt;").replace(/>/g, "&gt;");
+            username = escapeLotSocketText(username);
+            // Only < and >: the message sits in element content, and leaving & alone keeps links in it whole.
+            message = String(message == null ? '' : message).replace(/</g, "&lt;").replace(/>/g, "&gt;");
             var urlRegex = /(?:(?:https?|ftp|file):\/\/|www\.|ftp\.|auction\.)(?:\([-A-Z0-9+&@#\/%=~_|$?!:,.]*\)|[-A-Z0-9+&@#\/%=~_|$?!:,.])*(?:\([-A-Z0-9+&@#\/%=~_|$?!:,.]*\)|[A-Z0-9+&@#\/%=~_|$])/igm
             message =  message.replace(urlRegex, function(url) {
                 return '<a style="color: #555; font-weight: bold;" href="' + url + '">' + url + '</a>';
@@ -1063,10 +1072,11 @@ grey box with a drop shadow. It is a card now, like every other panel on the pag
 
             // Format timestamp for display
             var timestampHtml = '';
+            var fullDateTime = '';
             if (timestamp) {
                 var date = new Date(timestamp);
                 var timeString = date.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true });
-                var fullDateTime = date.toLocaleString('en-US', { dateStyle: 'short', timeStyle: 'short' });
+                fullDateTime = date.toLocaleString('en-US', { dateStyle: 'short', timeStyle: 'short' });
                 timestampHtml = '<small class="text-muted" style="margin-left: 8px;" title="' + fullDateTime + '">' + timeString + '</small>';
             }
 

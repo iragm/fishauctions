@@ -208,7 +208,7 @@ def join_auction(user, auction, pickup_location, *, time_spent_reading_rules=0):
     if pickup_location is not None and pickup_location.pickup_by_mail and not userdata.address:
         return None, False, "address"
 
-    find_by_email = AuctionTOS.objects.filter(email=user.email, auction=auction).first()
+    find_by_email = AuctionTOS.objects.filter(email=user.email, auction=auction).first() if user.email else None
     is_new_join = False
     if find_by_email:
         # Added by email before signing in and also joined by user id: keep the oldest, fold the other.
@@ -1139,7 +1139,7 @@ def review_lot_points(lot, club, *, acting_user, decision, bap=0, hap=0, cap=0):
         lot=lot,
         defaults={
             "club_member": member,
-            "date": lot.date_end.date() if lot.date_end else timezone.now().date(),
+            "date": timezone.localtime(lot.date_end).date() if lot.date_end else timezone.localdate(),
             "points": bap,
             "hap_points": hap,
             "cap_points": cap,
@@ -1287,3 +1287,36 @@ def propagate_contact_info(user, userdata, *, acting_user=None):
             told.append(club_member.club.name)
 
     return told
+
+
+def remove_bid(bid):
+    """Take a bid back: the page's ``BidDelete`` and the palette's ``remove_bid`` share this, so the lot ends
+    up the same whichever did it.
+
+    A lot that already ended (a buy-now, or bids closing before the auction) is reopened with no winner,
+    and every bid row that bidder has on it goes, not just the highest. The palette used to delete only
+    that one row, which left the bidder the winner at the removed price.
+    """
+    from datetime import timedelta
+
+    from django.utils import timezone
+
+    from auctions.models import Bid
+
+    lot = bid.lot_number
+    if lot.ended:
+        lot.winner = None
+        lot.auctiontos_winner = None
+        lot.winning_price = None
+        if lot.auction and lot.auction.date_end:
+            lot.date_end = lot.auction.date_end
+        else:
+            lot.date_end = timezone.now() + timedelta(days=lot.lot_run_duration)
+        lot.active = True
+        lot.buy_now_used = False
+        if lot.label_printed:
+            lot.label_needs_reprinting = True
+        lot.save()
+    bid.delete()
+    Bid.objects.exclude(is_deleted=True).filter(user=bid.user, lot_number=lot).update(is_deleted=True)
+    return lot

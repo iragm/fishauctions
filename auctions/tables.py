@@ -73,7 +73,7 @@ class AuctionTOSHTMxTable(tables.Table):
         cm = record.clubmember
         if not cm:
             return "—"
-        today = timezone.now().date()
+        today = timezone.localdate()
         has_fee = bool(cm.club.membership_annual_fee)
         renew_btn = format_html("")
         if has_fee and not cm.is_deleted:
@@ -655,7 +655,7 @@ class ClubMemberHTMxTable(tables.Table):
     def render_membership_expiration_date(self, value, record):
         from django.utils import timezone
 
-        today = timezone.now().date()
+        today = timezone.localdate()
         has_fee = bool(record.club.membership_annual_fee)
 
         renew_btn = format_html("")

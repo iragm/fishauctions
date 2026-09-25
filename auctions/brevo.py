@@ -358,6 +358,9 @@ def _delete_contact(client, member):
 
 
 def _delete_contact_by_email(client, email):
+    if not email:
+        # No address, no contact: "/contacts/" alone is the collection, not a contact.
+        return
     try:
         client.request("DELETE", f"/contacts/{quote(email)}")
     except BrevoApiError as e:

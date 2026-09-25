@@ -83,6 +83,9 @@ def bid_on_lot(lot, user, amount):
         # if True:
         try:
             amount_decimal = Decimal(str(amount))
+            if not amount_decimal.is_finite():
+                # "Infinity" raised from quantize() below and reached the admins as an error email.
+                raise InvalidOperation
         except (InvalidOperation, ValueError):
             result = {
                 "type": "ERROR",
@@ -429,7 +432,10 @@ def place_bid_and_broadcast(lot, user, amount):
         else:
             result = bid_on_lot(lot, user, amount)
             if result is None:
-                # bid_on_lot returns None on unexpected errors; surface that as an error.
+                # bid_on_lot returns None on unexpected errors; surface that as an error, and undo
+                # whatever it had written before failing (a buy-now can save the lot and then fail
+                # on the invoice, leaving a sale nobody was told about).
+                transaction.set_rollback(True)
                 result = _bid_error_result("Something went wrong placing your bid")
     try:
         broadcast_bid_result(lot, user, result)

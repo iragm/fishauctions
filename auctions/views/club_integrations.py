@@ -46,7 +46,7 @@ from auctions.models import (
 )
 from auctions.services import attachment_filename
 
-from .base import ClubViewMixin, check_club_permission
+from .base import ClubViewMixin, browser_timezone, check_club_permission
 from .payments import SquareAPIMixin
 
 #: The club being connected, carried in the session across the Mailchimp round trip.
@@ -571,7 +571,7 @@ class ClubEventCreateView(LoginRequiredMixin, ClubViewMixin, View):
 
 def _browser_timezone(request):
     """The admin's timezone, which forms render and must parse in."""
-    return request.COOKIES.get("user_timezone", settings.TIME_ZONE)
+    return browser_timezone(request)
 
 
 class ClubEventUpdateView(LoginRequiredMixin, ClubViewMixin, View):

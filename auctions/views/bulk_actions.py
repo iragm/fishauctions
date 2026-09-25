@@ -11,6 +11,7 @@ from urllib.parse import unquote
 
 from django.contrib import messages
 from django.contrib.auth.mixins import LoginRequiredMixin
+from django.db import transaction
 from django.db.models import (
     Q,
 )
@@ -21,6 +22,7 @@ from django.http import (
 )
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
+from django.utils.html import format_html
 from django.utils.safestring import mark_safe
 from django.views.generic import DetailView, TemplateView
 from django.views.generic.edit import (
@@ -71,7 +73,8 @@ class GetClubs(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
-        search = request.POST["search"]
+        # A post without it was a MultiValueDictKeyError and a 500.
+        search = request.POST.get("search", "")
         result = (
             Club.objects.listed()
             .filter(Q(name__icontains=search) | Q(abbreviation__icontains=search))
@@ -96,7 +99,12 @@ class BulkSetLotsWon(LoginRequiredMixin, TemplateView, FormMixin, AuctionViewMix
         # select_related("auction"): every lot here belongs to `self.auction`, and
         # `sell_to_online_high_bidder` reads the auction (through `calculated_end`) for each one,
         # which was a query per lot on a button whose whole job is to touch hundreds of them.
-        self.queryset = LotAdminFilter.generic(self, self.auction.lots_qs, self.query).select_related("auction")
+        # Unsold lots only: re-running this re-sold floor sales to a lower online bid.
+        self.queryset = (
+            LotAdminFilter.generic(self, self.auction.lots_qs, self.query)
+            .filter(winning_price__isnull=True, auctiontos_winner__isnull=True, winner__isnull=True, banned=False)
+            .select_related("auction")
+        )
         return super().dispatch(request, *args, **kwargs)
 
     def post(self, request, *args, **kwargs):
@@ -128,10 +136,17 @@ class BulkSetLotsWon(LoginRequiredMixin, TemplateView, FormMixin, AuctionViewMix
         context = super().get_context_data(**kwargs)
         tooltip = "This is intended to be used with silent auctions where people place bids on their phones, or with hybrid online auctions where some lots will be sold ahead of time.  It will sell any lots with online bids to the current online high bidder."
         if not self.query:
-            tooltip += "<br><br><span class='text-warning'>You are about to set the winners of all lots.  This is a bad idea, you should click on cancel and then type in a filter first.</span>"
+            warning = format_html(
+                "<br><br><span class='text-warning'>You are about to set the winners of all lots.  This is a bad idea, you should click on cancel and then type in a filter first.</span>"
+            )
         else:
-            tooltip += f"<br><br>You are about to set the winners of {self.queryset.count()} lots that match the filter <span class='text-warning'>{self.query}</span>"
-        context["tooltip"] = tooltip
+            # The query is whatever was typed in the filter box.
+            warning = format_html(
+                "<br><br>You are about to set the winners of {} lots that match the filter <span class='text-warning'>{}</span>",
+                self.queryset.count(),
+                self.query,
+            )
+        context["tooltip"] = format_html("{}{}", tooltip, warning)
         context["modal_title"] = "Sell lots to online high bidders"
         return context
 
@@ -188,9 +203,21 @@ class InvoiceBulkUpdateStatus(LoginRequiredMixin, TemplateView, FormMixin, Aucti
                 except Exception:
                     logger.exception("Failed to ensure renewal state for invoice %s in bulk", invoice.pk)
             try:
-                invoice.status = self.new_invoice_status
-                invoice.invoice_notification_due = run_at
-                invoice.save()
+                # A fresh, locked copy, and only if it still has the status it was listed with: a Square
+                # webhook can mark one paid while this loop runs, and saving the copy read at the start
+                # put it back. A save, not an update(): Invoice.save() sets date_paid and books the ledger.
+                with transaction.atomic():
+                    fresh = (
+                        Invoice.objects.select_for_update()
+                        .filter(pk=invoice.pk, status=self.old_invoice_status)
+                        .first()
+                    )
+                    if fresh is None:
+                        continue
+                    fresh.status = self.new_invoice_status
+                    fresh.invoice_notification_due = run_at
+                    fresh.save()
+                invoice = fresh
             except Exception:
                 logger.exception("Failed to update invoice %s to %s in bulk", invoice.pk, self.new_invoice_status)
                 continue
@@ -210,7 +237,8 @@ class InvoiceBulkUpdateStatus(LoginRequiredMixin, TemplateView, FormMixin, Aucti
                     cancel_invoice_notification(invoice.pk)
             except Exception:
                 logger.exception("schedule/cancel notification failed for invoice %s in bulk", invoice.pk)
-        action = f"Set {invoices.count()} invoices from {self.old_status_display} to {self.new_status_display}"
+        # Not invoices.count(): that re-runs the status filter after the update, and always said 0.
+        action = f"Set {self.invoice_count} invoices from {self.old_status_display} to {self.new_status_display}"
         try:
             self.auction.create_history(
                 applies_to="INVOICES",
@@ -427,12 +455,12 @@ class LotRefundDialog(LoginRequiredMixin, DetailView, FormMixin, AuctionViewMixi
             # unpaid, then go back on.
             existing_refund = self.lot.partial_refund_percent
             if existing_refund:
-                self.lot.partial_refund_percent = 0
-                self.lot.save()
-                full_seller_refund = add_price_info(Lot.objects.filter(pk=self.lot.pk)).first().your_cut
-                # if we removed a refund before for math purposes, put it back now
-                self.lot.partial_refund_percent = existing_refund
-                self.lot.save()
+                # Worked out with the refund taken off inside a transaction that is always rolled back:
+                # saving the whole lot twice on every open of this dialog overwrote live changes to it.
+                with transaction.atomic():
+                    Lot.objects.filter(pk=self.lot.pk).update(partial_refund_percent=0)
+                    full_seller_refund = add_price_info(Lot.objects.filter(pk=self.lot.pk)).first().your_cut
+                    transaction.set_rollback(True)
                 tooltip = "A refund has already been issued for this lot.  The refund percent is based on the original sale price.<br><br>"
             else:
                 full_seller_refund = add_price_info(Lot.objects.filter(pk=self.lot.pk)).first().your_cut

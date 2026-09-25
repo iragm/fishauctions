@@ -50,7 +50,7 @@ from django.utils.http import urlencode
 from django.utils.text import Truncator
 
 from . import command_palette, palette_routes, source_code
-from .models import AuctionTOS, ClubMember, DonationVendor, Lot
+from .models import AuctionTOS, ClubMember, DonationVendor, Lot, email_q
 from .services import (
     apply_club_member_to_tos,
     check_in_auctiontos,
@@ -194,9 +194,11 @@ def _decimal(params: dict[str, Any], key: str) -> Decimal | None:
     if value in (None, ""):
         return None
     try:
-        return Decimal(str(value))
+        number = Decimal(str(value))
     except (InvalidOperation, TypeError, ValueError):
         return None
+    # "NaN" and "Infinity" parse, then raise on the first comparison a resolver makes.
+    return number if number.is_finite() else None
 
 
 def _query(request) -> str:
@@ -542,7 +544,7 @@ def _club_member_arriving(auction, hint: str):
 
 
 def _own_tos(user, auction):
-    return AuctionTOS.objects.filter(auction=auction).filter(Q(user=user) | Q(email=user.email)).first()
+    return AuctionTOS.objects.filter(auction=auction).filter(Q(user=user) | email_q("email", user.email)).first()
 
 
 def _is_auction_admin(user, auction) -> bool:
@@ -664,7 +666,18 @@ def _auction_followup(auction) -> dict[str, str]:
 
 def _lot_label_followup(lot) -> dict[str, str]:
     """A "print this lot's label" followup."""
-    return {"label": f"Print label for {lot.lot_name}", "url": reverse("single_lot_label", kwargs={"pk": lot.pk})}
+    return {
+        "label": f"Print label for {untrusted_short(lot.lot_name)}",
+        "url": reverse("single_lot_label", kwargs={"pk": lot.pk}),
+    }
+
+
+def _lot_history(request, lot, what: str) -> None:
+    """One ``LOTS`` history line on the lot's auction naming the surface, as ``edit_lot`` writes one. A
+    lot in no auction has no history to write to.
+    """
+    if lot.auction:
+        lot.auction.create_history(applies_to="LOTS", action=f"{what} {via(request)}", user=request.user)
 
 
 def local_time(auction, value) -> str | None:
@@ -916,8 +929,11 @@ def _create_one_lot(request, auction, tos, for_self, params: dict[str, Any]) -> 
     if buy_now is not None:
         data["buy_now_price"] = buy_now
     for key in ("donation", "i_bred_this_fish", "custom_checkbox"):
-        if key in params:
-            data[key] = bool(params.get(key))
+        if params.get(key) not in (None, ""):
+            flag = _flag(params, key)
+            if flag is None:
+                return _need(f"Yes or no for the {dict(_LOT_FIELDS)[key]} on {untrusted_short(lot_name)}?")
+            data[key] = flag
     for key in ("custom_field_1", "custom_dropdown"):
         if params.get(key):
             data[key] = _str(params, key)
@@ -953,7 +969,7 @@ def _create_one_lot(request, auction, tos, for_self, params: dict[str, Any]) -> 
             "from_lot": untrusted_short(previous.lot_name),
             "copied": what,
             "why": (
-                f"There was already a lot called “{previous.lot_name}” that {whose}, so its {what} "
+                f"There was already a lot called “{untrusted_short(previous.lot_name)}” that {whose}, so its {what} "
                 "were copied onto this one. Edit the lot to change that."
             ),
         }
@@ -1256,7 +1272,7 @@ def set_lot_winner(request, params: dict[str, Any]) -> dict[str, Any]:
     view.kwargs = {}
     # ignore_errors is the page's "Ignore errors and save": the overridden checks catch a clerk and
     # auctioneer disagreeing, which needs a decision, not a dead end.
-    forced = bool(params.get("ignore_errors"))
+    forced = bool(_flag(params, "ignore_errors"))
     action = "force_save" if forced else "save"
 
     lot, lot_error = view.validate_lot(_str(params, "lot"), action)
@@ -1377,7 +1393,7 @@ def draw_door_prize(request, params: dict[str, Any]) -> dict[str, Any]:
             return _error(f"Nobody has checked in to {auction.title} yet, so there's no one to draw from.")
         return _error(f"Everyone who's checked in to {auction.title} has already won a door prize.")
     return _ok(
-        f"{winner.name} wins! (bidder {winner.bidder_number})",
+        f"{untrusted_short(winner.name)} wins! (bidder {winner.bidder_number})",
         bidder_number=winner.bidder_number,
         auction=auction.slug,
         followups=[
@@ -1425,7 +1441,7 @@ def check_in(request, params: dict[str, Any]) -> dict[str, Any]:
         bidder_number=_str(params, "bidder_number"),
         note=via(request),
     )
-    who = tos.name or f"bidder {tos.bidder_number}"
+    who = untrusted_short(tos.name) or f"bidder {tos.bidder_number}"
     if already:
         return _ok(
             f"{who} was already checked in to {auction.title}.",
@@ -1469,7 +1485,7 @@ def undo_check_in(request, params: dict[str, Any]) -> dict[str, Any]:
     tos, problem = resolve_person(user, auction, _str(params, "person") or _str(params, "bidder"))
     if problem:
         return problem
-    who = tos.name or f"bidder {tos.bidder_number}"
+    who = untrusted_short(tos.name) or f"bidder {tos.bidder_number}"
     if not tos.checked_in:
         return _ok(f"{who} wasn't checked in to {auction.title} anyway.", auction=auction.slug)
     undo_check_in_auctiontos(tos, acting_user=user, note=via(request))
@@ -1477,7 +1493,7 @@ def undo_check_in(request, params: dict[str, Any]) -> dict[str, Any]:
         f"{who} is no longer checked in to {auction.title}.",
         auction=auction.slug,
         bidder_number=tos.bidder_number,
-        person=tos.name,
+        person=untrusted_short(tos.name),
     )
 
 
@@ -1604,11 +1620,32 @@ _PERSON_ADMIN_FIELDS = (
 
 _PERSON_FIELDS = _CONTACT_FIELDS + _PERSON_ADMIN_FIELDS
 
+#: Fields ``update_person``'s undo may put back to blank, through the unadvertised ``clear_fields``: a
+#: blank parameter means "not said", so an undo restoring an empty email can't send one.
+_PERSON_CLEARABLE = frozenset({"email", "phone_number", "address", "memo"})
+
+
+def _cleared_fields(params: dict[str, Any], allowed) -> list[str]:
+    """The ``clear_fields`` an undo sent, limited to ``allowed``."""
+    raw = params.get("clear_fields") or []
+    if isinstance(raw, str):
+        raw = [raw]
+    if not isinstance(raw, list | tuple):
+        return []
+    return [str(name) for name in raw if str(name) in allowed]
+
+
+def _flag(params: dict[str, Any], key: str) -> bool | None:
+    """A yes/no parameter, read as ``update_preferences`` reads one: ``bool("false")`` is True."""
+    return _preference_boolean(params.get(key))
+
 
 def _change_phrase(label: str, value: Any) -> str:
     """How one change reads back ("bidding on", "email to bob@example.com")."""
     if isinstance(value, bool):
         return f"{label} {'on' if value else 'off'}"
+    if value in (None, ""):
+        return f"{label} to blank"
     return f"{label} to {value}"
 
 
@@ -1668,10 +1705,17 @@ def update_person(request, params: dict[str, Any]) -> dict[str, Any]:
     new_name = _str(params, "new_name")
     if new_name:
         changes["name"] = new_name
+    for key in _cleared_fields(params, _PERSON_CLEARABLE):
+        changes.setdefault(key, "")
     for key in ("bidding_allowed", "selling_allowed"):
-        # Booleans: sent-and-false is a real change.
-        if key in params:
-            changes[key] = bool(params[key])
+        # Booleans: sent-and-false is a real change; something that isn't yes or no is not.
+        if params.get(key) not in (None, ""):
+            flag = _flag(params, key)
+            if flag is None:
+                return _need(
+                    f"Should {untrusted_short(tos.name)} be allowed to {'bid' if key == 'bidding_allowed' else 'sell'}?"
+                )
+            changes[key] = flag
     if not changes:
         return _need(
             f"What should I change about {tos.name}? I can set their email, phone, address, "
@@ -1735,8 +1779,13 @@ def update_person(request, params: dict[str, Any]) -> dict[str, Any]:
         "auction": auction.slug,
     }
     for key, value in previous.items():
+        if value in (None, ""):
+            # A blank parameter is "not said"; say "clear it".
+            if key in _PERSON_CLEARABLE:
+                undo_params.setdefault("clear_fields", []).append(key)
+            continue
         # ``person`` finds; ``new_name`` renames.
-        undo_params["new_name" if key == "name" else key] = "" if value is None else value
+        undo_params["new_name" if key == "name" else key] = value
     return _ok(
         f"Set {tos.name}'s {told}.",
         followups=[{"label": f"{tos.name}'s details", "url": _edit_person_url(auction, tos)}],
@@ -2364,15 +2413,17 @@ def update_preferences(request, params: dict[str, Any]) -> dict[str, Any]:
         return _need(f"What should “{field.verbose_name or field_name}” be?")
     else:
         data[field_name] = raw
-    was = getattr(userdata, field_name)
+    stored_was = getattr(userdata, field_name)
+    # Said and undone in the form's units: a km user's radius is stored in miles.
+    was = unbound.initial.get(field_name, stored_was)
 
     form = form_class(user, data, instance=userdata)
     if not form.is_valid():
         return _form_problem(form)
     form.save()
     userdata.refresh_from_db()
-    now = getattr(userdata, field_name)
-    if was == now:
+    now = form_class(user, instance=userdata).initial.get(field_name, getattr(userdata, field_name))
+    if stored_was == getattr(userdata, field_name):
         return _ok(f"“{_preference_label(field)}” was already {_preference_phrase(field, now)}.")
     return _ok(
         f"Set “{_preference_label(field)}” to {_preference_phrase(field, now)}.",
@@ -4328,8 +4379,10 @@ def _comparable_sales(user, *, text: str = "", species=None, exclude_lot=None, y
     return sales.select_related("auction", "auctiontos_seller").order_by("-date_posted")
 
 
-def _money(value: Decimal) -> Decimal:
-    """A price to two decimal places."""
+def _cents(value: Decimal) -> Decimal:
+    """A price to two decimal places, as a Decimal. Not ``_money``, which formats one for a sentence: this
+    had the same name, so it replaced that one for the whole module.
+    """
     return Decimal(value).quantize(Decimal("0.01"))
 
 
@@ -4342,9 +4395,9 @@ def _price_stats(prices: list[Decimal]) -> dict[str, Any]:
     median = ordered[middle] if len(ordered) % 2 else (ordered[middle - 1] + ordered[middle]) / 2
     return {
         "sales": len(ordered),
-        "low": str(_money(ordered[0])),
-        "median": str(_money(median)),
-        "high": str(_money(ordered[-1])),
+        "low": str(_cents(ordered[0])),
+        "median": str(_cents(median)),
+        "high": str(_cents(ordered[-1])),
     }
 
 
@@ -4359,7 +4412,7 @@ def _suggested_opening(prices: list[Decimal], minimum: Decimal | None) -> Decima
     start = ordered[max(0, (len(ordered) - 1) // 4)].to_integral_value(rounding=ROUND_DOWN)
     if minimum is not None and start < minimum:
         start = Decimal(minimum)
-    return _money(start)
+    return _cents(start)
 
 
 def _sale_row(lot) -> dict[str, Any]:
@@ -5019,7 +5072,7 @@ def auctions_near_me(request, params: dict[str, Any]) -> dict[str, Any]:
     # One query for joined status.
     joined_mine = set(
         AuctionTOS.objects.filter(auction__in=[auction.pk for auction in ours])
-        .filter(Q(user=user) | Q(email=user.email))
+        .filter(Q(user=user) | email_q("email", user.email))
         .values_list("auction_id", flat=True)
     )
     mine = [
@@ -5054,7 +5107,7 @@ def auctions_near_me(request, params: dict[str, Any]) -> dict[str, Any]:
     # One query for joined status.
     joined = set(
         AuctionTOS.objects.filter(auction__in=[auction.pk for auction, _ in nearest])
-        .filter(Q(user=user) | Q(email=user.email))
+        .filter(Q(user=user) | email_q("email", user.email))
         .values_list("auction_id", flat=True)
     )
     rows = []
@@ -5391,15 +5444,19 @@ def undo_sale(request, params: dict[str, Any]) -> dict[str, Any]:
     # unsell also reverses a "no sale", so a winnerless inactive lot is undoable too.
     if not sold and lot.active:
         return _error(f"Lot {lot.lot_number_display} is still up for sale, so there's nothing to undo.")
-    forced = bool(params.get("ignore_errors"))
+    forced = bool(_flag(params, "ignore_errors"))
     settled = _settled_invoice_warning(lot)
     if settled and not forced:
         return _error(_with_override(settled, forced))
     result = view.unsell(lot)
     if not sold:
         result["success_message"] = f"Lot {lot.lot_number_display} {lot.lot_name} is back up for sale."
+    message = str(result.get("success_message") or f"Un-sold lot {lot.lot_number_display}.")
+    # The view's message names the lot; fence the name where it says it.
+    named = f"{lot.lot_number_display} {lot.lot_name}"
+    message = message.replace(named, f"{lot.lot_number_display} {untrusted_short(lot.lot_name)}", 1)
     return _ok(
-        str(result.get("success_message") or f"Un-sold lot {lot.lot_number_display}."),
+        message,
         lot_id=lot.pk,
         **_lot_echo(lot),
     )
@@ -5480,7 +5537,8 @@ def undo_last(request, params: dict[str, Any]) -> dict[str, Any]:
         return result
     # Popped only on success, before anything else, so it can't be applied twice.
     cache.set(_undo_key(user), stack[:-1], timeout=UNDO_WINDOW_SECONDS)
-    what = entry.get("describes") or f"the last {entry.get('was', 'command').replace('_', ' ')}"
+    # ``describes`` names people and lots in their own words; fenced whole, with any fence inside it lifted.
+    what = untrusted_short(entry.get("describes") or "") or f"the last {entry.get('was', 'command').replace('_', ' ')}"
     return _ok(
         f"Undid {what}. {result.get('summary', '')}".strip(),
         **{key: value for key, value in result.items() if key in ("lot_id", "lot_name", "bidder_number", "auction")},
@@ -5496,12 +5554,24 @@ def _resolve_lot(request, params):
     """
     hint = _str(params, "lot") or _str(params, "query") or _str(params, "name")
     if not hint:
-        # The lot on screen; not re-scoped.
-        lot_id = _int(params, "lot_id") or _page(request).get("lot_id")
-        if lot_id:
-            lot = Lot.objects.filter(pk=lot_id, is_deleted=False).select_related("auction").first()
-            if lot:
-                return lot, None
+        # The lot on screen is not re-scoped. One named by id in the parameters is, as find_lot scopes
+        # a name: walking lot_id from 1 watched and echoed lots in auctions nobody had shown this user.
+        page_lot_id = _page(request).get("lot_id")
+        param_lot_id = _int(params, "lot_id")
+        lots = Lot.objects.filter(is_deleted=False).select_related("auction")
+        lot = None
+        if param_lot_id and param_lot_id != page_lot_id:
+            user = request.user
+            scoped = (
+                lots
+                if user.is_superuser
+                else lots.filter(Q(user=user) | Q(auction__in=command_palette._joined_auctions(user)))
+            )
+            lot = scoped.filter(pk=param_lot_id).first()
+        elif page_lot_id or param_lot_id:
+            lot = lots.filter(pk=page_lot_id or param_lot_id).first()
+        if lot:
+            return lot, None
         return None, _need("Which lot? Give me a lot number or its name.")
     found = find_lot(request, params)
     if "error" in found:
@@ -5543,14 +5613,14 @@ def watch_lot(request, params: dict[str, Any]) -> dict[str, Any]:
     if problem:
         return problem
     # Watching is the default.
-    watching = params.get("watching")
+    watching = _flag(params, "watching")
     if watching is None:
         watching = not (_str(params, "action").lower() in {"unwatch", "remove", "stop"} or params.get("unwatch"))
     existing = Watch.objects.filter(lot_number=lot, user=user).first()
     if watching:
         if not existing:
             Watch.objects.create(lot_number=lot, user=user)
-        summary = f"Lot {lot.lot_number_display}, {lot.lot_name}, is on your watch list."
+        summary = f"Lot {lot.lot_number_display}, {untrusted_short(lot.lot_name)}, is on your watch list."
         followups = [
             {"label": "View this lot", "url": lot.lot_link},
             {"label": "Everything I'm watching", "url": reverse("watched")},
@@ -5568,20 +5638,20 @@ def watch_lot(request, params: dict[str, Any]) -> dict[str, Any]:
             undo={
                 "action": "watch_lot",
                 "params": {"lot_id": lot.pk, "watching": False},
-                "describes": f"watching {lot.lot_name}",
+                "describes": f"watching {untrusted_short(lot.lot_name)}",
             },
         )
     if existing:
         existing.delete()
     return _ok(
-        f"Took lot {lot.lot_number_display}, {lot.lot_name}, off your watch list.",
+        f"Took lot {lot.lot_number_display}, {untrusted_short(lot.lot_name)}, off your watch list.",
         lot_id=lot.pk,
         **_lot_echo(lot),
         followups=[{"label": "Everything I'm watching", "url": reverse("watched")}],
         undo={
             "action": "watch_lot",
             "params": {"lot_id": lot.pk, "watching": True},
-            "describes": f"un-watching {lot.lot_name}",
+            "describes": f"un-watching {untrusted_short(lot.lot_name)}",
         },
     )
 
@@ -5666,6 +5736,10 @@ _LOT_FIELDS = (
     ("reference_link", "reference link"),
 )
 
+#: Fields ``edit_lot``'s undo may put back to blank through ``clear_fields`` (see ``_PERSON_CLEARABLE``).
+#: Not ``reference_link``: ``Lot.save`` fills a blank one in, so it never was blank.
+_LOT_CLEARABLE = frozenset({"buy_now_price", "custom_field_1", "custom_dropdown", "summernote_description"})
+
 
 def edit_lot(request, params: dict[str, Any]) -> dict[str, Any]:
     """Change a lot's price, quantity or name through ``QuickAddLot`` with the lot as instance. Permission is
@@ -5705,11 +5779,16 @@ def edit_lot(request, params: dict[str, Any]) -> dict[str, Any]:
         if value is not None:
             changes[target or key] = value
     for key in ("donation", "i_bred_this_fish", "custom_checkbox"):
-        if key in params:
-            changes[key] = bool(params.get(key))
+        if params.get(key) not in (None, ""):
+            flag = _flag(params, key)
+            if flag is None:
+                return _need(f"Yes or no for the {dict(_LOT_FIELDS)[key]} on {untrusted_short(lot.lot_name)}?")
+            changes[key] = flag
     for key in ("custom_field_1", "custom_dropdown"):
         if params.get(key):
             changes[key] = _str(params, key)
+    for key in _cleared_fields(params, _LOT_CLEARABLE):
+        changes.setdefault(key, "")
     switched_off = _lot_field_switched_off(auction, params)
     if switched_off:
         return _error(switched_off)
@@ -5752,7 +5831,13 @@ def edit_lot(request, params: dict[str, Any]) -> dict[str, Any]:
     )
     undo_params: dict[str, Any] = {"lot_id": lot.pk}
     for key, value in previous.items():
-        undo_params["new_name" if key == "lot_name" else key] = "" if value is None else value
+        if value in (None, ""):
+            # A blank parameter is "not said"; say "clear it".
+            if key in _LOT_CLEARABLE:
+                undo_params.setdefault("clear_fields", []).append(key)
+            continue
+        # The advertised names: "summernote_description" was refused as an unknown parameter.
+        undo_params[{"lot_name": "new_name", "summernote_description": "description"}.get(key, key)] = value
     return _ok(
         f"Changed the {told} on lot {lot.lot_number_display}, {lot.lot_name}.",
         lot_id=lot.pk,
@@ -5916,7 +6001,8 @@ def add_invoice_adjustment(request, params: dict[str, Any]) -> dict[str, Any]:
     )
     direction = "off" if kind == "DISCOUNT" else "to"
     return _ok(
-        f"Put {adjustment.display} {direction} {tos.name}'s invoice for “{label}”. It {invoice.invoice_summary_short}.",
+        f"Put {adjustment.display} {direction} {untrusted_short(tos.name)}'s invoice for “{label}”. "
+        f"It {invoice.invoice_summary_short}.",
         person=untrusted_short(tos.name),
         bidder_number=tos.bidder_number,
         auction=auction.slug,
@@ -5955,7 +6041,7 @@ def _club_funded_refund(request, lot, percent: int, label: str) -> dict[str, Any
     user = request.user
     auction = lot.auction
     tax = Decimal(auction.tax or 0)
-    gross = _money(Decimal(lot.winning_price) * Decimal(percent) / 100 * (100 + tax) / 100)
+    gross = _cents(Decimal(lot.winning_price) * Decimal(percent) / 100 * (100 + tax) / 100)
     if gross <= 0:
         return _error("That works out to nothing to give back.")
     if gross != gross.to_integral_value():
@@ -6018,8 +6104,8 @@ def _club_funded_refund(request, lot, percent: int, label: str) -> dict[str, Any
     seller = lot.auctiontos_seller
     return _ok(
         f"Took {auction.currency_symbol}{gross} off the buyer's invoice for lot "
-        f"{lot.lot_number_display}, “{lot.lot_name}”. It came out of the club's cut — "
-        f"{seller.name if seller else 'the seller'} keeps the full payout and the lot still reads as "
+        f"{lot.lot_number_display}, “{untrusted_short(lot.lot_name)}”. It came out of the club's cut — "
+        f"{untrusted_short(seller.name) if seller else 'the seller'} keeps the full payout and the lot still reads as "
         f"sold for {auction.currency_symbol}{lot.winning_price}. It {invoice.invoice_summary_short}.",
         lot_id=lot.pk,
         paid_by="club",
@@ -6048,13 +6134,13 @@ def refund_lot(request, params: dict[str, Any]) -> dict[str, Any]:
         return problem
     auction = lot.auction
     if not auction:
-        return _error(f"“{lot.lot_name}” isn't in an auction, so there's no invoice to refund it on.")
+        return _error(f"“{untrusted_short(lot.lot_name)}” isn't in an auction, so there's no invoice to refund it on.")
     remember_auction(request, auction)
     if not _is_auction_admin(user, auction):
         return _error(f"Only admins of {auction.title} can refund lots in {auction.title}.")
     if not lot.winning_price:
         return _error(
-            f"Lot {lot.lot_number_display}, “{lot.lot_name}”, hasn't sold, so there's nothing to "
+            f"Lot {lot.lot_number_display}, “{untrusted_short(lot.lot_name)}”, hasn't sold, so there's nothing to "
             f"refund. Removing an unsold lot is a different thing and lives on the lot's own page."
         )
 
@@ -6067,6 +6153,9 @@ def refund_lot(request, params: dict[str, Any]) -> dict[str, Any]:
             f"commission?"
         )
     percent = _int(params, "percent")
+    if percent is None and params.get("percent") not in (None, ""):
+        # Something was said that isn't a whole number ("half", "50%"): ask, never refund all of it.
+        return _need("What percentage of the price should go back? A whole number from 1 to 100.")
     if percent is None:
         percent = 100
     if not 0 <= percent <= 100:
@@ -6112,7 +6201,7 @@ def refund_lot(request, params: dict[str, Any]) -> dict[str, Any]:
         else:
             settled.append(f"the {role}'s invoice is {invoice.get_status_display().lower()}")
     summary = (
-        f"Refunded {percent}% on lot {lot.lot_number_display}, “{lot.lot_name}”. It comes off the "
+        f"Refunded {percent}% on lot {lot.lot_number_display}, “{untrusted_short(lot.lot_name)}”. It comes off the "
         f"buyer's invoice and off the seller's payout together, so the club's cut drops by the same "
         f"share."
     )
@@ -6163,7 +6252,7 @@ def set_invoice_status(request, params: dict[str, Any]) -> dict[str, Any]:
         return _error(f"{tos.name} doesn't have an invoice in {auction.title} yet.")
     if invoice.status == status:
         return _ok(
-            f"{tos.name}'s invoice is already {invoice.get_status_display().lower()}.",
+            f"{untrusted_short(tos.name)}'s invoice is already {invoice.get_status_display().lower()}.",
             bidder_number=tos.bidder_number,
             auction=auction.slug,
         )
@@ -6174,11 +6263,11 @@ def set_invoice_status(request, params: dict[str, Any]) -> dict[str, Any]:
     view.post(request, pk=invoice.pk, status=status)
     invoice.refresh_from_db()
     return _ok(
-        f"{tos.name}'s invoice in {auction.title} is now marked "
+        f"{untrusted_short(tos.name)}'s invoice in {auction.title} is now marked "
         f"{invoice.get_status_display().lower()} — it {invoice.invoice_summary_short}.",
         followups=[{"label": f"{tos.name}'s invoice", "url": invoice.get_absolute_url()}],
         bidder_number=tos.bidder_number,
-        person=tos.name,
+        person=untrusted_short(tos.name),
         auction=auction.slug,
         invoice={
             "status": invoice.get_status_display(),
@@ -6306,7 +6395,7 @@ def add_club_member(request, params: dict[str, Any]) -> dict[str, Any]:
         return _need("What's their name?")
     existing = ClubMember.objects.filter(club=club, is_deleted=False, name__iexact=name).first()
     if existing:
-        return _error(f"{existing.name} is already a member of {club.name}.")
+        return _error(f"{untrusted_short(existing.name)} is already a member of {club.name}.")
     data = {
         "name": name,
         "email": _str(params, "email"),
@@ -6315,7 +6404,7 @@ def add_club_member(request, params: dict[str, Any]) -> dict[str, Any]:
         "bidder_number": _str(params, "bidder_number"),
         "memo": _str(params, "memo"),
         "contact_status": "contact",
-        "send_welcome_email": bool(params.get("send_welcome_email", False)),
+        "send_welcome_email": bool(_flag(params, "send_welcome_email")),
         "bidding_allowed": True,
         "selling_allowed": True,
     }
@@ -6327,13 +6416,15 @@ def add_club_member(request, params: dict[str, Any]) -> dict[str, Any]:
     member.added_by = user
     member.source = "manually_added"
     member.save()
-    ClubHistory.objects.create(club=club, user=user, action=f"Added member {member}", applies_to="MEMBERS")
-    summary = f"Added {member.name} to {club.name}"
+    ClubHistory.objects.create(
+        club=club, user=user, action=f"Added member {member} {via(request)}", applies_to="MEMBERS"
+    )
+    summary = f"Added {untrusted_short(member.name)} to {club.name}"
     summary += f" as member {member.bidder_number}." if member.bidder_number else "."
     if not member.email:
         summary += " No email yet — tell me it, or use the link below."
     # ``club`` echoed as a field: an agent has no page to check against.
-    return _ok(summary, followups=_member_followups(club, member), person=member.name, club=club.name)
+    return _ok(summary, followups=_member_followups(club, member), person=untrusted_short(member.name), club=club.name)
 
 
 def update_club_member(request, params: dict[str, Any]) -> dict[str, Any]:
@@ -6359,7 +6450,9 @@ def update_club_member(request, params: dict[str, Any]) -> dict[str, Any]:
     if _str(params, "bidder_number"):
         changes["bidder_number"] = _str(params, "bidder_number")
     if not changes:
-        return _need(f"What should I change about {member.name}? I can set their email, phone or address.")
+        return _need(
+            f"What should I change about {untrusted_short(member.name)}? I can set their email, phone or address."
+        )
     data = model_to_dict(
         member, fields=[field for field in _club_member_form(club, None).fields if field != "send_welcome_email"]
     )
@@ -6375,9 +6468,9 @@ def update_club_member(request, params: dict[str, Any]) -> dict[str, Any]:
     )
     told = ", ".join(sorted(changes))
     return _ok(
-        f"Updated {member.name}'s {told.replace('_', ' ')} in {club.name}.",
+        f"Updated {untrusted_short(member.name)}'s {told.replace('_', ' ')} in {club.name}.",
         followups=_member_followups(club, member),
-        person=member.name,
+        person=untrusted_short(member.name),
         club=club.name,
     )
 
@@ -6401,9 +6494,9 @@ def renew_member(request, params: dict[str, Any]) -> dict[str, Any]:
     expires = member.membership_expiration_date
     when = expires.strftime("%B %-d %Y") if expires else "an unknown date"
     return _ok(
-        f"Renewed {member.name}'s membership of {club.name}. It now runs to {when}.",
+        f"Renewed {untrusted_short(member.name)}'s membership of {club.name}. It now runs to {when}.",
         followups=_member_followups(club, member),
-        person=member.name,
+        person=untrusted_short(member.name),
         club=club.name,
     )
 
@@ -6429,10 +6522,21 @@ def award_points(request, params: dict[str, Any]) -> dict[str, Any]:
     hap = _int(params, "hap_points")
     cap = _int(params, "cap_points")
     if points is None and hap is None and cap is None:
-        return _need(f"How many points should {member.name} get?")
+        return _need(f"How many points should {untrusted_short(member.name)} get?")
+    # BapAwardForm drops a track the club doesn't run; refuse it by name, as review_points does.
+    if hap and not club.separate_hap:
+        return _error(
+            f"{club.name} doesn't run a separate HAP, so plant points go in the ordinary BAP column. "
+            "Give them as points instead."
+        )
+    if cap and not club.separate_cap:
+        return _error(
+            f"{club.name} doesn't run a separate CAP, so culture points go in the ordinary BAP column. "
+            "Give them as points instead."
+        )
     data = {
         "club_member": member.pk,
-        "date": _str(params, "date") or timezone.now().date().isoformat(),
+        "date": _str(params, "date") or timezone.localdate().isoformat(),
         "points": points or 0,
         "hap_points": hap or 0,
         "cap_points": cap or 0,
@@ -6444,16 +6548,15 @@ def award_points(request, params: dict[str, Any]) -> dict[str, Any]:
     award = form.save(commit=False)
     award.awarded_by = user
     award.save()
-    ClubHistory.objects.create(club=club, user=user, action=f"Added BAP award: {award}", applies_to="BAP")
-    earned = ", ".join(
-        f"{value} {label}"
-        for value, label in ((points, "BAP"), (hap, "HAP"), (cap, "CAP"))
-        if value  # # zeros aren't worth saying
+    ClubHistory.objects.create(
+        club=club, user=user, action=f"Added BAP award: {award} {via(request)}", applies_to="BAP"
     )
+    # What was saved, not what was asked for; zeros aren't worth saying.
+    earned = ", ".join(f"{value} {label.upper()}" for label, value in _award_points_paid(award).items()) or "0"
     return _ok(
-        f"Gave {member.name} {earned} point(s) in {club.name}.",
+        f"Gave {untrusted_short(member.name)} {earned} point(s) in {club.name}.",
         followups=_member_followups(club, member),
-        person=member.name,
+        person=untrusted_short(member.name),
         club=club.name,
     )
 
@@ -6528,7 +6631,7 @@ def _vendor_row(vendor, *, latest_reply=None) -> dict[str, Any]:
         "contact_method": vendor.get_contact_method_display(),
         "contact_url": vendor.contact_url or None,
         "last_contact": vendor.last_contact.strftime("%Y-%m-%d") if vendor.last_contact else None,
-        "followup_due": vendor.followup_due.strftime("%Y-%m-%d") if vendor.followup_due else None,
+        "followup_due": timezone.localtime(vendor.followup_due).strftime("%Y-%m-%d") if vendor.followup_due else None,
         "followup_overdue": bool(vendor.is_followup_due),
         "latest_reply": untrusted(latest_reply) if latest_reply else None,
         "can_be_contacted": bool(vendor.can_be_contacted),
@@ -6705,7 +6808,7 @@ def describe_donation_vendor(request, params: dict[str, Any]) -> dict[str, Any]:
     if vendor.is_followup_due:
         summary += " A follow-up is due."
     elif vendor.followup_due:
-        summary += f" Follow up on {vendor.followup_due:%B %-d}."
+        summary += f" Follow up on {timezone.localtime(vendor.followup_due):%B %-d}."
     if not vendor.can_be_contacted:
         summary += f" {vendor.cannot_contact_reason}."
     return {
@@ -6951,7 +7054,7 @@ def contact_donation_vendor(request, params: dict[str, Any]) -> dict[str, Any]:
         return _error(str(error))
     vendor.refresh_from_db()
     if vendor.followup_due:
-        summary += f" Follow up on {vendor.followup_due:%B %-d} if they don't reply."
+        summary += f" Follow up on {timezone.localtime(vendor.followup_due):%B %-d} if they don't reply."
     return _ok(
         summary,
         vendor=vendor.name,
@@ -6996,7 +7099,7 @@ def record_donation_contact(request, params: dict[str, Any]) -> dict[str, Any]:
     vendor.refresh_from_db()
     summary = f"Recorded a donation request to {vendor.name} via {email_row.get_channel_display().lower()}."
     if vendor.followup_due:
-        summary += f" Follow up on {vendor.followup_due:%B %-d} if they don't reply."
+        summary += f" Follow up on {timezone.localtime(vendor.followup_due):%B %-d} if they don't reply."
     return _ok(
         summary,
         vendor=vendor.name,
@@ -7369,7 +7472,7 @@ def review_points(request, params: dict[str, Any]) -> dict[str, Any]:
     if decision == "approve" and award:
         earned = ", ".join(f"{value} {label.upper()}" for label, value in _award_points_paid(award).items())
         summary = (
-            f"Gave {award.club_member.name} {earned} for lot {lot.lot_number_display}, "
+            f"Gave {untrusted_short(award.club_member.name)} {earned} for lot {lot.lot_number_display}, "
             f"{untrusted_short(lot.lot_name)}. That's {award.club_member.bap_points} BAP points all told."
         )
     elif decision == "deny":
@@ -7387,7 +7490,7 @@ def review_points(request, params: dict[str, Any]) -> dict[str, Any]:
         decision=decision,
         club=club.name,
         awarded=_award_points_paid(award) if award else {},
-        member=member.name if member else None,
+        member=untrusted_short(member.name) if member else None,
         member_total_bap=member.bap_points if member else None,
         **_lot_echo(lot),
         followups=[
@@ -7396,7 +7499,7 @@ def review_points(request, params: dict[str, Any]) -> dict[str, Any]:
         undo={
             "action": "review_points",
             "params": {"lot_id": lot.pk, "decision": "undo"},
-            "describes": f"the points decision on {lot.lot_name}",
+            "describes": f"the points decision on {untrusted_short(lot.lot_name)}",
         },
     )
 
@@ -7559,8 +7662,10 @@ def _can_manage_club_events(user, club) -> bool:
     )
 
 
-def _resolve_club_event(club, hint: str):
-    """One of a club's events by name. ``(event, problem)``."""
+def _resolve_club_event(club, hint: str, user=None):
+    """One of a club's events by name. ``(event, problem)``. ``user`` sets the timezone the options are
+    labelled in.
+    """
     from .models import ClubEvent
 
     hint = (hint or "").strip()
@@ -7582,7 +7687,7 @@ def _resolve_club_event(club, hint: str):
         return None, _need(
             f"Which event at {club.name}?",
             [
-                {"label": f"{event.title} — {user_time(None, event.date_start)}", "value": event.title}
+                {"label": f"{event.title} — {user_time(user, event.date_start)}", "value": event.title}
                 for event in matches
             ],
         )
@@ -7695,7 +7800,7 @@ def update_club_event(request, params: dict[str, Any]) -> dict[str, Any]:
         return problem
     if not _can_manage_club_events(user, club):
         return _error(f"You don't have permission to change events for {club.name}.")
-    event, problem = _resolve_club_event(club, _str(params, "event") or _str(params, "title"))
+    event, problem = _resolve_club_event(club, _str(params, "event") or _str(params, "title"), user)
     if problem:
         return problem
     data = {
@@ -7722,8 +7827,11 @@ def update_club_event(request, params: dict[str, Any]) -> dict[str, Any]:
         if _str(params, key):
             data[key] = _str(params, key)
             told.append(key)
-    if "cancel" in params:
-        data["cancelled"] = bool(params.get("cancel"))
+    if params.get("cancel") not in (None, ""):
+        cancelled = _flag(params, "cancel")
+        if cancelled is None:
+            return _need(f"Should {event.title} be called off, or back on?")
+        data["cancelled"] = cancelled
         told.append("cancelled" if data["cancelled"] else "back on")
     if not told:
         return _need(f"What should I change about {event.title}? I can move it, rename it, or call it off.")
@@ -7775,17 +7883,17 @@ def send_club_announcement(request, params: dict[str, Any]) -> dict[str, Any]:
         if when_error:
             return _error(when_error)
         when = parsed
-    email = params.get("email")
+    email = bool(_flag(params, "email"))
     data = {
         "text": text,
-        "send_to_discord": bool(params.get("discord")),
-        "send_to_push": bool(params.get("push")),
+        "send_to_discord": bool(_flag(params, "discord")),
+        "send_to_push": bool(_flag(params, "push")),
         # One email flag, resolved to the connected provider.
         "send_to_mailchimp": bool(email) and announcements_module.mailchimp_ready(club),
         "send_to_brevo": bool(email)
         and not announcements_module.mailchimp_ready(club)
         and announcements_module.brevo_ready(club),
-        "show_on_website": bool(params.get("website")),
+        "show_on_website": bool(_flag(params, "website")),
         "scheduled_for": when or None,
     }
     if email and not (data["send_to_mailchimp"] or data["send_to_brevo"]):
@@ -7844,7 +7952,7 @@ def retract_announcement(request, params: dict[str, Any]) -> dict[str, Any]:
     ClubHistory.objects.create(
         club=club,
         user=user,
-        action=f"Announcement retracted: {announcement.short_text}",
+        action=f"Announcement retracted: {announcement.short_text} {via(request)}",
         applies_to="ANNOUNCEMENTS",
     )
     if result["never_sent"]:
@@ -7876,8 +7984,8 @@ def set_current_auction(request, params: dict[str, Any]) -> dict[str, Any]:
     if not (
         check_club_permission(user, club, "permission_admin")
         or check_club_permission(user, club, "permission_manage_auctions")
-        or check_club_permission(user, club, "permission_edit_club")
     ):
+        # As the club page's "make current": admin or auction manager, not settings access.
         return _error(f"You don't have permission to change {club.name}'s current auction.")
     auction, problem = _auction_or_problem(request, params)
     if problem:
@@ -7886,9 +7994,17 @@ def set_current_auction(request, params: dict[str, Any]) -> dict[str, Any]:
         return _error(f"{auction.title} isn't one of {club.name}'s auctions.")
     if club.current_auction_id == auction.pk:
         return _ok(f"{auction.title} is already {club.name}'s current auction.", club=club.name, auction=auction.slug)
+    from .models import ClubHistory
+
     was = club.current_auction
     club.current_auction = auction
     club.save(update_fields=["current_auction"])
+    ClubHistory.objects.create(
+        club=club,
+        user=user,
+        action=f"Made {auction.title} the current auction {via(request)}",
+        applies_to="SETTINGS",
+    )
     return _ok(
         f"{auction.title} is now {club.name}'s current auction.",
         club=club.name,
@@ -8823,7 +8939,7 @@ def add_pickup_location(request, params: dict[str, Any]) -> dict[str, Any]:
     when, when_error = _parse_when(user, _str(params, "pickup_time") or _str(params, "when"))
     if when_error:
         return _error(when_error)
-    by_mail = bool(params.get("by_mail"))
+    by_mail = bool(_flag(params, "by_mail"))
     marker_said = _str(params, "location_coordinates") or _str(params, "coordinates")
     marker = _coordinate_pair(marker_said) if marker_said else None
     if marker_said and not marker:
@@ -8853,7 +8969,7 @@ def add_pickup_location(request, params: dict[str, Any]) -> dict[str, Any]:
         "pickup_by_mail": by_mail,
         "mail_or_not": "True" if by_mail else "False",
         "location_coordinates": marker or "",
-        "users_must_coordinate_pickup": bool(params.get("users_must_coordinate_pickup")),
+        "users_must_coordinate_pickup": bool(_flag(params, "users_must_coordinate_pickup")),
         "allow_selling_by_default": True,
         "allow_bidding_by_default": True,
     }
@@ -8973,6 +9089,7 @@ def add_dropdown_option(request, params: dict[str, Any]) -> dict[str, Any]:
     if AuctionDropdown.objects.filter(auction=auction, value__iexact=value).exists():
         return _ok(f"{auction.title} already has an option called “{value}”.", auction=auction.slug)
     AuctionDropdown.objects.create(auction=auction, user=user, value=value)
+    auction.create_history(applies_to="RULES", action=f"Added dropdown option {value} {via(request)}", user=user)
     options = list(
         AuctionDropdown.objects.filter(auction=auction).order_by("createdon").values_list("value", flat=True)
     )
@@ -9016,6 +9133,9 @@ def remove_dropdown_option(request, params: dict[str, Any]) -> dict[str, Any]:
             + (" It has: " + ", ".join(have) + "." if have else "")
         )
     option.delete()
+    auction.create_history(
+        applies_to="RULES", action=f"Removed dropdown option {option.value} {via(request)}", user=user
+    )
     options = list(
         AuctionDropdown.objects.filter(auction=auction).order_by("createdon").values_list("value", flat=True)
     )
@@ -9290,14 +9410,15 @@ def set_lot_species(request, params: dict[str, Any]) -> dict[str, Any]:
         lot.species = None
         lot.save()
         _teach_the_lot_name(lot, None, user, is_admin)
+        _lot_history(request, lot, f"Took the species off lot {lot.lot_number_display}")
         return _ok(
-            f"Took {was.full_scientific_name} off lot {lot.lot_number_display}, {lot.lot_name}.",
+            f"Took {was.full_scientific_name} off lot {lot.lot_number_display}, {untrusted_short(lot.lot_name)}.",
             **_lot_echo(lot),
             was=_species_echo(was),
             undo={
                 "action": "set_lot_species",
                 "params": {"lot_id": lot.pk, "species": was.full_scientific_name},
-                "describes": f"clearing the species on {lot.lot_name}",
+                "describes": f"clearing the species on {untrusted_short(lot.lot_name)}",
             },
         )
 
@@ -9340,11 +9461,15 @@ def set_lot_species(request, params: dict[str, Any]) -> dict[str, Any]:
     # save(): it re-derives the category.
     lot.save()
     taught = _teach_the_lot_name(lot, species, user, is_admin)
-    summary = f"Lot {lot.lot_number_display}, {lot.lot_name}, is {species.full_scientific_name}."
+    _lot_history(request, lot, f"Set the species on lot {lot.lot_number_display} to {species.full_scientific_name}")
+    summary = f"Lot {lot.lot_number_display}, {untrusted_short(lot.lot_name)}, is {species.full_scientific_name}."
     if from_the_lot_name:
         summary += " I read that off the lot's own name."
     if taught:
-        summary += f" I've also remembered that “{lot.lot_name}” means that, so the next one matches by itself."
+        summary += (
+            f" I've also remembered that “{untrusted_short(lot.lot_name)}” means that, so the next one "
+            "matches by itself."
+        )
     return _ok(
         summary,
         **_lot_echo(lot),
@@ -9356,7 +9481,7 @@ def set_lot_species(request, params: dict[str, Any]) -> dict[str, Any]:
             "params": (
                 {"lot_id": lot.pk, "species": was.full_scientific_name} if was else {"lot_id": lot.pk, "clear": True}
             ),
-            "describes": f"the species on {lot.lot_name}",
+            "describes": f"the species on {untrusted_short(lot.lot_name)}",
         },
     )
 
@@ -9623,11 +9748,12 @@ def add_lot_image(request, params: dict[str, Any]) -> dict[str, Any]:
     image.save()
     if image.is_primary:
         LotImage.objects.filter(lot_number=lot).exclude(pk=image.pk).update(is_primary=False)
+    _lot_history(request, lot, f"Added a picture to lot {lot.lot_number_display}")
 
     shown = image.source_display
     kind = image.get_image_source_display()
     return _ok(
-        f"Added a picture to lot {lot.lot_number_display}, {lot.lot_name}. It's recorded as “{kind}”"
+        f"Added a picture to lot {lot.lot_number_display}, {untrusted_short(lot.lot_name)}. It's recorded as “{kind}”"
         + (", which is what bidders see next to it." if shown else ", which bidders don't see."),
         **_lot_echo(lot),
         image=_image_echo(image),
@@ -9636,7 +9762,7 @@ def add_lot_image(request, params: dict[str, Any]) -> dict[str, Any]:
         undo={
             "action": "remove_lot_image",
             "params": {"lot_id": lot.pk, "image_id": image.pk},
-            "describes": f"the picture on {lot.lot_name}",
+            "describes": f"the picture on {untrusted_short(lot.lot_name)}",
         },
     )
 
@@ -9653,7 +9779,7 @@ def remove_lot_image(request, params: dict[str, Any]) -> dict[str, Any]:
         return _error(f"You can't change the pictures on lot {lot.lot_number_display}.")
     images = list(LotImage.objects.filter(lot_number=lot).order_by("-is_primary", "createdon"))
     if not images:
-        return _error(f"Lot {lot.lot_number_display}, {lot.lot_name}, has no pictures on it.")
+        return _error(f"Lot {lot.lot_number_display}, {untrusted_short(lot.lot_name)}, has no pictures on it.")
 
     wanted = params.get("image_id")
     if wanted in (None, ""):
@@ -9682,7 +9808,8 @@ def remove_lot_image(request, params: dict[str, Any]) -> dict[str, Any]:
         if promoted:
             promoted.is_primary = True
             promoted.save()
-    summary = f"Removed a picture from lot {lot.lot_number_display}, {lot.lot_name}."
+    _lot_history(request, lot, f"Removed a picture from lot {lot.lot_number_display}")
+    summary = f"Removed a picture from lot {lot.lot_number_display}, {untrusted_short(lot.lot_name)}."
     if promoted:
         summary += " Another one of its pictures is the thumbnail now."
     return _ok(
@@ -9966,7 +10093,8 @@ def queue_lot(request, params: dict[str, Any]) -> dict[str, Any]:
     process_queue_notifications(auction)
     position = _queue_position(auction, lot)
     return _ok(
-        f"Queued lot {lot.lot_number_display}, {lot.lot_name}. It's number {position} in the running order.",
+        f"Queued lot {lot.lot_number_display}, {untrusted_short(lot.lot_name)}. "
+        f"It's number {position} in the running order.",
         **_lot_echo(lot),
         position=position,
         queue_length=LotQueueEntry.objects.filter(auction=auction).count(),
@@ -9992,7 +10120,7 @@ def unqueue_lot(request, params: dict[str, Any]) -> dict[str, Any]:
     process_queue_notifications(auction)
     remaining = LotQueueEntry.objects.filter(auction=auction).count()
     return _ok(
-        f"Took lot {lot.lot_number_display}, {lot.lot_name}, out of the queue. "
+        f"Took lot {lot.lot_number_display}, {untrusted_short(lot.lot_name)}, out of the queue. "
         f"{remaining} lot{'s' if remaining != 1 else ''} still queued.",
         **_lot_echo(lot),
         queue_length=remaining,
@@ -10033,7 +10161,7 @@ def remove_bid(request, params: dict[str, Any]) -> dict[str, Any]:
             return problem
         if not tos.user_id:
             return _error(
-                f"{tos.name} has no account on this site, so they have never placed a bid — only a "
+                f"{untrusted_short(tos.name)} has no account on this site, so they have never placed a bid — only a "
                 "winner set by an admin."
             )
         bids = bids.filter(user=tos.user_id)
@@ -10050,8 +10178,10 @@ def remove_bid(request, params: dict[str, Any]) -> dict[str, Any]:
         who = "You have" if described == "your" else f"{described} has"
         return _error(f"{who} no bid on lot {lot.lot_number_display}.")
     amount = bid.amount
-    # Soft delete, as the page.
-    bid.delete()
+    # The page's own effect: reopens a lot that had already ended, and takes all of that bidder's rows.
+    from .services import remove_bid as remove_bid_from_lot
+
+    remove_bid_from_lot(bid)
     LotHistory.objects.create(
         lot=lot,
         user=user,
@@ -10070,7 +10200,7 @@ def remove_bid(request, params: dict[str, Any]) -> dict[str, Any]:
     possessive = "your" if described == "your" else f"{described}'s"
     return _ok(
         f"Removed {possessive} bid of {lot.currency_symbol}{amount} from lot {lot.lot_number_display}, "
-        f"{lot.lot_name}. It's now at {lot.currency_symbol}{lot.high_bid}.",
+        f"{untrusted_short(lot.lot_name)}. It's now at {lot.currency_symbol}{lot.high_bid}.",
         **_lot_echo(lot),
         removed_bid=str(amount),
         price_now=str(lot.high_bid),
@@ -10153,7 +10283,12 @@ def set_member_active(request, params: dict[str, Any]) -> dict[str, Any]:
         return problem
     if bool(member.is_deleted) is not active:
         state = "already active" if active else "already deactivated"
-        return _ok(f"{member.name} is {state} in {club.name}.", person=member.name, club=club.name, active=active)
+        return _ok(
+            f"{untrusted_short(member.name)} is {state} in {club.name}.",
+            person=untrusted_short(member.name),
+            club=club.name,
+            active=active,
+        )
     member.is_deleted = not active
     member.save(update_fields=["is_deleted"])
     ClubHistory.objects.create(
@@ -10163,14 +10298,15 @@ def set_member_active(request, params: dict[str, Any]) -> dict[str, Any]:
         applies_to="MEMBERS",
     )
     summary = (
-        f"Brought {member.name} back as a member of {club.name}."
+        f"Brought {untrusted_short(member.name)} back as a member of {club.name}."
         if active
-        else f"Deactivated {member.name} in {club.name}. Nothing was deleted — they can be brought back."
+        else f"Deactivated {untrusted_short(member.name)} in {club.name}. Nothing was deleted — they can be "
+        "brought back."
     )
     return _ok(
         summary,
         followups=_member_followups(club, member),
-        person=member.name,
+        person=untrusted_short(member.name),
         club=club.name,
         active=active,
         **_about(club=club),
@@ -10435,7 +10571,7 @@ def resend_member_card(request, params: dict[str, Any]) -> dict[str, Any]:
     from .tasks import send_membership_card_email
 
     user = request.user
-    club, problem = _club_or_problem(request, params, also="person")
+    club, problem = _club_or_problem(request, params)
     if problem:
         return problem
     if not _can_edit_members(user, club):
@@ -10446,9 +10582,11 @@ def resend_member_card(request, params: dict[str, Any]) -> dict[str, Any]:
     if problem:
         return problem
     if not member.email:
-        return _error(f"{member.display_name} has no email address on file, so there's nowhere to send it.")
+        return _error(
+            f"{untrusted_short(member.display_name)} has no email address on file, so there's nowhere to send it."
+        )
     if member.contact_status == "do_not_contact":
-        return _error(f"{member.display_name} is marked do-not-contact, so no email was sent.")
+        return _error(f"{untrusted_short(member.display_name)} is marked do-not-contact, so no email was sent.")
     send_membership_card_email(member)
     ClubHistory.objects.create(
         club=club,
@@ -10457,8 +10595,8 @@ def resend_member_card(request, params: dict[str, Any]) -> dict[str, Any]:
         applies_to="MEMBERS",
     )
     return _ok(
-        f"Emailed {member.display_name}'s membership card to {member.email}.",
-        person=member.display_name,
+        f"Emailed {untrusted_short(member.display_name)}'s membership card to {untrusted_short(member.email)}.",
+        person=untrusted_short(member.display_name),
         club=club.name,
         followups=_member_followups(club, member),
         **_about(club=club),
@@ -10526,7 +10664,7 @@ def leave_feedback(request, params: dict[str, Any]) -> dict[str, Any]:
     words = {1: "positive", 0: "neutral", -1: "negative"}
     said = f"{words[rating]} feedback" if rating is not None else "a comment"
     return _ok(
-        f"Left {said} about {about} on lot {lot.lot_number_display}, {lot.lot_name}.",
+        f"Left {said} about {about} on lot {lot.lot_number_display}, {untrusted_short(lot.lot_name)}.",
         **_lot_echo(lot),
         left_as="buyer" if as_buyer else "seller",
         rating=rating,
@@ -10765,6 +10903,7 @@ def rotate_lot_image(request, params: dict[str, Any]) -> dict[str, Any]:
         image.save(update_fields=["is_primary"])
         did.append("made it the thumbnail")
     image.refresh_from_db()
+    _lot_history(request, lot, f"On lot {lot.lot_number_display}, {' and '.join(did)}")
     return _ok(
         f"On lot {lot.lot_number_display}, {' and '.join(did)}.",
         **_lot_echo(lot),
@@ -11555,7 +11694,8 @@ register(
         danger=DANGER_CONFIRM,
         idempotent=True,
         resolver=update_person,
-        aliases={"name", "phone"},
+        # clear_fields: undo's own, to put a blank back.
+        aliases={"name", "phone", "clear_fields"},
         confirm_template="Update someone's details",
         examples=["change bob's email to bob@example.com", "let jane bid", "note that bob paid cash"],
         needs=NEEDS_AUCTION_ADMIN,
@@ -11608,7 +11748,8 @@ register(
         danger=DANGER_CONFIRM,
         idempotent=True,
         resolver=edit_lot,
-        aliases={"name", "query", "lot_id", "price"},
+        # clear_fields: undo's own, to put a blank back.
+        aliases={"name", "query", "lot_id", "price", "clear_fields"},
         confirm_template="Change a lot",
         examples=["make lot 14 twenty dollars", "change the quantity on the blue shrimp to 3"],
     )

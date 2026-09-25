@@ -6,6 +6,7 @@ below it are what a membership card's barcode resolves to.
 
 import logging
 import re
+import uuid
 from urllib.parse import quote_plus
 
 from django.conf import settings
@@ -57,6 +58,15 @@ from .base import (
 logger = logging.getLogger(__name__)
 
 
+def _is_uuid(value):
+    """Whether ``value`` parses as a UUID: filtering a UUIDField on anything else raises."""
+    try:
+        uuid.UUID(str(value))
+    except ValueError:
+        return False
+    return True
+
+
 # Club management views
 class ClubDetailView(ClubViewMixin, TemplateView):
     """User self-service page for a club"""
@@ -76,7 +86,7 @@ class ClubDetailView(ClubViewMixin, TemplateView):
         if self.request.user.is_authenticated:
             member = ClubMember.objects.filter(club=self.club, user=self.request.user, is_deleted=False).first()
         requested_member_uuid = self.request.GET.get("user", "")
-        if requested_member_uuid:
+        if requested_member_uuid and _is_uuid(requested_member_uuid):
             member = ClubMember.objects.filter(club=self.club, uuid=requested_member_uuid, is_deleted=False).first()
         context["member"] = member
         # Only the owner -- not a holder of the UUID renewal link -- sees the Google Wallet save
@@ -247,9 +257,12 @@ class ClubDetailView(ClubViewMixin, TemplateView):
                 "permission_manage_auctions"
             )
             if can_manage_auctions:
-                auction = Auction.objects.filter(
-                    pk=request.POST.get("auction"), club=self.club, is_deleted=False
-                ).first()
+                auction_pk = str(request.POST.get("auction") or "")
+                auction = (
+                    Auction.objects.filter(pk=auction_pk, club=self.club, is_deleted=False).first()
+                    if auction_pk.isdigit()
+                    else None
+                )
                 if auction:
                     self.club.current_auction = auction
                     self.club.save(update_fields=["current_auction"])
@@ -332,7 +345,7 @@ def _get_or_create_membership_invoice(club, member):
 
 def _membership_renewal_state(club, member):
     """Return (is_expired, expiring_soon, should_show_payment, can_pay)."""
-    today = timezone.now().date()
+    today = timezone.localdate()
     expiration = member.membership_expiration_date
     is_expired = bool(expiration and expiration < today) or (not expiration and not member.is_paid_member)
     expiring_soon = bool(expiration and not is_expired and (expiration - today).days <= 30)

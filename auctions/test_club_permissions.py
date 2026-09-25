@@ -541,7 +541,8 @@ class ClubMemberManagementViewTests(TestCase):
         self.assertTrue(self.source_member.is_deleted)
         self.assertEqual(self.target_member.email, "source@example.com")
         self.assertEqual(self.target_member.phone_number, "555-1111")
-        self.assertTrue(self.target_member.permission_manage_bap)
+        # An add/edit editor merging carries no roles over: that would be granting them.
+        self.assertFalse(self.target_member.permission_manage_bap)
         self.assertEqual(self.target_member.membership_last_paid, timezone.now().date())
         self.assertTrue(ClubHistory.objects.filter(club=self.club, action__contains="Merged member").exists())
 

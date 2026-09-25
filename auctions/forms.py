@@ -12,6 +12,7 @@
 """
 
 import datetime
+import json
 import logging
 import re
 from decimal import ROUND_HALF_UP, Decimal
@@ -35,6 +36,7 @@ from django.conf import settings
 from django.contrib.auth.models import User
 from django.core.files.base import ContentFile
 from django.core.files.uploadedfile import UploadedFile
+from django.core.validators import MaxValueValidator, MinValueValidator, URLValidator
 from django.db.models import Q
 from django.forms import (
     HiddenInput,
@@ -114,6 +116,18 @@ MILES_TO_KM = 1.60934
 logger = logging.getLogger(__name__)
 
 
+class LiteralHTML(HTML):
+    """Crispy's ``HTML`` without the template engine: the markup goes onto the page exactly as given.
+
+    ``HTML(s)`` renders ``s`` as a Django template, so a lot name reading ``{% debug %}`` or
+    ``{{ csrf_token }}`` interpolated into it would run. Anything carrying text a person typed is
+    built with ``format_html`` and wrapped in this instead.
+    """
+
+    def render(self, form, context, template_pack=None, **kwargs):
+        return mark_safe(str(self.html))  # noqa: S308 - callers build it with format_html/escape
+
+
 def recaptcha_is_configured():
     return bool(getattr(settings, "RECAPTCHA_ENABLED", False))
 
@@ -129,6 +143,20 @@ def apply_price_input_constraints(fields, field_names, only_whole_dollar_bids):
     for field_name in field_names:
         fields[field_name].widget.attrs["min"] = min_value
         fields[field_name].widget.attrs["step"] = step
+
+
+def limit_number_field(field, min_value=None, max_value=None):
+    """``min_value``/``max_value`` for a model form's field after construction, where setting the
+    attributes alone validates nothing: adds the validators and the browser's own min/max.
+    """
+    if min_value is not None:
+        field.min_value = min_value
+        field.validators.append(MinValueValidator(min_value))
+        field.widget.attrs.setdefault("min", min_value)
+    if max_value is not None:
+        field.max_value = max_value
+        field.validators.append(MaxValueValidator(max_value))
+        field.widget.attrs.setdefault("max", max_value)
 
 
 #: The empty species option. "No species" is a legitimate answer, not an omission.
@@ -665,16 +693,21 @@ class QuickAddLot(forms.ModelForm):
         cleaned_data = super().clean()
         clean_species_for_auction(cleaned_data, self.auction, derive_category=True, instance=self.instance)
         if not self.is_admin:
+            # The bulk formset posts every existing row, so only a row the seller actually changed is
+            # refused; otherwise one sold lot would block adding new ones.
+            if self.instance.pk and self.has_changed() and self.instance.cannot_be_edited_reason:
+                self.add_error(None, f"{self.instance.lot_name}: {self.instance.cannot_be_edited_reason}")
             if self.auction.reserve_price == "disable":
                 cleaned_data["reserve_price"] = self.auction.minimum_bid
             if self.auction.buy_now == "disable" and cleaned_data.get("buy_now_price"):
                 cleaned_data["buy_now_price"] = None
-            if (self.auction.buy_now == "require") and not cleaned_data.get("buy_now_price"):
+            # The stored choice is "required"; comparing with "require" never matched.
+            if (self.auction.buy_now == "required") and not cleaned_data.get("buy_now_price"):
                 self.add_error("buy_now_price", "Buy Now price is required in this auction")
             if (
                 self.auction.custom_field_1 == "required" and self.auction.custom_field_1_name
             ) and not cleaned_data.get("custom_field_1"):
-                self.add_error("buy_now_price", "Required in this auction")
+                self.add_error("custom_field_1", "Required in this auction")
         if self.auction.only_whole_dollar_bids:
             reserve_price = cleaned_data.get("reserve_price")
             if reserve_price is not None and reserve_price != reserve_price.to_integral_value():
@@ -703,7 +736,10 @@ class QuickAddLot(forms.ModelForm):
             existing_lots = self.tos.unbanned_lot_qs
             if self.auction.allow_additional_lots_as_donation:
                 existing_lots = existing_lots.exclude(donation=True)
-            if not cleaned_data.get("lot_number"):
+            # The formset posts the pk as lot_number; the palette edits through the instance alone, and
+            # counting that edit as a new lot refused every change to a seller already at the limit.
+            existing_lot = cleaned_data.get("lot_number") or (self.instance if self.instance.pk else None)
+            if not existing_lot:
                 # new lots only. ``>=``, not ``>``: the lot being validated isn't in either count yet,
                 # so ``>`` let every seller add exactly one over the limit. ``CreateLotForm`` has
                 # always counted it this way; this form is the palette's and /mcp/'s, and an auction's
@@ -722,7 +758,7 @@ class QuickAddLot(forms.ModelForm):
                 else:
                     self.new_lot_count += 1
             else:
-                is_saved = Lot.objects.filter(pk=cleaned_data.get("lot_number").pk, donation=True).first()
+                is_saved = Lot.objects.filter(pk=existing_lot.pk, donation=True).first()
                 if is_saved and self.auction.allow_additional_lots_as_donation and not cleaned_data.get("donation"):
                     lot_count = (
                         Lot.objects.exclude(is_deleted=True)
@@ -798,6 +834,8 @@ class InvoiceAdjustmentForm(forms.ModelForm):
         self.fields["notes"].widget.attrs = {"placeholder": "ex: membership fee"}
         self.fields["adjustment_type"].help_text = "Charge extra adds to the invoice; Discount subtracts from it."
         self.fields["amount"].help_text = "Whole dollars only"
+        # Invoice.calculated_total is max_digits=10: past it every recalculate() raised DataError.
+        limit_number_field(self.fields["amount"], max_value=99999)
 
         return result
 
@@ -1084,9 +1122,10 @@ class DeleteAuctionTOS(forms.Form):
                 if self.lots_exist:
                     self.add_error("merge_with", "Select a new user to preserve this user's data")
             else:
-                if AuctionTOS.objects.get(pk=merge_with).auction.pk != self.auctiontos.auction.pk:
-                    self.add_error("merge_with", "This shouldn't even be possible!")
-                if AuctionTOS.objects.get(pk=merge_with) == self.auctiontos:
+                target = AuctionTOS.objects.filter(pk=merge_with).first() if str(merge_with).isdigit() else None
+                if not target or target.auction_id != self.auctiontos.auction_id:
+                    self.add_error("merge_with", "Select a user in this auction")
+                elif target == self.auctiontos:
                     self.add_error("merge_with", "You can't select the user you're about to delete")
         return cleaned_data
 
@@ -1228,6 +1267,8 @@ class EditLot(forms.ModelForm):
         # and some housekeeping on labels and help text
         self.fields["winning_price"].label = "Sell price"
         self.fields["winning_price"].help_text = ""
+        # A negative sell price turned into a credit on the winner's invoice.
+        limit_number_field(self.fields["winning_price"], min_value=0)
         self.fields["lot_name"].help_text = ""
         self.fields["species_category"].help_text = ""
         self.fields["auctiontos_winner"].label = "Winner"
@@ -1295,7 +1336,7 @@ class EditLot(forms.ModelForm):
             name = self.lot.species.full_scientific_name if self.lot.species else ""
             summary.append(f"Scientific name: <strong>{escape(name or 'none')}</strong>")
         return Div(
-            HTML(
+            LiteralHTML(
                 '<div class="d-flex flex-wrap align-items-center gap-3 mb-3">'
                 f'<span class="text-muted">{" &middot; ".join(summary)}</span>'
                 '<button class="btn btn-sm btn-primary" type="button" '
@@ -1382,11 +1423,13 @@ class EditLot(forms.ModelForm):
 
     def clean(self):
         cleaned_data = super().clean()
-        auction = cleaned_data.get("auction")
+        # The lot's own auction, never the posted hidden field: that could name another auction the
+        # user runs and skip this one's rules. LotAdmin doesn't save it either.
+        auction = self.auction
         clean_species_for_auction(cleaned_data, auction, instance=self.instance)
         if auction:
             if not auction.permission_check(self.user):
-                self.add_error("auction", "How did you even manage to change this field?")
+                self.add_error(None, "You can only edit lots in your own auctions")
             if auction.only_whole_dollar_bids:
                 reserve_price = cleaned_data.get("reserve_price")
                 if reserve_price is not None and reserve_price != reserve_price.to_integral_value():
@@ -1678,7 +1721,14 @@ class BulkSellLotsToOnlineHighBidder(forms.Form):
     def __init__(self, auction, query, queryset, *args, **kwargs):
         self.auction = auction
         self.queryset = queryset
-        submit_button_html = f'<button hx-vals=\'{{"query": "{query}"}}\' hx-post="{reverse("bulk_set_lots_won", kwargs={"slug": self.auction.slug})}" hx-target="#modals-here" type="submit" class="btn btn-success text-dark">Mark {self.queryset.count()} lots sold</button>'
+        # The query is whatever was typed in the filter box, so it goes through format_html and LiteralHTML.
+        submit_button_html = format_html(
+            '<button hx-vals="{}" hx-post="{}" hx-target="#modals-here" type="submit" '
+            'class="btn btn-success text-dark">Mark {} lots sold</button>',
+            json.dumps({"query": query}),
+            reverse("bulk_set_lots_won", kwargs={"slug": self.auction.slug}),
+            self.queryset.count(),
+        )
         super().__init__(*args, **kwargs)
         self.helper = FormHelper()
         self.helper.form_method = "post"
@@ -1697,7 +1747,7 @@ class BulkSellLotsToOnlineHighBidder(forms.Form):
                 HTML(
                     '<button type="button" class="btn btn-secondary me-auto" onmousedown="event.preventDefault()" onclick="closeModal()">Cancel</button>'
                 ),
-                HTML(submit_button_html),
+                LiteralHTML(submit_button_html),
                 css_class="modal-footer",
             ),
         )
@@ -2025,7 +2075,9 @@ class PickupLocationForm(forms.ModelForm):
 
     def clean(self):
         cleaned_data = super().clean()
-        auction = cleaned_data.get("auction")
+        # The auction the view passed, not the posted hidden field: the views save to self.auction, and
+        # a posted blank or other auction counted the wrong mail locations.
+        auction = self.auction
         if auction:
             if not auction.permission_check(self.user):
                 self.add_error("auction", "You can only add pickup locations to your own auctions")
@@ -2314,6 +2366,8 @@ class AuctionEditForm(forms.ModelForm):
             "email_users_when_invoices_ready"
         ].help_text = "Send an email to users when their invoice is ready or paid"
         self.fields["alternative_split_label"].widget.attrs = {"placeholder": "Club Member"}
+        # A percent: 150 would have charged more tax than the lots cost.
+        limit_number_field(self.fields["tax"], max_value=100)
         # Hidden by JS without a club; don't block submission.
         self.fields["club_member_discount"].required = False
         # Blank means no fee; clean() coerces to 0 (NOT NULL).
@@ -2582,6 +2636,13 @@ class AuctionEditForm(forms.ModelForm):
             club = self.cleaned_data.get("club") or (instance.club if instance and instance.pk else None)
             if not club:
                 msg = "Associate this auction with a club before enabling this option."
+                raise forms.ValidationError(msg)
+            # Switching this on copies the club's whole roster (names, emails, phones) into the auction.
+            from auctions.views.base import check_club_permission
+
+            # permission_admin is a wildcard in check_club_permission.
+            if not check_club_permission(self.user, club, "permission_manage_auctions"):
+                msg = f"Only {club} admins and auction managers can manage participants through the club."
                 raise forms.ValidationError(msg)
             if instance and instance.pk:
                 if Lot.objects.filter(auction=instance, is_deleted=False).exists():
@@ -3219,8 +3280,22 @@ class CreateLotForm(forms.ModelForm):
                 self.add_error("auction", "You've been banned from selling lots in this auction")
             except UserBan.DoesNotExist:
                 pass
-            # thisAuction = Auction.objects.get(pk=auction)
-            if not self.instance.pk:  # # only when creating a lot
+            # Here, so the seller sees it on the field rather than after the lot is saved.
+            if auction.buy_now == "required" and not cleaned_data.get("buy_now_price"):
+                self.add_error("buy_now_price", "Buy now price is required in this auction")
+            if (
+                auction.custom_field_1 == "required"
+                and auction.custom_field_1_name
+                and not cleaned_data.get("custom_field_1")
+            ):
+                self.add_error("custom_field_1", f"{auction.custom_field_1_name} is required in this auction")
+            # Moving a lot into another auction is a new lot there: its limit and its numbering.
+            moving_in = bool(self.instance.pk) and self.instance.auction_id != auction.pk
+            if moving_in:
+                # Lot.save assigns both afresh when they're blank; the old auction's number would clash.
+                self.instance.lot_number_int = None
+                self.instance.custom_lot_number = None
+            if not self.instance.pk or moving_in:
                 if auction.max_lots_per_user:
                     if auction.allow_additional_lots_as_donation:
                         numberOfLots = (
@@ -5193,7 +5268,7 @@ class BapAwardForm(forms.ModelForm):
                 "name"
             )
         if not self.instance.pk and not self.initial.get("date"):
-            self.fields["date"].initial = timezone.now().date()
+            self.fields["date"].initial = timezone.localdate()
         self.fields["points"].label = "BAP points"
         self.fields["hap_points"].label = "HAP points"
         self.fields["cap_points"].label = "CAP points"
@@ -5209,7 +5284,9 @@ class BapAwardForm(forms.ModelForm):
         prefix_items = []
         if lot:
             prefix_items.append(
-                HTML(f'<p class="text-muted mb-2"><small>Lot: <strong>{lot.lot_name}</strong></small></p>')
+                LiteralHTML(
+                    format_html('<p class="text-muted mb-2"><small>Lot: <strong>{}</strong></small></p>', lot.lot_name)
+                )
             )
         if prefix_items:
             layout_fields = prefix_items + layout_fields
@@ -5468,7 +5545,7 @@ class ClubMemberDiscordForm(MarksClubMemberAdminEditedMixin, forms.ModelForm):
 
         has_discord_id = bool(instance and instance.discord_id)
         if has_discord_id:
-            discord_id_row = HTML(
+            discord_id_row = LiteralHTML(
                 format_html(
                     '<div class="mb-3">'
                     '<label class="form-label" for="id_discord_id">Discord ID</label>'
@@ -5705,6 +5782,8 @@ class VolunteerJobForm(forms.ModelForm):
         super().__init__(*args, **kwargs)
         self.fields["people_needed"].initial = 1
         self.fields["bounty"].required = False
+        # A negative bounty would charge the volunteer.
+        limit_number_field(self.fields["bounty"], min_value=0)
         add_bootstrap_classes(self)
 
     def clean_people_needed(self):
@@ -6117,6 +6196,13 @@ class DonationVendorForm(forms.ModelForm):
         url = (self.cleaned_data.get("contact_url") or "").strip()
         if url and "://" not in url:
             url = f"https://{url}"
+        if url:
+            # It becomes a link: "javascript:alert(1)//://" used to get through as it was.
+            try:
+                URLValidator(schemes=["http", "https"])(url)
+            except forms.ValidationError:
+                msg = "Enter the web address of their request form."
+                raise forms.ValidationError(msg) from None
         return url
 
     def clean_followup_due(self):

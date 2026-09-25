@@ -585,7 +585,7 @@ class WebSocketConsumerTests(TransactionTestCase):
                         found_message = True
                         self.assertEqual(response["username"], str(self.user_with_no_lots))
                         break
-                except:
+                except Exception:
                     break
 
             self.assertTrue(found_message, "Did not receive the expected chat message")
@@ -687,7 +687,7 @@ class WebSocketConsumerTests(TransactionTestCase):
             # Even if connection failed, try to disconnect to clean up
             try:
                 await communicator.disconnect(timeout=self.DISCONNECT_TIMEOUT)
-            except:
+            except Exception:
                 pass
 
     async def test_user_consumer_connect_anonymous(self):
@@ -712,7 +712,7 @@ class WebSocketConsumerTests(TransactionTestCase):
             # Even if connection failed, try to disconnect to clean up
             try:
                 await communicator.disconnect(timeout=self.DISCONNECT_TIMEOUT)
-            except:
+            except Exception:
                 pass
 
     async def test_auction_consumer_connect_admin(self):
@@ -755,7 +755,7 @@ class WebSocketConsumerTests(TransactionTestCase):
             # Even if connection failed, try to disconnect to clean up
             try:
                 await communicator.disconnect(timeout=self.DISCONNECT_TIMEOUT)
-            except:
+            except Exception:
                 pass
 
     async def test_auction_consumer_connect_anonymous(self):
@@ -780,7 +780,7 @@ class WebSocketConsumerTests(TransactionTestCase):
             # Even if connection failed, try to disconnect to clean up
             try:
                 await communicator.disconnect(timeout=self.DISCONNECT_TIMEOUT)
-            except:
+            except Exception:
                 pass
 
     async def test_auction_consumer_invalid_auction(self):
@@ -804,7 +804,7 @@ class WebSocketConsumerTests(TransactionTestCase):
             # Even if connection failed, try to disconnect to clean up
             try:
                 await communicator.disconnect(timeout=self.DISCONNECT_TIMEOUT)
-            except:
+            except Exception:
                 pass
 
 

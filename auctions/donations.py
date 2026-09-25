@@ -129,6 +129,15 @@ def _day_bounds(now=None):
     return start, start + datetime.timedelta(days=1)
 
 
+def _sent_today(club, start):
+    return DonationEmail.objects.filter(
+        vendor__club=club,
+        direction=DonationEmail.DIRECTION_OUTGOING,
+        channel=DonationEmail.CHANNEL_EMAIL,
+        date__gte=start,
+    ).count()
+
+
 def donation_email_quota(club, *, now=None):
     """How much of *club*'s daily donation-email allowance is gone.
 
@@ -140,12 +149,7 @@ def donation_email_quota(club, *, now=None):
     deliverability -- does not spend it. That is the whole reason the column exists.
     """
     start, end = _day_bounds(now)
-    sent = DonationEmail.objects.filter(
-        vendor__club=club,
-        direction=DonationEmail.DIRECTION_OUTGOING,
-        channel=DonationEmail.CHANNEL_EMAIL,
-        date__gte=start,
-    ).count()
+    sent = _sent_today(club, start)
     drafted = calls_used_today(club, "draft")
     return DonationEmailQuota(used=max(sent, drafted), limit=MAX_DONATION_EMAILS_PER_DAY, resets_at=end)
 
@@ -683,9 +687,14 @@ def contact_blocked_reason(vendor, quota=None):
 
 
 def _check_daily_quota(club):
-    """Refuse past the daily allowance, on every path, not only in the view."""
+    """Refuse past the daily allowance, on every path, not only in the view.
+
+    Counts what was sent, not what was drafted: the draft being sent was already charged, so the day's
+    last draft could otherwise never go out.
+    """
     quota = donation_email_quota(club)
-    if quota.exhausted:
+    start, _end = _day_bounds()
+    if _sent_today(club, start) >= quota.limit:
         raise DonationSendError(quota.exhausted_message)
 
 

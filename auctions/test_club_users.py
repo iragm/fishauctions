@@ -179,6 +179,8 @@ class ManageUsersThroughClubTests(TestCase):
         self.assertIn("manage_users_through_club", form2.errors)
 
     def test_enabling_club_management_syncs_existing_club_members(self):
+        # Turning club management on needs a club role (it copies the roster into the auction).
+        ClubMember.objects.create(club=self.club, user=self.creator, name="Creator", permission_manage_auctions=True)
         self.joiner.userdata.preferred_bidder_number = "246"
         self.joiner.userdata.save(update_fields=["preferred_bidder_number"])
         member = ClubMember.objects.create(club=self.club, user=self.joiner, name="Joiner", email=self.joiner.email)
@@ -357,6 +359,8 @@ class ManageUsersThroughClubTests(TestCase):
 
     def test_edit_form_warns_when_checkin_mode_and_pre_event_online_bidding(self):
         """Warn when check-in mode is combined with online bidding before the start date."""
+        # Turning club management on needs a club role (it copies the roster into the auction).
+        ClubMember.objects.create(club=self.club, user=self.creator, name="Creator", permission_manage_auctions=True)
         self.client.force_login(self.creator)
         data = {
             **self._auction_form_data(),

@@ -378,8 +378,9 @@ class DonationContactView(LoginRequiredMixin, DonationPermissionMixin, View):
         step = request.POST.get("step")
         if not self.club.donation_mailing_address.strip():
             return render(request, "auctions/donation_contact_modal.html", self._missing_address_context())
-        if self.quota.exhausted:
+        if self.quota.exhausted and step != "send":
             # Nothing may be written past the limit, so don't offer a screen that ends in a refusal.
+            # Sending a draft already paid for is checked on the send itself (donations._check_daily_quota).
             return render(request, "auctions/donation_contact_modal.html", self._blocked_context())
         if step == "generate":
             return self._generate(request)

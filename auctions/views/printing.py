@@ -13,6 +13,7 @@ from django.contrib import messages
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.db.models.base import Model as Model
 from django.http import (
+    Http404,
     HttpResponse,
     HttpResponseBadRequest,
     JsonResponse,
@@ -54,8 +55,11 @@ class LotLabelView(TemplateView, WeasyTemplateResponseMixin, AuctionViewMixin):
     mark_labels_printed = True
     # One label per page for the PNG raster. Presets already one label per page are left as they are.
     single_label_page = False
-    # Keep the deep link near 2000 characters; the PDF's 100-label cap doesn't apply.
+    # Keep the deep link near 2000 characters; the PDF caps below don't apply.
     MAX_DEEP_LINK_LOTS = 300
+    # Labels per PDF: WeasyPrint's time and memory grow with the page count.
+    MAX_PDF_LABELS = 500
+    MAX_THERMAL_PDF_LABELS = 100
     # Per preset: start shrinking after shrink_threshold characters, by ratio_base / length, down
     # to min_ratio.
     SELLER_EMAIL_FONT_CONFIG = {
@@ -75,8 +79,7 @@ class LotLabelView(TemplateView, WeasyTemplateResponseMixin, AuctionViewMixin):
         return self.tos.print_labels_qs
 
     def dispatch(self, request, *args, **kwargs):
-        # check to make sure the user has permission to view this invoice
-        self.auction = Auction.objects.exclude(is_deleted=True).filter(slug=kwargs["slug"]).first()
+        self.auction = get_object_or_404(Auction, slug=kwargs["slug"], is_deleted=False)
         self.bidder_number = kwargs.pop("bidder_number", None)
         self.username = kwargs.pop("username", None)
         printing_for_self = False
@@ -375,32 +378,21 @@ class LotLabelView(TemplateView, WeasyTemplateResponseMixin, AuctionViewMixin):
             "user",
         )
 
-        # Cap thermal labels at 100 per PDF
         is_thermal = user_label_prefs.preset in ["thermal_sm", "thermal_very_sm"]
-
-        if is_thermal:
-            # Fetch 101 to tell if there are more than 100.
-            labels_list = list(labels[:101])
-            if len(labels_list) > 100:
-                # Show warning and limit to first 100
-                total_labels_count = labels.count()
-                labels = labels_list[:100]
-                messages.warning(
-                    self.request,
-                    f"Only the first 100 labels are included in this PDF (you have {total_labels_count} total labels). "
-                    f"To print the remaining labels, use the 'Print unprinted labels' option.",
-                )
-            else:
-                # Use the list we already fetched (100 or fewer labels)
-                labels = labels_list
-        else:
-            labels = list(labels)
-
-        if self.mark_labels_printed:
-            for label in labels:
-                label.label_printed = True
-                label.label_needs_reprinting = False
-            Lot.objects.bulk_update(labels, ["label_printed", "label_needs_reprinting"])
+        cap = self.MAX_THERMAL_PDF_LABELS if is_thermal else self.MAX_PDF_LABELS
+        # One more than the cap, to tell whether there are more.
+        labels_list = list(labels[: cap + 1])
+        if len(labels_list) > cap:
+            total_labels_count = labels.count()
+            labels_list = labels_list[:cap]
+            messages.warning(
+                self.request,
+                f"Only the first {cap} labels are included in this PDF (you have {total_labels_count} total labels). "
+                f"Print the rest in batches with the 'Print unprinted labels' option.",
+            )
+        labels = labels_list
+        # Marked by render_to_response once the PDF exists, so a failed render leaves them unprinted.
+        self.labels_to_mark_printed = labels if self.mark_labels_printed else []
 
         # Layout rules are in auctions/printing.py.
         print_fields = set(self.auction.label_print_fields.split(","))
@@ -418,6 +410,20 @@ class LotLabelView(TemplateView, WeasyTemplateResponseMixin, AuctionViewMixin):
         # Outline every column, for tuning a preset by eye.
         context["all_borders"] = False
         return context
+
+    def render_to_response(self, context, **response_kwargs):
+        response = super().render_to_response(context, **response_kwargs)
+        labels = getattr(self, "labels_to_mark_printed", None)
+        if labels:
+            response.add_post_render_callback(lambda _response: self.mark_printed(labels))
+        return response
+
+    @staticmethod
+    def mark_printed(labels):
+        for label in labels:
+            label.label_printed = True
+            label.label_needs_reprinting = False
+        Lot.objects.bulk_update(labels, ["label_printed", "label_needs_reprinting"])
 
     def generate_qr_code(self, label, qr_code_width, qr_code_height):
         label_qr_code = qr_code.qrcode.maker.make_qr_code_image(
@@ -455,18 +461,17 @@ class SingleLotLabelView(LotLabelView):
     def dispatch(self, request, *args, **kwargs):
         self.lot = get_object_or_404(Lot, pk=kwargs.pop("pk"), is_deleted=False)
         self.filename = f"label_{self.lot.lot_number_display}"
-        if self.lot.auctiontos_seller:
-            self.auction = self.lot.auctiontos_seller.auction
-            if not self.lot.is_owned_by(request.user) and not self.is_auction_admin:
-                messages.error(
-                    request,
-                    "You can't print labels for other people's lots unless you are an admin",
-                )
-                return redirect(reverse("home"))
-        if not self.lot.auctiontos_seller:
-            if self.lot.user and self.lot.user != request.user:
-                messages.error(request, "You can only print labels for your own lots")
-                return redirect(reverse("home"))
+        seller = self.lot.auctiontos_seller
+        self.auction = seller.auction if seller else self.lot.auction
+        if not self.auction:
+            # The label is laid out from the auction's print fields.
+            raise Http404
+        if not self.lot.is_owned_by(request.user) and not self.is_auction_admin:
+            messages.error(
+                request,
+                "You can't print labels for other people's lots unless you are an admin",
+            )
+            return redirect(reverse("home"))
         # ?format=png or ?fmt=png returns one PNG like the mobile endpoint, with
         # ?resolution=WIDTHxHEIGHT&dpi=N (default 600x400 @ 203dpi).
         if (request.GET.get("format") or request.GET.get("fmt")) == "png":
