@@ -186,7 +186,7 @@ this only quotes its opening sentence.
 - **`notifications.py`** (313 lines)
   Email to mobile-push routing.
   `push_configured`, `user_prefers_push`, `user_has_app_push`, `notify_user`, `notify_running_total`, `send_fcm_message`, `send_fcm_data_message`
-- **`palette_actions.py`** (14669 lines)
+- **`palette_actions.py`** (14675 lines)
   The things the command palette's assist, and ``/mcp/``, are allowed to do.
 - **`palette_assist.py`** (2209 lines)
   Natural-language orchestration for the command palette.
@@ -401,7 +401,7 @@ this only quotes its opening sentence.
   Mailchimp and Brevo: syncing members, webhooks, self-service and what gets redacted.
 - **`test_marketing_sync_and_tasks.py`** (748 lines)
   Gaps left by test_marketing.py and test_celery_tasks.py: the per-member Mailchimp and Brevo sync
-- **`test_mcp.py`** (1403 lines)
+- **`test_mcp.py`** (1489 lines)
   Tests for the MCP tool catalogue.
 - **`test_mcp_permissions.py`** (670 lines)
   Every tool on ``/mcp/``, run against somebody else's club and auction.
@@ -513,7 +513,7 @@ this only quotes its opening sentence.
 - **`test_support.py`** (40 lines)
   Support code shared by the test modules. Holds no tests of its own.
   `isolated_cache`
-- **`test_support_page.py`** (264 lines)
+- **`test_support_page.py`** (273 lines)
   /support/, and a way to reach a human that works with no account.
   `SupportUrlWorksSignedOutTests`, `SupportPageIsTheHelpPageTests`, `OldContactUrlStillWorksTests`, `VideoEmbedFitsItsContainerTests`, `SupportFormDeliveryTests`, `SupportFormSignedInTests`
 - **`test_sweep_round_three.py`** (117 lines)
@@ -712,7 +712,7 @@ The site's Model Context Protocol server, and the tool catalogue behind it.
 - **`resources.py`** (352 lines)
   Addressable reads: the read-only tools' answers, reachable by URI.
   `Template`, `template_descriptors`, `fixed_descriptors`, `match`, `read`, `links_for`
-- **`tools.py`** (368 lines)
+- **`tools.py`** (447 lines)
   The action registry, as MCP tools.
 - **`transport.py`** (139 lines)
   The HTTP end of the MCP server: one view, at ``/mcp/``. Nothing here knows what a tool is.

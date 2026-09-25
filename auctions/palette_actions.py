@@ -3349,7 +3349,13 @@ def _lots_matching(lots, query: str) -> list:
     by_number = list(lots.filter(number_q).select_related("auction")[: AMBIGUOUS_LIMIT + 1])
     if by_number:
         return by_number
-    return list(lots.filter(lot_name__icontains=query).select_related("auction")[: AMBIGUOUS_LIMIT + 1])
+    if number.isdigit():
+        # A lot number that isn't there (deleted, say) is a miss, not "OptiMax 1150" and "PR11509";
+        # only a name with the number as a word of its own ("150 gallon tank") is worth offering.
+        name_q = Q(lot_name__iregex=rf"\b{number}\b")
+    else:
+        name_q = Q(lot_name__icontains=query)
+    return list(lots.filter(name_q).select_related("auction")[: AMBIGUOUS_LIMIT + 1])
 
 
 def _lots_matching_here_first(request, lots, query: str):

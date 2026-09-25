@@ -382,6 +382,92 @@ class CallToolTests(StandardTestCase):
         self.assertIn("limit and offset", parsed["what_to_do"])
 
 
+@isolated_cache("mcp-repeats")
+class RepeatedWriteTests(StandardTestCase):
+    """ChatGPT sent one organizer's every add_lot twice, identically: two lots per item."""
+
+    def setUp(self):
+        super().setUp()
+        UserData.objects.update(use_llm_search=True)
+
+    def _call(self, name, arguments, user=None):
+        request = RequestFactory().post("/mcp/")
+        request.user = user or self.user
+        return tools.call_tool(request, name, arguments)
+
+    def _lots(self, name):
+        from auctions.models import Lot
+
+        return Lot.objects.filter(auction=self.in_person_auction, lot_name=name).count()
+
+    def test_the_same_add_twice_makes_one_lot(self):
+        arguments = {"name": "Echo Snail", "auction": self.in_person_auction.slug}
+        first = self._call("add_lot", arguments)
+        second = self._call("add_lot", dict(arguments))
+        self.assertFalse(first["isError"], first)
+        self.assertEqual(self._lots("Echo Snail"), 1)
+        self.assertEqual(first["structuredContent"], second["structuredContent"])
+        self.assertIn("arrived twice", second["content"][-1]["text"])
+
+    def test_different_arguments_are_different_lots(self):
+        self._call("add_lot", {"name": "Echo Snail", "auction": self.in_person_auction.slug})
+        self._call("add_lot", {"name": "Echo Snail", "auction": self.in_person_auction.slug, "quantity": 2})
+        self.assertEqual(self._lots("Echo Snail"), 2)
+
+    def test_another_person_asking_the_same_is_not_a_repeat(self):
+        arguments = {"name": "Echo Snail", "auction": self.in_person_auction.slug}
+        self._call("add_lot", arguments)
+        self._call("add_lot", arguments, user=self.admin_user)
+        self.assertEqual(self._lots("Echo Snail"), 2)
+
+    def test_a_failed_call_can_be_retried(self):
+        with patch.object(palette_actions, "run_action", return_value={"error": "try again"}):
+            self._call("add_lot", {"name": "Echo Snail", "auction": self.in_person_auction.slug})
+        self._call("add_lot", {"name": "Echo Snail", "auction": self.in_person_auction.slug})
+        self.assertEqual(self._lots("Echo Snail"), 1)
+
+    def test_a_duplicate_waits_for_the_first_answer(self):
+        # Parallel duplicates arrive while the first is still running.
+        from django.core.cache import cache
+
+        arguments = {"name": "Echo Snail", "auction": self.in_person_auction.slug}
+        key = tools._repeat_key(RequestFactory().post("/mcp/"), palette_actions.get_action("add_lot"), arguments)
+        self.assertIsNone(key)  # no user on that request
+        request = RequestFactory().post("/mcp/")
+        request.user = self.user
+        key = tools._repeat_key(request, palette_actions.get_action("add_lot"), arguments)
+        cache.set(key, tools._IN_FLIGHT, 60)
+        with patch.object(tools, "REPEAT_WAIT_SECONDS", 0):
+            result = self._call("add_lot", arguments)
+        self.assertTrue(result["isError"])
+        self.assertIn("still running", result["content"][0]["text"])
+        self.assertEqual(self._lots("Echo Snail"), 0)
+
+    def test_repeats_that_mean_something_are_not_collapsed(self):
+        for name in tools.REPEATS_ARE_MEANT:
+            action = palette_actions.get_action(name)
+            self.assertIsNotNone(action, name)
+            request = RequestFactory().post("/mcp/")
+            request.user = self.user
+            self.assertIsNone(tools._repeat_key(request, action, {}))
+
+
+class MissingLotNumberTests(StandardTestCase):
+    """Asked about lot 150 after it was deleted, the agent was offered "OptiMax 1150" and "PR11509"."""
+
+    def test_a_missing_number_matches_only_names_with_that_number_as_a_word(self):
+        from auctions.models import Lot
+
+        for name in ("OptiMax 1150 Pump", "Gasket PR11509", "150 gallon tank"):
+            Lot.objects.create(
+                lot_name=name, auction=self.in_person_auction, auctiontos_seller=self.admin_in_person_tos
+            )
+        lots = Lot.objects.filter(auction=self.in_person_auction)
+        self.assertFalse(lots.filter(lot_number_int=150).exists())
+        matches = palette_actions._lots_matching(lots, "150")
+        self.assertEqual([lot.lot_name for lot in matches], ["150 gallon tank"])
+
+
 @isolated_cache("mcp-endpoint")
 class EndpointTests(StandardTestCase):
     """The HTTP statuses the transport spec requires, tested through the URL."""

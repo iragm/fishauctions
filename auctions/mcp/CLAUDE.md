@@ -44,7 +44,10 @@ auctions/mcp/auth.py       who is calling
   and never acts. `readOnlyHint` is `danger != DANGER_CONFIRM`. No catch-all execute tool.
   `destructive=True` only where a write overwrites a previous answer (`undo_sale`, `undo_last`) or
   can't be undone at all (`place_bid`). `idempotent` is derived (reads yes, writes no) unless a
-  setter says otherwise.
+  setter says otherwise. That flag is load-bearing: a non-idempotent write repeated byte-for-byte
+  by the same person within a minute is answered from the first call, not run again
+  (`tools.REPEAT_WINDOW_SECONDS`; ChatGPT double-sent every `add_lot`). A write where two identical
+  calls mean two things goes in `tools.REPEATS_ARE_MEANT`.
 - No `outputSchema` — a schema loose enough to describe fifty-odd results validates nothing and
   costs tokens every session.
 - Field-usage advice belongs in the parameter description, not in `lot_fields_in_use`, which rides

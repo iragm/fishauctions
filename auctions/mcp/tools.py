@@ -14,10 +14,14 @@ Permissions are not enforced here; the resolvers re-check them in ``run_action``
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import re
+import time
 from typing import Any
+
+from django.core.cache import cache
 
 from auctions import palette_actions
 
@@ -52,6 +56,21 @@ _PARAM_PREFIX = re.compile(
     r"^(?P<types>[a-z]+(?:\s+of\s+[a-z]+(?:\s+or\s+[a-z]+)*)?(?:\s+or\s+[a-z]+)*)\s*,\s*(?P<need>required|optional)\b",
     re.IGNORECASE,
 )
+
+
+#: How long an identical write from the same person is answered from the first one instead of
+#: being done again. ChatGPT sent every add_lot and edit_lot twice, within the same minute and
+#: byte-for-byte identical, for one organizer (Sep 2026): two lots per item, four for "two of these".
+#: Keyed on the person, not the credential, because that organizer had two connections open.
+REPEAT_WINDOW_SECONDS = 60
+
+#: How long a duplicate that arrives while the first is still running waits for its answer.
+REPEAT_WAIT_SECONDS = 15
+
+#: Writes where the same call twice is two things: two door prizes, two undos.
+REPEATS_ARE_MEANT = frozenset({"draw_door_prize", "undo_last"})
+
+_IN_FLIGHT = "in-flight"
 
 
 class UnknownTool(Exception):
@@ -330,7 +349,8 @@ def call_tool(request, name: str, arguments: Any, *, writes: bool = True) -> dic
     """Run one tool for the user on ``request`` and return an MCP ``CallToolResult``.
 
     Everything goes through :func:`palette_actions.run_action`. ``{"error"}`` becomes ``isError``;
-    ``{"more_info_needed"}`` is a successful result (:func:`_needs_more_information`).
+    ``{"more_info_needed"}`` is a successful result (:func:`_needs_more_information`). A write repeated
+    exactly within :data:`REPEAT_WINDOW_SECONDS` is answered with the first call's result, not done twice.
     """
     if not isinstance(arguments, dict):
         arguments = {}
@@ -344,6 +364,65 @@ def call_tool(request, name: str, arguments: Any, *, writes: bool = True) -> dic
             "/ai/ — a credential's read/write ceiling is fixed when it is issued.",
             is_error=True,
         )
+    repeat_key = _repeat_key(request, action, arguments)
+    if repeat_key and not cache.add(repeat_key, _IN_FLIGHT, REPEAT_WINDOW_SECONDS):
+        return _answer_repeat(repeat_key, action)
+    try:
+        result = _call_tool(request, action, arguments)
+    except BaseException:
+        if repeat_key:
+            cache.delete(repeat_key)
+        raise
+    if repeat_key:
+        if result.get("isError") or (result.get("structuredContent") or {}).get("nothing_was_changed"):
+            # Nothing happened, so the same call again is a retry, not a duplicate.
+            cache.delete(repeat_key)
+        else:
+            cache.set(repeat_key, result, REPEAT_WINDOW_SECONDS)
+    return result
+
+
+def _repeat_key(request, action: palette_actions.Action, arguments: dict[str, Any]) -> str | None:
+    """The cache key for "this person already asked for exactly this", or ``None`` for calls that
+    are safe or meant to repeat."""
+    if read_only(action) or idempotent(action) or action.name in REPEATS_ARE_MEANT:
+        return None
+    user_id = getattr(getattr(request, "user", None), "pk", None)
+    if user_id is None:
+        return None
+    digest = hashlib.sha256(json.dumps(arguments, sort_keys=True, default=str).encode()).hexdigest()
+    return f"mcp-repeat:{user_id}:{action.name}:{digest}"
+
+
+def _answer_repeat(repeat_key: str, action: palette_actions.Action) -> dict[str, Any]:
+    """The first call's answer, once it has one. Parallel duplicates arrive together, so the second
+    usually finds the first still running."""
+    deadline = time.monotonic() + REPEAT_WAIT_SECONDS
+    first = cache.get(repeat_key)
+    while first == _IN_FLIGHT and time.monotonic() < deadline:
+        time.sleep(0.25)
+        first = cache.get(repeat_key)
+    logger.info("Answered a repeated %s from the first call", action.name)
+    if isinstance(first, dict):
+        note = (
+            f"This exact {action.name} call arrived twice, so it was done once and this is that answer "
+            "again. If a second one really is wanted, say so to the user; for lots, add_lots with a count."
+        )
+        return {**first, "content": [*first["content"], {"type": "text", "text": note}]}
+    if first is None:
+        # The first failed and let go of the key while this one waited.
+        return _result(
+            f"An identical {action.name} call just failed. Nothing was changed; look at that answer.",
+            is_error=True,
+        )
+    return _result(
+        f"An identical {action.name} call is still running. Don't send it again -- check the result "
+        "with a read before trying.",
+        is_error=True,
+    )
+
+
+def _call_tool(request, action: palette_actions.Action, arguments: dict[str, Any]) -> dict[str, Any]:
     credential = getattr(request, "mcp_credential", None)
     if credential is not None and not read_only(action) and not auth.within_write_budget(credential):
         # Caps how far an instruction hidden in someone's lot description can get.

@@ -29,7 +29,8 @@
  * on the way out of a page saved twenty minutes ago (2); a dirty form swapped away, which is an
  * abandonment beforeunload will never see because the page never unloads (3); and an hx-get link
  * replacing the region a dirty form sits in, which loses the work with no browser dialog anywhere,
- * because as far as the browser is concerned nothing happened (4).
+ * because as far as the browser is concerned nothing happened (4). A fifth is not HTMx: a script
+ * that cancels the submit event and later calls form.submit(), which fires no submit event (5).
  *
  * Trackers are pruned whenever they are used: a swap detaches form elements without telling
  * anybody, and a detached form's fields still answer questions about their values.
@@ -66,8 +67,11 @@
     return Array.prototype.filter.call(
       form.querySelectorAll("input, select, textarea"),
       function (el) {
+        // g-recaptcha-response is a textarea Google injects and fills with a token on Send, so
+        // it would count as an unsaved field at exactly the moment the form is being saved.
         return el.name && el.type !== "hidden" && el.type !== "submit" && el.type !== "button" &&
-          el.type !== "reset" && !el.disabled && el.name !== "csrfmiddlewaretoken";
+          el.type !== "reset" && !el.disabled && el.name !== "csrfmiddlewaretoken" &&
+          el.name.indexOf("g-recaptcha") !== 0;
       }
     );
   }
@@ -243,11 +247,25 @@
     scan(document);
   }
 
+  // Case 5: the invisible reCAPTCHA on signup, support and the report forms cancels the submit
+  // event, runs its check, then calls form.submit() -- which fires no submit event, so the form
+  // still looked dirty and the browser asked "Leave site?" on the way out of a form being sent.
+  // Patched on the prototype so every such caller is covered, including this file's own Save.
+  var nativeSubmit = HTMLFormElement.prototype.submit;
+  HTMLFormElement.prototype.submit = function () {
+    var form = this;
+    tracked.forEach(function (tracker) {
+      if (tracker.form === form) { tracker.submitting = true; }
+    });
+    refresh();
+    return nativeSubmit.apply(form, arguments);
+  };
+
   saveButton.addEventListener("click", function () {
     var tracker = dirtyTracker();
     if (!tracker) { return; }
     var button = tracker.form.querySelector("[type=submit]");
-    if (button) { button.click(); } else { tracker.form.submit(); }
+    if (button) { button.click(); } else { HTMLFormElement.prototype.submit.call(tracker.form); }
   });
 
   discardButton.addEventListener("click", function () {
