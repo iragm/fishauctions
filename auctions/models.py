@@ -76,7 +76,7 @@ from .email_routing import (
     sender_with_display_name,
 )
 from .friction_models import FormFailure  # noqa: F401
-from .helper_functions import bin_data, get_currency_symbol
+from .helper_functions import bin_data, get_currency_symbol, static_html
 from .html_sanitize import sanitize_summernote_html
 from .model_caching import CachedPropertiesMixin, InvalidatesRelatedCache
 
@@ -5054,7 +5054,7 @@ class Auction(CachedPropertiesMixin, models.Model):
         """Not used directly; see template_lot_link_first_column and template_lot_link_separate_column."""
         if timezone.now() > self.lot_submission_start_date:
             return format_html("<a href='{}'>View lots</a>", self.view_lot_link)
-        return format_html("<small class='text-muted'>Lots not yet open</small>")
+        return static_html("<small class='text-muted'>Lots not yet open</small>")
 
     @property
     def template_lot_link_first_column(self):
@@ -6228,9 +6228,9 @@ class AuctionTOS(InvalidatesRelatedCache, CachedPropertiesMixin, models.Model):
             kwargs={"bidder_number": self.bidder_number, "slug": self.auction.slug},
         )
         if not self.selling_allowed:
-            icon = html.format_html('<i class="text-danger me-1 bi bi-cash-coin" title="Selling not allowed"></i>')
+            icon = static_html('<i class="text-danger me-1 bi bi-cash-coin" title="Selling not allowed"></i>')
         else:
-            icon = html.format_html("<i class='bi bi-calendar-plus me-1'></i>")
+            icon = static_html("<i class='bi bi-calendar-plus me-1'></i>")
         return html.format_html("<a href='{}' hx-noget>{} Add lots</a>", url, icon)
 
     @property
@@ -6340,7 +6340,7 @@ class AuctionTOS(InvalidatesRelatedCache, CachedPropertiesMixin, models.Model):
                 kwargs={"bidder_number": self.bidder_number, "slug": self.auction.slug},
             )
             return html.format_html("<a href='{}'><i class='bi bi-tags me-1'></i>Print labels</a>", url)
-        return html.format_html("")
+        return static_html("")
 
     @cached_property
     def print_labels_count(self):
@@ -6359,7 +6359,7 @@ class AuctionTOS(InvalidatesRelatedCache, CachedPropertiesMixin, models.Model):
             return html.format_html(
                 "<a href='{}'>Print only {} unprinted labels</a>", unprinted_url, self.unprinted_label_count
             )
-        return html.format_html("")
+        return static_html("")
 
     @cached_property
     def print_labels_html(self):
@@ -6375,7 +6375,7 @@ class AuctionTOS(InvalidatesRelatedCache, CachedPropertiesMixin, models.Model):
                     self.print_unprinted_labels_link_html,
                 )
             return result
-        return html.format_html("")
+        return static_html("")
 
     @cached_property
     def actions_dropdown_html(self):
@@ -6465,7 +6465,7 @@ class AuctionTOS(InvalidatesRelatedCache, CachedPropertiesMixin, models.Model):
         if self.auction.is_club_managed and self.clubmember_id:
             club = self.auction.club
             cm = self.clubmember
-            result += html.format_html("<div class='dropdown-divider'></div>")
+            result += static_html("<div class='dropdown-divider'></div>")
             if club.membership_annual_fee:
                 renew_url = reverse("club_member_renew", kwargs={"pk": cm.pk})
                 set_expiry_url = reverse("club_member_renew_page", kwargs={"slug": club.slug, "pk": cm.pk})
@@ -6534,7 +6534,7 @@ class AuctionTOS(InvalidatesRelatedCache, CachedPropertiesMixin, models.Model):
                     add_to_club_url,
                     club.name,
                 )
-        result += html.format_html("</div>")
+        result += static_html("</div>")
         return result
 
     @cached_property

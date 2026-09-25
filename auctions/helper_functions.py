@@ -1,10 +1,21 @@
-"""Small helpers with no home of their own: email scrubbing, currency symbols, histogram bins, location cookies."""
+"""Small helpers with no home of their own: email scrubbing, currency symbols, histogram bins, cookies, fixed HTML."""
 
 import re
 from collections import Counter
 from datetime import datetime, timedelta
 
+from django.utils.safestring import mark_safe
+
 EMAIL_IN_TEXT_RE = re.compile(r"[^\s<>@,;:\"'()\[\]]+@[^\s<>@,;:\"'()\[\]]+\.[A-Za-z]{2,}")
+
+
+def static_html(fragment):
+    """A fixed piece of markup, marked safe. String literals only -- ``test_static_html`` enforces it.
+
+    ``format_html`` with nothing to format is deprecated and raises from Django 6.0; a bare
+    ``mark_safe`` trips S308 at every call site. Anything with a value in it is ``format_html``'s job.
+    """
+    return mark_safe(fragment)  # noqa: S308 - literals only, checked by test_static_html
 
 
 def scrub_emails(text):

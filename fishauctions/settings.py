@@ -914,10 +914,16 @@ X_FRAME_OPTIONS = "SAMEORIGIN"
 # No script-src: the templates are full of inline <script> blocks and hyperscript _="on ..."
 # attributes, so 'unsafe-inline' would be the only workable value and a policy that permits inline
 # script buys nothing. What is here costs nothing and closes what it names: object-src stops plugin
-# content, base-uri stops a <base> tag rewriting every relative URL on the page, form-action stops a
-# form posting somewhere else, and frame-ancestors is X_FRAME_OPTIONS in the modern spelling.
+# content, base-uri stops a <base> tag rewriting every relative URL on the page, and frame-ancestors
+# is X_FRAME_OPTIONS in the modern spelling.
 # Narrowing script-src properly means nonces on every inline block: worth doing, not a one-liner.
-CONTENT_SECURITY_POLICY = "object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'self'"
+#
+# No form-action. Chrome and Safari apply it to the redirect a form POST answers with, not just to
+# where the form posts, so 'self' silently blocked every POST that ends somewhere else: PayPal and
+# Square checkout, connecting a club's PayPal or Square account, and the OAuth consent screen
+# sending an agent back to its callback -- which can be any host, http://localhost included, so no
+# allowlist fits it either.
+CONTENT_SECURITY_POLICY = "object-src 'none'; base-uri 'self'; frame-ancestors 'self'"
 
 PAYPAL_API_BASE = os.environ.get("PAYPAL_API_BASE", "")
 if not PAYPAL_API_BASE:

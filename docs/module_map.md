@@ -148,9 +148,9 @@ this only quotes its opening sentence.
 - **`google_wallet.py`** (302 lines)
   Helpers for the Google Wallet REST API.
   `is_configured`, `get_access_token`, `member_text_modules`, `update_generic_object_for_member`, `expire_generic_object_for_member`, `create_generic_class`
-- **`helper_functions.py`** (151 lines)
-  Small helpers with no home of their own: email scrubbing, currency symbols, histogram bins, location cookies.
-  `scrub_emails`, `cookie_coordinates`, `get_currency_symbol`, `bin_data`
+- **`helper_functions.py`** (162 lines)
+  Small helpers with no home of their own: email scrubbing, currency symbols, histogram bins, cookies, fixed HTML.
+  `static_html`, `scrub_emails`, `cookie_coordinates`, `get_currency_symbol`, `bin_data`
 - **`history.py`** (148 lines)
   What an edit changed, in a form a query can answer.
   `is_secret_field`, `jsonable`, `truncate`, `changed_field_summary`, `record_club_history`, `field_label`
@@ -232,7 +232,7 @@ this only quotes its opening sentence.
   `normalize_category_name`, `CategoryResolver`, `hint_for`, `assign_categories`
 - **`species_matching.py`** (1034 lines)
   Turn a typed lot name into a short list of species to pick from, or nothing.
-- **`tables.py`** (1433 lines)
+- **`tables.py`** (1434 lines)
   The ``django_tables2`` tables behind every list on the site.
 - **`tasks.py`** (1739 lines)
   Celery tasks for the auctions app. Many wrap the management command of the same name.
@@ -481,7 +481,7 @@ this only quotes its opening sentence.
   `QueryGrowthMixin`, `AuctionUsersTableQueryCountTests`, `AuctionLotAdminTableQueryCountTests`, `LotDetailQueryCountTests`, `InvoiceQueryCountTests`, `SellerAndFeedbackQueryCountTests`, `LongLivedInstanceTests`, `CachedPropertyWiringTests`, `LotListQueryCountTests`, `LotCachedPropertyTests`
 - **`test_remote_print.py`** (539 lines)
   Printing from a computer to the phone's Bluetooth label printer.
-- **`test_security.py`** (581 lines)
+- **`test_security.py`** (587 lines)
   Tests that AuctionTOS and user data are protected: unauthenticated and non-admin users can't reach
   `AuctionTOSSecurityTestCase`, `LotOrderCookieTestCase`, `AttachmentFilenameTestCase`, `ExportFilenameTestCase`, `CsvCellTestCase`, `ContentSecurityPolicyTestCase`, `ClientIpTestCase`, `TableCellMarkupTests`, `SummernoteSanitizerTests`
 - **`test_site_account_fixes.py`** (541 lines)
@@ -502,6 +502,9 @@ this only quotes its opening sentence.
 - **`test_static_files.py`** (147 lines)
   `/static/`: content-hashed names, and the nginx rule that caches them for a year.
   `TemplatesNameRealFilesTests`, `HashedNamesReachTheYearLongCacheTests`, `MissingManifestEntriesDoNotRaiseTests`, `DebugSkipsHashingTests`
+- **`test_static_html.py`** (85 lines)
+  ``format_html`` is never called with nothing to format, and ``static_html`` only ever takes a literal.
+  `misuses`, `StaticHtmlTests`, `StaticHtmlCheckerTests`
 - **`test_stats.py`** (1183 lines)
   The numbers on an auction's stats page, and the invoice wording that quotes them.
 - **`test_stats_and_browse_views.py`** (617 lines)
@@ -828,7 +831,7 @@ Every view on the site, split by the part of it the view belongs to.
   Shared view machinery: the mixins that decide who may see a page.
 - **`browse.py`** (823 lines)
   The lot lists people browse, and what they do to a lot without opening it.
-- **`bulk_actions.py`** (507 lines)
+- **`bulk_actions.py`** (508 lines)
   The bulk buttons on the auction admin pages: mark paid, set won, enable bidding.
   `GetClubs`, `BulkSetLotsWon`, `InvoiceBulkUpdateStatus`, `MarkInvoicesReady`, `MarkInvoicesPaid`, `EnableBiddingForAllUsers`, `LotRefundDialog`
 - **`bulk_add.py`** (909 lines)
@@ -885,7 +888,7 @@ Every view on the site, split by the part of it the view belongs to.
   The superuser's dashboard: traffic, signups, referrers, the user map.
 - **`site_pages.py`** (576 lines)
   Pages that belong to the site rather than to an auction or club: the FAQ, support, the promo site,
-- **`speakers.py`** (482 lines)
+- **`speakers.py`** (483 lines)
   The speaker directory: who will come and talk to a club, and what about.
   `NECSpeakerAccessMixin`, `SpeakerListView`, `SpeakerPanelView`, `SpeakerDetailView`, `SpeakerCreateView`, `SpeakerUpdateView`, `SpeakerDeleteView`, `SpeakerTagView`, `SpeakerCommentView`, `SpeakerCommentDeleteView`
 - **`species.py`** (492 lines)
@@ -917,7 +920,7 @@ This will make sure the app is always imported when
 - **`firebase_config.py`** (88 lines)
   Parse the public Firebase client-config files that ship with the mobile build.
   `load_android_config`, `load_ios_config`, `load_firebase_client_config`
-- **`settings.py`** (1211 lines)
+- **`settings.py`** (1217 lines)
   Django settings for fishauctions. Reads .env; variables are documented in .env.example.
 - **`static_storage.py`** (52 lines)
   Content-hashed names for `/static/`, tolerant of the two things that would break a deploy.

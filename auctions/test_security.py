@@ -441,7 +441,13 @@ class ContentSecurityPolicyTestCase(TestCase):
         policy = response["Content-Security-Policy"]
         self.assertNotIn("frame-ancestors", policy)
         self.assertIn("object-src 'none'", policy)
-        self.assertIn("form-action 'self'", policy)
+
+    def test_no_form_action(self):
+        """A form that POSTs and is redirected off-site -- PayPal and Square checkout, the OAuth
+        consent screen -- is blocked mid-redirect by Chrome under any form-action this site could set.
+        """
+        response = self.client.get(reverse("home"), follow=True)
+        self.assertNotIn("form-action", response["Content-Security-Policy"])
 
 
 class ClientIpTestCase(TestCase):

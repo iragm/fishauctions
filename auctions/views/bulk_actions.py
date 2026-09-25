@@ -41,6 +41,7 @@ from auctions.forms import (
     EnableBiddingForAllForm,
     LotRefundForm,
 )
+from auctions.helper_functions import static_html
 from auctions.models import (
     Auction,
     AuctionTOS,
@@ -136,7 +137,7 @@ class BulkSetLotsWon(LoginRequiredMixin, TemplateView, FormMixin, AuctionViewMix
         context = super().get_context_data(**kwargs)
         tooltip = "This is intended to be used with silent auctions where people place bids on their phones, or with hybrid online auctions where some lots will be sold ahead of time.  It will sell any lots with online bids to the current online high bidder."
         if not self.query:
-            warning = format_html(
+            warning = static_html(
                 "<br><br><span class='text-warning'>You are about to set the winners of all lots.  This is a bad idea, you should click on cancel and then type in a filter first.</span>"
             )
         else:
