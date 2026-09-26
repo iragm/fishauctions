@@ -435,7 +435,7 @@ class AuctionConsumer(WebsocketConsumer):
         self.send(text_data=json.dumps({"type": "stats_updated"}))
 
     def queue_updated(self, event):
-        """The in-person lot queue changed, so the queue and kiosk screens re-fetch and track winners set on
+        """The in-person lot queue changed, so the queue and projector screens re-fetch and track winners set on
         another device.
         """
         self.send(text_data=json.dumps({"type": "queue_updated"}))

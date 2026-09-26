@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+{% block title %}Current lot for {{ auction }}{% endblock %}
+
+{% block content %}
+<div class="container hide-fullscreen mb-2">
+  <a href="{% url 'auction_lot_queue' slug=auction.slug %}" class="btn btn-secondary btn-sm"><i class="bi bi-arrow-left"></i> Lot queue</a>
+  <button type="button" id="fullscreen-btn" class="btn btn-primary btn-sm ms-1 d-none d-sm-inline-block"><i class="bi bi-fullscreen"></i> Go fullscreen</button>
+</div>
+{% endblock %}
+
+{% block undiv_content %}
+{% comment %}
+Re-fetched over the admin auction websocket (queue_updated) as winners are set on another device;
+the slow htmx poll is a fallback for a dropped socket.
+{% endcomment %}
+<div id="current-lot"
+     hx-get="{% url 'auction_lot_queue_current_lot' slug=auction.slug %}?partial=lot"
+     hx-trigger="queue-updated from:body, every 30s" hx-swap="innerHTML">
+  {% include 'auctions/lot_queue_current_lot_partial.html' %}
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+  $(document).ready(function () {
+    $('#fullscreen-btn').on('click', function () {
+      var elem = document.documentElement;
+      (elem.requestFullscreen ? elem.requestFullscreen() : elem.webkitRequestFullscreen()).catch(function (err) {
+        console.error('Error attempting to enable full-screen mode: ' + err.message);
+      });
+    });
+
+    $(document).on('fullscreenchange webkitfullscreenchange', function () {
+      $('.hide-fullscreen').toggle(!(document.fullscreenElement || document.webkitFullscreenElement));
+    });
+
+    try {
+      var wsProtocol = (window.location.protocol === 'https:') ? 'wss://' : 'ws://';
+      var queueSocket = new WebSocket(wsProtocol + window.location.host + '/ws/auctions/{{ auction.pk }}/');
+      queueSocket.onmessage = function (e) {
+        if (JSON.parse(e.data).type === 'queue_updated') {
+          document.body.dispatchEvent(new Event('queue-updated'));
+        }
+      };
+    } catch (err) {
+      // Websocket unavailable -- the htmx poll keeps the lot fresh.
+    }
+  });
+</script>
+{% endblock %}

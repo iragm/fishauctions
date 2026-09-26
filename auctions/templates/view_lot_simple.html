@@ -26,7 +26,8 @@
             {% if lot.auction.use_quantity_field %}<b>Quantity:</b> {{ lot.quantity }}<br>{% endif %}
             {% if lot.reserve_price > lot.auction.minimum_bid %}<b>Minimum bid:</b> {{ lot.currency_symbol }}{{ lot.reserve_price }}<br>{% endif %}
             {% if lot.buy_now_price %}<b>Buy now:</b> {{ lot.currency_symbol }}{{ lot.buy_now_price }}<br>{% endif %}
-            {% if lot.auction.online_bidding == 'allow' %}
+            {% comment %}lot_info_only: the fullscreen current lot, which shows the room the lot and never who is bidding.{% endcomment %}
+            {% if lot.auction.online_bidding == 'allow' and not lot_info_only %}
                 <b>Online high bid:</b>
                 {% if lot.high_bidder %}
                     {{ lot.currency_symbol }}{{ lot.high_bid }} <b>Bidder:</b> {{ lot.high_bidder_for_admins }} {{ lot.auction_show_high_bidder_template }}

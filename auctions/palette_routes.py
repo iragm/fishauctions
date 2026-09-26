@@ -338,12 +338,12 @@ ROUTE_LIST: list[Route] = [
         keywords=["queue", "running order", "what's next"],
     ),
     _r(
-        "auction_lot_queue_kiosk",
-        "Lot queue on a second screen",
+        "auction_lot_queue_current_lot",
+        "Current lot on a projector",
         "Running an auction",
         scope=SCOPE_AUCTION,
         admin=ADMIN_AUCTION,
-        keywords=["kiosk", "projector", "display"],
+        keywords=["kiosk", "projector", "display", "second screen", "fullscreen"],
     ),
     _r(
         "auction_printing",
@@ -1178,6 +1178,7 @@ EXCLUDED: dict[str, str] = {
     "save_lot_ajax": _API,
     "auction_barcode_scan": _API,
     "auction_quick_checkout_htmx": _API,
+    "auction_lot_queue_fullscreen": _API,
     "auction_lot_map_data": _API,
     "auction_show_high_bidder": _API,
     "auto_image_available": _API,

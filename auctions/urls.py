@@ -527,9 +527,14 @@ urlpatterns = [
         name="auction_lot_queue",
     ),
     path(
-        "auctions/<slug:slug>/queue/kiosk/",
-        views.LotQueueKioskView.as_view(),
-        name="auction_lot_queue_kiosk",
+        "auctions/<slug:slug>/queue/fullscreen/",
+        views.LotQueueFullscreenView.as_view(),
+        name="auction_lot_queue_fullscreen",
+    ),
+    path(
+        "auctions/<slug:slug>/queue/current-lot/",
+        views.LotQueueCurrentLotView.as_view(),
+        name="auction_lot_queue_current_lot",
     ),
     path(
         "auctions/<slug:slug>/volunteers/",

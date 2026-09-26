@@ -2070,7 +2070,7 @@ class QueueRespectsTheAuctionNotificationSettingTests(StandardTestCase):
         self.in_person_auction.save()
         self._process().assert_not_called()
 
-    def test_kiosk_still_refreshes_when_the_setting_is_off(self):
+    def test_fullscreen_queue_still_refreshes_when_the_setting_is_off(self):
         self.in_person_auction.message_users_when_lots_sell = False
         self.in_person_auction.save()
         from auctions.views import process_queue_notifications

@@ -4777,8 +4777,8 @@ def club_history(request, params: dict[str, Any]) -> dict[str, Any]:
 
 
 def lot_queue(request, params: dict[str, Any]) -> dict[str, Any]:
-    """The lot being sold now and what's queued behind it. **Open to anyone in the room**: the kiosk
-    projects the same thing; only editing the queue is admin.
+    """The lot being sold now and what's queued behind it. **Open to anyone in the room**: the fullscreen
+    queue projects the same thing; only editing the queue is admin.
 
     ``query`` filters by lot name and keeps each lot's real queue position. An auction not using the
     queue is told so.

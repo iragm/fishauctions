@@ -687,13 +687,16 @@ class DynamicSetLotWinnerViewTestCase(StandardTestCase):
 
 
 class LotQueueViewTestCase(StandardTestCase):
-    """The in-person lot queue (LotQueueView, LotQueueKioskView), the set-winners page and watcher pushes."""
+    """The in-person lot queue (LotQueueView, the fullscreen queue and current lot), set winners and watcher pushes."""
 
     def get_url(self):
         return reverse("auction_lot_queue", kwargs={"slug": self.in_person_auction.slug})
 
-    def kiosk_url(self):
-        return reverse("auction_lot_queue_kiosk", kwargs={"slug": self.in_person_auction.slug})
+    def fullscreen_url(self):
+        return reverse("auction_lot_queue_fullscreen", kwargs={"slug": self.in_person_auction.slug})
+
+    def current_lot_url(self):
+        return reverse("auction_lot_queue_current_lot", kwargs={"slug": self.in_person_auction.slug})
 
     def _make_in_person_lot(self, name):
         return Lot.objects.create(
@@ -732,7 +735,8 @@ class LotQueueViewTestCase(StandardTestCase):
         self.client.login(username=self.user_who_does_not_join.username, password="testpassword")
         assert self.client.get(self.get_url()).status_code == 403
         assert self.client.post(self.get_url(), data={"action": "add", "value": "101-1"}).status_code == 403
-        assert self.client.get(self.kiosk_url()).status_code == 403
+        assert self.client.get(self.fullscreen_url()).status_code == 403
+        assert self.client.get(self.current_lot_url()).status_code == 403
 
     def test_online_auction_has_no_queue(self):
         """The queue is in-person only; the online auction 404s."""
@@ -747,7 +751,8 @@ class LotQueueViewTestCase(StandardTestCase):
         self.assertContains(response, "Lot queue")
         # Multi-line {# #} comments leak onto the page, so the template uses {% comment %}.
         self.assertNotContains(response, "Reuse the shared barcode pipeline")
-        self.assertNotContains(response, "Kiosk / projector view")
+        self.assertNotContains(response, "Fullscreen queue: hidden until fullscreen")
+        self.assertContains(response, self.current_lot_url())
 
     # --- adding --------------------------------------------------------------
     def test_add_by_qr_value(self):
@@ -840,13 +845,40 @@ class LotQueueViewTestCase(StandardTestCase):
         assert response.status_code == 200
         assert not LotQueueEntry.objects.filter(pk=entry.pk).exists()
 
-    # --- kiosk ---------------------------------------------------------------
-    def test_kiosk_shows_head_lot(self):
+    # --- fullscreen queue / current lot ---------------------------------------
+    def test_fullscreen_queue_shows_head_lot(self):
         self._login_admin()
         LotQueueEntry.objects.create(auction=self.in_person_auction, lot=self.in_person_lot, order=1)
-        response = self.client.get(self.kiosk_url())
+        response = self.client.get(self.fullscreen_url())
         assert response.status_code == 200
         self.assertContains(response, self.in_person_lot.lot_name)
+
+    def test_current_lot_shows_only_the_head_lot(self):
+        self._login_admin()
+        self.in_person_auction.online_bidding = "allow"
+        self.in_person_auction.save()
+        next_lot = self._make_in_person_lot("Next up")
+        LotQueueEntry.objects.create(auction=self.in_person_auction, lot=self.in_person_lot, order=1)
+        LotQueueEntry.objects.create(auction=self.in_person_auction, lot=next_lot, order=2)
+        for url in (self.current_lot_url(), self.current_lot_url() + "?partial=lot"):
+            response = self.client.get(url)
+            assert response.status_code == 200
+            self.assertContains(response, self.in_person_lot.lot_name)
+            self.assertNotContains(response, "Next up")
+            self.assertNotContains(response, "Online high bid")
+
+    def test_current_lot_skips_a_lot_sold_elsewhere(self):
+        self._login_admin()
+        next_lot = self._make_in_person_lot("Next up")
+        LotQueueEntry.objects.create(auction=self.in_person_auction, lot=self.in_person_lot, order=1)
+        LotQueueEntry.objects.create(auction=self.in_person_auction, lot=next_lot, order=2)
+        self.in_person_lot.auctiontos_winner = self.in_person_buyer
+        self.in_person_lot.winning_price = 10
+        self.in_person_lot.save()
+        response = self.client.get(self.current_lot_url() + "?partial=lot")
+        self.assertContains(response, "Next up")
+        # A GET doesn't pop the queue.
+        assert LotQueueEntry.objects.filter(lot=self.in_person_lot).exists()
 
     # --- set-winner integration ----------------------------------------------
     def test_set_winner_pops_queue_and_returns_next(self):

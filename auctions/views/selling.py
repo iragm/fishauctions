@@ -615,7 +615,7 @@ def notify_watchers_lot_selling_soon(lot, request_user=None, position=None):
 
 
 def broadcast_queue_update(auction):
-    """Tell open queue and kiosk screens to re-fetch after a queue change. Best-effort."""
+    """Tell open queue and projector screens to re-fetch after a queue change. Best-effort."""
     try:
         channel_layer = channels.layers.get_channel_layer()
         async_to_sync(channel_layer.group_send)(
@@ -826,12 +826,12 @@ class LotQueueView(LotQueueMixin, TemplateView):
         return self.render_list(error="Unknown action")
 
 
-class LotQueueKioskView(LotQueueMixin, TemplateView):
-    """Projector partial: the head lot large, plus the next few. Refreshed over websocket, with a slow poll
-    fallback. No ViewLotSimple notification side effect.
+class LotQueueFullscreenView(LotQueueMixin, TemplateView):
+    """Fullscreen queue partial: the head lot large, plus the next few. Refreshed over websocket, with a
+    slow poll fallback. No ViewLotSimple notification side effect.
     """
 
-    template_name = "auctions/lot_queue_kiosk.html"
+    template_name = "auctions/lot_queue_fullscreen.html"
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
@@ -839,6 +839,26 @@ class LotQueueKioskView(LotQueueMixin, TemplateView):
         context["auction"] = self.auction
         context["lot"] = entries[0].lot if entries else None
         context["upcoming"] = [entry.lot for entry in entries[1:6]]
+        return context
+
+
+class LotQueueCurrentLotView(LotQueueMixin, TemplateView):
+    """Fullscreen current lot: its own page for a projector, the lot set winners will sell next and only
+    its details (no bids, no queue). ``?partial=lot`` is the lot alone, re-fetched as the queue moves.
+    """
+
+    template_name = "auctions/lot_queue_current_lot.html"
+
+    def get_template_names(self):
+        if self.request.GET.get("partial") == "lot":
+            return ["auctions/lot_queue_current_lot_partial.html"]
+        return super().get_template_names()
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["auction"] = self.auction
+        # Skip a lot sold elsewhere without popping it: a GET here stays side-effect free.
+        context["lot"] = next((entry.lot for entry in self.queue_entries() if not entry.lot.sold), None)
         return context
 
 
