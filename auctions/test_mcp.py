@@ -1430,6 +1430,14 @@ class ResourceLinkTests(StandardTestCase):
         uris = [link["uri"] for link in resources.links_for("list_lots", {"auction": "spring"})]
         self.assertEqual(uris, ["auction://spring"])
 
+    def test_a_write_carries_no_links(self):
+        """ChatGPT showed add_lot's two links as two file attachments, and asked before opening them."""
+        result = tools.call_tool(
+            self._request_for(self.user), "add_lot", {"name": "Echo Snail", "auction": self.in_person_auction.slug}
+        )
+        self.assertFalse(result["isError"], result)
+        self.assertEqual(self._links(result), [])
+
     def test_a_lot_result_links_to_the_lot_and_the_auction(self):
         links = resources.links_for("edit_lot", {"auction": "spring", "lot": "14"})
         self.assertEqual([link["uri"] for link in links], ["lot://spring/14", "auction://spring"])

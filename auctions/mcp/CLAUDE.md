@@ -263,7 +263,7 @@ the whole registry as three people who shouldn't reach a tenant's objects.
 - `more_info_needed` is **not** `isError`. It's a successful result naming the question, the
   candidates, and which tool to call again — MCP elicitation needs a session this transport lacks.
 - Every result carries `structuredContent`, parsed back out of the text so the two can't disagree.
-- `resource_link` blocks ride alongside results naming an auction/club/lot, from
+- `resource_link` blocks ride alongside **read** results naming an auction/club/lot, from
   `palette_actions._about`. A tool never links to its own answer; rows in a long list aren't linked;
   `resources.MAX_LINKS` is 12.
 - **No lot ever travels as a primary key.** A lot's public identity is `lot_number_display`

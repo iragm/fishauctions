@@ -327,9 +327,10 @@ def _children(uri: str) -> list[str]:
 def links_for(action: str, about: Any) -> list[dict[str, Any]]:
     """The ``resource_link`` blocks to hang off one tool result.
 
-    A host that supports resources can fetch the whole auction after a write that named one; one that
-    doesn't ignores the unknown block. The tool's own answer is never linked: a URI answered by this
-    action is dropped and replaced by what sits underneath it (:func:`_children`).
+    A host that supports resources can fetch the whole auction after a read that named one; one that
+    doesn't ignores the unknown block. Writes get none (``tools._call_tool``). The tool's own answer
+    is never linked: a URI answered by this action is dropped and replaced by what sits underneath
+    it (:func:`_children`).
     """
     if not isinstance(about, dict) or not about:
         return []

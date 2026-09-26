@@ -404,7 +404,7 @@ this only quotes its opening sentence.
   Mailchimp and Brevo: syncing members, webhooks, self-service and what gets redacted.
 - **`test_marketing_sync_and_tasks.py`** (748 lines)
   Gaps left by test_marketing.py and test_celery_tasks.py: the per-member Mailchimp and Brevo sync
-- **`test_mcp.py`** (1489 lines)
+- **`test_mcp.py`** (1497 lines)
   Tests for the MCP tool catalogue.
 - **`test_mcp_permissions.py`** (670 lines)
   Every tool on ``/mcp/``, run against somebody else's club and auction.
@@ -715,10 +715,10 @@ The site's Model Context Protocol server, and the tool catalogue behind it.
 - **`protocol.py`** (252 lines)
   JSON-RPC 2.0 and the MCP methods, with no HTTP in it.
   `Caller`, `error`, `is_notification`, `negotiate`, `handle`
-- **`resources.py`** (352 lines)
+- **`resources.py`** (353 lines)
   Addressable reads: the read-only tools' answers, reachable by URI.
   `Template`, `template_descriptors`, `fixed_descriptors`, `match`, `read`, `links_for`
-- **`tools.py`** (447 lines)
+- **`tools.py`** (449 lines)
   The action registry, as MCP tools.
 - **`transport.py`** (139 lines)
   The HTTP end of the MCP server: one view, at ``/mcp/``. Nothing here knows what a tool is.
